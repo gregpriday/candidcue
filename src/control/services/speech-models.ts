@@ -224,3 +224,131 @@ export async function onSpeechModelProgress(
 
 /** Preload is not offered for a model that is not there — say so precisely. */
 export const MODEL_NOT_INSTALLED_CODE = 'STT_MODEL_NOT_INSTALLED';
+
+/* ------------------------------------------------------------ language choice
+ *
+ * §153: the user picks a LANGUAGE. Which model serves it is an implementation
+ * detail of that choice, which is why everything above this line is addressed
+ * by `modelId` and everything below it by a language tag.
+ */
+
+/** Refused because a take is open. The recogniser cannot change mid-session. */
+export const LANGUAGE_CHANGE_BLOCKED_CODE = 'STT_LANGUAGE_CHANGE_BLOCKED';
+/** Refused because this build cannot follow that language at all. */
+export const LANGUAGE_UNAVAILABLE_CODE = 'STT_LANGUAGE_UNAVAILABLE';
+
+/** Where a model's bytes come from. Mirrors Rust's `SpeechDownloadOrigin`. */
+export interface SpeechDownloadOrigin {
+  kind: 'mirror' | 'upstream';
+  /** Host only — the digest path in a mirror URL means nothing to a reader. */
+  host: string;
+}
+
+/**
+ * The licence a model travels under.
+ *
+ * Shown, never gated on. §153 is explicit: this is an attribution obligation
+ * the app carries, not a decision to put in front of the user, so there is no
+ * accept step anywhere in this flow.
+ */
+export interface SpeechModelAttribution {
+  title: string;
+  author: string;
+  sourceUrl: string;
+  distributedVia: string | null;
+  license: { id: string; name: string; url: string };
+  licenseNote: string | null;
+  modified: boolean;
+}
+
+/**
+ * One language the user may choose. Mirrors Rust's `SpeechLanguageOption`.
+ *
+ * Only languages this build can actually follow are ever returned — Rust does
+ * the three-way join (catalogue × recogniser × alignment engine) and a language
+ * that fails any part of it is absent rather than disabled.
+ */
+export interface SpeechLanguageOption {
+  /** The BCP-47 tag persisted if this is activated, e.g. `en-US`. */
+  languageTag: string;
+  /** Its primary subtag, e.g. `en`. */
+  primarySubtag: string;
+  /** The SHORT catalogue id — what every install command is addressed with. */
+  modelId: string;
+  /** The LONG recogniser id — what settings persists. Not interchangeable. */
+  recognizerId: string;
+  active: boolean;
+  status: SpeechModelStatus;
+  origins: SpeechDownloadOrigin[];
+  attribution: SpeechModelAttribution;
+}
+
+/** The persisted choice. Mirrors Rust's `SpeechActiveLanguage`. */
+export interface SpeechActiveLanguage {
+  languageTag: string;
+  primarySubtag: string;
+  modelId: string | null;
+  recognizerId: string;
+}
+
+/** Mirrors Rust's `SpeechLanguageOptions`. */
+export interface SpeechLanguageOptions {
+  active: SpeechActiveLanguage;
+  /** Whether a take is open, so activation is refused right now. */
+  changeBlocked: boolean;
+  /** Followable languages ONLY. */
+  languages: SpeechLanguageOption[];
+  /** Models on disk backing no offered language — here so disk can be freed. */
+  removable: SpeechModelStatus[];
+}
+
+/**
+ * Everything the picker paints, in one call.
+ *
+ * One command rather than "list the languages, then ask about each model": a
+ * row cannot be rendered without both halves, and splitting them would give the
+ * sizes and the install state separate chances to go stale.
+ */
+export async function getSpeechLanguageOptions(): Promise<SpeechLanguageOptions> {
+  const { mockSpeechModels } = await import('./mock-backend');
+  return invokeOrMock<SpeechLanguageOptions>('get_speech_language_options', {}, () =>
+    mockSpeechModels.languageOptions(),
+  );
+}
+
+/**
+ * Commit to a language.
+ *
+ * Writes the language and the recogniser together in Rust — they are one
+ * choice, and persisting them separately is how a session ends up declaring one
+ * language while the settings screen shows another.
+ *
+ * `ipcInvoke`, not `invokeOrMock`: a browser-dev mock that pretended a language
+ * change had been saved would be lying about the one thing this command exists
+ * to do.
+ */
+export async function selectSpeechLanguage(
+  expectedRevision: number,
+  languageTag: string,
+): Promise<unknown> {
+  const { ipcInvoke } = await import('./ipc');
+  return ipcInvoke('select_speech_language', { input: { expectedRevision, languageTag } });
+}
+
+/**
+ * The display name for a language tag, in the reader's own locale.
+ *
+ * `Intl.DisplayNames` rather than a table in this repository: the names are a
+ * fact about human languages, not about CandidCue, and a hand-kept list would
+ * be one more thing to translate. Falls back to the tag itself where the
+ * runtime has no name for it — a bare `en` is a worse label than "English" and
+ * a better one than nothing.
+ */
+export function languageDisplayName(tag: string): string {
+  try {
+    const names = new Intl.DisplayNames(undefined, { type: 'language' });
+    return names.of(tag) ?? tag;
+  } catch {
+    return tag;
+  }
+}

@@ -34,7 +34,7 @@ import type {
 import type { SaveResult, ScriptListFilter, ScriptPage, ScriptSort } from './scripts-types';
 // Type-only, so this does not close a runtime cycle: `speech-models` reaches
 // this module through a dynamic import, and types are erased.
-import type { SpeechModelStatus } from './speech-models';
+import type { SpeechLanguageOptions, SpeechModelStatus } from './speech-models';
 
 const STORAGE_KEY = 'candidcue.mock.scripts.v1';
 
@@ -334,6 +334,53 @@ function mockModelStatus(): SpeechModelStatus {
   };
 }
 
+/**
+ * The language picker (#153), for a window with no Rust behind it.
+ *
+ * One language, because that is what the real build offers: the three-way join
+ * Rust does (catalogue × recogniser × alignment engine) selects English alone
+ * today, and a mock that offered French would let a browser-dev screen render a
+ * row the app can never produce.
+ *
+ * `changeBlocked` is always false — browser dev has no coordinator and no take.
+ */
+function mockLanguageOptions(): SpeechLanguageOptions {
+  return {
+    active: {
+      languageTag: 'en-US',
+      primarySubtag: 'en',
+      modelId: 'x-asr-480ms',
+      recognizerId: BUNDLED_MODEL_NAME,
+    },
+    changeBlocked: false,
+    languages: [
+      {
+        languageTag: 'en-US',
+        primarySubtag: 'en',
+        modelId: 'x-asr-480ms',
+        recognizerId: BUNDLED_MODEL_NAME,
+        active: true,
+        status: mockModelStatus(),
+        origins: [{ kind: 'upstream', host: 'github.com' }],
+        attribution: {
+          title: 'X-ASR streaming Zipformer transducer (mock)',
+          author: 'Jun Guo, with the X-LANCE Lab, Shanghai Jiao Tong University',
+          sourceUrl: 'https://github.com/Gilgamesh-J/X-ASR',
+          distributedVia: 'https://github.com/k2-fsa/sherpa-onnx',
+          license: {
+            id: 'Apache-2.0',
+            name: 'Apache License 2.0',
+            url: 'https://www.apache.org/licenses/LICENSE-2.0',
+          },
+          licenseNote: null,
+          modified: false,
+        },
+      },
+    ],
+    removable: [],
+  };
+}
+
 export const mockSpeechModels = {
   status: mockModelStatus,
   /** No network in browser dev, so this completes immediately. */
@@ -346,6 +393,7 @@ export const mockSpeechModels = {
     mockModelInstalled = false;
     return mockModelStatus();
   },
+  languageOptions: mockLanguageOptions,
   /** Test seam: put the mock back into a known state. */
   reset(installed = true): void {
     mockModelInstalled = installed;

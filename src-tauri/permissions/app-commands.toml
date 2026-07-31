@@ -50,6 +50,8 @@ commands.allow = [
   "start_speech_model_download",
   "cancel_speech_model_download",
   "delete_speech_model",
+  "get_speech_language_options",
+  "select_speech_language",
   "start_alignment",
   "stop_alignment",
   "set_alignment_position",

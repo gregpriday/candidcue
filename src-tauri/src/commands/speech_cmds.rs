@@ -9,13 +9,29 @@
 //!
 //! What remains is the audio path: arm a session, push PCM at it, stop it.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::errors::AppError;
+use crate::coordinator::AppCoordinator;
+use crate::database::Database;
+use crate::errors::{AppError, ErrorCategory};
+use crate::settings::{self, RevisionedSettings};
 use crate::speech::catalogue::{self, ModelEntry};
+use crate::speech::language_options::{self, SpeechLanguageOptions};
 use crate::speech::model_manager::{self, SpeechModelManager, SpeechModelStatus};
-use crate::speech::{decode_base64, default_model, SpeechEngine, SAMPLE_RATE_HZ};
+use crate::speech::{decode_base64, BundledModel, SpeechEngine, SAMPLE_RATE_HZ};
+
+/// The recogniser the user's settings select.
+///
+/// Read from the database on every call rather than cached, and that is the
+/// point: this is the ONE place a language choice becomes a model, and a copy
+/// held anywhere else is a copy that can disagree with the settings screen.
+/// `selected_model` repairs anything this build cannot load, so a stale
+/// document degrades to the default rather than failing a take.
+async fn selected_model(db: &Database) -> Result<&'static BundledModel, AppError> {
+    let settings = settings::get_settings(db.pool()).await?;
+    Ok(settings::selected_model(&settings.value))
+}
 
 /// What Settings shows in place of "is the key still good?".
 ///
@@ -45,9 +61,10 @@ pub struct SpeechEngineStatus {
 #[tauri::command]
 pub async fn get_speech_engine_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
+    db: State<'_, Database>,
     speech: State<'_, SpeechEngine>,
 ) -> Result<SpeechEngineStatus, AppError> {
-    let model = default_model();
+    let model = selected_model(&db).await?;
     // "Is THIS model resident", not "is anything resident". The two are the
     // same answer while one model ships and stop being the same the moment a
     // second does — at which point a status line reporting model B as loaded
@@ -85,15 +102,23 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn preload_speech_engine<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
+    db: State<'_, Database>,
     speech: State<'_, SpeechEngine>,
 ) -> Result<(), AppError> {
-    speech.ensure_loaded(&app, default_model()).map(|_| ())
+    let model = selected_model(&db).await?;
+    speech.ensure_loaded(&app, model).map(|_| ())
 }
 
 /// What the renderer may choose about a session.
 ///
-/// Empty, and kept as a struct rather than deleted so the IPC shape has
-/// somewhere to grow. The provider-era options are all gone: `modelId` and
+/// Still empty after §153, and now deliberately so rather than incidentally.
+/// The language is a SETTING, read here from the database, and a per-take
+/// override would create a second authority over which recogniser is listening
+/// — which is exactly the mid-session switching §153 rules out. A renderer that
+/// could name a model per take could also name a different one from the one
+/// Settings is showing.
+///
+/// The provider-era options are all gone: `modelId` and
 /// `language` described a service that no longer exists, and `vocabulary`
 /// carried a soft bias the hosted recogniser accepted on its config frame.
 ///
@@ -116,10 +141,12 @@ pub struct TranscriptionOptions {}
 #[tauri::command]
 pub async fn start_transcription<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
+    db: State<'_, Database>,
     speech: State<'_, SpeechEngine>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
-    speech.start_stream(app, default_model())
+    let model = selected_model(&db).await?;
+    speech.start_stream(app, model)
 }
 
 /// Forward one frame of PCM16 audio, base64-encoded.
@@ -215,6 +242,121 @@ pub async fn delete_speech_model<R: tauri::Runtime>(
 ) -> Result<SpeechModelStatus, AppError> {
     let entry = resolve_entry(model_id.as_deref())?;
     models.delete(&app, entry)
+}
+
+/* ------------------------------------------------------------ language choice
+ *
+ * §153: the user picks a LANGUAGE. The model is an implementation detail of
+ * that choice, which is why these two commands speak in language tags and the
+ * four above speak in model ids.
+ */
+
+/// Every language this build can follow, with what fetching each one costs.
+///
+/// One call rather than "list languages, then ask about each model": a row
+/// cannot be painted without both halves, and splitting them would give the
+/// sizes and the install state separate chances to go stale.
+#[tauri::command]
+pub async fn get_speech_language_options<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    db: State<'_, Database>,
+    models: State<'_, SpeechModelManager>,
+    coordinator: State<'_, AppCoordinator>,
+) -> Result<SpeechLanguageOptions, AppError> {
+    let settings = settings::get_settings(db.pool()).await?;
+    Ok(language_options::build(
+        &app,
+        &models,
+        &settings.value,
+        take_is_running(&coordinator),
+    ))
+}
+
+/// What the picker sends when the user commits to a language.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectSpeechLanguageInput {
+    /// The settings revision the screen was showing. Carried so a language
+    /// change cannot silently clobber an unrelated edit made in another window.
+    pub expected_revision: i64,
+    /// A BCP-47 tag. Resolved by PRIMARY SUBTAG against the offer list, and the
+    /// offer's own canonical tag is what gets persisted — never this string.
+    pub language_tag: String,
+}
+
+/// Make a language the one CandidCue listens in.
+///
+/// Writes BOTH halves of the choice in ONE patch, and that is the whole reason
+/// this command exists rather than the screen issuing two settings writes. The
+/// language and the recogniser are a pair: persisted separately they can be
+/// observed half-applied, and a session declaring one language while the
+/// settings screen shows another is the failure `services/settings.ts` warns
+/// about in as many words.
+///
+/// Refused while a take is running. The recogniser loads once and stays
+/// resident, so honouring a change mid-take would either do nothing (and lie
+/// about it) or swap the model out from under a live session.
+#[tauri::command]
+pub async fn select_speech_language<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    db: State<'_, Database>,
+    coordinator: State<'_, AppCoordinator>,
+    input: SelectSpeechLanguageInput,
+) -> Result<RevisionedSettings, AppError> {
+    if take_is_running(&coordinator) {
+        return Err(AppError::structured(
+            "STT_LANGUAGE_CHANGE_BLOCKED",
+            ErrorCategory::Validation,
+            "End the current take before changing the speech language.",
+            true,
+        )
+        .with_log("language change requested while a session was open".to_string()));
+    }
+
+    // The same offer list the picker rendered from, so a tag that was offerable
+    // when the screen painted is still checked against the build's own tables
+    // rather than trusted. An unoffered language is refused here and can never
+    // reach the settings document.
+    let Some(offer) = language_options::offer_for_tag(&input.language_tag) else {
+        return Err(AppError::structured(
+            "STT_LANGUAGE_UNAVAILABLE",
+            ErrorCategory::Validation,
+            "CandidCue cannot follow that language yet.",
+            false,
+        )
+        .with_log(format!("no offer for language tag {:?}", input.language_tag)));
+    };
+
+    // Activating a language whose weights are not on the machine would leave
+    // the app claiming to listen in a language it cannot load — the take would
+    // fail at its top, which is the outcome §153 exists to move earlier.
+    if model_manager::resolve_for(&app, offer.entry).is_none() {
+        return Err(AppError::structured(
+            "STT_MODEL_NOT_INSTALLED",
+            ErrorCategory::Validation,
+            "Download this language before switching to it.",
+            true,
+        )
+        .with_log(format!("model {:?} is not installed", offer.entry.id)));
+    }
+
+    let patch = serde_json::json!({
+        "audio": {
+            "language": offer.language_tag,
+            "transcriptionModel": offer.model.id,
+        }
+    });
+    settings::update_settings(db.pool(), input.expected_revision, patch).await
+}
+
+/// Whether a take is open, as Rust sees it.
+///
+/// The COORDINATOR's session rather than `SpeechEngine::active_generation`,
+/// because a take exists before its transcription stream does: `start_session`
+/// establishes this the moment the take begins arming, and a language change
+/// landing in that window would apply to a take already under way.
+fn take_is_running(coordinator: &AppCoordinator) -> bool {
+    coordinator.snapshot().session.session_id.is_some()
 }
 
 /// A catalogue entry from an optional id, defaulting to the catalogue default.

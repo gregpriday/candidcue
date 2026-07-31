@@ -24,6 +24,7 @@
   import Select from '../components/Select.svelte';
   import SettingReadout from '../components/SettingReadout.svelte';
   import Slider from '../components/Slider.svelte';
+  import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
@@ -69,17 +70,10 @@
   import * as stageService from '../services/stage';
   import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
   import {
-    canDownload,
-    canRemove,
-    cancelSpeechModelDownload,
-    deleteSpeechModel,
-    formatBytes,
     getSpeechModelStatus,
     isBusy as isModelBusy,
     onSpeechModelProgress,
     phaseLabel,
-    progressFraction,
-    startSpeechModelDownload,
     type SpeechModelStatus,
   } from '../services/speech-models';
   import { getVoiceFacade } from '../services/voice-facade';
@@ -168,12 +162,20 @@
    */
   let recentErrors = $state<ErrorDiagnosticEntry[]>([]);
 
-  /* ------------------------------------------------------- speech model */
+  /* ------------------------------------------------------- speech model
+   *
+   * What is left here is the SECTION PILL — "can a take follow me right now?" —
+   * and nothing else. Choosing a language, downloading it, cancelling, and
+   * removing one all moved into `SpeechLanguagePicker` when §153 turned this
+   * from one model into a list of them; a second copy of that state machine
+   * living up here is exactly the drift Welcome's own comment warned about.
+   *
+   * The pill still needs the ACTIVE model's status, so this keeps the one
+   * snapshot it needs. `getSpeechModelStatus()` with no argument answers for
+   * the catalogue default, which is the model a stock install runs on.
+   */
 
   let modelStatus = $state<SpeechModelStatus | null>(null);
-  let modelActionError = $state<string | null>(null);
-  let modelActionBusy = $state(false);
-  let confirmingModelDelete = $state(false);
 
   /**
    * How many progress events have landed.
@@ -181,7 +183,7 @@
    * A snapshot request and the event stream race: a status call can be issued
    * while the install is validating, the install can finish and emit its
    * terminal event, and the older reply can then land on top and leave the
-   * panel stuck on a phase that is over. Rust is authoritative and its events
+   * pill stuck on a phase that is over. Rust is authoritative and its events
    * are newer than any request that was already in flight, so a snapshot is
    * discarded if anything arrived while it was pending.
    */
@@ -225,23 +227,6 @@
     await refreshEngineStatus();
   }
 
-  async function runModelAction(
-    action: () => Promise<SpeechModelStatus>,
-  ): Promise<void> {
-    modelActionBusy = true;
-    modelActionError = null;
-    try {
-      modelStatus = await action();
-    } catch (err) {
-      // Tauri rejects with a serialized AppError OBJECT, not an Error, so
-      // `String(err)` renders "[object Object]". `describeError` maps the
-      // stable code to copy and falls back to the redacted user message.
-      modelActionError = describeError(err);
-    } finally {
-      modelActionBusy = false;
-    }
-    await refreshSpeechStatus();
-  }
 
   $effect(() => {
     void loadSettings();
@@ -1609,16 +1594,17 @@
         </Section>
       {:else if section === 'speech'}
         <Section
-          title="Speech"
-          description="CandidCue transcribes on this machine. There is no account to create and no key to paste — but the recogniser is a large download, so it is fetched once after installation rather than shipped inside the app."
+          title="Speech language"
+          description="CandidCue listens in one language, chosen here. It transcribes on this machine — there is no account to create and no key to paste — but each language is a large download, fetched once rather than shipped inside the app."
         >
           <!--
-            `modelStatus` is authoritative for installed / not-installed, and
-            `engineStatus` only upgrades Installed to Ready. They used to be
+            The pill answers "can a take follow me right now?", which needs both
+            halves: `modelStatus` is authoritative for installed / not-installed
+            and `engineStatus` only upgrades Installed to Ready. They used to be
             consulted the other way round, which let the pill contradict the
-            body directly beneath it whenever the two calls disagreed — and
-            they disagree for ordinary reasons, since one can fail while the
-            other succeeds.
+            body directly beneath it whenever the two disagreed — and they
+            disagree for ordinary reasons, since one can fail while the other
+            succeeds.
           -->
           {#snippet actions()}
             {#if !modelStatus}
@@ -1635,117 +1621,21 @@
             {/if}
           {/snippet}
 
-          {#if modelStatus}
-            {@const busy = isModelBusy(modelStatus)}
-            {@const fraction = progressFraction(modelStatus)}
-
-            {#if !modelStatus.supported}
-              <p class="inline-alert" role="alert">
-                This version of CandidCue cannot run {modelStatus.modelId} yet.
-              </p>
-            {:else if busy}
-              <p class="hint-line" role="status" aria-live="polite">
-                {phaseLabel(modelStatus)}
-                {#if fraction !== null}
-                  — {formatBytes(modelStatus.progressBytes)} of {formatBytes(
-                    modelStatus.progressTotal,
-                  )}
-                {/if}
-              </p>
-              <!-- A determinate bar only while there is a real fraction to
-                   show. `installing` and `validating` measure nothing, and a
-                   bar snapping back to empty there reads as a restart. -->
-              <progress
-                class="model-progress"
-                max="1"
-                value={fraction ?? undefined}
-                aria-label="Speech model install progress"
-              ></progress>
-              <div class="model-actions">
-                <Button variant="default" onclick={() => void runModelAction(cancelSpeechModelDownload)}>
-                  Stop
-                </Button>
-              </div>
-            {:else if modelStatus.installed}
-              <p class="hint-line">
-                {#if modelStatus.source === 'bundled'}
-                  Installed with the app
-                {:else if modelStatus.source === 'override'}
-                  Loaded from CANDIDCUE_MODELS_DIR
-                {:else}
-                  Installed
-                {/if}
-                — {formatBytes(modelStatus.installedBytes)} on disk.
-              </p>
-              <!--
-                Only a real download is removable. `bundled` lives inside the
-                app bundle and is not ours to delete; `override` is a developer
-                pointing at their own directory, and Remove would silently
-                delete an app-data copy while the override stayed installed —
-                a button that appears to do nothing.
-              -->
-              {#if canRemove(modelStatus)}
-                <div class="model-actions">
-                  {#if confirmingModelDelete}
-                    <p class="hint-line">
-                      Remove the speech model? Voice following will not work until it is
-                      downloaded again.
-                    </p>
-                    <Button
-                      variant="danger-primary"
-                      disabled={modelActionBusy}
-                      onclick={() => {
-                        confirmingModelDelete = false;
-                        void runModelAction(deleteSpeechModel);
-                      }}
-                    >
-                      Remove it
-                    </Button>
-                    <Button variant="default" onclick={() => (confirmingModelDelete = false)}>
-                      Keep it
-                    </Button>
-                  {:else}
-                    <Button
-                      variant="danger"
-                      disabled={modelActionBusy}
-                      onclick={() => (confirmingModelDelete = true)}
-                    >
-                      Remove download
-                    </Button>
-                  {/if}
-                </div>
-              {/if}
-            {:else}
-              <p class="inline-alert" role="alert">
-                The speech model has not been downloaded yet, so voice following cannot run.
-                Everything else — writing, the stage, and fixed-speed scrolling — works without it.
-              </p>
-              {#if modelStatus.error}
-                <p class="hint-line">{modelStatus.error.message}</p>
-              {/if}
-              {#if canDownload(modelStatus)}
-                <div class="model-actions">
-                  <Button
-                    variant="primary"
-                    disabled={modelActionBusy}
-                    onclick={() => void runModelAction(startSpeechModelDownload)}
-                  >
-                    Download ({formatBytes(modelStatus.downloadBytes)})
-                  </Button>
-                </div>
-              {/if}
-            {/if}
-
-            {#if modelActionError}
-              <p class="inline-alert" role="alert">{modelActionError}</p>
-            {/if}
-
-            <p class="hint-line">
-              Recogniser: <code>{modelStatus.modelName}</code>. It transcribes {modelStatus.languages.join(
-                ' and ',
-              )}, runs only while a take is running, and uses a small fraction of one CPU core.
-            </p>
-          {/if}
+          <!--
+            §153: changing the language afterwards should read as a deliberate,
+            infrequent act rather than a toggle. Choosing a row in the dropdown
+            saves nothing and downloads nothing; the explicit "Use …" button is
+            the commitment, and it is refused while a take is open.
+          -->
+          <SpeechLanguagePicker
+            revision={$settings.revision}
+            onlanguagechange={() => {
+              // Forced: the store is already loaded, and Rust has just written
+              // a revision the screen would otherwise keep patching against.
+              void loadSettings(true);
+              void refreshSpeechStatus();
+            }}
+          />
 
           <p class="hint-line">
             The download is the only time CandidCue contacts the network for speech. Your voice is
@@ -2960,39 +2850,6 @@
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-muted);
-  }
-
-  /* Speech-model install (#152). */
-  .model-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  /*
-   * Styled for both states. With no `value` a progress element is
-   * indeterminate, which is exactly what the install and validate phases
-   * want — they have no fraction to report and a bar reading zero there
-   * would look like the download had restarted.
-   */
-  .model-progress {
-    width: 100%;
-    height: 6px;
-    appearance: none;
-    border: none;
-    border-radius: 3px;
-    background: var(--surface-sunken);
-  }
-
-  .model-progress::-webkit-progress-bar {
-    border-radius: 3px;
-    background: var(--surface-sunken);
-  }
-
-  .model-progress::-webkit-progress-value {
-    border-radius: 3px;
-    background: var(--accent);
   }
 
   /*

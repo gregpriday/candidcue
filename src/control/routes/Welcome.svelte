@@ -30,6 +30,7 @@
 <script lang="ts">
   import Button from '../components/Button.svelte';
   import Icon from '../components/Icon.svelte';
+  import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill, { type PillTone } from '../components/StatusPill.svelte';
   import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
   import { chooseStageDisplay } from '../lib/start-take';
@@ -231,19 +232,18 @@
         pill: 'Installed',
         detail: 'Voice following is ready. Transcription happens on this machine.',
         emphasis: 'quiet',
-        action: 'Manage model',
+        action: 'Manage languages',
       };
     }
     return {
       tone: 'accent',
       pill: 'Set up',
-      // The size is the whole reason this is a separate step, so it is named
-      // rather than buried behind the link.
-      detail: `Voice following needs a one-time ${formatBytes(
-        modelStatus.downloadBytes,
-      )} download. Everything else works without it.`,
+      // The picker below states the size for the chosen language; this line
+      // says why the step exists rather than repeating the number.
+      detail:
+        'Choose the language you will speak. Voice following needs a one-time download; everything else works without it.',
       emphasis: 'setup',
-      action: 'Download speech model',
+      action: 'Open speech settings',
     };
   }
 
@@ -407,24 +407,34 @@
       </li>
 
       <!--
-        Like the display row, this one's state ARRIVES — the status comes back
-        over IPC, and an install running in the background moves it again — so
-        the detail is a polite live region for the same reason.
+        §153: the language choice belongs HERE, at first run, alongside the
+        other setup a good take needs — not behind a link to Settings. The row
+        above it still reports state (and, like the display row, that state
+        ARRIVES over IPC, so the detail stays a polite live region); the picker
+        beneath it is where the choice is actually made.
+
+        Still not a gate. Writing, importing and the stage all work with no
+        recogniser at all, and nothing here blocks a CTA.
       -->
-      <li class="readiness-item" class:setup={speechState.emphasis === 'setup'}>
-        <span class="readiness-icon"><Icon name="mic" size={16} /></span>
-        <span class="readiness-text">
-          <span class="readiness-title">Speech model</span>
-          <span class="readiness-detail" role="status" aria-live="polite">
-            {speechState.detail}
+      <li class="readiness-item stacked" class:setup={speechState.emphasis === 'setup'}>
+        <div class="readiness-head">
+          <span class="readiness-icon"><Icon name="mic" size={16} /></span>
+          <span class="readiness-text">
+            <span class="readiness-title">Speech language</span>
+            <span class="readiness-detail" role="status" aria-live="polite">
+              {speechState.detail}
+            </span>
           </span>
-        </span>
-        <span class="readiness-status">
-          <StatusPill tone={speechState.tone} label={speechState.pill} />
-          <button type="button" class="link" onclick={openSpeechSettings}>
-            {speechState.action}
-          </button>
-        </span>
+          <span class="readiness-status">
+            <StatusPill tone={speechState.tone} label={speechState.pill} />
+            <button type="button" class="link" onclick={openSpeechSettings}>
+              {speechState.action}
+            </button>
+          </span>
+        </div>
+        <div class="readiness-picker">
+          <SpeechLanguagePicker compact revision={$settings.revision} />
+        </div>
       </li>
     </ul>
 
@@ -550,6 +560,25 @@
     align-items: flex-end;
     gap: 6px;
     flex: 0 0 auto;
+  }
+  /*
+    The speech row carries a control rather than only a readout (§153), so it
+    stacks: the same header as every other row, with the picker beneath it.
+  */
+  .readiness-item.stacked {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .readiness-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+  .readiness-picker {
+    /* Aligned under the title rather than the icon, so the block reads as
+       belonging to this row instead of starting a new one. */
+    padding-left: calc(16px + var(--space-3));
+    padding-top: var(--space-2);
   }
 
   .footer-links {

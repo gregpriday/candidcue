@@ -67,6 +67,7 @@ fn not_installed() -> AppError {
 }
 
 pub mod catalogue;
+pub mod language_options;
 pub mod model_download;
 pub mod model_manager;
 pub mod model_store;
