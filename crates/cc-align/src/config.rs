@@ -121,6 +121,29 @@ pub struct AlignmentConfig {
     /// reaches (atoms).
     pub retake_corridor_atoms: u32,
 
+    // ---- off-script aside ----
+    /// Consecutive insertion-dominated revisions before the tracker latches
+    /// off-script.
+    ///
+    /// Going off script is ordinary: an aside, an answer, fifteen seconds of
+    /// riffing. It is not the same thing as thin evidence, and it must not be
+    /// decided by one revision — a single partial where insertions happen to
+    /// dominate is a bad partial, not an aside.
+    pub off_script_enter_revisions: u8,
+    /// Consecutive ordered-exact revisions required to release the latch.
+    ///
+    /// Coming back is also not a single-revision fact: one revision that
+    /// happens to line up is not proof the reader is back on the page.
+    pub off_script_return_revisions: u8,
+    /// Consecutive exact matches that count as *ordered* evidence the reader
+    /// is back on the line they left.
+    ///
+    /// This is the bar the ordinary local gate does not clear on its own:
+    /// `fidelity` and `coverage` are ratios over the whole tail, so words from
+    /// the aside dilute them, while a run of consecutive exact matches is a
+    /// count that aside material cannot manufacture in script order.
+    pub off_script_return_min_run: u32,
+
     // ---- beam ----
     pub beam_size: usize,
     /// Hypotheses whose end positions differ by ≤ this many atoms are one
@@ -474,6 +497,12 @@ impl AlignmentConfig {
         // sweep that overshoots the top of the range gets full weight, not a
         // bonus for having been told the answer.
         self.biased_content_weight_milli = self.biased_content_weight_milli.min(1000);
+        // A zero here would latch (or release) on the single revision the
+        // hysteresis exists to disregard, which is the bug, not a tuning.
+        self.off_script_enter_revisions = self.off_script_enter_revisions.clamp(2, 16);
+        self.off_script_return_revisions = self.off_script_return_revisions.clamp(2, 16);
+        // One matched word is not an order.
+        self.off_script_return_min_run = self.off_script_return_min_run.clamp(2, 16);
         self
     }
 }
@@ -524,6 +553,10 @@ impl Default for AlignmentConfig {
             weak_unexplained_total: 4,
             desperate_search_after: 3,
             retake_corridor_atoms: 240,
+
+            off_script_enter_revisions: 3,
+            off_script_return_revisions: 2,
+            off_script_return_min_run: 3,
 
             beam_size: 8,
             cluster_radius: 3,
