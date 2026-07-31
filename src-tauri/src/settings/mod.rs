@@ -168,7 +168,12 @@ pub struct AudioSettings {
     /// question a diagnostics bundle has to be able to answer about a session
     /// recorded months ago on a build that may have shipped a different model.
     pub transcription_model: String,
-    /// BCP-47 tag, e.g. `en-US`. The bundled model is English-only.
+    /// BCP-47 tag, e.g. `en-US`.
+    ///
+    /// Honoured when the selected recogniser transcribes it and repaired when
+    /// it does not — which is a question about the model, not a constant. The
+    /// shipped bundle is bilingual (`zh-en`), a fact the code denied for long
+    /// enough to be worth stating here.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
@@ -188,8 +193,8 @@ pub struct AudioSettings {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            transcription_model: crate::speech::MODEL_NAME.into(),
-            language: DEFAULT_LANGUAGE.into(),
+            transcription_model: crate::speech::default_model().id.into(),
+            language: default_language().into(),
             soft_pause_auto_disconnect_minutes: 10,
             // A.6 neutral. Never an extreme: an unreadable or absent value must
             // not silently become the most aggressive VAD on offer.
@@ -352,26 +357,37 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
-/// The only language the bundled recogniser transcribes.
-pub const DEFAULT_LANGUAGE: &str = "en-US";
+/// The language a fresh install starts in.
+///
+/// The selected model's own, rather than a constant beside it. A fallback that
+/// does not track the model it is falling back to is exactly how the app ended
+/// up insisting on English at a recogniser that also transcribes Chinese.
+pub fn default_language() -> &'static str {
+    crate::speech::default_model().default_language
+}
 
 /// The recogniser to record, given whatever a previous build persisted.
 ///
-/// Anything that is not the model this build ships is replaced rather than
-/// honoured. The value on disk has twice now named a service the app no longer
-/// talks to — first a realtime provider's model, then Inworld's — and each time
-/// the stale string was forwarded to something that rejected it.
+/// Anything this build cannot load is replaced rather than honoured. The value
+/// on disk has twice now named a service the app no longer talks to — first a
+/// realtime provider's model, then Inworld's — and each time the stale string
+/// was forwarded to something that rejected it.
 ///
 /// It cannot be forwarded anywhere any more, because there is nothing to
 /// forward it to; but it is still reported in diagnostics and still shown in
 /// Settings, and a build that claims to be running `inworld/inworld-stt-1` while
 /// an on-device Zipformer does the listening is a lie in the one artefact whose
 /// whole job is to be believed.
-fn resolve_model(requested: &str) -> String {
-    match requested.trim() {
-        model if model == crate::speech::MODEL_NAME => model.to_string(),
-        _ => crate::speech::MODEL_NAME.to_string(),
-    }
+///
+/// The test is now catalogue MEMBERSHIP rather than equality with one constant.
+/// The two agree exactly while one model ships, and they stop agreeing the
+/// moment a second one does — at which point equality would start throwing away
+/// a choice the user had made rather than repairing one the build cannot serve.
+/// Membership deliberately says nothing about whether the model's files are
+/// healthy on this machine: a broken bundle is the speech engine's status to
+/// report, not a reason to rewrite what the user picked.
+fn resolve_model(requested: &str) -> &'static crate::speech::BundledModel {
+    crate::speech::model_by_id(requested).unwrap_or_else(crate::speech::default_model)
 }
 
 /// Repair values that a previous build wrote and this one cannot honour.
@@ -384,35 +400,37 @@ fn resolve_model(requested: &str) -> String {
 /// re-derived every time the document loads, so an installation that never
 /// writes settings again is still fixed.
 fn migrate_in_place(settings: &mut AppSettings) {
-    let resolved = resolve_model(settings.audio.transcription_model.as_str());
-    if resolved != settings.audio.transcription_model {
+    let model = resolve_model(settings.audio.transcription_model.as_str());
+    if model.id != settings.audio.transcription_model {
         tracing::info!(
             "settings: replacing unsupported transcription model {:?} with {:?}",
             settings.audio.transcription_model,
-            resolved
+            model.id
         );
-        settings.audio.transcription_model = resolved;
+        settings.audio.transcription_model = model.id.to_string();
     }
 
     // Previous builds offered Spanish, French, German and Portuguese, because
-    // the hosted service transcribed them. The bundled model is English-only,
-    // so a persisted `es-ES` is a setting the app cannot honour and must not
-    // keep claiming — a diagnostics bundle that reports a take was transcribed
-    // in Spanish, by an English-only recogniser, sends whoever reads it after
-    // the wrong problem.
-    if !settings
-        .audio
-        .language
-        .trim()
-        .to_ascii_lowercase()
-        .starts_with("en")
-    {
+    // the hosted service transcribed them. A persisted `es-ES` is a setting the
+    // bundled model cannot honour and must not keep claiming — a diagnostics
+    // bundle reporting that a take was transcribed in Spanish, by a recogniser
+    // with no Spanish in it, sends whoever reads it after the wrong problem.
+    //
+    // Asked of the RESOLVED MODEL rather than of a hardcoded `en` prefix. The
+    // prefix test was wrong in both directions: it discarded `zh-CN`, which the
+    // shipped bilingual model transcribes perfectly well, and it accepted
+    // anything else beginning with those two letters. Repairing a setting the
+    // recogniser cannot serve is worth doing; overwriting one it can is just
+    // losing the user's choice on a build that happened to be sure.
+    if !model.serves_language(&settings.audio.language) {
+        let fallback = model.default_language;
         tracing::info!(
-            "settings: replacing unsupported language {:?} with {:?}",
+            "settings: replacing language {:?}, which {:?} does not transcribe, with {:?}",
             settings.audio.language,
-            DEFAULT_LANGUAGE
+            model.id,
+            fallback
         );
-        settings.audio.language = DEFAULT_LANGUAGE.to_string();
+        settings.audio.language = fallback.to_string();
     }
 }
 
@@ -520,7 +538,7 @@ mod tests {
     /// a bundle claiming a take was transcribed by a service the build cannot
     /// reach sends whoever reads it after the wrong problem.
     #[test]
-    fn a_stale_recogniser_name_is_rewritten_to_the_one_that_ships() {
+    fn a_recogniser_name_this_build_cannot_load_is_rewritten() {
         for stale in [
             "inworld/inworld-stt-1",
             "gpt-realtime-whisper",
@@ -532,29 +550,74 @@ mod tests {
             migrate_in_place(&mut settings);
             assert_eq!(
                 settings.audio.transcription_model,
-                crate::speech::MODEL_NAME,
+                crate::speech::default_model().id,
                 "{stale:?} must be rewritten"
             );
         }
     }
 
-    /// The bundled recogniser is English-only; earlier builds offered four
-    /// other languages against a hosted service that served them.
+    /// Every model the build ships is one it may keep.
+    ///
+    /// The repair used to be equality with a single constant, which is the same
+    /// thing while one model ships and stops being the same thing the day two
+    /// do — silently rewriting the user's choice back to the first one.
     #[test]
-    fn a_language_the_recogniser_cannot_serve_is_rewritten() {
-        for stale in ["es-ES", "fr-FR", "de-DE", "pt-BR"] {
+    fn a_recogniser_this_build_does_ship_is_left_alone() {
+        for model in crate::speech::bundled_models() {
+            let mut settings = AppSettings::default();
+            settings.audio.transcription_model = model.id.to_string();
+            settings.audio.language = model.default_language.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(
+                settings.audio.transcription_model, model.id,
+                "{} must survive",
+                model.id
+            );
+        }
+    }
+
+    /// A language the SELECTED recogniser cannot serve is repaired; one it can
+    /// is left alone.
+    ///
+    /// Earlier builds offered Spanish, French, German and Portuguese against a
+    /// hosted service that served them, and those still have to go. What must
+    /// NOT go is Chinese: the shipped bundle is `zh-en` and roughly 4000 of its
+    /// 5000 tokens are CJK, so a persisted `zh-CN` was a setting the recogniser
+    /// could honour that the app threw away on the strength of a comment
+    /// calling it English-only.
+    #[test]
+    fn a_language_the_selected_recogniser_cannot_serve_is_rewritten() {
+        let shipped = crate::speech::default_model();
+        for stale in ["es-ES", "fr-FR", "de-DE", "pt-BR", "enochian", ""] {
             let mut settings = AppSettings::default();
             settings.audio.language = stale.to_string();
             migrate_in_place(&mut settings);
-            assert_eq!(settings.audio.language, DEFAULT_LANGUAGE, "{stale} must go");
+            assert_eq!(
+                settings.audio.language, shipped.default_language,
+                "{stale:?} must go"
+            );
         }
-        // An English locale the user chose deliberately is left alone.
-        for kept in ["en-GB", "en-AU", "en-US"] {
+        // A locale the recogniser serves is the user's to keep.
+        for kept in ["en-GB", "en-AU", "en-US", "zh", "zh-CN", "zh-Hans-CN"] {
             let mut settings = AppSettings::default();
             settings.audio.language = kept.to_string();
             migrate_in_place(&mut settings);
             assert_eq!(settings.audio.language, kept, "{kept} must survive");
         }
+    }
+
+    /// Repair is idempotent: reading settings twice must not keep rewriting
+    /// them. `migrate_in_place` runs on every load, so a value it does not
+    /// settle on would churn the document forever.
+    #[test]
+    fn repairing_twice_changes_nothing_the_second_time() {
+        let mut settings = AppSettings::default();
+        settings.audio.transcription_model = "inworld/inworld-stt-1".to_string();
+        settings.audio.language = "fr-FR".to_string();
+        migrate_in_place(&mut settings);
+        let once = settings.clone();
+        migrate_in_place(&mut settings);
+        assert_eq!(settings.audio, once.audio);
     }
 
     use super::*;
@@ -687,7 +750,7 @@ mod tests {
 
         migrate_in_place(&mut settings);
 
-        assert_eq!(settings.audio.transcription_model, crate::speech::MODEL_NAME);
+        assert_eq!(settings.audio.transcription_model, crate::speech::default_model().id);
         // And the settings the user actually chose are untouched.
         assert_eq!(settings.audio.vad_sensitivity, 0.8);
     }
@@ -695,19 +758,22 @@ mod tests {
     #[test]
     fn a_supported_model_is_left_exactly_as_it_was() {
         let mut settings = AppSettings::default();
-        settings.audio.transcription_model = crate::speech::MODEL_NAME.into();
+        settings.audio.transcription_model = crate::speech::default_model().id.into();
         migrate_in_place(&mut settings);
-        assert_eq!(settings.audio.transcription_model, crate::speech::MODEL_NAME);
+        assert_eq!(settings.audio.transcription_model, crate::speech::default_model().id);
     }
 
-    /// The Inworld defaults are the ones the streaming config frame is built
-    /// from, so a typo here is a session that connects and transcribes nothing.
+    /// A fresh install must name the recogniser it actually ships and a
+    /// language that recogniser serves — the two facts a diagnostics bundle
+    /// reports about a take before anyone has changed anything.
     #[test]
-    fn audio_defaults_name_an_inworld_model_and_locale() {
+    fn audio_defaults_name_the_bundled_model_and_a_locale_it_serves() {
         let audio = AppSettings::default().audio;
-        assert_eq!(audio.transcription_model, crate::speech::MODEL_NAME);
-        assert_eq!(audio.language, DEFAULT_LANGUAGE);
-        assert!(audio.language.contains('-'), "Inworld wants a BCP-47 tag");
+        let shipped = crate::speech::default_model();
+        assert_eq!(audio.transcription_model, shipped.id);
+        assert_eq!(audio.language, shipped.default_language);
+        assert!(shipped.serves_language(&audio.language));
+        assert!(audio.language.contains('-'), "a BCP-47 tag, not a bare subtag");
     }
 
     /// A null patch value resets a field to its default. `merge_json` removes

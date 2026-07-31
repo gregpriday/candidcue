@@ -32,7 +32,8 @@
 export interface RustAudioSettings {
   /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
   transcriptionModel: string;
-  /** BCP-47 tag, e.g. `en-US`. The bundled recogniser is English-only. */
+  /** BCP-47 tag, e.g. `en-US`. Rust repairs a tag the selected recogniser
+   * cannot transcribe; the bundled one is bilingual (`zh-en`). */
   language: string;
   softPauseAutoDisconnectMinutes: number;
   /** 0-1; 0.5 is the Appendix A.6 neutral (§28.4). */

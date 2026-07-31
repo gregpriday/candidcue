@@ -17,6 +17,7 @@
 //!   faith. The app does not enable it.
 
 pub mod local;
+pub mod models;
 
 #[cfg(feature = "inworld")]
 pub mod inworld;
@@ -66,4 +67,5 @@ pub enum SttFrame {
     Closed {},
 }
 
-pub use local::{LocalRecognizer, LocalSttConfig};
+pub use local::{LocalModelTuning, LocalRecognizer, LocalSttConfig};
+pub use models::{bundled_models, default_model, model_by_id, BundledModel};

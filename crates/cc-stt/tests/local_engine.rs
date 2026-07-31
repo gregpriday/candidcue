@@ -12,45 +12,69 @@
 use std::path::PathBuf;
 
 use cc_stt::local::{LocalRecognizer, LocalSttConfig};
+use cc_stt::models::default_model;
 use cc_stt::SttFrame;
 
-/// Find the bundled model, whichever one this build ships.
+/// Where the shipped model's weights live in a dev checkout.
 ///
-/// Deliberately a SEARCH rather than a hard-coded path. It used to name
+/// Asked of the CATALOGUE rather than written out here. This used to name
 /// `models/zipformer-en-20m` directly, and when the bundled model was replaced
-/// the directory stopped existing — so every test in this file started
-/// skipping and kept reporting success. The one suite that exercises the real
-/// recogniser through the real code path went dark for a whole model swap and
-/// said `ok` the entire time.
-fn model_dir() -> Option<PathBuf> {
-    let models = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/models");
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&models)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    // Sorted so a machine holding two model bundles picks the same one twice.
-    candidates.sort();
-    candidates
-        .into_iter()
-        .find(|dir| LocalSttConfig::with_model_dir(dir).validate().is_ok())
+/// the directory stopped existing — so every test in this file started skipping
+/// and kept reporting success. The one suite that exercises the real recogniser
+/// through the real code path went dark for a whole model swap and said `ok`
+/// the entire time.
+///
+/// It was then a SEARCH for any directory that happened to validate, which
+/// fixed the staleness and introduced a worse problem: on a machine holding a
+/// second bundle it would test THAT one and report it as the shipped model.
+/// Deriving the path from `default_model()` cannot go stale — replacing the
+/// model moves this with it — and cannot wander onto a different bundle.
+fn model_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src-tauri")
+        .join(default_model().resource_dir)
 }
 
-/// The skip is for a clean clone that has not run `pnpm models:fetch`. On a
-/// machine that HAS fetched a model, skipping silently is the failure this
-/// whole file exists to prevent, so say so loudly enough to be noticed.
+/// The shipped model's directory, or `None` when the weights were never
+/// fetched.
+///
+/// The skip is for a clean clone that has not run `pnpm models:fetch`, and it
+/// is deliberately narrow: only a directory with no graphs in it at all counts
+/// as "not fetched". A directory that HAS graphs but does not detect is a
+/// broken bundle, and this panics rather than skipping — silently skipping a
+/// broken model is precisely the failure this file exists to prevent, and it
+/// has happened here before.
 fn require_model() -> Option<PathBuf> {
-    match model_dir() {
-        Some(dir) => Some(dir),
-        None => {
-            eprintln!(
-                "SKIPPING {}: no usable model under src-tauri/models (run `pnpm models:fetch`)",
-                module_path!()
-            );
-            None
-        }
+    let dir = model_dir();
+    let graphs = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(".onnx")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if graphs == 0 {
+        eprintln!(
+            "SKIPPING {}: no model in {} (run `pnpm models:fetch`)",
+            module_path!(),
+            dir.display()
+        );
+        return None;
     }
+    if let Err(detail) = LocalSttConfig::for_model(default_model(), &dir).validate() {
+        panic!(
+            "{} holds {graphs} ONNX graph(s) but is not a loadable bundle — a half-fetched \
+             model must fail here rather than skip: {detail}",
+            dir.display()
+        );
+    }
+    Some(dir)
 }
 
 /// 24 kHz mono PCM16 silence, the app's capture format.
@@ -62,7 +86,7 @@ fn silence_pcm16(ms: usize) -> Vec<u8> {
 fn the_bundled_model_loads_and_a_session_closes_cleanly() {
     let Some(dir) = require_model() else { return };
     let recognizer =
-        LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
+        LocalRecognizer::load(&LocalSttConfig::for_model(default_model(), dir)).expect("model loads");
 
     let mut frames = Vec::new();
     let mut session = recognizer.session(7);
@@ -88,7 +112,7 @@ fn the_bundled_model_loads_and_a_session_closes_cleanly() {
 fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
     let Some(dir) = require_model() else { return };
     let recognizer =
-        LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
+        LocalRecognizer::load(&LocalSttConfig::for_model(default_model(), dir)).expect("model loads");
 
     // The clock is "audio consumed", which is what the alignment engine times
     // every prediction against. It must follow the samples handed over, not the
@@ -114,13 +138,13 @@ fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
 
 #[test]
 fn a_missing_model_is_refused_by_name_rather_than_by_a_null_pointer() {
-    let config = LocalSttConfig::with_model_dir("/definitely/not/a/model");
+    let config = LocalSttConfig::for_model(default_model(), "/definitely/not/a/model");
     let error = match LocalRecognizer::load(&config) {
         Ok(_) => panic!("a model directory that does not exist must not load"),
         Err(error) => error,
     };
     assert!(
-        error.contains("encoder"),
-        "the error must name the file that is missing: {error}"
+        error.contains("/definitely/not/a/model"),
+        "the error must name what it could not find: {error}"
     );
 }

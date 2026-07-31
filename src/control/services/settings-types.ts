@@ -823,7 +823,8 @@ export function defaultAppSettings(): AppSettings {
       readerFrame: null,
     },
     speech: {
-      // Must match `crate::speech::MODEL_NAME`. Rust re-derives this on every
+      // Must match the id of `cc_stt::models::default_model()`, re-exported as
+      // `crate::speech::default_model`. Rust re-derives this on every
       // settings read, so a stale value here is corrected before a take — but
       // it is also what the browser mock and the offline fallback show, and a
       // default that names a service the app no longer talks to is a lie in
