@@ -31,6 +31,17 @@ export const FOCUSABLE_SELECTOR = [
  * non-focusable content dropped it on `<body>`. From there the browser would
  * walk the page BEHIND the scrim, so the trap pulls focus back to its own edge
  * rather than doing nothing.
+ *
+ * Being inside the panel is not the same as being in the ring, and the second
+ * is what the edge tests below need. A long dialog opens on a static
+ * `tabindex="-1"` line at the top — the APG's own advice, and what keeps the
+ * shortcuts reference from opening scrolled to its footer button — and that
+ * element is excluded by `FOCUSABLE_SELECTOR`. It is therefore neither `first`
+ * nor `last`, so both edge tests missed, `null` handed Tab back to the browser,
+ * and Shift+Tab walked straight out of an `aria-modal` panel whose only real
+ * stop was the button in the footer. Membership implies containment, so this
+ * subsumes `inside`; the flag stays because it is the caller's own reading of
+ * where focus went and costs nothing to keep honest.
  */
 export function nextTrapFocus(
   focusables: readonly HTMLElement[],
@@ -41,7 +52,7 @@ export function nextTrapFocus(
   if (focusables.length === 0) return null;
   const first = focusables[0] ?? null;
   const last = focusables[focusables.length - 1] ?? null;
-  if (!inside || active === null) return shiftKey ? last : first;
+  if (!inside || active === null || !focusables.includes(active)) return shiftKey ? last : first;
   if (shiftKey && active === first) return last;
   if (!shiftKey && active === last) return first;
   return null;

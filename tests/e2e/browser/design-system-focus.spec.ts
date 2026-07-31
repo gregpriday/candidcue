@@ -133,18 +133,47 @@ test('a selection drag out of a dialog does not dismiss it', async ({ page }) =>
 
   const panel = await dialog.boundingBox();
   expect(panel).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+
+  /*
+   * Aim at the middle of the scrim BELOW the panel rather than a fixed overshoot
+   * past its edge.
+   *
+   * The panel caps at `min(80vh, 640px)` and scrolls its own content, so a
+   * dialog whose content grows past the cap stops growing on the glass and
+   * instead sits taller and closer to the viewport floor. A hardcoded `+ 80`
+   * then falls off the bottom of the viewport, where the pointer lands on
+   * nothing at all — and a gesture that touches nothing dismisses nothing, so
+   * the "must not dismiss" assertion below goes on passing while testing
+   * neither the drag nor the guard it exists to protect. Only the click half
+   * fails, which reports a Dialog regression that never happened.
+   *
+   * The midpoint self-scales, and the cap is what guarantees it exists: at most
+   * 80vh of panel always leaves scrim underneath, whatever the dialog holds.
+   */
+  const scrimX = panel!.x + panel!.width / 2;
+  const scrimY = (panel!.y + panel!.height + viewport!.height) / 2;
+
+  // ...and prove it landed there, so neither half can be asserted against empty
+  // space again.
+  const hit = await page.evaluate(
+    (point) => document.elementFromPoint(point.x, point.y)?.className ?? null,
+    { x: scrimX, y: scrimY },
+  );
+  expect(hit, 'the release point must be on the scrim').toContain('scrim');
 
   // Press inside the panel, drag well clear of it, release over the scrim —
   // the gesture of selecting the last line of text and overshooting.
   await page.mouse.move(panel!.x + panel!.width / 2, panel!.y + panel!.height / 2);
   await page.mouse.down();
-  await page.mouse.move(panel!.x + panel!.width / 2, panel!.y + panel!.height + 80, { steps: 10 });
+  await page.mouse.move(scrimX, scrimY, { steps: 10 });
   await page.mouse.up();
 
   await expect(dialog, 'releasing a panel drag over the scrim must not dismiss').toBeVisible();
 
   // A genuine click on the scrim still closes it — the fix must not cost the
   // dismissal it is guarding.
-  await page.mouse.click(panel!.x + panel!.width / 2, panel!.y + panel!.height + 80);
+  await page.mouse.click(scrimX, scrimY);
   await expect(dialog).toBeHidden();
 });

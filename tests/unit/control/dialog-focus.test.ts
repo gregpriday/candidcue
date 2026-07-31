@@ -35,6 +35,22 @@ describe('nextTrapFocus', () => {
     expect(nextTrapFocus(TRAP, B, true, true)).toBeNull();
   });
 
+  /*
+   * The other way out, and the one a long dialog walks into by following the
+   * APG: open on a static `tabindex="-1"` line at the top so the panel does not
+   * scroll to its footer button. That element is inside the panel and outside
+   * the ring, so it is neither `first` nor `last` — the edge tests could never
+   * fire, and Tab fell through to the browser, out of an `aria-modal` panel.
+   */
+  it('holds the line when focus is inside the panel but outside the ring', () => {
+    const INTRO = { id: 'intro' } as unknown as HTMLElement;
+    expect(nextTrapFocus(TRAP, INTRO, false, true)).toBe(A);
+    expect(nextTrapFocus(TRAP, INTRO, true, true)).toBe(C);
+    // The shortcuts dialog's own shape: one real stop, so both ways land on it.
+    expect(nextTrapFocus([A], INTRO, false, true)).toBe(A);
+    expect(nextTrapFocus([A], INTRO, true, true)).toBe(A);
+  });
+
   it('does nothing when the dialog has no focusable content', () => {
     expect(nextTrapFocus([], null, false, false)).toBeNull();
   });
