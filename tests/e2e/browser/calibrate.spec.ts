@@ -247,7 +247,13 @@ test('Apply cannot clear a mirror set in Settings when the orientation step was 
 
   // Straight past it to the end, so orientation is never answered.
   await applyRig(page);
-  await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
+  /*
+   * "Measure another rig…" is the sentinel for being back on Stage display once
+   * a rig is applied. The primary button there is "Re-calibrate {rigName}…" and
+   * so moves with the rig's name; this one does not, and only exists in the
+   * applied state, which is exactly the state every assertion below is in.
+   */
+  await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
 
   // The mirror survived a rig the operator calibrated around it.
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
@@ -292,7 +298,7 @@ test('a second Apply cannot start while the first is still saving', async ({ pag
 
   // The save completes and the wizard leaves on its own.
   await page.evaluate(() => window.__E2E__.setDelay('update_settings', null));
-  await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
 
   // Still exactly one write, despite Apply having been pressed during a save.
   expect(await settingsWrites(page)).toHaveLength(1);
@@ -317,7 +323,7 @@ test('finishing the wizard is what applies the mirror, both axes at once', async
   await applyRig(page);
 
   // Finishing navigates back to Stage display on its own.
-  await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
 
   // Both axes are now in force, and the operator can see it on the switches.
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
