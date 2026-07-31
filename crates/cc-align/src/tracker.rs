@@ -345,9 +345,10 @@ pub struct Engine {
     /// window and votes to end the aside again on every later revision —
     /// the same three words counted twice, which is not two pieces of evidence.
     off_script_return_position: f64,
-    /// Exact matches behind that position, so progress cannot be manufactured
-    /// by a fuzzy word landing after an unchanged run.
-    off_script_return_exact: u32,
+    /// Audio time the return began, so releasing the latch can retire the
+    /// aside's own words from the tail rather than leaving them to drag the
+    /// ordinary ratio gate back down over a reader who has plainly resumed.
+    off_script_return_from_ms: f64,
     /// Evidence older than this is dead: it was spoken before the last
     /// accepted discontinuity (or manual move) and would otherwise keep
     /// out-voting the new location in the full-tail alignment — the failure
@@ -384,7 +385,7 @@ impl Engine {
             off_script_enter_streak: 0,
             off_script_return_streak: 0,
             off_script_return_position: 0.0,
-            off_script_return_exact: 0,
+            off_script_return_from_ms: 0.0,
             tail_horizon_ms: f64::MIN,
             regions: Vec::new(),
         }
@@ -421,7 +422,7 @@ impl Engine {
         self.off_script_enter_streak = 0;
         self.off_script_return_streak = 0;
         self.off_script_return_position = 0.0;
-        self.off_script_return_exact = 0;
+        self.off_script_return_from_ms = 0.0;
     }
 
     /// Tell the tracker what range of atoms the presenter can currently see.
@@ -1084,33 +1085,47 @@ impl Engine {
         // running. A reader riffing near their place throws off script words by
         // coincidence; coincidence does not arrive in script order twice.
         //
-        // The second run must also be FURTHER ON than the first. The tail is
-        // cumulative, so one lucky run survives in the window and would
-        // otherwise vote again on every later revision — one piece of evidence
-        // counted twice. Requiring progress asks the question that actually
-        // distinguishes the two cases: are you reading, or did you happen to
-        // say three of these words once?
+        // The second run must also CLEAR the first. The tail is cumulative, so
+        // one lucky run survives in the window and would otherwise vote again
+        // on every later revision — one piece of evidence counted twice.
+        // Requiring a whole run's worth of daylight between them is what makes
+        // the two votes independent rather than the same words re-read.
+        //
+        // A revision that neither contradicts the return nor gets past the last
+        // one is a RESTATEMENT, and neither counts nor cancels. The on-device
+        // recogniser closes an item by re-emitting its last hypothesis as a
+        // final, so treating "no progress" as contradiction would cancel the
+        // vote the matching partial just earned, on every short utterance.
         if self.off_script {
             let position = ev.end_position as f64;
-            // Progress has to be made of EXACT matches. `end_position` alone
-            // can be nudged forward by a fuzzy or phonetic word sitting after
-            // the same old run, which would let one lucky run buy both votes.
-            let progressed = position > self.off_script_return_position
-                && ev.exact_matches > self.off_script_return_exact;
-            let returning = ev.longest_run >= c.off_script_return_min_run
+            let ordered = ev.longest_run >= c.off_script_return_min_run
                 && ev.content_matches >= c.observe_min_content
-                && position >= self.observed
-                && (self.off_script_return_streak == 0 || progressed);
-            if returning {
+                && position >= self.observed;
+            let clears_last = self.off_script_return_streak == 0
+                || position >= self.off_script_return_position + c.off_script_return_min_run as f64;
+            if !ordered {
+                self.off_script_return_streak = 0;
+            } else if clears_last {
                 self.off_script_return_streak = self.off_script_return_streak.saturating_add(1);
                 self.off_script_return_position = position;
-                self.off_script_return_exact = ev.exact_matches;
-            } else {
-                self.off_script_return_streak = 0;
+                if self.off_script_return_streak == 1 {
+                    // Where coming back began. On release this retires the
+                    // aside so its words stop dragging the ratios down.
+                    self.off_script_return_from_ms = ev.last_match_audio_ms;
+                }
             }
             if self.off_script_return_streak < c.off_script_return_revisions {
                 return self.hold(DecisionCode::HoldOffScript, now_ms);
             }
+            // The aside is over. Retire the words it was made of: they are the
+            // reason the ordinary ratio gate cannot see the reader, and left in
+            // the tail they would re-park them within a revision or two.
+            self.tail_horizon_ms = self.tail_horizon_ms.max(self.off_script_return_from_ms);
+            // The pace anchors now straddle the aside. A pair spanning twenty
+            // silent seconds reads as a crawl, and the median would clamp to
+            // `rate_min` just as the reader gets going again — so drop them and
+            // re-learn the pace from what they read next.
+            self.rate_anchors.clear();
             self.clear_off_script();
             // Ordered exact evidence is the stronger claim of the two. Having
             // asked for it, honour it — otherwise the aside's leftover words
@@ -2052,18 +2067,22 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_run_restarts_the_return() {
+    fn going_back_to_the_aside_does_not_complete_the_return() {
         let mut engine = engine_off_script();
 
         final_item(&mut engine, 4, "echo foxtrot golf", 1_600.0);
         assert_eq!(engine.off_script_return_streak, 1);
 
-        // Back to the aside before the return completed. The earlier run is
-        // still sitting in the cumulative tail, so this also pins down that it
-        // does not get to vote a second time from where it already voted.
-        final_item(&mut engine, 5, "wombat pangolin marmoset", 2_000.0);
-        assert_eq!(engine.off_script_return_streak, 0);
+        // Back to the aside before the return completed. More aside words
+        // cannot supply the second vote however many arrive, because that vote
+        // has to come from a run further on than the first — and the reader is
+        // not producing runs at all.
+        for (n, at) in [(5u32, 2_000.0), (6, 2_400.0), (7, 2_800.0)] {
+            let snapshot = final_item(&mut engine, n, "wombat pangolin marmoset", at);
+            assert_eq!(snapshot.decision, DecisionCode::HoldOffScript);
+        }
         assert!(engine.off_script);
+        assert_eq!(engine.observed, 4.0);
     }
 
     #[test]
@@ -2088,6 +2107,68 @@ mod tests {
             engine.off_script,
             "a static run must not accumulate a return streak: {:?} then {:?}",
             second.decision, third.decision,
+        );
+    }
+
+    #[test]
+    fn restating_the_same_words_neither_counts_nor_cancels() {
+        let mut engine = engine_off_script();
+
+        let partial = engine.handle(SessionEvent::Partial {
+            item_id: "item-4".to_string(),
+            text: "echo foxtrot golf".to_string(),
+            audio_ms: 1_600.0,
+        });
+        assert_eq!(partial.decision, DecisionCode::HoldOffScript);
+        assert_eq!(engine.off_script_return_streak, 1);
+
+        // The recogniser closes the item by re-emitting the same hypothesis.
+        // That is one utterance, not a contradiction — it must not cancel the
+        // vote its own partial just earned.
+        final_item(&mut engine, 4, "echo foxtrot golf", 1_700.0);
+        assert_eq!(
+            engine.off_script_return_streak, 1,
+            "a duplicate final restated the same words; it is not evidence against the return",
+        );
+        assert!(engine.off_script);
+    }
+
+    #[test]
+    fn a_reader_who_keeps_reading_always_gets_back() {
+        // A swept config where progress cannot be measured by counting exact
+        // matches: the tail holds four atoms, so a reader reading perfectly
+        // pins that count at four forever while their position keeps moving.
+        let config = AlignmentConfig {
+            max_query_atoms: 4,
+            off_script_return_min_run: 4,
+            ..AlignmentConfig::default()
+        }
+        .sanitized();
+        assert_eq!(config.off_script_return_min_run, 4, "clamp changed the case under test");
+
+        let mut engine = Engine::new(aside_script(), config);
+        engine.set_manual_position(4, 0.0);
+        for (n, at) in [(1u32, 400.0), (2, 800.0), (3, 1_200.0)] {
+            final_item(&mut engine, n, "wombat pangolin marmoset", at);
+        }
+        assert!(engine.off_script, "fixture failed to latch");
+
+        // Now read on, correctly, for as long as any presenter reasonably would.
+        let mut at = 1_600.0;
+        let phrases = [
+            "echo foxtrot golf hotel",
+            "india juliet kilo lima",
+            "mike november oscar papa",
+            "quebec romeo sierra tango",
+        ];
+        for (n, phrase) in phrases.iter().enumerate() {
+            final_item(&mut engine, 10 + n as u32, phrase, at);
+            at += 400.0;
+        }
+
+        assert!(
+            !engine.off_script,
+            "a reader reading the script must always be able to get back",
         );
     }
 
