@@ -357,7 +357,7 @@ pub fn align(
                             ev.stable_end_position = region_start + j as u32;
                         }
                     }
-                    if !crate::normalize::is_stopword(&q.surface) && !q.filler {
+                    if !q.stopword && !q.filler {
                         ev.content_matches += 1;
                         if q.stability.is_stable() {
                             ev.stable_content_matches += 1;
@@ -376,7 +376,7 @@ pub fn align(
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult * 0.5;
                     }
-                    if !crate::normalize::is_stopword(&q.surface) && !q.filler {
+                    if !q.stopword && !q.filler {
                         ev.approximate_content_matches += 1;
                     }
                     if ev.last_match_query_index.is_none() {
@@ -389,7 +389,7 @@ pub fn align(
                     run = 0;
                     prev_exact_qi = None;
                     ev.matched_weight += weight * stab_mult * 0.4;
-                    if !crate::normalize::is_stopword(&q.surface) && !q.filler {
+                    if !q.stopword && !q.filler {
                         ev.approximate_content_matches += 1;
                     }
                     if ev.last_match_query_index.is_none() {
@@ -509,19 +509,25 @@ mod tests {
     use crate::ledger::StabilityClass;
     use crate::script::{compile, CompileOptions};
 
+    /// Classified as English explicitly, rather than by a hidden default.
+    ///
+    /// Deliberately does NOT go through `CompiledScript::query_words`: these
+    /// tests want the raw canonical atoms, and `query_words` also rejoins words
+    /// the script split apart, which would change what the aligner is handed.
     fn query_from(text: &str, script: &mut CompiledScript) -> Vec<QueryAtom> {
-        crate::normalize::canonical_atoms(text)
+        let lang = crate::language::AlignmentLanguage::English;
+        crate::normalize::canonical_atoms_for(lang, text)
             .into_iter()
             .enumerate()
             .map(|(i, surface)| {
                 let id = script.interner.intern(&surface);
-                let filler = crate::normalize::is_filler(&surface);
                 QueryAtom {
-                    phonetic: crate::normalize::phonetic_key(&surface),
+                    phonetic: crate::normalize::phonetic_key_for(lang, &surface),
                     id,
+                    filler: crate::normalize::is_filler_for(lang, &surface),
+                    stopword: crate::normalize::is_stopword_for(lang, &surface),
                     surface,
                     stability: StabilityClass::Final,
-                    filler,
                     audio_ms: i as f64 * 300.0,
                     item_index: 0,
                 }

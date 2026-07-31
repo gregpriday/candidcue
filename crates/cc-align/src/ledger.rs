@@ -11,8 +11,8 @@
 
 use serde::Serialize;
 
-use crate::normalize::{canonical_atoms, is_filler, phonetic_key, PhoneticKey};
-use crate::script::Interner;
+use crate::normalize::PhoneticKey;
+use crate::script::{Interner, QueryWord};
 
 /// Evidence class of one transcript atom at alignment time (spec §7.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -59,6 +59,9 @@ pub struct LedgerAtom {
     /// Consecutive revisions this atom has survived at this position.
     pub stability: u8,
     pub filler: bool,
+    /// Carried rather than recomputed: which words are function words is a
+    /// language decision, and only the compiled script knows the language.
+    pub stopword: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +88,9 @@ pub struct QueryAtom {
     pub phonetic: PhoneticKey,
     pub stability: StabilityClass,
     pub filler: bool,
+    /// See [`LedgerAtom::stopword`] — classified once, under the script's
+    /// language, and carried from there.
+    pub stopword: bool,
     /// Best-effort audio time of this word (interpolated inside the item).
     pub audio_ms: f64,
     /// Index of the item this atom came from (into `Ledger::items`).
@@ -115,33 +121,18 @@ impl Ledger {
 
     /// Apply a replacement partial (or the final restatement) for an item.
     /// Returns the number of atoms retracted by this revision.
-    pub fn revise(
-        &mut self,
-        interner: &mut Interner,
-        item_id: &str,
-        text: &str,
-        is_final: bool,
-        audio_ms: f64,
-    ) -> u32 {
-        self.revise_atoms(
-            interner,
-            item_id,
-            canonical_atoms(text),
-            is_final,
-            audio_ms,
-        )
-    }
-
-    /// The same, for a caller that has already canonicalised the text.
     ///
-    /// The tracker takes this door because its canonicalisation is
-    /// script-aware — it rejoins words the recogniser split apart — and that
-    /// needs the compiled script, which the ledger has no business holding.
+    /// The words arrive already canonicalised AND already classified, because
+    /// both are language decisions and the ledger has no language. It used to
+    /// take raw text and reach for the global English normaliser, which worked
+    /// only for as long as English was the only thing there was; see
+    /// [`crate::script::CompiledScript::query_words`], which is the one place
+    /// in the transcript path that knows what language is being spoken.
     pub fn revise_atoms(
         &mut self,
         interner: &mut Interner,
         item_id: &str,
-        atoms: Vec<String>,
+        atoms: Vec<QueryWord>,
         is_final: bool,
         audio_ms: f64,
     ) -> u32 {
@@ -159,15 +150,15 @@ impl Ledger {
 
         let new_atoms: Vec<LedgerAtom> = atoms
             .into_iter()
-            .map(|surface| {
-                let id = interner.intern(&surface);
-                let filler = is_filler(&surface);
+            .map(|word| {
+                let id = interner.intern(&word.surface);
                 LedgerAtom {
-                    phonetic: phonetic_key(&surface),
+                    phonetic: word.phonetic,
                     id,
-                    surface,
+                    surface: word.surface,
                     stability: 0,
-                    filler,
+                    filler: word.filler,
+                    stopword: word.stopword,
                 }
             })
             .collect();
@@ -237,6 +228,7 @@ impl Ledger {
                     phonetic: atom.phonetic,
                     stability,
                     filler: atom.filler,
+                    stopword: atom.stopword,
                     audio_ms,
                     item_index,
                 });
@@ -275,13 +267,43 @@ fn classify(item: &Item, index: usize) -> StabilityClass {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::language::AlignmentLanguage;
+    use crate::normalize::{canonical_atoms_for, is_filler_for, is_stopword_for, phonetic_key_for};
+
+    /// The door the ledger no longer offers.
+    ///
+    /// Production hands it [`QueryWord`]s from the compiled script, which is
+    /// what makes the language single-sourced. These tests are about stability
+    /// and retraction rather than normalisation, so they canonicalise as
+    /// English right here — explicitly, rather than by a default hidden inside
+    /// the ledger.
+    fn revise_text(
+        ledger: &mut Ledger,
+        interner: &mut Interner,
+        item_id: &str,
+        text: &str,
+        is_final: bool,
+        audio_ms: f64,
+    ) -> u32 {
+        let lang = AlignmentLanguage::English;
+        let words: Vec<QueryWord> = canonical_atoms_for(lang, text)
+            .into_iter()
+            .map(|surface| QueryWord {
+                filler: is_filler_for(lang, &surface),
+                stopword: is_stopword_for(lang, &surface),
+                phonetic: phonetic_key_for(lang, &surface),
+                surface,
+            })
+            .collect();
+        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms)
+    }
 
     fn ledger_with(texts: &[(&str, bool)]) -> (Ledger, Interner) {
         let mut ledger = Ledger::default();
         let mut interner = Interner::default();
         ledger.item_started("1-0", 0.0);
         for (i, (text, is_final)) in texts.iter().enumerate() {
-            ledger.revise(&mut interner, "1-0", text, *is_final, (i as f64 + 1.0) * 1000.0);
+            revise_text(&mut ledger, &mut interner, "1-0", text, *is_final, (i as f64 + 1.0) * 1000.0);
         }
         (ledger, interner)
     }
@@ -306,10 +328,10 @@ mod tests {
         let mut ledger = Ledger::default();
         let mut interner = Interner::default();
         ledger.item_started("1-0", 0.0);
-        ledger.revise(&mut interner, "1-0", "we should build a very", false, 1000.0);
-        let retracted = ledger.revise(&mut interner, "1-0", "we should build a", false, 1500.0);
+        revise_text(&mut ledger, &mut interner, "1-0", "we should build a very", false, 1000.0);
+        let retracted = revise_text(&mut ledger, &mut interner, "1-0", "we should build a", false, 1500.0);
         assert_eq!(retracted, 1);
-        ledger.revise(&mut interner, "1-0", "we should build a complicated system", true, 2000.0);
+        revise_text(&mut ledger, &mut interner, "1-0", "we should build a complicated system", true, 2000.0);
         let tail = ledger.tail(40, 0.0, 0.0);
         assert!(tail.iter().all(|a| a.stability == StabilityClass::Final));
         assert_eq!(tail.len(), 6);
@@ -320,9 +342,9 @@ mod tests {
         let mut ledger = Ledger::default();
         let mut interner = Interner::default();
         ledger.item_started("1-0", 0.0);
-        ledger.revise(&mut interner, "1-0", "one two three", true, 1000.0);
+        revise_text(&mut ledger, &mut interner, "1-0", "one two three", true, 1000.0);
         ledger.item_started("1-1", 1200.0);
-        ledger.revise(&mut interner, "1-1", "four five six", false, 2000.0);
+        revise_text(&mut ledger, &mut interner, "1-1", "four five six", false, 2000.0);
         let tail = ledger.tail(4, 0.0, 0.0);
         let surfaces: Vec<&str> = tail.iter().map(|a| a.surface.as_str()).collect();
         assert_eq!(surfaces, vec!["3", "4", "5", "6"]);

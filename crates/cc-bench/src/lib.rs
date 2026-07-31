@@ -6,6 +6,7 @@ pub mod capture;
 pub mod capture_local;
 pub mod difficulty;
 pub mod dimming;
+pub mod language_gate;
 pub mod metrics;
 pub mod passgold;
 pub mod perceptual;

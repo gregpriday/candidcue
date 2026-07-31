@@ -170,10 +170,13 @@ pub struct AudioSettings {
     pub transcription_model: String,
     /// BCP-47 tag, e.g. `en-US`.
     ///
-    /// Honoured when the selected recogniser transcribes it and repaired when
-    /// it does not — which is a question about the model, not a constant. The
-    /// shipped bundle is bilingual (`zh-en`), a fact the code denied for long
-    /// enough to be worth stating here.
+    /// Honoured when this build can FOLLOW it and repaired when it cannot,
+    /// which takes two questions rather than a constant: the selected
+    /// recogniser has to transcribe it and the alignment engine has to have a
+    /// normalisation profile for it. Both are facts about the build, and they
+    /// do not currently give the same answer — the shipped bundle is bilingual
+    /// (`zh-en`, a fact the code denied for long enough to be worth stating
+    /// here), while the engine knows only English. See `migrate_in_place`.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
@@ -411,21 +414,44 @@ fn migrate_in_place(settings: &mut AppSettings) {
     }
 
     // Previous builds offered Spanish, French, German and Portuguese, because
-    // the hosted service transcribed them. A persisted `es-ES` is a setting the
-    // bundled model cannot honour and must not keep claiming — a diagnostics
+    // the hosted service transcribed them. A persisted `es-ES` is a setting
+    // this build cannot honour and must not keep claiming — a diagnostics
     // bundle reporting that a take was transcribed in Spanish, by a recogniser
     // with no Spanish in it, sends whoever reads it after the wrong problem.
     //
-    // Asked of the RESOLVED MODEL rather than of a hardcoded `en` prefix. The
-    // prefix test was wrong in both directions: it discarded `zh-CN`, which the
-    // shipped bilingual model transcribes perfectly well, and it accepted
-    // anything else beginning with those two letters. Repairing a setting the
-    // recogniser cannot serve is worth doing; overwriting one it can is just
-    // losing the user's choice on a build that happened to be sure.
-    if !model.serves_language(&settings.audio.language) {
+    // Honoured only if BOTH halves of following can serve it, because a
+    // teleprompter that transcribes a language it cannot align is not following
+    // in that language, it is guessing in it.
+    //
+    // The first question goes to the ALIGNMENT ENGINE: does it have a
+    // normalisation profile for this tag? Asked of the engine's own table
+    // rather than a literal `starts_with("en")` here, so when a language passes
+    // the bar in `cc_bench::language_gate` and gains a profile, this gate opens
+    // for it without anybody remembering to come back and edit a string
+    // comparison. `from_bcp47` is also what canonicalises the persisted string:
+    // it resolves the PRIMARY subtag, so `en_GB` and `en-gibberish-` are still
+    // English while `english` and `eng` — which the old prefix test waved
+    // through — are not tags at all and resolve to nothing.
+    //
+    // The second goes to the RESOLVED MODEL rather than to a hardcoded `en`,
+    // because the prefix test was wrong in that direction too: it could only
+    // ever describe one recogniser, and the shipped one is bilingual. Repairing
+    // a setting the recogniser cannot serve is worth doing; overwriting one it
+    // can is losing the user's choice on a build that happened to be sure.
+    //
+    // Today the conjunction bites in exactly one place, `zh-CN`: the model
+    // transcribes Chinese and the engine has no Chinese profile, so the script
+    // would be compiled as English — and `language.rs` says plainly that CJK
+    // needs a real tokenizer before whitespace segmentation means anything.
+    // Keeping the tag would buy a true claim about the transcript and a false
+    // one about the glass. It stops biting the moment Chinese earns a profile,
+    // and it stops by itself.
+    let followable = cc_align::AlignmentLanguage::from_bcp47(settings.audio.language.trim())
+        .is_some_and(|language| model.serves_language(language.primary_subtag()));
+    if !followable {
         let fallback = model.default_language;
         tracing::info!(
-            "settings: replacing language {:?}, which {:?} does not transcribe, with {:?}",
+            "settings: replacing language {:?}, which {:?} and the alignment engine cannot both serve, with {:?}",
             settings.audio.language,
             model.id,
             fallback
@@ -576,19 +602,32 @@ mod tests {
         }
     }
 
-    /// A language the SELECTED recogniser cannot serve is repaired; one it can
-    /// is left alone.
+    /// A language this build cannot FOLLOW is repaired; one it can is left
+    /// alone.
     ///
-    /// Earlier builds offered Spanish, French, German and Portuguese against a
-    /// hosted service that served them, and those still have to go. What must
-    /// NOT go is Chinese: the shipped bundle is `zh-en` and roughly 4000 of its
-    /// 5000 tokens are CJK, so a persisted `zh-CN` was a setting the recogniser
-    /// could honour that the app threw away on the strength of a comment
-    /// calling it English-only.
+    /// The two halves fail for different reasons, and both are here because the
+    /// gate is a conjunction. Spanish, French, German and Portuguese were
+    /// offered against a hosted service that transcribed them, and the bundled
+    /// recogniser does not — that is the recogniser's half.
+    ///
+    /// Chinese fails the other half, and is worth reading twice because it
+    /// looks like a regression and is not. The shipped bundle is `zh-en` and
+    /// roughly 4000 of its 5000 tokens are CJK, so a Chinese take would be
+    /// transcribed perfectly well; it is the ALIGNMENT ENGINE that has no
+    /// Chinese profile, and `align/mod.rs` would compile the script as English.
+    /// Keeping `zh-CN` would buy a true claim about the transcript and a false
+    /// one about the glass. The day `AlignmentLanguage` gains a Chinese variant
+    /// the tag becomes honourable, this loop starts failing, and moving the
+    /// entry across is the whole of the change.
     #[test]
-    fn a_language_the_selected_recogniser_cannot_serve_is_rewritten() {
+    fn a_language_this_build_cannot_follow_is_rewritten() {
         let shipped = crate::speech::default_model();
-        for stale in ["es-ES", "fr-FR", "de-DE", "pt-BR", "enochian", ""] {
+        for stale in [
+            // The recogniser has none of these.
+            "es-ES", "fr-FR", "de-DE", "pt-BR", "enochian", "",
+            // The recogniser has these; the engine does not.
+            "zh", "zh-CN", "zh-Hans-CN",
+        ] {
             let mut settings = AppSettings::default();
             settings.audio.language = stale.to_string();
             migrate_in_place(&mut settings);
@@ -597,12 +636,41 @@ mod tests {
                 "{stale:?} must go"
             );
         }
-        // A locale the recogniser serves is the user's to keep.
-        for kept in ["en-GB", "en-AU", "en-US", "zh", "zh-CN", "zh-Hans-CN"] {
+        // A locale both halves serve is the user's to keep.
+        for kept in ["en-GB", "en-AU", "en-US"] {
             let mut settings = AppSettings::default();
             settings.audio.language = kept.to_string();
             migrate_in_place(&mut settings);
             assert_eq!(settings.audio.language, kept, "{kept} must survive");
+        }
+    }
+
+    /// The engine half of the gate resolves a tag rather than matching a
+    /// prefix, which is a deliberate tightening: these all begin with `en` and
+    /// survived the old check, but none is a BCP-47 tag.
+    #[test]
+    fn a_language_that_is_not_a_tag_is_normalised_even_when_it_looks_english() {
+        for sloppy in ["english", "eng", "EN GB"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = sloppy.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(
+                settings.audio.language,
+                default_language(),
+                "{sloppy} is not a tag the recogniser can be handed"
+            );
+        }
+        // Case and separator variation IS still English, though — and so is a
+        // tag with a subtag nobody recognises. `from_bcp47` resolves the
+        // PRIMARY subtag; it is not a BCP-47 validator, and a region it has
+        // never heard of does not make the language less English. It is also
+        // what the model half is then asked about, so an underscore the
+        // recogniser's own tag matching would have choked on never reaches it.
+        for ok in ["EN-US", "en_GB", "en-gibberish-"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = ok.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(settings.audio.language, ok, "{ok} must survive");
         }
     }
 
@@ -766,6 +834,12 @@ mod tests {
     /// A fresh install must name the recogniser it actually ships and a
     /// language that recogniser serves — the two facts a diagnostics bundle
     /// reports about a take before anyone has changed anything.
+    ///
+    /// The engine has to have a profile for it too, and that is not the same
+    /// assertion. `migrate_in_place` falls back to the resolved model's
+    /// `default_language`, so a model whose default the engine cannot normalise
+    /// would leave every install persisting a language the stage cannot follow
+    /// — repaired to itself on every load, so nothing would ever complain.
     #[test]
     fn audio_defaults_name_the_bundled_model_and_a_locale_it_serves() {
         let audio = AppSettings::default().audio;
@@ -773,7 +847,44 @@ mod tests {
         assert_eq!(audio.transcription_model, shipped.id);
         assert_eq!(audio.language, shipped.default_language);
         assert!(shipped.serves_language(&audio.language));
+        assert!(cc_align::AlignmentLanguage::from_bcp47(&audio.language).is_some());
         assert!(audio.language.contains('-'), "a BCP-47 tag, not a bare subtag");
+    }
+
+    /// The same requirement as the defaults test above, asked of the whole
+    /// catalogue rather than only the model that happens to ship first.
+    ///
+    /// `migrate_in_place` falls back to the RESOLVED model's
+    /// `default_language`, and the resolved model is whichever one the settings
+    /// document names — so every entry in `bundled_models()`, not just
+    /// `default_model()`, supplies a fallback to somebody. If a model's own
+    /// default fails either half of the conjunction, that fallback is
+    /// unfollowable: the migration would rewrite the language to a value the
+    /// next load rejects for exactly the same reason, repairing it to itself on
+    /// every start. Nothing errors, nothing surfaces, and the stage simply
+    /// never follows for anyone who selected that recogniser.
+    ///
+    /// So the invariant belongs to the catalogue: adding a model whose default
+    /// language this build cannot align has to fail here, at the point where
+    /// the model is added, rather than at a take.
+    #[test]
+    fn every_bundled_model_defaults_to_a_language_this_build_can_follow() {
+        for model in crate::speech::bundled_models() {
+            let language = cc_align::AlignmentLanguage::from_bcp47(model.default_language)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "model {:?} defaults to {:?}, which the alignment engine has no profile for",
+                        model.id, model.default_language
+                    )
+                });
+            assert!(
+                model.serves_language(language.primary_subtag()),
+                "model {:?} defaults to {:?}, which it does not transcribe (it serves {:?})",
+                model.id,
+                model.default_language,
+                model.languages
+            );
+        }
     }
 
     /// A null patch value resets a field to its default. `merge_json` removes

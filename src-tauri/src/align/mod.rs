@@ -151,7 +151,16 @@ impl AlignmentState {
                 para: t.para,
             })
             .collect();
-        let script = cc_align::compile_tokens(&inputs);
+        // English, stated rather than defaulted into.
+        //
+        // The bundled recogniser transcribes English and `migrate_in_place`
+        // refuses to persist anything else, so this is correct today — but it
+        // is the ONE place the app chooses a language, and a `compile_tokens`
+        // call that quietly means English would be an easy thing to miss when
+        // a second profile exists. Naming it here is what makes #157 a matter
+        // of threading the setting to this line rather than of discovering
+        // that the setting never reached the engine at all.
+        let script = cc_align::compile_tokens_in(&inputs, cc_align::AlignmentLanguage::English);
         let engine = Engine::new(script, AlignmentConfig::default());
         *self.lock() = Some(AlignmentSession {
             label,

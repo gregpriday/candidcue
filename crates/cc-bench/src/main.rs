@@ -13,6 +13,7 @@
 use std::path::PathBuf;
 
 use cc_align::AlignmentConfig;
+use cc_bench::language_gate;
 use cc_bench::plan::expand;
 use cc_bench::scenarios::{build_suite, tier_b_selection};
 use cc_bench::suite::{
@@ -118,6 +119,12 @@ struct Flags {
     /// `tier-c`: aim the reading corridor this many atoms ahead of the tracked
     /// position. See `Layout::focus_lead_atoms`.
     focus_lead: Option<f64>,
+    /// `gate-language`: the saved Tier B result to judge.
+    tier_b: Option<PathBuf>,
+    /// `gate-language`: the saved Tier C result to judge. Must have been run
+    /// at the as-shipped layout (`--layouts 60hz --focus-lead 0`), or it scores
+    /// a reading corridor the product does not have.
+    tier_c: Option<PathBuf>,
     verbose: bool,
 }
 
@@ -131,6 +138,8 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         scripts: None,
         runs: None,
         seconds: None,
+        tier_b: None,
+        tier_c: None,
         model: None,
         prime_ms: None,
         blank_penalty: None,
@@ -154,6 +163,8 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--workdir" => flags.workdir = Some(PathBuf::from(take()?)),
             "--pace" => flags.pace = take()?.parse()?,
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
+            "--tier-b" => flags.tier_b = Some(PathBuf::from(take()?)),
+            "--tier-c" => flags.tier_c = Some(PathBuf::from(take()?)),
             "--seconds" => flags.seconds = Some(take()?.parse()?),
             "--model" => flags.model = Some(PathBuf::from(take()?)),
             "--prime-ms" => flags.prime_ms = Some(take()?.parse()?),
@@ -889,9 +900,83 @@ fn main() -> anyhow::Result<()> {
                 serde_json::from_str(&std::fs::read_to_string(&args[2])?)?;
             print!("{}", compare_tables(&a, &b));
         }
+        /*
+         * The shipping decision for a language, as a number rather than a
+         * feeling.
+         *
+         * It reads results the existing `tier-b` and `tier-c` commands already
+         * write, instead of re-running them itself. That keeps the gate honest
+         * about what it is — a policy, not a measurement — and it means the
+         * thresholds can be exercised by unit tests on a machine with no
+         * recogniser and no corpus, which is where a gate that nobody can run
+         * would otherwise rot.
+         *
+         * Exits non-zero on failure, because a gate that always succeeds is
+         * the thing this replaces.
+         */
+        Some("gate-language") => {
+            let flags = parse_flags(args[1..].iter())?;
+            let language = flags.label.clone();
+            let tier_b: SuiteResult = serde_json::from_str(&std::fs::read_to_string(
+                flags
+                    .tier_b
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("--tier-b <result.json> required"))?,
+            )?)?;
+            let tier_c: TierCResult = serde_json::from_str(&std::fs::read_to_string(
+                flags
+                    .tier_c
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("--tier-c <result.json> required"))?,
+            )?)?;
+
+            // The two tiers use disjoint metric prefixes today (`live.*`,
+            // `forms.*`, `safety.*` against `band.*`, `gate.*`, `outcome.*`,
+            // `recover.*`, `time.*`), so merging them is safe. It is not
+            // safe BY CONSTRUCTION, though, and a collision would silently
+            // judge a Tier B threshold against a Tier C value — so refuse one
+            // rather than let the last writer win.
+            // The bar's Tier C numbers were measured on the as-shipped rig.
+            // A whole-sweep result averages seven layouts and a corridor the
+            // product does not have, so it is not the same measurement.
+            //
+            // This catches the wrong LAYOUT set. It cannot catch a 60 Hz run
+            // made with a non-zero `focus_lead_atoms`, because `Layout` is not
+            // serialised into the result — see bench/README.md, "Known gaps".
+            let layouts: Vec<&String> = tier_c.by_layout.keys().collect();
+            if layouts != vec![&"60hz".to_string()] {
+                anyhow::bail!(
+                    "Tier C evidence must be the as-shipped rig alone \
+                     (--layouts 60hz --focus-lead 0); this result carries {:?}",
+                    layouts
+                );
+            }
+
+            let mut metrics = language_gate::metrics_of(&tier_b);
+            for entry in &tier_c.table {
+                if metrics.contains_key(&entry.name) {
+                    anyhow::bail!(
+                        "{} is emitted by BOTH Tier B and Tier C; the gate cannot \
+                         tell which one a threshold means",
+                        entry.name
+                    );
+                }
+                metrics.insert(entry.name.clone(), entry.value);
+            }
+
+            let runs: Vec<String> = tier_b.runs.iter().map(|r| r.run.clone()).collect();
+            let report = language_gate::evaluate(&language, &metrics, &runs);
+            print!("{}", report.render());
+            if !report.passed() {
+                anyhow::bail!(
+                    "{language} does not clear the bar — see bench/README.md, \
+                     \"What supporting a language requires\""
+                );
+            }
+        }
         _ => {
             eprintln!(
-                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio --workdir DIR\n       cc-bench capture --workdir DIR [--pace P]\n       cc-bench compare A B"
+                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio --workdir DIR\n       cc-bench capture --workdir DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
             );
         }
     }

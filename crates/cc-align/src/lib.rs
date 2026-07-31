@@ -21,6 +21,7 @@
 
 pub mod align;
 pub mod config;
+pub mod language;
 pub mod ledger;
 pub mod normalize;
 pub mod project;
@@ -29,7 +30,14 @@ pub mod tracker;
 pub mod vocab;
 
 pub use config::AlignmentConfig;
+pub use language::{
+    AlignmentLanguage, CurrencyOrder, LanguageRule, NormalizationProfile, PhoneticPolicy,
+    RuleDisposition,
+};
 pub use project::{decision_name, project_to_tokens, state_name, TokenSnapshot};
-pub use script::{compile, compile_tokens, CompileOptions, CompiledScript, TokenInput};
+pub use script::{
+    compile, compile_tokens, compile_tokens_in, CompileOptions, CompiledScript, QueryWord,
+    TokenInput,
+};
 pub use tracker::{DecisionCode, Engine, SessionEvent, Snapshot, TrackingState};
 pub use vocab::{extract_from_markdown, extract_terms, spoken_surfaces, VocabLimits, VocabToken};

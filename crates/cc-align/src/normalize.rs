@@ -19,30 +19,32 @@
 //! The output is a flat sequence of canonical atom strings. Everything
 //! downstream (weights, anchors, alignment) operates on these atoms.
 
-/// Fillers: transcript insertions that are cheap to skip and carry zero
-/// positional evidence. Kept deliberately short — `so`/`like`/`well` are real
-/// script words and must NOT be here.
-const FILLERS: &[&str] = &[
-    "um", "uh", "uhm", "erm", "er", "ah", "hm", "hmm", "mm", "mhm",
-];
+use crate::language::{
+    AlignmentLanguage, CurrencyOrder, NormalizationProfile, PhoneticPolicy,
+};
 
-/// Function words that carry little locating power. They still align (an
-/// ordered run of stopwords is real evidence) but mismatching or deleting one
-/// is cheap, and one can never be a global anchor.
-const STOPWORDS: &[&str] = &[
-    "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at", "is",
-    "are", "was", "were", "be", "been", "being", "it", "that", "this", "these",
-    "those", "i", "you", "we", "they", "he", "she", "my", "your", "our",
-    "their", "his", "her", "its", "as", "by", "for", "with", "from", "so",
-    "do", "does", "did", "have", "has", "had", "will", "would", "can",
-    "could", "should", "shall", "may", "might", "not", "no", "yes", "if",
-    "then", "than", "there", "here", "what", "when", "where", "who", "how",
-    "why", "all", "any", "some", "just", "also", "very", "now", "well", "oh",
-    "okay", "up", "down", "out", "about", "into", "over", "us", "them", "me",
-];
+/// The English profile, for the free functions that predate per-language
+/// normalisation.
+///
+/// These wrappers exist because `cc-bench` measures an English corpus and
+/// reaches for the normaliser directly — computing word error rate, scoring
+/// corpus difficulty. They are NOT a default for the engine: everything on the
+/// production path takes its language from the compiled script (see
+/// [`crate::script::CompiledScript::language`]), because a normaliser that
+/// silently assumes English is precisely how a French model produces a green
+/// test suite and a stage that does not follow.
+fn english() -> &'static NormalizationProfile {
+    AlignmentLanguage::English.profile()
+}
 
+/// English only. Callers that may see another language want
+/// [`is_filler_for`].
 pub fn is_filler(atom: &str) -> bool {
-    FILLERS.contains(&atom)
+    english().is_filler(atom)
+}
+
+pub fn is_filler_for(language: AlignmentLanguage, atom: &str) -> bool {
+    language.profile().is_filler(atom)
 }
 
 /// Minimum length for a word to carry a phonetic key at all. Short words
@@ -118,7 +120,27 @@ impl PhoneticKey {
 /// matches the looser skeleton was getting for free. Precision it does not
 /// need, bought with recall it does. (It also panics on any non-ASCII input,
 /// which is the one input class this relation exists for.)
+/// English only. Callers that may see another language want
+/// [`phonetic_key_for`].
 pub fn phonetic_key(word: &str) -> PhoneticKey {
+    phonetic_key_for(AlignmentLanguage::English, word)
+}
+
+/// The sounds-alike key for `word` under `language`'s phonetic policy.
+///
+/// A language whose policy is [`PhoneticPolicy::Disabled`] produces an empty
+/// key, which [`PhoneticKey::matches`] already treats as "never matches". The
+/// relation therefore switches off on BOTH sides together, so nothing that
+/// used to match becomes a mismatch — which is what makes it safe to leave
+/// unanswered.
+pub fn phonetic_key_for(language: AlignmentLanguage, word: &str) -> PhoneticKey {
+    match language.profile().phonetics {
+        PhoneticPolicy::EnglishSkeleton => english_skeleton(word),
+        PhoneticPolicy::Disabled => PhoneticKey::default(),
+    }
+}
+
+fn english_skeleton(word: &str) -> PhoneticKey {
     // Bytes, not characters, because that is what the inline version measured
     // and this was meant to be a pure move. Counting characters instead would
     // have quietly dropped the relation for short international names —
@@ -172,22 +194,45 @@ pub fn phonetic_key(word: &str) -> PhoneticKey {
     }
 }
 
+/// English only. Callers that may see another language want
+/// [`is_stopword_for`].
 pub fn is_stopword(atom: &str) -> bool {
-    STOPWORDS.contains(&atom)
+    english().is_stopword(atom)
 }
 
-/// Normalise a run of text into canonical atoms.
+pub fn is_stopword_for(language: AlignmentLanguage, atom: &str) -> bool {
+    language.profile().is_stopword(atom)
+}
+
+/// Normalise a run of text into canonical atoms, as English.
+///
+/// English only. The engine calls [`canonical_atoms_for`] with the language its
+/// script was compiled in; this wrapper is for the benchmark tooling, which
+/// measures an English corpus.
+pub fn canonical_atoms(text: &str) -> Vec<String> {
+    canonical_atoms_for(AlignmentLanguage::English, text)
+}
+
+/// Normalise a run of text into canonical atoms under `language`.
 ///
 /// This is the only entry point; there is deliberately no "script variant" or
-/// "transcript variant" of this function.
-pub fn canonical_atoms(text: &str) -> Vec<String> {
+/// "transcript variant" of this function. Script text and transcript text pass
+/// through it with the SAME language — which is not a convention the caller has
+/// to remember, because the language is stored on the compiled script and both
+/// sides read it from there.
+pub fn canonical_atoms_for(language: AlignmentLanguage, text: &str) -> Vec<String> {
+    let profile = language.profile();
     let mut words: Vec<String> = Vec::new();
     for raw in text.split_whitespace() {
-        split_word(raw, &mut words);
+        split_word(raw, profile, &mut words);
     }
-    let mut atoms = itn_numbers(&words);
-    reorder_currency(&mut atoms);
-    expand_units(&mut atoms);
+    let mut atoms = if profile.spelled_numbers {
+        itn_numbers(&words)
+    } else {
+        words
+    };
+    reorder_currency(&mut atoms, profile);
+    expand_units(&mut atoms, profile);
     atoms
 }
 
@@ -198,17 +243,19 @@ pub fn canonical_atoms(text: &str) -> Vec<String> {
 /// stood left a transcript holding `2.4 dollars million` against a script
 /// holding `2.4 million dollars`: the same three atoms, in an order that
 /// matches nothing.
-const CURRENCY_UNITS: &[&str] = &["dollars", "pounds", "euros"];
-
-fn reorder_currency(atoms: &mut [String]) {
-    if atoms.len() < 3 {
+/// The word order itself is the per-language decision, not just the list:
+/// [`CurrencyOrder`] says whether the unit follows the scale word at all.
+fn reorder_currency(atoms: &mut [String], profile: &NormalizationProfile) {
+    if profile.currency_order != CurrencyOrder::UnitAfterScale || atoms.len() < 3 {
         return;
     }
     for i in 1..atoms.len() - 1 {
         if !atoms[i - 1].starts_with(|c: char| c.is_ascii_digit()) {
             continue;
         }
-        if CURRENCY_UNITS.contains(&atoms[i].as_str()) && is_scale_word(&atoms[i + 1]) {
+        if profile.currency_units.contains(&atoms[i].as_str())
+            && profile.scale_words.contains(&atoms[i + 1].as_str())
+        {
             atoms.swap(i, i + 1);
         }
     }
@@ -223,38 +270,31 @@ fn reorder_currency(atoms: &mut [String]) {
 /// Only ever after a number. `250 ms` is a duration; `Ms Okonkwo` is a person,
 /// and rewriting her name to "milliseconds" would invent a mismatch out of a
 /// perfectly good match.
-const UNIT_WORDS: &[(&str, &str)] = &[
-    ("hz", "hertz"),
-    ("khz", "kilohertz"),
-    ("mhz", "megahertz"),
-    ("ghz", "gigahertz"),
-    ("ms", "milliseconds"),
-    ("kb", "kilobytes"),
-    ("mb", "megabytes"),
-    ("gb", "gigabytes"),
-    ("tb", "terabytes"),
-    ("km", "kilometres"),
-    ("kg", "kilograms"),
-    ("cm", "centimetres"),
-    ("mm", "millimetres"),
-    ("fps", "frames"),
-];
-
-fn expand_units(atoms: &mut [String]) {
+/// The abbreviations are shared across these languages; the spelled forms are
+/// not. A profile that left this list English would not merely miss a match —
+/// it would put the atom `milliseconds` into a French script, which the reader
+/// is never going to say.
+fn expand_units(atoms: &mut [String], profile: &NormalizationProfile) {
     for i in 1..atoms.len() {
         if !atoms[i - 1].starts_with(|c: char| c.is_ascii_digit()) {
             continue;
         }
-        if let Some((_, spelled)) = UNIT_WORDS.iter().find(|(abbrev, _)| *abbrev == atoms[i]) {
+        if let Some((_, spelled)) = profile
+            .unit_words
+            .iter()
+            .find(|(abbrev, _)| *abbrev == atoms[i])
+        {
             atoms[i] = (*spelled).to_string();
         }
     }
 }
 
 /// Stage 1+2+3: one whitespace-delimited chunk → zero or more word atoms.
-fn split_word(raw: &str, out: &mut Vec<String>) {
+fn split_word(raw: &str, profile: &NormalizationProfile, out: &mut Vec<String>) {
     /*
-     * `&` is a WORD, and it is read aloud as "and".
+     * `&` is a WORD, and it is read aloud as "and" — in English. It is `et`,
+     * `und` and `y` elsewhere, which is why the word comes from the profile
+     * rather than sitting here as a literal.
      *
      * It used to be filtered out with the rest of the punctuation, which was a
      * quiet disagreement with the app's own tokenizer: that one emits `&` as a
@@ -264,16 +304,17 @@ fn split_word(raw: &str, out: &mut Vec<String>) {
      * to match, and in the degenerate case of a script whose only spoken token
      * is `&` the compiled script had no atoms at all.
      *
-     * Rewriting it as a hyphen-delimited "and" reuses the compound path
+     * Rewriting it as a hyphen-delimited word reuses the compound path
      * exactly, so `AT&T` becomes `at and t` — which is what a recogniser
      * actually returns for it — and a bare `&` becomes `and`.
      */
     let expanded;
-    let raw = if raw.contains('&') {
-        expanded = raw.replace('&', "-and-");
-        expanded.as_str()
-    } else {
-        raw
+    let raw = match profile.ampersand {
+        Some(word) if raw.contains('&') => {
+            expanded = raw.replace('&', &format!("-{word}-"));
+            expanded.as_str()
+        }
+        _ => raw,
     };
 
     // Currency prefix is remembered, stripped, and re-emitted as a trailing
@@ -285,20 +326,17 @@ fn split_word(raw: &str, out: &mut Vec<String>) {
     let trimmed: String = raw
         .chars()
         .filter_map(|c| match c {
-            '$' => {
-                currency = Some("dollars");
-                None
-            }
-            '£' => {
-                currency = Some("pounds");
-                None
-            }
-            '€' => {
-                currency = Some("euros");
-                None
-            }
             '%' => {
                 percent = true;
+                None
+            }
+            // Last symbol in a token wins, as it always has.
+            _ if profile.currency_symbols.iter().any(|(s, _)| *s == c) => {
+                currency = profile
+                    .currency_symbols
+                    .iter()
+                    .find(|(s, _)| *s == c)
+                    .map(|(_, word)| *word);
                 None
             }
             // Unicode apostrophes to ASCII so the contraction table matches.
@@ -325,21 +363,41 @@ fn split_word(raw: &str, out: &mut Vec<String>) {
         if piece.is_empty() {
             continue;
         }
-        emit_piece(piece, out);
+        emit_piece(piece, profile, out);
     }
 
+    // `%` is one atom in English and two in French and Spanish, so the profile
+    // supplies a slice rather than a word.
     if percent {
-        out.push("percent".into());
+        for word in profile.percent {
+            out.push((*word).into());
+        }
     }
     if let Some(unit) = currency {
         out.push(unit.into());
     }
 }
 
-fn emit_piece(piece: &str, out: &mut Vec<String>) {
-    // Pure number token: strip grouping commas, keep decimal point.
-    if piece.chars().all(|c| c.is_ascii_digit() || c == ',' || c == '.') {
-        let digits: String = piece.chars().filter(|c| *c != ',').collect();
+fn emit_piece(piece: &str, profile: &NormalizationProfile, out: &mut Vec<String>) {
+    let decimal = profile.decimal_separator;
+    let group = profile.group_separator;
+
+    // Pure number token: drop the grouping separator, keep the decimal one.
+    //
+    // Which character is which is the whole of the per-language decision here,
+    // and getting it wrong is not a missed match. English `12,500` is twelve
+    // and a half thousand and German `12,5` is twelve and a half; read with the
+    // wrong convention the second one becomes the atom `125`, a number nobody
+    // said.
+    if piece
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == group || c == decimal)
+    {
+        let digits: String = piece
+            .chars()
+            .filter(|c| *c != group)
+            .map(|c| if c == decimal { '.' } else { c })
+            .collect();
         let digits = digits.trim_matches('.');
         if !digits.is_empty() {
             out.push(digits.to_string());
@@ -348,11 +406,13 @@ fn emit_piece(piece: &str, out: &mut Vec<String>) {
     }
 
     // Ordinal digits (`2nd`, `21st`) → ordinal words, the way they are read.
-    if let Some(words) = ordinal_digits_to_words(piece) {
-        for w in words {
-            out.push(w);
+    if profile.ordinals {
+        if let Some(words) = ordinal_digits_to_words(piece) {
+            for w in words {
+                out.push(w);
+            }
+            return;
         }
-        return;
     }
 
     // Mixed alphanumeric like `24kHz` splits at the digit/letter boundary:
@@ -362,17 +422,17 @@ fn emit_piece(piece: &str, out: &mut Vec<String>) {
     let lower = piece.to_lowercase();
     for c in lower.chars() {
         let is_digit = c.is_ascii_digit();
-        if c == '.' || c == ',' {
+        if c == decimal || c == group {
             // Interior punctuation inside an alpha word (e.g. `u.s.a`) is
             // dropped; inside digits it was handled above.
-            if current_is_digit == Some(true) && c == '.' {
+            if current_is_digit == Some(true) && c == decimal {
                 current.push('.');
             }
             continue;
         }
         match current_is_digit {
             Some(prev) if prev != is_digit => {
-                flush(&mut current, out);
+                flush(&mut current, profile, out);
                 current_is_digit = Some(is_digit);
             }
             None => current_is_digit = Some(is_digit),
@@ -384,10 +444,10 @@ fn emit_piece(piece: &str, out: &mut Vec<String>) {
             current.push(c);
         }
     }
-    flush(&mut current, out);
+    flush(&mut current, profile, out);
 }
 
-fn flush(current: &mut String, out: &mut Vec<String>) {
+fn flush(current: &mut String, profile: &NormalizationProfile, out: &mut Vec<String>) {
     if current.is_empty() {
         return;
     }
@@ -396,7 +456,15 @@ fn flush(current: &mut String, out: &mut Vec<String>) {
     if word.is_empty() {
         return;
     }
-    expand_contraction(word, out);
+    if profile.contractions {
+        expand_contraction(word, out);
+    } else {
+        // Elisions (`l'arbre`, `qu'il`) pass through untouched, which is safe
+        // because BOTH sides pass through untouched: the script and the
+        // recogniser write the same surface and still match each other. What
+        // is lost is only the case where the two spell it differently.
+        out.push(word.into());
+    }
 }
 
 /// Contraction expansion. Both sides expand, so `cannot`, `can't` and
@@ -938,5 +1006,151 @@ mod tests {
         assert!(!is_filler("like"));
         assert!(is_stopword("the"));
         assert!(!is_stopword("teleprompter"));
+    }
+
+    /// The English constants moved out of this file and into a profile, and
+    /// these are the atoms they must still produce.
+    ///
+    /// Written out in full ON PURPOSE. The obvious version of this test —
+    /// asserting `canonical_atoms(t) == canonical_atoms_for(English, t)` — is
+    /// worthless, because the wrapper simply CALLS the profile version: it
+    /// compares a function to itself and would pass just as happily if every
+    /// filler, unit and currency word had been changed. A test that cannot
+    /// fail is worse than no test, because it implies coverage that is not
+    /// there.
+    ///
+    /// The benchmark's English baselines (`ahead_worst` 6.700, `within5`
+    /// 94.03, `gate.unread_never_spoken` 2.903) were all measured against the
+    /// old constants. They remain evidence for anything only while these atoms
+    /// are exactly these atoms.
+    #[test]
+    fn english_still_produces_the_atoms_the_baselines_were_measured_on() {
+        // One case per rule the profile now owns.
+        let cases: &[(&str, &[&str])] = &[
+            // segmentation + punctuation
+            ("Hello, World!", &["hello", "world"]),
+            // currency symbol, decimal point, grouping comma, percent, and the
+            // scale-word reordering all in one line
+            (
+                "It's a $2.4 million round, up 12.5% from 1,000.",
+                &[
+                    "it", "is", "a", "2.4", "million", "dollars", "round", "up",
+                    "12.5", "percent", "from", "1000",
+                ],
+            ),
+            // unit words, spelled out the way they are said
+            (
+                "24kHz at 250ms over 5km",
+                &["24", "kilohertz", "at", "250", "milliseconds", "over", "5", "kilometres"],
+            ),
+            // ampersand as a spoken word
+            ("R&D at AT&T", &["r", "and", "d", "at", "at", "and", "t"]),
+            // Ordinal digits. `21st` expands to "twenty first" and then the
+            // spelled-number pass folds the "twenty" to `20`, because it is
+            // not followed by another number word. Ungainly, and correct
+            // where it counts: a recogniser writing "twenty first" lands on
+            // exactly the same two atoms, which is the entire point of
+            // normalising both sides through one pipeline.
+            ("the 2nd and the 21st", &["the", "second", "and", "the", "20", "first"]),
+            // spelled-number ITN, including the year join
+            ("nineteen eighty four", &["1984"]),
+            ("forty two", &["42"]),
+            ("one hundred and five", &["105"]),
+            ("twelve point five", &["12.5"]),
+            // contractions, both table and suffix rules
+            ("She can't and won't", &["she", "can", "not", "and", "will", "not"]),
+            ("I'm going to, they've gone", &["i", "am", "going", "to", "they", "have", "gone"]),
+            // the other two currencies
+            ("£50 and €20", &["50", "pounds", "and", "20", "euros"]),
+        ];
+
+        for (text, expected) in cases {
+            assert_eq!(
+                canonical_atoms(text),
+                *expected,
+                "English normalisation changed for {text:?} — if this is \
+                 deliberate, every Tier B and Tier C baseline needs re-measuring"
+            );
+        }
+    }
+
+    /// The English profile's data, asserted directly.
+    ///
+    /// The atom test above covers the rules that fire on text; this covers the
+    /// lists themselves, so silently dropping a filler or a stopword is caught
+    /// even though no single sentence would reveal it.
+    #[test]
+    fn the_english_profile_still_holds_the_constants_it_replaced() {
+        let p = AlignmentLanguage::English.profile();
+
+        assert_eq!(
+            p.fillers,
+            ["um", "uh", "uhm", "erm", "er", "ah", "hm", "hmm", "mm", "mhm"]
+        );
+        assert_eq!(p.stopwords.len(), 89, "the stopword list changed size");
+        for word in ["the", "a", "and", "of", "to", "is", "not", "me"] {
+            assert!(p.is_stopword(word), "{word} must still be a stopword");
+        }
+        // The words the original list deliberately EXCLUDED, because they are
+        // real script words.
+        for word in ["like", "presenter", "so"] {
+            assert!(!p.is_filler(word), "{word} must not be a filler");
+        }
+
+        assert_eq!(p.currency_units, ["dollars", "pounds", "euros"]);
+        assert_eq!(p.percent, ["percent"]);
+        assert_eq!(p.unit_words.len(), 14);
+        assert_eq!(p.ampersand, Some("and"));
+        assert!(p.contractions && p.spelled_numbers && p.ordinals);
+    }
+
+    /// Why switching the phonetic relation off is safe.
+    ///
+    /// Named for what it actually establishes. It does NOT exercise
+    /// [`PhoneticPolicy::Disabled`] end to end, because no language selects
+    /// that policy yet — English is the only profile, and it encodes. What it
+    /// does establish is the property the `SafeEmpty` disposition rests on:
+    /// an empty key is inert in BOTH directions, so when a future profile
+    /// switches the relation off, script and transcript stop producing keys
+    /// together and nothing that used to match becomes a mismatch.
+    #[test]
+    fn an_empty_phonetic_key_is_inert_in_both_directions() {
+        let profile = AlignmentLanguage::English.profile();
+        assert_eq!(profile.phonetics, PhoneticPolicy::EnglishSkeleton);
+
+        // English still encodes, which is the behaviour every benchmark row
+        // was measured against.
+        let key = phonetic_key_for(AlignmentLanguage::English, "worcestershire");
+        assert!(!key.is_empty());
+        assert!(key.matches(&phonetic_key_for(
+            AlignmentLanguage::English,
+            "worstushier"
+        )));
+
+        let empty = PhoneticKey::default();
+        assert!(empty.is_empty());
+        assert!(!empty.matches(&key));
+        assert!(!key.matches(&empty));
+        // Including against another empty one — two words the relation has
+        // given up on are not thereby evidence that they sound alike.
+        assert!(!empty.matches(&empty));
+    }
+
+    /// The decimal separator is the rule the issue did not name and the one
+    /// that produces a WRONG number rather than a missed match. English is
+    /// asserted here; the failure it guards against is a profile that groups
+    /// and points with the same character.
+    #[test]
+    fn english_groups_with_commas_and_points_with_periods() {
+        assert_eq!(atoms("1,000"), vec!["1000"]);
+        assert_eq!(atoms("12.5"), vec!["12.5"]);
+        assert_eq!(atoms("1,234.5"), vec!["1234.5"]);
+
+        let english = AlignmentLanguage::English.profile();
+        assert_eq!(english.group_separator, ',');
+        assert_eq!(english.decimal_separator, '.');
+        // A profile that used one character for both would silently make
+        // `12,5` into `125`; `supplies` refuses it.
+        assert!(english.supplies(crate::language::LanguageRule::DecimalSyntax));
     }
 }
