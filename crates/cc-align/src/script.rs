@@ -10,7 +10,7 @@
 //! The compiler — not the tracker — owns lexical importance. There is no
 //! second stopword list anywhere downstream.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::language::AlignmentLanguage;
 use crate::normalize::{canonical_atoms_for, is_stopword_for, phonetic_key_for, PhoneticKey};
@@ -27,6 +27,17 @@ pub const FLAG_ANCHOR: u8 = 1 << 2;
 /// to agree on — the Markdown path derives it from terminal punctuation, the
 /// token path is told it by a caller that segmented the document properly.
 pub const FLAG_SENTENCE_END: u8 = 1 << 3;
+/// This word was handed to the recogniser as a bias term.
+///
+/// Never set by either compile path — provenance arrives only through
+/// [`CompiledScript::set_biased_terms`], because only the caller that
+/// configured the decoder knows what it was actually told to expect.
+///
+/// Bit 4, not 3: [`FLAG_SENTENCE_END`] took the next free bit first, and the
+/// two must not alias. They are cleared and rebuilt by different owners — the
+/// setter below wipes every [`FLAG_BIASED`] mark on each call, which under an
+/// alias would erase the sentence structure the display brakes on.
+pub const FLAG_BIASED: u8 = 1 << 4;
 
 /// One spoken atom of the script, in reading order.
 #[derive(Debug, Clone)]
@@ -274,6 +285,72 @@ impl CompiledScript {
 
     pub fn query_atoms(&self, text: &str) -> Vec<String> {
         self.rejoin_split_words(canonical_atoms_for(self.language, text))
+    }
+
+    /// Declare the vocabulary terms the recogniser was biased toward.
+    ///
+    /// A word the decoder was told to expect is not independent evidence that
+    /// the reader is at the position which asked for it: bias the upcoming
+    /// stretch, let weak acoustics decode as the scripted words, and the exact
+    /// matches the aligner sees were partly produced by the hypothesis under
+    /// test. The gates that authorise a relocation discount those matches
+    /// ([`AlignmentConfig::biased_content_weight_milli`]); ordinary local
+    /// continuity still takes them at full value, because a wrong local step is
+    /// small and self-correcting.
+    ///
+    /// Provenance cannot come from the recogniser. sherpa-onnx matches hotwords
+    /// against an internal context graph and no per-token "this was boosted"
+    /// signal ever reaches a caller, so the only honest source is the term list
+    /// the caller itself handed over — which is why this is an explicit setter
+    /// rather than something `compile` infers. Re-deriving the terms here would
+    /// flag atoms on a take where nothing was biased at all.
+    ///
+    /// Replaces the active set: the previous [`FLAG_BIASED`] marks are cleared
+    /// first, so the flags always describe the decoder's *current* configuration
+    /// and never accumulate across takes. Every other lexical flag survives.
+    /// Passing an empty slice restores an unbiased script exactly.
+    ///
+    /// Terms are the authored spellings (`"RustLight Games"`), canonicalised the
+    /// same way [`compile`] canonicalised the script, so a multi-word term
+    /// reaches its constituent atoms. A term the script does not contain is
+    /// ignored rather than interned: bias provenance must never invent a word.
+    ///
+    /// Pass the terms as they were extracted, not as fragments of them.
+    /// Canonicalisation of numbers is context-sensitive — the script's
+    /// `twenty-seven million` compiles to the single atom `27000000`, while
+    /// `twenty-seven` on its own normalises to `27` and matches nothing.
+    /// [`crate::vocab::extract_terms`] already emits the whole figure phrase,
+    /// so a caller that forwards its output unmodified is correct by
+    /// construction; one that splits terms up first quietly marks less than it
+    /// thinks.
+    ///
+    /// Every occurrence of a matched token is flagged, not just the one inside
+    /// the extracted phrase. The recogniser's hotword configuration applies to
+    /// the whole take rather than to one position, so a term biases each place
+    /// it could be heard. That over-approximates, and deliberately: the cost is
+    /// a relocation that needs more evidence, never a following step that gets
+    /// less.
+    ///
+    /// [`AlignmentConfig::biased_content_weight_milli`]: crate::config::AlignmentConfig::biased_content_weight_milli
+    pub fn set_biased_terms(&mut self, terms: &[String]) {
+        let mut biased: HashSet<u32> = HashSet::new();
+        for term in terms {
+            for surface in canonical_atoms_for(self.language, term) {
+                // The interner is shared with the transcript, so a hit here is
+                // not proof the script contains the word. Matching on atom ids
+                // below settles that without a second membership test.
+                if let Some(id) = self.interner.get(&surface) {
+                    biased.insert(id);
+                }
+            }
+        }
+        for atom in &mut self.atoms {
+            if biased.contains(&atom.id) {
+                atom.flags |= FLAG_BIASED;
+            } else {
+                atom.flags &= !FLAG_BIASED;
+            }
+        }
     }
 
     /// Transcript text, normalised and classified the way the script itself was.
@@ -1027,6 +1104,137 @@ mod tests {
         assert!(by_surface["the"].weight < by_surface["teleprompter"].weight);
         assert!(by_surface["teleprompter"].flags & FLAG_ANCHOR != 0);
         assert!(by_surface["the"].flags & FLAG_ANCHOR == 0);
+    }
+
+    /// The whole point of the setter. Bias is off today, and a compiler that
+    /// guessed at provenance would weaken the jump gates on every take of a
+    /// product whose recogniser was never told anything.
+    #[test]
+    fn compiling_never_infers_bias_provenance() {
+        let source = "RustLight Games shipped twenty-seven updates to LumenWorks.";
+        let script = compile(source, CompileOptions::default());
+        assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
+
+        // Not even when the extractor would happily nominate those very words.
+        let terms = crate::vocab::extract_from_markdown(
+            source,
+            CompileOptions::default(),
+            crate::vocab::VocabLimits::default(),
+        );
+        assert!(!terms.is_empty());
+        assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
+    }
+
+    /// The flags describe the decoder's CURRENT configuration, so a second call
+    /// replaces the first rather than adding to it.
+    #[test]
+    fn setting_bias_terms_replaces_the_active_set() {
+        let mut script = compile(
+            "The teleprompter follows the presenter closely.",
+            CompileOptions::default(),
+        );
+        let marked = |s: &CompiledScript| -> Vec<String> {
+            s.atoms
+                .iter()
+                .filter(|a| a.flags & FLAG_BIASED != 0)
+                .map(|a| a.surface.clone())
+                .collect()
+        };
+
+        script.set_biased_terms(&["teleprompter".to_string()]);
+        assert_eq!(marked(&script), vec!["teleprompter"]);
+
+        script.set_biased_terms(&["presenter".to_string()]);
+        assert_eq!(marked(&script), vec!["presenter"], "stale marks persisted");
+
+        script.set_biased_terms(&[]);
+        assert!(marked(&script).is_empty(), "an empty set must unbias");
+
+        // Clearing bias must not have taken the lexical flags with it.
+        let by_surface: HashMap<&str, &ScriptAtom> = script
+            .atoms
+            .iter()
+            .map(|a| (a.surface.as_str(), a))
+            .collect();
+        assert!(by_surface["teleprompter"].flags & FLAG_ANCHOR != 0);
+        assert!(by_surface["the"].flags & FLAG_STOPWORD != 0);
+    }
+
+    /// Terms arrive in the authored spelling; atoms are canonical. A term has
+    /// to survive the same normalisation the script went through, or the
+    /// provenance silently marks nothing.
+    #[test]
+    fn bias_terms_are_canonicalised_the_way_the_script_was() {
+        let mut script = compile(
+            "RustLight Games raised twenty-seven million last spring.",
+            CompileOptions::default(),
+        );
+        script.set_biased_terms(&[
+            "RustLight Games".to_string(),
+            "twenty-seven million".to_string(),
+        ]);
+
+        let marked: Vec<&str> = script
+            .atoms
+            .iter()
+            .filter(|a| a.flags & FLAG_BIASED != 0)
+            .map(|a| a.surface.as_str())
+            .collect();
+        // A multi-word term reaches both constituents, and the figure reaches
+        // the atom actually compiled from it rather than the authored spelling.
+        assert_eq!(marked, vec!["rustlight", "games", "27000000"]);
+    }
+
+    /// Numbers canonicalise in context, so half a figure is not a term. Worth
+    /// pinning: the failure is silent — the caller gets an unbiased script back
+    /// and a jump gate that believes its evidence was unsolicited.
+    #[test]
+    fn half_a_figure_is_not_the_term_the_script_compiled() {
+        let mut script = compile("We raised twenty-seven million.", CompileOptions::default());
+        assert!(script.atoms.iter().any(|a| a.surface == "27000000"));
+
+        script.set_biased_terms(&["twenty-seven".to_string()]);
+        assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
+
+        script.set_biased_terms(&["twenty-seven million".to_string()]);
+        assert_eq!(
+            script
+                .atoms
+                .iter()
+                .filter(|a| a.flags & FLAG_BIASED != 0)
+                .count(),
+            1
+        );
+    }
+
+    /// The decoder is configured for the whole take, not for one position, so a
+    /// term biases every place it could be heard.
+    #[test]
+    fn a_bias_term_marks_every_occurrence_of_the_word() {
+        let mut script = compile(
+            "Harbour opens. Then harbour closes. Nothing else.",
+            CompileOptions::default(),
+        );
+        script.set_biased_terms(&["harbour".to_string()]);
+        assert_eq!(
+            script
+                .atoms
+                .iter()
+                .filter(|a| a.flags & FLAG_BIASED != 0)
+                .count(),
+            2
+        );
+    }
+
+    /// Provenance may not invent vocabulary. A term the script does not contain
+    /// is dropped rather than interned, so it cannot later be resolved as one.
+    #[test]
+    fn a_bias_term_the_script_lacks_marks_nothing_and_interns_nothing() {
+        let mut script = compile("Only these words exist.", CompileOptions::default());
+        let before = script.interner.len();
+        script.set_biased_terms(&["kombucha".to_string(), String::new()]);
+        assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
+        assert_eq!(script.interner.len(), before);
     }
 
     #[test]

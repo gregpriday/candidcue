@@ -847,6 +847,31 @@ impl Engine {
         }
     }
 
+    /// Does this candidate carry enough content evidence to *move the reader*,
+    /// counting solicited words at a discount?
+    ///
+    /// A word the recogniser was biased toward is not independent evidence of
+    /// the position that asked for it, so it buys a fraction of an ordinary
+    /// match here (`biased_content_weight_milli`). Only the gates that
+    /// authorise a relocation or a far jump ask this — ordinary local
+    /// continuity compares `content_matches` directly, because a wrong local
+    /// step is cheap and self-correcting, while a wrong jump is not.
+    ///
+    /// Compared in milli-units rather than rounded back to whole words, so
+    /// fractional authority accumulates exactly: at half weight, two solicited
+    /// matches are worth precisely one unsolicited one, with no per-token
+    /// rounding to lose. Both sides saturate, so a pathological threshold
+    /// cannot wrap into a gate that passes.
+    fn content_authority_ok(&self, ev: &Evidence, required: u32) -> bool {
+        let biased = ev.biased_content_matches.min(ev.content_matches);
+        let unbiased = ev.content_matches.saturating_sub(biased);
+        let weight = self.config.biased_content_weight_milli.min(1000);
+        let available = unbiased
+            .saturating_mul(1000)
+            .saturating_add(biased.saturating_mul(weight));
+        available >= required.saturating_mul(1000)
+    }
+
     fn decide_relocation(&mut self, best: Candidate, margin: f64, now_ms: f64) -> Snapshot {
         let ev = &best.evidence;
         let c = &self.config;
@@ -863,7 +888,7 @@ impl Engine {
             c.ambiguity_margin
         };
         let enough = ev.fidelity >= c.jump_min_fidelity
-            && ev.content_matches >= c.relocation_min_content
+            && self.content_authority_ok(ev, c.relocation_min_content)
             && margin >= required_margin;
         if !enough {
             self.confidence = (self.confidence * 0.8).max(0.05);
@@ -1050,7 +1075,7 @@ impl Engine {
         let c = self.config.clone();
         let ev = &best.evidence;
         let needed_content = if best.backward {
-            c.jump_min_content + c.retake_extra_content
+            c.jump_min_content.saturating_add(c.retake_extra_content)
         } else {
             c.jump_min_content
         };
@@ -1059,7 +1084,7 @@ impl Engine {
         // permanently lose to nearby junk.
         let evidence_score = best.score + best.jump_penalty;
         let strong = ev.fidelity >= c.jump_min_fidelity
-            && ev.content_matches >= needed_content
+            && self.content_authority_ok(ev, needed_content)
             && evidence_score - local_suffix_score >= c.jump_margin
             && distant_rivals_gap >= c.ambiguity_margin;
 
@@ -1067,6 +1092,12 @@ impl Engine {
             // Not evidence enough to even consider — clear any stale pending
             // target so an unrelated later fluctuation doesn't inherit its
             // persistence count.
+            //
+            // Undiscounted deliberately: forgetting a target authorises
+            // nothing. Whether the pending entry survives or not, accepting it
+            // still has to clear the discounted gate above, so reading a
+            // solicited match at full value here only decides how long a
+            // suggestion is remembered.
             if ev.content_matches < 2 {
                 self.pending_jump = None;
             }
@@ -1648,5 +1679,149 @@ mod tests {
         assert_eq!(snapshot.provisional, Some(3.0));
         assert_eq!(snapshot.observed, 2.0);
         assert_eq!(snapshot.confirmed, 2.0);
+    }
+
+    /* ----------------------------------------------------------------------
+     * Solicited evidence (issue #169)
+     * ------------------------------------------------------------------- */
+
+    /// Filler, then a passage that occurs nowhere else and sits far enough away
+    /// to be a discontinuity rather than a local step.
+    ///
+    /// Four distinct content words, not three: `jump_query_min` will not even
+    /// evaluate a discontinuity against a shorter unexplained tail, so a
+    /// three-word passage tests the discount by never reaching it.
+    fn jump_script() -> CompiledScript {
+        compile(&jump_source(&["Zanzibar quartzite mnemonic obsidian."]), CompileOptions::default())
+    }
+
+    fn jump_source(tail: &[&str]) -> String {
+        let mut source = String::new();
+        for i in 0..24 {
+            source.push_str(&format!("region {i} holds ordinary material here. "));
+        }
+        for piece in tail {
+            source.push_str(piece);
+        }
+        source
+    }
+
+    const DISTANT: &str = "zanzibar quartzite mnemonic obsidian";
+
+    fn distant_terms(words: &str) -> Vec<String> {
+        words.split(' ').map(str::to_string).collect()
+    }
+
+    /// The named case from the issue. Three exact content matches carry a jump;
+    /// the same three, solicited from the decoder, do not.
+    #[test]
+    fn solicited_matches_lose_the_authority_to_jump() {
+        let mut engine = Engine::new(jump_script(), AlignmentConfig::default());
+        engine.set_manual_position(0, 0.0);
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+        let landed = jumped.observed;
+        assert!(landed > 40.0, "expected a far landing, got {landed}");
+
+        let mut script = jump_script();
+        script.set_biased_terms(&distant_terms(DISTANT));
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(0, 0.0);
+        let held = final_item(&mut engine, 1, DISTANT, 900.0);
+
+        assert_ne!(held.decision, DecisionCode::JumpForwardAccepted);
+        assert!(
+            held.observed < 40.0,
+            "a solicited run moved the reader to {}",
+            held.observed
+        );
+    }
+
+    /// Weight is authority, not a switch: at full weight the discount is off and
+    /// the marked run jumps exactly as the unmarked one did. This is what keeps
+    /// the mechanism a tunable rather than a second, hidden veto.
+    #[test]
+    fn solicited_matches_at_full_weight_jump_as_before() {
+        let mut script = jump_script();
+        script.set_biased_terms(&distant_terms(DISTANT));
+        let config = AlignmentConfig {
+            biased_content_weight_milli: 1000,
+            ..Default::default()
+        };
+        let mut engine = Engine::new(script, config);
+        engine.set_manual_position(0, 0.0);
+
+        assert_eq!(
+            final_item(&mut engine, 1, DISTANT, 900.0).decision,
+            DecisionCode::JumpForwardAccepted
+        );
+    }
+
+    /// The discount is fractional, not a veto: enough solicited evidence still
+    /// authorises the move. Six half-weight matches are worth three whole ones,
+    /// exactly, with no per-token rounding lost along the way.
+    #[test]
+    fn enough_solicited_evidence_still_earns_the_jump() {
+        const LONGER: &str = "zanzibar quartzite mnemonic obsidian pergola cinnabar";
+        let source = jump_source(&["Zanzibar quartzite mnemonic obsidian pergola cinnabar."]);
+        let mut script = compile(&source, CompileOptions::default());
+        script.set_biased_terms(&distant_terms(LONGER));
+
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(0, 0.0);
+
+        assert_eq!(
+            final_item(&mut engine, 1, LONGER, 1_800.0).decision,
+            DecisionCode::JumpForwardAccepted
+        );
+    }
+
+    /// The other half of the issue: ordinary local continuity takes solicited
+    /// words at full value, because a wrong local step is small and
+    /// self-correcting. Two marked content words must still advance the reader —
+    /// under the jump discount they would be worth one, and hold.
+    #[test]
+    fn solicited_matches_keep_full_local_authority() {
+        let mut script = compile(
+            "alpha bravo charlie zanzibar quartzite delta echo foxtrot",
+            CompileOptions::default(),
+        );
+        script.set_biased_terms(&["zanzibar".to_string(), "quartzite".to_string()]);
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(3, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "zanzibar quartzite", 700.0);
+        assert_eq!(snapshot.state, TrackingState::Following);
+        assert!(
+            snapshot.observed >= 5.0,
+            "local following was discounted: observed {}",
+            snapshot.observed
+        );
+    }
+
+    /// The invariant that matters while bias is off: with nothing declared, the
+    /// weight cannot reach anything. Same events, same snapshots, byte for byte.
+    #[test]
+    fn an_unmarked_script_is_unaffected_by_the_bias_weight() {
+        let drive = |weight: u32| -> String {
+            let config = AlignmentConfig {
+                biased_content_weight_milli: weight,
+                ..Default::default()
+            };
+            let mut engine = Engine::new(jump_script(), config);
+            engine.set_manual_position(0, 0.0);
+            let mut out = Vec::new();
+            out.push(final_item(&mut engine, 1, "region 0 holds ordinary", 600.0));
+            out.push(final_item(&mut engine, 2, "material here region 1", 1_200.0));
+            out.push(final_item(&mut engine, 3, DISTANT, 1_900.0));
+            out.push(final_item(&mut engine, 4, "region 3 holds ordinary", 2_600.0));
+            serde_json::to_string(&out).unwrap()
+        };
+
+        // A jump lands inside this sequence, so the discounted gate is genuinely
+        // exercised — the comparison is not vacuous.
+        assert!(drive(500).contains("JumpForwardAccepted"));
+        assert_eq!(drive(500), drive(1000));
+        assert_eq!(drive(500), drive(0));
     }
 }

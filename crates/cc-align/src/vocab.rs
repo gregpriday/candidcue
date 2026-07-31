@@ -1307,4 +1307,46 @@ HiddenContainerTerm lives here.
         assert!(extract(&[]).is_empty());
         assert!(extract(&["", "   "]).is_empty());
     }
+
+    /// The loop the caller will actually close once bias returns: whatever this
+    /// extractor nominates is what the decoder is told, so the same list has to
+    /// land on script atoms when handed straight back.
+    ///
+    /// It is not obvious that it would. Terms come out in the authored spelling
+    /// and the compiler works in canonical atoms, so a term that survives
+    /// extraction but not normalisation would mark nothing at all — and would do
+    /// so silently, leaving a jump gate that believes its evidence was
+    /// unsolicited.
+    #[test]
+    fn extracted_terms_mark_the_atoms_they_came_from() {
+        use crate::script::{compile, FLAG_BIASED};
+
+        let source = "RustLight Games shipped the harbour release. \
+             The release raised twenty-seven million.";
+        let terms = extract_from_markdown(source, CompileOptions::default(), VocabLimits::default());
+        assert!(
+            terms.iter().any(|t| t.contains("RustLight")),
+            "fixture no longer exercises a multi-word term: {terms:?}"
+        );
+
+        let mut script = compile(source, CompileOptions::default());
+        script.set_biased_terms(&terms);
+
+        let marked: Vec<&str> = script
+            .atoms
+            .iter()
+            .filter(|a| a.flags & FLAG_BIASED != 0)
+            .map(|a| a.surface.as_str())
+            .collect();
+        assert!(marked.contains(&"rustlight"), "marked: {marked:?}");
+        assert!(marked.contains(&"games"), "marked: {marked:?}");
+        // The extractor emits the whole figure phrase, which is exactly why
+        // forwarding its output unmodified survives the compiler folding
+        // `twenty-seven million` into one atom.
+        assert!(marked.contains(&"27000000"), "marked: {marked:?}");
+        // Ordinary words the extractor declined are left alone, so the discount
+        // stays aimed at the words bias would actually have boosted.
+        assert!(!marked.contains(&"shipped"), "marked: {marked:?}");
+        assert!(!marked.contains(&"the"), "marked: {marked:?}");
+    }
 }
