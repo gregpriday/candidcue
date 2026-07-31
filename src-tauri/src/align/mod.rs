@@ -122,6 +122,13 @@ impl AlignmentState {
 
     /// Compile `tokens` and arm the engine against them.
     ///
+    /// The script is compiled as English, stated here rather than defaulted
+    /// into: this is the only entry point in this file that picks a language
+    /// without being told one, and it exists for tests and for callers that
+    /// have no setting to consult. Anything on the take path goes through
+    /// [`AlignmentState::start_in`] instead, carrying the language the setting
+    /// resolved to.
+    ///
     /// `label` is the take's SESSION generation — an identity echoed onto every
     /// snapshot, never a filter (see [`AlignmentSession`]). The session starts
     /// UNBOUND: it follows nothing until [`AlignmentState::bind_stream`] ties
@@ -131,7 +138,23 @@ impl AlignmentState {
     /// and keeping the previous engine alive would let speech from before the
     /// change drag the cursor.
     pub fn start(&self, label: u64, tokens: &[AlignToken]) {
-        self.start_bound(label, None, tokens);
+        self.start_in(label, tokens, cc_align::AlignmentLanguage::English);
+    }
+
+    /// Compile `tokens` as `language` and arm the engine against them.
+    ///
+    /// The language is a PARAMETER rather than something this state reads for
+    /// itself, and deliberately: `AlignmentState` owns an engine, not a
+    /// database, and a take that consulted settings mid-flight could change
+    /// language under a running session. The caller latches it once, at the top
+    /// of the take, and hands it down.
+    pub fn start_in(
+        &self,
+        label: u64,
+        tokens: &[AlignToken],
+        language: cc_align::AlignmentLanguage,
+    ) {
+        self.start_bound(label, None, tokens, language);
     }
 
     /// Arm the engine, optionally already bound to a live socket.
@@ -142,7 +165,13 @@ impl AlignmentState {
     /// `bind_stream` has already fired against no session and would never fire
     /// again. Seeding here is what makes the binding order-independent — and a
     /// later `bind_stream` still supersedes it, so a stale seed cannot stick.
-    pub fn start_bound(&self, label: u64, stream_generation: Option<u64>, tokens: &[AlignToken]) {
+    pub fn start_bound(
+        &self,
+        label: u64,
+        stream_generation: Option<u64>,
+        tokens: &[AlignToken],
+        language: cc_align::AlignmentLanguage,
+    ) {
         let inputs: Vec<TokenInput> = tokens
             .iter()
             .map(|t| TokenInput {
@@ -151,16 +180,17 @@ impl AlignmentState {
                 para: t.para,
             })
             .collect();
-        // English, stated rather than defaulted into.
+        // The language the SETTING resolved to, which is what #157 threaded
+        // here.
         //
-        // The bundled recogniser transcribes English and `migrate_in_place`
-        // refuses to persist anything else, so this is correct today — but it
-        // is the ONE place the app chooses a language, and a `compile_tokens`
-        // call that quietly means English would be an easy thing to miss when
-        // a second profile exists. Naming it here is what makes #157 a matter
-        // of threading the setting to this line rather than of discovering
-        // that the setting never reached the engine at all.
-        let script = cc_align::compile_tokens_in(&inputs, cc_align::AlignmentLanguage::English);
+        // This used to be a hardcoded `English` with a comment saying that the
+        // day a second profile existed, the setting would have to reach this
+        // line. It does now. What arrives is already resolved to a profile the
+        // engine has — `start_alignment` asks `AlignmentLanguage::from_bcp47`
+        // and falls back to English when the persisted tag names a language
+        // this build cannot normalise — so there is no tag parsing and no
+        // silent English fallback buried in the compile call itself.
+        let script = cc_align::compile_tokens_in(&inputs, language);
         let engine = Engine::new(script, AlignmentConfig::default());
         *self.lock() = Some(AlignmentSession {
             label,
@@ -439,6 +469,95 @@ mod tests {
         assert!(snapshot.confirmed_token <= snapshot.observed_token);
     }
 
+    /// A non-English script compiles, follows, and produces different ATOMS.
+    ///
+    /// Two separate claims, because an earlier version of this test conflated
+    /// them and was wrong for an instructive reason. It asserted that compiling
+    /// a French script as English would track WORSE, and it does not: script
+    /// and transcript pass through the SAME normaliser, so a wrong profile
+    /// makes both sides wrong in the same direction and they go on matching
+    /// each other. `language.rs` says this exactly — an unanswered
+    /// `DecimalSyntax` rule is "not a missed match, it is the wrong number".
+    /// The damage is that the atom is a figure the reader never says, which
+    /// costs nothing until real speech arrives and everything afterwards.
+    ///
+    /// So the atom-level difference is asserted where it is visible, and what
+    /// is asserted HERE is the part only this layer can show: the one
+    /// conversion in the system — engine atoms to app tokens, in this module —
+    /// has never run on a non-English profile before, and it holds up.
+    ///
+    /// This is a unit test of the wiring. It is NOT evidence that French
+    /// follows on real audio; that needs a corpus and the gate in `cc-bench`.
+    #[test]
+    fn a_script_is_compiled_in_the_language_it_was_armed_with() {
+        const FRENCH_SCRIPT: &[&str] = &[
+            "nos", "revenus", "ont", "augmenté", "de", "12,5%", "ce", "trimestre",
+            "et", "l'équipe", "a", "livré", "trois", "fonctionnalités",
+        ];
+
+        // The profiles genuinely disagree about this script: French points with
+        // a comma and reads `%` as two words. If this ever stops differing, the
+        // session assertions below would pass without meaning anything.
+        let as_french = cc_align::normalize::canonical_atoms_for(
+            cc_align::AlignmentLanguage::French,
+            "12,5%",
+        );
+        let as_english = cc_align::normalize::canonical_atoms_for(
+            cc_align::AlignmentLanguage::English,
+            "12,5%",
+        );
+        assert_eq!(as_french, vec!["12.5", "pour", "cent"]);
+        assert_eq!(as_english, vec!["125", "percent"]);
+
+        let french = AlignmentState::new();
+        french.start_in(1, &tokens(FRENCH_SCRIPT), cc_align::AlignmentLanguage::French);
+
+        // The load-bearing assertion: the ARMED engine's script says French.
+        // Everything else in this test would still pass if `start_in` threw the
+        // parameter away and compiled English — the atom comparison above is
+        // standalone, and the session below advances either way, because script
+        // and transcript share whatever profile was used. This reads it back
+        // off the engine, so dropping the argument fails here and only here.
+        assert_eq!(
+            french
+                .lock()
+                .as_ref()
+                .expect("a session was just armed")
+                .engine
+                .script
+                .language(),
+            cc_align::AlignmentLanguage::French,
+            "the language did not reach `compile_tokens_in`"
+        );
+
+        french.bind_stream(1);
+        let snapshot = french
+            .observe(
+                &SttFrame::Final {
+                    generation: 1,
+                    item_id: "1-0".into(),
+                    text: "nos revenus ont augmenté de 12,5 pour cent ce trimestre".into(),
+                    audio_end_ms: 3_000.0,
+                },
+                3_000.0,
+            )
+            .expect("a running session answers a transcript frame");
+
+        assert_eq!(snapshot.state, "following");
+        assert_eq!(snapshot.script_len_tokens, FRENCH_SCRIPT.len() as f64);
+        // Eight of the fourteen script tokens were spoken. The atom-to-token
+        // conversion has to land near there rather than anywhere: a French
+        // figure that expanded to three atoms against one token is precisely
+        // where that mapping could drift.
+        assert!(
+            (snapshot.observed_token - 8.0).abs() <= 2.0,
+            "French speech against a French script should sit near token 8, \
+             got {}",
+            snapshot.observed_token
+        );
+        assert!(snapshot.confirmed_token <= snapshot.observed_token);
+    }
+
     /// Frames from a superseded transcription socket must not reach the engine:
     /// this is the check that keeps the tail of a stopped take out of the next
     /// one's alignment.
@@ -525,7 +644,7 @@ mod tests {
     #[test]
     fn a_session_armed_after_its_socket_still_follows() {
         let state = AlignmentState::new();
-        state.start_bound(1, Some(2), &tokens(SCRIPT));
+        state.start_bound(1, Some(2), &tokens(SCRIPT), cc_align::AlignmentLanguage::English);
         assert_eq!(state.bound_stream(), Some(2));
         assert!(state
             .observe(

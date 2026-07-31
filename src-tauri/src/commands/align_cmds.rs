@@ -8,6 +8,7 @@
 //! carries three lifecycle messages a take rather than one message a word.
 
 use crate::align::{AlignToken, AlignmentState};
+use crate::database::Database;
 use crate::errors::AppError;
 use crate::speech::SpeechEngine;
 
@@ -17,6 +18,7 @@ use crate::speech::SpeechEngine;
 /// frames from a superseded session can never reach a newer engine.
 #[tauri::command]
 pub async fn start_alignment(
+    db: tauri::State<'_, Database>,
     state: tauri::State<'_, AlignmentState>,
     speech: tauri::State<'_, SpeechEngine>,
     generation: u64,
@@ -27,12 +29,57 @@ pub async fn start_alignment(
             "cannot align against a script with no spoken tokens",
         ));
     }
+    let language = resolve_language(&db).await;
     // `generation` is the take's SESSION generation — a label, echoed onto
     // every snapshot. What the engine FILTERS frames on is the socket, which
     // Rust owns; seeding it here covers the case where the stream started
     // first, and `bind_stream` covers the case where it starts second.
-    state.start_bound(generation, speech.current_generation(), &tokens);
+    state.start_bound(generation, speech.current_generation(), &tokens, language);
     Ok(())
+}
+
+/// The language to compile this take's script in.
+///
+/// Read once, here, at the top of the take, rather than by the engine while it
+/// runs — see [`AlignmentState::start_in`] for why that separation matters.
+///
+/// Two things can go wrong and both answer English, but not for the same
+/// reason, and the weaker of the two is worth being honest about.
+///
+/// A failed settings read is a real failure and English is a degraded answer,
+/// not a correct one. It is chosen because this build ships one recogniser and
+/// it is English: following in the language every install starts in beats not
+/// following, and the alternative is not "fail loudly" but "the take runs with
+/// no following at all", since the caller in `services/session.ts` catches an
+/// alignment start failure and carries on. That trade stops being right the
+/// day a second language ships, at which point this should resolve the
+/// language alongside the MODEL and fail when they disagree.
+///
+/// An unresolvable tag is different: it should be unreachable.
+/// `settings::migrate_in_place` runs on every read and repairs any tag this
+/// build cannot both transcribe and normalise, so `None` here means that
+/// invariant broke. It is logged as such rather than silently absorbed —
+/// `from_bcp47`'s own doc says pretending an unknown tag is English is never
+/// right, and this is the one place that would otherwise do it quietly.
+async fn resolve_language(db: &Database) -> cc_align::AlignmentLanguage {
+    let tag = match crate::settings::get_settings(db.pool()).await {
+        Ok(settings) => settings.value.audio.language,
+        Err(err) => {
+            tracing::warn!(
+                "alignment: could not read the language setting ({err}); \
+                 compiling as English"
+            );
+            return cc_align::AlignmentLanguage::English;
+        }
+    };
+    cc_align::AlignmentLanguage::from_bcp47(tag.trim()).unwrap_or_else(|| {
+        tracing::error!(
+            "alignment: settings returned {tag:?}, which has no normalisation \
+             profile — migrate_in_place should have repaired it before this \
+             point. Compiling as English."
+        );
+        cc_align::AlignmentLanguage::English
+    })
 }
 
 #[tauri::command]
