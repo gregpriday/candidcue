@@ -767,6 +767,36 @@ export const DEFAULT_STAGE_APPEARANCE = {
   readingBandCenterPercent: 38,
 } as const;
 
+/**
+ * The auto-scroll pace a take falls back to when nobody has set one.
+ *
+ * 130, because that is what RUST hands out, and Rust is what a real install
+ * actually loads: `fixed_speed_wpm: 130` in `src-tauri/src/settings/mod.rs`, and
+ * `fromRustDocument` maps `stageBehavior.fixedSpeedWpm` straight over whatever
+ * this file said. The literal here used to be 150 — a number no packaged build
+ * has ever started at, because Rust's value always overwrote it before anybody
+ * saw it.
+ *
+ * That was harmless while nothing read it, and stops being harmless the moment
+ * Settings offers to restore it: a fresh install would open on Rust's 130,
+ * label it "Set by you", and offer to "reset" it to a 150 the user never chose.
+ * That is precisely the defect #124 exists to remove — a control describing a
+ * state the app is not in — so the two sides are made to agree rather than the
+ * disagreement being papered over in the UI.
+ *
+ * Still deliberately NOT the two similarly-named constants elsewhere:
+ *
+ *   - `lib/format.ts`'s `DEFAULT_WPM` (150) is a SPEAKING rate, for estimating
+ *     how long a script takes to read aloud. Different question entirely.
+ *   - `stage/renderer/autoscroll.ts`'s `AUTO_SCROLL_DEFAULT_WPM` is the
+ *     renderer's repair for a value that arrived missing or invalid, not a
+ *     preference. It agrees at 130 today, and does not have to.
+ *
+ * If Rust's default moves, this must move with it — `stage-appearance.test.ts`
+ * pins them together so the disagreement cannot come back silently.
+ */
+export const DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM = 130;
+
 export function defaultAppSettings(): AppSettings {
   return {
     schemaVersion: 1,
@@ -822,7 +852,7 @@ export function defaultAppSettings(): AppSettings {
       phraseHighlight: true,
       pastDimming: true,
       textIntensity: 'standard',
-      fixedSpeedWpm: 150,
+      fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
       stageEndBehavior: 'close',
       hidePointer: true,
       /*

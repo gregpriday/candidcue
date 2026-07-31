@@ -22,6 +22,7 @@
   import Section from '../components/Section.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import Select from '../components/Select.svelte';
+  import SettingReadout from '../components/SettingReadout.svelte';
   import Slider from '../components/Slider.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import TextField from '../components/TextField.svelte';
@@ -70,11 +71,14 @@
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
+    DEFAULT_STAGE_APPEARANCE,
+    DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
     activeOpticalProfile,
     opticalRigsForDisplay,
     withOpticalProfile,
     withoutOpticalProfile,
   } from '../services/settings-types';
+  import { describeCalibrationProgress } from '../lib/optical-calibration';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -702,6 +706,70 @@
       displayFingerprint: fingerprint,
       rigName: name ?? unusedRigName(discovered.profile.rigName),
     });
+  }
+
+  /**
+   * The appearance sliders that have a fixed default worth naming.
+   *
+   * Four geometry fields plus the auto-scroll pace. Everything here resets to a
+   * CONSTANT, which is what separates them from the rig overrides above: those
+   * reset to a value the optical resolver works out afresh from a measured
+   * distance, and can move when the distance does.
+   */
+  type AppearanceSliderKey =
+    | 'fontSizePx'
+    | 'lineHeight'
+    | 'columnWidthPercent'
+    | 'readingBandCenterPercent'
+    | 'fixedSpeedWpm';
+
+  /**
+   * Read from the same constants `defaultAppSettings()` builds from, never
+   * retyped here. A "Reset to default" carrying its own copy of the number is a
+   * reset that can quietly disagree with the default it claims to restore.
+   */
+  const APPEARANCE_DEFAULTS: Record<AppearanceSliderKey, number> = {
+    fontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
+    lineHeight: DEFAULT_STAGE_APPEARANCE.lineHeight,
+    columnWidthPercent: DEFAULT_STAGE_APPEARANCE.columnWidthPercent,
+    readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
+    fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
+  };
+
+  /**
+   * Who decides the four geometry fields right now — or null for nobody.
+   *
+   * Read from the same two facts `stageSettingsFromSettings` branches on, and
+   * in the same order, because anything else is a second opinion about a
+   * question the stage has already answered.
+   *
+   * TWO OWNERS, NOT ONE. Gating on `appliedRig` alone was the obvious reading
+   * and it is wrong in a way nobody would notice from the prompter path:
+   * a READING WINDOW always runs its own rig. `readerOpticalProfile`
+   * synthesises one when nothing is stored — deliberately, so a reader never
+   * falls through to the uncalibrated layout — so in reader mode these four
+   * fields are overridden whether or not a prompter rig was ever measured.
+   * A presenter in reader mode with no calibration would otherwise have been
+   * left with exactly the defect this change exists to remove.
+   */
+  const geometryOwner = $derived.by((): { label: string; toRig: boolean } | null => {
+    if ($settings.stage.presentationMode === 'reader') {
+      return { label: 'the reading window', toRig: false };
+    }
+    if (appliedRig !== null) return { label: `${appliedRig.rigName} calibration`, toRig: true };
+    return null;
+  });
+
+  /**
+   * Send somebody to whatever owns the geometry they just tried to change.
+   *
+   * The disabled sliders name the owner, which answers "why can I not move
+   * this"; this answers "then where do I". Both destinations are the Stage
+   * display section — where the applied rig sorts first and carries its own
+   * Re-calibrate, and where the prompter/reader switch lives.
+   */
+  function openGeometryOwner(): void {
+    void navigate({ name: 'settings', section: 'stage' });
   }
 
   function unusedRigName(preferred: string): string {
@@ -1336,25 +1404,54 @@
             alone. That is a different decision from "can the script roll", and
             until somebody makes it, a take always opens listening.
           -->
-          <Select
-            label="Default session mode"
-            value={$settings.general.defaultSessionMode}
-            options={[
-              { value: 'voice', label: 'Voice follow' },
-              { value: 'manual', label: 'Manual — not available in this release', disabled: true },
-              { value: 'fixed', label: 'Fixed speed — not available in this release', disabled: true },
-            ]}
-            onchange={(value) =>
-              void patchSettings('general', {
-                defaultSessionMode: value as 'voice' | 'manual' | 'fixed',
-              })}
-          />
-          <p class="hint-line">
-            Every take opens listening. Auto-scroll can roll the script at a set pace from inside
-            any take (see the pace below), but there is no mode that starts one without a
-            microphone — so these two are shown here rather than offered, because a mode that
-            silently behaves like another one is worse than a mode that is missing.
-          </p>
+          <!--
+            This was a Select with three entries, two of them permanently
+            disabled and labelled "not available in this release".
+
+            The reasoning below is unchanged and still right: a mode that
+            silently behaves like another one is worse than a mode that is
+            missing. What was wrong was the shape. A dropdown is a question, and
+            opening this one to find both alternatives greyed out answers it with
+            "there was never anything to decide" — every time, for every reader.
+
+            So it says what the mode is. The sentence carries what the two
+            disabled rows used to, which is the part worth keeping: somebody who
+            came here looking for a fixed-speed mode learns that auto-scroll
+            exists and where to find it, instead of learning only that they
+            cannot have what they came for.
+          -->
+          <!--
+            READ, not asserted. `defaultSessionMode` is still a real stored
+            field: `fromRustDocument` accepts a persisted 'manual' or 'fixed',
+            and `startTake` passes whatever it finds straight into the session.
+            A readout hardcoded to "Voice follow" would therefore have been the
+            same defect one layer along — a screen describing a state the app is
+            not in — for anybody carrying such a document. So if an unsupported
+            mode is stored, this says so and offers the way back that removing
+            the Select would otherwise have taken away.
+          -->
+          {#if $settings.general.defaultSessionMode === 'voice'}
+            <SettingReadout
+              label="Session mode"
+              value="Voice follow"
+              description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take (see the pace below), but there is no mode that starts one without a microphone — so manual and fixed-speed modes are not offered rather than shipped as something that silently behaves like this one."
+            />
+          {:else}
+            <SettingReadout
+              label="Session mode"
+              value={$settings.general.defaultSessionMode === 'manual' ? 'Manual' : 'Fixed speed'}
+              description="This setting was stored by an earlier version and takes no longer open in it. Switch back to voice follow to prompt normally; auto-scroll still rolls the script at a set pace from inside any take."
+            />
+            <p class="hint-line">
+              <button
+                type="button"
+                class="inline-link"
+                onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
+              >
+                Switch to voice follow
+              </button>
+            </p>
+          {/if}
           <Slider
             label="Revision retention"
             value={$settings.general.revisionRetentionDays}
@@ -1712,10 +1809,35 @@
           title="This rig"
           description="How the text is sized for the panel above — worked out from how far away you stand, not from a pixel default."
         >
+          <!--
+            One button used to sit here and it always started a NEW rig.
+
+            `calibrate()` with no argument mints a name no stored rig is using,
+            which is right for measuring a second arrangement and wrong for
+            everything else. Somebody with "Desk hood" applied who pressed the
+            most prominent button on the panel got "Desk hood 2" — a second rig
+            they did not ask for, leaving the one they meant to adjust untouched.
+            The row-level "Re-calibrate" already did the right thing, but it is
+            not where the eye goes.
+
+            So the primary action now names the rig it will change, and measuring
+            another stays reachable beside it. Both paths matter: one panel
+            legitimately holds several rigs, and the store keys on (panel, name),
+            so the two must never be the same button.
+          -->
           {#snippet actions()}
-            <Button size="sm" disabled={rigFingerprint === null} onclick={() => calibrate()}>
-              Calibrate…
-            </Button>
+            {#if appliedRig}
+              <Button size="sm" onclick={() => calibrate(appliedRig.rigName)}>
+                Re-calibrate {appliedRig.rigName}…
+              </Button>
+              <Button size="sm" variant="ghost" onclick={() => calibrate()}>
+                Measure another rig…
+              </Button>
+            {:else}
+              <Button size="sm" disabled={rigFingerprint === null} onclick={() => calibrate()}>
+                Calibrate…
+              </Button>
+            {/if}
           {/snippet}
 
           {#if rigFingerprint === null}
@@ -1744,7 +1866,12 @@
                           ? 'No distance measured'
                           : `${(entry.profile.viewingDistanceMm / 1000).toFixed(2)} m`}
                         · {OPTICAL_HARDWARE[entry.profile.hardwareKind].label}
-                        · {entry.profile.completedSteps.length} of 8 steps
+                        <!-- Not `completedSteps.length` against a literal 8.
+                             That counted tokens rather than answers, so a rig
+                             with no measured scale still read "8 of 8" — done,
+                             with the one number every angular result is
+                             multiplied by never taken. See lib/optical-calibration.ts. -->
+                        · {describeCalibrationProgress(entry.profile)}
                       </span>
                     </button>
                     <div class="row-actions">
@@ -2040,6 +2167,71 @@
           </div>
         {/snippet}
       {:else if section === 'teleprompter'}
+        <!--
+          One appearance slider, with the two things every one of them was
+          missing: what the default is, and who owns the value right now.
+
+          It deliberately mirrors the rig `override` snippet above rather than
+          reusing it — that one is keyed on `rig.overrides` and resets to an
+          automatic value the resolver recomputes, while these are flat
+          `teleprompter` fields resetting to a fixed constant. Same vocabulary,
+          different data path; sharing the implementation would mean one snippet
+          that had to ask which kind of setting it was holding.
+
+          `rigOwned` is the honest part. With a rig applied, `resolveStageGeometry`
+          decides size, line height, column and band from a measured distance and
+          `buildStageSettings` writes its answer over these same fields — so the
+          control is inert and says so, naming the rig that took it. The reset
+          row is hidden in that state rather than disabled: offering to restore a
+          default that would not be used either is a second dead control under
+          the first.
+        -->
+        {#snippet appearanceSlider(
+          key: AppearanceSliderKey,
+          label: string,
+          min: number,
+          max: number,
+          step: number,
+          format: (value: number) => string,
+          rigOwned: boolean,
+        )}
+          {@const value = $settings.teleprompter[key]}
+          {@const defaultValue = APPEARANCE_DEFAULTS[key]}
+          {@const owner = rigOwned ? geometryOwner : null}
+          {@const owned = owner !== null}
+          {@const atDefault = value === defaultValue}
+          <div class="override">
+            <Slider
+              {label}
+              {value}
+              {min}
+              {max}
+              {step}
+              {format}
+              disabled={owned}
+              description={owner
+                ? `Controlled by ${owner.label} — the number here is the fallback for an uncalibrated display, not what a take prompts at.`
+                : undefined}
+              onchange={(next) => void patchSettings('teleprompter', { [key]: next })}
+            />
+            {#if !owned}
+              <div class="override-state">
+                {#if atDefault}
+                  <span class="override-tag automatic">Default · {format(defaultValue)}</span>
+                {:else}
+                  <span class="override-tag">Set by you</span>
+                  <button
+                    type="button"
+                    class="inline-link"
+                    onclick={() => void patchSettings('teleprompter', { [key]: defaultValue })}
+                  >
+                    Reset to default · {format(defaultValue)}
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/snippet}
         <Section title="Teleprompter">
           <!--
             The controls below describe the glass, so they are set at the glass.
@@ -2056,8 +2248,18 @@
             >
               {stagePreview ? 'Stop preview' : 'Show on teleprompter'}
             </Button>
+            <!--
+              "Everything below updates it as you drag" was the sentence this
+              screen's whole defect hid behind: with a rig applied it is false
+              for the four geometry sliders, and it was making the promise at
+              the exact moment the preview was running to be believed.
+            -->
             <p class="hint-line preview-note">
-              {#if stagePreview}
+              {#if stagePreview && geometryOwner}
+                Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
+                Size, line height, column width and reading band come from
+                <strong>{geometryOwner.label}</strong>; the rest updates as you drag.
+              {:else if stagePreview}
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
                 Everything below updates it as you drag.
               {:else if displays.length === 0}
@@ -2134,43 +2336,57 @@
             knowledge of, and the operator had no way to tell that the slider
             had run out rather than the display.
           -->
-          <Slider
-            label="Default font size"
-            value={$settings.teleprompter.fontSizePx}
-            min={MIN_FONT_SIZE_PX}
-            max={sizeCeilingPx}
-            format={(v) => `${v} px`}
-            onchange={(value) => void patchSettings('teleprompter', { fontSizePx: value })}
-          />
+          {@render appearanceSlider(
+            'fontSizePx',
+            'Default font size',
+            MIN_FONT_SIZE_PX,
+            sizeCeilingPx,
+            1,
+            (v) => `${v} px`,
+            true,
+          )}
           <!-- Bounds from APPEARANCE_LIMITS, not literals: the in-session sheet
                sets these same four values, and a range that lives on one screen
                is a range that drifts from the other. -->
-          <Slider
-            label="Line height"
-            value={$settings.teleprompter.lineHeight}
-            min={APPEARANCE_LIMITS.lineHeight.min}
-            max={APPEARANCE_LIMITS.lineHeight.max}
-            step={APPEARANCE_LIMITS.lineHeight.step}
-            format={(v) => v.toFixed(2)}
-            onchange={(value) => void patchSettings('teleprompter', { lineHeight: value })}
-          />
-          <Slider
-            label="Text column width"
-            value={$settings.teleprompter.columnWidthPercent}
-            min={APPEARANCE_LIMITS.columnWidthPercent.min}
-            max={APPEARANCE_LIMITS.columnWidthPercent.max}
-            format={(v) => `${v}%`}
-            onchange={(value) => void patchSettings('teleprompter', { columnWidthPercent: value })}
-          />
-          <Slider
-            label="Reading band position"
-            value={$settings.teleprompter.readingBandCenterPercent}
-            min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
-            max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
-            format={(v) => `${v}%`}
-            onchange={(value) =>
-              void patchSettings('teleprompter', { readingBandCenterPercent: value })}
-          />
+          {@render appearanceSlider(
+            'lineHeight',
+            'Line height',
+            APPEARANCE_LIMITS.lineHeight.min,
+            APPEARANCE_LIMITS.lineHeight.max,
+            APPEARANCE_LIMITS.lineHeight.step,
+            (v) => v.toFixed(2),
+            true,
+          )}
+          {@render appearanceSlider(
+            'columnWidthPercent',
+            'Text column width',
+            APPEARANCE_LIMITS.columnWidthPercent.min,
+            APPEARANCE_LIMITS.columnWidthPercent.max,
+            1,
+            (v) => `${v}%`,
+            true,
+          )}
+          {@render appearanceSlider(
+            'readingBandCenterPercent',
+            'Reading band position',
+            APPEARANCE_LIMITS.readingBandCenterPercent.min,
+            APPEARANCE_LIMITS.readingBandCenterPercent.max,
+            1,
+            (v) => `${v}%`,
+            true,
+          )}
+          {#if geometryOwner}
+            <!--
+              One route, once, under the four controls somebody else owns —
+              rather than a link repeated in every description. The owner is
+              named in each slider's own hint; this is where you go to change it.
+            -->
+            <p class="hint-line">
+              <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
+                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open Stage display'}
+              </button>
+            </p>
+          {/if}
           <!--
             The one control on this screen that is aligning against a physical
             object. Said here rather than in the shared note below, because the
@@ -2179,29 +2395,31 @@
             should be sent to the wizard that puts a crosshair on the glass
             rather than left estimating a percentage.
           -->
-          <p class="hint-line">
-            The marks at the sides of the stage are the band. With the preview running, drag this
-            until they sit over your camera lens — that is where your eyes rest, so it is where the
-            lens should be. <strong>Calibrate</strong> under Stage display does the same alignment with
-            a crosshair and remembers it per rig.
-          </p>
           <!--
-            Said once, here, because it is the honest scope of the four sliders
-            above and it is otherwise invisible: a calibrated rig OVERRULES all
-            of them. `resolveStageGeometry` decides size, line height, column
-            and band from a measured distance, and `buildStageSettings` writes
-            its answer into these same flat fields. Somebody who has calibrated
-            their prompter and then drags "Text column width" would otherwise be
-            moving a control that changes nothing on the glass — which is the
-            precise defect this screen exists to remove, reappearing one layer
-            along.
+            Both notes are for the uncalibrated path only now.
+
+            The band instruction ("drag until the marks sit over your lens") is
+            an instruction for a control that, once something else owns it,
+            cannot be dragged — and the paragraph below it explained an override
+            that the sliders themselves now state, each naming its owner.
+            Leaving either in place would put the explanation back beside a
+            control that has already made it, which is how the screen ended up
+            arguing with itself in the first place.
           -->
-          <p class="hint-line">
-            These four are what an <strong>uncalibrated</strong> display prompts at. Calibrate one
-            under Stage display and its size, line height, column and reading band are worked out
-            from how far away you stand instead — which is the only way they can be right on two
-            panels of different sizes at once.
-          </p>
+          {#if geometryOwner === null}
+            <p class="hint-line">
+              The marks at the sides of the stage are the band. With the preview running, drag this
+              until they sit over your camera lens — that is where your eyes rest, so it is where the
+              lens should be. <strong>Calibrate</strong> under Stage display does the same alignment with
+              a crosshair and remembers it per rig.
+            </p>
+            <p class="hint-line">
+              These four are what an <strong>uncalibrated</strong> display prompts at. Calibrate one
+              under Stage display and its size, line height, column and reading band are worked out
+              from how far away you stand instead — which is the only way they can be right on two
+              panels of different sizes at once.
+            </p>
+          {/if}
           <!--
             "Fixed-speed default" was a slider onto nothing, and then a sentence
             saying so. It is a control again, because there is finally something
@@ -2215,15 +2433,17 @@
             somebody who is not yet standing at a camera with a script that has
             stopped moving.
           -->
-          <Slider
-            label="Auto-scroll pace"
-            value={$settings.teleprompter.fixedSpeedWpm}
-            min={AUTO_SCROLL_MIN_WPM}
-            max={AUTO_SCROLL_MAX_WPM}
-            format={(v) => `${v} wpm`}
-            onchange={(value) =>
-              void patchSettings('teleprompter', { fixedSpeedWpm: value })}
-          />
+          <!-- Not rig-owned: a calibrated rig decides geometry, not pace. So
+               this one stays live whatever is applied. -->
+          {@render appearanceSlider(
+            'fixedSpeedWpm',
+            'Auto-scroll pace',
+            AUTO_SCROLL_MIN_WPM,
+            AUTO_SCROLL_MAX_WPM,
+            1,
+            (v) => `${v} wpm`,
+            false,
+          )}
           <p class="hint-line">
             Auto-scroll rolls the script at this pace when your voice is not getting through.
             Press <kbd>A</kbd> during a take to start or stop it; <kbd>[</kbd> and <kbd>]</kbd>

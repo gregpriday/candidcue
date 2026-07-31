@@ -7,6 +7,7 @@
  * silently rewrites that value the first time it is touched, and the operator
  * has no way to see that it did.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ADVANCED_FONT_SIZE_CEILING_PX,
@@ -17,7 +18,11 @@ import {
   typeCeilingPx,
   type StageAppearance,
 } from '../../../src/control/lib/stage-appearance';
-import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import {
+  DEFAULT_STAGE_APPEARANCE,
+  DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
+  defaultAppSettings,
+} from '../../../src/control/services/settings-types';
 
 const BASE: StageAppearance = {
   textIntensity: 'standard',
@@ -158,5 +163,47 @@ describe('reading an appearance off the saved settings', () => {
       columnWidthPercent: t.columnWidthPercent,
       readingBandCenterPercent: t.readingBandCenterPercent,
     });
+  });
+});
+
+describe('the defaults Settings offers to restore', () => {
+  /*
+   * Settings now shows what each appearance slider's default is and offers a
+   * way back to it. That is only true if the number it restores is the number a
+   * fresh install actually starts at — a "Reset to default" reading from its own
+   * copy of the value is the kind of control this whole change exists to remove.
+   */
+  it('restores the same numbers a fresh install starts at', () => {
+    const t = defaultAppSettings().teleprompter;
+    expect(t.fontSizePx).toBe(DEFAULT_STAGE_APPEARANCE.fontSizePx);
+    expect(t.lineHeight).toBe(DEFAULT_STAGE_APPEARANCE.lineHeight);
+    expect(t.columnWidthPercent).toBe(DEFAULT_STAGE_APPEARANCE.columnWidthPercent);
+    expect(t.readingBandCenterPercent).toBe(DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent);
+    expect(t.fixedSpeedWpm).toBe(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM);
+  });
+
+  /*
+   * THE ONE THAT IS NOT TAUTOLOGICAL, and the reason this block exists.
+   *
+   * `defaultAppSettings()` is built FROM these constants, so asserting the two
+   * agree proves nothing on its own. The real question is whether the number
+   * Settings calls "the default" is the number a real install actually opens
+   * on — and that number comes from Rust: `fromRustDocument` maps
+   * `stageBehavior.fixedSpeedWpm` straight over the TypeScript value.
+   *
+   * This read the Rust source rather than a copy of it, because a copy is how
+   * the two drifted in the first place. They disagreed (TS 150, Rust 130) for
+   * as long as nothing displayed the default; the day Settings offered to
+   * restore it, a fresh install would have opened on 130, been told it was
+   * "Set by you", and been offered a reset to a 150 nobody chose.
+   */
+  it('agrees with the default Rust actually hands a fresh install', () => {
+    const rustSource = readFileSync(
+      new URL('../../../src-tauri/src/settings/mod.rs', import.meta.url),
+      'utf8',
+    );
+    const match = rustSource.match(/fixed_speed_wpm:\s*(\d+)/);
+    expect(match, 'fixed_speed_wpm no longer parses out of the Rust defaults').not.toBeNull();
+    expect(Number(match![1])).toBe(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM);
   });
 });
