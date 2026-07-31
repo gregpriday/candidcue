@@ -13,6 +13,8 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::errors::AppError;
+use crate::speech::catalogue::{self, ModelEntry};
+use crate::speech::model_manager::{self, SpeechModelManager, SpeechModelStatus};
 use crate::speech::{decode_base64, default_model, SpeechEngine, SAMPLE_RATE_HZ};
 
 /// What Settings shows in place of "is the key still good?".
@@ -146,4 +148,83 @@ pub async fn stop_transcription(
 ) -> Result<(), AppError> {
     speech.stop_stream(generation);
     Ok(())
+}
+
+/* -------------------------------------------------------------- model install
+ *
+ * §152: the recogniser is no longer inside the app. These four are how a
+ * machine gets one.
+ *
+ * The download runs in RUST rather than in the webview, and not for tidiness:
+ * the control window's CSP allows `connect-src 'self' ipc: http://ipc.localhost`
+ * and nothing else, so JavaScript here cannot reach a remote host at all. It
+ * also should not — the hardened hop guard, the SHA-256 check and the atomic
+ * install are the reasons this is safe, and none of them can live in a webview.
+ *
+ * All four take an OPTIONAL `modelId` and fall back to the catalogue default.
+ * There is one model worth naming today, and making every call site spell it
+ * out would put a string that belongs to the catalogue into the frontend.
+ */
+
+/// What Settings and Welcome show about a speech model.
+#[tauri::command]
+pub async fn get_speech_model_status<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    models: State<'_, SpeechModelManager>,
+    model_id: Option<String>,
+) -> Result<SpeechModelStatus, AppError> {
+    let entry = resolve_entry(model_id.as_deref())?;
+    Ok(models.status(&app, entry))
+}
+
+/// Begin downloading a model, or join the download already running.
+///
+/// Returns as soon as the job is registered rather than when it finishes: a
+/// 128 MB transfer outlives any reasonable IPC call, so progress arrives on
+/// `speech://model-progress` and this hands back the status to paint now.
+#[tauri::command]
+pub async fn start_speech_model_download<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    models: State<'_, SpeechModelManager>,
+    model_id: Option<String>,
+) -> Result<SpeechModelStatus, AppError> {
+    let entry = resolve_entry(model_id.as_deref())?;
+    models.start(&app, entry)
+}
+
+/// Stop a running download, keeping what has been transferred so far.
+#[tauri::command]
+pub async fn cancel_speech_model_download<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    models: State<'_, SpeechModelManager>,
+    model_id: Option<String>,
+) -> Result<SpeechModelStatus, AppError> {
+    let entry = resolve_entry(model_id.as_deref())?;
+    Ok(models.cancel(&app, entry))
+}
+
+/// Remove a downloaded model, and any partial download of it, from app data.
+///
+/// Refuses while a take is running on it or an install is in flight — see
+/// `SpeechModelManager::delete`.
+#[tauri::command]
+pub async fn delete_speech_model<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    models: State<'_, SpeechModelManager>,
+    model_id: Option<String>,
+) -> Result<SpeechModelStatus, AppError> {
+    let entry = resolve_entry(model_id.as_deref())?;
+    models.delete(&app, entry)
+}
+
+/// A catalogue entry from an optional id, defaulting to the catalogue default.
+///
+/// The `'static` lifetime is load-bearing: `start` hands the entry to a task
+/// that outlives this call, and the catalogue is a `LazyLock` that lives for
+/// the process, so there is nothing to clone and no lifetime to launder.
+fn resolve_entry(model_id: Option<&str>) -> Result<&'static ModelEntry, AppError> {
+    match model_id {
+        Some(id) => model_manager::entry_for(id),
+        None => Ok(catalogue::default_model()),
+    }
 }

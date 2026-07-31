@@ -36,6 +36,11 @@ export interface ShimConfig {
   seedScripts?: ShimScriptSeed[];
   /** Speech-engine status returned by get_speech_engine_status. */
   engineStatus?: Record<string, unknown>;
+  /**
+   * Speech-model status returned by the four model-lifecycle commands (#152).
+   * Seed it to drive the not-installed, downloading or failed states.
+   */
+  modelStatus?: Record<string, unknown>;
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
   /**
@@ -550,6 +555,39 @@ function shimBody(config: ShimConfig): void {
 
       case 'preload_speech_engine':
         return null;
+
+      /*
+       * Speech-model install (#152). The recogniser is downloaded after
+       * installation rather than bundled, so Settings and Welcome both ask
+       * about it on mount.
+       *
+       * Modelled here rather than left to the shim's `default: null`, which
+       * would hand the routes a null status and blank the Speech panel — a
+       * spec would then be asserting against a screen no real backend can
+       * produce. `config.modelStatus` lets a spec seed the not-installed and
+       * mid-download states.
+       */
+      case 'get_speech_model_status':
+      case 'start_speech_model_download':
+      case 'cancel_speech_model_download':
+      case 'delete_speech_model':
+        return (
+          config.modelStatus ?? {
+            modelId: 'x-asr-480ms',
+            modelName: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
+            languages: ['en', 'zh'],
+            phase: 'installed',
+            source: 'downloaded',
+            installed: true,
+            supported: true,
+            downloadBytes: 133_895_136,
+            installedBytes: 169_347_218,
+            progressBytes: 0,
+            progressTotal: 0,
+            operationId: null,
+            error: null,
+          }
+        );
 
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];

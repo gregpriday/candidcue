@@ -39,6 +39,19 @@ async-trait = "0.1"
 sha2 = "0.10"
 hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Speech-model archives (§152). Upstream publishes `.tar.bz2`, so the `zip`
+# crate above — which is for script export/import — has nothing to do with this.
+#
+# tar drops its default `xattr` feature: that reads and restores extended
+# attributes, and this unpacker writes only the regular files the catalogue
+# names — an archive carrying xattrs should have them ignored, not applied.
+#
+# bzip2 keeps its defaults, which is the whole point. `default = ["dep:libbz2-
+# rs-sys"]` IS the pure-Rust backend; the C library is the opt-in `bzip2-sys`
+# feature, which stays off. Turning defaults off here compiles nothing —
+# neither backend is selected and the crate fails on a missing `extern crate`.
+tar = { version = "0.4", default-features = false }
+bzip2 = "0.6"
 percent-encoding = "2"
 # Decoder-level validation for imported images (spec §24.2, §50.7). Only the
 # four formats the app actually renders are enabled, so this pulls in the

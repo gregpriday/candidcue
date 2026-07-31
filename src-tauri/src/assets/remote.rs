@@ -22,25 +22,34 @@
 //!     the magic bytes must agree with it, and the payload must survive a real
 //!     decode under width/height/allocation limits.
 //!
+//! The first three of those now live in `crate::net`, which the speech-model
+//! downloader (§152) shares. They moved verbatim: the guard is the same code
+//! answering for both callers rather than two that happen to agree today. What
+//! stayed here is everything specific to an IMAGE — the 25 MB cap, the four
+//! content types, the sniff agreement and the real decode — because none of it
+//! means anything to a hash-pinned archive of model weights.
+//!
 //! SVG is refused outright rather than sanitised. It is an active-content
 //! format (script, foreignObject, external references) and CandidCue renders
 //! script images inside the stage webview, which is the one window that is
 //! supposed to have no script surface of its own (spec §50.10). Nothing in the
 //! product needs vector art, so there is no sanitiser to get wrong.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use reqwest::header::{ACCEPT, CONTENT_TYPE, LOCATION};
 
 use crate::errors::{AppError, ErrorCategory};
+use crate::net::{self, Deadline, HopPolicy};
 
 /// Hard limit for a downloaded image (spec Appendix A.10).
 pub const MAX_REMOTE_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 /// Redirect budget. Five is what browsers settle on in practice.
-pub const MAX_REDIRECTS: u8 = 5;
+pub const MAX_REDIRECTS: u8 = net::MAX_REDIRECTS;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A total deadline, not an idle one: an image either arrives inside 30 seconds
+/// or is not worth making the editor wait for. The model downloader takes the
+/// other branch, because a 128 MB archive is legitimately slow.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Growth step for the streaming buffer. Never derived from `Content-Length`:
 /// that header is attacker-controlled and pre-allocating from it is the
@@ -64,6 +73,19 @@ pub struct FetchedImage {
     pub final_url: String,
 }
 
+/// The codes and copy the IMAGE path reports a refused url under.
+///
+/// Unchanged from before the transport moved to `crate::net`: these codes reach
+/// support bundles and the Settings error list, so the shared guard is
+/// parameterised with them rather than renumbering a contract that had no
+/// reason to change.
+pub(crate) const IMAGE_HOP_LABELS: net::HopLabels = net::HopLabels {
+    insecure_code: "ASSET_URL_INSECURE",
+    insecure_message: "Images can only be downloaded over https.",
+    blocked_code: "ASSET_URL_BLOCKED",
+    blocked_message: "That image address is not publicly reachable and was refused.",
+};
+
 /// Fetch policy. Production always uses [`FetchPolicy::strict`]; the only
 /// variation is a test-only exemption for a local mock server, which is
 /// `#[cfg(test)]` so no production code path can construct it.
@@ -86,6 +108,15 @@ impl FetchPolicy {
             exempt_authority: None,
         }
     }
+
+    /// The per-hop half of this policy, as the shared guard wants it.
+    fn hop_policy(&self) -> HopPolicy {
+        HopPolicy {
+            labels: IMAGE_HOP_LABELS,
+            #[cfg(test)]
+            exempt_authority: self.exempt_authority.clone(),
+        }
+    }
 }
 
 impl Default for FetchPolicy {
@@ -98,24 +129,8 @@ impl Default for FetchPolicy {
 // Errors
 // ---------------------------------------------------------------------------
 
-pub(crate) fn insecure_url(reason: impl Into<String>) -> AppError {
-    AppError::structured(
-        "ASSET_URL_INSECURE",
-        ErrorCategory::Network,
-        "Images can only be downloaded over https.",
-        true,
-    )
-    .with_log(reason.into())
-}
-
-pub(crate) fn blocked_url(reason: impl Into<String>) -> AppError {
-    AppError::structured(
-        "ASSET_URL_BLOCKED",
-        ErrorCategory::Network,
-        "That image address is not publicly reachable and was refused.",
-        true,
-    )
-    .with_log(reason.into())
+fn blocked_url(reason: impl Into<String>) -> AppError {
+    net::blocked_url(&IMAGE_HOP_LABELS, reason)
 }
 
 fn download_failed(reason: impl Into<String>) -> AppError {
@@ -148,209 +163,6 @@ fn too_large() -> AppError {
 }
 
 // ---------------------------------------------------------------------------
-// Address classification
-// ---------------------------------------------------------------------------
-
-/// Is this address one the public internet can route to?
-///
-/// `Ipv4Addr::is_global`/`Ipv6Addr::is_global` are still unstable, so the
-/// special-purpose registries are spelled out here. Everything not explicitly
-/// public is refused: the safe direction for an SSRF guard is to fail closed.
-pub fn is_publicly_routable(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => ipv4_is_public(v4),
-        IpAddr::V6(v6) => ipv6_is_public(v6),
-    }
-}
-
-fn ipv4_is_public(ip: Ipv4Addr) -> bool {
-    let o = ip.octets();
-    if ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local() // 169.254/16 — cloud instance metadata lives here
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_multicast()
-    {
-        return false;
-    }
-    // 0.0.0.0/8 "this network"
-    if o[0] == 0 {
-        return false;
-    }
-    // 100.64.0.0/10 carrier-grade NAT
-    if o[0] == 100 && (o[1] & 0xC0) == 64 {
-        return false;
-    }
-    // 192.0.0.0/24 IETF protocol assignments
-    if o[0] == 192 && o[1] == 0 && o[2] == 0 {
-        return false;
-    }
-    // 192.88.99.0/24 6to4 relay anycast
-    if o[0] == 192 && o[1] == 88 && o[2] == 99 {
-        return false;
-    }
-    // 198.18.0.0/15 benchmarking
-    if o[0] == 198 && (o[1] & 0xFE) == 18 {
-        return false;
-    }
-    // 240.0.0.0/4 reserved (includes 255.255.255.255)
-    if o[0] >= 240 {
-        return false;
-    }
-    true
-}
-
-fn ipv6_is_public(ip: Ipv6Addr) -> bool {
-    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
-        return false;
-    }
-    // ::ffff:a.b.c.d and the deprecated ::a.b.c.d both reach an IPv4 target.
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return ipv4_is_public(v4);
-    }
-    if let Some(v4) = ip.to_ipv4() {
-        return ipv4_is_public(v4);
-    }
-    let s = ip.segments();
-    // fc00::/7 unique local
-    if (s[0] & 0xFE00) == 0xFC00 {
-        return false;
-    }
-    // fe80::/10 link local
-    if (s[0] & 0xFFC0) == 0xFE80 {
-        return false;
-    }
-    // 100::/64 discard-only
-    if s[0] == 0x0100 && s[1] == 0 && s[2] == 0 && s[3] == 0 {
-        return false;
-    }
-    // 64:ff9b::/96 and 64:ff9b:1::/48 NAT64
-    if s[0] == 0x0064 && s[1] == 0xFF9B {
-        return false;
-    }
-    // 2001::/23 IETF protocol assignments (Teredo, ORCHID, benchmarking...)
-    if s[0] == 0x2001 && (s[1] & 0xFE00) == 0x0000 {
-        return false;
-    }
-    // 2001:db8::/32 documentation
-    if s[0] == 0x2001 && s[1] == 0x0DB8 {
-        return false;
-    }
-    true
-}
-
-// ---------------------------------------------------------------------------
-// Per-hop validation
-// ---------------------------------------------------------------------------
-
-struct Hop {
-    url: reqwest::Url,
-    /// Addresses the connection is pinned to. Empty for an IP-literal host.
-    addrs: Vec<SocketAddr>,
-}
-
-fn authority_of(url: &reqwest::Url) -> Option<String> {
-    let host = url.host_str()?;
-    let port = url.port_or_known_default()?;
-    Some(format!("{host}:{port}"))
-}
-
-/// Validate one hop and resolve it. Every check that matters happens here, so
-/// the initial url and every `Location` go through exactly the same gate.
-async fn check_hop(url: &reqwest::Url, policy: &FetchPolicy) -> Result<Hop, AppError> {
-    let authority =
-        authority_of(url).ok_or_else(|| blocked_url("url has no host or usable port"))?;
-
-    #[cfg(test)]
-    let exempt = policy.exempt_authority.as_deref() == Some(authority.as_str());
-    #[cfg(not(test))]
-    let exempt = {
-        let _ = (&authority, policy);
-        false
-    };
-
-    // Credentials in the url would be sent as HTTP basic auth on every hop —
-    // including, after a redirect, to a host the author never wrote down.
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(blocked_url("url carries embedded credentials"));
-    }
-    if url.scheme() != "https" && !(exempt && url.scheme() == "http") {
-        return Err(insecure_url(format!("scheme {} refused", url.scheme())));
-    }
-
-    let host = url
-        .host_str()
-        .ok_or_else(|| blocked_url("url has no host"))?
-        .to_string();
-    let port = url.port_or_known_default().unwrap_or(443);
-
-    let addrs: Vec<SocketAddr> = match host.parse::<IpAddr>() {
-        Ok(ip) => vec![SocketAddr::new(ip, port)],
-        Err(_) => {
-            // Strip the brackets an IPv6 literal carries in a url authority.
-            let bare = host.trim_start_matches('[').trim_end_matches(']');
-            match bare.parse::<IpAddr>() {
-                Ok(ip) => vec![SocketAddr::new(ip, port)],
-                Err(_) => tokio::net::lookup_host((bare, port))
-                    .await
-                    .map_err(|e| blocked_url(format!("dns lookup failed: {e}")))?
-                    .collect(),
-            }
-        }
-    };
-    if addrs.is_empty() {
-        return Err(blocked_url("host resolved to no addresses"));
-    }
-    if !exempt {
-        // ALL resolved addresses must be public. A host that answers with one
-        // public and one loopback address is a rebinding attempt, not a
-        // multi-homed CDN.
-        for addr in &addrs {
-            if !is_publicly_routable(addr.ip()) {
-                return Err(blocked_url(format!(
-                    "{host} resolves to non-public address {}",
-                    addr.ip()
-                )));
-            }
-        }
-    }
-
-    // Pin only for DNS names: an IP-literal host needs no override, and reqwest
-    // would reject one anyway.
-    let pin = host.parse::<IpAddr>().is_err();
-    Ok(Hop {
-        url: url.clone(),
-        addrs: if pin { addrs } else { Vec::new() },
-    })
-}
-
-/// A credential-free client for exactly one hop, pinned to the addresses that
-/// were just validated.
-fn client_for(hop: &Hop) -> Result<reqwest::Client, AppError> {
-    let mut builder = reqwest::Client::builder()
-        // Manual redirect handling: the client must never follow a Location we
-        // have not re-validated.
-        .redirect(reqwest::redirect::Policy::none())
-        // A configured proxy would resolve and connect on our behalf, defeating
-        // the address check entirely.
-        .no_proxy()
-        .referer(false)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(concat!("CandidCue/", env!("CARGO_PKG_VERSION")));
-    if !hop.addrs.is_empty() {
-        if let Some(host) = hop.url.host_str() {
-            builder = builder.resolve_to_addrs(host, &hop.addrs);
-        }
-    }
-    builder
-        .build()
-        .map_err(|e| AppError::Internal(format!("image http client: {e}")))
-}
-
-// ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
 
@@ -363,9 +175,10 @@ pub async fn fetch_remote_image(
     let mut current = reqwest::Url::parse(url)
         .map_err(|_| AppError::invalid_input("The image URL is not valid."))?;
 
+    let hop_policy = policy.hop_policy();
     for _ in 0..=policy.max_redirects {
-        let hop = check_hop(&current, policy).await?;
-        let client = client_for(&hop)?;
+        let hop = net::check_hop(&current, &hop_policy).await?;
+        let client = net::client_for(&hop, Deadline::Total(REQUEST_TIMEOUT))?;
         let response = client
             .get(hop.url.clone())
             .header(ACCEPT, "image/png,image/jpeg,image/gif,image/webp")
@@ -628,44 +441,6 @@ mod tests {
                 stream.write_all(&redirect(&format!("http://127.0.0.1:{port}/redirect-self")))
             }
             _ => stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"),
-        }
-    }
-
-    // -- address classification ------------------------------------------
-
-    #[test]
-    fn non_public_addresses_are_refused() {
-        for raw in [
-            "127.0.0.1",
-            "0.0.0.0",
-            "10.1.2.3",
-            "172.16.0.1",
-            "192.168.1.1",
-            "169.254.169.254", // cloud instance metadata
-            "100.64.0.1",      // CGNAT
-            "192.0.0.1",
-            "198.18.0.1",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::1",
-            "::",
-            "::ffff:127.0.0.1",
-            "fc00::1",
-            "fd12:3456::1",
-            "fe80::1",
-            "64:ff9b::7f00:1",
-            "2001:db8::1",
-        ] {
-            let ip: IpAddr = raw.parse().unwrap();
-            assert!(!is_publicly_routable(ip), "{raw} must be refused");
-        }
-    }
-
-    #[test]
-    fn genuinely_public_addresses_are_allowed() {
-        for raw in ["1.1.1.1", "93.184.216.34", "2606:4700:4700::1111", "2a00:1450::1"] {
-            let ip: IpAddr = raw.parse().unwrap();
-            assert!(is_publicly_routable(ip), "{raw} must be allowed");
         }
     }
 

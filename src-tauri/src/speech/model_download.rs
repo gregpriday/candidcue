@@ -1,0 +1,2471 @@
+//! Fetching a speech model, verifying it, and putting it where it belongs.
+//!
+//! ---------------------------------------------------------------------------
+//! THE ORDER IS THE DESIGN
+//! ---------------------------------------------------------------------------
+//! Bytes arrive → the whole archive is hashed → members are extracted to a
+//! staging directory → EVERY extracted file is hashed → the staged directory is
+//! proven loadable → only then is anything moved into the model's real home,
+//! and only then is the seal written.
+//!
+//! Each of those boundaries exists because of a specific way this can go wrong:
+//!
+//!   * Hashing the archive BEFORE unpacking means a corrupt or substituted
+//!     transfer never reaches a decompressor at all.
+//!   * Extracting only the members the catalogue names means a bundle's test
+//!     WAVs, export scripts, symlinks and absolute paths never touch the disk.
+//!     The digest already proves these are the pinned bytes; "the archive we
+//!     pinned" and "an archive safe to unpack whole" are different claims.
+//!   * Verifying every file before moving ANY of them is what
+//!     `scripts/fetch-stt-model.sh` learned the hard way: verify-and-move in
+//!     one pass lets a mismatch on the last file leave a new encoder beside an
+//!     old decoder — a mixed model that still has every filename
+//!     `ModelFiles::detect` looks for, and which fails at the top of a take.
+//!   * Installing a whole DIRECTORY with one rename, rather than file by file,
+//!     is that same guarantee one level up. There is no instant at which the
+//!     model directory holds a partial set.
+//!
+//! ---------------------------------------------------------------------------
+//! RESUMING
+//! ---------------------------------------------------------------------------
+//! 128 MB on a domestic connection is minutes, and a presenter who closes the
+//! laptop should not start again from zero. The partial is kept with a sidecar
+//! naming the archive digest it is a prefix of, plus whatever validator the
+//! origin gave us.
+//!
+//! `Range` alone is not enough for that. Upstream is a GitHub release tag,
+//! which is MUTABLE: an asset can be replaced under the same URL, and a range
+//! request against the new bytes would append them to a prefix of the old ones
+//! and produce a file that is neither. `If-Range` is what makes that safe — the
+//! origin restarts the transfer from zero instead of honouring the range when
+//! the validator no longer matches. The archive digest catches it either way;
+//! the point of `If-Range` is to catch it before spending the bandwidth.
+//!
+//! Extraction is never resumed, only downloads. A half-extracted staging
+//! directory is cheap to redo and expensive to reason about.
+
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use reqwest::header::{
+    ACCEPT_RANGES, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, LOCATION, RANGE,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+
+use super::catalogue::{Catalogue, ModelEntry};
+use super::model_store as store;
+use crate::errors::{AppError, ErrorCategory};
+use crate::net::{self, Deadline, HopPolicy};
+
+/// The codes the MODEL path reports a refused url under.
+pub const MODEL_HOP_LABELS: net::HopLabels = net::HopLabels {
+    insecure_code: "STT_MODEL_URL_INSECURE",
+    insecure_message: "Speech models can only be downloaded over https.",
+    blocked_code: "STT_MODEL_URL_BLOCKED",
+    blocked_message: "That model address is not publicly reachable and was refused.",
+};
+
+/// How long a transfer may sit with NO bytes arriving before it is abandoned.
+///
+/// An idle bound rather than a total one. A total deadline would abort a
+/// healthy download for being slow, which on a 128 MB archive is a normal
+/// property of a domestic connection rather than a fault.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Progress is reported at most this often, so a 128 MB transfer does not
+/// emit an IPC message per 8 KB chunk.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
+
+/// Where a model install has got to.
+///
+/// Reported verbatim to the UI, because "downloading" reaching 100% and then
+/// appearing to hang for the length of a bz2 decompression is the single most
+/// confusing thing this process can do. Verification and extraction are
+/// genuinely slow and are named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    Downloading,
+    VerifyingArchive,
+    Extracting,
+    VerifyingFiles,
+    Installing,
+    Validating,
+}
+
+/// Cooperative cancellation.
+///
+/// A flag rather than a `CancellationToken`: `tokio-util` is not in this tree
+/// and the whole requirement is one boolean read per chunk.
+#[derive(Debug, Clone, Default)]
+pub struct CancelFlag(Arc<AtomicBool>);
+
+impl CancelFlag {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn check(&self) -> Result<(), AppError> {
+        if self.is_cancelled() {
+            Err(cancelled())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// What the caller is told as the install proceeds.
+pub type ProgressFn = dyn Fn(Phase, u64, u64) + Send + Sync;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Not a failure. Distinguished so the UI can return to "paused" rather than
+/// showing the user an error for something they asked for.
+pub fn cancelled() -> AppError {
+    AppError::structured(
+        "STT_MODEL_CANCELLED",
+        ErrorCategory::Internal,
+        "The model download was stopped.",
+        true,
+    )
+}
+
+pub fn is_cancelled_error(err: &AppError) -> bool {
+    err.code() == "STT_MODEL_CANCELLED"
+}
+
+fn download_failed(reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        "STT_MODEL_DOWNLOAD_FAILED",
+        ErrorCategory::Network,
+        "The speech model could not be downloaded.",
+        true,
+    )
+    .with_log(reason.into())
+}
+
+/// The bytes are not the bytes the catalogue pinned.
+///
+/// Retryable, and worth saying why: the overwhelmingly likely cause is a
+/// truncated or proxy-mangled transfer, not an attack, and the honest response
+/// to that is to offer another go rather than to accuse anyone.
+fn integrity_failed(reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        "STT_MODEL_CORRUPT",
+        ErrorCategory::Media,
+        "The downloaded speech model did not match its published checksum and was discarded.",
+        true,
+    )
+    .with_log(reason.into())
+}
+
+fn install_failed(reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        "STT_MODEL_INSTALL_FAILED",
+        ErrorCategory::Internal,
+        "The speech model could not be installed. Check there is enough free disk space.",
+        true,
+    )
+    .with_log(reason.into())
+}
+
+// ---------------------------------------------------------------------------
+// Where to fetch from
+// ---------------------------------------------------------------------------
+
+/// Mirror first, then upstream — both hash-checked identically.
+///
+/// The mirror is content-addressed (`/sha256/<digest>/<file>`), so one URL can
+/// only ever name one set of bytes. It buys AVAILABILITY, not integrity: the
+/// digest already provides that, and upstream's `asr-models` tag is mutable, so
+/// an asset can be replaced or dropped out from under a build.
+pub fn archive_urls(catalogue: &Catalogue, model: &ModelEntry) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(base) = &catalogue.mirror_base_url {
+        urls.push(format!(
+            "{}/sha256/{}/{}",
+            base.trim_end_matches('/'),
+            model.archive.sha256,
+            model.archive.file_name
+        ));
+    }
+    urls.push(model.archive.upstream_url.clone());
+    urls
+}
+
+// ---------------------------------------------------------------------------
+// Resume metadata
+// ---------------------------------------------------------------------------
+
+/// What a partial download is a prefix OF.
+///
+/// The partial's own length is authoritative for "how far did we get" — this
+/// records only what cannot be recovered by looking at the file: which archive
+/// it belongs to, and the validator the origin gave us for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResumeState {
+    version: u32,
+    model_id: String,
+    /// The digest the completed file must have. A catalogue that moves to a
+    /// new archive makes every existing partial irrelevant, and this is how
+    /// that is noticed rather than discovered after a wasted transfer.
+    archive_sha256: String,
+    url: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+const RESUME_VERSION: u32 = 1;
+
+impl ResumeState {
+    /// Is this sidecar about the archive we are being asked for now?
+    fn matches(&self, model: &ModelEntry, url: &str) -> bool {
+        self.version == RESUME_VERSION
+            && self.model_id == model.id
+            && self.archive_sha256 == model.archive.sha256
+            && self.url == url
+    }
+
+    /// The `If-Range` value, if the origin gave us one to use.
+    ///
+    /// A strong ETag is preferred; `Last-Modified` is the fallback. With
+    /// neither there is nothing to make a range request safe against a
+    /// replaced asset, and the caller starts from zero instead.
+    fn validator(&self) -> Option<&str> {
+        self.etag
+            .as_deref()
+            .filter(|tag| !tag.starts_with("W/"))
+            .or(self.last_modified.as_deref())
+    }
+}
+
+fn read_resume(path: &Path) -> Option<ResumeState> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Written through a temporary sibling: a torn sidecar must read as "no
+/// sidecar", which costs one restarted download, rather than as a lie about
+/// which archive the partial belongs to.
+fn write_resume(path: &Path, state: &ResumeState) -> std::io::Result<()> {
+    let temp = path.with_extension("json.part");
+    std::fs::write(&temp, serde_json::to_vec(state)?)?;
+    std::fs::rename(&temp, path)
+}
+
+// ---------------------------------------------------------------------------
+// Download
+// ---------------------------------------------------------------------------
+
+/// A validated response body, mid-transfer.
+struct Transfer {
+    response: reqwest::Response,
+    /// Byte offset this body starts at. Non-zero only for an honoured range.
+    start: u64,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    accepts_ranges: bool,
+}
+
+/// Follow redirects by hand, revalidating each hop, and open the body.
+///
+/// `from` is where we would like to resume; the returned `Transfer.start` says
+/// where the origin actually started, which is the only one that counts.
+async fn open_transfer(
+    url: &str,
+    from: u64,
+    validator: Option<&str>,
+    policy: &HopPolicy,
+) -> Result<Transfer, AppError> {
+    let mut current = reqwest::Url::parse(url)
+        .map_err(|_| download_failed(format!("model url is not valid: {url}")))?;
+
+    for _ in 0..=net::MAX_REDIRECTS {
+        let hop = net::check_hop(&current, policy).await?;
+        let client = net::client_for(&hop, Deadline::Idle(IDLE_TIMEOUT))?;
+        let mut request = client.get(hop.url.clone());
+        // A range is only ever asked for WITH a validator. Without one there is
+        // nothing to stop a replaced asset being appended to a prefix of the
+        // old one, and the resulting file would be neither.
+        let mut asked_for_range = false;
+        if from > 0 {
+            if let Some(validator) = validator {
+                request = request
+                    .header(RANGE, format!("bytes={from}-"))
+                    .header(IF_RANGE, validator);
+                asked_for_range = true;
+            }
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| download_failed(format!("request failed: {e}")))?;
+
+        let status = response.status();
+        if status.is_redirection() {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| download_failed(format!("{status} with no Location")))?
+                .to_string();
+            current = current.join(&location).map_err(|_| {
+                net::blocked_url(
+                    &MODEL_HOP_LABELS,
+                    format!("unusable redirect target {location:?}"),
+                )
+            })?;
+            continue;
+        }
+
+        let header = |name: reqwest::header::HeaderName| {
+            response
+                .headers()
+                .get(&name)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        };
+        let accepts_ranges = response
+            .headers()
+            .get(ACCEPT_RANGES)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.split(',').any(|token| token.trim() == "bytes"));
+        let etag = header(ETAG);
+        let last_modified = header(LAST_MODIFIED);
+
+        // 206 means the range was honoured. Anything else that succeeds is a
+        // whole body, which is the origin telling us to start again — either it
+        // ignores ranges or the validator no longer matches.
+        let start = if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            // A 206 we did not ask for is not a gift. Honouring it would seek
+            // to an offset chosen by the origin and write the tail of some
+            // representation into a file we believe starts elsewhere.
+            if !asked_for_range {
+                return Err(download_failed("origin sent 206 to a request with no Range"));
+            }
+            let range = response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| download_failed("206 with no Content-Range"))?;
+            let offset = parse_content_range_start(range)
+                .ok_or_else(|| download_failed(format!("unusable Content-Range {range:?}")))?;
+            if offset != from {
+                return Err(download_failed(format!(
+                    "asked to resume at {from}, origin answered at {offset}"
+                )));
+            }
+            offset
+        } else if status.is_success() {
+            0
+        } else {
+            return Err(download_failed(format!("status {status}")));
+        };
+
+        return Ok(Transfer {
+            response,
+            start,
+            etag,
+            last_modified,
+            accepts_ranges,
+        });
+    }
+    Err(net::blocked_url(&MODEL_HOP_LABELS, "too many redirects"))
+}
+
+/// Make a failed download unusable, by deletion or failing that by truncation.
+///
+/// Truncation is the fallback rather than the first choice because an empty
+/// file is still clutter — but it is enough: a zero-length archive matches
+/// neither the complete-archive shortcut nor a resumable prefix, so the next
+/// attempt starts cleanly instead of re-hashing bytes already known to be bad.
+fn discard_archive(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => std::fs::File::create(path).map(|_| ()),
+    }
+}
+
+/// The first byte offset named by a `Content-Range: bytes <start>-<end>/<len>`.
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    let rest = value.trim().strip_prefix("bytes ")?;
+    let range = rest.split('/').next()?;
+    range.split('-').next()?.trim().parse().ok()
+}
+
+/// Fetch the archive to `target`, resuming when that is possible and safe.
+///
+/// Returns once the file on disk is exactly the length the catalogue promises.
+/// It is NOT hashed here — that is a separate, named phase, because hashing
+/// 128 MB takes long enough that a progress bar sitting at 100% during it is
+/// the confusing failure this split exists to avoid.
+async fn fetch_archive(
+    url: &str,
+    model: &ModelEntry,
+    target: &Path,
+    resume_path: &Path,
+    policy: &HopPolicy,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<(), AppError> {
+    let expected = model.archive.bytes;
+    let on_disk = std::fs::metadata(target).map(|m| m.len()).unwrap_or(0);
+
+    // Already the full length: nothing to fetch. The caller hashes it next and
+    // discards it if it is wrong, so this cannot install unverified bytes.
+    //
+    // Without this, every retry after a completed transfer re-downloaded the
+    // whole archive: cancelling during verification or extraction, running out
+    // of disk while unpacking, or crashing before the seal all leave exactly
+    // this state, and `on_disk < expected` sent each of them back to the
+    // network for 128 MB that was already sitting there.
+    if on_disk == expected {
+        on_progress(Phase::Downloading, expected, expected);
+        return Ok(());
+    }
+
+    // Resume only when the sidecar agrees this partial belongs to this archive
+    // at this url, AND the origin gave us a validator to make the range safe.
+    //
+    // No validator means no way to notice that the asset was replaced between
+    // the two requests, and appending the tail of new bytes to a prefix of old
+    // ones produces a file that is neither. Starting again costs bandwidth;
+    // getting this wrong costs a download that can never succeed.
+    let resume = read_resume(resume_path).filter(|state| state.matches(model, url));
+    let (mut from, validator) = match (&resume, on_disk) {
+        (Some(state), len) if len > 0 && len < expected => match state.validator() {
+            Some(validator) => (len, Some(validator.to_string())),
+            None => (0, None),
+        },
+        _ => (0, None),
+    };
+    if from == 0 {
+        // Any partial we cannot justify resuming is discarded rather than
+        // appended to.
+        let _ = std::fs::remove_file(target);
+    }
+
+    cancel.check()?;
+    let transfer = open_transfer(url, from, validator.as_deref(), policy).await?;
+    if transfer.start == 0 {
+        // The origin restarted us: it ignores ranges, or the asset changed
+        // under `If-Range`. Either way the bytes on disk are not a prefix of
+        // what is arriving.
+        from = 0;
+        let _ = std::fs::remove_file(target);
+    }
+
+    // Record what would let a LATER run resume this one, before spending the
+    // transfer rather than after — a crash mid-download is exactly the case
+    // this is for.
+    let _ = write_resume(
+        resume_path,
+        &ResumeState {
+            version: RESUME_VERSION,
+            model_id: model.id.clone(),
+            archive_sha256: model.archive.sha256.clone(),
+            url: url.to_string(),
+            etag: transfer.etag.clone().filter(|_| transfer.accepts_ranges),
+            last_modified: transfer
+                .last_modified
+                .clone()
+                .filter(|_| transfer.accepts_ranges),
+        },
+    );
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(from == 0)
+        .open(target)
+        .map_err(|e| install_failed(format!("could not open {}: {e}", target.display())))?;
+    if from > 0 {
+        use std::io::Seek as _;
+        file.seek(std::io::SeekFrom::Start(from))
+            .map_err(|e| install_failed(format!("could not seek the partial download: {e}")))?;
+    }
+
+    let mut written = from;
+    let mut response = transfer.response;
+    let mut last_report = std::time::Instant::now();
+    on_progress(Phase::Downloading, written, expected);
+    loop {
+        cancel.check()?;
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|e| download_failed(format!("stream failed: {e}")))?;
+        let Some(chunk) = chunk else { break };
+        // The catalogue's byte count is a hard ceiling, enforced per chunk. An
+        // origin that decides to stream forever fills neither memory nor disk,
+        // and `Content-Length` — which is attacker-controlled — is never
+        // trusted to size anything.
+        if written + chunk.len() as u64 > expected {
+            return Err(integrity_failed(format!(
+                "archive exceeded the catalogue's {expected} bytes"
+            )));
+        }
+        use std::io::Write as _;
+        file.write_all(&chunk)
+            .map_err(|e| install_failed(format!("could not write the download: {e}")))?;
+        written += chunk.len() as u64;
+        if last_report.elapsed() >= PROGRESS_INTERVAL {
+            on_progress(Phase::Downloading, written, expected);
+            last_report = std::time::Instant::now();
+        }
+    }
+    file.sync_all()
+        .map_err(|e| install_failed(format!("could not flush the download: {e}")))?;
+    drop(file);
+    on_progress(Phase::Downloading, written, expected);
+
+    if written != expected {
+        return Err(integrity_failed(format!(
+            "expected {expected} bytes, received {written}"
+        )));
+    }
+    Ok(())
+}
+
+/// Hash the archive on disk and compare it with the catalogue.
+///
+/// Streamed in blocks: the whole point of downloading to a file rather than to
+/// memory is not to hold 128 MB, and hashing it by reading it back in one go
+/// would give that up at the last moment.
+fn verify_archive(
+    path: &Path,
+    model: &ModelEntry,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<(), AppError> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| install_failed(format!("could not reopen the archive: {e}")))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut read_total = 0u64;
+    let mut last_report = std::time::Instant::now();
+    loop {
+        cancel.check()?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|e| install_failed(format!("could not read the archive: {e}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        read_total += read as u64;
+        if last_report.elapsed() >= PROGRESS_INTERVAL {
+            on_progress(Phase::VerifyingArchive, read_total, model.archive.bytes);
+            last_report = std::time::Instant::now();
+        }
+    }
+    let actual = hex::encode(hasher.finalize());
+    if actual != model.archive.sha256 {
+        return Err(integrity_failed(format!(
+            "archive sha256 {actual}, catalogue says {}",
+            model.archive.sha256
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Extraction
+// ---------------------------------------------------------------------------
+
+/// Unpack ONLY the members the catalogue names, into `staging`.
+///
+/// Every entry's path is compared against the catalogue's own member list, so
+/// there is no path arithmetic to get wrong: a name that is not in the list is
+/// skipped whatever it contains, which covers `..`, absolute paths and
+/// anything else in one rule rather than in a series of checks that have to be
+/// individually right. Only regular files are ever written — a symlink or a
+/// device node whose NAME matched would still be refused.
+fn extract(
+    archive_path: &Path,
+    model: &ModelEntry,
+    staging: &Path,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<(), AppError> {
+    std::fs::create_dir_all(staging)
+        .map_err(|e| install_failed(format!("could not create staging: {e}")))?;
+
+    let file = std::fs::File::open(archive_path)
+        .map_err(|e| install_failed(format!("could not open the archive: {e}")))?;
+    let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(file));
+    let entries = archive
+        .entries()
+        .map_err(|e| integrity_failed(format!("archive is not readable as tar: {e}")))?;
+
+    let installed_total = model.installed_bytes();
+    let mut written_total = 0u64;
+    let mut seen: Vec<&str> = Vec::new();
+    let mut last_report = std::time::Instant::now();
+    on_progress(Phase::Extracting, 0, installed_total);
+
+    for entry in entries {
+        cancel.check()?;
+        let mut entry =
+            entry.map_err(|e| integrity_failed(format!("archive entry unreadable: {e}")))?;
+        if entry.header().entry_type() != tar::EntryType::Regular {
+            continue;
+        }
+        let path = entry
+            .path()
+            .map_err(|e| integrity_failed(format!("archive entry has no usable path: {e}")))?
+            .to_string_lossy()
+            .into_owned();
+        let Some(wanted) = model.file_for_member(&path) else {
+            continue;
+        };
+        if seen.contains(&wanted.name.as_str()) {
+            return Err(integrity_failed(format!(
+                "archive names {} more than once",
+                wanted.name
+            )));
+        }
+        seen.push(&wanted.name);
+
+        // `wanted.name` came from the catalogue, which the catalogue tests pin
+        // to a single path segment with no separators. This join cannot leave
+        // `staging`.
+        let out = staging.join(&wanted.name);
+        let mut sink = std::fs::File::create(&out)
+            .map_err(|e| install_failed(format!("could not write {}: {e}", wanted.name)))?;
+        let mut buffer = vec![0u8; 1024 * 1024];
+        let mut written = 0u64;
+        loop {
+            cancel.check()?;
+            let read = entry
+                .read(&mut buffer)
+                .map_err(|e| integrity_failed(format!("{}: {e}", wanted.name)))?;
+            if read == 0 {
+                break;
+            }
+            // Bounded by the size the catalogue promises, so a decompression
+            // bomb under a wanted name cannot fill the disk before the hash
+            // check would have caught it.
+            written += read as u64;
+            if written > wanted.bytes {
+                return Err(integrity_failed(format!(
+                    "{} is larger than the catalogue's {} bytes",
+                    wanted.name, wanted.bytes
+                )));
+            }
+            use std::io::Write as _;
+            sink.write_all(&buffer[..read])
+                .map_err(|e| install_failed(format!("could not write {}: {e}", wanted.name)))?;
+            written_total += read as u64;
+            if last_report.elapsed() >= PROGRESS_INTERVAL {
+                on_progress(Phase::Extracting, written_total, installed_total);
+                last_report = std::time::Instant::now();
+            }
+        }
+        // Forced to disk before the seal can possibly be written. The seal
+        // means "these bytes were proven here", and after a power cut a
+        // filesystem is free to make a small metadata write durable while the
+        // large data writes that preceded it are still in page cache — which
+        // would leave a valid seal over graphs that are not there.
+        // `ModelFiles::detect` matches names and shape, not contents, so it
+        // would not notice.
+        sink.sync_all()
+            .map_err(|e| install_failed(format!("could not flush {}: {e}", wanted.name)))?;
+    }
+
+    if seen.len() != model.files.len() {
+        let missing: Vec<&str> = model
+            .files
+            .iter()
+            .map(|f| f.name.as_str())
+            .filter(|name| !seen.contains(name))
+            .collect();
+        return Err(integrity_failed(format!(
+            "archive is missing {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// Hash every staged file against the catalogue.
+///
+/// ALL of them, before any is moved. See the module header: this ordering is
+/// the thing that stops a mismatch on the last file leaving a mixed model
+/// behind that still looks complete to `ModelFiles::detect`.
+fn verify_staged(
+    staging: &Path,
+    model: &ModelEntry,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<(), AppError> {
+    let total = model.installed_bytes();
+    let mut hashed = 0u64;
+    for file in &model.files {
+        cancel.check()?;
+        let path = staging.join(&file.name);
+        let meta = std::fs::metadata(&path)
+            .map_err(|e| integrity_failed(format!("{}: {e}", file.name)))?;
+        if meta.len() != file.bytes {
+            return Err(integrity_failed(format!(
+                "{}: expected {} bytes, got {}",
+                file.name,
+                file.bytes,
+                meta.len()
+            )));
+        }
+        let mut handle = std::fs::File::open(&path)
+            .map_err(|e| integrity_failed(format!("{}: {e}", file.name)))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        loop {
+            cancel.check()?;
+            let read = handle
+                .read(&mut buffer)
+                .map_err(|e| integrity_failed(format!("{}: {e}", file.name)))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            hashed += read as u64;
+        }
+        let actual = hex::encode(hasher.finalize());
+        if actual != file.sha256 {
+            return Err(integrity_failed(format!(
+                "{}: sha256 {actual}, catalogue says {}",
+                file.name, file.sha256
+            )));
+        }
+        on_progress(Phase::VerifyingFiles, hashed, total);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The whole sequence
+// ---------------------------------------------------------------------------
+
+/// Download, verify, unpack and install a model. Returns its directory.
+///
+/// Cancellation is checked between every chunk and every file, and is honoured
+/// everywhere EXCEPT the remove-then-rename that installs the staged directory:
+/// that window is the one place where stopping halfway could leave the model
+/// directory missing with nothing to replace it, so it is allowed to finish.
+pub async fn install(
+    app_data_dir: &Path,
+    catalogue: &Catalogue,
+    model: &ModelEntry,
+    policy: &HopPolicy,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<PathBuf, AppError> {
+    let root = store::models_root(app_data_dir);
+    let downloads = root.join(store::DOWNLOADS_DIR);
+    std::fs::create_dir_all(&downloads)
+        .map_err(|e| install_failed(format!("could not create the models directory: {e}")))?;
+    // A model left in its backup by an interrupted commit goes back FIRST: if
+    // this attempt also fails, the machine still has the model it had before.
+    let _ = store::recover_backup(&root, model);
+    // Only then is what remains for this model garbage. Scoped to this model
+    // so a concurrent install of a different one is untouched.
+    let _ = store::clear_stale(app_data_dir, model);
+
+    let archive_path = downloads.join(store::archive_part_name(model));
+    let resume_path = downloads.join(store::resume_name(model));
+
+    // Mirror first, then upstream. A mirror miss is not a failure — the digest
+    // is the trust root and either host satisfies it — so only the LAST url's
+    // error is worth reporting.
+    //
+    // Each candidate is fetched AND verified before the next is considered.
+    // Verifying after the loop instead would let a mirror serving the right
+    // number of wrong bytes end the search: the loop would break on a
+    // successful transfer, the digest would fail, and upstream — which has the
+    // bytes we want — would never be asked. A wrong mirror could then make a
+    // model permanently uninstallable.
+    let urls = archive_urls(catalogue, model);
+    let mut last_error = None;
+    let mut verified = false;
+    for (index, url) in urls.iter().enumerate() {
+        let is_last = index + 1 == urls.len();
+        let outcome = fetch_archive(
+            url,
+            model,
+            &archive_path,
+            &resume_path,
+            policy,
+            cancel,
+            on_progress,
+        )
+        .await
+        .and_then(|()| {
+            on_progress(Phase::VerifyingArchive, 0, model.archive.bytes);
+            tokio::task::block_in_place(|| {
+                verify_archive(&archive_path, model, cancel, on_progress)
+            })
+        });
+
+        match outcome {
+            Ok(()) => {
+                verified = true;
+                break;
+            }
+            // A cancellation is the user's decision, not a mirror miss. Stop,
+            // and keep whatever was transferred so it can be resumed.
+            Err(err) if is_cancelled_error(&err) => return Err(err),
+            Err(err) => {
+                // Bytes that failed are never kept: they would be treated as a
+                // complete or resumable archive next time and fail identically
+                // forever.
+                //
+                // A failed removal cannot be shrugged off. The next candidate
+                // would see a file of exactly the catalogue's length, take the
+                // complete-archive shortcut, and re-hash the same bad bytes —
+                // so a mirror serving rubbish would stop upstream from ever
+                // being reached. Truncating is the fallback; if even that
+                // fails there is nothing useful left to try.
+                if let Err(remove_err) = discard_archive(&archive_path) {
+                    let _ = std::fs::remove_file(&resume_path);
+                    return Err(install_failed(format!(
+                        "could not discard a failed download at {}: {remove_err}",
+                        archive_path.display()
+                    )));
+                }
+                let _ = std::fs::remove_file(&resume_path);
+                if !is_last {
+                    tracing::warn!(
+                        url = %url,
+                        error = %err,
+                        "model source miss — falling back; the hash is checked either way"
+                    );
+                }
+                last_error = Some(err);
+            }
+        }
+    }
+    if !verified {
+        return Err(last_error.unwrap_or_else(|| download_failed("no url produced an archive")));
+    }
+
+    let staging = root.join(format!(
+        "{}{}-{}",
+        store::STAGING_PREFIX,
+        model.install_dir,
+        uuid::Uuid::new_v4()
+    ));
+    let outcome = tokio::task::block_in_place(|| {
+        install_from_archive(&archive_path, &staging, &root, model, cancel, on_progress)
+    });
+    if outcome.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return outcome;
+    }
+
+    // The archive has done its job. Keeping it would cost 128 MB for nothing —
+    // the installed files are what matter now.
+    //
+    // Logged rather than ignored: a scanner holding the file open makes this
+    // fail transiently, and silence would leave 128 MB nobody can account for
+    // and no record of why.
+    for path in [&archive_path, &resume_path] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "could not remove a spent model download")
+            }
+        }
+    }
+    outcome
+}
+
+/// Everything from a verified archive to a sealed model directory.
+fn install_from_archive(
+    archive_path: &Path,
+    staging: &Path,
+    root: &Path,
+    model: &ModelEntry,
+    cancel: &CancelFlag,
+    on_progress: &ProgressFn,
+) -> Result<PathBuf, AppError> {
+    extract(archive_path, model, staging, cancel, on_progress)?;
+    verify_staged(staging, model, cancel, on_progress)?;
+    store::write_attribution(staging, model)
+        .map_err(|e| install_failed(format!("could not write the licence notice: {e}")))?;
+
+    // Proven loadable while still in staging, so a model that cannot load
+    // never displaces one that can.
+    //
+    // Asked of the DIRECTORY rather than through a `LocalSttConfig`, for the
+    // reason `get_speech_engine_status` gives: "are the files there and in a
+    // shape the loader understands" is a question about the bundle, and
+    // building a tuned config to ask it would imply the tuning had something
+    // to do with the answer. `LocalSttConfig::validate` is this call anyway.
+    on_progress(Phase::Validating, 0, 1);
+    cc_stt::local::ModelFiles::detect(staging).map_err(|detail| {
+        integrity_failed(format!("the downloaded model is not loadable: {detail}"))
+    })?;
+
+    // The last point at which stopping is free. Past here the old model starts
+    // moving, and a cancellation would have to be undone rather than obeyed.
+    cancel.check()?;
+
+    // ---------------------------------------------------------------------
+    // Commit, as a transaction.
+    // ---------------------------------------------------------------------
+    // This used to `remove_dir_all` the previous model and then rename the new
+    // one into the hole. That is only safe if nothing can go wrong between the
+    // two, and plenty can: `remove_dir_all` is a recursive walk that can fail
+    // part-way on a permissions change, a scanner holding a handle, or an I/O
+    // error, and the rename after it can fail too. Every one of those left the
+    // user with NO model where they had a working one — and the post-rename
+    // validation could still fail, leaving an unsealed directory the resolver
+    // ignores.
+    //
+    // The old model is now moved ASIDE rather than destroyed. Nothing is
+    // deleted until the replacement is proven in place, and every failure path
+    // puts it back. The cost is transient disk: the old model, the staged new
+    // one and the archive coexist for the length of the commit.
+    on_progress(Phase::Installing, 0, 1);
+    let target = model.install_path(root);
+    let backup = store::backup_path(root, model);
+    let _ = std::fs::remove_dir_all(&backup);
+
+    let had_previous = target.exists();
+    if had_previous {
+        std::fs::rename(&target, &backup).map_err(|e| {
+            install_failed(format!("could not set the previous model aside: {e}"))
+        })?;
+    }
+
+    // Put the backup back. Split in two by whether the swap has HAPPENED,
+    // because "what is at `target`" means different things either side of it.
+    //
+    // Before the swap, `target` is not ours — it is either absent or something
+    // another actor put there — so deleting it would be destroying a stranger's
+    // work. After the swap it is the staged model we just moved in, and
+    // clearing it is the only way the backup can come home.
+    let restore_backup = |after_swap: bool, err: AppError| -> AppError {
+        if after_swap {
+            if let Err(e) = std::fs::remove_dir_all(&target) {
+                // The failed replacement is still sitting at `target` and the
+                // good copy is still in the backup. Leaving both is right:
+                // `recover_backup` prefers a sealed backup over an unsealed
+                // target, so the next launch repairs it.
+                tracing::error!(
+                    error = %e,
+                    target = %target.display(),
+                    "could not remove a failed model install; the previous model is \
+                     still in its backup and will be restored on the next launch"
+                );
+                return err;
+            }
+        }
+        if had_previous && !target.exists() {
+            if let Err(e) = std::fs::rename(&backup, &target) {
+                tracing::error!(
+                    error = %e,
+                    backup = %backup.display(),
+                    "could not restore the previous speech model; it is still in the \
+                     backup directory and will be recovered on the next launch"
+                );
+            }
+        }
+        err
+    };
+
+    if let Err(e) = std::fs::rename(staging, &target) {
+        // Nothing of ours is at `target` — the rename is precisely what did
+        // not happen — so this must not delete whatever is.
+        return Err(restore_backup(
+            false,
+            install_failed(format!("could not install the model: {e}")),
+        ));
+    }
+
+    // Validated AGAIN, at the path it will actually be loaded from. The staged
+    // check proves the files; this proves the install — and the seal below
+    // means "proven HERE", which is a claim only this call can support.
+    on_progress(Phase::Validating, 1, 1);
+    if let Err(detail) = cc_stt::local::ModelFiles::detect(&target) {
+        return Err(restore_backup(
+            true,
+            integrity_failed(format!("the installed model is not loadable: {detail}")),
+        ));
+    }
+
+    // Last. Everything before this is reversible; the seal is what makes the
+    // directory eligible to be chosen.
+    if let Err(e) = store::write_seal(&target, model) {
+        return Err(restore_backup(
+            true,
+            install_failed(format!("could not seal the model: {e}")),
+        ));
+    }
+
+    // Committed. Only now is the old model actually gone.
+    if had_previous {
+        if let Err(e) = std::fs::remove_dir_all(&backup) {
+            tracing::warn!(error = %e, "could not remove the replaced speech model");
+        }
+    }
+    Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::speech::catalogue::{Archive, Attribution, License, ModelFile};
+    use std::io::Write as _;
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicU64;
+
+    /// The four files a fixture model is made of. Small enough that a whole
+    /// install runs in milliseconds, real enough that `ModelFiles::detect`
+    /// accepts the result — which is the thing being proved.
+    fn fixture_files() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("encoder.int8.onnx", b"encoder-graph-bytes".to_vec()),
+            ("decoder.onnx", b"decoder-graph-bytes".to_vec()),
+            ("joiner.int8.onnx", b"joiner-graph-bytes".to_vec()),
+            ("tokens.txt", b"<blk> 0\n<unk> 1\n".to_vec()),
+        ]
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        hex::encode(Sha256::digest(bytes))
+    }
+
+    /// A real `.tar.bz2` with the given members, built in memory.
+    fn build_archive(root: &str, members: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        build_archive_with(root, members, &[])
+    }
+
+    /// As [`build_archive`], plus members whose paths are written straight into
+    /// the tar header.
+    ///
+    /// `Builder::append_data` refuses to CREATE a path containing `..`, which
+    /// is the right behaviour for a writer and useless for testing a reader: a
+    /// hostile archive is not built with this crate. `append` takes a header
+    /// that has already been filled in and does not revalidate it, so the name
+    /// goes in by hand.
+    fn build_archive_with(
+        root: &str,
+        members: &[(&str, Vec<u8>)],
+        raw: &[(&str, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            for (name, body) in members {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, format!("{root}/{name}"), body.as_slice())
+                    .unwrap();
+            }
+            for (name, body) in raw {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_entry_type(tar::EntryType::Regular);
+                let bytes = name.as_bytes();
+                header.as_gnu_mut().unwrap().name[..bytes.len()].copy_from_slice(bytes);
+                header.set_cksum();
+                builder.append(&header, body.as_slice()).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let mut encoder =
+            bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+        encoder.write_all(&tar_bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// A catalogue entry describing an archive we just built.
+    fn fixture_entry(archive: &[u8], files: &[(&str, Vec<u8>)], root: &str) -> ModelEntry {
+        ModelEntry {
+            id: "x-asr-480ms".to_string(),
+            model_name: "x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05".to_string(),
+            install_dir: "x-asr-480ms".to_string(),
+            languages: vec!["en".to_string()],
+            archive: Archive {
+                file_name: "fixture.tar.bz2".to_string(),
+                root_dir: root.to_string(),
+                upstream_url: "https://example.invalid/fixture.tar.bz2".to_string(),
+                sha256: sha256_of(archive),
+                bytes: archive.len() as u64,
+            },
+            files: files
+                .iter()
+                .map(|(name, body)| ModelFile {
+                    name: (*name).to_string(),
+                    sha256: sha256_of(body),
+                    bytes: body.len() as u64,
+                })
+                .collect(),
+            attribution: Attribution {
+                title: "Fixture".to_string(),
+                author: "Fixture".to_string(),
+                source_url: "https://example.invalid/".to_string(),
+                distributed_via: None,
+                license: License {
+                    id: "Apache-2.0".to_string(),
+                    name: "Apache License 2.0".to_string(),
+                    url: "https://example.invalid/licence".to_string(),
+                },
+                license_note: None,
+                modified: false,
+            },
+        }
+    }
+
+    fn fixture_catalogue(model: ModelEntry) -> Catalogue {
+        Catalogue {
+            schema_version: 1,
+            mirror_base_url: None,
+            default_model_id: model.id.clone(),
+            models: vec![model],
+        }
+    }
+
+    /// The ETag a healthy fixture origin serves.
+    const FIXTURE_ETAG: &str = "\"fixture\"";
+
+    /// How many pieces `Behaviour::Slow` dribbles a body out in.
+    const SLOW_PIECES: usize = 8;
+
+    /// How the origin should behave, per test.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Behaviour {
+        /// Serves ranges honestly, with a strong ETag.
+        Ranged,
+        /// Ignores `Range` entirely and always sends the whole body.
+        NoRanges,
+        /// Honours `Range`, but the asset has been REPLACED since the client
+        /// last saw it: its ETag no longer matches the `If-Range` value, so
+        /// the origin must ignore the range and send the whole new body.
+        Replaced,
+        /// Serves a body that is not the archive the catalogue pinned.
+        Corrupt,
+        /// Answers every request by closing the connection. A dead host, as
+        /// opposed to one the hop guard refuses before connecting.
+        Dead,
+        /// Serves the body in two writes with a pause between, so a transfer
+        /// can be cancelled while it is genuinely in flight.
+        Slow,
+    }
+
+    /// What the origin was actually asked, so a test can prove a request was
+    /// made rather than inferring it from the outcome.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct SeenRequest {
+        range_from: Option<u64>,
+        if_range: Option<String>,
+    }
+
+    /// A dependency-free HTTP/1.1 origin that understands `Range`.
+    ///
+    /// The same shape as `assets::remote`'s mock and for the same reason: it
+    /// drives the REAL reqwest client, so the range handling, the redirect
+    /// revalidation and the chunk loop under test are the ones that ship.
+    struct MockOrigin {
+        port: u16,
+        /// How many times a body has been served. Proves a resumed run sent a
+        /// second request rather than quietly restarting.
+        requests: Arc<AtomicU64>,
+        /// Bytes served in total, so a test can prove a resume transferred
+        /// only the tail — or that a retry transferred nothing at all.
+        served: Arc<AtomicU64>,
+        /// What each request actually carried.
+        seen: Arc<std::sync::Mutex<Vec<SeenRequest>>>,
+    }
+
+    impl MockOrigin {
+        fn start(body: Vec<u8>, behaviour: Behaviour) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock origin");
+            let port = listener.local_addr().unwrap().port();
+            let requests = Arc::new(AtomicU64::new(0));
+            let served = Arc::new(AtomicU64::new(0));
+            let seen: Arc<std::sync::Mutex<Vec<SeenRequest>>> = Arc::default();
+            let counters = (Arc::clone(&requests), Arc::clone(&served), Arc::clone(&seen));
+
+            std::thread::spawn(move || {
+                let (requests, served, seen) = counters;
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let mut buf = [0u8; 4096];
+                    let read = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..read]).to_string();
+                    requests.fetch_add(1, Ordering::SeqCst);
+
+                    if behaviour == Behaviour::Dead {
+                        // Close without answering. A host that is down, which
+                        // is a different failure from one the hop guard
+                        // refuses before a socket is ever opened.
+                        drop(stream);
+                        continue;
+                    }
+
+                    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    if path == "/redirect" {
+                        let _ = stream.write_all(
+                            format!(
+                                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/archive\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            )
+                            .as_bytes(),
+                        );
+                        let _ = stream.flush();
+                        continue;
+                    }
+
+                    // Header NAMES are matched case-insensitively because hyper
+                    // writes them lowercase on the wire. Matching `Range:` as
+                    // spelled in the RFC silently never fired, and every resume
+                    // test passed by restarting. Header VALUES keep their case,
+                    // because an ETag is case-sensitive.
+                    let header = |name: &str| -> Option<String> {
+                        request.lines().find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.trim()
+                                .eq_ignore_ascii_case(name)
+                                .then(|| value.trim().to_string())
+                        })
+                    };
+                    let range_from = header("range").and_then(|value| {
+                        value
+                            .trim()
+                            .strip_prefix("bytes=")?
+                            .split('-')
+                            .next()?
+                            .trim()
+                            .parse::<u64>()
+                            .ok()
+                    });
+                    let if_range = header("if-range");
+                    seen.lock().unwrap().push(SeenRequest {
+                        range_from,
+                        if_range: if_range.clone(),
+                    });
+
+                    // What the asset's validator is NOW. `Replaced` models an
+                    // upstream release tag that was overwritten: the client's
+                    // `If-Range` still names the old one.
+                    let etag = if behaviour == Behaviour::Replaced {
+                        "\"fixture-v2\""
+                    } else {
+                        FIXTURE_ETAG
+                    };
+                    // A conditional range is honoured only when the validator
+                    // still matches — which is the entire point of `If-Range`.
+                    let validator_ok = match &if_range {
+                        Some(sent) => sent == etag,
+                        None => true,
+                    };
+                    let honour_range = match behaviour {
+                        Behaviour::NoRanges => false,
+                        _ => range_from.is_some() && validator_ok,
+                    };
+
+                    let payload: &[u8] = &body;
+                    let (head, slice) = if honour_range {
+                        let from = (range_from.unwrap_or(0) as usize).min(payload.len());
+                        let slice = &payload[from..];
+                        (
+                            format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nConnection: close\r\n\r\n",
+                                slice.len(),
+                                from,
+                                payload.len().saturating_sub(1),
+                                payload.len()
+                            ),
+                            slice,
+                        )
+                    } else {
+                        let accept = if behaviour == Behaviour::NoRanges {
+                            ""
+                        } else {
+                            "Accept-Ranges: bytes\r\n"
+                        };
+                        (
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{accept}ETag: {etag}\r\nConnection: close\r\n\r\n",
+                                payload.len()
+                            ),
+                            payload,
+                        )
+                    };
+
+                    let _ = stream.write_all(head.as_bytes());
+                    if behaviour == Behaviour::Slow && slice.len() >= SLOW_PIECES {
+                        // Dripped out in pieces with gaps between, so the
+                        // client sees many chunks and the throttled progress
+                        // callback fires more than once BEFORE the body ends.
+                        // Two writes was not enough: a fixture archive is a
+                        // few hundred bytes, both halves landed inside one
+                        // progress interval, and a "mid-transfer" cancellation
+                        // could only ever fire after the last byte.
+                        let piece = slice.len().div_ceil(SLOW_PIECES);
+                        for part in slice.chunks(piece) {
+                            let _ = stream.write_all(part);
+                            let _ = stream.flush();
+                            std::thread::sleep(Duration::from_millis(60));
+                        }
+                    } else {
+                        let _ = stream.write_all(slice);
+                    }
+                    served.fetch_add(slice.len() as u64, Ordering::SeqCst);
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                port,
+                requests,
+                served,
+                seen,
+            }
+        }
+
+        fn seen(&self) -> Vec<SeenRequest> {
+            self.seen.lock().unwrap().clone()
+        }
+
+        fn url(&self, path: &str) -> String {
+            format!("http://127.0.0.1:{}{path}", self.port)
+        }
+
+        fn policy(&self) -> HopPolicy {
+            HopPolicy {
+                labels: MODEL_HOP_LABELS,
+                exempt_authority: Some(format!("127.0.0.1:{}", self.port)),
+            }
+        }
+    }
+
+    /// Point a catalogue entry's upstream url at the mock.
+    fn aimed_at(mut model: ModelEntry, url: String) -> ModelEntry {
+        model.archive.upstream_url = url;
+        model
+    }
+
+    /// A model directory `ModelFiles::detect` accepts, with recognisable bytes.
+    fn write_model_dir(dir: &Path, marker: &[u8]) {
+        std::fs::create_dir_all(dir).unwrap();
+        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
+            std::fs::write(dir.join(name), marker).unwrap();
+        }
+        std::fs::write(dir.join("tokens.txt"), b"<blk> 0\n").unwrap();
+    }
+
+    fn no_progress() -> Box<ProgressFn> {
+        Box::new(|_, _, _| {})
+    }
+
+    /// A progress sink that remembers which phases were entered.
+    ///
+    /// "It did not install" is a much weaker claim than "it never reached
+    /// extraction". Several tests below assert the absence of a phase, which
+    /// is the only way to prove that a check happened BEFORE the work it is
+    /// supposed to prevent rather than after it.
+    #[derive(Clone, Default)]
+    struct PhaseLog(Arc<std::sync::Mutex<Vec<Phase>>>);
+
+    impl PhaseLog {
+        fn sink(&self) -> Box<ProgressFn> {
+            let seen = Arc::clone(&self.0);
+            Box::new(move |phase, _, _| {
+                let mut seen = seen.lock().unwrap();
+                if seen.last() != Some(&phase) {
+                    seen.push(phase);
+                }
+            })
+        }
+
+        fn saw(&self, phase: Phase) -> bool {
+            self.0.lock().unwrap().contains(&phase)
+        }
+    }
+
+    /// The happy path, end to end: fetch, verify, unpack, install, seal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_model_downloads_verifies_extracts_and_installs() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let dir = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a well-formed archive must install");
+
+        for (name, body) in &files {
+            assert_eq!(&std::fs::read(dir.join(name)).unwrap(), body, "{name}");
+        }
+        assert!(
+            store::read_seal(&dir, &model).is_some(),
+            "an installed model must be sealed"
+        );
+        assert!(
+            dir.join("ATTRIBUTION.md").exists(),
+            "the licence notice must travel with the weights"
+        );
+        // The archive is 128 MB in production and has done its job.
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        assert!(!downloads.join(store::archive_part_name(&model)).exists());
+    }
+
+    /// Every hop is revalidated, so a redirect still lands correctly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_is_followed_through_the_hardened_guard() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/redirect"),
+        );
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a redirect to an allowed hop must still install");
+    }
+
+    /// The production policy has no exemption, so the mock is refused outright
+    /// — which is what proves the tests above pass because of the exemption
+    /// rather than because the guard is weak.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_strict_policy_refuses_the_mock_origin() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &HopPolicy::strict(MODEL_HOP_LABELS),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("plaintext loopback must be refused in production");
+        assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+    }
+
+    /// A partial from an interrupted run is continued, not restarted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_interrupted_download_resumes_from_the_partial() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        // Stage a half-finished download exactly as a killed run would leave
+        // it: a prefix of the archive plus a sidecar naming its validator.
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        std::fs::create_dir_all(&downloads).unwrap();
+        let half = archive.len() / 2;
+        std::fs::write(
+            downloads.join(store::archive_part_name(&model)),
+            &archive[..half],
+        )
+        .unwrap();
+        write_resume(
+            &downloads.join(store::resume_name(&model)),
+            &ResumeState {
+                version: RESUME_VERSION,
+                model_id: model.id.clone(),
+                archive_sha256: model.archive.sha256.clone(),
+                url: model.archive.upstream_url.clone(),
+                etag: Some(FIXTURE_ETAG.to_string()),
+                last_modified: None,
+            },
+        )
+        .unwrap();
+
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a valid partial must be resumed");
+
+        // Exactly the tail, and asked for the right way. Byte count alone
+        // would not prove the request carried the conditional that makes the
+        // range safe — an origin could simply have sent less.
+        let served = origin.served.load(Ordering::SeqCst);
+        assert_eq!(
+            served,
+            (archive.len() - half) as u64,
+            "resume must transfer exactly the tail"
+        );
+        assert_eq!(
+            origin.seen(),
+            vec![SeenRequest {
+                range_from: Some(half as u64),
+                if_range: Some(FIXTURE_ETAG.to_string()),
+            }],
+            "the resume must be a conditional range request"
+        );
+    }
+
+    /// A complete archive from an interrupted run is reused, not re-fetched.
+    ///
+    /// Cancelling during verification or extraction, running out of disk while
+    /// unpacking, or crashing before the seal all leave a full archive on
+    /// disk. Re-downloading 128 MB that is already there is the most expensive
+    /// possible response to a retry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_complete_archive_is_reused_without_touching_the_network() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::write(downloads.join(store::archive_part_name(&model)), &archive).unwrap();
+
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a complete archive must install without re-downloading");
+
+        assert_eq!(
+            origin.requests.load(Ordering::SeqCst),
+            0,
+            "the network must not be touched when the archive is already complete"
+        );
+    }
+
+    /// The case `If-Range` exists for. Upstream's release tag is mutable, so a
+    /// partial can be a prefix of bytes that are no longer there; appending to
+    /// it would produce a file that is neither version.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replaced_asset_restarts_instead_of_appending() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Replaced);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        // A partial of some OTHER archive, the same length as a real prefix.
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        std::fs::create_dir_all(&downloads).unwrap();
+        let half = archive.len() / 2;
+        std::fs::write(
+            downloads.join(store::archive_part_name(&model)),
+            vec![0xEEu8; half],
+        )
+        .unwrap();
+        write_resume(
+            &downloads.join(store::resume_name(&model)),
+            &ResumeState {
+                version: RESUME_VERSION,
+                model_id: model.id.clone(),
+                archive_sha256: model.archive.sha256.clone(),
+                url: model.archive.upstream_url.clone(),
+                // The validator the client saw last time. The origin's asset
+                // has since been replaced and now answers `"fixture-v2"`.
+                etag: Some(FIXTURE_ETAG.to_string()),
+                last_modified: None,
+            },
+        )
+        .unwrap();
+
+        let dir = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a replaced asset must restart cleanly rather than corrupt");
+
+        // The client genuinely ATTEMPTED a conditional range — otherwise this
+        // passes as an ordinary fresh download and proves nothing about
+        // `If-Range` at all.
+        assert_eq!(
+            origin.seen(),
+            vec![SeenRequest {
+                range_from: Some(half as u64),
+                if_range: Some(FIXTURE_ETAG.to_string()),
+            }],
+            "the client must have tried to resume against its stored validator"
+        );
+        // And the whole body came back, so nothing was appended.
+        assert_eq!(origin.served.load(Ordering::SeqCst), archive.len() as u64);
+        for (name, body) in &files {
+            assert_eq!(&std::fs::read(dir.join(name)).unwrap(), body, "{name}");
+        }
+    }
+
+    /// An origin with no range support still works; it just cannot resume.
+    ///
+    /// Started FROM a partial, so a range is actually attempted. With no
+    /// partial this behaviour is indistinguishable from an ordinary fresh
+    /// download and the test would prove nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_origin_without_range_support_restarts_and_still_installs() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::NoRanges);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        std::fs::create_dir_all(&downloads).unwrap();
+        let half = archive.len() / 2;
+        std::fs::write(
+            downloads.join(store::archive_part_name(&model)),
+            &archive[..half],
+        )
+        .unwrap();
+        write_resume(
+            &downloads.join(store::resume_name(&model)),
+            &ResumeState {
+                version: RESUME_VERSION,
+                model_id: model.id.clone(),
+                archive_sha256: model.archive.sha256.clone(),
+                url: model.archive.upstream_url.clone(),
+                etag: Some(FIXTURE_ETAG.to_string()),
+                last_modified: None,
+            },
+        )
+        .unwrap();
+
+        let dir = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("an origin that ignores Range must still work");
+
+        assert_eq!(
+            origin.seen().first().and_then(|r| r.range_from),
+            Some(half as u64),
+            "a range must have been attempted"
+        );
+        // The origin ignored it and sent everything; the partial must have
+        // been truncated rather than appended to.
+        assert_eq!(origin.served.load(Ordering::SeqCst), archive.len() as u64);
+        for (name, body) in &files {
+            assert_eq!(&std::fs::read(dir.join(name)).unwrap(), body, "{name}");
+        }
+    }
+
+    /// Stopping mid-transfer keeps the bytes, and the next run continues them.
+    ///
+    /// The end-to-end claim the whole resume design exists for, and the one
+    /// the cancel-before-the-first-request test cannot make.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_mid_transfer_keeps_the_partial_and_the_next_run_resumes_it() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Slow);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        // Cancelled on a timer rather than from a progress callback.
+        //
+        // The origin paces itself — SLOW_PIECES writes with a 60 ms gap, so
+        // the body cannot arrive in under ~480 ms however fast the client is —
+        // and the chunk loop checks the flag before every read. Firing well
+        // inside that window therefore lands mid-transfer by construction.
+        // Triggering off a progress report instead made the test depend on
+        // PROGRESS_INTERVAL, which is a throttle that exists for the UI and is
+        // free to change.
+        let cancel = CancelFlag::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            trigger.cancel();
+        });
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &cancel,
+            &no_progress(),
+        )
+        .await
+        .expect_err("a cancelled install must not report success");
+        assert!(is_cancelled_error(&err), "{err:?}");
+
+        // The partial survives — cancelling is "not now", not "throw it away".
+        let part = store::models_root(temp.path())
+            .join(store::DOWNLOADS_DIR)
+            .join(store::archive_part_name(&model));
+        let kept = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        assert!(kept > 0 && kept < archive.len() as u64, "kept {kept} bytes");
+
+        // And a fresh run continues it rather than starting again.
+        //
+        // The SAME origin, deliberately: the resume sidecar records the url it
+        // is a partial of, and a second mock would be on a different port and
+        // therefore legitimately not resumable.
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("the interrupted download must be resumable");
+        assert_eq!(
+            origin.seen().get(1).and_then(|r| r.range_from),
+            Some(kept),
+            "the second run must resume from exactly what was kept"
+        );
+    }
+
+    /// Bytes that fail the digest never reach a decompressor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_archive_that_fails_its_digest_is_never_unpacked() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        // Serve something else entirely, at the same length.
+        let served = vec![0x5Au8; archive.len()];
+        let origin = MockOrigin::start(served, Behaviour::Corrupt);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let phases = PhaseLog::default();
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &phases.sink(),
+        )
+        .await
+        .expect_err("a digest mismatch must stop the install");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+
+        // The claim is that bad bytes never reach a DECOMPRESSOR, not merely
+        // that they end up uninstalled. Extract-then-clean-up would satisfy
+        // the absence check below on its own.
+        assert!(
+            !phases.saw(Phase::Extracting),
+            "the archive was unpacked before its digest was checked"
+        );
+        assert!(
+            !model.install_path(&store::models_root(temp.path())).exists(),
+            "nothing may be installed from an archive that failed its digest"
+        );
+        // Kept bytes would be resumed into and fail identically forever.
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        assert!(
+            !downloads.join(store::archive_part_name(&model)).exists(),
+            "bytes that failed the digest must be discarded, not resumed"
+        );
+    }
+
+    /// A body longer than the catalogue promises is cut off mid-stream rather
+    /// than filling the disk and being rejected afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_body_longer_than_the_catalogue_is_refused() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let mut oversized = archive.clone();
+        oversized.extend_from_slice(&vec![0u8; archive.len()]);
+        let origin = MockOrigin::start(oversized, Behaviour::Corrupt);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        let model_for_paths = catalogue.models[0].clone();
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("an over-long body must be refused");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+
+        // The claim is a bound applied PER CHUNK, not a size check after the
+        // fact. Nothing longer than the catalogue promises may ever have
+        // reached the disk — otherwise a hostile origin fills it before the
+        // check that would have stopped it.
+        let part = store::models_root(temp.path())
+            .join(store::DOWNLOADS_DIR)
+            .join(store::archive_part_name(&model_for_paths));
+        let written = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            written <= archive.len() as u64,
+            "wrote {written} bytes for a {}-byte archive",
+            archive.len()
+        );
+    }
+
+    /// Only catalogue-named members are written. A bundle's extra payload —
+    /// test audio, scripts, anything with a path that climbs — never lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_catalogue_named_members_are_extracted() {
+        let mut members = fixture_files();
+        members.push(("test_wavs/0.wav", b"not a model file".to_vec()));
+        let archive = build_archive_with(
+            "bundle-root",
+            &members,
+            // Traversal, an absolute path, and a name that matches a wanted
+            // file but sits outside the archive root. None is in the
+            // catalogue's member list, so none is written.
+            &[
+                ("../escape.txt", b"traversal".to_vec()),
+                ("/etc/escape.txt", b"absolute".to_vec()),
+                ("elsewhere/encoder.int8.onnx", b"wrong root".to_vec()),
+            ],
+        );
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        // The catalogue names only the four real files.
+        let model = aimed_at(
+            fixture_entry(&archive, &fixture_files(), "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        let dir = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("extra members must be ignored, not fatal");
+
+        assert!(!dir.join("test_wavs").exists(), "extra members must not land");
+        assert!(!dir.join("0.wav").exists());
+        let root = store::models_root(temp.path());
+        // `../escape.txt` resolved against the staging directory would land
+        // here; an absolute member would land at its own path. Neither may.
+        for candidate in [
+            root.join("escape.txt"),
+            temp.path().join("escape.txt"),
+            dir.join("escape.txt"),
+            std::path::PathBuf::from("/etc/escape.txt"),
+        ] {
+            assert!(
+                !candidate.exists(),
+                "a traversing or absolute member was written to {}",
+                candidate.display()
+            );
+        }
+        // Only the catalogue's files, the notice and the seal.
+        let mut found: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                ".candidcue-model.json",
+                "ATTRIBUTION.md",
+                "decoder.onnx",
+                "encoder.int8.onnx",
+                "joiner.int8.onnx",
+                "tokens.txt",
+            ]
+        );
+    }
+
+    /// A file whose hash does not match must leave any existing installation
+    /// exactly where it was — the mixed-model failure the staging order and
+    /// the verify-all-before-move rule exist to prevent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_file_hash_mismatch_leaves_the_previous_install_untouched() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        // A catalogue claiming a different digest for one member than the
+        // archive actually carries.
+        let mut model = fixture_entry(&archive, &files, "bundle-root");
+        model.files[1].sha256 = "0".repeat(64);
+        let model = aimed_at(model, origin.url("/archive"));
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        // A previous installation that genuinely RESOLVES: complete, sealed,
+        // and detectable. A lone sentinel file would prove only that the
+        // directory was not deleted, not that a usable model survived.
+        let root = store::models_root(temp.path());
+        let installed = model.install_path(&root);
+        write_model_dir(&installed, b"OLD");
+        store::write_seal(&installed, &model).unwrap();
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("a per-file digest mismatch must fail the install");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+
+        assert_eq!(
+            std::fs::read(installed.join("encoder.int8.onnx")).unwrap(),
+            b"OLD",
+            "the working install must survive a failed replacement"
+        );
+        // Still the model the resolver would pick — the property that
+        // actually matters to a presenter about to start a take.
+        let resolved = store::resolve(temp.path(), None, &model)
+            .expect("the previous model must still resolve after a failed replacement");
+        assert_eq!(resolved.source, store::ModelSource::Downloaded);
+
+        let leftovers: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.starts_with(store::STAGING_PREFIX) || name.starts_with(store::BACKUP_PREFIX)
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "failed staging and backups must be swept, found {leftovers:?}"
+        );
+    }
+
+    /// A replacement that fails its shape check must leave the previous model
+    /// installed.
+    ///
+    /// This is the PRE-swap path: the staged model passes every per-file
+    /// digest and then fails `ModelFiles::detect` while still in staging, so
+    /// nothing has been renamed. The post-swap path is
+    /// `an_unsealed_target_beside_a_sealed_backup_is_repaired` below — an
+    /// earlier version of this test claimed to cover it and did not, because
+    /// the staged check rejects the model before any rename happens.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replacement_that_fails_validation_leaves_the_previous_model_installed() {
+        // A catalogue whose files do not include a joiner: every digest
+        // matches, so verification passes, and `ModelFiles::detect` then
+        // refuses the result.
+        let files = vec![
+            ("encoder.int8.onnx", b"encoder-graph-bytes".to_vec()),
+            ("tokens.txt", b"<blk> 0\n".to_vec()),
+        ];
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let root = store::models_root(temp.path());
+        let installed = model.install_path(&root);
+        write_model_dir(&installed, b"OLD");
+        store::write_seal(&installed, &model).unwrap();
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("a model that cannot load must not install");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+
+        let resolved = store::resolve(temp.path(), None, &model)
+            .expect("the previous model must be restored");
+        assert_eq!(resolved.source, store::ModelSource::Downloaded);
+        assert_eq!(
+            std::fs::read(installed.join("joiner.int8.onnx")).unwrap(),
+            b"OLD",
+            "the restored model must be the whole previous one"
+        );
+    }
+
+    /// A crash between moving the old model aside and renaming the new one in
+    /// leaves no model and a full backup. Startup puts it back.
+    #[test]
+    fn an_interrupted_commit_is_recovered_on_the_next_launch() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+
+        // Exactly the state a crash in that window leaves behind.
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD");
+        store::write_seal(&backup, &model).unwrap();
+
+        assert!(
+            store::resolve(temp.path(), None, &model).is_none(),
+            "the model is genuinely unreachable before recovery"
+        );
+        assert!(store::recover_backup(&root, &model).unwrap());
+        let resolved = store::resolve(temp.path(), None, &model)
+            .expect("recovery must make the previous model resolvable again");
+        assert_eq!(resolved.source, store::ModelSource::Downloaded);
+    }
+
+    /// Recovery never disturbs a model that is properly installed.
+    #[test]
+    fn recovery_leaves_a_sealed_model_alone() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+
+        // A finished install: complete, detectable and sealed.
+        let installed = model.install_path(&root);
+        write_model_dir(&installed, b"CURRENT");
+        store::write_seal(&installed, &model).unwrap();
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD");
+        store::write_seal(&backup, &model).unwrap();
+
+        assert!(!store::recover_backup(&root, &model).unwrap());
+        assert_eq!(
+            std::fs::read(installed.join("encoder.int8.onnx")).unwrap(),
+            b"CURRENT"
+        );
+    }
+
+    /// The POST-swap crash window: the staged model was renamed into place and
+    /// the process died before it could be sealed.
+    ///
+    /// The target looks complete and was never proven; the backup beside it
+    /// was. Preferring the target because it merely EXISTS would keep the
+    /// unproven copy and delete the working one — which is what "restore only
+    /// when the target is absent" did, and why the seal is the test.
+    #[test]
+    fn an_unsealed_target_beside_a_sealed_backup_is_repaired() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+
+        let target = model.install_path(&root);
+        write_model_dir(&target, b"NEW-BUT-UNPROVEN");
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD-BUT-PROVEN");
+        store::write_seal(&backup, &model).unwrap();
+
+        assert!(
+            store::resolve(temp.path(), None, &model).is_none(),
+            "an unsealed target must not resolve on its own"
+        );
+        assert!(store::recover_backup(&root, &model).unwrap());
+
+        let resolved = store::resolve(temp.path(), None, &model)
+            .expect("the proven model must be back in place");
+        assert_eq!(resolved.source, store::ModelSource::Downloaded);
+        assert_eq!(
+            std::fs::read(target.join("encoder.int8.onnx")).unwrap(),
+            b"OLD-BUT-PROVEN",
+            "the PROVEN copy must win, not the one that merely exists"
+        );
+    }
+
+    /// A backup survives until the model it protects is actually installed.
+    ///
+    /// The sweep used to delete it on the strength of "we are about to install
+    /// anyway", which threw away a working model to make room for one that had
+    /// not been downloaded yet — and if that download then failed, the user
+    /// had neither.
+    #[test]
+    fn a_backup_is_kept_until_the_target_is_sealed() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD");
+        store::write_seal(&backup, &model).unwrap();
+
+        // Nothing installed yet: the backup is the only good copy.
+        store::clear_stale(temp.path(), &model).unwrap();
+        assert!(backup.is_dir(), "the only working copy must not be swept");
+
+        // Once the replacement is sealed, it is genuinely redundant.
+        let target = model.install_path(&root);
+        write_model_dir(&target, b"NEW");
+        store::write_seal(&target, &model).unwrap();
+        store::clear_stale(temp.path(), &model).unwrap();
+        assert!(!backup.exists(), "a superseded backup must be swept");
+    }
+
+    /// An archive missing a file the catalogue requires is refused, rather
+    /// than installing a model that is short a graph.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_archive_missing_a_required_file_is_refused() {
+        let all = fixture_files();
+        let archive = build_archive("bundle-root", &all[..3]);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &all, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("a short archive must be refused");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+    }
+
+    /// Cancelling keeps the partial: stopping is usually "not now".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_reports_cancellation_and_installs_nothing() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let cancel = CancelFlag::new();
+        cancel.cancel();
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &cancel,
+            &no_progress(),
+        )
+        .await
+        .expect_err("a cancelled install must not report success");
+
+        assert!(is_cancelled_error(&err), "{err:?}");
+        assert!(!model.install_path(&store::models_root(temp.path())).exists());
+    }
+
+    /// The mirror buys availability, not integrity — so a mirror that is down
+    /// must fall through to upstream rather than fail the install.
+    ///
+    /// The mirror here is a REACHABLE host that drops the connection, not a
+    /// url the hop guard refuses before opening a socket. Those are different
+    /// failures and only the first one exercises the network fallback: an
+    /// earlier version pointed at `127.0.0.1:1` and merely proved that a
+    /// rejected first candidate is skipped.
+    /// A reachable mirror that drops the connection must not end the search.
+    ///
+    /// The mirror is exempted (so it is genuinely dialled and genuinely fails
+    /// at the network layer) and upstream is not (so reaching it produces a
+    /// distinctive policy refusal). The refusal IS the proof of fallthrough:
+    /// stopping at the mirror would have reported a download failure instead.
+    /// One policy can only exempt one authority, which is what makes this
+    /// two-outcome shape the cheapest honest test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dead_mirror_is_not_the_end_of_the_search() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let upstream = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let mirror = MockOrigin::start(Vec::new(), Behaviour::Dead);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            upstream.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model);
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", mirror.port));
+        let temp = tempfile::tempdir().unwrap();
+
+        let policy = HopPolicy {
+            labels: MODEL_HOP_LABELS,
+            exempt_authority: Some(format!("127.0.0.1:{}", mirror.port)),
+        };
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &policy,
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("upstream is not exempt under this policy");
+
+        assert!(
+            mirror.requests.load(Ordering::SeqCst) >= 1,
+            "the mirror must actually have been dialled"
+        );
+        assert_eq!(
+            err.code(),
+            "STT_MODEL_URL_INSECURE",
+            "the search stopped at the mirror instead of moving on: {err:?}"
+        );
+    }
+
+    /// A mirror serving the right NUMBER of wrong bytes must not end the
+    /// search: the digest fails, and upstream still has the bytes we want.
+    ///
+    /// Verification used to happen after the url loop, so the first candidate
+    /// that produced a complete-looking file won — and a bad mirror could make
+    /// a model permanently uninstallable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mirror_serving_corrupt_bytes_falls_through_to_upstream() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let upstream = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            upstream.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        // A mirror serving the right NUMBER of bytes and the wrong ones. Only
+        // the digest can tell the difference, which is the point.
+        let corrupt = MockOrigin::start(vec![0x5Au8; archive.len()], Behaviour::Corrupt);
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", corrupt.port));
+        let policy = HopPolicy {
+            labels: MODEL_HOP_LABELS,
+            exempt_authority: Some(format!("127.0.0.1:{}", corrupt.port)),
+        };
+        let _ = &upstream;
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &policy,
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("upstream is not exempt under this policy");
+
+        assert!(
+            corrupt.requests.load(Ordering::SeqCst) >= 1,
+            "the mirror must have been tried"
+        );
+        // It did NOT stop at the mirror's digest failure — it went on to the
+        // next candidate, where the policy refuses the un-exempt authority.
+        assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+        // And the bad bytes were not kept to be mistaken for a resumable or
+        // complete archive next time.
+        let part = store::models_root(temp.path())
+            .join(store::DOWNLOADS_DIR)
+            .join(store::archive_part_name(&model));
+        assert!(!part.exists(), "bytes that failed the digest must be discarded");
+    }
+
+    /// A sidecar describing a different archive must not be resumed into.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_partial_from_a_different_archive_is_discarded() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::write(
+            downloads.join(store::archive_part_name(&model)),
+            vec![0xAAu8; archive.len() / 2],
+        )
+        .unwrap();
+        write_resume(
+            &downloads.join(store::resume_name(&model)),
+            &ResumeState {
+                version: RESUME_VERSION,
+                model_id: model.id.clone(),
+                // The catalogue has moved on to a different archive.
+                archive_sha256: "0".repeat(64),
+                url: model.archive.upstream_url.clone(),
+                etag: Some("\"fixture\"".to_string()),
+                last_modified: None,
+            },
+        )
+        .unwrap();
+
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a stale partial must be discarded, not resumed into");
+    }
+
+    #[test]
+    fn content_range_starts_are_parsed_and_rubbish_is_not() {
+        assert_eq!(parse_content_range_start("bytes 100-199/200"), Some(100));
+        assert_eq!(parse_content_range_start("bytes 0-9/10"), Some(0));
+        assert_eq!(parse_content_range_start("items 1-2/3"), None);
+        assert_eq!(parse_content_range_start("bytes */200"), None);
+        assert_eq!(parse_content_range_start(""), None);
+    }
+
+    /// A weak ETag cannot be used for `If-Range`: it promises semantic, not
+    /// byte-for-byte, equivalence, which is exactly the wrong guarantee when
+    /// the bytes are what is being appended to.
+    #[test]
+    fn a_weak_etag_is_not_used_as_a_range_validator() {
+        let state = ResumeState {
+            version: RESUME_VERSION,
+            model_id: "x".to_string(),
+            archive_sha256: "a".repeat(64),
+            url: "https://example.invalid/a".to_string(),
+            etag: Some("W/\"weak\"".to_string()),
+            last_modified: Some("Wed, 21 Oct 2026 07:28:00 GMT".to_string()),
+        };
+        assert_eq!(state.validator(), Some("Wed, 21 Oct 2026 07:28:00 GMT"));
+    }
+
+    #[test]
+    fn the_mirror_is_tried_before_upstream_and_is_content_addressed() {
+        let files = fixture_files();
+        let archive = build_archive("root", &files);
+        let model = fixture_entry(&archive, &files, "root");
+        let mut catalogue = fixture_catalogue(model.clone());
+        catalogue.mirror_base_url = Some("https://mirror.example/".to_string());
+
+        let urls = archive_urls(&catalogue, &catalogue.models[0]);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0],
+            format!(
+                "https://mirror.example/sha256/{}/fixture.tar.bz2",
+                model.archive.sha256
+            ),
+            "the digest belongs in the path so one url names one set of bytes"
+        );
+        assert_eq!(urls[1], model.archive.upstream_url);
+    }
+
+    #[test]
+    fn with_no_mirror_configured_only_upstream_is_tried() {
+        let files = fixture_files();
+        let archive = build_archive("root", &files);
+        let model = fixture_entry(&archive, &files, "root");
+        let catalogue = fixture_catalogue(model.clone());
+        assert_eq!(
+            archive_urls(&catalogue, &catalogue.models[0]),
+            vec![model.archive.upstream_url]
+        );
+    }
+}

@@ -15,7 +15,7 @@ use crate::util::{new_uuid, now_iso, sha256_hex};
 
 pub mod remote;
 
-pub use remote::{fetch_remote_image, is_publicly_routable, FetchPolicy};
+pub use remote::{fetch_remote_image, FetchPolicy};
 
 /// Hard limit for an imported image (spec Appendix A.10).
 pub const MAX_IMPORTED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
