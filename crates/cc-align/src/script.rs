@@ -39,6 +39,27 @@ pub const FLAG_SENTENCE_END: u8 = 1 << 3;
 /// alias would erase the sentence structure the display brakes on.
 pub const FLAG_BIASED: u8 = 1 << 4;
 
+/// Every canonical surface a bias term could have compiled to.
+///
+/// The phrase first, then its words individually, because the two compiler
+/// entry points normalise in different contexts — see
+/// [`CompiledScript::set_biased_terms`]. Marking the union over-approximates in
+/// the safe direction: an extra flagged word can only make a relocation ask for
+/// more evidence, never make local following ask for less.
+fn bias_surfaces(language: AlignmentLanguage, term: &str) -> Vec<String> {
+    let mut out = canonical_atoms_for(language, term);
+    if term.split_whitespace().nth(1).is_some() {
+        for word in term.split_whitespace() {
+            for surface in canonical_atoms_for(language, word) {
+                if !out.contains(&surface) {
+                    out.push(surface);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One spoken atom of the script, in reading order.
 #[derive(Debug, Clone)]
 pub struct ScriptAtom {
@@ -324,6 +345,23 @@ impl CompiledScript {
     /// construction; one that splits terms up first quietly marks less than it
     /// thinks.
     ///
+    /// A multi-word term is therefore resolved BOTH ways — as one phrase and
+    /// word by word — and the union is marked. The two compiler entry points
+    /// disagree about the context a number is normalised in:
+    /// [`compile`] normalises a whole spoken line, so it holds `27000000`,
+    /// while [`compile_tokens`] normalises each authored token separately and
+    /// holds `27` and `million`. Resolving only the phrase would mark nothing
+    /// at all on the token path, which is the one the app compiles through.
+    ///
+    /// Returns how many terms matched no atom in this script. Bias provenance
+    /// fails open — an unmatched term leaves its words looking unsolicited, so
+    /// they keep the full authority to move the reader — and the failure is
+    /// otherwise silent. A caller enabling bias should treat a non-zero count
+    /// as a defect in what it is about to send, not as routine. Some cases are
+    /// known: the extractor can emit `one hundred` for a script that compiled
+    /// `one hundred and five` into `105`, and a term is never partially
+    /// matched into a folded figure.
+    ///
     /// Every occurrence of a matched token is flagged, not just the one inside
     /// the extracted phrase. The recogniser's hotword configuration applies to
     /// the whole take rather than to one position, so a term biases each place
@@ -332,16 +370,26 @@ impl CompiledScript {
     /// less.
     ///
     /// [`AlignmentConfig::biased_content_weight_milli`]: crate::config::AlignmentConfig::biased_content_weight_milli
-    pub fn set_biased_terms(&mut self, terms: &[String]) {
+    pub fn set_biased_terms(&mut self, terms: &[String]) -> usize {
         let mut biased: HashSet<u32> = HashSet::new();
+        let mut unmatched = 0usize;
         for term in terms {
-            for surface in canonical_atoms_for(self.language, term) {
-                // The interner is shared with the transcript, so a hit here is
-                // not proof the script contains the word. Matching on atom ids
-                // below settles that without a second membership test.
-                if let Some(id) = self.interner.get(&surface) {
+            let mut matched = false;
+            for surface in bias_surfaces(self.language, term) {
+                // The interner is shared with the transcript, so a hit there is
+                // not proof the script contains the word. The postings are
+                // built from script atoms alone, which is what settles it.
+                let known = self
+                    .interner
+                    .get(&surface)
+                    .filter(|id| self.token_postings.contains_key(id));
+                if let Some(id) = known {
                     biased.insert(id);
+                    matched = true;
                 }
+            }
+            if !matched && !term.trim().is_empty() {
+                unmatched += 1;
             }
         }
         for atom in &mut self.atoms {
@@ -351,6 +399,7 @@ impl CompiledScript {
                 atom.flags &= !FLAG_BIASED;
             }
         }
+        unmatched
     }
 
     /// Transcript text, normalised and classified the way the script itself was.
@@ -1186,17 +1235,18 @@ mod tests {
     }
 
     /// Numbers canonicalise in context, so half a figure is not a term. Worth
-    /// pinning: the failure is silent — the caller gets an unbiased script back
-    /// and a jump gate that believes its evidence was unsolicited.
+    /// pinning: the failure is silent in the flags — the caller gets an unbiased
+    /// script back and a jump gate that believes its evidence was unsolicited.
+    /// The returned count is the only thing that says so.
     #[test]
     fn half_a_figure_is_not_the_term_the_script_compiled() {
         let mut script = compile("We raised twenty-seven million.", CompileOptions::default());
         assert!(script.atoms.iter().any(|a| a.surface == "27000000"));
 
-        script.set_biased_terms(&["twenty-seven".to_string()]);
+        assert_eq!(script.set_biased_terms(&["twenty-seven".to_string()]), 1);
         assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
 
-        script.set_biased_terms(&["twenty-seven million".to_string()]);
+        assert_eq!(script.set_biased_terms(&["twenty-seven million".to_string()]), 0);
         assert_eq!(
             script
                 .atoms
@@ -1205,6 +1255,57 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// The compiler entry points normalise in different contexts: `compile`
+    /// takes a whole spoken line and folds `twenty-seven million` into one
+    /// atom, while `compile_tokens` — the path the app compiles through —
+    /// normalises each authored token on its own and holds two. A term resolved
+    /// only as a phrase would mark nothing at all in production.
+    #[test]
+    fn a_figure_term_reaches_both_compiler_entry_points() {
+        let tokens: Vec<TokenInput> = ["We", "raised", "twenty-seven", "million"]
+            .iter()
+            .map(|surface| TokenInput {
+                surface: (*surface).to_string(),
+                line: 0,
+                para: 0,
+                // Irrelevant here: bias provenance is lexical and this test
+                // asserts nothing about a ceiling.
+                sentence_end: false,
+            })
+            .collect();
+        let mut script = compile_tokens(&tokens);
+        assert!(
+            script.atoms.iter().any(|a| a.surface == "27"),
+            "token path no longer splits the figure: {:?}",
+            script.atoms.iter().map(|a| &a.surface).collect::<Vec<_>>()
+        );
+
+        assert_eq!(script.set_biased_terms(&["twenty-seven million".to_string()]), 0);
+        let marked: Vec<&str> = script
+            .atoms
+            .iter()
+            .filter(|a| a.flags & FLAG_BIASED != 0)
+            .map(|a| a.surface.as_str())
+            .collect();
+        assert_eq!(marked, vec!["27", "million"]);
+    }
+
+    /// A term matching nothing is reported, and reported per term rather than
+    /// per word, so a caller can act on "this many of the words I am about to
+    /// send will not be discounted".
+    #[test]
+    fn terms_that_match_no_atom_are_counted_not_swallowed() {
+        let mut script = compile("Only these words exist.", CompileOptions::default());
+        let unmatched = script.set_biased_terms(&[
+            "kombucha".to_string(),
+            "these words".to_string(),
+            "entirely absent phrase".to_string(),
+            "   ".to_string(),
+        ]);
+        // "kombucha" and "entirely absent phrase" miss; the blank is not a term.
+        assert_eq!(unmatched, 2);
     }
 
     /// The decoder is configured for the whole take, not for one position, so a
