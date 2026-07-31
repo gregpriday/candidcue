@@ -45,8 +45,13 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     speech: State<'_, SpeechEngine>,
 ) -> Result<SpeechEngineStatus, AppError> {
-    let loaded = speech.is_loaded();
     let model = default_model();
+    // "Is THIS model resident", not "is anything resident". The two are the
+    // same answer while one model ships and stop being the same the moment a
+    // second does — at which point a status line reporting model B as loaded
+    // because model A happened to be warm is exactly the kind of lie this
+    // whole surface exists to avoid.
+    let loaded = speech.loaded_model_id() == Some(model.id);
     // Asked of the directory directly rather than through a config: "are the
     // files there?" is a question about the bundle, and building a tuned config
     // to ask it would imply the tuning had something to do with the answer.

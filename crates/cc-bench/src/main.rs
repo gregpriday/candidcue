@@ -988,6 +988,13 @@ fn capture_all_local(
     // The profile's tuning first, overrides on top. A capture that started
     // from anything else would be measuring a recogniser the app does not
     // ship, which is the one thing a baseline may not do.
+    //
+    // `--model` names a DIRECTORY, and nothing checks that the directory holds
+    // the model whose tuning is being applied — so the log below says whose
+    // tuning it is rather than claiming the weights are that model's. Pointing
+    // this at another bundle gives it x-asr's `blank_penalty`, which is a
+    // reasonable thing to want when sweeping and a corpus-poisoning mistake
+    // when not noticed. Naming the profile is what makes it noticeable.
     let model = cc_stt::default_model();
     let mut config = cc_stt::LocalSttConfig::for_model(model, model_dir);
     if let Some(ms) = prime_ms {
@@ -1003,10 +1010,10 @@ fn capture_all_local(
     let loading = std::time::Instant::now();
     let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
     println!(
-        "loaded {} from {} in {:.0}ms ({} threads, {}, prime {}ms, blank_penalty {})",
-        model.id,
+        "loaded {} in {:.0}ms with {} tuning ({} threads, {}, prime {}ms, blank_penalty {})",
         model_dir.display(),
         loading.elapsed().as_secs_f64() * 1000.0,
+        model.id,
         config.num_threads,
         config.decoding_method,
         config.prime_ms,

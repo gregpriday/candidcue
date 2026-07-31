@@ -160,18 +160,18 @@ impl SpeechEngine {
             if cached.model_id == model.id {
                 return Ok(Arc::clone(&cached.recognizer));
             }
-            // Dropped BEFORE the replacement is built, so the two never sit in
-            // memory together. A session still running keeps its own `Arc`
-            // alive and finishes on the model it started with, which is the
-            // only safe answer: swapping a recogniser out from under a take
-            // would change what the engine is hearing halfway through.
-            *slot = None;
         }
 
         let dir = Self::model_dir(app, model)?;
         let config = cc_stt::LocalSttConfig::for_model(model, &dir);
         // Checked before the C library is asked, because `create` answers a
         // missing file with a null pointer and no reason at all.
+        //
+        // Resolved and checked while any previous model is STILL CACHED. A
+        // request for a model this installation does not have should leave the
+        // one it does have exactly where it was — evicting first would answer
+        // "you asked for a model that isn't here" by also throwing away the
+        // working one, and the next take would pay a cold load for nothing.
         config.validate().map_err(|detail| {
             AppError::structured(
                 "STT_MODEL_MISSING",
@@ -180,6 +180,13 @@ impl SpeechEngine {
                 false,
             )
         })?;
+
+        // Dropped immediately before the replacement is built, so two ~161 MB
+        // graph sets never sit in the cache together. A take already running
+        // keeps its own `Arc` and finishes on the model it started with — the
+        // only safe answer, since swapping a recogniser out from under a
+        // session would change what the engine is hearing halfway through.
+        *slot = None;
 
         let started = std::time::Instant::now();
         let loaded = cc_stt::LocalRecognizer::load(&config).map_err(|detail| {

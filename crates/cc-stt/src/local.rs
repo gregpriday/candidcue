@@ -75,7 +75,16 @@ pub struct ModelFiles {
 enum Precision {
     /// Quantised: `<stem>.int8.onnx`.
     Int8,
-    /// Everything else ending `.onnx`.
+    /// Unquantised: `<stem>.onnx`.
+    ///
+    /// Only these two, deliberately. Upstream also publishes `.fp16.onnx` for
+    /// some families, and such a file is REFUSED here rather than treated as
+    /// unquantised — its stem would be `encoder.fp16`, which is not a role.
+    /// That is the wanted answer: half precision on the CPU provider this app
+    /// pins is not a configuration any of its numbers were taken with, and
+    /// loading one silently would mean benchmarking a recogniser nobody had
+    /// measured. Refusing says so, and the error lists what the directory
+    /// holds.
     Fp32,
 }
 
@@ -105,7 +114,13 @@ impl ModelFiles {
         let mut has_tokens = false;
         let mut has_bpe_vocab = false;
         for entry in entries.flatten() {
-            if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+            // `entry.path().is_file()` FOLLOWS symlinks; `entry.file_type()`
+            // does not, and reports a symlinked graph as "not a file". The
+            // enumerated-list version tested `dir.join(name).is_file()`, so a
+            // model directory assembled out of symlinks — an ordinary way to
+            // point a dev build at a bundle already on disk — has always
+            // worked and must keep working.
+            if !entry.path().is_file() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -137,7 +152,21 @@ impl ModelFiles {
         // ambiguous bundle resolve the same way twice, which matters because
         // the alternative is a model that loads differently on the presenter's
         // machine than on the one the benchmark ran on.
-        graphs.sort_by(|(left, _), (right, _)| left.cmp(right));
+        //
+        // SHORTEST NAME FIRST, then lexicographic. Not an aesthetic choice: the
+        // enumerated list this replaced put the bare `encoder.int8.onnx` ahead
+        // of `encoder-epoch-99-avg-1.int8.onnx`, and plain lexicographic order
+        // reverses that, because `-` sorts before `.`. A directory holding both
+        // would quietly start loading a different graph than it used to. Least
+        // qualified name wins, which is the same rule the list encoded.
+        //
+        // Between two equally-qualified names it is deterministic and nothing
+        // more. There is no universally better graph among, say, a `left-64`
+        // and a `left-128` variant of the same checkpoint, and no manifest to
+        // ask — so this picks one repeatably rather than pretending to judge.
+        let by_length_then_name =
+            |left: &String, right: &String| left.len().cmp(&right.len()).then_with(|| left.cmp(right));
+        graphs.sort_by(|(left, _), (right, _)| by_length_then_name(left, right));
         onnx_files.sort();
 
         let pick = |role: &str, preferred: Precision| -> Result<String, String> {
@@ -189,11 +218,17 @@ const ROLES: [&str; 3] = ["encoder", "decoder", "joiner"];
 /// Which graph a filename stem describes, if any.
 ///
 /// The stem must be the bare role or the role followed by `-`. The hyphen is
-/// load-bearing: `encoder-epoch-29-avg-9-with-averaged-model` is an encoder and
-/// `encoder_aux` is not, and a bare `starts_with` would claim both. Upstream
-/// separates a role from its qualifiers with a hyphen in every bundle this
-/// crate has seen, so requiring one costs nothing and refuses a file whose role
-/// we would only be guessing at.
+/// load-bearing, and upstream naming is the reason. `encoder_adaptor.onnx` ships
+/// in the FunASR-nano bundles and is an auxiliary adapter, NOT the acoustic
+/// encoder; `decoder_joint-model.onnx` ships in the NeMo transducer bundles and
+/// is a fused decoder+joiner this crate cannot drive at all. A bare
+/// `starts_with` would load both as though they were the graph they are named
+/// after. Requiring the hyphen refuses them.
+///
+/// It also refuses `encoder_prepared.onnx` from the RKNN conversion archives,
+/// which IS an encoder — an accepted cost, because the refusal is loud and
+/// names every ONNX file in the directory, whereas loading the wrong graph is
+/// silent right up until a take produces nothing.
 fn role_of(stem: &str) -> Option<&'static str> {
     ROLES
         .into_iter()
@@ -853,13 +888,20 @@ mod tests {
     /// with no reason attached, and it was not uniform — the Kroko bundles and
     /// the Russian one happened to match, so detection looked like it worked
     /// until it met a model where it didn't.
+    ///
+    /// The file list is the archive's real contents: it ships BOTH precisions
+    /// of all three roles, so this also proves the precision preference on the
+    /// bundle that actually broke rather than on a reduced stand-in.
     #[test]
     fn an_epoch_suffix_nobody_enumerated_is_still_detected() {
         let dir = bundle(
             "french-averaged",
             &[
+                "encoder-epoch-29-avg-9-with-averaged-model.onnx",
                 "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
                 "decoder-epoch-29-avg-9-with-averaged-model.onnx",
+                "decoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
+                "joiner-epoch-29-avg-9-with-averaged-model.onnx",
                 "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
                 TOKENS_FILE,
             ],
@@ -894,9 +936,19 @@ mod tests {
                 "decoder.onnx",
                 "joiner.int8.onnx",
                 TOKENS_FILE,
-                // None of these are graphs this crate may pick.
+                // None of these are graphs this crate may pick, and all but
+                // the last two are real filenames from published bundles.
+                //
+                // `encoder.onnx.data` is the external-weight sidecar the
+                // Nemotron and ReazonSpeech packages ship beside a >2 GB graph;
+                // `encoder_adaptor.onnx` is FunASR-nano's adapter;
+                // `decoder_joint-model.onnx` is NeMo's fused decoder+joiner,
+                // which this crate cannot drive at all; `.fp16.onnx` is a
+                // precision nothing here was measured at.
                 "encoder.onnx.data",
-                "encoder_aux.onnx",
+                "encoder_adaptor.onnx",
+                "decoder_joint-model.onnx",
+                "encoder.fp16.onnx",
                 "encoder.json",
                 "joinery.onnx",
                 "README.md",
@@ -904,8 +956,43 @@ mod tests {
         );
         let found = ModelFiles::detect(&dir).unwrap();
         assert_eq!(found.encoder, "encoder.int8.onnx");
+        assert_eq!(found.decoder, "decoder.onnx");
         assert_eq!(found.joiner, "joiner.int8.onnx");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory of symlinks is an ordinary way to point a dev build at a
+    /// bundle already on disk, and the enumerated-list version followed them
+    /// because `Path::is_file` does. Detecting by directory entry does not
+    /// unless it is asked to.
+    #[cfg(unix)]
+    #[test]
+    fn graphs_reached_through_a_symlink_are_still_found() {
+        let real = bundle(
+            "symlink-target",
+            &[
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
+        let linked = std::env::temp_dir().join("cc-stt-symlinked");
+        let _ = std::fs::remove_dir_all(&linked);
+        std::fs::create_dir_all(&linked).unwrap();
+        for name in [
+            "encoder.int8.onnx",
+            "decoder.onnx",
+            "joiner.int8.onnx",
+            TOKENS_FILE,
+        ] {
+            std::os::unix::fs::symlink(real.join(name), linked.join(name)).unwrap();
+        }
+        let found = ModelFiles::detect(&linked).expect("symlinked graphs must be detected");
+        assert_eq!(found.encoder, "encoder.int8.onnx");
+        assert_eq!(found.decoder, "decoder.onnx");
+        let _ = std::fs::remove_dir_all(&linked);
+        let _ = std::fs::remove_dir_all(&real);
     }
 
     /// `read_dir` returns entries in filesystem order, which is neither sorted
@@ -930,9 +1017,40 @@ mod tests {
         for _ in 0..4 {
             assert_eq!(ModelFiles::detect(&dir).unwrap(), first);
         }
-        // Lexicographic, so it is a rule someone can predict rather than
-        // whatever the directory happened to hand over first.
+        // Equal-length names, so the tie falls to lexicographic order — a rule
+        // someone can predict rather than whatever the directory happened to
+        // hand over first. All three roles resolve by the same rule, so a
+        // bundle named uniformly cannot produce a mixed triplet.
         assert_eq!(first.encoder, "encoder-epoch-10-avg-2.int8.onnx");
+        assert_eq!(first.decoder, "decoder-epoch-10-avg-2.onnx");
+        assert_eq!(first.joiner, "joiner-epoch-10-avg-2.int8.onnx");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bare name beats the qualified one, as the enumerated list it
+    /// replaced did.
+    ///
+    /// Plain lexicographic order gets this BACKWARDS — `-` sorts before `.`, so
+    /// `encoder-epoch-99-avg-1.int8.onnx` would win — and a directory holding
+    /// both would silently start loading a different graph than it used to.
+    #[test]
+    fn the_least_qualified_name_wins_as_the_enumerated_list_had_it() {
+        let dir = bundle(
+            "bare-vs-qualified",
+            &[
+                "encoder.int8.onnx",
+                "encoder-epoch-99-avg-1.int8.onnx",
+                "decoder.onnx",
+                "decoder-epoch-99-avg-1.onnx",
+                "joiner.int8.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
+        let found = ModelFiles::detect(&dir).unwrap();
+        assert_eq!(found.encoder, "encoder.int8.onnx");
+        assert_eq!(found.decoder, "decoder.onnx");
+        assert_eq!(found.joiner, "joiner.int8.onnx");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -993,8 +1111,61 @@ mod tests {
         assert_eq!(config.blank_penalty, model.tuning.blank_penalty);
         assert_eq!(config.prime_ms, model.tuning.prime_ms);
         assert_eq!(
+            config.rule1_min_trailing_silence,
+            model.tuning.rule1_min_trailing_silence
+        );
+        assert_eq!(
             config.rule2_min_trailing_silence,
             model.tuning.rule2_min_trailing_silence
         );
+        assert_eq!(
+            config.rule3_min_utterance_length,
+            model.tuning.rule3_min_utterance_length
+        );
+    }
+
+    /// The shipped recogniser is configured EXACTLY as it was before the model
+    /// became a runtime value.
+    ///
+    /// Every number here is written out rather than read back from the
+    /// catalogue, and that is the entire point: a test that asks the catalogue
+    /// what it says and then agrees with the answer cannot notice the
+    /// catalogue changing. These nine values are the ones the benchmark numbers
+    /// in `bench/REPORT.md` were taken with, so a diff that moves any of them
+    /// invalidates every published figure and should have to say so out loud.
+    ///
+    /// `blank_penalty` is the one with teeth. `cc-bench` records an occasion
+    /// when a bare override silently replaced the tuned value with 0.0 and a
+    /// whole corpus was captured with the knob off — the recogniser still
+    /// transcribed, every other test still passed, and following was simply
+    /// worse.
+    #[test]
+    fn the_shipped_model_is_configured_exactly_as_it_was_before_the_refactor() {
+        let config = LocalSttConfig::for_model(crate::models::default_model(), "/model");
+        assert_eq!(config.num_threads, 2);
+        assert_eq!(config.provider, "cpu");
+        assert_eq!(config.decoding_method, "greedy_search");
+        assert_eq!(config.rule1_min_trailing_silence, 2.4);
+        assert_eq!(config.rule2_min_trailing_silence, 1.2);
+        assert_eq!(config.rule3_min_utterance_length, 20.0);
+        assert_eq!(config.blank_penalty, 3.0);
+        assert_eq!(config.max_active_paths, 4);
+        assert_eq!(config.prime_ms, 0);
+    }
+
+    /// Priming is a per-model value that reaches the stream, not just the load.
+    ///
+    /// Unprovable end to end without weights: building a `LocalRecognizer`
+    /// needs the real ONNX graphs, so what is checked here is that a nonzero
+    /// tuning survives into the config the recogniser is built from. The
+    /// shipped model primes at 0, which means every other test in this file
+    /// would pass an implementation that ignored the setting entirely.
+    #[test]
+    fn a_model_that_primes_carries_its_priming_into_the_config() {
+        let tuning = LocalModelTuning {
+            prime_ms: 250,
+            ..crate::models::default_model().tuning
+        };
+        assert_eq!(LocalSttConfig::new("/model", tuning).prime_ms, 250);
     }
 }
