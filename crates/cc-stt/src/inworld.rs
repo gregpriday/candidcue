@@ -192,6 +192,9 @@ pub async fn stream_pcm(
                     text: transcript.to_string(),
                     audio_end_ms: audio_ms,
                     wall_ms,
+                    // The hosted service never reported per-word timing, which
+                    // is the honest reason `bench/runs/` has none.
+                    word_times: None,
                 });
                 open = None;
             } else {
@@ -200,6 +203,7 @@ pub async fn stream_pcm(
                     text: transcript.to_string(),
                     audio_ms,
                     wall_ms,
+                    word_times: None,
                 });
             }
         }
