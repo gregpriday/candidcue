@@ -887,6 +887,17 @@ pub fn layouts_for(names: Option<&[String]>) -> Vec<Layout> {
     }
 }
 
+
+/// Keep `RecoveryKind` reachable for callers that mix the two tables.
+pub fn recovery_kind_name(k: RecoveryKind) -> &'static str {
+    match k {
+        RecoveryKind::Initial => "initial",
+        RecoveryKind::SkipForward => "skip",
+        RecoveryKind::Retake => "retake",
+        RecoveryKind::AdlibReturn => "adlib",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -951,15 +962,5 @@ mod tests {
                 + row("band.readable_ahead_viewport_pct").value,
             deficit.value
         );
-    }
-}
-
-/// Keep `RecoveryKind` reachable for callers that mix the two tables.
-pub fn recovery_kind_name(k: RecoveryKind) -> &'static str {
-    match k {
-        RecoveryKind::Initial => "initial",
-        RecoveryKind::SkipForward => "skip",
-        RecoveryKind::Retake => "retake",
-        RecoveryKind::AdlibReturn => "adlib",
     }
 }
