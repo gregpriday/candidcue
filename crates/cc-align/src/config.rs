@@ -176,6 +176,17 @@ pub struct AlignmentConfig {
     /// rate estimate without invalidating the clock, so a ms-denominated cap
     /// silently grows in the one situation it exists to contain.
     pub max_lead_atoms: f64,
+    /// Brake prediction at the end of every SENTENCE rather than only at the
+    /// end of every paragraph.
+    ///
+    /// Not a tuning parameter — the two settings are two different rules, and
+    /// this exists so they can be compared in one binary against one corpus.
+    /// Everything above is measured that way, and a rule about where the
+    /// display may go is not worth believing on argument alone.
+    ///
+    /// Turning it off restores the paragraph ceiling exactly, which is the
+    /// rollback if braking this often ever reads as stop-start on the glass.
+    pub sentence_prediction_ceiling: bool,
 
     // ---- motion shape ----
     // Everything above decides WHERE the display may be. These decide how it
@@ -546,6 +557,10 @@ impl Default for AlignmentConfig {
             // showed the cap has a sharp knee: at margin 0.6 the suite's
             // `ahead_events` ran 71 at a cap of 3.0 and 5 at 2.6.
             max_lead_atoms: 3.2,
+            // On: a full stop is where the reader slows, breathes and holds,
+            // and it is the commonest place for the display to get ahead of
+            // them. Off restores the paragraph-only ceiling for comparison.
+            sentence_prediction_ceiling: true,
 
             // Every one of these three is a SAFETY knob as much as a comfort
             // one, which is not obvious and is worth stating: they decide how

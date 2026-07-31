@@ -39,6 +39,19 @@ export interface AlignToken {
   line: number;
   /** Block ordinal — a spoken paragraph, which is what the engine calls a para. */
   para: number;
+  /**
+   * The last token of its sentence. Unlike `line` and `para`, the engine DOES
+   * read this: it brakes forward prediction here, so the display stops at the
+   * full stop the reader is about to pause on instead of running into a
+   * sentence they have not started.
+   *
+   * It has to be sent because it cannot be recovered downstream. `tokenize.ts`
+   * ends every token on a letter or digit, so `surface` reaches the engine as
+   * `end` and never `end.` — the punctuation is gone before this point. What
+   * survives is the compiler's own sentence segmentation, which knows that
+   * `Dr.` and `3.14` are not boundaries, and that is what this carries.
+   */
+  sentenceEnd: boolean;
 }
 
 /**
@@ -61,14 +74,23 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
   const blockOrdinals = new Map<string, number>();
   (compiled.blocks ?? []).forEach((block, index) => blockOrdinals.set(block.id, index));
   const sentenceOrdinals = new Map<string, number>();
-  (compiled.sentences ?? []).forEach((sentence, index) =>
-    sentenceOrdinals.set(sentence.id, index),
-  );
+  const sentenceEnds = new Set<number>();
+  (compiled.sentences ?? []).forEach((sentence, index) => {
+    sentenceOrdinals.set(sentence.id, index);
+    sentenceEnds.add(sentence.endTokenIndex);
+  });
 
   return (compiled.spokenTokens ?? []).map((token) => ({
     surface: token.surface,
     line: sentenceOrdinals.get(token.sentenceId) ?? 0,
     para: blockOrdinals.get(token.blockId) ?? 0,
+    /*
+     * A missing sentence list leaves this false everywhere, which is the same
+     * defensive stance as the ordinals above: the engine falls back to braking
+     * at paragraph ends, which is where it braked before sentences reached it.
+     * Losing the finer ceiling is a worse take, not a broken one.
+     */
+    sentenceEnd: sentenceEnds.has(token.index),
   }));
 }
 

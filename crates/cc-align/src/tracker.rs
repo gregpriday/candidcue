@@ -112,7 +112,7 @@ pub struct Snapshot {
     pub lead_ease_ms: f64,
     pub lead_hold_ms: f64,
     pub lead_decay_ms: f64,
-    /// Absolute ceiling for the display: the end of the paragraph the reader
+    /// Absolute ceiling for the display: the end of the sentence the reader
     /// was last heard in. Prediction stops here and waits for evidence.
     pub display_limit: f64,
     /// Heuristic 0..1 — NOT yet a calibrated probability; benchmarked as-is.
@@ -142,7 +142,8 @@ impl Snapshot {
     /// nobody notices. Leading erases a line the reader has not reached — and
     /// they are looking straight at it. Everything below is that asymmetry: a
     /// lead that is only ever a fraction of a word, that decays to nothing when
-    /// evidence goes stale, and that stops dead at a paragraph break.
+    /// evidence goes stale, and that stops dead at the end of the sentence the
+    /// reader was last heard in.
     pub fn display_at(&self, t_audio_ms: f64) -> f64 {
         let ceiling = self.display_limit.min(self.script_len);
         let age = (t_audio_ms - self.evidence_audio_ms).max(0.0);
@@ -972,6 +973,21 @@ impl Engine {
     /// prediction, and only from an already-confident Following lock. It
     /// updates only the reversible dim frontier; never `observed`, `confirmed`,
     /// cold acquisition, or discontinuity authority.
+    /// How far prediction may carry the display from where the reader was last
+    /// heard — the sentence they are audibly in, or the paragraph when the
+    /// finer rule is switched off for comparison.
+    ///
+    /// Both places that need the answer read it here rather than asking the
+    /// script directly, so the reversible dim frontier and the display's hard
+    /// limit can never end up obeying two different rules.
+    fn prediction_ceiling(&self) -> f64 {
+        if self.config.sentence_prediction_ceiling {
+            self.script.prediction_ceiling(self.observed)
+        } else {
+            self.script.paragraph_ceiling(self.observed)
+        }
+    }
+
     fn can_bridge_local_approx(&self, candidate: &Candidate, predicted: f64) -> bool {
         let ev = &candidate.evidence;
         let c = &self.config;
@@ -984,7 +1000,7 @@ impl Engine {
             && ev.end_position as f64 > frontier
             && ev.end_position as f64 - frontier <= c.local_approx_max_step
             && ev.end_position as f64 - self.observed <= c.local_approx_max_advance
-            && ev.end_position as f64 <= self.script.prediction_ceiling(self.observed)
+            && ev.end_position as f64 <= self.prediction_ceiling()
             && (ev.end_position as f64 - predicted).abs() <= c.local_approx_prediction_slack
             && ev.fidelity >= c.observe_min_fidelity
             && ev.coverage >= c.observe_min_coverage
@@ -1412,7 +1428,7 @@ impl Engine {
             lead_ease_ms: self.config.lead_ease_ms,
             lead_hold_ms: self.config.lead_hold_ms,
             lead_decay_ms: self.config.lead_decay_ms,
-            display_limit: self.script.prediction_ceiling(self.observed),
+            display_limit: self.prediction_ceiling(),
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
             provisional: self.provisional,
@@ -1450,6 +1466,43 @@ mod tests {
             "alpha bravo presenter teleprompter harbour narration delta echo foxtrot golf",
             CompileOptions::default(),
         )
+    }
+
+    /// The snapshot the stage actually receives carries the sentence ceiling,
+    /// and the switch genuinely restores the old one — the two rules have to be
+    /// comparable in one binary or a claim about either is unfalsifiable.
+    #[test]
+    fn the_display_limit_brakes_at_the_sentence_and_the_switch_restores_paragraphs() {
+        // One paragraph, two sentences: atoms 0..3 and 3..6.
+        let script = compile(
+            "alpha bravo charlie. delta echo foxtrot.",
+            CompileOptions::default(),
+        );
+        assert_eq!(script.sentence_end, vec![3, 3, 3, 6, 6, 6]);
+
+        let mut engine = Engine::new(script.clone(), AlignmentConfig::default());
+        engine.set_manual_position(1, 0.0);
+        let snapshot = final_item(&mut engine, 1, "bravo", 350.0);
+        assert!(
+            snapshot.observed < 3.0,
+            "the reader must still be inside the first sentence: {}",
+            snapshot.observed
+        );
+        // Heard inside the first sentence, the display may reach its last word
+        // and stop — `delta` stays lit.
+        assert_eq!(snapshot.display_limit, 3.0);
+
+        let paragraph_only = AlignmentConfig {
+            sentence_prediction_ceiling: false,
+            ..AlignmentConfig::default()
+        };
+        let mut engine = Engine::new(script, paragraph_only);
+        engine.set_manual_position(1, 0.0);
+        let snapshot = final_item(&mut engine, 1, "bravo", 350.0);
+        assert!(snapshot.observed < 3.0);
+        // The rule this replaces: the whole paragraph was fair game from the
+        // first word of it.
+        assert_eq!(snapshot.display_limit, 6.0);
     }
 
     #[test]
