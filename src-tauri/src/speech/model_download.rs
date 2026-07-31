@@ -384,6 +384,20 @@ async fn open_transfer(
     Err(net::blocked_url(&MODEL_HOP_LABELS, "too many redirects"))
 }
 
+/// Make a failed download unusable, by deletion or failing that by truncation.
+///
+/// Truncation is the fallback rather than the first choice because an empty
+/// file is still clutter — but it is enough: a zero-length archive matches
+/// neither the complete-archive shortcut nor a resumable prefix, so the next
+/// attempt starts cleanly instead of re-hashing bytes already known to be bad.
+fn discard_archive(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => std::fs::File::create(path).map(|_| ()),
+    }
+}
+
 /// The first byte offset named by a `Content-Range: bytes <start>-<end>/<len>`.
 fn parse_content_range_start(value: &str) -> Option<u64> {
     let rest = value.trim().strip_prefix("bytes ")?;
@@ -813,7 +827,20 @@ pub async fn install(
                 // Bytes that failed are never kept: they would be treated as a
                 // complete or resumable archive next time and fail identically
                 // forever.
-                let _ = std::fs::remove_file(&archive_path);
+                //
+                // A failed removal cannot be shrugged off. The next candidate
+                // would see a file of exactly the catalogue's length, take the
+                // complete-archive shortcut, and re-hash the same bad bytes —
+                // so a mirror serving rubbish would stop upstream from ever
+                // being reached. Truncating is the fallback; if even that
+                // fails there is nothing useful left to try.
+                if let Err(remove_err) = discard_archive(&archive_path) {
+                    let _ = std::fs::remove_file(&resume_path);
+                    return Err(install_failed(format!(
+                        "could not discard a failed download at {}: {remove_err}",
+                        archive_path.display()
+                    )));
+                }
                 let _ = std::fs::remove_file(&resume_path);
                 if !is_last {
                     tracing::warn!(
@@ -926,16 +953,36 @@ fn install_from_archive(
         })?;
     }
 
-    // From here every failure restores the backup before returning.
-    let restore = |err: AppError| -> AppError {
-        let _ = std::fs::remove_dir_all(&target);
-        if had_previous {
+    // Put the backup back. Split in two by whether the swap has HAPPENED,
+    // because "what is at `target`" means different things either side of it.
+    //
+    // Before the swap, `target` is not ours — it is either absent or something
+    // another actor put there — so deleting it would be destroying a stranger's
+    // work. After the swap it is the staged model we just moved in, and
+    // clearing it is the only way the backup can come home.
+    let restore_backup = |after_swap: bool, err: AppError| -> AppError {
+        if after_swap {
+            if let Err(e) = std::fs::remove_dir_all(&target) {
+                // The failed replacement is still sitting at `target` and the
+                // good copy is still in the backup. Leaving both is right:
+                // `recover_backup` prefers a sealed backup over an unsealed
+                // target, so the next launch repairs it.
+                tracing::error!(
+                    error = %e,
+                    target = %target.display(),
+                    "could not remove a failed model install; the previous model is \
+                     still in its backup and will be restored on the next launch"
+                );
+                return err;
+            }
+        }
+        if had_previous && !target.exists() {
             if let Err(e) = std::fs::rename(&backup, &target) {
                 tracing::error!(
                     error = %e,
                     backup = %backup.display(),
-                    "could not restore the previous speech model; it is still in the backup \
-                     directory and will be recovered on the next install"
+                    "could not restore the previous speech model; it is still in the \
+                     backup directory and will be recovered on the next launch"
                 );
             }
         }
@@ -943,9 +990,12 @@ fn install_from_archive(
     };
 
     if let Err(e) = std::fs::rename(staging, &target) {
-        return Err(restore(install_failed(format!(
-            "could not install the model: {e}"
-        ))));
+        // Nothing of ours is at `target` — the rename is precisely what did
+        // not happen — so this must not delete whatever is.
+        return Err(restore_backup(
+            false,
+            install_failed(format!("could not install the model: {e}")),
+        ));
     }
 
     // Validated AGAIN, at the path it will actually be loaded from. The staged
@@ -953,17 +1003,19 @@ fn install_from_archive(
     // means "proven HERE", which is a claim only this call can support.
     on_progress(Phase::Validating, 1, 1);
     if let Err(detail) = cc_stt::local::ModelFiles::detect(&target) {
-        return Err(restore(integrity_failed(format!(
-            "the installed model is not loadable: {detail}"
-        ))));
+        return Err(restore_backup(
+            true,
+            integrity_failed(format!("the installed model is not loadable: {detail}")),
+        ));
     }
 
     // Last. Everything before this is reversible; the seal is what makes the
     // directory eligible to be chosen.
     if let Err(e) = store::write_seal(&target, model) {
-        return Err(restore(install_failed(format!(
-            "could not seal the model: {e}"
-        ))));
+        return Err(restore_backup(
+            true,
+            install_failed(format!("could not seal the model: {e}")),
+        ));
     }
 
     // Committed. Only now is the old model actually gone.
@@ -1311,6 +1363,15 @@ mod tests {
     fn aimed_at(mut model: ModelEntry, url: String) -> ModelEntry {
         model.archive.upstream_url = url;
         model
+    }
+
+    /// A model directory `ModelFiles::detect` accepts, with recognisable bytes.
+    fn write_model_dir(dir: &Path, marker: &[u8]) {
+        std::fs::create_dir_all(dir).unwrap();
+        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
+            std::fs::write(dir.join(name), marker).unwrap();
+        }
+        std::fs::write(dir.join("tokens.txt"), b"<blk> 0\n").unwrap();
     }
 
     fn no_progress() -> Box<ProgressFn> {
@@ -1687,17 +1748,20 @@ mod tests {
         let catalogue = fixture_catalogue(model.clone());
         let temp = tempfile::tempdir().unwrap();
 
-        // Stop as soon as the first bytes land, while the origin is still
-        // mid-write.
+        // Cancelled on a timer rather than from a progress callback.
+        //
+        // The origin paces itself — SLOW_PIECES writes with a 60 ms gap, so
+        // the body cannot arrive in under ~480 ms however fast the client is —
+        // and the chunk loop checks the flag before every read. Firing well
+        // inside that window therefore lands mid-transfer by construction.
+        // Triggering off a progress report instead made the test depend on
+        // PROGRESS_INTERVAL, which is a throttle that exists for the UI and is
+        // free to change.
         let cancel = CancelFlag::new();
         let trigger = cancel.clone();
-        let progress: Box<ProgressFn> = Box::new(move |phase, done, total| {
-            // Mid-transfer: some bytes in, not all of them. `done > 0` alone
-            // also matches the final report, which is the end of the transfer
-            // rather than the middle of it.
-            if phase == Phase::Downloading && done > 0 && done < total {
-                trigger.cancel();
-            }
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            trigger.cancel();
         });
         let err = install(
             temp.path(),
@@ -1705,7 +1769,7 @@ mod tests {
             &catalogue.models[0],
             &origin.policy(),
             &cancel,
-            &progress,
+            &no_progress(),
         )
         .await
         .expect_err("a cancelled install must not report success");
@@ -1927,11 +1991,7 @@ mod tests {
         // directory was not deleted, not that a usable model survived.
         let root = store::models_root(temp.path());
         let installed = model.install_path(&root);
-        std::fs::create_dir_all(&installed).unwrap();
-        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
-            std::fs::write(installed.join(name), b"OLD").unwrap();
-        }
-        std::fs::write(installed.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        write_model_dir(&installed, b"OLD");
         store::write_seal(&installed, &model).unwrap();
 
         let err = install(
@@ -1971,16 +2031,17 @@ mod tests {
         );
     }
 
-    /// A replacement that fails AFTER the old model has been moved aside must
-    /// put it back.
+    /// A replacement that fails its shape check must leave the previous model
+    /// installed.
     ///
-    /// The commit used to delete the previous model and then rename the new
-    /// one into the hole; anything going wrong in between left the machine
-    /// with no model at all. Here the staged model passes its per-file digests
-    /// and then fails the shape check, which is the last thing before the
-    /// seal — the deepest point the transaction can fail.
+    /// This is the PRE-swap path: the staged model passes every per-file
+    /// digest and then fails `ModelFiles::detect` while still in staging, so
+    /// nothing has been renamed. The post-swap path is
+    /// `an_unsealed_target_beside_a_sealed_backup_is_repaired` below — an
+    /// earlier version of this test claimed to cover it and did not, because
+    /// the staged check rejects the model before any rename happens.
     #[tokio::test]
-    async fn a_replacement_that_fails_after_the_swap_restores_the_previous_model() {
+    async fn a_replacement_that_fails_validation_leaves_the_previous_model_installed() {
         // A catalogue whose files do not include a joiner: every digest
         // matches, so verification passes, and `ModelFiles::detect` then
         // refuses the result.
@@ -1999,11 +2060,7 @@ mod tests {
 
         let root = store::models_root(temp.path());
         let installed = model.install_path(&root);
-        std::fs::create_dir_all(&installed).unwrap();
-        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
-            std::fs::write(installed.join(name), b"OLD").unwrap();
-        }
-        std::fs::write(installed.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        write_model_dir(&installed, b"OLD");
         store::write_seal(&installed, &model).unwrap();
 
         let err = install(
@@ -2040,11 +2097,7 @@ mod tests {
 
         // Exactly the state a crash in that window leaves behind.
         let backup = store::backup_path(&root, &model);
-        std::fs::create_dir_all(&backup).unwrap();
-        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
-            std::fs::write(backup.join(name), b"OLD").unwrap();
-        }
-        std::fs::write(backup.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        write_model_dir(&backup, b"OLD");
         store::write_seal(&backup, &model).unwrap();
 
         assert!(
@@ -2057,27 +2110,94 @@ mod tests {
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
     }
 
-    /// Recovery never overwrites a model that is already there.
+    /// Recovery never disturbs a model that is properly installed.
     #[test]
-    fn recovery_leaves_an_installed_model_alone() {
+    fn recovery_leaves_a_sealed_model_alone() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let model = fixture_entry(&archive, &files, "bundle-root");
         let temp = tempfile::tempdir().unwrap();
         let root = store::models_root(temp.path());
 
+        // A finished install: complete, detectable and sealed.
         let installed = model.install_path(&root);
-        std::fs::create_dir_all(&installed).unwrap();
-        std::fs::write(installed.join("encoder.int8.onnx"), b"CURRENT").unwrap();
+        write_model_dir(&installed, b"CURRENT");
+        store::write_seal(&installed, &model).unwrap();
         let backup = store::backup_path(&root, &model);
-        std::fs::create_dir_all(&backup).unwrap();
-        std::fs::write(backup.join("encoder.int8.onnx"), b"OLD").unwrap();
+        write_model_dir(&backup, b"OLD");
+        store::write_seal(&backup, &model).unwrap();
 
         assert!(!store::recover_backup(&root, &model).unwrap());
         assert_eq!(
             std::fs::read(installed.join("encoder.int8.onnx")).unwrap(),
             b"CURRENT"
         );
+    }
+
+    /// The POST-swap crash window: the staged model was renamed into place and
+    /// the process died before it could be sealed.
+    ///
+    /// The target looks complete and was never proven; the backup beside it
+    /// was. Preferring the target because it merely EXISTS would keep the
+    /// unproven copy and delete the working one — which is what "restore only
+    /// when the target is absent" did, and why the seal is the test.
+    #[test]
+    fn an_unsealed_target_beside_a_sealed_backup_is_repaired() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+
+        let target = model.install_path(&root);
+        write_model_dir(&target, b"NEW-BUT-UNPROVEN");
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD-BUT-PROVEN");
+        store::write_seal(&backup, &model).unwrap();
+
+        assert!(
+            store::resolve(temp.path(), None, &model).is_none(),
+            "an unsealed target must not resolve on its own"
+        );
+        assert!(store::recover_backup(&root, &model).unwrap());
+
+        let resolved = store::resolve(temp.path(), None, &model)
+            .expect("the proven model must be back in place");
+        assert_eq!(resolved.source, store::ModelSource::Downloaded);
+        assert_eq!(
+            std::fs::read(target.join("encoder.int8.onnx")).unwrap(),
+            b"OLD-BUT-PROVEN",
+            "the PROVEN copy must win, not the one that merely exists"
+        );
+    }
+
+    /// A backup survives until the model it protects is actually installed.
+    ///
+    /// The sweep used to delete it on the strength of "we are about to install
+    /// anyway", which threw away a working model to make room for one that had
+    /// not been downloaded yet — and if that download then failed, the user
+    /// had neither.
+    #[test]
+    fn a_backup_is_kept_until_the_target_is_sealed() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let model = fixture_entry(&archive, &files, "bundle-root");
+        let temp = tempfile::tempdir().unwrap();
+        let root = store::models_root(temp.path());
+        let backup = store::backup_path(&root, &model);
+        write_model_dir(&backup, b"OLD");
+        store::write_seal(&backup, &model).unwrap();
+
+        // Nothing installed yet: the backup is the only good copy.
+        store::clear_stale(temp.path(), &model).unwrap();
+        assert!(backup.is_dir(), "the only working copy must not be swept");
+
+        // Once the replacement is sealed, it is genuinely redundant.
+        let target = model.install_path(&root);
+        write_model_dir(&target, b"NEW");
+        store::write_seal(&target, &model).unwrap();
+        store::clear_stale(temp.path(), &model).unwrap();
+        assert!(!backup.exists(), "a superseded backup must be swept");
     }
 
     /// An archive missing a file the catalogue requires is refused, rather

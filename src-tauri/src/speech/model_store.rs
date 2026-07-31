@@ -41,6 +41,22 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogue::{ModelEntry, ATTRIBUTION_FILE};
 
+/// Serialises every test that reads or writes `CANDIDCUE_MODELS_DIR`.
+///
+/// At module scope rather than inside `mod tests` because `model_download`'s
+/// tests call `resolve` too, and a lock private to this file's test module
+/// would leave them racing the one test that sets the override — which is the
+/// bug it was added to fix, one module over.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A poisoned lock still serialises. A panicking test must not cascade into
+/// every other test that resolves reporting the same failure.
+#[cfg(test)]
+pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 /// Marks a model directory as installed AND proven loadable.
 pub const SEAL_FILE: &str = ".candidcue-model.json";
 
@@ -266,18 +282,37 @@ pub fn backup_path(root: &Path, model: &ModelEntry) -> PathBuf {
 /// Put back a model whose replacement was interrupted mid-commit.
 ///
 /// The install commit moves the old model aside, renames the new one into
-/// place, proves it, then deletes the backup. A crash between the first two
-/// steps leaves no model and a full backup — the one window where the
-/// transaction is visible from outside. This closes it.
+/// place, proves it, then deletes the backup. Two crash windows are visible
+/// from outside, and both end here:
 ///
-/// Restore-only, and deliberately: it never deletes anything and only acts
-/// when the target is absent, so running it while another process is
-/// installing cannot destroy that install's work.
+///   * between the two renames — no model at all, and a full backup;
+///   * between the second rename and the seal — a model that LOOKS complete
+///     at `target` but was never proven, beside the backup that was.
+///
+/// The second is why "is the target absent?" is not the right question. An
+/// unsealed target is exactly the thing the seal exists to distrust, and
+/// preferring it over a proven backup would throw away the working model to
+/// keep an unproven one.
+///
+/// It never touches a target that IS sealed, so it cannot disturb a finished
+/// install — including one another instance has just completed.
 pub fn recover_backup(root: &Path, model: &ModelEntry) -> std::io::Result<bool> {
     let backup = backup_path(root, model);
     let target = model.install_path(root);
-    if !backup.is_dir() || target.exists() {
+    if !backup.is_dir() {
         return Ok(false);
+    }
+    // A sealed target is a completed install. Nothing to recover.
+    if read_seal(&target, model).is_some() {
+        return Ok(false);
+    }
+    // Only a backup that is itself usable is worth restoring; otherwise the
+    // honest answer is that neither copy is good and the model re-downloads.
+    if !is_usable(&backup, model, true) {
+        return Ok(false);
+    }
+    if target.exists() {
+        std::fs::remove_dir_all(&target)?;
     }
     std::fs::rename(&backup, &target)?;
     tracing::warn!(
@@ -295,7 +330,14 @@ pub fn recover_interrupted(app_data_dir: &Path) {
     }
     for model in &super::catalogue::catalogue().models {
         if let Err(err) = recover_backup(&root, model) {
-            tracing::warn!(model = %model.id, error = %err, "could not restore a model backup");
+            // Loud rather than best-effort: a backup that could not be
+            // restored is a working model the user cannot reach, and the next
+            // install is under instruction not to delete it.
+            tracing::error!(
+                model = %model.id,
+                error = %err,
+                "could not restore an interrupted speech model backup"
+            );
         }
     }
 }
@@ -320,12 +362,19 @@ pub fn clear_stale(app_data_dir: &Path, model: &ModelEntry) -> std::io::Result<(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
+    // A backup is only garbage once the model it was protecting is actually
+    // installed and sealed. Deleting it on the strength of "we are about to
+    // install anyway" throws away the user's working model to make room for
+    // one that has not been downloaded yet, and if the download then fails
+    // they have neither.
+    let target_is_sealed = read_seal(&model.install_path(&root), model).is_some();
     let staging = format!("{STAGING_PREFIX}{}-", model.install_dir);
     let backup = format!("{BACKUP_PREFIX}{}", model.install_dir);
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(&staging) || *name == *backup {
+        let stale = name.starts_with(&staging) || (*name == *backup && target_is_sealed);
+        if stale {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
@@ -358,24 +407,6 @@ pub fn write_attribution(dir: &Path, model: &ModelEntry) -> std::io::Result<()> 
 mod tests {
     use super::*;
     use crate::speech::catalogue;
-
-    /// Serialises every test that reads or writes `CANDIDCUE_MODELS_DIR`.
-    ///
-    /// The override is process-wide and cargo runs a suite's tests on threads,
-    /// so the one test that SETS it was racing every test that resolves — and
-    /// the losers saw an override pointing at another test's temp directory.
-    /// It reproduced about one run in four, which is the worst frequency: rare
-    /// enough to look like an unrelated flake, common enough to keep costing.
-    ///
-    /// `resolve` reading the environment is the right production behaviour, so
-    /// the fix belongs here rather than in an API change nothing else wants.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// A poisoned lock still serialises. A panicking test must not cascade
-    /// into every other test in this module reporting the same failure.
-    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner())
-    }
 
     /// Sets `CANDIDCUE_MODELS_DIR` and puts back whatever was there before.
     ///
@@ -545,6 +576,10 @@ mod tests {
         let root = models_root(temp.path());
         let installed = model.install_path(&root);
         write_detectable_model(&installed);
+        // SEALED, because that is what makes the backup redundant. An unsealed
+        // target means the replacement never completed, and the backup is then
+        // the only proven copy — see `a_backup_is_kept_until_the_target_is_sealed`.
+        write_seal(&installed, model).unwrap();
         let staging = root.join(format!("{STAGING_PREFIX}{}-abc", model.install_dir));
         std::fs::create_dir_all(&staging).unwrap();
         let backup = backup_path(&root, model);

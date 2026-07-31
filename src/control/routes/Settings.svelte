@@ -175,9 +175,23 @@
   let modelActionBusy = $state(false);
   let confirmingModelDelete = $state(false);
 
+  /**
+   * How many progress events have landed.
+   *
+   * A snapshot request and the event stream race: a status call can be issued
+   * while the install is validating, the install can finish and emit its
+   * terminal event, and the older reply can then land on top and leave the
+   * panel stuck on a phase that is over. Rust is authoritative and its events
+   * are newer than any request that was already in flight, so a snapshot is
+   * discarded if anything arrived while it was pending.
+   */
+  let modelEventCount = $state(0);
+
   async function refreshModelStatus(): Promise<void> {
+    const seenBefore = modelEventCount;
     try {
-      modelStatus = await getSpeechModelStatus();
+      const status = await getSpeechModelStatus();
+      if (modelEventCount === seenBefore) modelStatus = status;
     } catch {
       // Leave whatever was last known rather than blanking the panel: an IPC
       // hiccup is not evidence the model went away.
@@ -246,6 +260,7 @@
     let stop: (() => void) | null = null;
     let disposed = false;
     onSpeechModelProgress((status) => {
+      modelEventCount += 1;
       modelStatus = status;
       // A finished install changes what the engine can do, and only Rust knows
       // it finished. Only the ENGINE half is re-read: re-fetching the model
@@ -1708,15 +1723,17 @@
               {#if modelStatus.error}
                 <p class="hint-line">{modelStatus.error.message}</p>
               {/if}
-              <div class="model-actions">
-                <Button
-                  variant="primary"
-                  disabled={modelActionBusy}
-                  onclick={() => void runModelAction(startSpeechModelDownload)}
-                >
-                  Download ({formatBytes(modelStatus.downloadBytes)})
-                </Button>
-              </div>
+              {#if canDownload(modelStatus)}
+                <div class="model-actions">
+                  <Button
+                    variant="primary"
+                    disabled={modelActionBusy}
+                    onclick={() => void runModelAction(startSpeechModelDownload)}
+                  >
+                    Download ({formatBytes(modelStatus.downloadBytes)})
+                  </Button>
+                </div>
+              {/if}
             {/if}
 
             {#if modelActionError}
