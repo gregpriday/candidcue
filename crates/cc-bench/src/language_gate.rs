@@ -84,8 +84,26 @@ pub struct Threshold {
 }
 
 impl Threshold {
-    pub fn passes(&self, value: f64) -> bool {
+    /// Is this value even a possible measurement of this metric?
+    ///
+    /// Separate from [`Threshold::passes`] because a negative latency or a
+    /// 101% rate is not a language that follows badly — it is a result file
+    /// that does not mean what the gate thinks it means, and passing it
+    /// silently is worse than failing it. `%` rows are bounded; everything
+    /// else here is a duration, a distance or a count, none of which can be
+    /// negative.
+    pub fn plausible(&self, value: f64) -> bool {
         if !value.is_finite() {
+            return false;
+        }
+        match self.unit {
+            "%" => (0.0..=100.0).contains(&value),
+            _ => value >= 0.0,
+        }
+    }
+
+    pub fn passes(&self, value: f64) -> bool {
+        if !self.plausible(value) {
             return false;
         }
         match self.direction {
@@ -97,24 +115,47 @@ impl Threshold {
 
 /// The number of Tier B fixtures a language's core corpus must contain.
 ///
-/// Nine scripts across three TTS engines, which is the shape the English
-/// corpus already has. The count is fixed rather than a minimum because
-/// `dim_never` is an absolute count, not a rate: it means "runs where the
-/// display never caught up at all", and comparing 1-in-18 against 1-in-9 is
-/// not comparing anything. Diagnostic fixtures may exist alongside these (the
-/// English corpus carries three `fuzzy-follow` runs) but are excluded from
-/// scoring.
+/// Eight script families crossed with performance plans and three TTS engines,
+/// which is the shape the English corpus already has. The count is fixed rather
+/// than a minimum because `dim_never` is an absolute count, not a rate: it means
+/// "runs where the display never caught up at all", and comparing 1-in-18
+/// against 1-in-9 is not comparing anything. Diagnostic fixtures may exist
+/// alongside these (the English corpus carries three `fuzzy-follow` runs) but
+/// are excluded from scoring.
 pub const REQUIRED_CORE_RUNS: usize = 18;
 
-/// The script roles the corpus has to cover.
+/// The script families the corpus has to cover.
 ///
 /// A good score on an easy corpus is not evidence. These are the difficulty
-/// families the English fixtures already stratify across, and a language that
-/// only ever reads flowing prose has not been asked the hard questions —
-/// figures, names and repeated passages are where following actually breaks.
+/// families the English fixtures actually stratify across — read off
+/// `bench/runs-local`, not invented — and a language that only ever reads
+/// flowing prose has not been asked the hard questions: figures, names and
+/// repeated passages are where following breaks.
 pub const REQUIRED_SCRIPT_ROLES: &[&str] = &[
-    "prose", "product", "technical", "long-form", "figures", "brands", "names", "refrain", "huge",
+    "brands",
+    "figures",
+    "longform",
+    "names",
+    "product-update",
+    "refrain",
+    "starter",
+    "technical",
 ];
+
+/// Fixture families that are diagnostics rather than evidence.
+///
+/// `fuzzy-follow` exists to exercise the reversible dim frontier and is not
+/// part of the scored core; counting it would move the `live.dim_never`
+/// denominator.
+pub const DIAGNOSTIC_ROLES: &[&str] = &["fuzzy-follow"];
+
+/// The family a fixture belongs to.
+///
+/// Run directories are named `family__plan__engine` (`starter__retake__gemini`),
+/// so the family is the leading segment.
+pub fn role_of(run: &str) -> &str {
+    run.split("__").next().unwrap_or(run)
+}
 
 /// The bar itself.
 ///
@@ -162,9 +203,13 @@ pub const SHIP_BAR: &[Threshold] = &[
         english_baseline: 1.0,
         limit: 1.0,
         unit: "count",
-        why: "Runs where the display never caught up at all. An absolute \
-              count over the fixed core corpus, which is why the core size is \
-              fixed too.",
+        why: "WORDS the display never reached before the take ended, summed \
+              over the corpus — not runs. The limit is a near-zero absolute \
+              rather than a rate, deliberately: a raw word count does not \
+              scale cleanly between a corpus and its translation, so the only \
+              honest thing to say about it across languages is that it must \
+              essentially not happen. English scores 1 word across all 18 \
+              runs.",
     },
     Threshold {
         metric: "gate.unread_never_spoken",
@@ -362,21 +407,43 @@ pub fn metrics_of(result: &SuiteResult) -> BTreeMap<String, f64> {
 
 /// Judge a language against [`SHIP_BAR`].
 ///
-/// `core_runs` is how many scoring fixtures the corpus contributed; a corpus of
-/// the wrong size is rejected before any metric is read, because an absolute
-/// count like `dim_never` means nothing against a different denominator.
+/// `run_names` is every fixture the result scored, named
+/// `family__plan__engine`. The corpus is checked BEFORE any metric is read,
+/// because a number computed over the wrong fixtures is not a worse
+/// measurement — it is a measurement of something else.
 pub fn evaluate(
     language: &str,
     metrics: &BTreeMap<String, f64>,
-    core_runs: usize,
+    run_names: &[String],
 ) -> LanguageGateReport {
     let mut corpus_problems = Vec::new();
-    if core_runs != REQUIRED_CORE_RUNS {
+
+    let core: Vec<&String> = run_names
+        .iter()
+        .filter(|r| !DIAGNOSTIC_ROLES.contains(&role_of(r)))
+        .collect();
+
+    if core.len() != REQUIRED_CORE_RUNS {
         corpus_problems.push(format!(
-            "corpus has {core_runs} scoring runs; the bar is defined over exactly \
-             {REQUIRED_CORE_RUNS} (nine scripts across three TTS engines), and an \
-             absolute count like live.dim_never does not transfer between \
-             denominators"
+            "corpus has {} scoring runs; the bar is defined over exactly \
+             {REQUIRED_CORE_RUNS}, and an absolute count like live.dim_never does \
+             not transfer between denominators",
+            core.len()
+        ));
+    }
+
+    let present: std::collections::BTreeSet<&str> =
+        core.iter().map(|r| role_of(r)).collect();
+    let missing: Vec<&str> = REQUIRED_SCRIPT_ROLES
+        .iter()
+        .copied()
+        .filter(|role| !present.contains(role))
+        .collect();
+    if !missing.is_empty() {
+        corpus_problems.push(format!(
+            "corpus does not cover {}; a good score on an easy corpus is not \
+             evidence, and figures/names/refrain are where following breaks",
+            missing.join(", ")
         ));
     }
 
@@ -393,9 +460,13 @@ pub fn evaluate(
                         threshold.metric
                     ),
                 ),
-                Some(v) if !v.is_finite() => (
+                Some(v) if !threshold.plausible(v) => (
                     false,
-                    format!("{} is NaN, which is not a measurement", threshold.metric),
+                    format!(
+                        "{} = {v} is not a possible measurement of a {} — the \
+                         result file is wrong, not the language",
+                        threshold.metric, threshold.unit
+                    ),
                 ),
                 Some(v) => {
                     let passed = threshold.passes(v);
@@ -438,9 +509,43 @@ mod tests {
             .collect()
     }
 
+    /// The shape of the real English corpus: 18 scoring runs spread across
+    /// every required family, plus the three `fuzzy-follow` diagnostics that
+    /// must NOT be counted into the core.
+    fn english_corpus() -> Vec<String> {
+        let mut runs: Vec<String> = vec![
+            "brands__exact__xai",
+            "figures__exact__qwen",
+            "figures__pauses__gemini",
+            "longform__intro_then_end__qwen",
+            "names__exact__xai",
+            "names__names_cold_jump__gemini",
+            "product-update__exact__qwen",
+            "product-update__intro_then_end__xai",
+            "product-update__viewport_start__gemini",
+            "refrain__exact__gemini",
+            "refrain__refrain_second__qwen",
+            "starter__adlib_return__xai",
+            "starter__exact__gemini",
+            "starter__long_pauses__gemini",
+            "starter__retake__gemini",
+            "starter__skip_forward__qwen",
+            "technical__exact__qwen",
+            "technical__pauses__xai",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(runs.len(), REQUIRED_CORE_RUNS);
+        for engine in ["gemini", "qwen", "xai"] {
+            runs.push(format!("fuzzy-follow__fuzzy_voice__{engine}"));
+        }
+        runs
+    }
+
     #[test]
     fn english_baselines_clear_their_own_bar() {
-        let report = evaluate("en", &english_baseline_metrics(), REQUIRED_CORE_RUNS);
+        let report = evaluate("en", &english_baseline_metrics(), &english_corpus());
         assert!(
             report.passed(),
             "the measured English numbers must pass the bar they anchor:\n{}",
@@ -456,7 +561,7 @@ mod tests {
             .iter()
             .map(|t| (t.metric.to_string(), t.limit))
             .collect();
-        let report = evaluate("xx", &metrics, REQUIRED_CORE_RUNS);
+        let report = evaluate("xx", &metrics, &english_corpus());
         assert!(report.passed(), "{}", report.render());
     }
 
@@ -473,7 +578,7 @@ mod tests {
             };
             metrics.insert(threshold.metric.to_string(), breach);
 
-            let report = evaluate("xx", &metrics, REQUIRED_CORE_RUNS);
+            let report = evaluate("xx", &metrics, &english_corpus());
             assert!(
                 !report.passed(),
                 "{} at {breach} should fail a limit of {}",
@@ -497,7 +602,7 @@ mod tests {
         for threshold in SHIP_BAR {
             let mut metrics = english_baseline_metrics();
             metrics.remove(threshold.metric);
-            let report = evaluate("xx", &metrics, REQUIRED_CORE_RUNS);
+            let report = evaluate("xx", &metrics, &english_corpus());
             assert!(
                 !report.passed(),
                 "a result missing {} must not pass",
@@ -516,11 +621,52 @@ mod tests {
         for threshold in SHIP_BAR {
             let mut metrics = english_baseline_metrics();
             metrics.insert(threshold.metric.to_string(), f64::NAN);
-            let report = evaluate("xx", &metrics, REQUIRED_CORE_RUNS);
+            let report = evaluate("xx", &metrics, &english_corpus());
             assert!(!report.passed(), "NaN {} must not pass", threshold.metric);
         }
         assert!(!SHIP_BAR[0].passes(f64::NAN));
         assert!(!SHIP_BAR[0].passes(f64::INFINITY));
+    }
+
+    /// A value that cannot be a measurement of its own metric means the result
+    /// file is wrong, and a wrong file must not read as a pass.
+    #[test]
+    fn impossible_values_are_rejected_even_when_they_are_on_the_good_side() {
+        for threshold in SHIP_BAR {
+            // Negative durations, distances and counts.
+            let mut metrics = english_baseline_metrics();
+            metrics.insert(threshold.metric.to_string(), -1.0);
+            assert!(
+                !evaluate("xx", &metrics, &english_corpus()).passed(),
+                "{} = -1 must not pass, even though it is 'better' than a \
+                 ceiling",
+                threshold.metric
+            );
+
+            // Rates outside 0..=100.
+            if threshold.unit == "%" {
+                for bogus in [101.0, 1000.0] {
+                    let mut metrics = english_baseline_metrics();
+                    metrics.insert(threshold.metric.to_string(), bogus);
+                    assert!(
+                        !evaluate("xx", &metrics, &english_corpus()).passed(),
+                        "{} = {bogus}% is not a rate",
+                        threshold.metric
+                    );
+                }
+            }
+        }
+        assert!(!SHIP_BAR[0].plausible(f64::NEG_INFINITY));
+        assert!(!SHIP_BAR[0].plausible(f64::INFINITY));
+    }
+
+    /// An empty result is the degenerate case of a missing metric, and the
+    /// contract is worth stating rather than inferring.
+    #[test]
+    fn an_empty_result_fails_every_row() {
+        let report = evaluate("xx", &BTreeMap::new(), &english_corpus());
+        assert!(!report.passed());
+        assert_eq!(report.failures().count(), SHIP_BAR.len());
     }
 
     /// A corpus of the wrong size invalidates the numbers rather than failing
@@ -528,20 +674,97 @@ mod tests {
     #[test]
     fn a_corpus_of_the_wrong_size_is_not_evidence() {
         let metrics = english_baseline_metrics();
-        for runs in [0, 9, 17, 19, 21] {
-            let report = evaluate("xx", &metrics, runs);
+        let full = english_corpus();
+        for take in [0, 9, 17] {
+            let runs: Vec<String> = full.iter().take(take).cloned().collect();
+            let report = evaluate("xx", &metrics, &runs);
             assert!(
                 !report.passed(),
-                "{runs} scoring runs must not produce a passing gate"
+                "{take} scoring runs must not produce a passing gate"
             );
             assert!(
                 !report.corpus_problems.is_empty(),
-                "{runs} runs should be reported as a corpus problem, not a metric failure"
+                "{take} runs should be a corpus problem, not a metric failure"
             );
         }
-        // And the three fuzzy diagnostics in the English corpus must not be
-        // counted into the core, or the denominator drifts.
-        assert_eq!(REQUIRED_CORE_RUNS, 18);
+
+        // One run too many is equally not the corpus the bar is defined over.
+        let mut extra = full.clone();
+        extra.push("starter__exact__qwen".into());
+        assert!(!evaluate("xx", &metrics, &extra).passed());
+    }
+
+    /// The diagnostics must not be counted into the core, or `dim_never`'s
+    /// denominator drifts and the whole absolute-count argument collapses.
+    #[test]
+    fn fuzzy_follow_diagnostics_are_excluded_from_the_core() {
+        let metrics = english_baseline_metrics();
+
+        // The real corpus is 21 directories, of which 3 are diagnostics.
+        assert_eq!(english_corpus().len(), REQUIRED_CORE_RUNS + 3);
+        assert!(evaluate("en", &metrics, &english_corpus()).passed());
+
+        // Without the diagnostics it is still exactly the core, and still
+        // passes — which is what "excluded" has to mean.
+        let core_only: Vec<String> = english_corpus()
+            .into_iter()
+            .filter(|r| role_of(r) != "fuzzy-follow")
+            .collect();
+        assert_eq!(core_only.len(), REQUIRED_CORE_RUNS);
+        assert!(evaluate("en", &metrics, &core_only).passed());
+    }
+
+    /// The check that makes `REQUIRED_SCRIPT_ROLES` load-bearing rather than a
+    /// `pub const` sitting next to a README claim.
+    #[test]
+    fn a_corpus_missing_a_difficulty_family_is_not_evidence() {
+        let metrics = english_baseline_metrics();
+        for role in REQUIRED_SCRIPT_ROLES {
+            // Drop one family and backfill the count from another, so the ONLY
+            // thing wrong is coverage.
+            let mut runs: Vec<String> = english_corpus()
+                .into_iter()
+                .filter(|r| role_of(r) != *role)
+                .collect();
+            // Backfill from a family that is NOT the one under test, or the
+            // filler would put the dropped family straight back.
+            let filler = REQUIRED_SCRIPT_ROLES
+                .iter()
+                .find(|r| *r != role)
+                .expect("more than one required family");
+            while runs
+                .iter()
+                .filter(|r| !DIAGNOSTIC_ROLES.contains(&role_of(r)))
+                .count()
+                < REQUIRED_CORE_RUNS
+            {
+                runs.push(format!("{filler}__filler_{}__gemini", runs.len()));
+            }
+
+            let report = evaluate("xx", &metrics, &runs);
+            assert!(
+                !report.passed(),
+                "a corpus with no {role} fixture must not pass — a good score on \
+                 an easy corpus is not evidence"
+            );
+            assert!(
+                report
+                    .corpus_problems
+                    .iter()
+                    .any(|p| p.contains(role)),
+                "the report should name the missing family {role}"
+            );
+        }
+    }
+
+    #[test]
+    fn role_is_the_leading_segment_of_a_run_name() {
+        assert_eq!(role_of("starter__retake__gemini"), "starter");
+        assert_eq!(role_of("product-update__exact__qwen"), "product-update");
+        assert_eq!(role_of("fuzzy-follow__fuzzy_voice__xai"), "fuzzy-follow");
+        // Degenerate shapes must not panic.
+        assert_eq!(role_of("bare"), "bare");
+        assert_eq!(role_of(""), "");
     }
 
     /// The non-gating list is a decision, so it must not silently overlap the
@@ -641,7 +864,7 @@ mod tests {
     fn the_rendered_report_names_what_failed_and_why() {
         let mut metrics = english_baseline_metrics();
         metrics.insert("live.ahead_worst".into(), 9.0);
-        let report = evaluate("fr", &metrics, REQUIRED_CORE_RUNS);
+        let report = evaluate("fr", &metrics, &english_corpus());
         let rendered = report.render();
         assert!(rendered.contains("live.ahead_worst"));
         assert!(rendered.contains("FAIL"));

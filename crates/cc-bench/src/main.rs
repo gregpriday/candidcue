@@ -930,12 +930,42 @@ fn main() -> anyhow::Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("--tier-c <result.json> required"))?,
             )?)?;
 
+            // The two tiers use disjoint metric prefixes today (`live.*`,
+            // `forms.*`, `safety.*` against `band.*`, `gate.*`, `outcome.*`,
+            // `recover.*`, `time.*`), so merging them is safe. It is not
+            // safe BY CONSTRUCTION, though, and a collision would silently
+            // judge a Tier B threshold against a Tier C value — so refuse one
+            // rather than let the last writer win.
+            // The bar's Tier C numbers were measured on the as-shipped rig.
+            // A whole-sweep result averages seven layouts and a corridor the
+            // product does not have, so it is not the same measurement.
+            //
+            // This catches the wrong LAYOUT set. It cannot catch a 60 Hz run
+            // made with a non-zero `focus_lead_atoms`, because `Layout` is not
+            // serialised into the result — see bench/README.md, "Known gaps".
+            let layouts: Vec<&String> = tier_c.by_layout.keys().collect();
+            if layouts != vec![&"60hz".to_string()] {
+                anyhow::bail!(
+                    "Tier C evidence must be the as-shipped rig alone \
+                     (--layouts 60hz --focus-lead 0); this result carries {:?}",
+                    layouts
+                );
+            }
+
             let mut metrics = language_gate::metrics_of(&tier_b);
             for entry in &tier_c.table {
+                if metrics.contains_key(&entry.name) {
+                    anyhow::bail!(
+                        "{} is emitted by BOTH Tier B and Tier C; the gate cannot \
+                         tell which one a threshold means",
+                        entry.name
+                    );
+                }
                 metrics.insert(entry.name.clone(), entry.value);
             }
 
-            let report = language_gate::evaluate(&language, &metrics, tier_b.runs.len());
+            let runs: Vec<String> = tier_b.runs.iter().map(|r| r.run.clone()).collect();
+            let report = language_gate::evaluate(&language, &metrics, &runs);
             print!("{}", report.render());
             if !report.passed() {
                 anyhow::bail!(

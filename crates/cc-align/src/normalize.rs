@@ -253,7 +253,9 @@ fn reorder_currency(atoms: &mut [String], profile: &NormalizationProfile) {
         if !atoms[i - 1].starts_with(|c: char| c.is_ascii_digit()) {
             continue;
         }
-        if profile.currency_units.contains(&atoms[i].as_str()) && is_scale_word(&atoms[i + 1]) {
+        if profile.currency_units.contains(&atoms[i].as_str())
+            && profile.scale_words.contains(&atoms[i + 1].as_str())
+        {
             atoms.swap(i, i + 1);
         }
     }
@@ -328,15 +330,12 @@ fn split_word(raw: &str, profile: &NormalizationProfile, out: &mut Vec<String>) 
                 percent = true;
                 None
             }
-            _ if profile
-                .currency_symbols
-                .iter()
-                .any(|(symbol, _)| *symbol == c) =>
-            {
+            // Last symbol in a token wins, as it always has.
+            _ if profile.currency_symbols.iter().any(|(s, _)| *s == c) => {
                 currency = profile
                     .currency_symbols
                     .iter()
-                    .find(|(symbol, _)| *symbol == c)
+                    .find(|(s, _)| *s == c)
                     .map(|(_, word)| *word);
                 None
             }
@@ -369,8 +368,10 @@ fn split_word(raw: &str, profile: &NormalizationProfile, out: &mut Vec<String>) 
 
     // `%` is one atom in English and two in French and Spanish, so the profile
     // supplies a slice rather than a word.
-    for word in profile.percent.iter().filter(|_| percent) {
-        out.push((*word).into());
+    if percent {
+        for word in profile.percent {
+            out.push((*word).into());
+        }
     }
     if let Some(unit) = currency {
         out.push(unit.into());
@@ -1007,42 +1008,113 @@ mod tests {
         assert!(!is_stopword("teleprompter"));
     }
 
-    /// The English constants moved out of this file and into a profile. This
-    /// is the check that the move was a move and not an edit — every rule the
-    /// profile now owns, exercised through the wrapper that predates it.
+    /// The English constants moved out of this file and into a profile, and
+    /// these are the atoms they must still produce.
     ///
-    /// It is worth more than it looks. The benchmark's English baselines
-    /// (`ahead_worst` 6.700, `within5` 94.03) were measured against the old
-    /// constants, and they only remain evidence for anything if these two
-    /// paths agree.
+    /// Written out in full ON PURPOSE. The obvious version of this test —
+    /// asserting `canonical_atoms(t) == canonical_atoms_for(English, t)` — is
+    /// worthless, because the wrapper simply CALLS the profile version: it
+    /// compares a function to itself and would pass just as happily if every
+    /// filler, unit and currency word had been changed. A test that cannot
+    /// fail is worse than no test, because it implies coverage that is not
+    /// there.
+    ///
+    /// The benchmark's English baselines (`ahead_worst` 6.700, `within5`
+    /// 94.03, `gate.unread_never_spoken` 2.903) were all measured against the
+    /// old constants. They remain evidence for anything only while these atoms
+    /// are exactly these atoms.
     #[test]
-    fn the_english_wrapper_and_the_english_profile_agree() {
-        let samples = [
-            "Hello, World!",
-            "It's a $2.4 million round, up 12.5% from 1,000 last year.",
-            "We ship at 24kHz with 250ms of latency over 5km.",
-            "R&D at AT&T on the 2nd and 21st.",
-            "Nineteen eighty four, forty two, one hundred and five.",
-            "She can't and won't, so I'm going to.",
-            "um so like the presenter said Saoirse and Worcestershire",
-            "£50 and €20 and $12 million",
+    fn english_still_produces_the_atoms_the_baselines_were_measured_on() {
+        // One case per rule the profile now owns.
+        let cases: &[(&str, &[&str])] = &[
+            // segmentation + punctuation
+            ("Hello, World!", &["hello", "world"]),
+            // currency symbol, decimal point, grouping comma, percent, and the
+            // scale-word reordering all in one line
+            (
+                "It's a $2.4 million round, up 12.5% from 1,000.",
+                &[
+                    "it", "is", "a", "2.4", "million", "dollars", "round", "up",
+                    "12.5", "percent", "from", "1000",
+                ],
+            ),
+            // unit words, spelled out the way they are said
+            (
+                "24kHz at 250ms over 5km",
+                &["24", "kilohertz", "at", "250", "milliseconds", "over", "5", "kilometres"],
+            ),
+            // ampersand as a spoken word
+            ("R&D at AT&T", &["r", "and", "d", "at", "at", "and", "t"]),
+            // Ordinal digits. `21st` expands to "twenty first" and then the
+            // spelled-number pass folds the "twenty" to `20`, because it is
+            // not followed by another number word. Ungainly, and correct
+            // where it counts: a recogniser writing "twenty first" lands on
+            // exactly the same two atoms, which is the entire point of
+            // normalising both sides through one pipeline.
+            ("the 2nd and the 21st", &["the", "second", "and", "the", "20", "first"]),
+            // spelled-number ITN, including the year join
+            ("nineteen eighty four", &["1984"]),
+            ("forty two", &["42"]),
+            ("one hundred and five", &["105"]),
+            ("twelve point five", &["12.5"]),
+            // contractions, both table and suffix rules
+            ("She can't and won't", &["she", "can", "not", "and", "will", "not"]),
+            ("I'm going to, they've gone", &["i", "am", "going", "to", "they", "have", "gone"]),
+            // the other two currencies
+            ("£50 and €20", &["50", "pounds", "and", "20", "euros"]),
         ];
-        for text in samples {
+
+        for (text, expected) in cases {
             assert_eq!(
                 canonical_atoms(text),
-                canonical_atoms_for(AlignmentLanguage::English, text),
-                "wrapper and profile disagree on {text:?}"
+                *expected,
+                "English normalisation changed for {text:?} — if this is \
+                 deliberate, every Tier B and Tier C baseline needs re-measuring"
             );
         }
     }
 
-    /// A language whose phonetic policy is off produces empty keys, and an
-    /// empty key never matches anything — including another empty one. That is
-    /// what makes [`RuleDisposition::SafeEmpty`] safe: the relation switches
-    /// off on both sides together, so nothing that used to match becomes a
-    /// mismatch.
+    /// The English profile's data, asserted directly.
+    ///
+    /// The atom test above covers the rules that fire on text; this covers the
+    /// lists themselves, so silently dropping a filler or a stopword is caught
+    /// even though no single sentence would reveal it.
     #[test]
-    fn a_disabled_phonetic_policy_yields_keys_that_never_match() {
+    fn the_english_profile_still_holds_the_constants_it_replaced() {
+        let p = AlignmentLanguage::English.profile();
+
+        assert_eq!(
+            p.fillers,
+            ["um", "uh", "uhm", "erm", "er", "ah", "hm", "hmm", "mm", "mhm"]
+        );
+        assert_eq!(p.stopwords.len(), 89, "the stopword list changed size");
+        for word in ["the", "a", "and", "of", "to", "is", "not", "me"] {
+            assert!(p.is_stopword(word), "{word} must still be a stopword");
+        }
+        // The words the original list deliberately EXCLUDED, because they are
+        // real script words.
+        for word in ["like", "presenter", "so"] {
+            assert!(!p.is_filler(word), "{word} must not be a filler");
+        }
+
+        assert_eq!(p.currency_units, ["dollars", "pounds", "euros"]);
+        assert_eq!(p.percent, ["percent"]);
+        assert_eq!(p.unit_words.len(), 14);
+        assert_eq!(p.ampersand, Some("and"));
+        assert!(p.contractions && p.spelled_numbers && p.ordinals);
+    }
+
+    /// Why switching the phonetic relation off is safe.
+    ///
+    /// Named for what it actually establishes. It does NOT exercise
+    /// [`PhoneticPolicy::Disabled`] end to end, because no language selects
+    /// that policy yet — English is the only profile, and it encodes. What it
+    /// does establish is the property the `SafeEmpty` disposition rests on:
+    /// an empty key is inert in BOTH directions, so when a future profile
+    /// switches the relation off, script and transcript stop producing keys
+    /// together and nothing that used to match becomes a mismatch.
+    #[test]
+    fn an_empty_phonetic_key_is_inert_in_both_directions() {
         let profile = AlignmentLanguage::English.profile();
         assert_eq!(profile.phonetics, PhoneticPolicy::EnglishSkeleton);
 
@@ -1055,11 +1127,12 @@ mod tests {
             "worstushier"
         )));
 
-        // And the empty key is inert in both directions.
         let empty = PhoneticKey::default();
         assert!(empty.is_empty());
         assert!(!empty.matches(&key));
         assert!(!key.matches(&empty));
+        // Including against another empty one — two words the relation has
+        // given up on are not thereby evidence that they sound alike.
         assert!(!empty.matches(&empty));
     }
 

@@ -170,10 +170,13 @@ pub struct AudioSettings {
     pub transcription_model: String,
     /// BCP-47 tag, e.g. `en-US`.
     ///
-    /// Honoured when the selected recogniser transcribes it and repaired when
-    /// it does not — which is a question about the model, not a constant. The
-    /// shipped bundle is bilingual (`zh-en`), a fact the code denied for long
-    /// enough to be worth stating here.
+    /// Honoured when this build can FOLLOW it and repaired when it cannot,
+    /// which takes two questions rather than a constant: the selected
+    /// recogniser has to transcribe it and the alignment engine has to have a
+    /// normalisation profile for it. Both are facts about the build, and they
+    /// do not currently give the same answer — the shipped bundle is bilingual
+    /// (`zh-en`, a fact the code denied for long enough to be worth stating
+    /// here), while the engine knows only English. See `migrate_in_place`.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
@@ -639,6 +642,35 @@ mod tests {
             settings.audio.language = kept.to_string();
             migrate_in_place(&mut settings);
             assert_eq!(settings.audio.language, kept, "{kept} must survive");
+        }
+    }
+
+    /// The engine half of the gate resolves a tag rather than matching a
+    /// prefix, which is a deliberate tightening: these all begin with `en` and
+    /// survived the old check, but none is a BCP-47 tag.
+    #[test]
+    fn a_language_that_is_not_a_tag_is_normalised_even_when_it_looks_english() {
+        for sloppy in ["english", "eng", "EN GB"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = sloppy.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(
+                settings.audio.language,
+                default_language(),
+                "{sloppy} is not a tag the recogniser can be handed"
+            );
+        }
+        // Case and separator variation IS still English, though — and so is a
+        // tag with a subtag nobody recognises. `from_bcp47` resolves the
+        // PRIMARY subtag; it is not a BCP-47 validator, and a region it has
+        // never heard of does not make the language less English. It is also
+        // what the model half is then asked about, so an underscore the
+        // recogniser's own tag matching would have choked on never reaches it.
+        for ok in ["EN-US", "en_GB", "en-gibberish-"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = ok.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(settings.audio.language, ok, "{ok} must survive");
         }
     }
 

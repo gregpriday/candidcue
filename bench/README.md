@@ -549,25 +549,31 @@ the problem; this section holds the bar.
 
 ### The normaliser, rule by rule
 
-`LanguageRule` enumerates every rule whose behaviour depends on the language,
-and `RuleDisposition` records what leaving it English costs. A profile that
-omits a `MUST_REPLACE` rule fails `every_language_answers_every_must_replace_rule`,
-so this table cannot drift away from the code without a test going red.
+`LanguageRule` enumerates the rules known to be language-sensitive, and
+`RuleDisposition` records what leaving each one English costs. A profile that
+omits a `MUST_REPLACE` rule fails `every_language_answers_every_must_replace_rule`.
+
+Two honest limits on that guarantee. It checks that a profile SUPPLIES data,
+not that the data is linguistically right — a French profile with one nonsense
+filler passes. And a rule added to the normaliser but never listed here is
+simply missed; `is_scale_word` was exactly that until review caught it. The
+contract makes forgetting harder, not impossible.
 
 | Disposition | Rules | What it means |
 |---|---|---|
-| `SHARED` | segmentation | Correct unchanged for all four target languages. Whitespace splitting is why the first set is Latin-script; CJK needs a real tokenizer and is a much larger job. |
-| `MUST_REPLACE` | fillers, stopwords, ampersand, decimal syntax, currency symbols, currency order, percent, unit words | Leaving these English is not inert. |
+| `SHARED` | segmentation | Assumed correct unchanged for all four target languages — asserted from the writing systems, not measured. Whitespace splitting is why the first set is Latin-script; CJK needs a real tokenizer and is a much larger job. |
+| `MUST_REPLACE` | fillers, stopwords, ampersand, decimal syntax, currency symbols, currency order, scale words, percent, unit words | Leaving these English is not inert. |
 | `SAFE_EMPTY` | phonetics | Switches off on both sides together, so nothing that matched becomes a mismatch. |
 | `INERT_RECALL_GAP` | contractions, spelled numbers, ordinals | Fail safe — no false merges — but the equivalence they bought is gone. |
 
 Three of the `MUST_REPLACE` rules are worth reading twice, because they are not
 word lists and the obvious reading of "replace the English lists" misses them:
 
-- **Decimal syntax.** English groups with `,` and points with `.`; French,
-  German and Spanish do the opposite. Left alone, a German script's `12,5`
+- **Decimal syntax.** English groups with `,` and points with `.`; German and
+  Spanish use the comma as the decimal mark, and French uses the comma for
+  decimals and a space for grouping. Left alone, a German script's `12,5`
   normalises to the atom `125`. That is not a missed match, it is the wrong
-  number.
+  number. (French grouping is a known gap — see below.)
 - **Unit words.** The abbreviations are shared, the spelled forms are English.
   Left alone, a French script produces the atom `milliseconds`, which the reader
   will never say.
@@ -580,7 +586,9 @@ evidence for the observe/confirm/jump gates — a take whose `le`/`la`/`de` all
 carry full locating weight is a different engine, and false anchoring on a
 frequent function word is what it costs.
 
-**Phonetics starts disabled outside English**, and the reason is measurement
+**Phonetics is intended to start disabled outside English** — an intention, not
+a demonstrated behaviour: English is the only profile that exists, so the
+`Disabled` branch has never run on a real language. The reason is measurement
 rather than taste: Double Metaphone was tried against the in-house consonant
 skeleton and measurably lost, so there is no reason to assume a per-language
 phonetic algorithm wins either — it has to be shown on that language's own
@@ -593,16 +601,20 @@ is an English behaviour change bought for an unmeasured non-English benefit.
 
 ### The minimum corpus
 
-Nine scripts across three TTS engines — **18 scoring fixtures**, the shape the
-English corpus already has. The count is fixed rather than a floor because
-`live.dim_never` is an absolute count, and 1-in-18 against 1-in-9 is not a
-comparison. Diagnostic fixtures may sit alongside the core (English carries
-three `fuzzy-follow` runs) but are excluded from scoring.
+**18 scoring fixtures**, the shape the English corpus already has: eight script
+families crossed with performance plans (`exact`, `pauses`, `retake`,
+`skip_forward`, `adlib_return`, `viewport_start`, …) and rendered by three TTS
+engines, named `family__plan__engine`. The count is fixed rather than a floor
+because `live.dim_never` is an absolute count, and 1-in-18 against 1-in-9 is not
+a comparison. Diagnostic fixtures may sit alongside the core — English carries
+three `fuzzy-follow` runs, so `bench/runs-local` has 21 directories for an
+18-run core — but are excluded from scoring.
 
-The nine scripts must cover the difficulty families the English set stratifies
-across — prose, product, technical, long-form, figures, brands, names, refrain,
-huge — because a good score on an easy corpus is not evidence. Figures, names
-and repeated passages are where following actually breaks.
+The eight families are `brands`, `figures`, `longform`, `names`,
+`product-update`, `refrain`, `starter` and `technical`, and all eight must be
+present: a good score on an easy corpus is not evidence, and figures, names and
+repeated passages are where following actually breaks. `gate-language` reads the
+families off the run names and refuses a corpus that is missing one.
 
 ```bash
 # 1. Render the corpus. Both sides of any A/B must come from ONE fresh workdir:
@@ -627,6 +639,12 @@ English baselines, checked by `cc-bench gate-language`, which exits non-zero on
 failure. A language is not required to match English — different model, different
 recording — but it may not be materially worse on the axes that decide whether a
 presenter can use it.
+
+What the command actually checks: the corpus is 18 scoring runs covering all
+eight families, the Tier C evidence is the lone `60hz` layout, every gated metric
+is present and a possible measurement, and each clears its limit. What it does
+**not** check is in "Known gaps" below — most importantly, it takes the operator's
+word for which language produced the results.
 
 <!-- BEGIN LANGUAGE GATE TABLE (generated — see language_gate::render_bar_markdown) -->
 | Tier | Metric | English | Ship bar |
@@ -655,7 +673,8 @@ and inversely related to following past `blank_penalty` 3.0), and `live.freeze`
 
 ```bash
 # Tier C must be the as-shipped layout, or it scores a corridor the product
-# does not have.
+# does not have. The gate rejects any other layout SET; the focus-lead value
+# itself is not recoverable from the saved result (see Known gaps).
 cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-fr --label fr --out /tmp/fr-b.json
 cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-fr --layouts 60hz --focus-lead 0 \
   --label fr --out /tmp/fr-c.json
@@ -664,13 +683,32 @@ cargo run --release -p cc-bench -- gate-language --label fr --tier-b /tmp/fr-b.j
 
 ### Known gaps, written down rather than fixed
 
-- `compute_weight` in `script.rs` measures word length in UTF-8 **bytes**, so an
-  accented word reads as longer than it is and can cross the `>= 8` weight
-  threshold early. Changing it would move English weights, so it is deferred
-  rather than silently altered here.
-- Tier A's scenarios, ad-lib bank and verbaliser are English. A new language's
-  evidence is captured Tier B plus rendered Tier C; do not claim Tier A coverage
-  for it.
+These are the things #157 will hit. They are listed because the alternative —
+building speculative machinery for a language nobody has measured — is how the
+`focus_lead_atoms` corridor ended up in the harness and not in the product.
+
+- **Currency and unit expansions are one atom each.** French says "millions
+  **de** dollars", so a faithful French profile needs an atom *sequence*. The
+  right shape is much easier to see with a French corpus in hand.
+- **The group separator is a single character**, and `canonical_atoms_for`
+  splits on whitespace before it is consulted. French `12 500` (space or
+  narrow no-break space) therefore cannot be expressed at all — it arrives as
+  two atoms.
+- **The gate does not verify which language produced its inputs.** `--label` is
+  free text and neither result embeds a language, so English results can be
+  labelled `fr`. Closing this means serialising the language into Tier B and
+  Tier C results.
+- **`focus_lead_atoms` is not verifiable from a saved Tier C result.** The gate
+  refuses anything other than a lone `60hz` layout, which catches a whole-sweep
+  run, but `Layout` is not serialised — so a 60 Hz run made with a non-zero
+  focus lead would pass. That matters: focus lead moves
+  `outcome.readable_availability` from 71.2% to 75.8%.
+- **`compute_weight` measures word length in UTF-8 bytes**, so an accented word
+  reads as longer than it is and can cross the `>= 8` threshold early. Changing
+  it would move English weights, so it is deferred rather than silently altered.
+- **Tier A is English** — its scenarios, ad-lib bank and verbaliser all are. A
+  new language's evidence is captured Tier B plus rendered Tier C; do not claim
+  Tier A coverage for it.
 - Nothing here is a substitute for a real take on real glass, which remains
   unautomatable on macOS.
 

@@ -106,6 +106,9 @@ pub enum LanguageRule {
     CurrencySymbols,
     /// Where the currency word lands relative to a scale word.
     CurrencyOrder,
+    /// The magnitude words a currency amount can carry — `million`,
+    /// `millions`, `Millionen`, `millones`.
+    ScaleWords,
     /// `%` rewritten as the word(s) that are spoken.
     Percent,
     /// `24kHz` → `24 kilohertz`.
@@ -150,6 +153,7 @@ impl LanguageRule {
         LanguageRule::DecimalSyntax,
         LanguageRule::CurrencySymbols,
         LanguageRule::CurrencyOrder,
+        LanguageRule::ScaleWords,
         LanguageRule::Percent,
         LanguageRule::UnitWords,
         LanguageRule::Contractions,
@@ -190,6 +194,7 @@ impl LanguageRule {
             LanguageRule::DecimalSyntax => RuleDisposition::MustReplace,
             LanguageRule::CurrencySymbols => RuleDisposition::MustReplace,
             LanguageRule::CurrencyOrder => RuleDisposition::MustReplace,
+            LanguageRule::ScaleWords => RuleDisposition::MustReplace,
             LanguageRule::Percent => RuleDisposition::MustReplace,
             LanguageRule::UnitWords => RuleDisposition::MustReplace,
 
@@ -283,8 +288,22 @@ pub struct NormalizationProfile {
     /// Currency symbol → the word that is spoken for it.
     pub currency_symbols: &'static [(char, &'static str)],
     /// The spoken currency words, for the reordering rule.
+    ///
+    /// One atom each, which is a real limitation and not an oversight worth
+    /// discovering later: French says "millions DE dollars", so a faithful
+    /// French profile needs an atom SEQUENCE here. Recorded in
+    /// `bench/README.md` as a known gap rather than built speculatively — the
+    /// right shape is easier to see with a French corpus in hand than without.
     pub currency_units: &'static [&'static str],
     pub currency_order: CurrencyOrder,
+
+    /// The magnitude words an amount can carry.
+    ///
+    /// Needed by the currency reordering rule independently of the spelled
+    /// number grammar: `reorder_currency` has to recognise the scale word to
+    /// know where the unit belongs, and it runs whether or not a language has
+    /// a number grammar the engine can parse.
+    pub scale_words: &'static [&'static str],
 
     /// What `%` is read aloud as. More than one atom is normal outside English
     /// ("pour cent", "por ciento").
@@ -326,6 +345,7 @@ impl NormalizationProfile {
             LanguageRule::DecimalSyntax => self.decimal_separator != self.group_separator,
             LanguageRule::CurrencySymbols => !self.currency_symbols.is_empty(),
             LanguageRule::CurrencyOrder => !self.currency_units.is_empty(),
+            LanguageRule::ScaleWords => !self.scale_words.is_empty(),
             LanguageRule::Percent => !self.percent.is_empty(),
             LanguageRule::UnitWords => !self.unit_words.is_empty(),
 
@@ -379,6 +399,7 @@ static ENGLISH: NormalizationProfile = NormalizationProfile {
     currency_symbols: &[('$', "dollars"), ('£', "pounds"), ('€', "euros")],
     currency_units: &["dollars", "pounds", "euros"],
     currency_order: CurrencyOrder::UnitAfterScale,
+    scale_words: &["hundred", "thousand", "million", "billion"],
 
     percent: &["percent"],
 
@@ -486,7 +507,7 @@ mod tests {
         }
         assert_eq!(
             LanguageRule::ALL.len(),
-            13,
+            14,
             "a rule was added or removed; update the count and bench/README.md"
         );
     }
