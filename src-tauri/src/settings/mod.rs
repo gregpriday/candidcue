@@ -521,25 +521,9 @@ pub async fn update_settings(
     let mut base = serde_json::to_value(&current.value)
         .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
     merge_json(&mut base, &patch);
-    let mut merged: AppSettings = serde_json::from_value(base)
+    let merged: AppSettings = serde_json::from_value(base)
         .map_err(|e| AppError::invalid_input("Settings patch has an invalid shape.")
             .with_log(format!("settings patch deserialize: {e}")))?;
-    // Repaired on WRITE as well as on read.
-    //
-    // `get_settings` migrates the copy it hands back but does not persist the
-    // repair, so this used to be the one path that could put a value this
-    // build cannot honour into the database — and, worse, RETURN it. A patch
-    // setting `audio.language` to a tag no loadable recogniser serves was
-    // written, echoed to the frontend, adopted by its settings store, and only
-    // silently corrected the next time something read settings. The UI spent
-    // that whole window showing a language the app would not have followed in.
-    //
-    // `validate` cannot catch it: it checks the Appendix A numeric ranges, and
-    // whether a language is followable is a question about this build's model
-    // table rather than about the value's shape. Running the same repair here
-    // makes the two paths agree, and `repairing_twice_changes_nothing_the_
-    // second_time` already pins the idempotence this relies on.
-    migrate_in_place(&mut merged);
     validate(&merged)?;
 
     let json = serde_json::to_string(&merged)
