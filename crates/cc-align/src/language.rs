@@ -943,6 +943,13 @@ mod tests {
 
     /// Atoms are lowercased before anything is compared against these lists, so
     /// an uppercase entry is an entry that can never match.
+    ///
+    /// The keyed lists are held to the same bar for the same reason. A
+    /// `unit_words` abbreviation is compared by exact equality against an
+    /// already-lowercased atom, so `("KB", ...)` would never fire; and both it
+    /// and `currency_symbols` are looked up with `.find()`, so a duplicate key
+    /// is not an error but a shadow — the second entry simply never wins. Like
+    /// the multi-atom substitutions above, neither would fail loudly.
     #[test]
     fn every_word_list_is_lowercase_and_free_of_duplicates() {
         for lang in AlignmentLanguage::ALL {
@@ -969,6 +976,28 @@ mod tests {
                         "{lang:?} {name} lists {word:?} twice"
                     );
                 }
+            }
+            let mut abbrevs = std::collections::BTreeSet::new();
+            for (abbrev, _) in profile.unit_words {
+                assert_eq!(
+                    *abbrev,
+                    abbrev.to_lowercase(),
+                    "{lang:?} unit_words contains {abbrev:?}, which is not \
+                     lowercase and so can never match an atom"
+                );
+                assert!(
+                    abbrevs.insert(*abbrev),
+                    "{lang:?} unit_words lists {abbrev:?} twice; only the \
+                     first expansion can ever fire"
+                );
+            }
+            let mut symbols = std::collections::BTreeSet::new();
+            for (symbol, _) in profile.currency_symbols {
+                assert!(
+                    symbols.insert(*symbol),
+                    "{lang:?} currency_symbols lists {symbol:?} twice; only \
+                     the first spoken word can ever fire"
+                );
             }
         }
     }

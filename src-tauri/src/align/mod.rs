@@ -122,6 +122,13 @@ impl AlignmentState {
 
     /// Compile `tokens` and arm the engine against them.
     ///
+    /// The script is compiled as English, stated here rather than defaulted
+    /// into: this is the only entry point in this file that picks a language
+    /// without being told one, and it exists for tests and for callers that
+    /// have no setting to consult. Anything on the take path goes through
+    /// [`AlignmentState::start_in`] instead, carrying the language the setting
+    /// resolved to.
+    ///
     /// `label` is the take's SESSION generation — an identity echoed onto every
     /// snapshot, never a filter (see [`AlignmentSession`]). The session starts
     /// UNBOUND: it follows nothing until [`AlignmentState::bind_stream`] ties
