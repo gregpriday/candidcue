@@ -100,10 +100,12 @@
   .input:hover:not(:disabled) {
     border-color: var(--border-strong);
   }
-  /* Quiet focus: firmer border + surface shift only — no accent outline. */
+  /* Quiet focus: firmer border + surface shift. The inset edge that makes the
+     state carry at 3:1 comes from the central focus policy in tokens.css —
+     these two are the accompanying signal, not the whole of it, which is why
+     the outline is no longer suppressed here. */
   .input:focus,
   .input:focus-visible {
-    outline: none;
     border-color: var(--border-strong);
     background: var(--bg-elevated);
   }

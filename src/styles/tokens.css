@@ -138,8 +138,16 @@
   --grain-opacity: 0;
   --grain-url: none;
 
-  /* One keyboard-focus ring color, themed via --focus (refinement §3). */
+  /* One keyboard-focus ring color, themed via --focus (refinement §3). Worn
+     only by controls that opt in with `data-focus="control"` — see the focus
+     policy near the bottom of this file. */
   --focus-ring: var(--focus);
+
+  /* The modal scrim is the same dark veil in both themes: it exists to push the
+     page back, and a light veil over a light page does not. The value is the
+     studio canvas at 40%, but it is deliberately NOT `var(--bg-app)` — that
+     would flip to warm paper under the workspace theme. */
+  --dialog-scrim: rgba(15, 17, 21, 0.4);
 }
 
 /* ============================================================================
@@ -164,11 +172,15 @@
   --accent-wash: rgba(224, 138, 99, 0.08); /* selected radio/index wash */
   --bg-selected: rgba(224, 138, 99, 0.16);
 
-  /* Text */
+  /* Text. The two low-emphasis steps are pinned by the surface they can
+     actually land on: --bg-hover-surface (#242932) is the brightest thing
+     either sits over, and both clear 4.5:1 there (muted 5.16:1, faint 4.60:1).
+     The gap between them is small because it has to be — see the workspace
+     block for the full story. */
   --text-primary: #f5f6f8;
   --text-secondary: #a8afbc;
-  --text-muted: #858d9b;
-  --text-faint: #6b7280;
+  --text-muted: #929aaa;
+  --text-faint: #8991a0;
 
   /* Lines */
   --border: #303641;
@@ -184,11 +196,18 @@
   --accent-contrast: #241510;
   --accent-soft: #3a2018;
   --focus: #ec9d7a;
+  /* Neutral keyboard-focus edge for surfaces (rows, tiles, editors, panels).
+     3.98:1 against --bg-hover-surface, the brightest surface it sits inside,
+     so the state it reports clears SC 1.4.11 on its own. --border-strong is
+     only 1.86:1 there and cannot carry this. */
+  --focus-quiet: #7e8695;
   --success: #55b894;
   --success-soft: rgba(85, 184, 148, 0.16);
   --warning: #dea94d;
   --warning-soft: rgba(222, 169, 77, 0.16);
   --danger: #ef7168;
+  --danger-strong: #d95e56; /* filled-danger lip + hover */
+  --danger-contrast: var(--accent-contrast); /* 6.08:1 on --danger */
   --danger-soft: rgba(239, 113, 104, 0.16);
 
   /* Flat fills — no machined highlight, no gradient, no glow. */
@@ -257,8 +276,23 @@
 
   --text-primary: #18191d;
   --text-secondary: #5d626c;
-  --text-muted: #676b74; /* nudged darker so 12-13px text clears AA on chrome */
-  --text-faint: #868b94;
+  /*
+   * Muted and faint sit almost on top of each other, and that is the honest
+   * answer rather than an oversight.
+   *
+   * The surface that pins both is --bg-hover-chrome (#e8e3db): a sidebar row,
+   * a back control, a revision row all pass under the cursor, and faint text
+   * rides along (RevisionHistory's timestamps, Sidebar's version line). To
+   * clear 4.5:1 there a colour has to reach ~#61656e — which is DARKER than
+   * the old muted (#676b74, itself only 4.18:1 on that surface). Fixing faint
+   * alone would therefore have inverted the two steps, so muted moves with it.
+   *
+   * Three low-emphasis greys cannot stay visibly apart while all of them clear
+   * AA on the same warm hover surface. Correct ordering and readable text beat
+   * a decorative distinction nobody could safely rely on.
+   */
+  --text-muted: #5f636c; /* 4.71:1 on --bg-hover-chrome */
+  --text-faint: #61656e; /* 4.57:1 on --bg-hover-chrome */
 
   --border: #dedad3; /* decorative divider */
   --border-control: #c7c1b6; /* resting control outline — medium-light warm gray */
@@ -274,6 +308,11 @@
   --accent-soft: #f6e7df;
   --accent-wash: rgba(179, 90, 56, 0.05); /* 5% terracotta — selected radio/index */
   --focus: #b35a38;
+  /* Neutral keyboard-focus edge for surfaces. 3.48:1 against
+     --bg-hover-chrome, the darkest surface it sits inside, and 4.45:1 on white.
+     --border-strong is 3.01:1 on white but only 2.74:1 on the app canvas, so it
+     cannot be the focus signal. */
+  --focus-quiet: #7b7771;
   /* Status foregrounds are darkened from the source palette so 12-13px text on
      the translucent -soft fills clears WCAG AA (the lighter source hues sat
      ~3.8:1 on the warm canvas). */
@@ -282,6 +321,8 @@
   --warning: #7a5310;
   --warning-soft: rgba(154, 103, 22, 0.12);
   --danger: #a6342b;
+  --danger-strong: #8e2922; /* filled-danger lip + hover */
+  --danger-contrast: var(--accent-contrast); /* white, 6.67:1 on --danger */
   --danger-soft: rgba(185, 65, 56, 0.1);
 
   --highlight-edge: transparent;
@@ -376,16 +417,72 @@ html[data-presenting='true'] body {
   background: var(--selection);
 }
 
-/* A single calm keyboard-focus ring for SMALL interactive controls only —
-   exactly one treatment, so it never doubles with a component's own accent
-   border. Deliberately NOT extended to `[tabindex]`: large composite surfaces
-   (the source listbox, a sheet panel) carry tabindex, and an accent ring around
-   a whole surface looks wrong — those indicate focus with a quiet bg/border
-   shift instead (see CLAUDE.md "Focus indication"). Kept as `outline` (never
-   box-shadow) so panel overflow never clips it and dimensions never change. */
-:where(button, a, input, textarea, select):focus-visible {
+/* ============================================================================
+   FOCUS POLICY — opt IN to the accent ring, not out of it.
+
+   The house rule is that inputs, editors, panels and list rows indicate focus
+   with a quiet edge, never an accent ring; only small controls wear the ring.
+   This used to be spelled the other way round — every `button` got the ring and
+   each row/tile pattern had to remember to cancel it — which meant the rule held
+   only where somebody had remembered, and the screens built from raw `<button>`
+   rows and tiles simply did not.
+
+   CSS cannot tell a 32px icon button from a 240px monitor tile: both are
+   `<button>`, both may carry `aria-pressed`, and there is no selector for
+   "large". So the discrimination cannot be inferred — it has to be declared,
+   and the DEFAULT has to be the safe one. An unmarked button gets the quiet
+   edge; a genuine compact control opts in with `data-focus="control"`. Shared
+   components declare it once on behalf of every call site, so a new row pattern
+   is correct by construction and a route needs no edit to be correct.
+
+   Three markers, and they are mutually exclusive by construction so source
+   order never decides a winner:
+
+     data-focus="control"   small control — wears the accent ring
+     data-focus="surface"   non-native focusable surface (a div with a role)
+     data-focus="delegate"  focus is drawn by an ancestor (see ScriptCard)
+
+   Both treatments stay `outline` (never box-shadow) so panel overflow cannot
+   clip them and no dimension changes. The quiet edge is inset (a negative
+   offset) so it reads as the surface's own perimeter firming up rather than as
+   a ring drawn around it, and --focus-quiet carries >=3:1 against the surface
+   it sits on so the state clears SC 1.4.11 by itself.
+   ============================================================================ */
+
+/* Every native branch below is `:not([data-focus])`, so an element is claimed
+   EITHER by its tag (when it carries no marker) or by its marker — never by
+   both. All three rules have equal specificity, and equal specificity is
+   settled by source order; keeping the sets disjoint means order never gets a
+   say, so a future reshuffle of this block cannot silently change behaviour. */
+
+/* The quiet default. Checkboxes and radios are excluded because they are small
+   controls in their own right; the range input is excluded because its focus
+   lives on the thumb, below. */
+:where(
+  button:not([data-focus]),
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([data-focus]),
+  textarea:not([data-focus]),
+  select:not([data-focus]),
+  [data-focus='surface']
+):focus-visible {
+  outline: 2px solid var(--focus-quiet);
+  outline-offset: -2px;
+}
+
+/* The accent ring, by declaration only. */
+:where(
+  a:not([data-focus]),
+  input[type='checkbox']:not([data-focus]),
+  input[type='radio']:not([data-focus]),
+  [data-focus='control']
+):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* Focus is drawn by an ancestor — the child must not also draw it. */
+:where([data-focus='delegate']):focus-visible {
+  outline: none;
 }
 
 button {
@@ -431,8 +528,16 @@ input[type='range']::-webkit-slider-thumb {
 input[type='range']:hover::-webkit-slider-thumb {
   background: var(--accent-strong);
 }
-input[type='range']:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--focus);
+/* The range input is excluded from the policy above so the ring lands on the
+   thumb — the part that actually moves — rather than around the whole track.
+   `:not([data-focus])` for the same reason every branch up there has it: a
+   marked range would otherwise be rung twice, once by its marker and once
+   here. A range should not carry a marker at all — a marker does not turn the
+   focus styling off, it hands the element to the marker's own branch instead,
+   so `data-focus="control"` would drop the thumb ring and draw an accent ring
+   around the whole 20px track. */
+input[type='range']:not([data-focus]):focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* Dragging the thumb deepens it to the press accent — completing rest/hover/

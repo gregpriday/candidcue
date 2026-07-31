@@ -41,8 +41,20 @@
     <label class="label" for={uid}>{label}</label>
     <span class="value">{format(value)}</span>
   </div>
-  <input id={uid} type="range" {min} {max} {step} {value} {disabled} oninput={handleInput} />
-  {#if description}<p class="description">{description}</p>{/if}
+  <input
+    id={uid}
+    type="range"
+    {min}
+    {max}
+    {step}
+    {value}
+    {disabled}
+    aria-describedby={description ? `${uid}-description` : undefined}
+    oninput={handleInput}
+  />
+  <!-- Described BY id: an explanation rendered under the track is invisible to
+       a screen reader unless the control points at it. -->
+  {#if description}<p class="description" id="{uid}-description">{description}</p>{/if}
 </div>
 
 <style>

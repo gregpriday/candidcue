@@ -74,11 +74,82 @@
     window.addEventListener('keydown', onKeydown, true);
     return () => window.removeEventListener('keydown', onKeydown, true);
   });
+
+  /*
+   * Dismiss on a click of the scrim — but only a gesture that both BEGAN and
+   * ENDED on the scrim.
+   *
+   * `click` alone cannot tell a dismissing tap from the end of a drag, and
+   * checking `event.target` does not rescue it: when a press and a release land
+   * on different elements the browser targets the click at their nearest common
+   * ancestor, and for anything inside this dialog that ancestor IS the scrim.
+   * So `e.target === e.currentTarget` is true for BOTH directions of drag —
+   * selecting a line of the take summary and overshooting the panel, and
+   * pressing on the backdrop and releasing inside it. Neither is a dismissal,
+   * and the first one used to throw the dialog away with the selection still in
+   * hand.
+   *
+   * Both ends of the gesture are therefore recorded from the pointer events and
+   * the click only consults them. This is what Radix, React Aria and Ark all
+   * do. Two details that are easy to get wrong and silently lose the fix:
+   *
+   *   - touch and pen IMPLICITLY capture the pointer on the element that was
+   *     pressed, so without releasing that capture every `pointerup` would be
+   *     reported against the scrim no matter where the finger actually lifted,
+   *     and the reverse drag would dismiss again on exactly the devices where
+   *     dragging is most likely;
+   *   - the gesture is tied to one `pointerId`, so a second finger cannot
+   *     overwrite the first one's press, and one pointer's release can never
+   *     complete another's.
+   */
+  let gesturePointer: number | null = null;
+  let pressedScrim = false;
+  let releasedScrim = false;
+
+  function onScrimPointerDown(event: PointerEvent): void {
+    // Primary contact only: a right- or middle-press is not a dismissal, and it
+    // must not arm one either. A second finger mid-gesture is ignored.
+    if (event.button !== 0 || event.isPrimary === false) return;
+    if (gesturePointer !== null && gesturePointer !== event.pointerId) return;
+
+    const scrim = event.currentTarget as Element;
+    if (scrim.hasPointerCapture?.(event.pointerId)) scrim.releasePointerCapture(event.pointerId);
+
+    gesturePointer = event.pointerId;
+    pressedScrim = event.target === event.currentTarget;
+    releasedScrim = false;
+  }
+
+  function onScrimPointerUp(event: PointerEvent): void {
+    if (event.pointerId !== gesturePointer) return;
+    releasedScrim = event.target === event.currentTarget;
+  }
+
+  function forgetGesture(): void {
+    gesturePointer = null;
+    pressedScrim = false;
+    releasedScrim = false;
+  }
+
+  function onScrimClick(event: MouseEvent): void {
+    const dismissing = pressedScrim && releasedScrim;
+    // One press, one verdict: a stale `true` must never authorise a later click
+    // that had no press of its own (a keyboard-synthesised one, say).
+    forgetGesture();
+    if (dismissing && event.target === event.currentTarget) onclose?.();
+  }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
+  <div
+    class="scrim"
+    role="presentation"
+    onpointerdown={onScrimPointerDown}
+    onpointerup={onScrimPointerUp}
+    onpointercancel={forgetGesture}
+    onclick={onScrimClick}
+  >
     <div
       class="panel {size}"
       role="dialog"
@@ -105,7 +176,7 @@
     z-index: 100;
     display: grid;
     place-items: center;
-    background: rgba(15, 17, 21, 0.4);
+    background: var(--dialog-scrim);
     padding: var(--space-8);
     animation: scrim-in var(--dur-fast) var(--ease-out);
   }

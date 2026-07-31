@@ -62,6 +62,7 @@
   <button
     type="button"
     class="main"
+    data-focus="delegate"
     onclick={() => {
       // Select first: a caller may open by navigating away, and the selection is
       // what the library remembers for when the operator comes back.
@@ -128,12 +129,21 @@
     /* Card focus is a quiet edge shift, not an accent ring around a surface. */
     outline: none;
   }
-  .main:focus-visible {
-    outline: none;
-  }
+  /*
+   * Focus moves to the CARD edge, and it has to be visible enough to count.
+   *
+   * This used to shift the border to --border-control and lift the shadow —
+   * which is character-for-character what `.interactive:hover` already does, so
+   * a keyboard user got a state indistinguishable from "the mouse is somewhere
+   * near this", and at 1.79:1 against the white card it was under the 3:1 that
+   * a border-as-state-signal owes SC 1.4.11 anyway. The inset ring in
+   * --focus-quiet clears 3:1 on its own and cannot be confused with hover.
+   */
   .card:has(.main:focus-visible) {
     border-color: var(--border-control);
-    box-shadow: var(--shadow-hover);
+    box-shadow:
+      inset 0 0 0 2px var(--focus-quiet),
+      var(--shadow-hover);
   }
 
   .heading {
