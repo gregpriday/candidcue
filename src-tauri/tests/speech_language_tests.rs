@@ -432,6 +432,80 @@ async fn an_unrelated_patch_leaves_the_language_alone() {
     );
 }
 
+/// The upgrade path, which is the whole reason refusing a write is safe.
+///
+/// Previous builds offered French, so a user upgrading into this one has
+/// `fr-FR` sitting in the settings row — a pair this build's `validate` would
+/// reject outright. Every patch is merged onto the CURRENT document, so if the
+/// merge base were the stored value, that user could no longer change their
+/// font size, their mic sensitivity or anything else: settings would be frozen
+/// by a language they are not touching, and frozen for exactly the people the
+/// read-time repair exists to protect.
+///
+/// It is not, because `get_settings` migrates before `update_settings` merges,
+/// so the base is already coherent and the unrelated write goes through. It
+/// also COMMITS that repair, which is the second half of the bargain: the stale
+/// tag is gone from disk afterwards rather than being re-corrected on every
+/// load forever.
+///
+/// Seeded straight into the row, because `update_settings` is now precisely the
+/// thing that could not have written it.
+#[tokio::test]
+async fn an_obsolete_language_does_not_make_settings_unwritable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let pool = database::init(dir.path()).await.expect("database init");
+
+    // A document an older build could plausibly have left behind: French,
+    // paired with the recogniser this build does ship.
+    let mut obsolete = settings::AppSettings::default();
+    obsolete.audio.language = "fr-FR".to_string();
+    obsolete.audio.vad_sensitivity = 0.5;
+    sqlx::query("INSERT INTO settings (key, value_json, revision, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(settings::SETTINGS_KEY)
+        .bind(serde_json::to_string(&obsolete).expect("serialize"))
+        .bind(4_i64)
+        .bind("2026-01-01T00:00:00.000Z")
+        .execute(&pool)
+        .await
+        .expect("seed a settings document an older build wrote");
+
+    // The read repairs it, and reports the revision the patch has to name.
+    let current = settings::get_settings(&pool).await.expect("settings");
+    assert_eq!(current.revision, 4);
+    assert_eq!(
+        current.value.audio.language, "en-US",
+        "the read-time repair is what makes the write below possible"
+    );
+
+    let updated = settings::update_settings(
+        &pool,
+        current.revision,
+        json!({ "audio": { "vadSensitivity": 0.8 } }),
+    )
+    .await
+    .expect("an unrelated patch must not be refused over a language nobody touched");
+
+    assert_eq!(updated.revision, 5, "the write really happened");
+    assert_eq!(updated.value.audio.vad_sensitivity, 0.8);
+    assert_eq!(updated.value.audio.language, "en-US");
+    assert_eq!(
+        updated.value.audio.transcription_model,
+        candidcue_lib::speech::default_model().id
+    );
+
+    // …and the repair is now on disk. A stale tag that survived every write
+    // would be re-corrected on every load and never actually leave.
+    let stored: String = sqlx::query_scalar("SELECT value_json FROM settings WHERE key = ?")
+        .bind(settings::SETTINGS_KEY)
+        .fetch_one(&pool)
+        .await
+        .expect("read the stored document back");
+    assert!(
+        !stored.contains("fr-FR"),
+        "the unrelated write persisted the read-time repair, got: {stored}"
+    );
+}
+
 /// The offer list and what a selection would persist have to agree, or the
 /// picker offers a value the settings document then rejects.
 #[test]
