@@ -89,6 +89,15 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
      * defensive stance as the ordinals above: the engine falls back to braking
      * at paragraph ends, which is where it braked before sentences reached it.
      * Losing the finer ceiling is a worse take, not a broken one.
+     *
+     * KNOWN GAP: `SentenceUnit` is a NAVIGATION unit, and a list item is
+     * deliberately one of them however many sentences it contains (§25.5, see
+     * `singleSentence` in `compile.ts`). So a multi-sentence bullet reports one
+     * boundary — at the end of the item — and the display may still be carried
+     * across a full stop inside it. That is the behaviour this whole change
+     * replaces for prose, so a bullet is no worse off than before, but it is
+     * not protected either. Closing it means publishing grammatical sentence
+     * ends separately from navigation units rather than reusing these.
      */
     sentenceEnd: sentenceEnds.has(token.index),
   }));

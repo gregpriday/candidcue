@@ -1155,6 +1155,57 @@ mod canonicalization_contract_tests {
         "£20", "€5", "co-founder", "API",
     ];
 
+    /// The sentence boundary has exactly one route from the compiler to the
+    /// engine, and it is this JSON field.
+    ///
+    /// Worth a test of its own because every way it can break is silent. The
+    /// key is camelCase on the wire and snake_case in Rust, so a struct-level
+    /// rename that went missing would leave `sentence_end` quietly false; and
+    /// `#[serde(default)]` means a payload that never mentions it deserializes
+    /// happily. Both failures look like "prediction is a bit loose", not like
+    /// an error.
+    #[test]
+    fn a_sentence_boundary_survives_the_ipc_shape() {
+        let flagged: AlignToken =
+            serde_json::from_str(r#"{"surface":"bravo","line":0,"para":0,"sentenceEnd":true}"#)
+                .expect("camelCase sentenceEnd must deserialize");
+        assert!(flagged.sentence_end);
+
+        // A payload from before this field existed is still valid, and says no.
+        let legacy: AlignToken =
+            serde_json::from_str(r#"{"surface":"bravo","line":0,"para":0}"#)
+                .expect("a payload without the field must still deserialize");
+        assert!(!legacy.sentence_end);
+
+        // And it reaches the compiled script rather than stopping at the struct.
+        let tokens = vec![
+            AlignToken {
+                surface: "alpha".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            flagged,
+            AlignToken {
+                surface: "charlie".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+        ];
+        let inputs: Vec<TokenInput> = tokens
+            .iter()
+            .map(|t| TokenInput {
+                surface: t.surface.clone(),
+                line: t.line,
+                para: t.para,
+                sentence_end: t.sentence_end,
+            })
+            .collect();
+        let script = cc_align::compile_tokens(&inputs);
+        assert_eq!(script.sentence_end, vec![2, 2, 3]);
+    }
+
     #[test]
     fn every_spoken_token_the_app_renders_produces_at_least_one_atom() {
         let tokens: Vec<AlignToken> = APP_TOKEN_SURFACES

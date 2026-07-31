@@ -973,13 +973,12 @@ impl Engine {
     /// prediction, and only from an already-confident Following lock. It
     /// updates only the reversible dim frontier; never `observed`, `confirmed`,
     /// cold acquisition, or discontinuity authority.
-    /// How far prediction may carry the display from where the reader was last
+    /// How far prediction may carry the DISPLAY from where the reader was last
     /// heard — the sentence they are audibly in, or the paragraph when the
     /// finer rule is switched off for comparison.
     ///
-    /// Both places that need the answer read it here rather than asking the
-    /// script directly, so the reversible dim frontier and the display's hard
-    /// limit can never end up obeying two different rules.
+    /// Only the display's limit comes through here. The approximate-bridge gate
+    /// keeps the paragraph ceiling on purpose; see the note at its call site.
     fn prediction_ceiling(&self) -> f64 {
         if self.config.sentence_prediction_ceiling {
             self.script.prediction_ceiling(self.observed)
@@ -1000,7 +999,16 @@ impl Engine {
             && ev.end_position as f64 > frontier
             && ev.end_position as f64 - frontier <= c.local_approx_max_step
             && ev.end_position as f64 - self.observed <= c.local_approx_max_advance
-            && ev.end_position as f64 <= self.prediction_ceiling()
+            // Deliberately the PARAGRAPH ceiling, not the sentence one. This
+            // gate is not dim-only: `local_ok` above reads it to decide whether
+            // evidence is weak, and failing it here drops the engine into
+            // `Holding` — so tightening it to sentences would stop
+            // extrapolation and change motion state at every full stop. The
+            // display does not need that to stay behind the reader; the
+            // sentence rule is enforced where it belongs, on `display_limit`,
+            // which already refuses to cross the boundary. Braking the display
+            // is the goal; halting the tracker at every full stop is not.
+            && ev.end_position as f64 <= self.script.paragraph_ceiling(self.observed)
             && (ev.end_position as f64 - predicted).abs() <= c.local_approx_prediction_slack
             && ev.fidelity >= c.observe_min_fidelity
             && ev.coverage >= c.observe_min_coverage
@@ -1503,6 +1511,36 @@ mod tests {
         // The rule this replaces: the whole paragraph was fair game from the
         // first word of it.
         assert_eq!(snapshot.display_limit, 6.0);
+    }
+
+    /// Braking the display at a full stop must not also halt the tracker
+    /// there.
+    ///
+    /// `can_bridge_local_approx` looks like a dimming concern and is not: the
+    /// health check reads it to decide whether evidence is weak, and failing it
+    /// drops the engine to `Holding` with the rate at zero. Gating it on
+    /// sentences would therefore stop extrapolation at every full stop — a
+    /// stutter in the motion, bought for a safety the `display_limit` was
+    /// already providing on its own.
+    #[test]
+    fn a_sentence_break_brakes_the_display_without_stalling_the_tracker() {
+        let script = compile(
+            "alpha bravo presenter. teleprompter harbour narration",
+            CompileOptions::default(),
+        );
+        // The frontier sits exactly on the full stop after `presenter`.
+        assert_eq!(script.sentence_end[2], 3);
+
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+        let snapshot = final_item(&mut engine, 1, "presentor", 350.0);
+
+        // The fuzzy bridge still carries the reversible frontier across the
+        // boundary — it is dim-only and can be taken back.
+        assert_eq!(snapshot.state, TrackingState::Following);
+        assert_eq!(snapshot.provisional, Some(3.0));
+        // ...while the display itself is held at the full stop.
+        assert_eq!(snapshot.display_limit, 3.0);
     }
 
     #[test]

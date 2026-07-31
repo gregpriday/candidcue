@@ -127,6 +127,23 @@ describe('the spoken-token contract with the alignment engine', () => {
   });
 
   /*
+   * Pins the known gap rather than leaving it to be discovered on a stage.
+   * A list item is ONE navigation unit by design (§25.5), so a bullet holding
+   * two sentences reports one boundary and the display can still be carried
+   * over the full stop inside it. Not a regression — that is what every
+   * paragraph did before — but not the protection prose gets either. If
+   * grammatical sentence ends are ever published separately from navigation
+   * units, this expectation is the one that should change.
+   */
+  it('reports a multi-sentence list item as a single unit, for now', () => {
+    const compiled = compile('- Alpha bravo. Charlie delta.', { scriptId: 'bullets' });
+    const tokens = alignTokensFor(compiled);
+
+    expect(tokens.map((t) => t.surface)).toEqual(['Alpha', 'bravo', 'Charlie', 'delta']);
+    expect(tokens.filter((t) => t.sentenceEnd).map((t) => t.surface)).toEqual(['delta']);
+  });
+
+  /*
    * `&` is the one that broke. The compiler has always emitted it as its own
    * token — the pattern in `tokenize.ts` names it explicitly — so an engine
    * that drops it renders a word with nothing behind it.
