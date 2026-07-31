@@ -483,11 +483,15 @@ mod tests {
     /// What the fix actually is, stated in full so nobody plans on half of it:
     /// a corpus in the language, a `blank_penalty` sweep, a passing run of
     /// `cc-bench gate-language`, and then a `BundledModel` entry carrying the
-    /// measured numbers. AND the speech commands have to start honouring the
-    /// selected model — `start_transcription` and `preload_speech_engine` both
-    /// call `default_model()` today and never read the setting, which is
-    /// harmless while one model ships and becomes a take transcribed in the
-    /// wrong language the moment two do.
+    /// measured numbers. That list is now the whole of it. The speech commands
+    /// used to owe a debt here as well — `start_transcription` and
+    /// `preload_speech_engine` both called `default_model()` and never read the
+    /// setting — but §153 gave them a `selected_model` helper that resolves the
+    /// persisted choice through `settings::selected_model` on every call, so
+    /// whichever recogniser the user picked is the one that listens. Which
+    /// makes this test load-bearing rather than merely tidy: a `BundledModel`
+    /// entry is now by itself enough to put an unmeasured recogniser in front
+    /// of a live take, with no second piece of wiring left to forget.
     #[test]
     fn the_kroko_models_download_but_do_not_load_until_they_are_measured() {
         for id in ["kroko-fr", "kroko-de", "kroko-es"] {
