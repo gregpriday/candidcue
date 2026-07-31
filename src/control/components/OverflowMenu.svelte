@@ -321,12 +321,16 @@
   /*
    * A menu highlights, it does not ring.
    *
-   * `tokens.css` gives every focusable control a 2px accent outline at 2px
-   * offset, and opening this menu moves focus onto an item — so the first item
-   * wore a heavy clay box that consumed the whole 4px of popover padding and sat
-   * ON the border, while overhanging vertically into its neighbour. Hovering the
-   * next item then lit a second highlight underneath the first one's ring, which
-   * is what made the menu look broken.
+   * Under the opt-in policy in `tokens.css` these unmarked buttons would take
+   * the quiet inset edge, not the accent ring — a menu item is a list row, not
+   * a compact control, so it deliberately does not carry `data-focus="control"`.
+   * This component then declines even the quiet edge, because the highlight
+   * below IS the focus affordance here: opening the menu moves focus onto an
+   * item, and an outline on that item would read as a second selection sitting
+   * underneath the highlight marking the very same row. (The accent ring this
+   * replaced was worse still — at +2px offset it consumed the whole 4px of
+   * popover padding, sat ON the border and overhung into its neighbour, which
+   * is what made the menu look broken.)
    *
    * The highlight is driven by `activeIndex` rather than by `:focus`/`:hover`, so
    * exactly one item is ever marked no matter which device is driving, and it

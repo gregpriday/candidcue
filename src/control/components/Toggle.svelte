@@ -1,6 +1,7 @@
 <!--
-  Switch. Accent fill when on; the small-control focus ring comes from the
-  global :focus-visible treatment on the button.
+  Switch. Accent fill when on; the button opts in with `data-focus="control"`,
+  which is what earns it the accent focus ring — under the policy in
+  `tokens.css` an unmarked button takes the quiet inset edge instead.
 -->
 <script lang="ts">
   interface Props {
