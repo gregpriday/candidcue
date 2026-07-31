@@ -15,6 +15,7 @@
 import { render } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import ShortcutsDialog from '../../src/control/components/ShortcutsDialog.svelte';
+import { FOCUSABLE_SELECTOR, nextTrapFocus } from '../../src/control/components/dialog-focus';
 import { isMacPlatform, SHORTCUT_OWNERSHIP } from '../../src/control/lib/shortcuts';
 
 /* jsdom is not a platform, so the modifier is read the same way the dialog
@@ -194,6 +195,30 @@ describe('the shortcuts reference is grouped by the screen that answers each key
     expect(document.activeElement).toBe(intro);
     // And it stays out of the Tab order, so Done is still the first stop.
     expect(intro?.getAttribute('tabindex')).toBe('-1');
+  });
+
+  /*
+   * Opening on a line that Tab cannot reach is only safe while the trap knows
+   * it. jsdom has no native Tab, so what is asserted is the decision the trap
+   * makes — computed off the real panel the way Dialog.svelte computes it, and
+   * from the element that really has focus.
+   *
+   * Before this was guarded, the intro was inside the panel and outside the
+   * ring, so it matched neither end of a one-stop ring and the trap returned
+   * `null`. The browser then took the key, and Shift+Tab left an
+   * `aria-modal="true"` panel for the page behind the scrim.
+   */
+  it('still traps Tab from a line that is not itself a Tab stop', () => {
+    const panel = open();
+    const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+    const active = document.activeElement as HTMLElement | null;
+    // The premise: focus is in the panel, and it is not one of the stops.
+    expect(panel.contains(active)).toBe(true);
+    expect(focusables).not.toContain(active);
+    // Done is the whole ring, so it is where both directions have to land.
+    expect(focusables.map((el) => el.textContent?.trim())).toEqual(['Done']);
+    expect(nextTrapFocus(focusables, active, false, panel.contains(active))).toBe(focusables[0]);
+    expect(nextTrapFocus(focusables, active, true, panel.contains(active))).toBe(focusables[0]);
   });
 
   it('gives the editor its formatting keys, marked as needing the text focused', () => {
