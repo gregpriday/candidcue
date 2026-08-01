@@ -972,16 +972,21 @@ impl Engine {
             // through a repeated chorus in place: while local continuity is
             // healthy it explains the words at least as well as any far copy,
             // so no jump is offered in the first place.
-            // Identical text is necessary and not sufficient. The span compared
-            // ends at the last atom that MATCHED, so two passages that diverge
-            // just past it present the same span while explaining different
-            // amounts of the speech — a reader saying "...obsidian terminus"
-            // matches one copy through `terminus` and the other only through
-            // `obsidian`, and both report the span they share. Those are not
-            // interchangeable: one is simply the better explanation, and the
-            // ordinary evidence gap is there to say so. Requiring the match
-            // counts to agree as well is what makes "the evidence cannot
-            // choose" true rather than merely plausible.
+            // The span compared ends at the last atom that MATCHED, which is
+            // what makes it the right question: a copy the reader's words
+            // carried further reports a longer span and is not identical, so
+            // it is the better explanation and the ordinary gap decides. A
+            // reader saying "...mnemonic terminus" reaches `terminus` in the
+            // copy that has it and stops at `mnemonic` in the copy that does
+            // not.
+            //
+            // The counts are belt-and-braces on top of that. Identical spans
+            // aligned against the same query should already yield identical
+            // counts, so nothing here is expected to turn on them — but the
+            // spans come out of a DP whose path is chosen by cost, and that is
+            // an invariant of the aligner rather than anything this gate can
+            // see. Cheap to ask, and the answer being surprising is exactly
+            // the case worth refusing.
             let evidence_equivalent = |c: &Candidate| {
                 c.evidence.exact_matches == distant.evidence.exact_matches
                     && c.evidence.content_matches == distant.evidence.content_matches
@@ -998,19 +1003,29 @@ impl Engine {
             // right one — the nearest copy is the one that asks the page to
             // move least on a guess, and being a little short of the reader is
             // recoverable in a way overshooting them is not.
+            //
+            // Measured from `observed`, the same place eligibility is measured
+            // from, and deliberately NOT from `predicted`. Prediction coasts
+            // during a stall, and a stale one sitting far ahead would pull the
+            // choice toward the copy furthest from where the reader was
+            // actually last heard — the overshoot this ordering exists to
+            // prevent, arriving through the back door. Today's defaults keep
+            // the drift under a dozen atoms and it could not bite, but that is
+            // an accident of two unrelated config values rather than anything
+            // this code is entitled to assume.
             let selected = if identical_rival_tie {
                 blocking
                     .iter()
                     .copied()
                     .chain(std::iter::once(&distant))
                     .min_by(|a, b| {
-                        let from_predicted =
-                            |c: &Candidate| ((c.evidence.end_position as f64) - predicted).abs();
+                        let from_reader =
+                            |c: &Candidate| ((c.evidence.end_position as f64) - self.observed).abs();
                         // `total_cmp`, not `partial_cmp`: a total order needs no
                         // guess about what an unordered pair means. The position
                         // tiebreak keeps the choice deterministic.
-                        from_predicted(a)
-                            .total_cmp(&from_predicted(b))
+                        from_reader(a)
+                            .total_cmp(&from_reader(b))
                             .then(a.evidence.end_position.cmp(&b.evidence.end_position))
                     })
                     .cloned()
@@ -2845,18 +2860,22 @@ mod tests {
     /// rivals, pinned rather than inherited.
     ///
     /// `gate_config` already pins the content thresholds, but the duplicate
-    /// path also needs both copies to survive the beam, to stay far enough
-    /// apart to count as rivals, and to sit outside the local band. A sweep
-    /// that shrank `beam_size` to 1, widened `cluster_radius` past 37, or
-    /// dropped `ambiguity_margin` to zero would leave every test below green
-    /// while quietly ceasing to exercise the duplicate tie at all — which is
-    /// the failure mode this file's other pinned config exists to prevent.
+    /// path also needs BOTH copies to be proposed as regions, to survive the
+    /// beam, to stay far enough apart to count as rivals, and to sit outside
+    /// the local band. A sweep that shrank `beam_size` or `max_postings_per_key`
+    /// to 1, widened `cluster_radius` past 37, or dropped `ambiguity_margin`
+    /// to zero would leave every test below green while quietly ceasing to
+    /// exercise the duplicate tie at all — one copy proposed, no rival, and
+    /// the ordinary gate doing the work. That is the failure mode this file's
+    /// other pinned config exists to prevent.
     fn refrain_config() -> AlignmentConfig {
         AlignmentConfig {
             ambiguity_margin: 0.35,
             beam_size: 8,
             cluster_radius: 3,
             local_forward: 112,
+            max_postings_per_key: 8,
+            max_regions: 8,
             ..gate_config()
         }
     }
@@ -2943,15 +2962,14 @@ mod tests {
     /// A reader with a copy on either side of them does not get pulled to
     /// either one.
     ///
-    /// Honest about what this pins: it is the end-to-end outcome, not the
-    /// forward-only guard specifically. Measured, the backward copy takes
-    /// `rank_backward_factor` on top of its distance penalty and ends up 0.76
-    /// behind the forward one — past `ambiguity_margin`, so the two never
-    /// reach the duplicate path and the guard is not what holds them. The
-    /// guard stays in because a straddling tie is cheap to refuse and
-    /// expensive to get wrong (a display that has run PAST a presenter is the
-    /// one failure worth any amount of latency to avoid), but it is defensive
-    /// rather than exercised here.
+    /// The forward-only guard is what holds this, and the ranked scores make
+    /// it look otherwise: the backward copy takes `rank_backward_factor` on
+    /// top of its distance penalty and trails by 0.76, which reads as a clear
+    /// winner. It is not one. The gates compare EVIDENCE, adding the distance
+    /// penalty back, and on evidence the two copies are level — so the
+    /// backward copy is blocking, and without the guard proximity would pick
+    /// 512 over 148 and move the page. Deleting `!c.backward` fails this test,
+    /// which is the point of it.
     #[test]
     fn a_reader_between_two_copies_is_not_pulled_to_either() {
         // Widely spaced on purpose. The local band reaches 48 atoms back and
@@ -2981,6 +2999,34 @@ mod tests {
             snapshot.decision,
         );
         assert_eq!(snapshot.observed, 330.0, "the page moved on a coin flip");
+    }
+
+    /// A copy the reader's words carry further is not an identical rival, and
+    /// the page goes there rather than to whichever copy happens to be closer.
+    ///
+    /// `terminus` is in the second copy and not the first, so saying it
+    /// reaches one atom further there. The matched span is what carries this:
+    /// it ends at the last atom that matched, so the better explanation
+    /// reports the longer span and the two stop looking alike. Proximity would
+    /// have taken 148.
+    #[test]
+    fn a_copy_that_explains_more_is_not_an_identical_rival() {
+        let script = compile(
+            &refrain_source(
+                "Zanzibar quartzite mnemonic wharf. ",
+                "Zanzibar quartzite mnemonic terminus.",
+            ),
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, refrain_config());
+        engine.set_manual_position(0, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "zanzibar quartzite mnemonic terminus", 900.0);
+
+        assert_eq!(
+            snapshot.observed, 296.0,
+            "took the nearer copy over the one that explained more",
+        );
     }
 
     /// The tie-break's whole safety argument rests on this comparison, so it is
