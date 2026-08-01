@@ -249,13 +249,6 @@ impl AlignmentState {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Feed one transcript frame and return the projected snapshot.
-    ///
-    /// `audio_now_ms` is the session's bytes-sent audio clock read at the
-    /// moment the frame arrived. It is NOT wall-clock time: the engine's lag
-    /// model (`partial_lag_ms` / `endpoint_lag_ms`) was measured against the
-    /// audio clock on live captures, and substituting a wall clock silently
-    /// mis-times every prediction.
     /// The same observation, from a recogniser that did not time its words.
     ///
     /// Test-only. Production always goes through
@@ -267,6 +260,13 @@ impl AlignmentState {
         self.observe_with_word_times(frame, audio_now_ms, None)
     }
 
+    /// Feed one transcript frame and return the projected snapshot.
+    ///
+    /// `audio_now_ms` is the session's bytes-sent audio clock read at the
+    /// moment the frame arrived. It is NOT wall-clock time: the engine's lag
+    /// model (`partial_lag_ms` / `endpoint_lag_ms`) was measured against the
+    /// audio clock on live captures, and substituting a wall clock silently
+    /// mis-times every prediction.
     fn observe_with_word_times(
         &self,
         frame: &SttFrame,
