@@ -284,6 +284,53 @@ struct Candidate {
     jump_penalty: f64,
 }
 
+/// Do two candidate alignments consume the SAME script text?
+///
+/// Two places in the document scoring alike can mean either of two completely
+/// different things, and the score alone cannot tell them apart:
+///
+/// * two weakly-supported candidates that happen to land near each other —
+///   the engine does not know where the reader is, or
+/// * a refrain, where the places are indistinguishable *because they are the
+///   same words*.
+///
+/// Only the second is safe to treat permissively. In a refrain the tie carries
+/// no information about what is being read — the reader's words fit both
+/// places equally well and always will — so it is a fact about the document,
+/// not about the evidence.
+///
+/// Compares interned atom ids, which is the same canonical identity the
+/// aligner matches on: lowercased, expanded, and tokenised once at compile
+/// time. Exact ids only — a fuzzy or phonetic near-match is precisely the case
+/// where the two places are NOT interchangeable, and counting it here is how a
+/// spelling coincidence would end up authorising a jump.
+///
+/// The span compared is `start_position..end_position`, which ends at the last
+/// atom the alignment MATCHED — script consumed by a trailing substitution
+/// falls outside it. That is the right span rather than a shortcoming: the
+/// question is whether the words already spoken can tell the two places apart,
+/// and material neither place matched cannot. Divergence after the span is
+/// expected — a refrain is followed by different text, and that difference is
+/// exactly how the tie resolves itself a moment later.
+///
+/// Fails closed. An empty or out-of-range span is not evidence of anything.
+fn same_matched_span(script: &CompiledScript, a: &Evidence, b: &Evidence) -> bool {
+    let span = |ev: &Evidence| {
+        let start = ev.start_position as usize;
+        let end = ev.end_position as usize;
+        if end <= start {
+            return None;
+        }
+        script.atoms.get(start..end)
+    };
+    match (span(a), span(b)) {
+        (Some(left), Some(right)) => {
+            left.len() == right.len() && left.iter().zip(right).all(|(x, y)| x.id == y.id)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PendingJump {
     target: u32,
@@ -878,22 +925,121 @@ impl Engine {
         if let Some(distant) = best_distant {
             // Ambiguity among distant targets (duplicate passages): the best
             // distant cluster must clearly beat the next distant cluster.
-            let distant_rivals_gap = clusters
-                .iter()
-                .filter(|c| {
-                    is_distant(c)
-                        && (c.evidence.end_position as i64
-                            - distant.evidence.end_position as i64)
-                            .unsigned_abs()
-                            > self.config.cluster_radius as u64 * 4
-                })
-                .map(|c| (distant.score + distant.jump_penalty) - (c.score + c.jump_penalty))
-                .fold(f64::INFINITY, f64::min);
+            // One pass: the margin to the nearest distant rival, and the rivals
+            // close enough to be blocking it. Two passes and a second `Vec`
+            // would be tidier to read and this runs on every revision, with
+            // `beam_size` sanitised as high as 64.
+            let evidence_score = |c: &Candidate| c.score + c.jump_penalty;
+            let best_evidence = evidence_score(&distant);
+            let mut distant_rivals_gap = f64::INFINITY;
+            let mut blocking: Vec<&Candidate> = Vec::new();
+            for rival in clusters.iter().filter(|c| {
+                is_distant(c)
+                    && (c.evidence.end_position as i64 - distant.evidence.end_position as i64)
+                        .unsigned_abs()
+                        > self.config.cluster_radius as u64 * 4
+            }) {
+                let gap = best_evidence - evidence_score(rival);
+                distant_rivals_gap = distant_rivals_gap.min(gap);
+                if gap < self.config.ambiguity_margin {
+                    blocking.push(rival);
+                }
+            }
+
+            // A tie among rivals that are *the same words* is a fact about the
+            // document, not a failure to read the evidence. Progress through a
+            // refrain is unambiguous even while the place it occupies is not,
+            // so the duplicate-passage veto is answering "which copy is this?"
+            // — a question the display does not have to answer to keep moving.
+            //
+            // Where the veto still applies untouched: rivals that merely score
+            // alike. There the engine really is lost, and holding is honest.
+            //
+            // FORWARD copies only, and only when every one of them is forward.
+            // Copies straddling the reader are the case where choosing wrong
+            // does not merely arrive late, it arrives AHEAD — the display
+            // running past a presenter who is actually behind it is the one
+            // failure this engine will not trade for responsiveness. Backward
+            // ties are refused for the mirror reason: a rewind onto an earlier
+            // chorus is the most expensive thing a wrong guess can do, and no
+            // amount of extra content evidence can tell identical copies
+            // apart. Both keep the old honest hold.
+            //
+            // Waiving the veto does NOT waive anything else. The jump must
+            // still out-argue the local explanation by `jump_margin`, clear the
+            // fidelity and content-authority bars, and persist across
+            // revisions. That local comparison is what keeps a straight read
+            // through a repeated chorus in place: while local continuity is
+            // healthy it explains the words at least as well as any far copy,
+            // so no jump is offered in the first place.
+            // The span compared ends at the last atom that MATCHED, which is
+            // what makes it the right question: a copy the reader's words
+            // carried further reports a longer span and is not identical, so
+            // it is the better explanation and the ordinary gap decides. A
+            // reader saying "...mnemonic terminus" reaches `terminus` in the
+            // copy that has it and stops at `mnemonic` in the copy that does
+            // not.
+            //
+            // The counts are belt-and-braces on top of that. Identical spans
+            // aligned against the same query should already yield identical
+            // counts, so nothing here is expected to turn on them — but the
+            // spans come out of a DP whose path is chosen by cost, and that is
+            // an invariant of the aligner rather than anything this gate can
+            // see. Cheap to ask, and the answer being surprising is exactly
+            // the case worth refusing.
+            let evidence_equivalent = |c: &Candidate| {
+                c.evidence.exact_matches == distant.evidence.exact_matches
+                    && c.evidence.content_matches == distant.evidence.content_matches
+                    && same_matched_span(&self.script, &distant.evidence, &c.evidence)
+            };
+            let identical_rival_tie = !blocking.is_empty()
+                && !distant.backward
+                && blocking.iter().all(|c| !c.backward && evidence_equivalent(c));
+
+            // Among copies that are word-for-word identical the evidence
+            // cannot choose, and does not need to: whichever is real, the
+            // reader traverses the same run of tokens. What is left to decide
+            // is only *where*, and there the least-displacement answer is the
+            // right one — the nearest copy is the one that asks the page to
+            // move least on a guess, and being a little short of the reader is
+            // recoverable in a way overshooting them is not.
+            //
+            // Measured from `observed`, the same place eligibility is measured
+            // from, and deliberately NOT from `predicted`. Prediction coasts
+            // during a stall, and a stale one sitting far ahead would pull the
+            // choice toward the copy furthest from where the reader was
+            // actually last heard — the overshoot this ordering exists to
+            // prevent, arriving through the back door. Today's defaults keep
+            // the drift under a dozen atoms and it could not bite, but that is
+            // an accident of two unrelated config values rather than anything
+            // this code is entitled to assume.
+            let selected = if identical_rival_tie {
+                blocking
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(&distant))
+                    .min_by(|a, b| {
+                        let from_reader =
+                            |c: &Candidate| ((c.evidence.end_position as f64) - self.observed).abs();
+                        // `total_cmp`, not `partial_cmp`: a total order needs no
+                        // guess about what an unordered pair means. The position
+                        // tiebreak keeps the choice deterministic.
+                        from_reader(a)
+                            .total_cmp(&from_reader(b))
+                            .then(a.evidence.end_position.cmp(&b.evidence.end_position))
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| distant.clone())
+            } else {
+                distant.clone()
+            };
+
             let discontinuity_horizon = global_query.first().map(|q| q.audio_ms - 1.0);
             match self.try_discontinuity(
-                &distant,
+                &selected,
                 local_suffix_score,
                 distant_rivals_gap,
+                identical_rival_tie,
                 discontinuity_horizon,
                 now_ms,
             ) {
@@ -980,7 +1126,7 @@ impl Engine {
                 {
                     self.hold(DecisionCode::HoldLowEvidence, now_ms)
                 } else {
-                    self.decide_local(local, f64::INFINITY, predicted, now_ms)
+                    self.decide_local(local, predicted, now_ms)
                 }
             }
             _ => self.hold(DecisionCode::HoldLowEvidence, now_ms),
@@ -1052,21 +1198,19 @@ impl Engine {
         self.snapshot(DecisionCode::RelocationAccepted, evidence_ms, now_ms)
     }
 
-    fn decide_local(
-        &mut self,
-        best: Candidate,
-        margin: f64,
-        predicted: f64,
-        now_ms: f64,
-    ) -> Snapshot {
+    fn decide_local(&mut self, best: Candidate, predicted: f64, now_ms: f64) -> Snapshot {
         let c = self.config.clone();
         let ev = &best.evidence;
-        let ambiguous = margin < c.ambiguity_margin;
-        if ambiguous {
-            self.state = TrackingState::Ambiguous;
-            self.confidence = (self.confidence * 0.7).max(0.05);
-            return self.snapshot(DecisionCode::HoldAmbiguous, self.last_evidence_ms, now_ms);
-        }
+        // There is deliberately no ambiguity check here, and no margin to make
+        // one from. An ambiguity hold used to sit at the top of this function
+        // and stopped being reachable when candidate generation was split into
+        // a local phase and a global one — the surviving caller supplies no
+        // margin at all. That is the invariant rather than an oversight: this
+        // path handles a reader who is continuing, whether through the local
+        // band or a nearby suffix reconnection, and neither is a claim about
+        // which of several places in the document the reader is in. Duplicate
+        // passages are a discontinuity question and are settled in
+        // `try_discontinuity`, where the rival copies actually exist.
         let mut ordinary_passes = ev.fidelity >= c.observe_min_fidelity
             && ev.coverage >= c.observe_min_coverage
             && ev.content_matches >= c.observe_min_content;
@@ -1167,7 +1311,9 @@ impl Engine {
             self.approximate_streak = 0;
             self.accept(target, evidence_ms, false);
             self.state = TrackingState::Following;
-            self.confidence = confidence_of(ev, margin);
+            // No rival to be scored against, so no margin penalty: local
+            // continuity is confident in proportion to its own evidence.
+            self.confidence = confidence_of(ev, f64::INFINITY);
         }
 
         // Confirmed advancement: finals confirm outright; partials confirm
@@ -1271,12 +1417,15 @@ impl Engine {
     /// `local_suffix_score` is the local band aligned with the SAME suffix —
     /// the honest "could this still be explained locally?" comparison.
     /// `distant_rivals_gap` is the margin to the next distant cluster
-    /// (duplicate-passage protection).
+    /// (duplicate-passage protection). `duplicate_tie` says that margin is
+    /// small only because the tied rivals are word-for-word identical, which
+    /// the caller has already resolved by trajectory — see the note there.
     fn try_discontinuity(
         &mut self,
         best: &Candidate,
         local_suffix_score: f64,
         distant_rivals_gap: f64,
+        identical_rival_tie: bool,
         horizon_ms: Option<f64>,
         now_ms: f64,
     ) -> DiscontinuityOutcome {
@@ -1291,10 +1440,17 @@ impl Engine {
         // orders candidates; it must not make a far-but-correct relocation
         // permanently lose to nearby junk.
         let evidence_score = best.score + best.jump_penalty;
+        // The duplicate-passage veto asks "is this copy the one?", and a
+        // refrain answers with a permanent no. Identity is not resolved when
+        // the caller sets `identical_rival_tie` — it is decided to be
+        // undecidable, and the choice made on the only ground left. What the
+        // veto would buy from here is not safety but stillness for the length
+        // of the passage, so it does not apply.
+        let no_rival_veto = identical_rival_tie || distant_rivals_gap >= c.ambiguity_margin;
         let strong = ev.fidelity >= c.jump_min_fidelity
             && self.content_authority_ok(ev, needed_content)
             && evidence_score - local_suffix_score >= c.jump_margin
-            && distant_rivals_gap >= c.ambiguity_margin;
+            && no_rival_veto;
 
         if !strong {
             // Not evidence enough to even consider — clear any stale pending
@@ -1370,6 +1526,14 @@ impl Engine {
         self.accept(target as f64, evidence_ms, true);
         self.state = TrackingState::Following;
         self.confidence = confidence_of(ev, evidence_score - local_suffix_score);
+        if identical_rival_tie {
+            // Moving was the right call and the words on the glass are right
+            // either way, but a copy chosen by proximity is still a copy
+            // chosen without evidence. Say so: confidence is what the rest of
+            // the engine reads to decide how much rope to give the next
+            // approximate bridge, and it should have less of it here.
+            self.confidence = (self.confidence * 0.7).max(0.05);
+        }
         let snapshot = if backward {
             // A retake re-reads earlier text: confirmed must follow backward,
             // or every subsequent confirm would be capped at the old position.
@@ -2658,5 +2822,237 @@ mod tests {
         assert!(drive(500).contains("JumpForwardAccepted"));
         assert_eq!(drive(500), drive(1000));
         assert_eq!(drive(500), drive(0));
+    }
+
+    /* ----------------------------------------------------------------------
+     * Repeated passages (issue #168)
+     * ------------------------------------------------------------------- */
+
+    /// Filler, the refrain, more filler, the same refrain again.
+    ///
+    /// Both copies must sit outside the phase-1 continuity band, not merely
+    /// past `discontinuity_atoms` — the band reaches `local_forward` (112)
+    /// atoms ahead, and a copy inside it is explained as ordinary local
+    /// material and never becomes a distant rival at all. At six atoms per
+    /// filler region, 24 regions puts the first copy near atom 144 and the
+    /// second near 292, so a reader at the top has two DISTANT candidates that
+    /// are word-for-word identical — the tie the issue is about.
+    fn refrain_source(first_copy: &str, second_copy: &str) -> String {
+        refrain_source_spaced(first_copy, second_copy, 24)
+    }
+
+    /// `gap` filler regions between the copies, six atoms each, so a test can
+    /// place the reader BETWEEN them with neither inside the local band.
+    fn refrain_source_spaced(first_copy: &str, second_copy: &str, gap: u32) -> String {
+        let mut source = String::new();
+        for i in 0..24 {
+            source.push_str(&format!("region {i} holds ordinary material here. "));
+        }
+        source.push_str(first_copy);
+        for i in 24..24 + gap {
+            source.push_str(&format!("region {i} holds ordinary material here. "));
+        }
+        source.push_str(second_copy);
+        source
+    }
+
+    /// Everything these tests depend on to produce TWO blocking distant
+    /// rivals, pinned rather than inherited.
+    ///
+    /// `gate_config` already pins the content thresholds, but the duplicate
+    /// path also needs BOTH copies to be proposed as regions, to survive the
+    /// beam, to stay far enough apart to count as rivals, and to sit outside
+    /// the local band. A sweep that shrank `beam_size` or `max_postings_per_key`
+    /// to 1, widened `cluster_radius` past 37, or dropped `ambiguity_margin`
+    /// to zero would leave every test below green while quietly ceasing to
+    /// exercise the duplicate tie at all — one copy proposed, no rival, and
+    /// the ordinary gate doing the work. That is the failure mode this file's
+    /// other pinned config exists to prevent.
+    fn refrain_config() -> AlignmentConfig {
+        AlignmentConfig {
+            ambiguity_margin: 0.35,
+            beam_size: 8,
+            cluster_radius: 3,
+            local_forward: 112,
+            max_postings_per_key: 8,
+            max_regions: 8,
+            ..gate_config()
+        }
+    }
+
+    /// The two copies are the same words, so nothing about the evidence can
+    /// choose between them — and nothing needs to. Whichever is real the
+    /// reader traverses the same run of tokens, so the page must keep moving
+    /// rather than wait for the wording to diverge.
+    ///
+    /// Before the fix this held: the duplicate-passage veto refused the jump
+    /// on the score tie and the display sat still for the whole passage.
+    #[test]
+    fn identical_repeated_passages_do_not_freeze_the_page() {
+        let script = compile(
+            &refrain_source(
+                "Zanzibar quartzite mnemonic obsidian. ",
+                "Zanzibar quartzite mnemonic obsidian.",
+            ),
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, refrain_config());
+        engine.set_manual_position(0, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, DISTANT, 900.0);
+
+        assert_eq!(
+            snapshot.decision,
+            DecisionCode::JumpForwardAccepted,
+            "a refrain must not veto its own motion: {:?}",
+            snapshot.decision,
+        );
+        assert_eq!(snapshot.state, TrackingState::Following);
+        // 24 filler regions of six atoms each put the first copy at 144..148;
+        // the second ends at 296. Pinned exactly: a range would also accept
+        // 147, which is the boundary a *failed* match on `obsidian` leaves.
+        assert_eq!(snapshot.observed, 148.0);
+    }
+
+    /// The safety half, and the reason the check is textual rather than a
+    /// looser margin: two passages that merely SCORE alike are two places the
+    /// engine cannot tell apart, and moving to one of them is a guess.
+    ///
+    /// Proximity never outranks the evidence. Here the far copy is what was
+    /// actually said and the near copy is one word off, so there is a textual
+    /// winner and the tie-break has no business firing: landing on the near
+    /// copy at 147 would mean it had.
+    ///
+    /// This is the honest form of a test that started out claiming more. Two
+    /// passages that are textually different but score within
+    /// `ambiguity_margin` of each other turn out to be hard to build through
+    /// the whole engine — different words do not tie, which is the reason the
+    /// margin gate works at all. Every construction tried either produced a
+    /// clear winner (this one) or produced candidates whose MATCHED spans were
+    /// genuinely identical because the difference fell past the last matched
+    /// atom, which is a real tie and correctly moves the page. The textual
+    /// check itself is pinned directly by
+    /// `same_matched_span_is_exact_and_fails_closed`.
+    #[test]
+    fn a_clear_textual_winner_outranks_the_nearer_copy() {
+        let script = compile(
+            &refrain_source(
+                "Zanzibar quartzite mnemonic obsidian. ",
+                "Zanzibar quartzite mnemonic basilisk.",
+            ),
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, refrain_config());
+        engine.set_manual_position(0, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "zanzibar quartzite mnemonic basilisk", 900.0);
+
+        assert_eq!(
+            snapshot.decision,
+            DecisionCode::JumpForwardAccepted,
+            "{:?}",
+            snapshot.decision,
+        );
+        assert_eq!(
+            snapshot.observed, 296.0,
+            "proximity beat the evidence and took the nearer copy",
+        );
+    }
+
+    /// A reader with a copy on either side of them does not get pulled to
+    /// either one.
+    ///
+    /// The forward-only guard is what holds this, and the ranked scores make
+    /// it look otherwise: the backward copy takes `rank_backward_factor` on
+    /// top of its distance penalty and trails by 0.76, which reads as a clear
+    /// winner. It is not one. The gates compare EVIDENCE, adding the distance
+    /// penalty back, and on evidence the two copies are level — so the
+    /// backward copy is blocking, and without the guard proximity would pick
+    /// 512 over 148 and move the page. Deleting `!c.backward` fails this test,
+    /// which is the point of it.
+    #[test]
+    fn a_reader_between_two_copies_is_not_pulled_to_either() {
+        // Widely spaced on purpose. The local band reaches 48 atoms back and
+        // 112 forward, so copies only 148 apart cannot BOTH be outside it —
+        // one would be explained as ordinary local material and never become a
+        // rival at all. 60 filler regions put the second copy at 512.
+        let script = compile(
+            &refrain_source_spaced(
+                "Zanzibar quartzite mnemonic obsidian. ",
+                "Zanzibar quartzite mnemonic obsidian.",
+                60,
+            ),
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, refrain_config());
+        // Between the copies (148 and 512), outside the band on both sides.
+        engine.set_manual_position(330, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, DISTANT, 900.0);
+
+        assert!(
+            !matches!(
+                snapshot.decision,
+                DecisionCode::JumpForwardAccepted | DecisionCode::RetakeAccepted
+            ),
+            "committed to one of two copies straddling the reader: {:?}",
+            snapshot.decision,
+        );
+        assert_eq!(snapshot.observed, 330.0, "the page moved on a coin flip");
+    }
+
+    /// A copy the reader's words carry further is not an identical rival, and
+    /// the page goes there rather than to whichever copy happens to be closer.
+    ///
+    /// `terminus` is in the second copy and not the first, so saying it
+    /// reaches one atom further there. The matched span is what carries this:
+    /// it ends at the last atom that matched, so the better explanation
+    /// reports the longer span and the two stop looking alike. Proximity would
+    /// have taken 148.
+    #[test]
+    fn a_copy_that_explains_more_is_not_an_identical_rival() {
+        let script = compile(
+            &refrain_source(
+                "Zanzibar quartzite mnemonic wharf. ",
+                "Zanzibar quartzite mnemonic terminus.",
+            ),
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, refrain_config());
+        engine.set_manual_position(0, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "zanzibar quartzite mnemonic terminus", 900.0);
+
+        assert_eq!(
+            snapshot.observed, 296.0,
+            "took the nearer copy over the one that explained more",
+        );
+    }
+
+    /// The tie-break's whole safety argument rests on this comparison, so it is
+    /// pinned directly: canonical atom ids over the entire consumed span, and
+    /// nothing weaker.
+    #[test]
+    fn same_matched_span_is_exact_and_fails_closed() {
+        let script = compile(
+            "alpha bravo charlie delta alpha bravo charlie echo",
+            CompileOptions::default(),
+        );
+        let span = |start: u32, end: u32| Evidence {
+            start_position: start,
+            end_position: end,
+            ..Evidence::default()
+        };
+
+        // `alpha bravo charlie` in both halves.
+        assert!(same_matched_span(&script, &span(0, 3), &span(4, 7)));
+        // `alpha bravo charlie delta` vs `alpha bravo charlie echo`.
+        assert!(!same_matched_span(&script, &span(0, 4), &span(4, 8)));
+        // Different lengths are not "identical so far".
+        assert!(!same_matched_span(&script, &span(0, 3), &span(4, 8)));
+        // Empty, reversed and out-of-range spans are not evidence of anything.
+        assert!(!same_matched_span(&script, &span(2, 2), &span(2, 2)));
+        assert!(!same_matched_span(&script, &span(3, 1), &span(3, 1)));
+        assert!(!same_matched_span(&script, &span(0, 3), &span(6, 99)));
     }
 }
