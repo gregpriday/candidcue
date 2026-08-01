@@ -85,6 +85,28 @@ pub struct AlignmentConfig {
     pub retake_extra_content: u32,
     /// Content atoms required for the very first lock of a session.
     pub relocation_min_content: u32,
+    /// How much authority to relocate a *biased* content match carries, in
+    /// thousandths of an ordinary one.
+    ///
+    /// A word the recogniser was told to expect is partly a product of the
+    /// hypothesis being tested — bias the upcoming stretch, let weak acoustics
+    /// decode as the scripted words, and the exact matches that authorise the
+    /// jump were solicited by the position the jump is being tested against.
+    /// The observation model assumes recogniser errors are unconditioned on
+    /// where we think the reader is, and bias breaks exactly that assumption,
+    /// in the direction that looks like success.
+    ///
+    /// Applies only where a relocation or a far jump is authorised. Ordinary
+    /// local continuity reads the undiscounted count, because a wrong local
+    /// step costs little and corrects itself.
+    ///
+    /// `1000` is full authority (the discount off), `0` a veto. The default
+    /// halves it: a genuinely heard hotword is still evidence, it just takes
+    /// two of them to move the reader as far as one unsolicited word does.
+    /// Inert until something actually declares bias terms — see
+    /// [`crate::script::CompiledScript::set_biased_terms`] — so the shipping
+    /// greedy-decoding path is unaffected whatever this says.
+    pub biased_content_weight_milli: u32,
     /// Minimum unexplained atoms before a discontinuity is even evaluated.
     pub jump_query_min: usize,
     /// Unexplained CONTENT atoms that mark local evidence as weak (triggers
@@ -448,6 +470,10 @@ impl AlignmentConfig {
         self.max_query_atoms = self.max_query_atoms.clamp(4, 200);
         self.beam_size = self.beam_size.clamp(1, 64);
         self.max_regions = self.max_regions.clamp(1, 64);
+        // A biased match must never be worth MORE than an unsolicited one; a
+        // sweep that overshoots the top of the range gets full weight, not a
+        // bonus for having been told the answer.
+        self.biased_content_weight_milli = self.biased_content_weight_milli.min(1000);
         self
     }
 }
@@ -492,6 +518,7 @@ impl Default for AlignmentConfig {
             jump_persistence: 1,
             retake_extra_content: 0,
             relocation_min_content: 2,
+            biased_content_weight_milli: 500,
             jump_query_min: 4,
             weak_unexplained_content: 3,
             weak_unexplained_total: 4,
@@ -633,5 +660,47 @@ impl Default for AlignmentConfig {
             rank_w_jump: 0.30,
             rank_backward_factor: 1.5,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Half authority by default: a solicited word is still evidence, it just
+    /// takes two of them to move the reader as far as one unsolicited word.
+    #[test]
+    fn biased_content_weight_defaults_to_half_and_never_exceeds_full() {
+        assert_eq!(AlignmentConfig::default().biased_content_weight_milli, 500);
+
+        let veto = AlignmentConfig {
+            biased_content_weight_milli: 0,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(veto.biased_content_weight_milli, 0);
+
+        let full = AlignmentConfig {
+            biased_content_weight_milli: 1000,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(full.biased_content_weight_milli, 1000);
+
+        // A sweep that overshoots gets full weight, never a bonus for having
+        // been told the answer.
+        let over = AlignmentConfig {
+            biased_content_weight_milli: 9_000,
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(over.biased_content_weight_milli, 1000);
+    }
+
+    /// Recorded benchmark configurations predate this field and must still load.
+    #[test]
+    fn a_config_without_the_field_deserialises_to_the_default() {
+        let restored: AlignmentConfig = serde_json::from_str("{\"jump_min_content\":3}").unwrap();
+        assert_eq!(restored.biased_content_weight_milli, 500);
     }
 }

@@ -16,7 +16,7 @@
 
 use crate::config::AlignmentConfig;
 use crate::ledger::QueryAtom;
-use crate::script::CompiledScript;
+use crate::script::{CompiledScript, FLAG_BIASED};
 
 /// What one aligned query atom did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,15 @@ pub struct Evidence {
     pub deletions: u32,
     /// Exact-matched *content* (non-stopword) query atoms.
     pub content_matches: u32,
+    /// How many of `content_matches` landed on a script atom the recogniser
+    /// was biased toward — a subset, never larger.
+    ///
+    /// Kept as its own counter rather than deducted from `content_matches` so
+    /// the gates can disagree about what a solicited word is worth: local
+    /// continuity spends the full count, relocation and jump spend a
+    /// discounted one (`biased_content_weight_milli`). Zero on every take that
+    /// declared no bias terms, which is every take today.
+    pub biased_content_matches: u32,
     /// Fuzzy/phonetic content matches. Kept separate from exact content
     /// because they may support a tightly bounded local continuation but must
     /// never acquire or relocate the reader on their own.
@@ -362,6 +371,13 @@ pub fn align(
                         if q.stability.is_stable() {
                             ev.stable_content_matches += 1;
                         }
+                        // Only exact matches can be solicited: a hotword boost
+                        // makes the decoder emit the expected token outright,
+                        // it does not produce a near-miss. The fuzzy and
+                        // phonetic branches below therefore need no equivalent.
+                        if s.flags & FLAG_BIASED != 0 {
+                            ev.biased_content_matches += 1;
+                        }
                     }
                     if ev.last_match_query_index.is_none() {
                         ev.last_match_query_index = Some(i - 1);
@@ -543,6 +559,67 @@ mod tests {
         let len = script.len() as u32;
         let ev = align(&script, &query, 0, len, &config, &mut scratch).unwrap();
         (ev, script)
+    }
+
+    /// The new counter is a strict subset of `content_matches` and changes
+    /// nothing else — the local gates that read the raw count must see exactly
+    /// what they saw before anything was marked.
+    #[test]
+    fn biased_content_matches_are_a_subset_that_costs_the_other_counters_nothing() {
+        let text = "alpha bravo charlie delta echo foxtrot golf hotel india juliet";
+        let spoken = "charlie delta echo foxtrot";
+
+        let (bare, _) = run(text, spoken);
+        assert_eq!(bare.biased_content_matches, 0, "nothing was declared");
+
+        let mut script = compile(text, CompileOptions::default());
+        script.set_biased_terms(&["delta".to_string(), "foxtrot".to_string()]);
+        let query = query_from(spoken, &mut script);
+        let len = script.len() as u32;
+        let marked = align(
+            &script,
+            &query,
+            0,
+            len,
+            &AlignmentConfig::default(),
+            &mut AlignScratch::new(),
+        )
+        .unwrap();
+
+        assert_eq!(marked.biased_content_matches, 2);
+        assert!(marked.biased_content_matches <= marked.content_matches);
+        // Everything the rest of the engine reads is untouched.
+        assert_eq!(marked.content_matches, bare.content_matches);
+        assert_eq!(marked.stable_content_matches, bare.stable_content_matches);
+        assert_eq!(marked.exact_matches, bare.exact_matches);
+        assert_eq!(marked.matched_weight, bare.matched_weight);
+        assert_eq!(marked.fidelity, bare.fidelity);
+        assert_eq!(marked.coverage, bare.coverage);
+        assert_eq!(marked.end_position, bare.end_position);
+    }
+
+    /// Bias makes the decoder emit the expected token outright; it does not
+    /// coax a near-miss. A marked atom reached only fuzzily is not a solicited
+    /// match, and counting it as one would discount evidence bias never touched.
+    #[test]
+    fn an_approximate_match_on_a_marked_atom_is_not_a_biased_match() {
+        let text = "alpha bravo teleprompter charlie delta echo foxtrot golf";
+        let mut script = compile(text, CompileOptions::default());
+        script.set_biased_terms(&["teleprompter".to_string()]);
+        let query = query_from("bravo teleprompters charlie", &mut script);
+        let len = script.len() as u32;
+        let ev = align(
+            &script,
+            &query,
+            0,
+            len,
+            &AlignmentConfig::default(),
+            &mut AlignScratch::new(),
+        )
+        .unwrap();
+
+        assert_eq!(ev.fuzzy_matches, 1);
+        assert_eq!(ev.biased_content_matches, 0);
     }
 
     #[test]
