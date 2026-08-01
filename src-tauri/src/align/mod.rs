@@ -256,11 +256,42 @@ impl AlignmentState {
     /// model (`partial_lag_ms` / `endpoint_lag_ms`) was measured against the
     /// audio clock on live captures, and substituting a wall clock silently
     /// mis-times every prediction.
+    /// The same observation, from a recogniser that did not time its words.
+    ///
+    /// Test-only. Production always goes through
+    /// [`AlignmentState::observe_with_word_times`], because the recogniser the
+    /// app ships DOES time its words and a path that quietly dropped them would
+    /// be the bug this exists to prevent.
+    #[cfg(test)]
     fn observe(&self, frame: &SttFrame, audio_now_ms: f64) -> Option<AlignmentSnapshot> {
+        self.observe_with_word_times(frame, audio_now_ms, None)
+    }
+
+    fn observe_with_word_times(
+        &self,
+        frame: &SttFrame,
+        audio_now_ms: f64,
+        word_times: Option<&[cc_stt::WordTime]>,
+    ) -> Option<AlignmentSnapshot> {
         let mut guard = self.lock();
         let session = guard.as_mut()?;
         // The SOCKET's number, not the take's. See `AlignmentSession`.
         let bound = session.stream_generation?;
+
+        // A field copy and nothing else. Which words the recogniser's words
+        // correspond to is a lexical question, and this module does not answer
+        // lexical questions — the engine lines them up against its own atoms.
+        let timed = || {
+            word_times.map(|words| {
+                words
+                    .iter()
+                    .map(|word| cc_align::TranscriptWordTime {
+                        text: word.text.clone(),
+                        start_ms: word.start_ms,
+                    })
+                    .collect()
+            })
+        };
 
         let event = match frame {
             SttFrame::ItemStarted {
@@ -280,6 +311,7 @@ impl AlignmentState {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_ms: audio_now_ms,
+                word_times: timed(),
             },
             SttFrame::Final {
                 generation,
@@ -290,6 +322,7 @@ impl AlignmentState {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
+                word_times: timed(),
             },
             // Transport, failure and audio-drop frames say nothing about where
             // the reader is. Feeding them would be inventing evidence.
@@ -390,15 +423,22 @@ pub fn bind_stream_generation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, gene
     }
 }
 
-/// The single hook the Inworld stream calls. Called only for transcript frames,
-/// with the audio clock read at arrival.
+/// The single hook the recogniser thread calls. Called only for transcript
+/// frames, with the audio clock read at arrival.
+///
+/// `word_times` rides alongside the frame rather than inside it. The renderer's
+/// [`SttFrame`] is the `stt://event` wire contract and has no use for per-word
+/// timing — the alignment engine lives in Rust and consumes these beside the
+/// audio clock they were measured against — so widening that type would be
+/// paying a protocol change for an audience of nobody.
 pub fn observe_frame<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     frame: &SttFrame,
     audio_now_ms: f64,
+    word_times: Option<&[cc_stt::WordTime]>,
 ) {
     let state: tauri::State<'_, AlignmentState> = app.state();
-    if let Some(snapshot) = state.observe(frame, audio_now_ms) {
+    if let Some(snapshot) = state.observe_with_word_times(frame, audio_now_ms, word_times) {
         publish(app, &snapshot);
     }
 }

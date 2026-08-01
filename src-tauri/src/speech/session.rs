@@ -271,8 +271,9 @@ fn emit_transcript<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     frame: SttFrame,
     audio_now_ms: f64,
+    word_times: Option<&[cc_stt::WordTime]>,
 ) {
-    crate::align::observe_frame(app, &frame, audio_now_ms);
+    crate::align::observe_frame(app, &frame, audio_now_ms, word_times);
     emit(app, frame);
 }
 
@@ -331,11 +332,16 @@ fn run_session<R: tauri::Runtime>(
                 audio_start_ms,
             },
             audio_start_ms,
+            None,
         ),
+        // `word_times` goes to the aligner and stops there. It is measurement
+        // the engine dates its atoms with; the renderer's frame is the wire
+        // contract and stays exactly as wide as it was.
         cc_stt::SttFrame::Partial {
             item_id,
             text,
             audio_ms,
+            word_times,
             ..
         } => emit_transcript(
             app,
@@ -345,11 +351,13 @@ fn run_session<R: tauri::Runtime>(
                 text,
             },
             audio_ms,
+            word_times.as_deref(),
         ),
         cc_stt::SttFrame::Final {
             item_id,
             text,
             audio_end_ms,
+            word_times,
             ..
         } => emit_transcript(
             app,
@@ -360,6 +368,7 @@ fn run_session<R: tauri::Runtime>(
                 audio_end_ms,
             },
             audio_end_ms,
+            word_times.as_deref(),
         ),
         cc_stt::SttFrame::Error { message } => emit(
             app,

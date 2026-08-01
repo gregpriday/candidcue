@@ -5,8 +5,26 @@
 
 use std::time::Instant;
 
-use cc_align::{AlignmentConfig, CompiledScript, Engine, SessionEvent, Snapshot};
+use cc_align::{AlignmentConfig, CompiledScript, Engine, SessionEvent, Snapshot, TranscriptWordTime};
 use cc_stt::SttFrame;
+
+/// Captured per-word timing, in the engine's own vocabulary.
+///
+/// A fixture recorded before the recogniser timed its words has no `wordTimes`
+/// key at all and arrives here as `None`, which is the engine's "date these by
+/// interpolation" path — so every frozen corpus replays exactly as it did
+/// before, and only a freshly captured one exercises the measured path.
+pub fn engine_word_times(times: &Option<Vec<cc_stt::WordTime>>) -> Option<Vec<TranscriptWordTime>> {
+    times.as_ref().map(|words| {
+        words
+            .iter()
+            .map(|word| TranscriptWordTime {
+                text: word.text.clone(),
+                start_ms: word.start_ms,
+            })
+            .collect()
+    })
+}
 
 /// Per-item bookkeeping for the pre-final responsiveness metric.
 #[derive(Debug, Clone)]
@@ -68,12 +86,14 @@ pub fn replay(
                 item_id,
                 text,
                 audio_ms,
+                word_times,
                 ..
             } => (
                 SessionEvent::Partial {
                     item_id: item_id.clone(),
                     text: text.clone(),
                     audio_ms: *audio_ms,
+                    word_times: engine_word_times(word_times),
                 },
                 *audio_ms,
             ),
@@ -81,12 +101,14 @@ pub fn replay(
                 item_id,
                 text,
                 audio_end_ms,
+                word_times,
                 ..
             } => (
                 SessionEvent::Final {
                     item_id: item_id.clone(),
                     text: text.clone(),
                     audio_end_ms: *audio_end_ms,
+                    word_times: engine_word_times(word_times),
                 },
                 *audio_end_ms,
             ),

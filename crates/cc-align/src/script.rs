@@ -152,6 +152,25 @@ pub struct QueryWord {
     pub filler: bool,
     pub stopword: bool,
     pub phonetic: PhoneticKey,
+    /// When the recogniser says this word was spoken, on the audio clock.
+    ///
+    /// `None` whenever the recogniser reported no per-word timing, or reported
+    /// timing this script could not line up against its own atoms — see
+    /// [`CompiledScript::query_words_with_times`]. The ledger dates an atom by
+    /// interpolation in that case, exactly as it always has.
+    pub measured_start_ms: Option<f64>,
+}
+
+/// One word the recogniser timed, in the engine's own vocabulary.
+///
+/// A copy of `cc_stt::WordTime` rather than a re-export: the engine does not
+/// depend on the recogniser crate, and a benchmark replaying captured frames
+/// has to be able to build these without one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptWordTime {
+    pub text: String,
+    /// Onset of this word on the audio clock, in milliseconds.
+    pub start_ms: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -433,8 +452,119 @@ impl CompiledScript {
                 stopword: profile.is_stopword(&surface),
                 phonetic: phonetic_key_for(self.language, &surface),
                 surface,
+                measured_start_ms: None,
             })
             .collect()
+    }
+
+    /// The same words, carrying the recogniser's own clock where it can be
+    /// trusted to describe the same atoms.
+    ///
+    /// The atoms are ALWAYS the ones [`CompiledScript::query_words`] would have
+    /// produced for `text`. Timing is the only thing this can add, and the only
+    /// thing it can get wrong — which is why the surfaces are compared rather
+    /// than assumed, and why a disagreement returns the untimed words instead
+    /// of a best guess.
+    ///
+    /// # Why the atoms have to be re-derived to be dated
+    ///
+    /// `word_times` is keyed to the RECOGNISER's word boundaries, and this
+    /// script's are not the same ones: `$12` is one word to the recogniser and
+    /// the atoms `12 dollars` here, while `Rust Light` is two words there and
+    /// the single atom `rustlight` here. Zipping the two lists together lines
+    /// up only until the first disagreement and then silently mis-clocks
+    /// everything after it.
+    ///
+    /// So the correspondence is MEASURED, the way [`sentence_atom_breaks`]
+    /// measures where a sentence ends: normalise each recogniser word on its
+    /// own, concatenate, and use the result only if it reproduced the whole
+    /// exactly. When it does, each atom's source word is known outright rather
+    /// than inferred. When it does not — a spelled number or a currency run
+    /// that only normalises correctly as a phrase — there is no honest mapping
+    /// and this hands back untimed words rather than a plausible one.
+    pub fn query_words_with_times(
+        &self,
+        text: &str,
+        word_times: &[TranscriptWordTime],
+    ) -> Vec<QueryWord> {
+        match self.dated_atoms(text, word_times) {
+            Some(dated) => {
+                let profile = self.language.profile();
+                dated
+                    .into_iter()
+                    .map(|(surface, start_ms)| QueryWord {
+                        filler: profile.is_filler(&surface),
+                        stopword: profile.is_stopword(&surface),
+                        phonetic: phonetic_key_for(self.language, &surface),
+                        surface,
+                        measured_start_ms: Some(start_ms),
+                    })
+                    .collect()
+            }
+            None => self.query_words(text),
+        }
+    }
+
+    /// Atoms paired with the onset of the recogniser word each came from, or
+    /// `None` when the two accounts of the text cannot be shown to agree.
+    fn dated_atoms(
+        &self,
+        text: &str,
+        word_times: &[TranscriptWordTime],
+    ) -> Option<Vec<(String, f64)>> {
+        if word_times.is_empty() {
+            return None;
+        }
+        // A time that is not a number, or one that goes backwards, is not
+        // evidence about when anything was said. `cc_stt` already guarantees
+        // both; a captured fixture or a future recogniser might not, and the
+        // cost of checking is one pass over a handful of words.
+        let mut previous = f64::NEG_INFINITY;
+        for word in word_times {
+            if !word.start_ms.is_finite() || word.start_ms < previous {
+                return None;
+            }
+            previous = word.start_ms;
+        }
+
+        // Each recogniser word normalised on its own, remembering which word
+        // every atom came from.
+        let mut rebuilt: Vec<String> = Vec::new();
+        let mut source: Vec<usize> = Vec::new();
+        for (index, word) in word_times.iter().enumerate() {
+            for atom in canonical_atoms_for(self.language, &word.text) {
+                rebuilt.push(atom);
+                source.push(index);
+            }
+        }
+        if rebuilt.is_empty() {
+            return None;
+        }
+        // The whole, normalised as one run — which is what the engine actually
+        // aligns against. Anything the pieces did differently means a transform
+        // spanned a word boundary, and the mapping is guesswork from there.
+        if rebuilt != canonical_atoms_for(self.language, text) {
+            return None;
+        }
+
+        // The join runs on the reconstruction, so it consumes the same spans it
+        // would have consumed on the whole — and reports which, so a joined
+        // atom keeps a source word rather than losing one.
+        let (joined, spans) = self.rejoin_split_words_tracked(rebuilt);
+        Some(
+            joined
+                .into_iter()
+                .zip(spans)
+                .map(|(surface, span)| {
+                    // The LAST recogniser word the atom covers. A word is not
+                    // finished being said until its final piece has been, and
+                    // dating `rustlight` to `rust` would put it before half the
+                    // sound it stands for.
+                    let start_ms = word_times[source[span.end - 1]].start_ms;
+                    (surface, start_ms)
+                })
+                .collect(),
+        )
     }
 
     /// Is this canonical word one the script itself contains? The interner is
@@ -446,9 +576,25 @@ impl CompiledScript {
             .is_some_and(|id| self.token_postings.contains_key(&id))
     }
 
-    fn rejoin_split_words(&self, mut atoms: Vec<String>) -> Vec<String> {
+    fn rejoin_split_words(&self, atoms: Vec<String>) -> Vec<String> {
+        self.rejoin_split_words_tracked(atoms).0
+    }
+
+    /// The join, reporting which input atoms each output atom was built from.
+    ///
+    /// One implementation rather than two: a second copy of this walk that only
+    /// counted spans would be free to drift from the one that decides the
+    /// atoms, and a span that disagrees with the join it describes is worse
+    /// than no span at all. The extra vector is the same order of cost as the
+    /// `known` lookups the join already builds.
+    fn rejoin_split_words_tracked(
+        &self,
+        mut atoms: Vec<String>,
+    ) -> (Vec<String>, Vec<std::ops::Range<usize>>) {
+        let identity = |n: usize| (0..n).map(|i| i..i + 1).collect::<Vec<_>>();
         if self.token_postings.is_empty() || atoms.len() < 2 {
-            return atoms;
+            let spans = identity(atoms.len());
+            return (atoms, spans);
         }
         // One lookup per atom, decided up front. This runs on every partial of
         // every item, and a reader reading the script produces runs where every
@@ -456,10 +602,12 @@ impl CompiledScript {
         // building a single string.
         let known: Vec<bool> = atoms.iter().map(|a| self.knows(a)).collect();
         if known.iter().all(|k| *k) {
-            return atoms;
+            let spans = identity(atoms.len());
+            return (atoms, spans);
         }
 
         let mut out: Vec<String> = Vec::with_capacity(atoms.len());
+        let mut spans: Vec<std::ops::Range<usize>> = Vec::with_capacity(atoms.len());
         let mut candidate = String::new();
         let mut i = 0;
         while i < atoms.len() {
@@ -479,16 +627,18 @@ impl CompiledScript {
             match joined {
                 Some((word, span)) => {
                     out.push(word);
+                    spans.push(i..i + span);
                     i += span;
                 }
                 None => {
                     // Moved, not copied: everything below `i` is finished with.
                     out.push(std::mem::take(&mut atoms[i]));
+                    spans.push(i..i + 1);
                     i += 1;
                 }
             }
         }
-        out
+        (out, spans)
     }
 
     /// Fractional atom position → fractional host-token position.
@@ -1832,6 +1982,216 @@ mod tests {
         let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
         assert_eq!(surfaces, vec!["alpha", "bravo"]);
         assert_eq!(script.sentence_end, vec![1, 2]);
+    }
+
+    // ---------------------------------------------------------------
+    // Dating atoms from the recogniser's word times
+    // ---------------------------------------------------------------
+
+    fn timed(words: &[(&str, f64)]) -> Vec<TranscriptWordTime> {
+        words
+            .iter()
+            .map(|(text, start_ms)| TranscriptWordTime {
+                text: (*text).to_string(),
+                start_ms: *start_ms,
+            })
+            .collect()
+    }
+
+    fn dated(script: &CompiledScript, text: &str, times: &[TranscriptWordTime]) -> Vec<(String, Option<f64>)> {
+        script
+            .query_words_with_times(text, times)
+            .into_iter()
+            .map(|w| (w.surface, w.measured_start_ms))
+            .collect()
+    }
+
+    /// The ordinary case, and the one that has to work or none of this is worth
+    /// having: plain speech, one recogniser word per atom.
+    ///
+    /// This is deliberately shaped the way a real frame is — the text is the
+    /// words joined back together — because a reconciliation that only ever
+    /// declines is decoration, and this codebase has shipped one of those
+    /// before.
+    #[test]
+    fn plain_speech_is_dated_word_for_word() {
+        let script = compile("we should build a simple system", CompileOptions::default());
+        let times = timed(&[
+            ("we", 100.0),
+            ("should", 340.0),
+            ("build", 620.0),
+            ("a", 900.0),
+            ("simple", 1_040.0),
+            ("system", 1_380.0),
+        ]);
+        assert_eq!(
+            dated(&script, "we should build a simple system", &times),
+            vec![
+                ("we".to_string(), Some(100.0)),
+                ("should".to_string(), Some(340.0)),
+                ("build".to_string(), Some(620.0)),
+                ("a".to_string(), Some(900.0)),
+                ("simple".to_string(), Some(1_040.0)),
+                ("system".to_string(), Some(1_380.0)),
+            ]
+        );
+    }
+
+    /// Punctuation rides along on the recogniser's words, because the model is
+    /// punctuated and that is the text a real frame carries.
+    #[test]
+    fn punctuated_recogniser_words_still_line_up() {
+        let script = compile("hello world it works", CompileOptions::default());
+        let times = timed(&[
+            ("Hello,", 100.0),
+            ("world.", 400.0),
+            ("It", 800.0),
+            ("works.", 1_000.0),
+        ]);
+        assert_eq!(
+            dated(&script, "Hello, world. It works.", &times),
+            vec![
+                ("hello".to_string(), Some(100.0)),
+                ("world".to_string(), Some(400.0)),
+                ("it".to_string(), Some(800.0)),
+                ("works".to_string(), Some(1_000.0)),
+            ]
+        );
+    }
+
+    /// One recogniser word, several atoms. Both halves of `$12` were said
+    /// during the one word the recogniser timed, so both take its clock.
+    #[test]
+    fn atoms_split_from_one_word_share_its_clock() {
+        let script = compile("it costs $12 today", CompileOptions::default());
+        let times = timed(&[("it", 100.0), ("costs", 300.0), ("$12", 700.0), ("today", 1_200.0)]);
+        assert_eq!(
+            dated(&script, "it costs $12 today", &times),
+            vec![
+                ("it".to_string(), Some(100.0)),
+                ("costs".to_string(), Some(300.0)),
+                ("12".to_string(), Some(700.0)),
+                ("dollars".to_string(), Some(700.0)),
+                ("today".to_string(), Some(1_200.0)),
+            ]
+        );
+    }
+
+    /// Several recogniser words, one atom. The script writes `RustLight`; the
+    /// recogniser hears no capital letter and writes two words. The joined atom
+    /// is dated to the LAST of them — it is not finished being said until the
+    /// second half has been.
+    #[test]
+    fn a_joined_atom_takes_the_clock_of_its_last_word() {
+        let script = compile("we ship with rustlight games", CompileOptions::default());
+        let times = timed(&[
+            ("we", 100.0),
+            ("ship", 300.0),
+            ("with", 500.0),
+            ("rust", 700.0),
+            ("light", 900.0),
+            ("games", 1_100.0),
+        ]);
+        let out = dated(&script, "we ship with rust light games", &times);
+        assert_eq!(
+            out.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            vec!["we", "ship", "with", "rustlight", "games"]
+        );
+        assert_eq!(out[3].1, Some(900.0), "dated to `light`, not `rust`");
+    }
+
+    /// A transform that only works as a phrase has no honest per-word mapping,
+    /// so the whole revision goes untimed rather than partly mis-timed.
+    #[test]
+    fn a_number_spanning_words_declines_rather_than_guesses() {
+        let script = compile("we saw forty two of them", CompileOptions::default());
+        let times = timed(&[
+            ("we", 100.0),
+            ("saw", 300.0),
+            ("forty", 500.0),
+            ("two", 700.0),
+            ("of", 900.0),
+            ("them", 1_100.0),
+        ]);
+        let out = dated(&script, "we saw forty two of them", &times);
+        // The atoms are still exactly what the untimed path produces.
+        assert_eq!(
+            out.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            vec!["we", "saw", "42", "of", "them"]
+        );
+        assert!(
+            out.iter().all(|(_, t)| t.is_none()),
+            "no atom may be dated when the pieces disagree with the whole"
+        );
+    }
+
+    /// Timing that describes different text than the frame does is not evidence
+    /// about the frame. It is refused whole rather than zipped on positionally.
+    #[test]
+    fn timing_for_other_text_is_refused() {
+        let script = compile("alpha bravo charlie", CompileOptions::default());
+        let times = timed(&[("alpha", 100.0), ("delta", 300.0)]);
+        let out = dated(&script, "alpha bravo charlie", &times);
+        assert_eq!(
+            out.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "bravo", "charlie"]
+        );
+        assert!(out.iter().all(|(_, t)| t.is_none()));
+    }
+
+    /// A number that is not one, or a sequence that goes backwards, says
+    /// nothing about when anything was spoken.
+    #[test]
+    fn unusable_times_are_refused() {
+        let script = compile("alpha bravo", CompileOptions::default());
+        for bad in [
+            timed(&[("alpha", f64::NAN), ("bravo", 300.0)]),
+            timed(&[("alpha", 500.0), ("bravo", 300.0)]),
+            timed(&[("alpha", f64::INFINITY), ("bravo", 300.0)]),
+        ] {
+            let out = dated(&script, "alpha bravo", &bad);
+            assert!(
+                out.iter().all(|(_, t)| t.is_none()),
+                "expected no timing from {bad:?}"
+            );
+        }
+        // And no timing at all is simply the untimed path.
+        assert!(dated(&script, "alpha bravo", &[])
+            .iter()
+            .all(|(_, t)| t.is_none()));
+    }
+
+    /// Whatever timing does or does not arrive, the ATOMS are the ones the
+    /// untimed path would have produced. Nothing about matching turns on
+    /// whether a recogniser reports a clock.
+    #[test]
+    fn timing_never_changes_which_atoms_come_out() {
+        let script = compile("we ship with rustlight games and saw forty two", CompileOptions::default());
+        for text in [
+            "we ship with rust light games",
+            "we saw forty two",
+            "it costs $12",
+            "Hello, world.",
+        ] {
+            let plain: Vec<String> = script.query_words(text).into_iter().map(|w| w.surface).collect();
+            // Times that fit, and times that do not.
+            let fitting: Vec<TranscriptWordTime> = text
+                .split_whitespace()
+                .enumerate()
+                .map(|(i, w)| TranscriptWordTime {
+                    text: w.to_string(),
+                    start_ms: i as f64 * 100.0,
+                })
+                .collect();
+            for times in [fitting, timed(&[("nonsense", 10.0)])] {
+                let timed_surfaces: Vec<String> = script
+                    .query_words_with_times(text, &times)
+                    .into_iter()
+                    .map(|w| w.surface)
+                    .collect();
+                assert_eq!(timed_surfaces, plain, "atoms changed for {text:?}");
+            }
+        }
     }
 
     /// What the shared predicate actually does, rather than what its old

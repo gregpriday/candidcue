@@ -371,15 +371,30 @@ pub struct AlignmentConfig {
     /// before that could replace this constant:
     ///
     ///   - whether `timestamps` is segment-relative or stream-relative, and
-    ///     whether it stays so across a segment boundary. Upstream documentation
-    ///     is contradictory and a probe here never reached a second segment.
+    ///     whether it stays so across a segment boundary. SETTLED: they are
+    ///     segment-relative, and `start_time` carries the segment's origin —
+    ///     measured by forcing a second segment. See `cc_stt::word_times`.
     ///   - that `timestamps.last()` is the END of the last token rather than its
-    ///     ONSET. No token duration is exposed, so it is likely the onset, which
-    ///     would leave a residual worth measuring rather than assuming.
-    ///   - that the result is better than 1400 on a re-captured corpus. The
-    ///     frozen fixtures carry the `audioEndMs` they were captured with, so
-    ///     this is not measurable without a fresh capture — which is the reason
-    ///     the constant has not simply been changed.
+    ///     ONSET. SETTLED: it is the ONSET, and it runs 100–340 ms late (mean
+    ///     ~200) against true acoustic onset, because a streaming transducer
+    ///     times a token from the frame it committed on.
+    ///   - that the result is better than 1400 on a re-captured corpus. STILL
+    ///     OPEN. The frozen fixtures carry the `audioEndMs` they were captured
+    ///     with, so this is not measurable without a fresh capture — which is
+    ///     the reason the constant has not simply been changed.
+    ///
+    /// What DID change: the per-word times those first two facts unlocked now
+    /// reach the ledger, and [`crate::ledger::Ledger::tail`] dates an atom by
+    /// the larger of its measurement and its interpolated share of the item. So
+    /// this constant no longer decides when a measured word was spoken — it is
+    /// a floor under one, and the sole answer only for atoms with no
+    /// measurement (a recogniser that reports none, and every fixture captured
+    /// before one did). That makes it less load-bearing without re-tuning it,
+    /// which is what the missing corpus still forbids. Note the floor also
+    /// means the rule-2 over-correction described above survives wherever the
+    /// measurement lands earlier than the spread; only the rule-3 case, where
+    /// this constant dates words before speech that was still running, is
+    /// actually repaired.
     pub endpoint_lag_ms: f64,
 
     // ---- viewport prior ----
