@@ -185,6 +185,10 @@ pub fn generate_events(gold: &GoldTimeline, corruption: &Corruption, seed: u64) 
                     text,
                     audio_ms: t,
                     wall_ms: t,
+                    // Tier A scenarios are built from a gold timeline rather
+                    // than heard, so any word time here would be the answer
+                    // handed back to the engine as evidence.
+                    word_times: None,
                 });
             }
             t += PARTIAL_EVERY_MS;
@@ -196,6 +200,7 @@ pub fn generate_events(gold: &GoldTimeline, corruption: &Corruption, seed: u64) 
             text,
             audio_end_ms: final_at,
             wall_ms: final_at,
+            word_times: None,
         });
     }
     events

@@ -30,7 +30,7 @@ use std::path::PathBuf;
 
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 
-use crate::SttFrame;
+use crate::{SttFrame, WordTime};
 
 /// The token table. Every sherpa transducer bundle names this the same.
 pub const TOKENS_FILE: &str = "tokens.txt";
@@ -496,6 +496,9 @@ impl LocalRecognizer {
             sample_rate: 0,
             started: std::time::Instant::now(),
             last_emitted_ms: 0.0,
+            open_item_start_ms: 0.0,
+            prime_offset_ms: prime_ms as f64,
+            last_word_times: None,
         }
     }
 }
@@ -518,6 +521,26 @@ pub struct LocalSession<'a> {
     /// Audio-clock time of the most recent frame emitted, so the stream this
     /// session produces is monotonic. See [`LocalSession::publish`].
     last_emitted_ms: f64,
+    /// The clock the open item was announced at, and the floor every word time
+    /// inside it is held to — a word cannot have been spoken before the
+    /// utterance containing it began.
+    open_item_start_ms: f64,
+    /// How far the recogniser's own clock runs AHEAD of the audio clock.
+    ///
+    /// Priming feeds the decoder silence that is deliberately invisible to
+    /// [`Self::audio_ms`] — the clock means "how much of the presenter's audio
+    /// has been heard", and silence this side of the microphone is not that.
+    /// sherpa counts it anyway, so every time it reports is late by exactly the
+    /// priming, and subtracting it here is what keeps the two clocks the same
+    /// clock. Zero for the shipped model, which primes not at all; the knob
+    /// exists for the next one, and a systematic offset is not a thing to
+    /// discover after a model swap.
+    prime_offset_ms: f64,
+    /// Word timings for [`Self::last_text`], kept because [`Self::close_item`]
+    /// builds its `Final` from the cached text and never asks the recogniser
+    /// again. Without this the final — the one frame the ledger treats as
+    /// authoritative — would be the only frame with no timing on it.
+    last_word_times: Option<Vec<WordTime>>,
 }
 
 impl LocalSession<'_> {
@@ -592,11 +615,22 @@ impl LocalSession<'_> {
             return;
         };
         let text = result.text.trim().to_string();
-        if text.is_empty() || text == self.last_text {
+        if text.is_empty() {
             return;
         }
 
         let audio_ms = self.audio_ms();
+
+        if text == self.last_text {
+            // The hypothesis has not moved, so there is nothing to publish —
+            // but the recogniser may still have sharpened the timing under it,
+            // and the cache is what the eventual `Final` is built from. Refresh
+            // it and stay quiet.
+            if let Some(times) = self.word_times(&result, self.open_item_start_ms, audio_ms) {
+                self.last_word_times = Some(times);
+            }
+            return;
+        }
         let item_id = match &self.open_item {
             Some(id) => id.clone(),
             None => {
@@ -621,10 +655,11 @@ impl LocalSession<'_> {
                 // shared protocol.
                 let audio_start_ms = result
                     .start_time
-                    .map(|s| s as f64 * 1000.0)
+                    .map(|s| s as f64 * 1000.0 - self.prime_offset_ms)
                     .unwrap_or(audio_ms)
                     .clamp(self.last_emitted_ms, audio_ms);
                 self.last_emitted_ms = audio_start_ms;
+                self.open_item_start_ms = audio_start_ms;
                 emit(SttFrame::ItemStarted {
                     item_id: id.clone(),
                     ordinal: self.ordinal - 1,
@@ -634,6 +669,13 @@ impl LocalSession<'_> {
             }
         };
 
+        // Reconstructed from the SAME result the text came from, so a word
+        // vector never describes a hypothesis other than the one beside it.
+        // Cleared rather than carried when reconstruction fails: stale timings
+        // against fresh text would be a lie the shape of an answer.
+        let word_times = self.word_times(&result, self.open_item_start_ms, audio_ms);
+        self.last_word_times = word_times.clone();
+
         self.last_text = text.clone();
         self.last_emitted_ms = self.last_emitted_ms.max(audio_ms);
         emit(SttFrame::Partial {
@@ -641,7 +683,31 @@ impl LocalSession<'_> {
             text,
             audio_ms,
             wall_ms: self.wall_ms(),
+            word_times,
         });
+    }
+
+    /// Word timings for one raw result, or `None` when the recogniser did not
+    /// give enough to build them honestly.
+    ///
+    /// `start_time` being absent is a refusal rather than a zero: the offsets
+    /// are relative to the segment, so guessing an origin of 0 inside a later
+    /// segment would date every word to the top of the take.
+    fn word_times(
+        &self,
+        result: &sherpa_onnx::RecognizerResult,
+        floor_ms: f64,
+        ceil_ms: f64,
+    ) -> Option<Vec<WordTime>> {
+        let timestamps = result.timestamps.as_ref()?;
+        let segment_start_ms = result.start_time? as f64 * 1000.0 - self.prime_offset_ms;
+        crate::word_times::reconstruct(
+            &result.tokens,
+            timestamps,
+            segment_start_ms,
+            floor_ms,
+            ceil_ms,
+        )
     }
 
     /// Close the open utterance, if any, with the last hypothesis as its final.
@@ -649,6 +715,7 @@ impl LocalSession<'_> {
         let Some(item_id) = self.open_item.take() else {
             // Endpoint on silence: reset the decoder, mint nothing.
             self.last_text.clear();
+            self.last_word_times = None;
             return;
         };
         let text = std::mem::take(&mut self.last_text);
@@ -658,6 +725,10 @@ impl LocalSession<'_> {
             text,
             audio_end_ms: self.audio_ms(),
             wall_ms: self.wall_ms(),
+            // Taken, not copied: the next utterance decodes in a new segment
+            // against a new origin, and inheriting these would date its first
+            // words to the previous one.
+            word_times: self.last_word_times.take(),
         });
     }
 

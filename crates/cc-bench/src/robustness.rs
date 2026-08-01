@@ -72,25 +72,48 @@ fn observed_series(
 }
 
 /// Rewrite every partial/final text with `f`.
+///
+/// Word timings are DROPPED rather than carried: `f` is free to add, remove or
+/// merge words, so a vector built for the original text may no longer line up
+/// with a single word of the rewritten one. A perturbation exists to ask what
+/// the engine does with worse evidence, and evidence that quietly disagrees
+/// with itself is not the question being asked.
 fn map_text(events: &[SttFrame], f: impl Fn(&str) -> String) -> Vec<SttFrame> {
     events
         .iter()
         .map(|e| match e {
-            SttFrame::Partial { item_id, text, audio_ms, wall_ms } => SttFrame::Partial {
+            SttFrame::Partial { item_id, text, audio_ms, wall_ms, .. } => SttFrame::Partial {
                 item_id: item_id.clone(),
                 text: f(text),
                 audio_ms: *audio_ms,
                 wall_ms: *wall_ms,
+                word_times: None,
             },
-            SttFrame::Final { item_id, text, audio_end_ms, wall_ms } => SttFrame::Final {
+            SttFrame::Final { item_id, text, audio_end_ms, wall_ms, .. } => SttFrame::Final {
                 item_id: item_id.clone(),
                 text: f(text),
                 audio_end_ms: *audio_end_ms,
                 wall_ms: *wall_ms,
+                word_times: None,
             },
             other => other.clone(),
         })
         .collect()
+}
+
+fn scale_word_times(
+    word_times: &Option<Vec<cc_stt::WordTime>>,
+    scale: f64,
+) -> Option<Vec<cc_stt::WordTime>> {
+    word_times.as_ref().map(|times| {
+        times
+            .iter()
+            .map(|w| cc_stt::WordTime {
+                text: w.text.clone(),
+                start_ms: w.start_ms * scale,
+            })
+            .collect()
+    })
 }
 
 /// Shift every timestamp by `scale`, which must be matched by a correspondingly
@@ -104,17 +127,22 @@ fn scale_time(events: &[SttFrame], scale: f64) -> Vec<SttFrame> {
                 ordinal: *ordinal,
                 audio_start_ms: audio_start_ms * scale,
             },
-            SttFrame::Partial { item_id, text, audio_ms, wall_ms } => SttFrame::Partial {
+            SttFrame::Partial { item_id, text, audio_ms, wall_ms, word_times } => SttFrame::Partial {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_ms: audio_ms * scale,
                 wall_ms: wall_ms * scale,
+                // Scaled with everything else: this perturbation stretches the
+                // take's clock, and a word time left at its old value would put
+                // the word outside the utterance it belongs to.
+                word_times: scale_word_times(word_times, scale),
             },
-            SttFrame::Final { item_id, text, audio_end_ms, wall_ms } => SttFrame::Final {
+            SttFrame::Final { item_id, text, audio_end_ms, wall_ms, word_times } => SttFrame::Final {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: audio_end_ms * scale,
                 wall_ms: wall_ms * scale,
+                word_times: scale_word_times(word_times, scale),
             },
             other => other.clone(),
         })
@@ -205,11 +233,16 @@ pub fn metamorphic_battery(
         let delayed = events
             .iter()
             .map(|e| match e {
-                SttFrame::Partial { item_id, text, audio_ms, wall_ms } => SttFrame::Partial {
+                SttFrame::Partial { item_id, text, audio_ms, wall_ms, word_times } => SttFrame::Partial {
                     item_id: item_id.clone(),
                     text: text.clone(),
                     audio_ms: audio_ms + 250.0,
                     wall_ms: *wall_ms,
+                    // Carried UNCHANGED. This perturbation delays when the
+                    // frame arrives, not when the words were said — moving
+                    // the word clocks with it would model a presenter who
+                    // spoke late rather than a recogniser that reported late.
+                    word_times: word_times.clone(),
                 },
                 other => other.clone(),
             })
@@ -371,9 +404,11 @@ fn apply(events: &[SttFrame], perts: &[Perturbation], vocab: &[String]) -> Vec<S
     for p in perts {
         let Some(frame) = out.get_mut(p.event) else { continue };
         match frame {
-            SttFrame::Partial { text, audio_ms, .. }
-            | SttFrame::Final { text, audio_end_ms: audio_ms, .. } => {
+            SttFrame::Partial { text, audio_ms, word_times, .. }
+            | SttFrame::Final { text, audio_end_ms: audio_ms, word_times, .. } => {
                 match p.op {
+                    // Only WHEN the frame arrived moved; the words in it did
+                    // not, so their clocks stand.
                     PerturbOp::DelayMs(ms) => *audio_ms += ms as f64,
                     _ => {
                         let mut words: Vec<String> =
@@ -395,6 +430,13 @@ fn apply(events: &[SttFrame], perts: &[Perturbation], vocab: &[String]) -> Vec<S
                             PerturbOp::DelayMs(_) => unreachable!(),
                         }
                         *text = words.join(" ");
+                        // The word list just changed length or spelling, so a
+                        // timing vector built for the old one now describes a
+                        // transcript that no longer exists. Nothing reads it
+                        // yet, which is exactly why it must not be left to rot
+                        // — the day something does, this frame would be a
+                        // corrupt fixture rather than a harder one.
+                        *word_times = None;
                     }
                 }
             }
@@ -624,18 +666,21 @@ mod tests {
                 text: "alpha bravo charlie".into(),
                 audio_ms: 1_000.0,
                 wall_ms: 1_000.0,
+                word_times: None,
             },
             SttFrame::Partial {
                 item_id: "1".into(),
                 text: "alpha bravo charlie delta echo".into(),
                 audio_ms: 1_800.0,
                 wall_ms: 1_800.0,
+                word_times: None,
             },
             SttFrame::Final {
                 item_id: "1".into(),
                 text: "alpha bravo charlie delta echo".into(),
                 audio_end_ms: 2_600.0,
                 wall_ms: 2_600.0,
+                word_times: None,
             },
         ]
     }
