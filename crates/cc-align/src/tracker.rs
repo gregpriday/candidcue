@@ -1445,9 +1445,11 @@ impl Engine {
     /// `local_suffix_score` is the local band aligned with the SAME suffix —
     /// the honest "could this still be explained locally?" comparison.
     /// `distant_rivals_gap` is the margin to the next distant cluster
-    /// (duplicate-passage protection). `duplicate_tie` says that margin is
-    /// small only because the tied rivals are word-for-word identical, which
-    /// the caller has already resolved by trajectory — see the note there.
+    /// (duplicate-passage protection). `identical_rival_tie` says that margin
+    /// is small only because the tied rivals are word-for-word identical, which
+    /// the caller has already resolved by picking the copy nearest `observed`
+    /// — the minimum overshoot available, never the one furthest ahead. See
+    /// the note there.
     fn try_discontinuity(
         &mut self,
         best: &Candidate,
