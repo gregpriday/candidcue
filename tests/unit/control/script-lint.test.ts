@@ -95,7 +95,8 @@ describe('long-paragraph', () => {
 
   it('explains the recovery cost rather than restating the word count', () => {
     const [finding] = only(lintScriptSource(prose(120)), 'long-paragraph');
-    expect(finding!.message).toMatch(/end of the paragraph/i);
+    expect(finding!.message).toMatch(/end of the sentence/i);
+    expect(finding!.message).toMatch(/bounded[\s\S]*by the paragraph/i);
     expect(finding!.message).toMatch(/read one twice|skip a line/i);
     expect(finding!.hint).toMatch(/blank line|split/i);
   });

@@ -39,6 +39,19 @@ export interface AlignToken {
   line: number;
   /** Block ordinal — a spoken paragraph, which is what the engine calls a para. */
   para: number;
+  /**
+   * The last token of its sentence. Unlike `line` and `para`, the engine DOES
+   * read this: it brakes forward prediction here, so the display stops at the
+   * full stop the reader is about to pause on instead of running into a
+   * sentence they have not started.
+   *
+   * It has to be sent because it cannot be recovered downstream: `tokenize.ts`
+   * never keeps a TERMINAL dot, so `surface` reaches the engine as `end` and
+   * never `end.`, and the punctuation is gone before this point. What survives
+   * is the compiler's own segmentation, which knows that `Dr.` and `3.14` are
+   * not boundaries, and that is what this carries.
+   */
+  sentenceEnd: boolean;
 }
 
 /**
@@ -52,23 +65,46 @@ export interface AlignToken {
  */
 export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
   /*
-   * `line` and `para` are debug metadata the engine never reads, so a compiled
-   * script that is missing its block or sentence lists must still produce a
+   * A compiled script missing its block or sentence lists must still produce a
    * usable token stream. Throwing here would take alignment down for a take
    * whose SPOKEN TOKENS were perfectly fine — a total loss of following in
-   * exchange for a diagnostic ordinal.
+   * exchange for an ordinal.
+   *
+   * `line` really is only a diagnostic. `para` is NOT: the engine builds its
+   * paragraph table from it, and that table is the outer bound on how far the
+   * display may be carried past the reader. A block list that fails to load
+   * collapses every token into paragraph 0, which is one long paragraph and a
+   * looser ceiling — degraded, still safe, and worth knowing about.
    */
   const blockOrdinals = new Map<string, number>();
   (compiled.blocks ?? []).forEach((block, index) => blockOrdinals.set(block.id, index));
   const sentenceOrdinals = new Map<string, number>();
-  (compiled.sentences ?? []).forEach((sentence, index) =>
-    sentenceOrdinals.set(sentence.id, index),
-  );
+  const sentenceEnds = new Set<number>();
+  (compiled.sentences ?? []).forEach((sentence, index) => {
+    sentenceOrdinals.set(sentence.id, index);
+    sentenceEnds.add(sentence.endTokenIndex);
+  });
 
   return (compiled.spokenTokens ?? []).map((token) => ({
     surface: token.surface,
     line: sentenceOrdinals.get(token.sentenceId) ?? 0,
     para: blockOrdinals.get(token.blockId) ?? 0,
+    /*
+     * A missing sentence list leaves this false everywhere, which is the same
+     * defensive stance as the ordinals above: the engine falls back to braking
+     * at paragraph ends, which is where it braked before sentences reached it.
+     * Losing the finer ceiling is a worse take, not a broken one.
+     *
+     * KNOWN GAP: `SentenceUnit` is a NAVIGATION unit, and a list item is
+     * deliberately one of them however many sentences it contains (§25.5, see
+     * `singleSentence` in `compile.ts`). So a multi-sentence bullet reports one
+     * boundary — at the end of the item — and the display may still be carried
+     * across a full stop inside it. That is the behaviour this whole change
+     * replaces for prose, so a bullet is no worse off than before, but it is
+     * not protected either. Closing it means publishing grammatical sentence
+     * ends separately from navigation units rather than reusing these.
+     */
+    sentenceEnd: sentenceEnds.has(token.index),
   }));
 }
 

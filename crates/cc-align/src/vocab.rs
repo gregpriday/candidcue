@@ -69,7 +69,7 @@
 //! module goes through [`sanitize`], which is an allowlist, and anything it
 //! cannot clean is dropped rather than sent and hoped for.
 
-use crate::script::CompileOptions;
+use crate::script::{ends_sentence, CompileOptions};
 
 /// One authored spoken token, in reading order.
 #[derive(Debug, Clone, Copy)]
@@ -441,23 +441,6 @@ impl Shape {
 
 fn trim_edges(surface: &str) -> &str {
     surface.trim_matches(|c: char| !c.is_alphanumeric())
-}
-
-fn ends_sentence(raw: &str) -> bool {
-    let trimmed = raw.trim_end_matches(['"', '\'', ')', ']', '”', '’']);
-    let Some(last) = trimmed.chars().last() else {
-        return false;
-    };
-    if !matches!(last, '.' | '!' | '?') {
-        return false;
-    }
-    // `3.` never ends a sentence in a script that is reading figures aloud, and
-    // `Dr.` / `U.S.` are abbreviations the tokenizer keeps whole.
-    let body = &trimmed[..trimmed.len() - last.len_utf8()];
-    if body.chars().last().is_some_and(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    body.chars().filter(|c| c.is_alphanumeric()).count() > 1 && !body.contains('.')
 }
 
 /// Case-insensitive identity for deduplication and occurrence counting.

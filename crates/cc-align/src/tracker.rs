@@ -112,7 +112,7 @@ pub struct Snapshot {
     pub lead_ease_ms: f64,
     pub lead_hold_ms: f64,
     pub lead_decay_ms: f64,
-    /// Absolute ceiling for the display: the end of the paragraph the reader
+    /// Absolute ceiling for the display: the end of the sentence the reader
     /// was last heard in. Prediction stops here and waits for evidence.
     pub display_limit: f64,
     /// Heuristic 0..1 — NOT yet a calibrated probability; benchmarked as-is.
@@ -142,7 +142,8 @@ impl Snapshot {
     /// nobody notices. Leading erases a line the reader has not reached — and
     /// they are looking straight at it. Everything below is that asymmetry: a
     /// lead that is only ever a fraction of a word, that decays to nothing when
-    /// evidence goes stale, and that stops dead at a paragraph break.
+    /// evidence goes stale, and that stops dead at the end of the sentence the
+    /// reader was last heard in.
     pub fn display_at(&self, t_audio_ms: f64) -> f64 {
         let ceiling = self.display_limit.min(self.script_len);
         let age = (t_audio_ms - self.evidence_audio_ms).max(0.0);
@@ -963,15 +964,35 @@ impl Engine {
         self.snapshot(decision, evidence_ms, now_ms)
     }
 
+    /// How far prediction may carry the DISPLAY from where the reader was last
+    /// heard — the sentence they are audibly in, or the paragraph when the
+    /// finer rule is switched off for comparison.
+    ///
+    /// Only the display's limit comes through here. The approximate-bridge gate
+    /// keeps the paragraph ceiling on purpose; see the note at its call site.
+    fn prediction_ceiling(&self) -> f64 {
+        if self.config.sentence_prediction_ceiling {
+            self.script.prediction_ceiling(self.observed)
+        } else {
+            self.script.paragraph_ceiling(self.observed)
+        }
+    }
+
     /// May one close spelling/sound stand in for the immediately expected
     /// script word?
     ///
     /// This is intentionally much narrower than ordinary local alignment:
     /// one new approximate content relation per step, no unexplained transcript
     /// or skipped script material, forward by about one word, near the pace
-    /// prediction, and only from an already-confident Following lock. It
-    /// updates only the reversible dim frontier; never `observed`, `confirmed`,
-    /// cold acquisition, or discontinuity authority.
+    /// prediction, and only from an already-confident Following lock. What it
+    /// MOVES is only the reversible dim frontier; never `observed`,
+    /// `confirmed`, cold acquisition, or discontinuity authority.
+    ///
+    /// What it DECIDES reaches further than that, which is easy to miss and
+    /// matters: the local-health check reads this answer as part of `local_ok`,
+    /// and the ordinary-evidence path treats a refusal here as grounds to hold.
+    /// So a stricter gate does not merely dim less — it can stop the engine
+    /// extrapolating at all.
     fn can_bridge_local_approx(&self, candidate: &Candidate, predicted: f64) -> bool {
         let ev = &candidate.evidence;
         let c = &self.config;
@@ -984,7 +1005,16 @@ impl Engine {
             && ev.end_position as f64 > frontier
             && ev.end_position as f64 - frontier <= c.local_approx_max_step
             && ev.end_position as f64 - self.observed <= c.local_approx_max_advance
-            && ev.end_position as f64 <= self.script.prediction_ceiling(self.observed)
+            // Deliberately the PARAGRAPH ceiling, not the sentence one. This
+            // gate is not dim-only: `local_ok` above reads it to decide whether
+            // evidence is weak, and failing it here drops the engine into
+            // `Holding` — so tightening it to sentences would stop
+            // extrapolation and change motion state at every full stop. The
+            // display does not need that to stay behind the reader; the
+            // sentence rule is enforced where it belongs, on `display_limit`,
+            // which already refuses to cross the boundary. Braking the display
+            // is the goal; halting the tracker at every full stop is not.
+            && ev.end_position as f64 <= self.script.paragraph_ceiling(self.observed)
             && (ev.end_position as f64 - predicted).abs() <= c.local_approx_prediction_slack
             && ev.fidelity >= c.observe_min_fidelity
             && ev.coverage >= c.observe_min_coverage
@@ -1412,7 +1442,7 @@ impl Engine {
             lead_ease_ms: self.config.lead_ease_ms,
             lead_hold_ms: self.config.lead_hold_ms,
             lead_decay_ms: self.config.lead_decay_ms,
-            display_limit: self.script.prediction_ceiling(self.observed),
+            display_limit: self.prediction_ceiling(),
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
             provisional: self.provisional,
@@ -1450,6 +1480,80 @@ mod tests {
             "alpha bravo presenter teleprompter harbour narration delta echo foxtrot golf",
             CompileOptions::default(),
         )
+    }
+
+    /// The snapshot the stage actually receives carries the sentence ceiling,
+    /// and the switch genuinely restores the old one — the two rules have to be
+    /// comparable in one binary or a claim about either is unfalsifiable.
+    #[test]
+    fn the_display_limit_brakes_at_the_sentence_and_the_switch_restores_paragraphs() {
+        // One paragraph, two sentences: atoms 0..3 and 3..6.
+        let script = compile(
+            "alpha bravo charlie. delta echo foxtrot.",
+            CompileOptions::default(),
+        );
+        assert_eq!(script.sentence_end, vec![3, 3, 3, 6, 6, 6]);
+
+        let mut engine = Engine::new(script.clone(), AlignmentConfig::default());
+        engine.set_manual_position(1, 0.0);
+        let snapshot = final_item(&mut engine, 1, "bravo", 350.0);
+        assert!(
+            snapshot.observed < 3.0,
+            "the reader must still be inside the first sentence: {}",
+            snapshot.observed
+        );
+        // Heard inside the first sentence, the display may reach its last word
+        // and stop — `delta` stays lit.
+        assert_eq!(snapshot.display_limit, 3.0);
+
+        let paragraph_only = AlignmentConfig {
+            sentence_prediction_ceiling: false,
+            ..AlignmentConfig::default()
+        };
+        let mut engine = Engine::new(script, paragraph_only);
+        engine.set_manual_position(1, 0.0);
+        let snapshot = final_item(&mut engine, 1, "bravo", 350.0);
+        assert!(snapshot.observed < 3.0);
+        // The rule this replaces: the whole paragraph was fair game from the
+        // first word of it.
+        assert_eq!(snapshot.display_limit, 6.0);
+    }
+
+    /// Braking the display at a full stop must not also halt the tracker
+    /// there.
+    ///
+    /// `can_bridge_local_approx` looks like a dimming concern and is not: the
+    /// health check reads it to decide whether evidence is weak, and failing it
+    /// drops the engine to `Holding` with the rate at zero. Gating it on
+    /// sentences would therefore stop extrapolation at every full stop — a
+    /// stutter in the motion, bought for a safety the `display_limit` was
+    /// already providing on its own.
+    #[test]
+    fn a_sentence_break_brakes_the_display_without_stalling_the_tracker() {
+        // The full stop falls after `bravo`, so the bridge's candidate — which
+        // lands on `presenter`, atom 3 — sits BEYOND the sentence ceiling and
+        // inside the paragraph. That gap is the whole point: with the gate on
+        // the sentence ceiling the bridge is refused and the engine holds, so
+        // this test fails if the ceiling is ever put back on it.
+        let script = compile(
+            "alpha bravo. presenter teleprompter harbour narration",
+            CompileOptions::default(),
+        );
+        assert_eq!(script.sentence_end, vec![2, 2, 6, 6, 6, 6]);
+        assert_eq!(script.para_end, vec![6, 6, 6, 6, 6, 6]);
+
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+        let snapshot = final_item(&mut engine, 1, "presentor", 350.0);
+
+        // Heard through `bravo` and holding at the full stop, the display may
+        // not reach `presenter`...
+        assert_eq!(snapshot.display_limit, 2.0);
+        // ...but the tracker keeps following and the reversible dim frontier
+        // still advances, because shading can be taken back and a stalled
+        // engine cannot.
+        assert_eq!(snapshot.state, TrackingState::Following);
+        assert_eq!(snapshot.provisional, Some(3.0));
     }
 
     #[test]

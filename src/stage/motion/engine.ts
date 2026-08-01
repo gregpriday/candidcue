@@ -1280,10 +1280,10 @@ export function createStageMotionEngine(
      * happened in Rust, so no axis conversion is needed here.
      *
      * It is zero whenever the path is not advancing — a holding state, a
-     * saturated lead, a paragraph ceiling, a settle onto a pause — which is
-     * what keeps the §70.5 overshoot guard meaningful: that guard measures the
-     * plant's speed relative to this number, so a feed-forward the target
-     * cannot justify is a guard that cannot fire.
+     * saturated lead, a sentence or paragraph ceiling, a settle onto a pause —
+     * which is what keeps the §70.5 overshoot guard meaningful: that guard
+     * measures the plant's speed relative to this number, so a feed-forward the
+     * target cannot justify is a guard that cannot fire.
      */
     const velocity = alignmentDisplayRateAt(snapshot, audioNow);
     // The snapshot crossed a process boundary; arithmetic over it must not be

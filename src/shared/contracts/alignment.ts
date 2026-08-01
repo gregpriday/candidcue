@@ -168,10 +168,11 @@ export interface AlignmentSnapshot {
   leadHoldMs: number;
   leadDecayMs: number;
   /**
-   * Absolute ceiling for the display: the end of the paragraph the reader was
-   * last heard in. The engine will not predict across a paragraph break — a
-   * break is where readers stop, so crossing one on a rate estimate alone is
-   * the guess most likely to be wrong and most visible when it is.
+   * Absolute ceiling for the display: the end of the SENTENCE the reader was
+   * last heard in, and never past the end of its paragraph. The engine will not
+   * predict across either break — a break is where readers stop for breath, so
+   * crossing one on a rate estimate alone is the guess most likely to be wrong
+   * and most visible when it is.
    */
   displayLimitToken: number;
 
@@ -287,9 +288,9 @@ function clampToScript(position: number, ceiling: number): number {
  * The DERIVATIVE OF THE PATH, deliberately, and not the engine's rate estimate.
  * They are equal while the reader is flowing and the extrapolation gain is 1,
  * which is the common case; they diverge exactly where it matters, because the
- * path stops advancing when the lead saturates, when a paragraph ceiling is
- * reached, and while it settles onto a pause, and the rate estimate knows about
- * none of that.
+ * path stops advancing when the lead saturates, when a sentence or paragraph
+ * ceiling is reached, and while it settles onto a pause, and the rate estimate
+ * knows about none of that.
  *
  * Feeding the raw pace instead is unsafe rather than merely inaccurate. The
  * §70.5 overshoot guard measures speed RELATIVE to the feed-forward — matching

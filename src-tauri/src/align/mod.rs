@@ -59,6 +59,17 @@ pub struct AlignToken {
     pub line: u32,
     #[serde(default)]
     pub para: u32,
+    /// The last token of its sentence, per the compiler that laid the script
+    /// out. The engine brakes prediction here rather than carrying the display
+    /// into a sentence the reader has not started.
+    ///
+    /// It has to be told: the app's tokenizer drops terminal punctuation, so
+    /// `end.` reaches this struct as `end` and no amount of looking at
+    /// `surface` recovers the boundary. Defaulted so a payload from before this
+    /// existed still deserializes — and costs only the finer ceiling, since
+    /// paragraph ends are sentence ends regardless.
+    #[serde(default)]
+    pub sentence_end: bool,
 }
 
 /// What the stage and control receive after every transcript event.
@@ -178,6 +189,7 @@ impl AlignmentState {
                 surface: t.surface.clone(),
                 line: t.line,
                 para: t.para,
+                sentence_end: t.sentence_end,
             })
             .collect();
         // The language the SETTING resolved to, which is what #157 threaded
@@ -428,6 +440,7 @@ mod tests {
                 surface: (*w).to_string(),
                 line: i as u32,
                 para: 0,
+                sentence_end: false,
             })
             .collect()
     }
@@ -951,7 +964,11 @@ mod starter_script_tests {
         let sentence_two = "When you present, the stage follows your voice and keeps your place.";
         let mut tokens = Vec::new();
         for (para, sentence) in [sentence_one, sentence_two].iter().enumerate() {
-            for word in sentence.split_whitespace() {
+            // The trim mirrors `tokenize.ts`: the app's surfaces never carry
+            // their terminal punctuation, which is why the sentence boundary
+            // travels as its own field rather than being read back off the text.
+            let words: Vec<&str> = sentence.split_whitespace().collect();
+            for (index, word) in words.iter().enumerate() {
                 let surface = word.trim_matches(|c: char| c == '.' || c == ',');
                 if surface.is_empty() {
                     continue;
@@ -960,6 +977,7 @@ mod starter_script_tests {
                     surface: surface.to_string(),
                     line: para as u32,
                     para: 0,
+                    sentence_end: index + 1 == words.len(),
                 });
             }
         }
@@ -1137,6 +1155,57 @@ mod canonicalization_contract_tests {
         "£20", "€5", "co-founder", "API",
     ];
 
+    /// The sentence boundary has exactly one route from the compiler to the
+    /// engine, and it is this JSON field.
+    ///
+    /// Worth a test of its own because every way it can break is silent. The
+    /// key is camelCase on the wire and snake_case in Rust, so a struct-level
+    /// rename that went missing would leave `sentence_end` quietly false; and
+    /// `#[serde(default)]` means a payload that never mentions it deserializes
+    /// happily. Both failures look like "prediction is a bit loose", not like
+    /// an error.
+    #[test]
+    fn a_sentence_boundary_survives_the_ipc_shape() {
+        let flagged: AlignToken =
+            serde_json::from_str(r#"{"surface":"bravo","line":0,"para":0,"sentenceEnd":true}"#)
+                .expect("camelCase sentenceEnd must deserialize");
+        assert!(flagged.sentence_end);
+
+        // A payload from before this field existed is still valid, and says no.
+        let legacy: AlignToken =
+            serde_json::from_str(r#"{"surface":"bravo","line":0,"para":0}"#)
+                .expect("a payload without the field must still deserialize");
+        assert!(!legacy.sentence_end);
+
+        // And it reaches the compiled script rather than stopping at the struct.
+        let tokens = vec![
+            AlignToken {
+                surface: "alpha".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            flagged,
+            AlignToken {
+                surface: "charlie".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+        ];
+        let inputs: Vec<TokenInput> = tokens
+            .iter()
+            .map(|t| TokenInput {
+                surface: t.surface.clone(),
+                line: t.line,
+                para: t.para,
+                sentence_end: t.sentence_end,
+            })
+            .collect();
+        let script = cc_align::compile_tokens(&inputs);
+        assert_eq!(script.sentence_end, vec![2, 2, 3]);
+    }
+
     #[test]
     fn every_spoken_token_the_app_renders_produces_at_least_one_atom() {
         let tokens: Vec<AlignToken> = APP_TOKEN_SURFACES
@@ -1145,6 +1214,7 @@ mod canonicalization_contract_tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let inputs: Vec<TokenInput> = tokens
@@ -1153,6 +1223,7 @@ mod canonicalization_contract_tests {
                 surface: t.surface.clone(),
                 line: t.line,
                 para: t.para,
+                sentence_end: t.sentence_end,
             })
             .collect();
         let script = cc_align::compile_tokens(&inputs);
@@ -1181,6 +1252,7 @@ mod canonicalization_contract_tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let script = cc_align::compile_tokens(&inputs);
@@ -1209,6 +1281,7 @@ mod canonicalization_contract_tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         state.start(1, &tokens);

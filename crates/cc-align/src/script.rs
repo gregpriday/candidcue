@@ -19,6 +19,14 @@ pub const FLAG_STOPWORD: u8 = 1 << 0;
 pub const FLAG_NUMERIC: u8 = 1 << 1;
 /// Eligible to propose a *global* relocation on its own.
 pub const FLAG_ANCHOR: u8 = 1 << 2;
+/// The last atom of a sentence — where the reader stops, breathes, and holds.
+///
+/// Structural, not lexical: the three flags above describe what a word IS, this
+/// one describes where it SITS. It exists so [`CompiledScript::sentence_end`]
+/// can be built by one scan, and it is the only thing either compile path has
+/// to agree on — the Markdown path derives it from terminal punctuation, the
+/// token path is told it by a caller that segmented the document properly.
+pub const FLAG_SENTENCE_END: u8 = 1 << 3;
 
 /// One spoken atom of the script, in reading order.
 #[derive(Debug, Clone)]
@@ -149,12 +157,43 @@ pub struct CompiledScript {
     pub atom_token_pos: Vec<f64>,
     /// For each atom, the EXCLUSIVE atom index ending its paragraph.
     ///
-    /// The display's hard ceiling. Prediction may carry the reader to the end
-    /// of the paragraph they are audibly in, and not one word past it: crossing
-    /// a paragraph break is the one guess the engine is never allowed to make,
-    /// because a break is exactly where a reader stops to breathe, check the
-    /// camera, or decide whether to say the next bit at all.
+    /// The OUTER bound, not the display's ceiling — `sentence_end` below took
+    /// that job. Crossing a paragraph break is still the one guess the engine is
+    /// never allowed to make, because a break is exactly where a reader stops to
+    /// breathe, check the camera, or decide whether to say the next bit at all;
+    /// the finer rule simply brakes earlier and can never reach past this one.
+    ///
+    /// Two things still read it. The approximate-bridge gate
+    /// (`Tracker::can_bridge_local_approx`) stays deliberately paragraph-bounded,
+    /// because failing it does not merely dim less — it drops the engine into
+    /// `Holding`. And [`CompiledScript::paragraph_ceiling`] is the off switch
+    /// that reproduces the old display behaviour for comparison.
     pub para_end: Vec<u32>,
+    /// For each atom, the EXCLUSIVE atom index ending its SENTENCE.
+    ///
+    /// The same rule as `para_end`, applied where readers actually pause. A
+    /// full stop is where they slow down, take a breath and hold for effect,
+    /// so it is the most likely place for the display to run past them — and
+    /// a paragraph ceiling brakes at neither of the four sentence endings in a
+    /// five-sentence paragraph. Prose has far more sentences than paragraphs,
+    /// which is to say the paragraph rule caught the biggest version of this
+    /// and missed every smaller one.
+    ///
+    /// Never greater than `para_end` at the same atom: every paragraph's last
+    /// atom is forced to be a sentence end whether or not it was punctuated
+    /// like one, so the coarser rule survives inside the finer one. A script
+    /// with no terminal punctuation at all therefore compiles to
+    /// `sentence_end == para_end` and behaves exactly as it did before — that
+    /// is a property of how the table is built, not a special case.
+    ///
+    /// "Sentence" is whatever the compile path called one, and the token path
+    /// is only as good as what it was told. The app hands over its NAVIGATION
+    /// units, which are grammatical sentences in prose but deliberately one
+    /// unit per list item however many sentences the bullet holds. So a
+    /// multi-sentence bullet gets a ceiling at the end of the item and none
+    /// inside it — no worse than the paragraph rule it replaces, and no
+    /// better.
+    pub sentence_end: Vec<u32>,
 }
 
 impl CompiledScript {
@@ -167,20 +206,51 @@ impl CompiledScript {
     }
 
     /// How far the display may be carried by prediction from a frontier at
-    /// `atom_pos`: the end of the paragraph the reader was last *heard* in.
+    /// `atom_pos`: the end of the SENTENCE the reader was last *heard* in.
     ///
-    /// `atom_pos` is a frontier, so the last atom actually spoken is the one
-    /// below it — which is what keeps the rule honest at a break. A reader who
-    /// has just finished a paragraph has a frontier sitting exactly on the next
-    /// paragraph's first word; answering with THAT paragraph's end would let
+    /// `atom_pos` is a frontier, so the atom to answer for is the one below it
+    /// — which is what keeps the rule honest at a break. A reader who has just
+    /// finished a sentence has a frontier sitting exactly on the next
+    /// sentence's first word; answering with THAT sentence's end would let
     /// prediction fade its opening words on the strength of having heard the
     /// previous one end, which is the guess this function exists to refuse.
+    ///
+    /// A frontier of zero is the one place the phrasing strains: nothing has
+    /// been heard at all, and the answer is the first sentence's end rather
+    /// than nothing. That is the same room a reader gets for the first word of
+    /// any sentence, and the display has nowhere behind it to sit anyway.
     pub fn prediction_ceiling(&self, atom_pos: f64) -> f64 {
+        match self.last_heard(atom_pos) {
+            Some(at) => self.sentence_end[at] as f64,
+            None => 0.0,
+        }
+    }
+
+    /// The same question answered at paragraph granularity — how far
+    /// prediction could run before sentences reached the atom stream.
+    ///
+    /// Kept as the off switch behind [`crate::AlignmentConfig::
+    /// sentence_prediction_ceiling`] so the two rules can be compared in one
+    /// binary, which is the only way this engine's changes are ever believed.
+    pub fn paragraph_ceiling(&self, atom_pos: f64) -> f64 {
+        match self.last_heard(atom_pos) {
+            Some(at) => self.para_end[at] as f64,
+            None => 0.0,
+        }
+    }
+
+    /// Index of the last atom actually spoken below the frontier `atom_pos`,
+    /// or `None` for a script with nothing in it.
+    ///
+    /// Private and shared: the two ceilings differ only in which table they
+    /// read, and the frontier-sits-exactly-on-the-break rule is subtle enough
+    /// that two copies of it would eventually stop agreeing.
+    fn last_heard(&self, atom_pos: f64) -> Option<usize> {
         if self.atoms.is_empty() {
-            return 0.0;
+            return None;
         }
         let last_heard = (atom_pos.ceil() as i64 - 1).max(0) as usize;
-        self.para_end[last_heard.min(self.atoms.len() - 1)] as f64
+        Some(last_heard.min(self.atoms.len() - 1))
     }
 
     /// Canonical atoms for recogniser text, with word boundaries reconciled
@@ -364,6 +434,51 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
     finalize(atoms, interner, para_count, token_count, options.language)
 }
 
+/// Does this authored word end a sentence?
+///
+/// Shared by the vocabulary extractor and the compiler so there is one answer
+/// to the question in the crate, and it reads the AUTHORED spelling: by the
+/// time text is atoms the punctuation is gone.
+///
+/// It is deliberately crude, and its two ways of being wrong are NOT worth the
+/// same. Calling a boundary that is not one caps prediction early, and a
+/// display trailing the reader by a word is the error this engine is built to
+/// prefer. MISSING one is not free: it hands that stretch back to the paragraph
+/// ceiling, which is precisely the overrun this brake exists to stop.
+///
+/// So the known imprecisions are worth naming in both directions. An honorific
+/// (`Dr.`) reads as terminal here, which is the harmless direction. A figure
+/// ending a sentence (`...up 27. Next year...`) does NOT, because the same rule
+/// is what stops `3.14` being two sentences — that one costs a brake.
+///
+/// Both are confined to this entry point, which is the benchmark harness's.
+/// The live path never reaches here: the app segments sentences with a real
+/// abbreviation list (`src/shared/markdown/segment.ts`) and sends the
+/// boundaries over IPC, so it gets `Dr.` and `27.` right. So a bench number is
+/// not the product's number, and not a bound on it either — it errs in both
+/// directions at once, braking where the product would not and running on
+/// where it would stop.
+///
+/// Sharpening it is also a change to what the vocabulary extractor calls a
+/// sentence, so it belongs with its own measurement rather than riding along
+/// with a change to the display ceiling.
+pub(crate) fn ends_sentence(raw: &str) -> bool {
+    let trimmed = raw.trim_end_matches(['"', '\'', ')', ']', '”', '’']);
+    let Some(last) = trimmed.chars().last() else {
+        return false;
+    };
+    if !matches!(last, '.' | '!' | '?') {
+        return false;
+    }
+    // `3.` never ends a sentence in a script that is reading figures aloud, and
+    // a dotted acronym (`U.S.`) is one the tokenizer keeps whole.
+    let body = &trimmed[..trimmed.len() - last.len_utf8()];
+    if body.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    body.chars().filter(|c| c.is_alphanumeric()).count() > 1 && !body.contains('.')
+}
+
 /// Walk the Markdown once and hand every SPOKEN run of text to `visit`, with
 /// the source line and paragraph ordinal it belongs to.
 ///
@@ -475,6 +590,20 @@ pub struct TokenInput {
     pub line: u32,
     /// 0-based paragraph (block) ordinal.
     pub para: u32,
+    /// This token is the last one of its sentence.
+    ///
+    /// Told, not inferred. The caller's own tokenizer has already dropped the
+    /// full stop by the time it has a surface — `$12` and `well-known` survive
+    /// intact, `end.` arrives as `end` — so the engine cannot read a boundary
+    /// off the text the way it can on the Markdown path. The caller can: it
+    /// segmented the document to lay it out, and knows where its own units
+    /// stop. Whether those units are grammatical sentences is the caller's
+    /// business; the engine brakes wherever it is told to.
+    ///
+    /// `false` everywhere is a valid answer. It costs nothing but the finer
+    /// ceiling: paragraph ends are still sentence ends, so prediction brakes
+    /// exactly where it used to.
+    pub sentence_end: bool,
 }
 
 /// Compile from the caller's own spoken tokens.
@@ -506,6 +635,14 @@ pub fn compile_tokens_in(tokens: &[TokenInput], language: AlignmentLanguage) -> 
                 phonetic: PhoneticKey::default(),
                 token: index as u32,
             });
+        }
+        // The last atom standing is the sentence's last atom: a token that
+        // normalized away entirely leaves the boundary on the word before it,
+        // which is where the reader's voice actually stops.
+        if token.sentence_end {
+            if let Some(last) = atoms.last_mut() {
+                last.flags |= FLAG_SENTENCE_END;
+            }
         }
     }
 
@@ -580,6 +717,8 @@ fn finalize(
 
     let atom_token_pos = build_token_axis(&atoms, token_count);
     let para_end = build_para_end(&atoms);
+    force_paragraph_tails(&mut atoms);
+    let sentence_end = build_sentence_end(&atoms);
 
     CompiledScript {
         language,
@@ -587,6 +726,7 @@ fn finalize(
         token_count,
         atom_token_pos,
         para_end,
+        sentence_end,
         atoms,
         interner,
         token_postings,
@@ -627,6 +767,56 @@ fn build_token_axis(atoms: &[ScriptAtom], token_count: u32) -> Vec<f64> {
     }
     axis.push(token_count as f64);
     axis
+}
+
+/// Force every paragraph's last atom to be a sentence end.
+///
+/// A paragraph break is a sentence break whether or not the author typed a full
+/// stop before it: running out of paragraph is running out of something to say.
+/// Doing it here, on the atoms, rather than in each compile path means the two
+/// paths cannot disagree about it, and it is what makes `sentence_end <=
+/// para_end` hold by construction rather than by assertion.
+///
+/// "Paragraph" means whatever each path counted as one, and the two do not
+/// agree on tight structure. The live compiler gives every heading and every
+/// list item its own block. [`for_each_spoken_line`] only starts a new one at a
+/// blank line, so `- alpha\n- bravo` is one paragraph to it and two to the app.
+/// That divergence predates sentences and is not introduced here — but it does
+/// mean an unpunctuated tight list brakes per LIST on the benchmark path and
+/// per ITEM in the product, so a bench number about one says little about the
+/// other.
+fn force_paragraph_tails(atoms: &mut [ScriptAtom]) {
+    if atoms.is_empty() {
+        return;
+    }
+    for i in 0..atoms.len() - 1 {
+        if atoms[i].para != atoms[i + 1].para {
+            atoms[i].flags |= FLAG_SENTENCE_END;
+        }
+    }
+    let last = atoms.len() - 1;
+    atoms[last].flags |= FLAG_SENTENCE_END;
+}
+
+/// Exclusive end of each atom's sentence, read off the flags the compile paths
+/// set. One pass, for the same reason `build_para_end` needs only one: atoms
+/// are in reading order, so a sentence is a contiguous run.
+fn build_sentence_end(atoms: &[ScriptAtom]) -> Vec<u32> {
+    let mut ends = vec![0u32; atoms.len()];
+    let mut start = 0usize;
+    while start < atoms.len() {
+        let mut end = start;
+        while end < atoms.len() && atoms[end].flags & FLAG_SENTENCE_END == 0 {
+            end += 1;
+        }
+        // The atom carrying the flag belongs to the sentence it ends.
+        end = (end + 1).min(atoms.len());
+        for slot in ends.iter_mut().take(end).skip(start) {
+            *slot = end as u32;
+        }
+        start = end;
+    }
+    ends
 }
 
 /// Exclusive end of each atom's paragraph. Atoms are in reading order, so a
@@ -672,7 +862,10 @@ fn push_line(
     interner: &mut Interner,
     atoms: &mut Vec<ScriptAtom>,
 ) {
-    for canonical in canonical_atoms_for(language, text) {
+    let canonical_line = canonical_atoms_for(language, text);
+    let breaks = sentence_atom_breaks(language, text, &canonical_line);
+    let base = atoms.len();
+    for canonical in canonical_line {
         let id = interner.intern(&canonical);
         // On the Markdown path there is no host tokenizer, so every atom is its
         // own token and the axis is the identity — which is exactly what the
@@ -690,6 +883,70 @@ fn push_line(
             token,
         });
     }
+    for end in breaks {
+        atoms[base + end - 1].flags |= FLAG_SENTENCE_END;
+    }
+}
+
+/// Where this line's sentences end, as EXCLUSIVE offsets into the atoms the
+/// line just produced. Empty when the line holds no interior boundary, or when
+/// finding one would have meant changing the atoms.
+///
+/// Normalization is not a per-word function: `itn_numbers` merges a spelled
+/// number across several words into one atom, `split_word` turns `$12` into
+/// two, and currency and unit expansion reorder what is left. So there is no
+/// arithmetic that maps "the third raw word" onto an atom index, and the only
+/// honest way to ask where a sentence ends is to normalize each sentence on
+/// its own and count.
+///
+/// Which is a second opinion about what the atoms are, and the compiled script
+/// can only have one. So the split is a MEASUREMENT, never the output: the
+/// caller keeps the whole-line atoms regardless, and these offsets are handed
+/// back only when normalizing the pieces reproduced the whole exactly. When a
+/// number phrase or a currency run straddles a full stop the two disagree, and
+/// the answer is no interior boundary for that line rather than an atom stream
+/// that depends on where the sentences fell. Gold positions in the benchmark
+/// corpus are atom indexes; a compiler that quietly renumbered them to brake
+/// more often would invalidate the very measurements meant to judge it.
+fn sentence_atom_breaks(
+    language: AlignmentLanguage,
+    text: &str,
+    canonical_line: &[String],
+) -> Vec<usize> {
+    let mut chunks: Vec<(String, bool)> = Vec::new();
+    let mut current = String::new();
+    for raw in text.split_whitespace() {
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(raw);
+        if ends_sentence(raw) {
+            chunks.push((std::mem::take(&mut current), true));
+        }
+    }
+    // A trailing run with no terminator is the rest of a sentence that carries
+    // on past this line — real text, but not a boundary.
+    if !current.is_empty() {
+        chunks.push((current, false));
+    }
+    if chunks.iter().filter(|(_, terminated)| *terminated).count() == 0 {
+        return Vec::new();
+    }
+
+    let mut breaks = Vec::new();
+    let mut rebuilt: Vec<String> = Vec::with_capacity(canonical_line.len());
+    for (chunk, terminated) in &chunks {
+        rebuilt.extend(canonical_atoms_for(language, chunk));
+        // A sentence that normalized away entirely ends where the previous one
+        // did; there is no atom of its own to hang the flag on.
+        if *terminated && !rebuilt.is_empty() && breaks.last() != Some(&rebuilt.len()) {
+            breaks.push(rebuilt.len());
+        }
+    }
+    if rebuilt != canonical_line {
+        return Vec::new();
+    }
+    breaks
 }
 
 fn is_divider(line: &str) -> bool {
@@ -802,6 +1059,7 @@ mod tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let script = compile_tokens(&tokens);
@@ -830,6 +1088,7 @@ mod tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let script = compile_tokens(&tokens);
@@ -860,6 +1119,7 @@ mod tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let from_tokens = compile_tokens(&tokens);
@@ -887,6 +1147,7 @@ mod tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let script = compile_tokens(&tokens);
@@ -911,6 +1172,7 @@ mod tests {
                 surface: (*s).to_string(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             })
             .collect();
         let script = compile_tokens(&tokens);
@@ -963,6 +1225,295 @@ mod tests {
     #[test]
     fn an_empty_script_has_no_prediction_room() {
         assert_eq!(compile_tokens(&[]).prediction_ceiling(0.0), 0.0);
+    }
+
+    /// The sentence rule, stated the same way: prediction may run to the end of
+    /// the sentence the reader is audibly in, and stops dead at the full stop.
+    #[test]
+    fn prediction_stops_at_the_sentence_it_was_heard_in() {
+        // ONE paragraph, two sentences: atoms 0..3 and 3..6. The paragraph
+        // ceiling would have allowed the display all six from the first word.
+        let script = compile(
+            "alpha bravo charlie. delta echo foxtrot.\n",
+            CompileOptions::default(),
+        );
+        assert_eq!(script.para_end, vec![6, 6, 6, 6, 6, 6]);
+        assert_eq!(script.sentence_end, vec![3, 3, 3, 6, 6, 6]);
+
+        // Mid-first-sentence: carried to the end of it, no further.
+        assert_eq!(script.prediction_ceiling(1.0), 3.0);
+        assert_eq!(script.prediction_ceiling(2.5), 3.0);
+
+        // The frontier sits exactly ON the full stop. The reader has finished
+        // the sentence and has not been heard in the next one — which is the
+        // moment they are most likely to be drawing breath, and exactly when
+        // fading `delta` would be a guess about a word they have not reached.
+        assert_eq!(script.prediction_ceiling(3.0), 3.0);
+
+        // One word of the second sentence heard — now it may run to ITS end.
+        assert_eq!(script.prediction_ceiling(4.0), 6.0);
+
+        // Out of range clamps rather than panicking.
+        assert_eq!(script.prediction_ceiling(0.0), 3.0);
+        assert_eq!(script.prediction_ceiling(999.0), 6.0);
+
+        // Switched off, the same script answers the way it used to.
+        assert_eq!(script.paragraph_ceiling(1.0), 6.0);
+        assert_eq!(script.paragraph_ceiling(3.0), 6.0);
+    }
+
+    /// A sentence end is never allowed to reach past a paragraph end, and a
+    /// paragraph end is always a sentence end even when nobody punctuated it.
+    #[test]
+    fn sentence_ends_never_run_past_paragraph_ends() {
+        let script = compile(
+            "alpha bravo. charlie\n\ndelta echo foxtrot\n",
+            CompileOptions::default(),
+        );
+        assert_eq!(script.para_end, vec![3, 3, 3, 6, 6, 6]);
+        // `charlie` closes its paragraph with no full stop, and still ends a
+        // sentence: the reader has finished saying something either way.
+        assert_eq!(script.sentence_end, vec![2, 2, 3, 6, 6, 6]);
+        for (at, (sentence, para)) in script
+            .sentence_end
+            .iter()
+            .zip(script.para_end.iter())
+            .enumerate()
+        {
+            assert!(sentence <= para, "atom {at}: {sentence} > {para}");
+        }
+    }
+
+    /// The graceful-degradation property, stated as a test rather than left as
+    /// a claim: with no terminal punctuation anywhere the finer table collapses
+    /// onto the coarser one and the engine behaves exactly as it did before.
+    #[test]
+    fn a_script_with_no_punctuation_keeps_the_paragraph_ceiling() {
+        let script = compile("alpha bravo charlie\n\ndelta echo\n", CompileOptions::default());
+        assert_eq!(script.sentence_end, script.para_end);
+    }
+
+    /// The parity guard. Normalization runs over a whole line at once and
+    /// merges across word boundaries, so asking it where the sentences end can
+    /// change what the atoms ARE — and the benchmark corpus indexes its gold
+    /// positions by atom, so a compiler that renumbered them to brake more
+    /// often would invalidate the measurements meant to judge it.
+    #[test]
+    fn finding_a_boundary_never_changes_the_atoms() {
+        // `twenty` and `one` sit either side of the full stop and merge into a
+        // single `21` when the line is normalized whole — the one case where
+        // splitting first would have produced different atoms.
+        let text = "It was twenty. One more thing.";
+        let script = compile(text, CompileOptions::default());
+
+        let surfaces: Vec<String> = script.atoms.iter().map(|a| a.surface.clone()).collect();
+        assert_eq!(
+            surfaces,
+            canonical_atoms_for(AlignmentLanguage::English, text),
+            "the atoms must be what normalizing the whole line produces"
+        );
+        // Having declined to split, the line offers no interior boundary and
+        // the paragraph ceiling stands.
+        assert_eq!(script.sentence_end, script.para_end);
+    }
+
+    /// The same guard where the split IS safe, so the test above cannot pass by
+    /// the fallback never being exercised in either direction.
+    #[test]
+    fn a_boundary_is_found_when_splitting_agrees_with_the_whole_line() {
+        // `twenty twenty four` merges into one atom WITHIN its sentence, so the
+        // whole-line and per-sentence normalizations agree and the boundary is
+        // taken. `$12` expanding to two atoms inside the second sentence pins
+        // that the offsets are counted in atoms, not in words.
+        let text = "We shipped in twenty twenty four. Revenue hit $12 today.";
+        let script = compile(text, CompileOptions::default());
+
+        let surfaces: Vec<String> = script.atoms.iter().map(|a| a.surface.clone()).collect();
+        assert_eq!(
+            surfaces,
+            vec!["we", "shipped", "in", "2024", "revenue", "hit", "12", "dollars", "today"]
+        );
+        assert_eq!(
+            surfaces,
+            canonical_atoms_for(AlignmentLanguage::English, text)
+        );
+        assert_eq!(script.sentence_end, vec![4, 4, 4, 4, 9, 9, 9, 9, 9]);
+    }
+
+    /// A sentence that runs over a line break still ends on the right atom.
+    ///
+    /// `push_line` sees one line at a time, so the boundary is found in line
+    /// two's own coordinates and has to be rebased onto the atoms already
+    /// emitted. Line one contributing NO boundary is the correct answer there —
+    /// the sentence did not end on it.
+    #[test]
+    fn a_sentence_running_over_a_line_break_ends_on_the_right_atom() {
+        let script = compile("Alpha bravo\ncharlie delta. Echo\n", CompileOptions::default());
+
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["alpha", "bravo", "charlie", "delta", "echo"]);
+        // Two source lines, one paragraph.
+        assert_eq!(
+            script.atoms.iter().map(|a| a.line).collect::<Vec<_>>(),
+            vec![0, 0, 1, 1, 1]
+        );
+        assert_eq!(script.para_end, vec![5, 5, 5, 5, 5]);
+        // The full stop is after `delta`, atom 3 — not after line one's atoms.
+        assert_eq!(script.sentence_end, vec![4, 4, 4, 4, 5]);
+    }
+
+    /// The live path cannot read punctuation off a surface — the app's
+    /// tokenizer has already dropped it — so it is told instead, and the flag
+    /// has to land on the last atom the token expanded into.
+    #[test]
+    fn a_told_sentence_end_lands_on_the_last_atom_of_its_token() {
+        let tokens = vec![
+            TokenInput {
+                surface: "Revenue".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            TokenInput {
+                surface: "hit".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            // One token, two atoms: `12` and `dollars`.
+            TokenInput {
+                surface: "$12".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+            TokenInput {
+                surface: "Onward".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+        ];
+        let script = compile_tokens(&tokens);
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["revenue", "hit", "12", "dollars", "onward"]);
+
+        // The boundary is after `dollars`, not after `12`.
+        assert_eq!(script.sentence_end, vec![4, 4, 4, 4, 5]);
+        assert_eq!(script.prediction_ceiling(1.0), 4.0);
+        assert_eq!(script.prediction_ceiling(4.0), 4.0);
+        assert_eq!(script.prediction_ceiling(5.0), 5.0);
+    }
+
+    /// A caller that says nothing about sentences — every older one — loses the
+    /// finer ceiling and nothing else.
+    ///
+    /// Two paragraphs, deliberately: with one, an implementation that only ever
+    /// flagged the very last atom of the script would pass this and still have
+    /// dropped every interior paragraph tail.
+    #[test]
+    fn tokens_that_declare_no_sentences_fall_back_to_paragraphs() {
+        let tokens: Vec<TokenInput> = [("alpha", 0), ("bravo", 0), ("charlie", 1), ("delta", 1)]
+            .iter()
+            .map(|(s, para)| TokenInput {
+                surface: (*s).to_string(),
+                line: 0,
+                para: *para,
+                sentence_end: false,
+            })
+            .collect();
+        let script = compile_tokens(&tokens);
+        assert_eq!(script.para_end, vec![2, 2, 4, 4]);
+        assert_eq!(script.sentence_end, script.para_end);
+    }
+
+    /// A sentence whose every token normalizes away must not hand its boundary
+    /// to the sentence that follows — that would brake the display a whole
+    /// sentence early, at a full stop nobody will ever say.
+    #[test]
+    fn a_leading_atomless_sentence_does_not_end_the_next_one() {
+        let tokens = vec![
+            TokenInput {
+                surface: "…".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+            TokenInput {
+                surface: "alpha".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            TokenInput {
+                surface: "bravo".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+        ];
+        let script = compile_tokens(&tokens);
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["alpha", "bravo"]);
+        // `alpha` opens the real first sentence; it does not close a phantom one.
+        assert_eq!(script.atoms[0].flags & FLAG_SENTENCE_END, 0);
+        assert_eq!(script.sentence_end, vec![2, 2]);
+    }
+
+    /// A token that normalizes away cannot take the boundary with it: the
+    /// reader's voice stopped on the last word that survived.
+    #[test]
+    fn a_sentence_ending_on_an_unspoken_token_keeps_its_boundary() {
+        let tokens = vec![
+            TokenInput {
+                surface: "alpha".into(),
+                line: 0,
+                para: 0,
+                sentence_end: false,
+            },
+            TokenInput {
+                surface: "…".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+            TokenInput {
+                surface: "bravo".into(),
+                line: 0,
+                para: 0,
+                sentence_end: true,
+            },
+        ];
+        let script = compile_tokens(&tokens);
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["alpha", "bravo"]);
+        assert_eq!(script.sentence_end, vec![1, 2]);
+    }
+
+    /// What the shared predicate actually does, rather than what its old
+    /// comment claimed. The honorific is the known imprecision; it is recorded
+    /// here so a future change to it is a deliberate one.
+    #[test]
+    fn terminal_punctuation_is_read_conservatively() {
+        assert!(ends_sentence("end."));
+        assert!(ends_sentence("really?"));
+        assert!(ends_sentence("stop!"));
+        assert!(ends_sentence("done.\""));
+        assert!(ends_sentence("done.)"));
+        // A figure being read aloud, and a dotted acronym.
+        assert!(!ends_sentence("3."));
+        assert!(!ends_sentence("U.S."));
+        assert!(!ends_sentence("e.g."));
+        // No terminator at all.
+        assert!(!ends_sentence("word"));
+        assert!(!ends_sentence(""));
+        // Single letter: an initial, not a sentence.
+        assert!(!ends_sentence("J."));
+        // KNOWN IMPRECISION: an honorific reads as terminal here. Harmless on
+        // this path — it brakes the display a word early, which is the safe
+        // direction — and unreachable on the live one, which is told its
+        // boundaries by a segmenter that knows better.
+        assert!(ends_sentence("Dr."));
     }
 
     /// The recogniser heard no capital letter and wrote two words. The script
@@ -1027,6 +1578,7 @@ mod tests {
             surface: "alpha".into(),
             line: 0,
             para: 0,
+            sentence_end: false,
         }]);
         assert_eq!(from_tokens.language(), AlignmentLanguage::English);
 
@@ -1035,6 +1587,7 @@ mod tests {
                 surface: "alpha".into(),
                 line: 0,
                 para: 0,
+                sentence_end: false,
             }],
             AlignmentLanguage::English,
         );
