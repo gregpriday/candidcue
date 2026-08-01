@@ -238,9 +238,14 @@ impl Ledger {
     /// word was spoken later than the even spread believed, and declined when
     /// it says earlier.
     ///
-    /// The running maximum is load-bearing too, not decoration: normalisation
-    /// can reorder atoms — `$2.4 million` is said "two point four million
-    /// dollars" — so measured times do not arrive already sorted.
+    /// The running maximum is load-bearing too, not decoration — though not
+    /// because a single revision arrives unsorted. `CompiledScript::dated_atoms`
+    /// declines `word_times` that step backwards, and the source word it dates
+    /// each atom from only ever climbs, so one revision's measurements are
+    /// sorted by construction. Order is lost ACROSS revisions instead: the
+    /// per-index merge in [`Ledger::revise_atoms`] keeps `old.max(new)` for
+    /// every atom that survives, so atom i can hold an old LATE reading while
+    /// atom i+1 accepts a new EARLIER one.
     ///
     /// # What this does NOT buy, stated plainly
     ///
@@ -306,6 +311,19 @@ impl Ledger {
                 // snaps the reader forward. Declining leaves the atom on its
                 // interpolated share, which is strictly increasing, so the cut
                 // still has distinct values to bite on.
+                //
+                // That trades one source of plateaus for a shorter one rather
+                // than removing them. The running maximum below lifts every
+                // following atom whose interpolated share falls under an
+                // accepted measurement onto that measurement —
+                // `out_of_order_measurements_never_step_backwards` pins a
+                // two-atom run at 3500. Length is the whole difference: a clamp
+                // collapses however many words the cap cut short onto a single
+                // value, while a run made this way is bounded above by the
+                // item's own `end` and breaks at the first atom whose share
+                // clears it. Crowding this fine is not new either — see
+                // `an_untimed_item_is_dated_exactly_as_it_always_was`, where a
+                // collapsed window already spaces atoms 0.167 ms apart.
                 let measured = match atom.measured_start_ms {
                     // A non-finite clock is not a measurement. Checked rather
                     // than compared into, because a NaN start would otherwise
@@ -540,9 +558,12 @@ mod tests {
         assert_eq!(times, interpolated(4, 0.0, 4_000.0));
     }
 
-    /// Normalisation reorders atoms — `$2.4 million` is said "two point four
-    /// million dollars" — so measured times do not arrive sorted. The running
-    /// maximum is what keeps the tail monotonic when they do not.
+    /// Measured times can reach the ledger unsorted, because the per-index
+    /// merge in `revise_atoms` keeps `old.max(new)` per surviving atom: one
+    /// atom can hold an old late reading while the next accepts a newer earlier
+    /// one. The running maximum is what keeps the tail monotonic when that
+    /// happens, at the price of a short plateau — which this test pins too, so
+    /// the cost is on the record rather than assumed away.
     #[test]
     fn out_of_order_measurements_never_step_backwards() {
         let mut ledger = Ledger::default();
