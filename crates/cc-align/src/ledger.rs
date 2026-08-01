@@ -286,25 +286,38 @@ impl Ledger {
                 // Word i of n spans [i/n, (i+1)/n] of the item; use the end of
                 // its span as "when it had been said".
                 let interpolated = start + (end - start) * ((i + 1) as f64 / n as f64);
-                // Bounded by the item's OWN window, `end` included. A
-                // measurement redistributes words inside the stretch the lag
+                // Only inside the item's OWN window, `end` included. A
+                // measurement redistributes words within the stretch the lag
                 // constants say this item occupies; it does not get to move the
                 // far edge of that stretch, which is the `endpoint_lag_ms`
                 // question — still waiting on the re-captured corpus that could
                 // answer it, see `AlignmentConfig::endpoint_lag_ms`.
                 //
-                // The bound is also what keeps this change bounded. Dating a
-                // word later shortens the evidence's apparent AGE, and the
-                // display's settle onto a pause is driven by that age
-                // (`Snapshot::display_at`) — so a later clock holds the lead
-                // open a little longer into a silence. Capping at `end` keeps
-                // that within the item's own span instead of adding a further
-                // `endpoint_lag_ms` on top of it.
+                // DECLINED when it falls outside, not clamped into. Clamping
+                // reads as the conservative choice and is the more dangerous
+                // one: a final closed by the 20 s cap has no trailing silence,
+                // so its last second of words all measure later than `end` and
+                // would land on `end` EXACTLY — a plateau of identical
+                // timestamps. The tail is retired by timestamp (`retain(audio_ms
+                // >= horizon)`, with the horizon set one millisecond below an
+                // accepted position's clock), and a plateau spans that cut: the
+                // stale half of a retake survives it, and stable stale atoms
+                // are exactly what outvotes the retake on the next revision and
+                // snaps the reader forward. Declining leaves the atom on its
+                // interpolated share, which is strictly increasing, so the cut
+                // still has distinct values to bite on.
                 let measured = match atom.measured_start_ms {
-                    // A non-finite clock is not a measurement, and `f64::clamp`
-                    // panics on non-finite bounds rather than absorbing them.
-                    Some(ms) if ms.is_finite() && start.is_finite() && end.is_finite() => {
-                        ms.clamp(start, end)
+                    // A non-finite clock is not a measurement. Checked rather
+                    // than compared into, because a NaN start would otherwise
+                    // make every comparison below quietly false.
+                    Some(ms)
+                        if ms.is_finite()
+                            && start.is_finite()
+                            && end.is_finite()
+                            && ms >= start
+                            && ms <= end =>
+                    {
+                        ms
                     }
                     _ => f64::NEG_INFINITY,
                 };
@@ -566,7 +579,7 @@ mod tests {
     /// so letting a measurement run past the corrected end would add up to a
     /// whole `endpoint_lag_ms` of held-open lead on top of the item's own span.
     #[test]
-    fn a_measurement_is_capped_at_the_corrected_end() {
+    fn a_measurement_outside_the_window_is_declined_not_clamped() {
         let mut ledger = Ledger::default();
         let mut interner = Interner::default();
         ledger.item_started("1-0", 0.0);
@@ -584,7 +597,43 @@ mod tests {
         // A 1400 ms endpoint correction puts the interpolated end at 3600.
         let tail = ledger.tail(40, 0.0, 1_400.0);
         let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
-        assert_eq!(times, vec![3_600.0, 3_600.0]);
+        assert_eq!(times, interpolated(2, 0.0, 3_600.0));
+    }
+
+    /// The reason the branch above declines rather than clamps.
+    ///
+    /// A final closed by the 20 s cap has no trailing silence, so its last
+    /// second of words all measure later than the lag-corrected end. Clamped,
+    /// every one of them would land on that end EXACTLY — and the tail is
+    /// retired by timestamp, so a plateau of identical clocks spans the cut
+    /// that is supposed to drop the stale half of a retake.
+    #[test]
+    fn a_run_of_late_measurements_does_not_collapse_onto_one_timestamp() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four five",
+            true,
+            20_000.0,
+            // Everything heard in the last stretch, past the corrected end.
+            &[
+                Some(19_000.0),
+                Some(19_200.0),
+                Some(19_400.0),
+                Some(19_600.0),
+                Some(19_800.0),
+            ],
+        );
+        let tail = ledger.tail(40, 0.0, 1_400.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert!(
+            times.windows(2).all(|w| w[1] > w[0]),
+            "timestamps must stay distinct for the horizon to cut on: {times:?}"
+        );
     }
 
     /// A non-finite clock is not a measurement. It must be ignored rather than
@@ -601,7 +650,7 @@ mod tests {
                 &[Some(f64::NAN), Some(f64::INFINITY), Some(1_000.0)],
             );
             let tail = ledger.tail(40, 0.0, 0.0);
-            assert_eq!(tail.len(), 3);
+            assert_eq!(tail.len(), 3, "a bad clock must not drop an atom");
             if start.is_finite() {
                 let spread = interpolated(3, 0.0, 3_000.0);
                 // The two unusable clocks fall back; the real one is declined
@@ -609,6 +658,15 @@ mod tests {
                 assert_eq!(tail[0].audio_ms, spread[0]);
                 assert_eq!(tail[1].audio_ms, spread[1]);
                 assert_eq!(tail[2].audio_ms, spread[2]);
+            } else {
+                // A NaN item start is already beyond saving — the interpolation
+                // it feeds is NaN too, and always was. What matters is that
+                // reading a measurement past it no longer PANICS, which
+                // `f64::clamp` did on non-finite bounds. What comes out stays
+                // unusable, and the tail retention downstream drops it on the
+                // same comparison that dropped the NaN before.
+                assert!(tail.iter().all(|a| !a.audio_ms.is_finite()));
+                assert!(!tail.iter().any(|a| a.audio_ms >= 0.0));
             }
         }
     }

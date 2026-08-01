@@ -180,7 +180,14 @@ mod tests {
     use cc_align::{compile, CompileOptions};
 
     /// The recogniser's own output, through the real reconstruction, into the
-    /// real engine — and out the other side actually carrying a clock.
+    /// script's reconciliation — and out the other side carrying a clock.
+    ///
+    /// The GATE is what this covers, not the engine: that word times survive
+    /// into the evidence clock is pinned in `cc_align::tracker` and again over
+    /// the Tauri handoff in `src-tauri/src/align`. What only this can show is
+    /// that the two accounts of an utterance — sherpa's `result.text` and the
+    /// words rebuilt from its tokens — still agree once normalised, because
+    /// only this crate can see both cc-stt and cc-align.
     ///
     /// This test exists because of a specific past failure. The reversible dim
     /// frontier was believed to work for months while `provisional_advances`

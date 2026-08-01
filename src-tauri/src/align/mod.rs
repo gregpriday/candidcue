@@ -531,34 +531,62 @@ mod tests {
     /// answer for a session that gets none.
     #[test]
     fn word_times_reach_the_engine_without_widening_the_wire_frame() {
-        let heard = "good morning everyone and welcome to the quarterly review";
+        // A trailing word the script does not contain, so the last MATCHED
+        // atom is interior — the final atom of an item lands on the item's
+        // corrected end whether or not it was measured.
+        let heard = "good morning everyone and welcome to the quarterly review nevertheless";
         let frame = || SttFrame::Final {
             generation: 7,
             item_id: "7-0".into(),
             text: heard.into(),
-            audio_end_ms: 3_000.0,
+            audio_end_ms: 8_000.0,
         };
         let observed_with = |times: Option<&[cc_stt::WordTime]>| {
             let state = AlignmentState::new();
             state.start(7, &tokens(SCRIPT));
             state.bind_stream(7);
+            // Without this the ledger opens the item AT the final's own clock,
+            // collapsing its window to a millisecond — every measurement then
+            // reads as earlier and is declined, and this test would pass while
+            // proving nothing.
+            state.observe(
+                &SttFrame::ItemStarted {
+                    generation: 7,
+                    item_id: "7-0".into(),
+                    ordinal: 0,
+                    audio_start_ms: 0.0,
+                },
+                0.0,
+            );
             state
-                .observe_with_word_times(&frame(), 3_000.0, times)
+                .observe_with_word_times(&frame(), 8_000.0, times)
                 .expect("a running session answers a transcript frame")
         };
 
+        // Spoken late in the item but inside the window a 1400 ms endpoint
+        // correction leaves (0..6600) — and later than the even spread, which
+        // puts the last matched atom at 5940. A measurement that fell earlier
+        // than the spread would be declined by design and prove nothing.
         let times: Vec<cc_stt::WordTime> = heard
             .split_whitespace()
             .enumerate()
             .map(|(i, text)| cc_stt::WordTime {
                 text: text.to_string(),
-                start_ms: 1_500.0 + i as f64 * 100.0,
+                start_ms: 6_000.0 + i as f64 * 50.0,
             })
             .collect();
 
         let untimed = observed_with(None);
         let timed = observed_with(Some(&times));
 
+        // The sidecar reached the engine and dated the evidence LATER. Strict,
+        // so this fails rather than passes if the timing is dropped in transit.
+        assert!(
+            timed.evidence_audio_ms > untimed.evidence_audio_ms,
+            "word times did not survive the handoff: {} !> {}",
+            timed.evidence_audio_ms,
+            untimed.evidence_audio_ms
+        );
         // Same reader, same place — timing dates the evidence, it does not
         // relocate anyone.
         assert_eq!(timed.state, untimed.state);

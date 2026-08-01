@@ -383,18 +383,28 @@ pub struct AlignmentConfig {
     ///     with, so this is not measurable without a fresh capture — which is
     ///     the reason the constant has not simply been changed.
     ///
-    /// What DID change: the per-word times those first two facts unlocked now
-    /// reach the ledger, and [`crate::ledger::Ledger::tail`] dates an atom by
-    /// the larger of its measurement and its interpolated share of the item. So
-    /// this constant no longer decides when a measured word was spoken — it is
-    /// a floor under one, and the sole answer only for atoms with no
-    /// measurement (a recogniser that reports none, and every fixture captured
-    /// before one did). That makes it less load-bearing without re-tuning it,
-    /// which is what the missing corpus still forbids. Note the floor also
-    /// means the rule-2 over-correction described above survives wherever the
-    /// measurement lands earlier than the spread; only the rule-3 case, where
-    /// this constant dates words before speech that was still running, is
-    /// actually repaired.
+    /// What DID change, and — more importantly — what did not. The per-word
+    /// times those first two facts unlocked now reach the ledger, and
+    /// [`crate::ledger::Ledger::tail`] dates an atom by the larger of its
+    /// measurement and its interpolated share of the item.
+    ///
+    /// This constant still sets BOTH ends of that arithmetic. It is the floor,
+    /// via the interpolation a measurement has to beat; it is the ceiling, in
+    /// that a measurement landing after the corrected end is declined rather
+    /// than believed; and because the last atom's interpolated share IS the
+    /// corrected end, the final atom of every item is dated by this constant
+    /// alone, measured or not. What measurement buys is the INSIDE of an
+    /// utterance — words no longer sit on the wrong side of a pause. Where the
+    /// utterance ends is still this number, and still wrong in the four ways
+    /// described above.
+    ///
+    /// That is deliberate, not an oversight. Re-dating the end is the change
+    /// this doc has always said needs a corpus, and it is not a free
+    /// improvement even when correct: a later evidence clock reads as fresher
+    /// to [`crate::tracker::Snapshot::display_at`], which delays its settle
+    /// onto a pause and holds the display's lead open longer. Right answer,
+    /// re-tuned constants — and no way to tell which way that trades until
+    /// there is something to measure it on.
     pub endpoint_lag_ms: f64,
 
     // ---- viewport prior ----
