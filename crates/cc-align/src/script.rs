@@ -2161,6 +2161,38 @@ mod tests {
             .all(|(_, t)| t.is_none()));
     }
 
+    /// A timed word that normalises to nothing contributes no atom, and must
+    /// not shift the words around it onto the wrong clock.
+    #[test]
+    fn a_word_that_normalises_to_nothing_does_not_shift_the_others() {
+        let script = compile("alpha bravo charlie", CompileOptions::default());
+        // The middle entry is punctuation the normaliser drops entirely.
+        let times = timed(&[("alpha", 100.0), ("--", 200.0), ("bravo", 300.0), ("charlie", 500.0)]);
+        assert_eq!(
+            dated(&script, "alpha -- bravo charlie", &times),
+            vec![
+                ("alpha".to_string(), Some(100.0)),
+                ("bravo".to_string(), Some(300.0)),
+                ("charlie".to_string(), Some(500.0)),
+            ]
+        );
+    }
+
+    /// Empty and whitespace-only word text is not a word. It contributes no
+    /// atom, exactly as punctuation does.
+    #[test]
+    fn empty_word_text_contributes_nothing() {
+        let script = compile("alpha bravo", CompileOptions::default());
+        let times = timed(&[("alpha", 100.0), ("", 200.0), ("   ", 250.0), ("bravo", 300.0)]);
+        assert_eq!(
+            dated(&script, "alpha bravo", &times),
+            vec![
+                ("alpha".to_string(), Some(100.0)),
+                ("bravo".to_string(), Some(300.0)),
+            ]
+        );
+    }
+
     /// Whatever timing does or does not arrive, the ATOMS are the ones the
     /// untimed path would have produced. Nothing about matching turns on
     /// whether a recogniser reports a clock.

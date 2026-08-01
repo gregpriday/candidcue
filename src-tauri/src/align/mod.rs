@@ -522,6 +522,57 @@ mod tests {
         assert!(snapshot.confirmed_token <= snapshot.observed_token);
     }
 
+    /// The recogniser's word times survive the trip across this module.
+    ///
+    /// This is the production path: `session.rs` pulls `word_times` off the raw
+    /// `cc_stt` frame and hands it here alongside the renderer-shaped one. The
+    /// engine's own tests prove what it does with them; what this proves is
+    /// that they arrive at all, and that carrying them does not disturb the
+    /// answer for a session that gets none.
+    #[test]
+    fn word_times_reach_the_engine_without_widening_the_wire_frame() {
+        let heard = "good morning everyone and welcome to the quarterly review";
+        let frame = || SttFrame::Final {
+            generation: 7,
+            item_id: "7-0".into(),
+            text: heard.into(),
+            audio_end_ms: 3_000.0,
+        };
+        let observed_with = |times: Option<&[cc_stt::WordTime]>| {
+            let state = AlignmentState::new();
+            state.start(7, &tokens(SCRIPT));
+            state.bind_stream(7);
+            state
+                .observe_with_word_times(&frame(), 3_000.0, times)
+                .expect("a running session answers a transcript frame")
+        };
+
+        let times: Vec<cc_stt::WordTime> = heard
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, text)| cc_stt::WordTime {
+                text: text.to_string(),
+                start_ms: 1_500.0 + i as f64 * 100.0,
+            })
+            .collect();
+
+        let untimed = observed_with(None);
+        let timed = observed_with(Some(&times));
+
+        // Same reader, same place — timing dates the evidence, it does not
+        // relocate anyone.
+        assert_eq!(timed.state, untimed.state);
+        assert!((timed.observed_token - untimed.observed_token).abs() <= 2.0);
+
+        // The renderer's frame is untouched by any of this: `word_times` is not
+        // a field on it, so the `stt://event` payload cannot have grown one.
+        let wire = serde_json::to_value(frame()).expect("frame serialises");
+        assert!(
+            wire.get("wordTimes").is_none() && wire.get("word_times").is_none(),
+            "the wire frame grew a timing field: {wire}"
+        );
+    }
+
     /// A non-English script compiles, follows, and produces different ATOMS.
     ///
     /// Two separate claims, because an earlier version of this test conflated

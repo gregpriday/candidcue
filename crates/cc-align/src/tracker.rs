@@ -1936,7 +1936,12 @@ mod tests {
     #[test]
     fn measured_word_times_move_the_evidence_clock_only_later() {
         let script = || compile("alpha bravo charlie delta", CompileOptions::default());
-        let heard = "alpha bravo charlie delta";
+        // A trailing word the script does not contain, so the last MATCHED
+        // atom is an interior one. The final atom of an item always lands
+        // exactly on the item's corrected end whether or not it was measured —
+        // that edge is `endpoint_lag_ms`'s to move, not this change's — so an
+        // interior match is where a measurement is visible at all.
+        let heard = "alpha bravo charlie delta epsilon";
 
         let baseline = {
             let mut engine = Engine::new(script(), AlignmentConfig::default());
@@ -1970,14 +1975,18 @@ mod tests {
 
         // Heard late in the item — later than the even spread believed.
         let late = with_times(vec![
-            word("alpha", 3_000.0),
-            word("bravo", 3_200.0),
-            word("charlie", 3_400.0),
-            word("delta", 3_600.0),
+            word("alpha", 2_000.0),
+            word("bravo", 2_100.0),
+            word("charlie", 2_200.0),
+            word("delta", 2_300.0),
+            word("epsilon", 2_400.0),
         ]);
+        // STRICTLY later, not merely "not earlier". `>=` would hold just as
+        // well if the timing were dropped on the floor, which is the shape of
+        // vacuous test this whole change is most at risk of.
         assert!(
-            late >= baseline,
-            "a later measurement must not pull evidence back: {late} < {baseline}"
+            late > baseline,
+            "measured times must actually reach the evidence clock: {late} !> {baseline}"
         );
 
         // Heard right at the top of the item. Believing it would lengthen the
@@ -1987,6 +1996,7 @@ mod tests {
             word("bravo", 20.0),
             word("charlie", 30.0),
             word("delta", 40.0),
+            word("epsilon", 50.0),
         ]);
         assert_eq!(
             early, baseline,
