@@ -1833,6 +1833,19 @@ mod tests {
                 bottom_y: self.bottom_y,
             }
         }
+
+        /// The same glass scrolled down to `top_y`. Every other fixture sits at
+        /// the top of the document, where the display can only ever trail — so
+        /// scrolling is the only way to express the case the whole project is
+        /// built to avoid, the display LEADING the reader off the top edge.
+        fn glass_at<'a>(&'a self, drawn: &'a [(u32, f32)], top_y: f64) -> Glass<'a> {
+            Glass {
+                token_opacity: drawn,
+                line_map: &self.map,
+                top_y,
+                bottom_y: top_y + self.bottom_y,
+            }
+        }
     }
 
     #[test]
@@ -1976,6 +1989,22 @@ mod tests {
         assert_eq!(r.end, ReadableAheadEnd::Viewport);
         let expected = gold.tau(0, 10.0).unwrap() - gold.tau(0, 5.0).unwrap();
         assert!((r.ms - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_display_scrolled_past_the_reader_is_an_empty_corridor() {
+        // The invariant the product is built on: the display TRAILS, never
+        // leads. Here it has led — the glass starts one line BELOW the word in
+        // the reader's mouth, so their own line is off the top edge — and the
+        // corridor has to read as zero. Anything else would let a stage that
+        // has scrolled clean past the presenter bank credit for the perfectly
+        // bright text it is showing them further down the script.
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(10.0);
+        let drawn = opacities(0..20, &[]);
+        let r = measure_readable_ahead(&gold, 0, 5.0, &stage.glass_at(&drawn, 6.0 * PITCH)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::Viewport);
+        assert_eq!(r.ms, 0.0, "leading past the reader must never score as readable corridor");
     }
 
     #[test]
