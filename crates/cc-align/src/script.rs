@@ -157,11 +157,17 @@ pub struct CompiledScript {
     pub atom_token_pos: Vec<f64>,
     /// For each atom, the EXCLUSIVE atom index ending its paragraph.
     ///
-    /// The display's hard ceiling. Prediction may carry the reader to the end
-    /// of the paragraph they are audibly in, and not one word past it: crossing
-    /// a paragraph break is the one guess the engine is never allowed to make,
-    /// because a break is exactly where a reader stops to breathe, check the
-    /// camera, or decide whether to say the next bit at all.
+    /// The OUTER bound, not the display's ceiling — `sentence_end` below took
+    /// that job. Crossing a paragraph break is still the one guess the engine is
+    /// never allowed to make, because a break is exactly where a reader stops to
+    /// breathe, check the camera, or decide whether to say the next bit at all;
+    /// the finer rule simply brakes earlier and can never reach past this one.
+    ///
+    /// Two things still read it. The approximate-bridge gate
+    /// (`Tracker::can_bridge_local_approx`) stays deliberately paragraph-bounded,
+    /// because failing it does not merely dim less — it drops the engine into
+    /// `Holding`. And [`CompiledScript::paragraph_ceiling`] is the off switch
+    /// that reproduces the old display behaviour for comparison.
     pub para_end: Vec<u32>,
     /// For each atom, the EXCLUSIVE atom index ending its SENTENCE.
     ///

@@ -288,9 +288,9 @@ function clampToScript(position: number, ceiling: number): number {
  * The DERIVATIVE OF THE PATH, deliberately, and not the engine's rate estimate.
  * They are equal while the reader is flowing and the extrapolation gain is 1,
  * which is the common case; they diverge exactly where it matters, because the
- * path stops advancing when the lead saturates, when a paragraph ceiling is
- * reached, and while it settles onto a pause, and the rate estimate knows about
- * none of that.
+ * path stops advancing when the lead saturates, when a sentence or paragraph
+ * ceiling is reached, and while it settles onto a pause, and the rate estimate
+ * knows about none of that.
  *
  * Feeding the raw pace instead is unsafe rather than merely inaccurate. The
  * §70.5 overshoot guard measures speed RELATIVE to the feed-forward — matching

@@ -2,17 +2,23 @@
  * Advisory lint over the authored script source.
  *
  * The rule that keeps tracking honest lives in `crates/cc-align/src/script.rs`:
- * prediction may be carried to the end of the paragraph the reader was last
- * *heard* in, and stops dead at the break. That ceiling is what stops the stage
- * guessing its way into words nobody has spoken yet. Its protection is only as
- * tight as the paragraph, though — inside a three-hundred-word block the
- * ceiling sits three hundred words away, so a skipped line or a restarted
- * sentence has a very long runway before anything stops it.
+ * prediction may be carried to the end of the SENTENCE the reader was last
+ * *heard* in, and stops dead there. The paragraph is the outer bound around
+ * that ceiling — `sentence_end` can never reach past `para_end` — so what stops
+ * the stage guessing its way into unspoken words is now the next full stop
+ * rather than the next blank line.
  *
- * Giving the aligner a sentence-level ceiling is a week of Rust plus a
- * benchmark campaign to prove it did not make following worse. Asking the
- * author to press Enter twice costs four seconds and buys most of the same
- * protection, which is why this lives in the editor and not in the engine.
+ * This file used to argue that a sentence-level ceiling was a week of Rust plus
+ * a benchmark campaign away, and that asking the author to press Enter twice
+ * bought most of the same protection for four seconds of work. The Rust got
+ * written. What it did not change is RECOVERY: the approximate-bridge gate is
+ * still bounded by the paragraph on purpose (`can_bridge_local_approx` in
+ * `tracker.rs`), because failing that gate does not merely dim less — it drops
+ * the engine into `Holding`. Inside a three-hundred-word block that bound sits
+ * three hundred words away, so a skipped line or a restarted sentence still has
+ * a very long runway before the script's own structure catches it. That is what
+ * the long-paragraph finding is about now, and it is why this still lives in
+ * the editor and not in the engine.
  *
  * Everything here is advisory and stays advisory. Nothing it reports blocks a
  * compile, a save, or a take: these are scripts that read badly, not scripts
@@ -512,10 +518,10 @@ function longParagraphFinding(
     column,
     length: end - start,
     message:
-      `This paragraph runs to ${words} spoken words. Tracking only ever carries your place ` +
-      'to the end of the paragraph it last heard you in, so a long one gives it far fewer ' +
-      'safe places to stop — skip a line or read one twice inside it and the stage takes ' +
-      'longer to settle back onto you.',
+      `This paragraph runs to ${words} spoken words. Tracking stops the display at the end ` +
+      'of the sentence it last heard you in, but when it has to recover it is still bounded ' +
+      'by the paragraph — skip a line or read one twice inside a long one and it has that ' +
+      'much further to travel before the stage settles back onto you.',
     hint: severe
       ? 'Split this into three or four paragraphs at the natural pauses.'
       : 'A blank line at the next natural pause splits it in two.',
