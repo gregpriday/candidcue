@@ -36,6 +36,7 @@ fn final_word(engine: &mut Engine, ordinal: usize, heard: &str, at_ms: f64) -> S
         item_id: format!("dimming-{ordinal}"),
         text: heard.to_string(),
         audio_end_ms: at_ms,
+        word_times: None,
     })
 }
 

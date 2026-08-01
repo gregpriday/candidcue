@@ -53,15 +53,22 @@ fn observed_series(
                 item_id: item_id.clone(),
                 audio_start_ms: *audio_start_ms,
             },
+            // Timing is dropped rather than carried: robustness rewrites the
+            // TEXT of a frame (dropped words, swapped homophones), and word
+            // times captured against the original no longer describe it. The
+            // engine would reject the mismatch itself, but saying so here keeps
+            // the perturbation honest about what it is handing over.
             SttFrame::Partial { item_id, text, audio_ms, .. } => SessionEvent::Partial {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_ms: *audio_ms,
+                word_times: None,
             },
             SttFrame::Final { item_id, text, audio_end_ms, .. } => SessionEvent::Final {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
+                word_times: None,
             },
             SttFrame::Error { .. } | SttFrame::Closed {} => continue,
         };

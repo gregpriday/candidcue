@@ -1050,11 +1050,13 @@ mod tests {
             item_id: "one".into(),
             text: "presentor".into(),
             audio_end_ms: 350.0,
+            word_times: None,
         });
         let retracted = engine.handle(SessionEvent::Final {
             item_id: "two".into(),
             text: "banana".into(),
             audio_end_ms: 700.0,
+            word_times: None,
         });
         let replay = ReplayResult {
             snapshots: vec![anchored, provisional, retracted],

@@ -37,7 +37,7 @@ pub use language::{
 pub use project::{decision_name, project_to_tokens, state_name, TokenSnapshot};
 pub use script::{
     compile, compile_tokens, compile_tokens_in, CompileOptions, CompiledScript, QueryWord,
-    TokenInput,
+    TokenInput, TranscriptWordTime,
 };
 pub use tracker::{DecisionCode, Engine, SessionEvent, Snapshot, TrackingState};
 pub use vocab::{extract_from_markdown, extract_terms, spoken_surfaces, VocabLimits, VocabToken};

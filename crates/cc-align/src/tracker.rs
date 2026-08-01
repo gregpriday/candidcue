@@ -24,7 +24,7 @@ use serde::Serialize;
 use crate::align::{align, AlignScratch, Evidence};
 use crate::config::AlignmentConfig;
 use crate::ledger::{Ledger, QueryAtom};
-use crate::script::{CompiledScript, FLAG_ANCHOR};
+use crate::script::{CompiledScript, TranscriptWordTime, FLAG_ANCHOR};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TrackingState {
@@ -67,11 +67,19 @@ pub enum SessionEvent {
         text: String,
         /// Audio-clock value when this partial arrived.
         audio_ms: f64,
+        /// When the recogniser heard each word of `text`, if it reported that.
+        ///
+        /// `None` is the ordinary answer for a recogniser that does not time
+        /// its words, and for every frame captured before one did — the engine
+        /// dates the words by interpolation exactly as it always has.
+        word_times: Option<Vec<TranscriptWordTime>>,
     },
     Final {
         item_id: String,
         text: String,
         audio_end_ms: f64,
+        /// See [`SessionEvent::Partial::word_times`].
+        word_times: Option<Vec<TranscriptWordTime>>,
     },
 }
 
@@ -525,12 +533,13 @@ impl Engine {
                 item_id,
                 text,
                 audio_ms,
+                word_times,
             } => {
                 // Canonicalised against the script's own vocabulary first, so
                 // a name the recogniser split in two arrives as the one word
                 // the script wrote. Two statements, not one: the script is
                 // borrowed for the atoms, then its interner for the ledger.
-                let atoms = self.script.query_words(&text);
+                let atoms = self.query_words_for(&text, word_times.as_deref());
                 self.ledger.revise_atoms(
                     &mut self.script.interner,
                     &item_id,
@@ -544,8 +553,9 @@ impl Engine {
                 item_id,
                 text,
                 audio_end_ms,
+                word_times,
             } => {
-                let atoms = self.script.query_words(&text);
+                let atoms = self.query_words_for(&text, word_times.as_deref());
                 self.ledger.revise_atoms(
                     &mut self.script.interner,
                     &item_id,
@@ -561,6 +571,24 @@ impl Engine {
     // -----------------------------------------------------------------
     // Core update
     // -----------------------------------------------------------------
+
+    /// Transcript words for this event, timed where the recogniser timed them.
+    ///
+    /// The choice is only ever about the CLOCK on each word. Both paths produce
+    /// the same atoms — [`CompiledScript::query_words_with_times`] falls back
+    /// to the untimed ones itself if it cannot show the two accounts of the
+    /// text describe the same words — so no evidence and no matching decision
+    /// turns on whether a recogniser reports timing.
+    fn query_words_for(
+        &self,
+        text: &str,
+        word_times: Option<&[TranscriptWordTime]>,
+    ) -> Vec<crate::script::QueryWord> {
+        match word_times {
+            Some(times) => self.script.query_words_with_times(text, times),
+            None => self.script.query_words(text),
+        }
+    }
 
     /// Where to centre the local search band for this event.
     ///
@@ -1887,6 +1915,7 @@ mod tests {
             item_id: format!("item-{ordinal}"),
             text: text.to_string(),
             audio_end_ms: at_ms,
+            word_times: None,
         })
     }
 
@@ -1895,6 +1924,84 @@ mod tests {
             "alpha bravo presenter teleprompter harbour narration delta echo foxtrot golf",
             CompileOptions::default(),
         )
+    }
+
+    /// Word times reach the evidence clock, and reach it only in the direction
+    /// that is safe to be wrong in.
+    ///
+    /// `evidence_audio_ms` is what the display extrapolates FROM. Dating it
+    /// earlier makes the stage run further ahead of the reader, so a
+    /// measurement is taken when it says "later than you thought" and declined
+    /// when it says "earlier".
+    #[test]
+    fn measured_word_times_move_the_evidence_clock_only_later() {
+        let script = || compile("alpha bravo charlie delta", CompileOptions::default());
+        // A trailing word the script does not contain, so the last MATCHED
+        // atom is an interior one. The final atom of an item always lands
+        // exactly on the item's corrected end whether or not it was measured —
+        // that edge is `endpoint_lag_ms`'s to move, not this change's — so an
+        // interior match is where a measurement is visible at all.
+        let heard = "alpha bravo charlie delta epsilon";
+
+        let baseline = {
+            let mut engine = Engine::new(script(), AlignmentConfig::default());
+            engine.handle(SessionEvent::ItemStarted {
+                item_id: "item-0".into(),
+                audio_start_ms: 0.0,
+            });
+            final_item(&mut engine, 0, heard, 4_000.0).evidence_audio_ms
+        };
+
+        let with_times = |times: Vec<TranscriptWordTime>| {
+            let mut engine = Engine::new(script(), AlignmentConfig::default());
+            engine.handle(SessionEvent::ItemStarted {
+                item_id: "item-0".into(),
+                audio_start_ms: 0.0,
+            });
+            engine
+                .handle(SessionEvent::Final {
+                    item_id: "item-0".into(),
+                    text: heard.to_string(),
+                    audio_end_ms: 4_000.0,
+                    word_times: Some(times),
+                })
+                .evidence_audio_ms
+        };
+
+        let word = |text: &str, start_ms: f64| TranscriptWordTime {
+            text: text.to_string(),
+            start_ms,
+        };
+
+        // Heard late in the item — later than the even spread believed.
+        let late = with_times(vec![
+            word("alpha", 2_000.0),
+            word("bravo", 2_100.0),
+            word("charlie", 2_200.0),
+            word("delta", 2_300.0),
+            word("epsilon", 2_400.0),
+        ]);
+        // STRICTLY later, not merely "not earlier". `>=` would hold just as
+        // well if the timing were dropped on the floor, which is the shape of
+        // vacuous test this whole change is most at risk of.
+        assert!(
+            late > baseline,
+            "measured times must actually reach the evidence clock: {late} !> {baseline}"
+        );
+
+        // Heard right at the top of the item. Believing it would lengthen the
+        // display's extrapolation, so it is refused.
+        let early = with_times(vec![
+            word("alpha", 10.0),
+            word("bravo", 20.0),
+            word("charlie", 30.0),
+            word("delta", 40.0),
+            word("epsilon", 50.0),
+        ]);
+        assert_eq!(
+            early, baseline,
+            "an earlier measurement must not move the evidence clock at all"
+        );
     }
 
     /// The snapshot the stage actually receives carries the sentence ceiling,
@@ -2282,6 +2389,7 @@ mod tests {
             item_id: "item-4".to_string(),
             text: "echo foxtrot golf".to_string(),
             audio_ms: 1_600.0,
+            word_times: None,
         });
         assert_eq!(partial.decision, DecisionCode::HoldOffScript);
         assert_eq!(engine.off_script_return_streak, 1);

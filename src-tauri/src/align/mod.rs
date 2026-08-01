@@ -249,6 +249,17 @@ impl AlignmentState {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The same observation, from a recogniser that did not time its words.
+    ///
+    /// Test-only. Production always goes through
+    /// [`AlignmentState::observe_with_word_times`], because the recogniser the
+    /// app ships DOES time its words and a path that quietly dropped them would
+    /// be the bug this exists to prevent.
+    #[cfg(test)]
+    fn observe(&self, frame: &SttFrame, audio_now_ms: f64) -> Option<AlignmentSnapshot> {
+        self.observe_with_word_times(frame, audio_now_ms, None)
+    }
+
     /// Feed one transcript frame and return the projected snapshot.
     ///
     /// `audio_now_ms` is the session's bytes-sent audio clock read at the
@@ -256,11 +267,31 @@ impl AlignmentState {
     /// model (`partial_lag_ms` / `endpoint_lag_ms`) was measured against the
     /// audio clock on live captures, and substituting a wall clock silently
     /// mis-times every prediction.
-    fn observe(&self, frame: &SttFrame, audio_now_ms: f64) -> Option<AlignmentSnapshot> {
+    fn observe_with_word_times(
+        &self,
+        frame: &SttFrame,
+        audio_now_ms: f64,
+        word_times: Option<&[cc_stt::WordTime]>,
+    ) -> Option<AlignmentSnapshot> {
         let mut guard = self.lock();
         let session = guard.as_mut()?;
         // The SOCKET's number, not the take's. See `AlignmentSession`.
         let bound = session.stream_generation?;
+
+        // A field copy and nothing else. Which words the recogniser's words
+        // correspond to is a lexical question, and this module does not answer
+        // lexical questions — the engine lines them up against its own atoms.
+        let timed = || {
+            word_times.map(|words| {
+                words
+                    .iter()
+                    .map(|word| cc_align::TranscriptWordTime {
+                        text: word.text.clone(),
+                        start_ms: word.start_ms,
+                    })
+                    .collect()
+            })
+        };
 
         let event = match frame {
             SttFrame::ItemStarted {
@@ -280,6 +311,7 @@ impl AlignmentState {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_ms: audio_now_ms,
+                word_times: timed(),
             },
             SttFrame::Final {
                 generation,
@@ -290,6 +322,7 @@ impl AlignmentState {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
+                word_times: timed(),
             },
             // Transport, failure and audio-drop frames say nothing about where
             // the reader is. Feeding them would be inventing evidence.
@@ -390,15 +423,22 @@ pub fn bind_stream_generation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, gene
     }
 }
 
-/// The single hook the Inworld stream calls. Called only for transcript frames,
-/// with the audio clock read at arrival.
+/// The single hook the recogniser thread calls. Called only for transcript
+/// frames, with the audio clock read at arrival.
+///
+/// `word_times` rides alongside the frame rather than inside it. The renderer's
+/// [`SttFrame`] is the `stt://event` wire contract and has no use for per-word
+/// timing — the alignment engine lives in Rust and consumes these beside the
+/// audio clock they were measured against — so widening that type would be
+/// paying a protocol change for an audience of nobody.
 pub fn observe_frame<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     frame: &SttFrame,
     audio_now_ms: f64,
+    word_times: Option<&[cc_stt::WordTime]>,
 ) {
     let state: tauri::State<'_, AlignmentState> = app.state();
-    if let Some(snapshot) = state.observe(frame, audio_now_ms) {
+    if let Some(snapshot) = state.observe_with_word_times(frame, audio_now_ms, word_times) {
         publish(app, &snapshot);
     }
 }
@@ -480,6 +520,85 @@ mod tests {
             snapshot.observed_token
         );
         assert!(snapshot.confirmed_token <= snapshot.observed_token);
+    }
+
+    /// The recogniser's word times survive the trip across this module.
+    ///
+    /// This is the production path: `session.rs` pulls `word_times` off the raw
+    /// `cc_stt` frame and hands it here alongside the renderer-shaped one. The
+    /// engine's own tests prove what it does with them; what this proves is
+    /// that they arrive at all, and that carrying them does not disturb the
+    /// answer for a session that gets none.
+    #[test]
+    fn word_times_reach_the_engine_without_widening_the_wire_frame() {
+        // A trailing word the script does not contain, so the last MATCHED
+        // atom is interior — the final atom of an item lands on the item's
+        // corrected end whether or not it was measured.
+        let heard = "good morning everyone and welcome to the quarterly review nevertheless";
+        let frame = || SttFrame::Final {
+            generation: 7,
+            item_id: "7-0".into(),
+            text: heard.into(),
+            audio_end_ms: 8_000.0,
+        };
+        let observed_with = |times: Option<&[cc_stt::WordTime]>| {
+            let state = AlignmentState::new();
+            state.start(7, &tokens(SCRIPT));
+            state.bind_stream(7);
+            // Without this the ledger opens the item AT the final's own clock,
+            // collapsing its window to a millisecond — every measurement then
+            // reads as earlier and is declined, and this test would pass while
+            // proving nothing.
+            state.observe(
+                &SttFrame::ItemStarted {
+                    generation: 7,
+                    item_id: "7-0".into(),
+                    ordinal: 0,
+                    audio_start_ms: 0.0,
+                },
+                0.0,
+            );
+            state
+                .observe_with_word_times(&frame(), 8_000.0, times)
+                .expect("a running session answers a transcript frame")
+        };
+
+        // Spoken late in the item but inside the window a 1400 ms endpoint
+        // correction leaves (0..6600) — and later than the even spread, which
+        // puts the last matched atom at 5940. A measurement that fell earlier
+        // than the spread would be declined by design and prove nothing.
+        let times: Vec<cc_stt::WordTime> = heard
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, text)| cc_stt::WordTime {
+                text: text.to_string(),
+                start_ms: 6_000.0 + i as f64 * 50.0,
+            })
+            .collect();
+
+        let untimed = observed_with(None);
+        let timed = observed_with(Some(&times));
+
+        // The sidecar reached the engine and dated the evidence LATER. Strict,
+        // so this fails rather than passes if the timing is dropped in transit.
+        assert!(
+            timed.evidence_audio_ms > untimed.evidence_audio_ms,
+            "word times did not survive the handoff: {} !> {}",
+            timed.evidence_audio_ms,
+            untimed.evidence_audio_ms
+        );
+        // Same reader, same place — timing dates the evidence, it does not
+        // relocate anyone.
+        assert_eq!(timed.state, untimed.state);
+        assert!((timed.observed_token - untimed.observed_token).abs() <= 2.0);
+
+        // The renderer's frame is untouched by any of this: `word_times` is not
+        // a field on it, so the `stt://event` payload cannot have grown one.
+        let wire = serde_json::to_value(frame()).expect("frame serialises");
+        assert!(
+            wire.get("wordTimes").is_none() && wire.get("word_times").is_none(),
+            "the wire frame grew a timing field: {wire}"
+        );
     }
 
     /// A non-English script compiles, follows, and produces different ATOMS.

@@ -62,6 +62,12 @@ pub struct LedgerAtom {
     /// Carried rather than recomputed: which words are function words is a
     /// language decision, and only the compiled script knows the language.
     pub stopword: bool,
+    /// When the recogniser says this word was spoken, if it said at all.
+    ///
+    /// See [`crate::script::CompiledScript::query_words_with_times`] for what
+    /// makes this `None`, and [`Ledger::tail`] for how it is used — which is
+    /// never on its own, and never to move an atom earlier.
+    pub measured_start_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +97,9 @@ pub struct QueryAtom {
     /// See [`LedgerAtom::stopword`] — classified once, under the script's
     /// language, and carried from there.
     pub stopword: bool,
-    /// Best-effort audio time of this word (interpolated inside the item).
+    /// Best-effort audio time of this word: the recogniser's own measurement
+    /// where it had one and it fell later than the even spread across the item,
+    /// and that spread otherwise. See [`Ledger::tail`].
     pub audio_ms: f64,
     /// Index of the item this atom came from (into `Ledger::items`).
     pub item_index: usize,
@@ -159,6 +167,7 @@ impl Ledger {
                     stability: 0,
                     filler: word.filler,
                     stopword: word.stopword,
+                    measured_start_ms: word.measured_start_ms,
                 }
             })
             .collect();
@@ -176,6 +185,18 @@ impl Ledger {
         for (i, mut atom) in new_atoms.into_iter().enumerate() {
             if i < common {
                 atom.stability = item.atoms[i].stability.saturating_add(1);
+                // A word the recogniser is still revising can be re-dated, and
+                // the LATER of the two readings is the one to keep. Not because
+                // it is the more accurate — the first sighting is usually
+                // closer to the sound — but because this number ends up as the
+                // evidence clock the display extrapolates FROM, and a time that
+                // moves earlier lengthens that extrapolation. A word already
+                // credited to a moment is never taken back to before it.
+                atom.measured_start_ms = match (item.atoms[i].measured_start_ms, atom.measured_start_ms) {
+                    (Some(old), Some(new)) => Some(old.max(new)),
+                    (Some(old), None) => Some(old),
+                    (None, new) => new,
+                };
             }
             merged.push(atom);
         }
@@ -191,7 +212,7 @@ impl Ledger {
     }
 
     /// The last `max_atoms` atoms across items, oldest first, with stability
-    /// classes and interpolated audio times.
+    /// classes and audio times.
     ///
     /// The item timestamps are RECEIPT times, which lag the speech itself:
     /// a partial shows words spoken ~`partial_lag_ms` earlier, and a final
@@ -199,6 +220,53 @@ impl Ledger {
     /// silence before committing). Correcting here — per timestamp kind —
     /// is what lets word times approximate actual speech time; a single
     /// downstream fudge factor cannot fix both at once.
+    ///
+    /// # Measured times, and why they may only ever move an atom later
+    ///
+    /// Spreading an item evenly over its own duration assumes every word took
+    /// an equal share of it, which is not how anyone speaks: one rhetorical
+    /// pause dates every word around it on the wrong side of the silence. Where
+    /// the recogniser reported when it actually heard a word, that reading is
+    /// available here as [`LedgerAtom::measured_start_ms`].
+    ///
+    /// It is applied as a floor rather than a replacement — `max(interpolated,
+    /// measured)`, never `measured` alone. This number becomes the evidence
+    /// clock the display works from, and an atom dated EARLIER lengthens the
+    /// forward extrapolation off it. On a stage that dims what has been read,
+    /// running ahead is the one failure that cannot be taken back, while
+    /// running late merely trails. So a measurement is taken when it says a
+    /// word was spoken later than the even spread believed, and declined when
+    /// it says earlier.
+    ///
+    /// The running maximum is load-bearing too, not decoration — though not
+    /// because a single revision arrives unsorted. `CompiledScript::dated_atoms`
+    /// declines `word_times` that step backwards, and the source word it dates
+    /// each atom from only ever climbs, so one revision's measurements are
+    /// sorted by construction. Order is lost ACROSS revisions instead: the
+    /// per-index merge in [`Ledger::revise_atoms`] keeps `old.max(new)` for
+    /// every atom that survives, so atom i can hold an old LATE reading while
+    /// atom i+1 accepts a new EARLIER one.
+    ///
+    /// # What this does NOT buy, stated plainly
+    ///
+    /// "Only ever later, therefore it cannot add lead" is TRUE of the linear
+    /// term and FALSE of the display as a whole, and it would be comfortable to
+    /// stop at the first half. [`crate::tracker::Snapshot::display_at`] eases
+    /// its lead back to nothing as evidence goes stale, and it measures
+    /// staleness as `now - evidence_ms`. Dating a word later makes the evidence
+    /// look FRESHER, so that settle starts later: into a silence, the display
+    /// can hold a lead a little longer than it used to.
+    ///
+    /// That is why the clamp is the item's own `end` rather than the raw
+    /// receipt clock. It bounds the effect to the item's span instead of
+    /// letting a whole `endpoint_lag_ms` of extra freshness in on top, and it
+    /// keeps this change on the right side of a scope line: an even spread
+    /// being wrong ABOUT THE INSIDE of an utterance is this issue; where the
+    /// utterance ENDS is `endpoint_lag_ms`, which cannot be re-tuned until
+    /// there is a corpus to measure it on. The residual is real, bounded, and
+    /// UNMEASURED on live audio: every frozen fixture predates per-word timing
+    /// and replays through the interpolation branch below, so no benchmark in
+    /// the tree scores this. Do not read a green suite as evidence about it.
     pub fn tail(
         &self,
         max_atoms: usize,
@@ -217,11 +285,62 @@ impl Ledger {
                 None => item.last_seen_audio_ms - partial_lag_ms,
             }
             .max(start + 1.0);
+            let mut resolved = f64::NEG_INFINITY;
             for (i, atom) in item.atoms.iter().enumerate() {
                 let stability = classify(item, i);
                 // Word i of n spans [i/n, (i+1)/n] of the item; use the end of
                 // its span as "when it had been said".
-                let audio_ms = start + (end - start) * ((i + 1) as f64 / n as f64);
+                let interpolated = start + (end - start) * ((i + 1) as f64 / n as f64);
+                // Only inside the item's OWN window, `end` included. A
+                // measurement redistributes words within the stretch the lag
+                // constants say this item occupies; it does not get to move the
+                // far edge of that stretch, which is the `endpoint_lag_ms`
+                // question — still waiting on the re-captured corpus that could
+                // answer it, see `AlignmentConfig::endpoint_lag_ms`.
+                //
+                // DECLINED when it falls outside, not clamped into. Clamping
+                // reads as the conservative choice and is the more dangerous
+                // one: a final closed by the 20 s cap has no trailing silence,
+                // so its last second of words all measure later than `end` and
+                // would land on `end` EXACTLY — a plateau of identical
+                // timestamps. The tail is retired by timestamp (`retain(audio_ms
+                // >= horizon)`, with the horizon set one millisecond below an
+                // accepted position's clock), and a plateau spans that cut: the
+                // stale half of a retake survives it, and stable stale atoms
+                // are exactly what outvotes the retake on the next revision and
+                // snaps the reader forward. Declining leaves the atom on its
+                // interpolated share, which is strictly increasing, so the cut
+                // still has distinct values to bite on.
+                //
+                // That trades one source of plateaus for a shorter one rather
+                // than removing them. The running maximum below lifts every
+                // following atom whose interpolated share falls under an
+                // accepted measurement onto that measurement —
+                // `out_of_order_measurements_never_step_backwards` pins a
+                // two-atom run at 3500. Length is the whole difference: a clamp
+                // collapses however many words the cap cut short onto a single
+                // value, while a run made this way is bounded above by the
+                // item's own `end` and breaks at the first atom whose share
+                // clears it. Crowding this fine is not new either — see
+                // `an_untimed_item_is_dated_exactly_as_it_always_was`, where a
+                // collapsed window already spaces atoms 0.167 ms apart.
+                let measured = match atom.measured_start_ms {
+                    // A non-finite clock is not a measurement. Checked rather
+                    // than compared into, because a NaN start would otherwise
+                    // make every comparison below quietly false.
+                    Some(ms)
+                        if ms.is_finite()
+                            && start.is_finite()
+                            && end.is_finite()
+                            && ms >= start
+                            && ms <= end =>
+                    {
+                        ms
+                    }
+                    _ => f64::NEG_INFINITY,
+                };
+                let audio_ms = interpolated.max(measured).max(resolved);
+                resolved = audio_ms;
                 out.push(QueryAtom {
                     id: atom.id,
                     surface: atom.surface.clone(),
@@ -293,6 +412,7 @@ mod tests {
                 stopword: is_stopword_for(lang, &surface),
                 phonetic: phonetic_key_for(lang, &surface),
                 surface,
+                measured_start_ms: None,
             })
             .collect();
         ledger.revise_atoms(interner, item_id, words, is_final, audio_ms)
@@ -335,6 +455,373 @@ mod tests {
         let tail = ledger.tail(40, 0.0, 0.0);
         assert!(tail.iter().all(|a| a.stability == StabilityClass::Final));
         assert_eq!(tail.len(), 6);
+    }
+
+    /// Times measured for each atom, in order. The ledger takes them attached
+    /// to the words, so this is the shortest way to say "this item was heard
+    /// at these moments" without going through a compiled script.
+    fn revise_timed(
+        ledger: &mut Ledger,
+        interner: &mut Interner,
+        item_id: &str,
+        text: &str,
+        is_final: bool,
+        audio_ms: f64,
+        times: &[Option<f64>],
+    ) {
+        let lang = AlignmentLanguage::English;
+        let words: Vec<QueryWord> = canonical_atoms_for(lang, text)
+            .into_iter()
+            .enumerate()
+            .map(|(i, surface)| QueryWord {
+                filler: is_filler_for(lang, &surface),
+                stopword: is_stopword_for(lang, &surface),
+                phonetic: phonetic_key_for(lang, &surface),
+                surface,
+                measured_start_ms: times.get(i).copied().flatten(),
+            })
+            .collect();
+        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms);
+    }
+
+    /// The interpolated times, for comparison. Whatever a measurement does, it
+    /// may not produce a number below the one on this line.
+    fn interpolated(n: usize, start: f64, end: f64) -> Vec<f64> {
+        (0..n)
+            .map(|i| start + (end - start) * ((i + 1) as f64 / n as f64))
+            .collect()
+    }
+
+    /// The whole point of the change: a pause inside an utterance.
+    ///
+    /// Five words over four seconds with a two-second silence in the middle.
+    /// The even spread puts word 3 at 2400 ms — inside the silence, when
+    /// nothing at all was being said. The measurement puts it where it was
+    /// actually heard.
+    #[test]
+    fn a_measured_word_is_dated_where_it_was_heard_not_where_the_spread_guessed() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four five",
+            true,
+            4_000.0,
+            &[
+                Some(200.0),
+                Some(600.0),
+                // Said AFTER the two-second silence, not during it.
+                Some(3_000.0),
+                Some(3_400.0),
+                Some(3_800.0),
+            ],
+        );
+        let tail = ledger.tail(40, 0.0, 0.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        let spread = interpolated(5, 0.0, 4_000.0);
+
+        // The word after the pause moves LATER than the spread believed —
+        // 3000 rather than 2400 — which is the correction that matters.
+        assert_eq!(times[2], 3_000.0);
+        assert!(times[2] > spread[2]);
+        // And nothing anywhere moved earlier.
+        for (measured, even) in times.iter().zip(&spread) {
+            assert!(
+                measured >= even,
+                "a measurement may not date an atom before the spread did: {measured} < {even}"
+            );
+        }
+    }
+
+    /// The safety property, stated directly. An earlier evidence time is a
+    /// longer extrapolation, and a longer extrapolation is display lead.
+    #[test]
+    fn a_measurement_earlier_than_the_spread_is_declined() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four",
+            true,
+            4_000.0,
+            // Every word claimed at the very start of the item.
+            &[Some(10.0), Some(20.0), Some(30.0), Some(40.0)],
+        );
+        let tail = ledger.tail(40, 0.0, 0.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert_eq!(times, interpolated(4, 0.0, 4_000.0));
+    }
+
+    /// Measured times can reach the ledger unsorted, because the per-index
+    /// merge in `revise_atoms` keeps `old.max(new)` per surviving atom: one
+    /// atom can hold an old late reading while the next accepts a newer earlier
+    /// one. The running maximum is what keeps the tail monotonic when that
+    /// happens, at the price of a short plateau — which this test pins too, so
+    /// the cost is on the record rather than assumed away.
+    #[test]
+    fn out_of_order_measurements_never_step_backwards() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four",
+            true,
+            4_000.0,
+            &[Some(3_500.0), Some(1_000.0), Some(3_600.0), Some(3_900.0)],
+        );
+        let tail = ledger.tail(40, 0.0, 0.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert!(
+            times.windows(2).all(|w| w[1] >= w[0]),
+            "tail must be non-decreasing, got {times:?}"
+        );
+        // The late first word is kept, and the early second is lifted to it
+        // rather than dragging the sequence back.
+        assert_eq!(times[0], 3_500.0);
+        assert_eq!(times[1], 3_500.0);
+    }
+
+    /// A measurement redistributes words INSIDE the window the lag constants
+    /// give the item. It does not get to move the far edge of that window —
+    /// that is the `endpoint_lag_ms` question, and it is still waiting on the
+    /// corpus that could answer it.
+    ///
+    /// This bound is also what keeps the change bounded: a later clock makes
+    /// evidence look FRESHER, which delays the display's settle onto a pause,
+    /// so letting a measurement run past the corrected end would add up to a
+    /// whole `endpoint_lag_ms` of held-open lead on top of the item's own span.
+    #[test]
+    fn a_measurement_outside_the_window_is_declined_not_clamped() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two",
+            true,
+            5_000.0,
+            // Both claim times past the corrected end; the second past the
+            // receipt clock entirely.
+            &[Some(4_200.0), Some(9_999.0)],
+        );
+        // A 1400 ms endpoint correction puts the interpolated end at 3600.
+        let tail = ledger.tail(40, 0.0, 1_400.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert_eq!(times, interpolated(2, 0.0, 3_600.0));
+    }
+
+    /// The reason the branch above declines rather than clamps.
+    ///
+    /// A final closed by the 20 s cap has no trailing silence, so its last
+    /// second of words all measure later than the lag-corrected end. Clamped,
+    /// every one of them would land on that end EXACTLY — and the tail is
+    /// retired by timestamp, so a plateau of identical clocks spans the cut
+    /// that is supposed to drop the stale half of a retake.
+    #[test]
+    fn a_run_of_late_measurements_does_not_collapse_onto_one_timestamp() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four five",
+            true,
+            20_000.0,
+            // Everything heard in the last stretch, past the corrected end.
+            &[
+                Some(19_000.0),
+                Some(19_200.0),
+                Some(19_400.0),
+                Some(19_600.0),
+                Some(19_800.0),
+            ],
+        );
+        let tail = ledger.tail(40, 0.0, 1_400.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert!(
+            times.windows(2).all(|w| w[1] > w[0]),
+            "timestamps must stay distinct for the horizon to cut on: {times:?}"
+        );
+    }
+
+    /// A non-finite clock is not a measurement. It must be ignored rather than
+    /// propagated — and `f64::clamp` panics on non-finite bounds, so the item
+    /// start has to be checked too.
+    #[test]
+    fn non_finite_clocks_are_ignored_rather_than_propagated() {
+        for start in [0.0, f64::NAN] {
+            let mut ledger = Ledger::default();
+            let mut interner = Interner::default();
+            ledger.item_started("1-0", start);
+            revise_timed(
+                &mut ledger, &mut interner, "1-0", "one two three", true, 3_000.0,
+                &[Some(f64::NAN), Some(f64::INFINITY), Some(1_000.0)],
+            );
+            let tail = ledger.tail(40, 0.0, 0.0);
+            assert_eq!(tail.len(), 3, "a bad clock must not drop an atom");
+            if start.is_finite() {
+                let spread = interpolated(3, 0.0, 3_000.0);
+                // The two unusable clocks fall back; the real one is declined
+                // for being earlier than its own share of the spread.
+                assert_eq!(tail[0].audio_ms, spread[0]);
+                assert_eq!(tail[1].audio_ms, spread[1]);
+                assert_eq!(tail[2].audio_ms, spread[2]);
+            } else {
+                // A NaN item start is already beyond saving — the interpolation
+                // it feeds is NaN too, and always was. What matters is that
+                // reading a measurement past it no longer PANICS, which
+                // `f64::clamp` did on non-finite bounds. What comes out stays
+                // unusable, and the tail retention downstream drops it on the
+                // same comparison that dropped the NaN before.
+                assert!(tail.iter().all(|a| !a.audio_ms.is_finite()));
+                assert!(!tail.iter().any(|a| a.audio_ms >= 0.0));
+            }
+        }
+    }
+
+    /// Two items, both timed. The running maximum is per item, so item 2 is
+    /// free to start where it actually started rather than being dragged by
+    /// item 1 — but neither item may hand back a time before its own spread.
+    #[test]
+    fn timing_survives_across_items() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one two three", true, 3_000.0,
+            &[Some(400.0), Some(2_400.0), Some(2_800.0)],
+        );
+        ledger.item_started("1-1", 4_000.0);
+        revise_timed(
+            &mut ledger, &mut interner, "1-1", "four five six", true, 7_000.0,
+            &[Some(4_400.0), Some(6_400.0), Some(6_800.0)],
+        );
+        let tail = ledger.tail(40, 0.0, 0.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        assert!(
+            times.windows(2).all(|w| w[1] >= w[0]),
+            "tail must stay ordered across items, got {times:?}"
+        );
+        // The pause inside item 1 is honoured: word 2 sits at its measured
+        // 2400, not at the 2000 the even spread assumed.
+        assert_eq!(times[1], 2_400.0);
+        assert_eq!(tail[3].item_index, 1);
+        assert_eq!(times[4], 6_400.0);
+    }
+
+    /// One atom without a time among atoms that have one. It falls back to its
+    /// own interpolated value, and is lifted only if that would step backwards.
+    #[test]
+    fn an_untimed_atom_falls_back_on_its_own() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger,
+            &mut interner,
+            "1-0",
+            "one two three four",
+            true,
+            4_000.0,
+            &[Some(1_500.0), None, Some(3_500.0), None],
+        );
+        let tail = ledger.tail(40, 0.0, 0.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        let spread = interpolated(4, 0.0, 4_000.0);
+        assert_eq!(times[0], 1_500.0);
+        // Its own spread value (2000) survives — it is later than 1500.
+        assert_eq!(times[1], spread[1]);
+        assert_eq!(times[2], 3_500.0);
+        // Its spread value (4000) is later than the atom before it, so it stands.
+        assert_eq!(times[3], spread[3]);
+        assert!(times.windows(2).all(|w| w[1] >= w[0]));
+    }
+
+    /// A word re-reported by a later partial keeps the LATER of the two
+    /// readings. The first sighting is usually the truer one, but this number
+    /// is the clock the display extrapolates from, and letting it move earlier
+    /// lengthens that extrapolation after the fact.
+    #[test]
+    fn a_re_dated_word_never_moves_earlier() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one two", false, 1_000.0,
+            &[Some(900.0), Some(950.0)],
+        );
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one two three", false, 2_000.0,
+            // The recogniser revises the first word EARLIER, and is refused.
+            &[Some(100.0), Some(1_200.0), Some(1_800.0)],
+        );
+        let item = ledger.current_item().expect("item");
+        assert_eq!(item.atoms[0].measured_start_ms, Some(900.0));
+        // A later reading of the second word is taken.
+        assert_eq!(item.atoms[1].measured_start_ms, Some(1_200.0));
+    }
+
+    /// A revision that reports no timing at all must not erase what the
+    /// surviving prefix already established.
+    #[test]
+    fn an_untimed_revision_does_not_erase_a_surviving_prefix() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one two", false, 1_000.0,
+            &[Some(900.0), Some(950.0)],
+        );
+        revise_text(&mut ledger, &mut interner, "1-0", "one two three", false, 2_000.0);
+        let item = ledger.current_item().expect("item");
+        assert_eq!(item.atoms[0].measured_start_ms, Some(900.0));
+        assert_eq!(item.atoms[1].measured_start_ms, Some(950.0));
+        assert_eq!(item.atoms[2].measured_start_ms, None);
+    }
+
+    /// A retracted suffix is new evidence, not surviving evidence — it must not
+    /// inherit the clock of the word it replaced.
+    #[test]
+    fn a_retracted_suffix_does_not_inherit_the_old_time() {
+        let mut ledger = Ledger::default();
+        let mut interner = Interner::default();
+        ledger.item_started("1-0", 0.0);
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one two", false, 1_000.0,
+            &[Some(900.0), Some(950.0)],
+        );
+        revise_timed(
+            &mut ledger, &mut interner, "1-0", "one banana", false, 2_000.0,
+            &[Some(900.0), None],
+        );
+        let item = ledger.current_item().expect("item");
+        assert_eq!(item.atoms[1].surface, "banana");
+        assert_eq!(item.atoms[1].measured_start_ms, None);
+    }
+
+    /// Nothing about an untimed item may have changed. This is the path every
+    /// frozen benchmark fixture still takes.
+    #[test]
+    fn an_untimed_item_is_dated_exactly_as_it_always_was() {
+        let (ledger, _) = ledger_with(&[("hello world this is a test", true)]);
+        let tail = ledger.tail(40, 400.0, 1_400.0);
+        let times: Vec<f64> = tail.iter().map(|a| a.audio_ms).collect();
+        // Item start 0, final at 1000, endpoint correction 1400 → the window
+        // collapses and the `start + 1.0` floor applies, exactly as before.
+        assert_eq!(times, interpolated(6, 0.0, 1.0));
     }
 
     #[test]

@@ -371,15 +371,40 @@ pub struct AlignmentConfig {
     /// before that could replace this constant:
     ///
     ///   - whether `timestamps` is segment-relative or stream-relative, and
-    ///     whether it stays so across a segment boundary. Upstream documentation
-    ///     is contradictory and a probe here never reached a second segment.
+    ///     whether it stays so across a segment boundary. SETTLED: they are
+    ///     segment-relative, and `start_time` carries the segment's origin —
+    ///     measured by forcing a second segment. See `cc_stt::word_times`.
     ///   - that `timestamps.last()` is the END of the last token rather than its
-    ///     ONSET. No token duration is exposed, so it is likely the onset, which
-    ///     would leave a residual worth measuring rather than assuming.
-    ///   - that the result is better than 1400 on a re-captured corpus. The
-    ///     frozen fixtures carry the `audioEndMs` they were captured with, so
-    ///     this is not measurable without a fresh capture — which is the reason
-    ///     the constant has not simply been changed.
+    ///     ONSET. SETTLED: it is the ONSET, and it runs 100–340 ms late (mean
+    ///     ~200) against true acoustic onset, because a streaming transducer
+    ///     times a token from the frame it committed on.
+    ///   - that the result is better than 1400 on a re-captured corpus. STILL
+    ///     OPEN. The frozen fixtures carry the `audioEndMs` they were captured
+    ///     with, so this is not measurable without a fresh capture — which is
+    ///     the reason the constant has not simply been changed.
+    ///
+    /// What DID change, and — more importantly — what did not. The per-word
+    /// times those first two facts unlocked now reach the ledger, and
+    /// [`crate::ledger::Ledger::tail`] dates an atom by the larger of its
+    /// measurement and its interpolated share of the item.
+    ///
+    /// This constant still sets BOTH ends of that arithmetic. It is the floor,
+    /// via the interpolation a measurement has to beat; it is the ceiling, in
+    /// that a measurement landing after the corrected end is declined rather
+    /// than believed; and because the last atom's interpolated share IS the
+    /// corrected end, the final atom of every item is dated by this constant
+    /// alone, measured or not. What measurement buys is the INSIDE of an
+    /// utterance — words no longer sit on the wrong side of a pause. Where the
+    /// utterance ends is still this number, and still wrong in the four ways
+    /// described above.
+    ///
+    /// That is deliberate, not an oversight. Re-dating the end is the change
+    /// this doc has always said needs a corpus, and it is not a free
+    /// improvement even when correct: a later evidence clock reads as fresher
+    /// to [`crate::tracker::Snapshot::display_at`], which delays its settle
+    /// onto a pause and holds the display's lead open longer. Right answer,
+    /// re-tuned constants — and no way to tell which way that trades until
+    /// there is something to measure it on.
     pub endpoint_lag_ms: f64,
 
     // ---- viewport prior ----
