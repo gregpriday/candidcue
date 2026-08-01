@@ -2209,6 +2209,78 @@ mod tests {
         assert_eq!(latched.provisional, None);
     }
 
+    /// The same opening as `aside_script`, followed by enough ordinary body to
+    /// put the last passage outside the local band, and a closing passage whose
+    /// words occur nowhere else. Reaching that passage can only be an accepted
+    /// discontinuity — it is 116 atoms past where the aside is latched, so
+    /// neither local continuity nor the return gate can explain it.
+    fn distant_passage_script() -> CompiledScript {
+        compile(
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet \
+             kilo lima mike november oscar papa quebec romeo sierra tango \
+             amber anvil apricot ardent aspen azure badger ballast bamboo banner \
+             basalt beacon bellows birch bison blossom bramble bronze buckle burrow \
+             cactus canyon cavern cedar chalice cinder cistern clover cobalt comet \
+             copper coral cricket crimson crocus cypress dahlia damson dolphin drift \
+             dune ebony elder ember falcon fennel fjord flint forge fossil \
+             gable garnet geyser ginger glacier granite gravel grotto gull gypsum \
+             hammock harbour hazel heather hedge heron hollow hornet ivory jasmine \
+             jasper kettle lantern lattice lichen lilac linen lobster lupin magnet \
+             mallow mantle maple marble meadow mercury mesa mica mint mistral \
+             monsoon mortar mosaic moth mulberry myrtle nectar nettle nickel nutmeg \
+             obsidian pelican quicksilver ravine saffron thistle vellum wicket \
+             xylem zephyr basilisk cormorant",
+            CompileOptions::default(),
+        )
+    }
+
+    #[test]
+    fn an_accepted_jump_ends_an_aside() {
+        let mut engine = Engine::new(distant_passage_script(), AlignmentConfig::default());
+        engine.set_manual_position(4, 0.0);
+        for (n, at) in [(1u32, 400.0), (2, 800.0), (3, 1_200.0)] {
+            final_item(&mut engine, n, "wombat pangolin marmoset", at);
+        }
+        assert!(engine.off_script, "fixture failed to latch");
+
+        // The third way out of the latch, and the only one the return gate is
+        // not involved in: the reader turns up somewhere else entirely, reading
+        // a passage that appears nowhere else in the script. That is evidence
+        // about WHERE they are, and it outranks a latch that only says where
+        // they are not — so the relocation is allowed to bypass the gate.
+        let jumped = final_item(
+            &mut engine,
+            4,
+            "obsidian pelican quicksilver ravine saffron thistle \
+             vellum wicket xylem zephyr basilisk cormorant",
+            1_600.0,
+        );
+
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+        assert_eq!(jumped.state, TrackingState::Following);
+        assert_eq!(jumped.observed, 132.0);
+        assert!(!engine.off_script);
+        assert_eq!(engine.off_script_enter_streak, 0);
+        assert_eq!(engine.off_script_return_streak, 0);
+
+        // ...and the state is genuinely gone rather than masked by the accepted
+        // position. `hold` relabels every hold `HoldOffScript` while the latch
+        // is up, so a later thin revision saying `HoldLowEvidence` is the thing
+        // that distinguishes "cleared" from "still latched, currently quiet".
+        let after: Vec<DecisionCode> = [(5u32, 2_000.0), (6, 2_400.0), (7, 2_800.0)]
+            .into_iter()
+            .map(|(n, at)| final_item(&mut engine, n, "wombat pangolin marmoset", at).decision)
+            .collect();
+        assert!(
+            !after.contains(&DecisionCode::HoldOffScript),
+            "the aside survived an accepted jump: {after:?}",
+        );
+        assert!(
+            after.contains(&DecisionCode::HoldLowEvidence),
+            "expected a thin-evidence hold once the reader stopped reading again: {after:?}",
+        );
+    }
+
     #[test]
     fn expected_proper_noun_can_use_phonetic_evidence_locally() {
         let script = compile(
