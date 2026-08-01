@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use cc_align::TrackingState;
 
 use crate::passgold::{EventKind, PassGold, PauseClass};
-use crate::stage::{darkness, StageTrace, PAST_OPACITY};
+use crate::stage::{darkness, LineMap, StageTrace, PAST_OPACITY};
 
 /// Gaze weighting: σ in rendered lines. Tokens a line and a half from the
 /// reading position carry ~60% weight, three lines ~13%. Unread text being
@@ -61,6 +61,31 @@ const READABLE_NEXT_WORDS: u32 = 8;
 const READABLE_NEXT_MAX_DARKNESS: f64 = 0.25;
 const READABLE_MAX_LINES_PER_S: f64 = 2.5;
 const READABLE_MIN_DOC_OPACITY: f64 = 0.8;
+
+/// Readable corridor (§6.3): how dark a word has to be before it stops counting
+/// as material the reader still has in front of them.
+///
+/// Numerically `FIRST_RESPONSE`, and deliberately a separate constant. That one
+/// answers "when did the ramp visibly begin", this one answers "may the reader
+/// still count on this word" — the same number today because the first visible
+/// change is exactly the point a word stops being dependable, but they are two
+/// judgements and tying them together would hide that.
+const READABLE_AHEAD_DARKNESS: f64 = 0.25;
+
+/// How much readable material the reader needs in front of them, in ms of
+/// reading at the pace they are actually reading at.
+///
+/// A CANDIDATE, in the same sense as the `READABLE_*` block above, and the
+/// weakest-evidenced constant in this file. The oral reading literature puts
+/// fixation roughly 500 ms ahead of articulation; none of it was measured
+/// through teleprompter glass with a camera in the way, and Tier D is what would
+/// turn it into a measurement. It is reported, never gated on.
+///
+/// Revising it means re-running: `..._p05` is published beside the deficit to
+/// show the shape of the bad tail, NOT to make the threshold re-applicable
+/// after the fact. Two points do not reconstruct a distribution, and the
+/// per-frame pool is not serialised.
+const READABLE_AHEAD_MIN_MS: f64 = 500.0;
 
 /// Blur exposure: above this rendered speed the text is not readable while it
 /// moves. Lines per second.
@@ -155,6 +180,9 @@ pub struct PerceptualSamples {
     /// Normalised band error per frame, in lines.
     pub band_err_lines: Vec<f64>,
     pub future_reserve_lines: Vec<f64>,
+    /// Milliseconds of legible reading ahead of the mouth, per frame. Frames
+    /// that ran out of PASS MATERIAL are absent rather than zero.
+    pub readable_ahead_ms: Vec<f64>,
     pub handoff_err_lines: Vec<f64>,
     /// |plant − target| / line pitch, per frame.
     pub plant_err_lines: Vec<f64>,
@@ -247,6 +275,28 @@ pub struct PerceptualMetrics {
     pub future_reserve_min: f64,
     pub below_1_future_line_pct: f64,
     pub future_starvation_events: u32,
+
+    // ---- §6.3 the readable corridor ----
+    // Defaulted on read: results written before this metric existed have no
+    // such key, and refusing to open them would strand every archived run.
+    /// Milliseconds of legible reading ahead of the mouth, bad tail.
+    #[serde(default)]
+    pub readable_ahead_p05_ms: f64,
+    /// % of scored frames with less than `READABLE_AHEAD_MIN_MS` in front of
+    /// the reader. The headline; the two rows below split it by cause.
+    #[serde(default)]
+    pub readable_ahead_deficit_pct: f64,
+    /// …because the dim ramp had already taken a word they had not said.
+    #[serde(default)]
+    pub readable_ahead_opacity_deficit_pct: f64,
+    /// …because the corridor ran off the bottom of the glass.
+    #[serde(default)]
+    pub readable_ahead_viewport_deficit_pct: f64,
+    /// Frames excluded because the PASS ran out, not the display. An audit
+    /// count, not a quality number: it has no better direction.
+    #[serde(default)]
+    pub readable_ahead_material_end_frames: u32,
+
     pub handoff_err_p50: f64,
     pub handoff_err_p95: f64,
 
@@ -423,6 +473,208 @@ fn band_power_ratio(series: &[f64], dt_s: f64, lo_hz: f64, hi_hz: f64) -> f64 {
 // The evaluator
 // ---------------------------------------------------------------------------
 
+/// Why the readable corridor stopped. Three different complaints, and reporting
+/// them as one number would let the harmless case pay for the other two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadableAheadEnd {
+    /// The dim ramp had already taken a word the reader has not said. The
+    /// defect the metric exists for.
+    DimRamp,
+    /// The glass stopped showing the corridor. Usually running off the bottom,
+    /// but it also covers the reader's own line being scrolled off the TOP,
+    /// which is the catastrophic running-ahead case and belongs here rather
+    /// than in a category of its own. Legitimately a deficit — text the
+    /// presenter cannot see is not text they can read — but a placement
+    /// failure, not an opacity one, and `future_reserve` is its geometry-only
+    /// sibling.
+    Viewport,
+    /// The pass ran out of material. NOT a defect: a reader four words from the
+    /// end of a take genuinely has four words in front of them, and scoring
+    /// that as starvation would make every take end in a manufactured failure.
+    MaterialEnd,
+}
+
+/// Contiguous legible material ahead of the reader, and why it ended.
+#[derive(Debug, Clone, Copy)]
+struct ReadableAheadMeasurement {
+    /// Milliseconds of reading, at the pace the reader is actually reading at.
+    ms: f64,
+    end: ReadableAheadEnd,
+}
+
+/// What one frame's glass shows, and how darkly.
+///
+/// Visibility is asked GEOMETRICALLY rather than read off the extent of
+/// `token_opacity`, and the difference is not academic. `stage::render` bounds
+/// that vector with `first_atom_at_y(bottom)`, which returns the first atom of
+/// the line CONTAINING the bottom edge and is then used as an exclusive bound —
+/// so when the document runs out before the viewport does, the last line is
+/// fully visible and entirely absent from the vector. Inferring visibility from
+/// the vector would call that "ran off the glass" at the end of every take,
+/// which is precisely the frames the material-end censoring exists to protect.
+struct Glass<'a> {
+    token_opacity: &'a [(u32, f32)],
+    line_map: &'a LineMap,
+    top_y: f64,
+    bottom_y: f64,
+}
+
+impl Glass<'_> {
+    /// Is the line this atom sits on overlapping the viewport at all? Text is
+    /// drawn a line at a time, so the line is the honest unit.
+    fn shows(&self, atom: f64) -> bool {
+        let top = self.line_map.line_top_px(self.line_map.line_of(atom));
+        top < self.bottom_y && top + self.line_map.line_pitch_px() > self.top_y
+    }
+
+    /// Rendered darkness of `atom`, on the 0-bright/1-far-past axis.
+    ///
+    /// An atom the renderer skipped is bright, and the reason is the viewport's
+    /// direction rather than the ramp's: `rendered_opacity` persists between
+    /// frames and a sustained retreat of the dim cursor does walk tokens back
+    /// UP, so "opacity only ever falls" would be wrong. What holds is that the
+    /// drawn range's far edge only advances while the document scrolls forward,
+    /// so a token cannot leave that range downward and stay visible — and the
+    /// one thing that moves the viewport backward, a re-anchor, resets every
+    /// entry to 1.0 (`stage.rs`, `rendered_opacity.iter_mut()`). So an atom
+    /// that is visible and undrawn has had nothing applied to it.
+    fn darkness_of(&self, atom: u32) -> f64 {
+        self.token_opacity
+            .binary_search_by_key(&atom, |&(a, _)| a)
+            .ok()
+            .map(|i| darkness(self.token_opacity[i].1 as f64))
+            .unwrap_or(0.0)
+    }
+}
+
+/// Walk forward from where the reader is and measure how far the legible text
+/// reaches (§6.3).
+///
+/// This is the quantity `time.lag_p50` cannot see. A stage 700 ms behind the
+/// mouth with the line correctly placed and stable opaque text under it is
+/// fine; a stage with no lag at all that is fading the word about to be spoken
+/// is unusable, and the lag row calls the second one better.
+///
+/// Anchored on `reader_position` — the SPOKEN frontier, the mouth — and not on
+/// `PassGold::focus`. Focus is the frontier plus a modelled two-atom eye-voice
+/// lead, so anchoring there would subtract an assumed lead before testing a
+/// threshold justified by that same assumed lead. Measuring from the mouth
+/// keeps the model in `READABLE_AHEAD_MIN_MS`, where it is labelled and can be
+/// revised, instead of dissolving it into the measurement.
+///
+/// `None` when the position is outside the material `tau` can speak for, which
+/// is the same condition that makes `temporal_err` `None`.
+///
+/// Inherited from the gold model, and shared with every other frontier-anchored
+/// row: a forward SKIP does not open a new pass, so during the first word at
+/// the new location the frontier is still the abandoned one and `tau`
+/// interpolates across material the reader jumped over. Deviating here would
+/// buy a more accurate corridor at the cost of no longer being comparable with
+/// `time.lag_p50`, which is the comparison this row exists to make.
+fn measure_readable_ahead(
+    gold: &PassGold,
+    pass: u32,
+    reader_position: f64,
+    glass: &Glass<'_>,
+) -> Option<ReadableAheadMeasurement> {
+    let (pass_lo, pass_hi) = gold.pass_span(pass)?;
+    if reader_position < pass_lo || reader_position > pass_hi {
+        return None;
+    }
+    let t_start = gold.tau(pass, reader_position)?;
+
+    // Start at the token the reader is INSIDE, not the next one. A word being
+    // dimmed while it is still in the mouth is the sharpest form of the defect,
+    // and starting a token later would look straight past it.
+    let mut atom = reader_position.floor().max(0.0);
+    let (end_pos, end) = loop {
+        // Material end wins ties: when the pass runs out on the same atom the
+        // glass does, the honest reading is that there was nothing left to show.
+        if atom >= pass_hi {
+            break (pass_hi, ReadableAheadEnd::MaterialEnd);
+        }
+        if !glass.shows(atom) {
+            break (atom, ReadableAheadEnd::Viewport);
+        }
+        if glass.darkness_of(atom as u32) >= READABLE_AHEAD_DARKNESS {
+            break (atom, ReadableAheadEnd::DimRamp);
+        }
+        atom += 1.0;
+    };
+
+    // Clamped because the token the reader is inside starts BEHIND them: if it
+    // is already dark the corridor is empty, not negative.
+    let t_end = gold.tau(pass, end_pos.clamp(pass_lo, pass_hi))?;
+    Some(ReadableAheadMeasurement {
+        ms: (t_end - t_start).max(0.0),
+        end,
+    })
+}
+
+/// The corridor across a take.
+#[derive(Debug, Default)]
+struct ReadableAheadSummary {
+    /// Lengths that are a fact rather than a lower bound.
+    samples: Vec<f64>,
+    p05_ms: f64,
+    deficit_pct: f64,
+    opacity_deficit_pct: f64,
+    viewport_deficit_pct: f64,
+    material_end_frames: u32,
+}
+
+/// Summarise the corridor, censoring what the script's own ending made
+/// unknowable and nothing more.
+///
+/// A `MaterialEnd` observation is RIGHT-CENSORED: the corridor was AT LEAST
+/// that long and would have run further had there been more script. The two
+/// questions treat that differently, which is why they are computed over
+/// different sets rather than one:
+///
+/// - "was there enough?" is a yes/no a censored observation can still answer.
+///   One already past the threshold is a known success and stays in the
+///   denominator; dropping it would let a take that ended comfortably report a
+///   worse deficit than it earned. One that has NOT reached the threshold is
+///   genuinely unknowable and leaves entirely — the script ending is not the
+///   display's fault.
+/// - "how long was it?" is a magnitude no censored observation can answer, so
+///   the percentile is taken over uncensored lengths only. Feeding lower bounds
+///   into a low percentile would drag the bad tail down with values that are
+///   not measurements.
+fn summarise_readable_ahead(measured: &[ReadableAheadMeasurement]) -> ReadableAheadSummary {
+    let censored = |r: &ReadableAheadMeasurement| {
+        r.end == ReadableAheadEnd::MaterialEnd && r.ms < READABLE_AHEAD_MIN_MS
+    };
+    let judged: Vec<&ReadableAheadMeasurement> =
+        measured.iter().filter(|r| !censored(r)).collect();
+    let short = |cause: Option<ReadableAheadEnd>| -> f64 {
+        pct(
+            judged
+                .iter()
+                .filter(|r| r.ms < READABLE_AHEAD_MIN_MS)
+                .filter(|r| cause.is_none_or(|k| r.end == k))
+                .count(),
+            judged.len(),
+        )
+    };
+    let samples: Vec<f64> = measured
+        .iter()
+        .filter(|r| r.end != ReadableAheadEnd::MaterialEnd)
+        .map(|r| r.ms)
+        .collect();
+    ReadableAheadSummary {
+        p05_ms: pctl(&samples, 5.0),
+        samples,
+        deficit_pct: short(None),
+        opacity_deficit_pct: short(Some(ReadableAheadEnd::DimRamp)),
+        viewport_deficit_pct: short(Some(ReadableAheadEnd::Viewport)),
+        material_end_frames: measured
+            .iter()
+            .filter(|r| r.end == ReadableAheadEnd::MaterialEnd)
+            .count() as u32,
+    }
+}
+
 /// Per-frame derived quantities, computed once and reused by every family that
 /// needs them. Several metrics want the same three or four numbers per frame
 /// (focus line, band error, future reserve, next-word brightness) and computing
@@ -444,6 +696,10 @@ struct FrameView {
     future_reserve: f64,
     /// Worst darkness among the next READABLE_NEXT_WORDS unread tokens.
     next_worst_darkness: f64,
+    /// Legible material ahead of the mouth (§6.3). `None` outside the frames
+    /// `temporal_err` is scored over, so the two rows are comparable frame for
+    /// frame — which is the comparison the row exists to make.
+    readable_ahead: Option<ReadableAheadMeasurement>,
     /// Rendered speed, lines/s.
     speed_lines: f64,
     /// Gaze-weighted unread ink and spoken-ink retention this frame.
@@ -532,6 +788,22 @@ pub fn evaluate_perceptual(
             }
         }
 
+        // ---- §6.3 the readable corridor ----
+        // Same gate as `temporal_err` above, on purpose: the two rows are the
+        // pair the issue asks to be able to tell apart, and comparing them
+        // across different frame sets would be the same mistake in a new place.
+        let readable_ahead = if on_script && speaking && t >= from_ms {
+            let glass = Glass {
+                token_opacity: &f.token_opacity,
+                line_map: &trace.line_map,
+                top_y: f.q_px,
+                bottom_y,
+            };
+            measure_readable_ahead(gold, pass, frontier, &glass)
+        } else {
+            None
+        };
+
         // ---- §4.1/§4.2 the two ink integrals ----
         // D*_i = 1 once token i has been passed IN THE CURRENT PASS, else 0.
         // Positive residual either way is a defect, and the two directions are
@@ -587,6 +859,7 @@ pub fn evaluate_perceptual(
             band_err,
             future_reserve,
             next_worst_darkness: next_worst,
+            readable_ahead,
             speed_lines,
             uie,
             uie_tokens,
@@ -749,6 +1022,19 @@ pub fn evaluate_perceptual(
             }
         }
         m.future_starvation_events = events;
+    }
+    // §6.3 the readable corridor: how much legible text is in front of the
+    // reader, rather than how far behind them the display is.
+    {
+        let measured: Vec<ReadableAheadMeasurement> =
+            scored.iter().filter_map(|v| v.readable_ahead).collect();
+        let summary = summarise_readable_ahead(&measured);
+        s.readable_ahead_ms = summary.samples;
+        m.readable_ahead_p05_ms = summary.p05_ms;
+        m.readable_ahead_deficit_pct = summary.deficit_pct;
+        m.readable_ahead_opacity_deficit_pct = summary.opacity_deficit_pct;
+        m.readable_ahead_viewport_deficit_pct = summary.viewport_deficit_pct;
+        m.readable_ahead_material_end_frames = summary.material_end_frames;
     }
     // §6.2 line handoff: at the acoustic end of each rendered line, where does
     // the NEXT line sit relative to the reading position? A stage can be well
@@ -1481,4 +1767,327 @@ fn honesty_and_holistic(
 
     let _ = (pitch, PAST_OPACITY);
     (m, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::{expand, synthetic_timing, Corruption, PerformancePlan, PlanOp};
+    use crate::stage::default_layouts;
+    use cc_align::{compile, CompileOptions};
+
+    const WORDS: &str = "alpha bravo charlie delta echo foxtrot golf hotel india juliet \
+                         kilo lima mike november oscar papa quebec romeo sierra tango";
+
+    fn gold_at(wpm: u32, ops: Vec<PlanOp>) -> PassGold {
+        let script = compile(WORDS, CompileOptions::default());
+        let plan = PerformancePlan {
+            name: "t".into(),
+            script: "t".into(),
+            scenario: "exact".into(),
+            seed: 1,
+            ops,
+            corruption: Corruption::default(),
+        };
+        PassGold::derive(&synthetic_timing(&expand(&plan, &script), wpm))
+    }
+
+    /// Rendered opacities: everything in `drawn` bright, everything named in
+    /// `dark` taken all the way to the far past.
+    fn opacities(drawn: std::ops::Range<u32>, dark: &[u32]) -> Vec<(u32, f32)> {
+        drawn
+            .map(|a| {
+                let op = if dark.contains(&a) { PAST_OPACITY } else { 1.0 };
+                (a, op as f32)
+            })
+            .collect()
+    }
+
+    const PITCH: f64 = 100.0;
+
+    /// A fixture stage laid out one atom per line, scrolled to the top, so atom
+    /// `a` sits at `a * PITCH` and "the glass is N lines tall" means exactly
+    /// "atoms 0..N are visible".
+    struct Stage {
+        map: LineMap,
+        bottom_y: f64,
+    }
+
+    impl Stage {
+        fn tall(visible_lines: f64) -> Self {
+            let mut l = default_layouts().remove(0);
+            l.line_pitch_px = PITCH;
+            l.atoms_per_line = 1.0;
+            l.viewport_h_px = visible_lines * PITCH;
+            Self {
+                map: LineMap::build(&compile(WORDS, CompileOptions::default()), &l),
+                bottom_y: l.viewport_h_px,
+            }
+        }
+
+        fn glass<'a>(&'a self, drawn: &'a [(u32, f32)]) -> Glass<'a> {
+            Glass {
+                token_opacity: drawn,
+                line_map: &self.map,
+                top_y: 0.0,
+                bottom_y: self.bottom_y,
+            }
+        }
+
+        /// The same glass scrolled down to `top_y`. Every other fixture sits at
+        /// the top of the document, where the display can only ever trail — so
+        /// scrolling is the only way to express the case the whole project is
+        /// built to avoid, the display LEADING the reader off the top edge.
+        fn glass_at<'a>(&'a self, drawn: &'a [(u32, f32)], top_y: f64) -> Glass<'a> {
+            Glass {
+                token_opacity: drawn,
+                line_map: &self.map,
+                top_y,
+                bottom_y: top_y + self.bottom_y,
+            }
+        }
+    }
+
+    #[test]
+    fn the_corridor_ends_at_the_first_word_the_ramp_has_taken() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[8]);
+        let r = measure_readable_ahead(&gold, 0, 5.0, &stage.glass(&drawn)).expect("inside pass 0");
+        assert_eq!(r.end, ReadableAheadEnd::DimRamp);
+        let expected = gold.tau(0, 8.0).unwrap() - gold.tau(0, 5.0).unwrap();
+        assert!(
+            (r.ms - expected).abs() < 1.0,
+            "corridor {} ms, atoms 5→8 take {expected} ms",
+            r.ms
+        );
+    }
+
+    #[test]
+    fn a_bright_word_past_the_dark_one_does_not_reopen_the_corridor() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(20.0);
+        // Dark at 8, bright again from 9. What the reader can rely on is the
+        // CONTIGUOUS run; text past a hole in it is not a corridor.
+        let (broken_ops, clear_ops) = (opacities(0..20, &[8]), opacities(0..20, &[]));
+        let broken = measure_readable_ahead(&gold, 0, 5.0, &stage.glass(&broken_ops)).unwrap();
+        let clear = measure_readable_ahead(&gold, 0, 5.0, &stage.glass(&clear_ops)).unwrap();
+        assert!(broken.ms < clear.ms);
+        assert_eq!(clear.end, ReadableAheadEnd::MaterialEnd);
+    }
+
+    #[test]
+    fn the_corridor_is_denominated_in_the_readers_own_pace() {
+        // The same three atoms, read at half the speed, is twice the reading.
+        // An atom-denominated metric calls these two identical, which is the
+        // whole reason this module works in milliseconds.
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[8]);
+        let at = |wpm| {
+            measure_readable_ahead(
+                &gold_at(wpm, vec![PlanOp::Read { from: 0, to: 20 }]),
+                0,
+                5.0,
+                &stage.glass(&drawn),
+            )
+            .unwrap()
+        };
+        // 3 words at 120 wpm = 1500 ms; at 240 wpm = 750 ms.
+        assert!((at(120).ms - 1_500.0).abs() < 5.0, "120 wpm gave {}", at(120).ms);
+        assert!((at(240).ms - 750.0).abs() < 5.0, "240 wpm gave {}", at(240).ms);
+    }
+
+    #[test]
+    fn a_fractional_position_reads_from_where_the_reader_actually_is() {
+        // Mid-word, as a re-spelled run leaves the frontier. Flooring the START
+        // as well as the walk would add most of a word to every corridor, and
+        // the zero-clamp case cannot tell the difference.
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[8]);
+        let r = measure_readable_ahead(&gold, 0, 5.5, &stage.glass(&drawn)).unwrap();
+        let from_half = gold.tau(0, 8.0).unwrap() - gold.tau(0, 5.5).unwrap();
+        let from_floor = gold.tau(0, 8.0).unwrap() - gold.tau(0, 5.0).unwrap();
+        assert!(r.ms > 0.0);
+        assert!((r.ms - from_half).abs() < 1.0, "measured from 5.5, not 5.0");
+        assert!(
+            (from_floor - from_half) > 100.0,
+            "the fixture must make the two distinguishable"
+        );
+    }
+
+    #[test]
+    fn running_out_of_script_is_not_a_dimming_defect() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[]);
+        // Four words from the end, all of them on the glass and bright. The
+        // reader really does have only four words left, and calling that
+        // starvation would fail every take at its own ending.
+        let r = measure_readable_ahead(&gold, 0, 16.0, &stage.glass(&drawn)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::MaterialEnd);
+    }
+
+    #[test]
+    fn a_fully_visible_last_line_is_material_end_not_a_viewport_deficit() {
+        // `stage::render` bounds `token_opacity` with an exclusive
+        // `first_atom_at_y(bottom)`, so when the document ends before the glass
+        // does the last line is visible and undrawn. Reading visibility off
+        // that vector reported "ran off the glass" at the end of every take —
+        // exactly the frames material-end censoring exists to protect.
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(40.0);
+        // Exactly what `render` emits here: twenty one-atom lines, a glass
+        // taller than all of them, so `first_atom_at_y(bottom)` returns 19 —
+        // the first atom of the LAST line — and `lo..hi` drops atom 19 alone.
+        let drawn = opacities(0..19, &[]);
+        let r = measure_readable_ahead(&gold, 0, 16.0, &stage.glass(&drawn)).unwrap();
+        assert_eq!(
+            r.end,
+            ReadableAheadEnd::MaterialEnd,
+            "atom 19 is on the glass, merely undrawn"
+        );
+    }
+
+    #[test]
+    fn material_end_censors_only_what_the_scripts_ending_made_unknowable() {
+        let m = |ms: f64, end| ReadableAheadMeasurement { ms, end };
+        // A corridor that ran out of script at 900 ms is right-censored — it
+        // was AT LEAST that long — but it has already answered "was there
+        // enough?". Dropping it would report 100% deficit for a take that was
+        // short exactly half the time.
+        let s = summarise_readable_ahead(&[
+            m(100.0, ReadableAheadEnd::DimRamp),
+            m(900.0, ReadableAheadEnd::MaterialEnd),
+        ]);
+        assert_eq!(s.deficit_pct, 50.0);
+        assert_eq!(s.material_end_frames, 1);
+        assert_eq!(
+            s.samples,
+            vec![100.0],
+            "a lower bound is not a length, so it stays out of the percentile"
+        );
+
+        // Below the threshold it is genuinely unknowable, and leaves entirely.
+        let s = summarise_readable_ahead(&[
+            m(100.0, ReadableAheadEnd::DimRamp),
+            m(50.0, ReadableAheadEnd::MaterialEnd),
+            m(900.0, ReadableAheadEnd::Viewport),
+        ]);
+        assert_eq!(s.deficit_pct, 50.0, "one of two judgeable frames, not one of three");
+        assert_eq!(s.opacity_deficit_pct, 50.0);
+        assert_eq!(s.viewport_deficit_pct, 0.0);
+    }
+
+    #[test]
+    fn running_off_the_glass_is_a_deficit_with_its_own_cause() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        // Plenty of script left, but the glass is only ten lines tall.
+        let stage = Stage::tall(10.0);
+        let drawn = opacities(0..10, &[]);
+        let r = measure_readable_ahead(&gold, 0, 5.0, &stage.glass(&drawn)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::Viewport);
+        let expected = gold.tau(0, 10.0).unwrap() - gold.tau(0, 5.0).unwrap();
+        assert!((r.ms - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_display_scrolled_past_the_reader_is_an_empty_corridor() {
+        // The invariant the product is built on: the display TRAILS, never
+        // leads. Here it has led — the glass starts one line BELOW the word in
+        // the reader's mouth, so their own line is off the top edge — and the
+        // corridor has to read as zero. Anything else would let a stage that
+        // has scrolled clean past the presenter bank credit for the perfectly
+        // bright text it is showing them further down the script.
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(10.0);
+        let drawn = opacities(0..20, &[]);
+        let r = measure_readable_ahead(&gold, 0, 5.0, &stage.glass_at(&drawn, 6.0 * PITCH)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::Viewport);
+        assert_eq!(r.ms, 0.0, "leading past the reader must never score as readable corridor");
+    }
+
+    #[test]
+    fn a_word_dimmed_while_still_in_the_mouth_is_an_empty_corridor() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[5]);
+        // The ramp has taken the word the reader is part-way through saying —
+        // the sharpest form of the defect, and the walk has to start on that
+        // token to see it at all.
+        let r = measure_readable_ahead(&gold, 0, 5.4, &stage.glass(&drawn)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::DimRamp);
+        assert_eq!(r.ms, 0.0, "an empty corridor, never a negative one");
+    }
+
+    #[test]
+    fn the_corridor_sees_past_the_fixed_eight_word_window() {
+        // A DEMONSTRATION that the two rows measure different things, not a
+        // regression test for `next_worst_darkness`: the eight-atom scan is
+        // reproduced here rather than called, so it pins this fixture's
+        // properties and not the old metric's implementation.
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
+        let reader = 5.0;
+        let dark = reader as u32 + READABLE_NEXT_WORDS + 2;
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[dark]);
+
+        let mut next_worst = 0.0f64;
+        for atom in reader as u32..reader as u32 + READABLE_NEXT_WORDS {
+            if let Some(&(_, op)) = drawn.iter().find(|&&(a, _)| a == atom) {
+                next_worst = next_worst.max(darkness(op as f64));
+            }
+        }
+        assert!(next_worst <= READABLE_NEXT_MAX_DARKNESS, "a fixed window would be happy");
+
+        let r = measure_readable_ahead(&gold, 0, reader, &stage.glass(&drawn)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::DimRamp, "the corridor is not");
+        let expected = gold.tau(0, dark as f64).unwrap() - gold.tau(0, reader).unwrap();
+        assert!((r.ms - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_retake_is_measured_against_its_own_pass() {
+        // The retake is read at twice the speed, so the two passes disagree
+        // about how long the same four atoms take. At one rate they would
+        // agree by coincidence and the test would pass without the code
+        // choosing a pass at all.
+        let gold = gold_at(
+            150,
+            vec![
+                PlanOp::Read { from: 0, to: 12 },
+                PlanOp::Rate { wpm: 300 },
+                PlanOp::Read { from: 6, to: 20 },
+            ],
+        );
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[11]);
+        // Back at atom 7 on the second pass. Pass 0 also covers atom 7, and its
+        // timing is a whole pass earlier — reading the corridor off the wrong
+        // pass would produce a large negative, clamped to a silent zero.
+        let r = measure_readable_ahead(&gold, 1, 7.0, &stage.glass(&drawn)).unwrap();
+        assert_eq!(r.end, ReadableAheadEnd::DimRamp);
+        assert!(r.ms > 0.0, "the retake pass genuinely has text ahead of it");
+        let expected = gold.tau(1, 11.0).unwrap() - gold.tau(1, 7.0).unwrap();
+        assert!((r.ms - expected).abs() < 1.0);
+
+        let wrong_pass = measure_readable_ahead(&gold, 0, 7.0, &stage.glass(&drawn)).unwrap();
+        assert!(
+            (wrong_pass.ms - 2.0 * r.ms).abs() < 5.0,
+            "pass 0 read the same atoms at half the speed: {} vs {}",
+            wrong_pass.ms,
+            r.ms
+        );
+    }
+
+    #[test]
+    fn a_position_outside_the_pass_has_no_answer() {
+        let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 10 }]);
+        let stage = Stage::tall(20.0);
+        let drawn = opacities(0..20, &[]);
+        // Same condition that makes `temporal_err` None: refusing beats
+        // inventing a corridor out of material the pass never covered.
+        assert!(measure_readable_ahead(&gold, 0, 18.0, &stage.glass(&drawn)).is_none());
+        assert!(measure_readable_ahead(&gold, 9, 5.0, &stage.glass(&drawn)).is_none());
+    }
 }
