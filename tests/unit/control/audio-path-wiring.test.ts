@@ -113,8 +113,15 @@ describe('provider frames reach the aligner', () => {
   });
 
   it('Rust feeds transcript frames to the engine at the socket', () => {
+    /*
+     * Anchored on the load-bearing prefix — right function, right frame, right
+     * clock — and left open after it, so a sidecar argument the engine grows
+     * later (word times were the first) does not make this go stale. What it
+     * still refuses is the failure it was written for: the call deleted, or
+     * fed some other frame or some other clock.
+     */
     expect(
-      /crate::align::observe_frame\(app, &frame, audio_now_ms\)/.test(STT_STREAM),
+      /crate::align::observe_frame\(\s*app,\s*&frame,\s*audio_now_ms\s*[,)]/.test(STT_STREAM),
       'no path from a transcript frame to the alignment engine',
     ).toBe(true);
     /*
