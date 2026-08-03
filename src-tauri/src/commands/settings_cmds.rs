@@ -203,6 +203,35 @@ pub async fn clear_cache(
     kind: String,
 ) -> Result<ClearResult, AppError> {
     let dirs = clear_cache_targets(&paths, &kind)?;
+
+    /*
+     * Logs cannot go through the generic loop below.
+     *
+     * That loop unlinks every entry it finds, and one of the entries is the
+     * daily file the tracing appender is holding open. Unlinking it does not
+     * close the descriptor — the appender goes on writing into an inode with
+     * no name, and every line after the clear is invisible until the next
+     * rotation quietly opens a new file. `clear_logs` truncates that file in
+     * place instead, so logging survives its own log being cleared.
+     *
+     * Driven off `dirs` rather than off `paths.logs_dir()` so that
+     * `clear_cache_targets` stays the single answer to "what does this kind
+     * empty" — re-deriving the path here would let the two disagree silently.
+     */
+    if kind == "logs" {
+        let mut stats = crate::diagnostics::logging::LogClearStats::default();
+        for dir in &dirs {
+            let cleared = crate::diagnostics::logging::clear_logs(dir)?;
+            stats.removed_files += cleared.removed_files;
+            stats.removed_bytes += cleared.removed_bytes;
+        }
+        return Ok(ClearResult {
+            kind,
+            removed_files: stats.removed_files,
+            removed_bytes: stats.removed_bytes,
+        });
+    }
+
     let mut removed = 0u32;
     let mut removed_bytes = 0u64;
     for dir in dirs {
@@ -322,6 +351,12 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
         }
     }
 
+    // And the logs — which is the whole reason anyone exports one of these
+    // (§179). The bundle used to ship system facts and recovery reports while
+    // leaving out the only files that record what the app was actually doing
+    // when it went wrong.
+    crate::diagnostics::logging::copy_support_logs(&paths.logs_dir(), &bundle_dir)?;
+
     Ok(Some(SupportBundleResult {
         path: bundle_dir.to_string_lossy().to_string(),
     }))
@@ -362,9 +397,6 @@ pub async fn log_client_diagnostic(
     line: String,
 ) -> Result<(), AppError> {
     const MAX_LINE: usize = 2000;
-    /// Truncate at 4 MB. Long enough for many sessions, small enough that a
-    /// runaway caller cannot become a support problem of its own.
-    const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
     let scope: String = scope
         .chars()
@@ -374,33 +406,12 @@ pub async fn log_client_diagnostic(
     let line: String = line.chars().take(MAX_LINE).collect();
     tracing::warn!(target: "candidcue::client", scope = %scope, "{line}");
 
-    let path = paths.logs_dir().join("client-trace.log");
-    let _ = std::fs::create_dir_all(paths.logs_dir());
-    if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
-        let _ = std::fs::remove_file(&path);
-    }
-    /*
-     * One lock, one pre-formatted line, one write.
-     *
-     * Every trace step is an independent async command, so several can be in
-     * the file at once — and a `writeln!` that formats as it goes can emit
-     * more than one write. The result was visible in a captured log: a doubled
-     * timestamp on one line and none on the next, two steps spliced together.
-     * A trace whose lines interleave is a trace you cannot read an ordering
-     * out of, which is the only thing it is for.
-     */
-    static TRACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = TRACE_LOCK.lock();
+    // This command owns sanitising and formatting; the file — its size cap,
+    // its serialising lock, and the startup rotation that has to interleave
+    // safely with it — belongs to `diagnostics::logging`.
     let entry = format!("{} [{scope}] {line}\n", crate::util::now_iso());
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        use std::io::Write;
-        // Failing to write a diagnostic must never fail the caller: the whole
-        // point is to observe a broken path, not to add a way to break it.
-        let _ = file.write_all(entry.as_bytes());
-    }
+    // Failing to write a diagnostic must never fail the caller: the whole
+    // point is to observe a broken path, not to add a way to break it.
+    let _ = crate::diagnostics::logging::append_client_trace(&paths.logs_dir(), &entry);
     Ok(())
 }

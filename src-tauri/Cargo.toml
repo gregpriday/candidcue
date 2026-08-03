@@ -29,6 +29,11 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync",
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The log file a packaged build can actually be debugged from (§179). A
+# Finder-launched `.app` has stdout redirected to /dev/null by launchd, so the
+# subscriber needs a second sink that lands on disk; `tracing-appender` supplies
+# the daily rotation and the file-count retention that go with it.
+tracing-appender = "0.2"
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
