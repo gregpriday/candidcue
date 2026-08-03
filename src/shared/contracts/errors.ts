@@ -49,8 +49,11 @@ export const APP_ERROR_CODES = [
    * it is the only one of the five the user can clear themselves — Settings →
    * Speech has the download. Rust raises it recoverable for that reason.
    *
-   * The other four mean something on this machine is broken, which is why none
-   * of them are recoverable by anything the user can type.
+   * The other four mean something on this machine is broken. Rust raises all
+   * four non-recoverable, which is a statement about the SESSION rather than
+   * about the user: nothing retried in place will make the take work. Their
+   * copy still names a repair — restart, download the model again — because a
+   * repair between takes is a different thing from a recovery within one.
    */
   'STT_MODEL_NOT_INSTALLED',
   'STT_MODEL_MISSING',

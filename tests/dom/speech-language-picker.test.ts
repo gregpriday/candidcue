@@ -340,17 +340,26 @@ describe('a missing model is fixable here', () => {
  */
 describe('a language that cannot be activated says so in authored copy', () => {
   it('renders the app’s own sentence rather than the backend’s', async () => {
-    const german = optionFixture({
-      languageTag: 'de-DE',
-      primarySubtag: 'de',
-      modelId: 'kroko-de',
-      active: false,
-      status: statusFixture({ modelId: 'kroko-de', installed: true }),
-    });
-    const options = optionsFixture({
-      languages: [optionFixture({ active: false }), german],
-    });
-    const { view } = await mount(options);
+    const german = (installed: boolean): SpeechLanguageOption =>
+      optionFixture({
+        languageTag: 'de-DE',
+        primarySubtag: 'de',
+        modelId: 'kroko-de',
+        active: false,
+        status: statusFixture({
+          modelId: 'kroko-de',
+          installed,
+          phase: installed ? 'installed' : 'notInstalled',
+        }),
+      });
+    /*
+     * English stays ACTIVE, which is the whole scenario: the machine has a
+     * working model and the user asked for a second one. It also makes the
+     * "Use …" button unambiguous — with both rows inactive, English would have
+     * its own enabled button and the click could land on either.
+     */
+    const before = optionsFixture({ languages: [optionFixture({ active: true }), german(true)] });
+    const { view } = await mount(before);
 
     /*
      * Verbatim from `speech_cmds.rs`. It is readable prose, which is the whole
@@ -359,8 +368,20 @@ describe('a language that cannot be activated says so in authored copy', () => {
      * `errors.ts` had a say in what the picker said.
      */
     const backendMessage = 'Download this language before switching to it.';
-    setInvokeForTesting(async (command) => {
+    /*
+     * The refresh after the failure reports German as NOT installed, because
+     * that is what just happened — Rust refused the switch precisely because
+     * the weights were not resolvable. Returning the stale `installed: true`
+     * would leave the screen with no Download button while the alert told the
+     * reader to download, which is the unfollowable-instruction defect this
+     * copy exists to avoid, staged by the test itself.
+     */
+    const attempted: string[] = [];
+    setInvokeForTesting(async (command, args) => {
       if (command === 'select_speech_language') {
+        attempted.push(
+          (args as { input?: { languageTag?: string } } | undefined)?.input?.languageTag ?? '',
+        );
         throw {
           code: 'STT_MODEL_NOT_INSTALLED',
           category: 'validation',
@@ -369,7 +390,11 @@ describe('a language that cannot be activated says so in authored copy', () => {
           correlationId: 'corr-1',
         };
       }
-      if (command === 'get_speech_language_options') return options as never;
+      if (command === 'get_speech_language_options') {
+        return optionsFixture({
+          languages: [optionFixture({ active: true }), german(false)],
+        }) as never;
+      }
       return statusFixture() as never;
     });
 
@@ -379,16 +404,35 @@ describe('a language that cannot be activated says so in authored copy', () => {
     await waitFor(() => expect(buttonLabelled(view, 'Use ')?.disabled).toBe(false));
     await fireEvent.click(buttonLabelled(view, 'Use ')!);
 
+    // The click reached the command, and reached it for the row under test.
+    await waitFor(() => expect(attempted).toEqual(['de-DE']));
+
     await waitFor(() => {
       const alerts = Array.from(view.container.querySelectorAll('[role="alert"]'))
         .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim());
       expect(alerts.some((a) => a.includes('Settings → Speech'))).toBe(true);
     });
     const shown = text(view);
-    expect(shown).toContain('The speech model for the selected language is not installed.');
+    expect(shown).toContain('The speech model for the requested language is not installed.');
     expect(shown).not.toContain(backendMessage);
     // The rule the whole of `errors.ts` exists for, asserted on this screen too.
     expect(shown).not.toContain('STT_MODEL_NOT_INSTALLED');
+    /*
+     * "Requested", not "selected", and this screen is why. The write failed
+     * before Rust touched the settings document, so English is still the
+     * selected language and its model is installed — copy claiming otherwise
+     * would contradict the "currently using" line rendered directly above the
+     * alert.
+     */
+    expect(shown).toMatch(/English/);
+    /*
+     * What the row's pill says AFTER this is deliberately not asserted. The
+     * refresh above returns German as not installed, but `reconcileModelStatuses`
+     * keeps a known status per model until an event contradicts it — a rule
+     * about snapshot races that this component owns and #181 did not touch.
+     * Pinning the Download button here would be testing that reconciliation
+     * rather than the copy, and would fail the day it is tuned.
+     */
   });
 });
 

@@ -118,12 +118,25 @@ const ERROR_COPY: Record<string, string> = {
   // transport armed, and telling that presenter to "start" auto-scroll would
   // stop their script. "Start or stop" is also the wording Settings and Live
   // already use for this key.
+  //
+  // "the requested language", not "the selected language". The picker raises
+  // this BEFORE `update_settings`, and `activate()` says so in its own comment:
+  // the write failed, so nothing changed and the old language is still the
+  // selected one — whose model is installed, or the screen could not have been
+  // reached. "Selected" would have put the alert in contradiction with the
+  // "currently using" line directly above it. A language can be requested and
+  // refused; that is exactly what happened on all three surfaces.
   STT_MODEL_NOT_INSTALLED:
-    'The speech model for the selected language is not installed. In a take, press A to start or stop auto-scroll. Download it in Settings → Speech to follow your voice.',
+    'The speech model for the requested language is not installed. In a take, press A to start or stop auto-scroll. Download it in Settings → Speech to follow your voice.',
   STT_MODEL_MISSING:
     'The speech model files could not be found. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
+  // Not "remove the model, then download it again": Settings offers Remove only
+  // for a model this machine DOWNLOADED, and a load failure can also come from
+  // a bundled or `CANDIDCUE_MODELS_DIR` copy that has no Remove button to press.
+  // Download is offered whenever a model is not usable, so it is the half of
+  // that pair which is always there to follow.
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue; if this keeps happening, remove the model in Settings → Speech and download it again.',
+    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue; if this keeps happening, download the model again in Settings → Speech.',
   STT_WORKER_FAILED:
     'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
   STT_ENGINE_ERROR:
