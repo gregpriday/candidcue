@@ -221,6 +221,22 @@ export interface AppSettings {
     phraseHighlight: boolean;
     pastDimming: boolean;
     /**
+     * Choose where lines break instead of letting the browser fill each line.
+     *
+     * On by default and expected to stay on. A browser breaks at the last word
+     * that fits, which is right for prose somebody reads silently and wrong for
+     * a prompter: a line that ends on "the", on "will", or halfway through
+     * "South Africa" costs the presenter a recovery at the return sweep that
+     * the viewer can hear.
+     *
+     * The control exists because a presenter who dislikes what it does should
+     * not have to live with it, not because it is expected to be turned off.
+     * Off is exactly the old behaviour — the planner is skipped and the browser
+     * wraps — so it is also the fastest way to tell whether a layout complaint
+     * is about the breaker at all.
+     */
+    semanticLineBreaks: boolean;
+    /**
      * Luminance of the TEXT over the stage's unchanging black field.
      *
      * This replaces the "Stage background" menu, which offered near-black and
@@ -860,6 +876,7 @@ export function defaultAppSettings(): AppSettings {
       readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
       phraseHighlight: true,
       pastDimming: true,
+      semanticLineBreaks: true,
       textIntensity: 'standard',
       fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
       stageEndBehavior: 'close',

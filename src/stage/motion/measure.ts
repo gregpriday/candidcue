@@ -174,6 +174,8 @@ export interface FingerprintInput {
   /** Actual rendered bottom padding, px. */
   paddingBottomPx: number;
   fontHash?: string;
+  /** Digest of the chosen line breaks; absent means the browser wrapped. */
+  wrapPlanSignature?: string;
 }
 
 /** Companion §7.2 — everything a map's validity depends on. */
@@ -202,6 +204,7 @@ export function buildLayoutFingerprint(input: FingerprintInput): LayoutFingerpri
     readingBandHalfHeightPercent: s.readingBandHalfHeightPercent,
     cueLayout: s.showCues ? 'cues' : 'none',
     performanceView: s.stageMode === 'diagnostic' ? 'rehearsal' : 'take',
+    wrapPlanSignature: input.wrapPlanSignature ?? '',
   };
 }
 
@@ -243,6 +246,14 @@ const IDENTIFIES_LAYOUT: Record<keyof LayoutFingerprint, boolean> = {
   readingBandHalfHeightPercent: true,
   cueLayout: true,
   performanceView: true,
+  /*
+   * The strongest case in the table. A plan that changed while the fingerprint
+   * did not is precisely the bug §7.2 exists to prevent: every baseline below
+   * the first moved break sits somewhere new, `sameLayout()` says nothing
+   * changed, and the map is replaced under the old generation with the semantic
+   * re-anchor skipped.
+   */
+  wrapPlanSignature: true,
 };
 
 const LAYOUT_KEYS = (

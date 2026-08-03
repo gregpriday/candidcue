@@ -72,6 +72,9 @@ export function uncalibratedPreviewSettings(): StageSettings {
     mirrorX: false,
     mirrorY: false,
     showCues: true,
+    // On, exactly as a take runs: the preview exists to demonstrate the layout
+    // a presenter will actually get.
+    semanticLineBreaks: true,
     stageAcknowledgements: true,
     reducedMotion: false,
     paragraphSpacingEm: 0.7,
@@ -132,6 +135,9 @@ function previewSettings(viewport: { widthPx: number; heightPx: number }): Stage
     mirrorX: false,
     mirrorY: false,
     showCues: true,
+    // On, exactly as a take runs: the preview exists to demonstrate the layout
+    // a presenter will actually get.
+    semanticLineBreaks: true,
     stageAcknowledgements: true,
     reducedMotion: false,
     paragraphSpacingEm: optics.paragraphSpacingEm,

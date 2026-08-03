@@ -16,6 +16,7 @@
     showCues = true,
     dimFrozen = false,
     dimRollback = false,
+    breakAfterTokens = null,
   }: {
     nodes: SafeRenderNode[];
     /**
@@ -40,6 +41,21 @@
     dimFrozen?: boolean;
     /** Explicit engine withdrawal of a reversible provisional frontier. */
     dimRollback?: boolean;
+    /**
+     * Spoken tokens after which the line ends, chosen by the line breaker.
+     *
+     * The break is drawn as a `<br>` immediately after the word's span, and the
+     * space that follows is left exactly where it was: a space at the start of
+     * a line is collapsed away by ordinary white-space processing, and the
+     * stage's prose never sets `pre-wrap` (only `.code` does, which is not
+     * planned). Emitting after the WORD rather than in place of the space is
+     * what keeps this correct when the two land in different render nodes.
+     *
+     * Every other space stays breakable, so a plan that misjudged a width by a
+     * pixel costs one browser-wrapped line rather than an overflowing one.
+     * `null` — no plan — is the pre-existing behaviour, unchanged.
+     */
+    breakAfterTokens?: ReadonlySet<number> | null;
   } = $props();
 
   /**
@@ -218,7 +234,8 @@
           class="w {markClasses(node.marks)}"
           class:past={dimCursor !== null && seg.tokenIndex < dimCursor}
           data-dim={dimStep(seg.tokenIndex)}
-          data-t={seg.tokenIndex}>{seg.text}</span>
+          data-t={seg.tokenIndex}>{seg.text}</span
+        >{#if breakAfterTokens?.has(seg.tokenIndex)}<br data-planned-break="1" />{/if}
       {:else}
         <span class="w {markClasses(node.marks)}">{seg.text}</span>
       {/if}
@@ -227,7 +244,7 @@
     <br />
   {:else if node.type === 'link'}
     <!-- Links are inert on stage: label only, never navigable. -->
-    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></span>
+    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} /></span>
   {:else if node.type === 'image'}
     {#if assets[node.assetId]}
       <img class="inline-img" src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />

@@ -19,6 +19,7 @@
     dimFrozen = false,
     dimRollback = false,
     performanceMode = 'rehearsal',
+    breakAfterTokens = null,
   }: {
     block: CompiledBlock;
     zone: 'past' | 'current' | 'future';
@@ -48,6 +49,16 @@
      * renders exactly what it rendered before this existed.
      */
     performanceMode?: PerformanceMode;
+    /**
+     * Spoken tokens after which a line ends, from the stage's line breaker.
+     *
+     * Handed only to the prose runs — the ones `wrap-plan.ts` plans. A table
+     * cell, a code block and a cue chip lay themselves out, and applying
+     * English phrase rules to them would be answering a question they did not
+     * ask. `null` means nothing was planned and the browser wraps, which is
+     * what happened before the breaker existed.
+     */
+    breakAfterTokens?: ReadonlySet<number> | null;
   } = $props();
 
   const headingLevel = $derived(
@@ -135,12 +146,12 @@
       <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></pre>
     {:else if block.kind === 'blockquote'}
       <div class="quote">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} />
       </div>
     {:else if block.kind === 'list_item'}
       <div class="list-item">
         <span class="bullet" aria-hidden="true"></span>
-        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></span>
+        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} /></span>
       </div>
     {:else if block.kind === 'table'}
       <!-- Tables are structured reference cards on stage (§24.6): real rows,
@@ -191,7 +202,7 @@
       <div class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></div>
     {:else}
       <!-- paragraph -->
-      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></p>
+      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} /></p>
     {/if}
   </div>
 {/if}
