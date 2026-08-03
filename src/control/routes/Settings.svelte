@@ -1395,15 +1395,7 @@
   async function runUpdateCheck(): Promise<void> {
     updateNote = 'Checking…';
     try {
-      const result = await settingsService.checkForUpdate();
-      updateNote =
-        result.status === 'available'
-          ? `Update available: ${result.availableVersion}`
-          : result.status === 'up_to_date'
-            ? 'CandidCue is up to date.'
-            : result.status === 'unsupported'
-              ? 'Update checks are not available in this build.'
-              : `Could not check for updates: ${result.message ?? 'unknown error'}`;
+      updateNote = settingsService.describeUpdateCheck(await settingsService.checkForUpdate());
     } catch (err) {
       updateNote = `Could not check for updates. ${describeError(err)}`;
     }
@@ -1599,7 +1591,7 @@
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="CandidCue uses your microphone only while a test or a voice-tracking take is running. The audio is transcribed on this machine and is not recorded, saved, or uploaded."
+          description="CandidCue opens your microphone briefly when you grant access, while a test or a voice-tracking take is running, and while the input meter below is on screen. Audio from a test or a take is transcribed on this machine; the meter only measures how loud you are. Neither is recorded, saved, or uploaded."
         >
           {#if micPermission === 'unknown'}
             <div class="row-actions">
@@ -2566,24 +2558,28 @@
           <div class="privacy">
             <h3 class="privacy-head">Local by default</h3>
             <p class="privacy-body">
-              Your Markdown scripts, imported images, and settings are stored on this device.
+              Your Markdown scripts, imported images, settings, and diagnostic logs are stored on
+              this device.
             </p>
-            <h3 class="privacy-head">While voice tracking is active</h3>
+            <h3 class="privacy-head">When your microphone is open</h3>
             <p class="privacy-body">
-              Your microphone is open only while a take or a microphone test is running, and the
-              audio is transcribed on this machine by a recogniser built into CandidCue. It is not
-              uploaded, and CandidCue does not save it.
+              CandidCue opens your microphone briefly when you grant access, while a take or a
+              microphone test is running, and while the input meter is on screen in Audio settings.
+              Audio from a take or a test is transcribed on this machine by the speech model
+              installed here; the meter only measures how loud you are. None of it is uploaded, and
+              CandidCue does not save it.
             </p>
-            <h3 class="privacy-head">Nothing leaves this device</h3>
+            <h3 class="privacy-head">Your voice and your script stay here</h3>
             <p class="privacy-body">
               Neither your voice nor your script is sent anywhere. The words are recognised here and
               matched against your script here — there is no transcription account, no API key, and
               no third party involved in following you.
             </p>
-            <h3 class="privacy-head">CandidCue servers</h3>
+            <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
-              CandidCue checks for software updates. Your scripts and your audio are not sent to
-              CandidCue servers.
+              CandidCue does not check for updates on its own, and this build has no update service
+              to check with. It reaches the network when you download a language in Speech settings,
+              and that request carries neither your script nor your audio.
             </p>
           </div>
 
@@ -2604,22 +2600,14 @@
             <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>
           </div>
 
-          <Toggle
-            checked={$settings.privacy.diagnosticLogging}
-            label="Diagnostic logging"
-            description="Keeps redacted local logs to help diagnose problems"
-            onchange={(value) => void patchSettings('privacy', { diagnosticLogging: value })}
-          />
-          <Select
-            label="Update channel"
-            value={$settings.privacy.updateChannel}
-            options={[
-              { value: 'stable', label: 'Stable' },
-              { value: 'beta', label: 'Beta' },
-            ]}
-            onchange={(value) =>
-              void patchSettings('privacy', { updateChannel: value as 'stable' | 'beta' })}
-          />
+          <!--
+            #180: a "Diagnostic logging" toggle and an "Update channel" dropdown
+            used to sit here. Neither reached Rust — they wrote to the frontend
+            overlay and nothing ever read them back, so logging ran either way
+            and the channel selected nothing. The button below stays: unlike
+            those two it asks Rust a real question and reports the real answer,
+            which in this build is that update checks are not available.
+          -->
           <div class="row-actions">
             <Button size="sm" onclick={() => runUpdateCheck()}>Check for updates</Button>
             {#if updateNote}<span class="hint-line">{updateNote}</span>{/if}
