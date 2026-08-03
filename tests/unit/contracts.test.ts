@@ -10,6 +10,10 @@ describe('shared contracts', () => {
   it('exposes the stable application error codes', () => {
     expect(APP_ERROR_CODES).toContain('INTERNAL_UNEXPECTED');
     expect(APP_ERROR_CODES).toContain('STAGE_OPEN_FAILED');
+    // §181: raised recoverable by `speech/mod.rs` and by `select_speech_language`
+    // whenever this machine has no usable copy of the weights, which since §152
+    // is an ordinary first-run state rather than a damaged installation.
+    expect(APP_ERROR_CODES).toContain('STT_MODEL_NOT_INSTALLED');
     // Structured codes minted by src-tauri/src/errors.rs constructors.
     expect(APP_ERROR_CODES).toContain('NOT_IMPLEMENTED');
     expect(APP_ERROR_CODES).toContain('NOT_FOUND');
