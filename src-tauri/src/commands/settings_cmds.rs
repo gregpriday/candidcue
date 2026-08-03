@@ -1,7 +1,7 @@
 //! Settings and diagnostics commands (spec §46.8).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::State;
@@ -303,8 +303,14 @@ pub struct SupportBundleResult {
     pub path: String,
 }
 
-/// Support bundle (spec §44.11): system facts + recovery reports. No API
-/// key, audio, script, or transcript content.
+/// Support bundle (spec §44.11): system facts, recovery reports, and the logs
+/// (§179). No audio, script, or transcript content — the logs carry step names,
+/// states and timings, which is a property of what the call sites write rather
+/// than something enforced here.
+///
+/// `SUPPORT_BUNDLE_CONTENTS` in `src/control/lib/diagnostics-format.ts` states
+/// this list to the operator before they send it to anyone. Anything added to
+/// the bundle has to be added there too.
 ///
 /// Same C5 shape as `export_all_data`: this used to take `destination: String`
 /// from the webview, which had no way to obtain one — the dialog plugin is
@@ -337,7 +343,25 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
     fs::create_dir_all(&bundle_dir)?;
 
     let diagnostics = get_system_diagnostics(app, db, paths.clone()).await?;
-    let json = serde_json::to_vec_pretty(&diagnostics)
+    write_support_bundle(&paths, &bundle_dir, &diagnostics)?;
+
+    Ok(Some(SupportBundleResult {
+        path: bundle_dir.to_string_lossy().to_string(),
+    }))
+}
+
+/// Everything a support bundle contains, given a destination.
+///
+/// Split from the command so it can be tested. The command itself cannot be:
+/// it opens a NATIVE FOLDER PICKER, so there is no deterministic way to drive
+/// it from a test, and that is exactly why the logs could be dropped from the
+/// bundle without a single test noticing.
+pub fn write_support_bundle(
+    paths: &DataPaths,
+    bundle_dir: &Path,
+    diagnostics: &SystemDiagnostics,
+) -> Result<(), AppError> {
+    let json = serde_json::to_vec_pretty(diagnostics)
         .map_err(|e| AppError::Internal(format!("diagnostics serialize: {e}")))?;
     crate::util::atomic_write(&bundle_dir.join("diagnostics.json"), &json)?;
 
@@ -355,11 +379,8 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
     // (§179). The bundle used to ship system facts and recovery reports while
     // leaving out the only files that record what the app was actually doing
     // when it went wrong.
-    crate::diagnostics::logging::copy_support_logs(&paths.logs_dir(), &bundle_dir)?;
-
-    Ok(Some(SupportBundleResult {
-        path: bundle_dir.to_string_lossy().to_string(),
-    }))
+    crate::diagnostics::logging::copy_support_logs(&paths.logs_dir(), bundle_dir)?;
+    Ok(())
 }
 
 /// Updater is not wired in v1 (spec §44.10 planned; plugin absent).
@@ -380,16 +401,21 @@ pub async fn install_update() -> Result<(), AppError> {
 /// that has resisted every other kind of investigation, a realtime connection
 /// that will not open, has been invisible from the outside.
 ///
-/// It writes to a FILE as well as to `tracing`, and that is the important part.
-/// `tracing_subscriber::fmt()` writes to stdout, so a trace only survives if
+/// It writes to a FILE as well as to `tracing`, and that mattered more than it
+/// should have: `tracing` used to reach stdout only, so a trace survived only if
 /// whoever ran the app happened to pipe it somewhere — and the first attempt to
-/// collect one was lost exactly that way. A diagnostic that depends on
-/// remembering a shell pipe is a diagnostic that does not get captured.
+/// collect one was lost exactly that way. `tracing` now reaches a file too
+/// (§179), but this one stays: it is per-launch and per-step, which is what
+/// makes it readable as a sequence.
 ///
 /// Deliberately blunt: it takes a string the frontend has already composed and
-/// writes it. It is not a general logging API, it carries no user content by
-/// construction (callers pass step names, states and timings), and both the
-/// line and the file are bounded so a runaway loop cannot fill a disk.
+/// writes it. It is not a general logging API, and it carries no user content
+/// by construction (callers pass step names, states and timings).
+///
+/// The line and the client-trace file are both bounded. The `tracing::warn!`
+/// below is NOT — it lands in the daily Rust log, which caps file count rather
+/// than bytes — so the bound on disk usage here is the caller: the audio trace
+/// is off by default in a packaged build and emits a few dozen lines per take.
 #[tauri::command]
 pub async fn log_client_diagnostic(
     paths: State<'_, DataPaths>,

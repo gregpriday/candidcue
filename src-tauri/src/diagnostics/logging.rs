@@ -14,10 +14,10 @@
 //! not the person debugging it.
 //!
 //! Redaction, which this module's parent doc comment also promises, is NOT
-//! implemented here — see the note on `SENSITIVE_FIELDS` at the bottom of this
-//! file for why that is a deliberate omission rather than an oversight.
+//! implemented here — see the closing comment above the tests for why that is
+//! a deliberate omission rather than an oversight.
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use tracing_subscriber::layer::SubscriberExt;
@@ -36,18 +36,28 @@ use tracing_subscriber::util::SubscriberInitExt;
 const RUST_LOG_PREFIX: &str = "candidcue-rust";
 const RUST_LOG_SUFFIX: &str = "log";
 
-/// Daily rotation, eight files kept: today plus the previous week.
+/// Daily rotation, sized to keep at least a week: today plus seven days back.
 ///
-/// Measured against the crate rather than assumed: `prune_old_logs` returns
-/// early while `files.len() < max_files` and otherwise deletes down to
-/// `max_files - 1` before opening the new file, so the steady state is exactly
-/// this many files. A week is the horizon over which a user might plausibly
-/// say "it started doing this a few days ago" and still have the evidence.
-const MAX_DAILY_LOG_FILES: usize = 8;
+/// The number is 9 rather than 8, and the difference is not an off-by-one.
+/// `prune_old_logs` deletes down to `max_files - 1` and then opens the target
+/// file, which normally restores the count. But it also runs at STARTUP, and a
+/// same-day relaunch opens a file that ALREADY EXISTS — so no directory entry
+/// is created, and the count stays at `max_files - 1`. An app relaunched twice
+/// in a day at capacity therefore settles one file below the configured number,
+/// which is exactly why the crate's own docs tell you to ask for `m + 1` when
+/// you need `m`. A week is the horizon over which someone can plausibly say "it
+/// started doing this a few days ago" and still have the evidence.
+///
+/// Note this bounds the file COUNT, not bytes: the appender has no size cap.
+/// That is tolerable here only because nothing in this app logs on a hot path —
+/// `align/` emits no events at all, `speech/` logs discrete lifecycle moments,
+/// and the one renderer-driven logger is off by default in a packaged build. A
+/// future per-frame `info!` would make a byte budget necessary.
+const MAX_DAILY_LOG_FILES: usize = 9;
 
 /// The frontend's trace for the run in front of you, and the run before it.
-pub(crate) const CLIENT_TRACE: &str = "client-trace.log";
-pub(crate) const CLIENT_TRACE_PREV: &str = "client-trace.prev.log";
+pub const CLIENT_TRACE: &str = "client-trace.log";
+pub const CLIENT_TRACE_PREV: &str = "client-trace.prev.log";
 
 /// Truncate the client trace at 4 MB. Long enough for many sessions, small
 /// enough that a runaway caller cannot become a support problem of its own.
@@ -92,12 +102,12 @@ static CLIENT_TRACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Tauri drops managed state when the app itself goes down, which is exactly
 /// as long as the writer needs to live.
 #[derive(Debug)]
-pub(crate) struct LoggingGuard {
+pub struct LoggingGuard {
     _worker: tracing_appender::non_blocking::WorkerGuard,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum LoggingInitError {
+pub enum LoggingInitError {
     #[error("could not open the rolling log file: {0}")]
     Appender(#[from] tracing_appender::rolling::InitError),
     #[error("a tracing subscriber was already installed: {0}")]
@@ -116,7 +126,32 @@ pub(crate) enum LoggingInitError {
 /// the file layer in later, but the gap it closes is stdout-only output in a
 /// packaged build — which, per the module doc, goes to `/dev/null` regardless.
 /// It would be machinery bought with nothing.
-pub(crate) fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
+pub fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
+    let (subscriber, worker) = build_subscriber(logs_dir)?;
+    subscriber.try_init()?;
+    install_panic_hook(logs_dir.to_path_buf());
+    Ok(LoggingGuard { _worker: worker })
+}
+
+/// The subscriber `init` installs, built but not yet global.
+///
+/// Split out for one reason: `try_init` sets a process-wide dispatcher exactly
+/// once, so a test that called `init` would both prevent every other test in
+/// the binary from doing so and pass or fail depending on test ordering. With
+/// the construction separated from the installation, a test can drive this
+/// EXACT subscriber — same prefix, same filter, same layers — through
+/// `tracing::subscriber::with_default` and assert what lands on disk, while
+/// `init` stays a thin wrapper with nothing left in it to get wrong.
+#[allow(clippy::type_complexity)]
+fn build_subscriber(
+    logs_dir: &Path,
+) -> Result<
+    (
+        impl tracing::Subscriber + SubscriberInitExt + Send + Sync,
+        tracing_appender::non_blocking::WorkerGuard,
+    ),
+    LoggingInitError,
+> {
     let appender = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(RUST_LOG_PREFIX)
@@ -128,7 +163,7 @@ pub(crate) fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
-    tracing_subscriber::registry()
+    let subscriber = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         // No ANSI on disk: escape codes in a file the user is going to open in
@@ -137,12 +172,23 @@ pub(crate) fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(file_writer),
-        )
-        .try_init()?;
+        );
+    Ok((subscriber, worker))
+}
 
-    install_panic_hook(logs_dir.to_path_buf());
-
-    Ok(LoggingGuard { _worker: worker })
+/// Last resort when the log file cannot be opened: keep stdout, so a dev run
+/// still prints and the reason is at least visible somewhere.
+///
+/// Separate from `init` because it must not fail — by the time this is reached
+/// the app is already starting without the thing this module exists to provide,
+/// and turning that into a second failure would only make it harder to see.
+pub fn init_stdout_only() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .try_init();
 }
 
 /// Write a panic to disk before the process dies.
@@ -164,32 +210,35 @@ fn install_panic_hook(logs_dir: PathBuf) {
     std::panic::set_hook(Box::new(move |info| {
         // Deliberately infallible-by-ignoring: a panic hook that panics
         // replaces a diagnosable crash with an undiagnosable one.
-        let message = panic_message(info);
-        let location = info
-            .location()
-            .map(|l| (l.file().to_string(), l.line(), l.column()));
-        let thread = std::thread::current();
+        //
+        // One clock sample, used for both the timestamp and the filename. Read
+        // twice, a panic that starts at 23:59:59.999 can be stamped with
+        // yesterday and filed under today.
+        let now = chrono::Utc::now();
         let record = format_panic_record(
-            &crate::util::now_iso(),
-            thread.name(),
-            &message,
-            location
-                .as_ref()
-                .map(|(file, line, column)| (file.as_str(), *line, *column)),
+            &now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            std::thread::current().name(),
+            panic_message(info),
+            info.location().map(|l| (l.file(), l.line(), l.column())),
         );
-        let _ = append_panic_record(&rust_log_path(&logs_dir, today_utc()), &record);
+        let _ = append_panic_record(&rust_log_path(&logs_dir, now.date_naive()), &record);
         previous(info);
     }));
 }
 
-fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
+/// The panic payload as a borrowed string, without copying it.
+///
+/// Borrowed rather than owned on purpose: a panic caused by memory exhaustion
+/// is one where allocating a copy of the message is exactly the operation most
+/// likely to fail, and failing here means the crash goes unrecorded.
+fn panic_message<'a>(info: &'a std::panic::PanicHookInfo<'_>) -> &'a str {
     let payload = info.payload();
     if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
+        s
     } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
+        s.as_str()
     } else {
-        "panic payload was not a string".to_string()
+        "panic payload was not a string"
     }
 }
 
@@ -205,24 +254,51 @@ fn format_panic_record(
     message: &str,
     location: Option<(&str, u32, u32)>,
 ) -> String {
-    let escaped: String = message
-        .chars()
-        .flat_map(|c| match c {
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            c if c.is_control() => format!("\\u{{{:x}}}", c as u32).chars().collect(),
-            c => vec![c],
-        })
-        .collect();
-    let where_ = match location {
-        Some((file, line, column)) => format!("{file}:{line}:{column}"),
-        None => "unknown location".to_string(),
-    };
-    format!(
-        "{timestamp} PANIC thread={} at {where_}: {escaped}\n",
-        thread_name.unwrap_or("unnamed")
-    )
+    /// Enough for any panic worth reading; short enough that formatting one
+    /// cannot itself become the reason the crash goes unrecorded.
+    const MAX_PANIC_MESSAGE: usize = 8 * 1024;
+
+    let mut record = String::with_capacity(MAX_PANIC_MESSAGE / 8);
+    record.push_str(timestamp);
+    record.push_str(" PANIC thread=");
+    record.push_str(thread_name.unwrap_or("unnamed"));
+    record.push_str(" at ");
+    match location {
+        Some((file, line, column)) => {
+            record.push_str(file);
+            record.push(':');
+            record.push_str(&line.to_string());
+            record.push(':');
+            record.push_str(&column.to_string());
+        }
+        None => record.push_str("unknown location"),
+    }
+    record.push_str(": ");
+
+    // Escaped into the buffer a character at a time rather than through an
+    // iterator chain that allocated a Vec per character. A panic message can be
+    // arbitrarily long — `assert_eq!` on two big structures produces one — and
+    // the old shape turned that into millions of allocations at the exact
+    // moment the process is least able to afford them.
+    let mut truncated = false;
+    for c in message.chars() {
+        if record.len() >= MAX_PANIC_MESSAGE {
+            truncated = true;
+            break;
+        }
+        match c {
+            '\n' => record.push_str("\\n"),
+            '\r' => record.push_str("\\r"),
+            '\t' => record.push_str("\\t"),
+            c if c.is_control() => record.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => record.push(c),
+        }
+    }
+    if truncated {
+        record.push_str(" […truncated]");
+    }
+    record.push('\n');
+    record
 }
 
 /// Synchronous append, then `sync_data`. There is no second chance: the process
@@ -240,6 +316,10 @@ fn append_panic_record(path: &Path, record: &str) -> std::io::Result<()> {
     file.sync_data()
 }
 
+/// Test-only. Production never asks "what day is it" on its own: the panic hook
+/// takes ONE clock sample and derives both its timestamp and its filename from
+/// that, so a record cannot be stamped with one day and filed under another.
+#[cfg(test)]
 fn today_utc() -> chrono::NaiveDate {
     chrono::Utc::now().date_naive()
 }
@@ -265,9 +345,14 @@ fn is_rust_log_name(name: &str) -> bool {
     else {
         return false;
     };
-    // Parse the date rather than trusting the shape: it is what keeps a
-    // hand-dropped `candidcue-rust.notes.log` out of the retention and the
-    // support bundle.
+    // Parse the date rather than trusting the shape, so a hand-dropped
+    // `candidcue-rust.notes.log` is not mistaken for ours and shipped in a
+    // support bundle or truncated instead of cleared.
+    //
+    // This governs THIS module's decisions only. The appender's own pruner
+    // never calls it — it matches on prefix and suffix alone — so a file with
+    // our prefix and a `.log` suffix can still occupy a retention slot or be
+    // deleted by the crate regardless of what this returns.
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok()
 }
 
@@ -287,7 +372,7 @@ fn is_rust_log_name(name: &str) -> bool {
 /// the previous one alone rather than expiring it. If run B wrote nothing, then
 /// run A's trace is the newest evidence that exists, and the failure mode this
 /// whole issue is about is evidence being thrown away.
-pub(crate) fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
+pub fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     let live = logs_dir.join(CLIENT_TRACE);
     if !live.exists() {
@@ -298,7 +383,7 @@ pub(crate) fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
 
 /// Append one pre-formatted line to the live client trace, enforcing the size
 /// cap. The caller owns sanitising and formatting; this owns the file.
-pub(crate) fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Result<()> {
+pub fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Result<()> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     std::fs::create_dir_all(logs_dir)?;
     let path = logs_dir.join(CLIENT_TRACE);
@@ -313,7 +398,7 @@ pub(crate) fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Resu
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct LogClearStats {
+pub struct LogClearStats {
     pub removed_files: u32,
     pub removed_bytes: u64,
 }
@@ -335,7 +420,7 @@ pub(crate) struct LogClearStats {
 /// This is point-in-time, not a switch: lines already queued in the
 /// non-blocking writer can land immediately afterwards, and the app keeps
 /// logging. Clearing the logs is not the same as turning logging off.
-pub(crate) fn clear_logs(logs_dir: &Path) -> std::io::Result<LogClearStats> {
+pub fn clear_logs(logs_dir: &Path) -> std::io::Result<LogClearStats> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     let mut stats = LogClearStats::default();
     if !logs_dir.exists() {
@@ -398,7 +483,7 @@ fn dir_size(path: &Path) -> u64 {
 /// An allowlist rather than "every `*.log`": the bundle is something a user
 /// hands to someone else, so what goes in it should be a decision made here and
 /// not a consequence of whatever happens to be sitting in the directory.
-pub(crate) fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
+pub fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
     copy_support_logs_with_limit(logs_dir, bundle_dir, MAX_BUNDLED_FILE_BYTES)
 }
 
@@ -431,8 +516,12 @@ fn copy_support_logs_with_limit(
         }
         // Best effort per file, matching how the recovery reports are copied:
         // one unreadable log must not fail the export and leave the user
-        // holding nothing.
-        let _ = copy_tail(&entry.path(), &dest.join(&name), max_bytes);
+        // holding nothing. But it is reported rather than swallowed — a bundle
+        // silently missing the log someone is about to go looking for is how
+        // this issue happened in the first place.
+        if let Err(err) = copy_tail(&entry.path(), &dest.join(&name), max_bytes) {
+            tracing::warn!(file = %name, error = %err, "a log file could not be added to the support bundle");
+        }
     }
     Ok(())
 }
@@ -444,18 +533,44 @@ fn copy_support_logs_with_limit(
 fn copy_tail(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> {
     let mut input = std::fs::File::open(source)?;
     let len = input.metadata()?.len();
+
+    // Everything below reads through the descriptor already open, bounded by
+    // the length measured through that same descriptor. `fs::copy` would
+    // reopen by path — and the daily log is being appended to while this runs,
+    // so reopening means copying a file that is no longer the one that was
+    // measured, past the cap and potentially without end.
     if len <= max_bytes {
-        std::fs::copy(source, dest)?;
+        let mut output = std::fs::File::create(dest)?;
+        std::io::copy(&mut input.take(len), &mut output)?;
         return Ok(());
     }
 
-    input.seek(SeekFrom::Start(len - max_bytes))?;
+    /*
+     * Peek at the byte before the window.
+     *
+     * The tail has to start on a line boundary, and the obvious way to get
+     * there — drop everything up to the first newline — is wrong twice. If the
+     * window already begins just after a newline it throws away a complete
+     * line for nothing; and if the window's only newline is its final byte it
+     * throws away everything, leaving a file in the support bundle containing
+     * the truncation marker and not one line of log.
+     *
+     * Reading the preceding byte answers the question the first newline was
+     * being used to guess at.
+     */
+    let start = len - max_bytes;
+    input.seek(SeekFrom::Start(start - 1))?;
+    let mut preceding = [0u8; 1];
+    input.read_exact(&mut preceding)?;
+
     let mut tail = Vec::new();
-    std::io::Read::read_to_end(&mut input, &mut tail)?;
-    // Drop the partial first line. If there is no newline at all the whole tail
-    // is one enormous line, and keeping it is better than emitting nothing.
-    if let Some(cut) = tail.iter().position(|b| *b == b'\n') {
-        tail.drain(..=cut);
+    input.take(max_bytes).read_to_end(&mut tail)?;
+    if preceding[0] != b'\n' {
+        // Mid-line. Drop the fragment. If there is no newline at all the whole
+        // tail is one enormous line, and keeping it beats emitting nothing.
+        if let Some(cut) = tail.iter().position(|b| *b == b'\n') {
+            tail.drain(..=cut);
+        }
     }
 
     let mut output = std::fs::File::create(dest)?;
@@ -475,11 +590,15 @@ fn copy_tail(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> 
  * as evidence that logs had been audited for secrets. Machinery that implies a
  * guarantee it does not provide is worse than no machinery.
  *
- * What actually keeps user content out of these files is upstream and holds
- * today: `log_client_diagnostic` takes step names, states and timings and caps
- * their length, and no call site interpolates script text, transcripts or audio
- * into an event. If that ever stops being true, the fix belongs at the call
- * site that broke it — a formatter here would only hide it.
+ * What keeps user content out of these files is upstream, and it is a
+ * convention rather than a mechanism: `log_client_diagnostic` is documented to
+ * take step names, states and timings, and no call site today interpolates
+ * script text, transcripts or audio into an event. It is worth being precise
+ * about how far that goes — the command accepts an arbitrary string, the panic
+ * hook records an arbitrary payload, and error paths log `Error` messages whose
+ * text this module does not control. So the guarantee is "nothing puts user
+ * content in", not "nothing can". If that stops holding, the fix belongs at the
+ * call site that broke it; a formatter here would only hide it.
  */
 
 #[cfg(test)]
@@ -620,30 +739,26 @@ mod tests {
         assert_eq!(read(&dir.path().join(CLIENT_TRACE)), "after the cap\n");
     }
 
-    /// The measured fact this whole module exists for, asserted end to end: a
-    /// `warn!` has to come back off the disk.
+    /// The measured fact this whole module exists for, asserted against the
+    /// subscriber `init` actually installs: a `warn!` has to come back off the
+    /// disk.
     ///
-    /// Uses a thread-local subscriber rather than `init()`, because the global
-    /// dispatcher is a one-shot — a test that installed it would make every
-    /// other test in the binary unable to, and would itself pass or fail
-    /// depending on test ordering.
+    /// It drives `build_subscriber` rather than rebuilding an appender by hand.
+    /// That distinction is the point — an earlier version of this test
+    /// constructed its own appender and layer, which meant it stayed green if
+    /// `init` dropped the file layer, changed the prefix, or filtered warnings
+    /// out. It proved a dependency worked, not that this module used it.
+    ///
+    /// `init` itself is still not called: `try_init` sets a process-wide
+    /// dispatcher exactly once, so a test that called it would stop every other
+    /// test in this binary from doing so and would pass or fail on ordering.
+    /// What is left in `init` past this seam is the `try_init` and the hook
+    /// install.
     #[test]
     fn a_warning_reaches_the_daily_file_on_disk() {
         let dir = temp();
-        let appender = tracing_appender::rolling::RollingFileAppender::builder()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix(RUST_LOG_PREFIX)
-            .filename_suffix(RUST_LOG_SUFFIX)
-            .max_log_files(MAX_DAILY_LOG_FILES)
-            .build(dir.path())
-            .expect("appender");
-        let (writer, worker) = tracing_appender::non_blocking(appender);
+        let (subscriber, worker) = build_subscriber(dir.path()).expect("subscriber");
 
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(writer),
-        );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!("sentinel-line-179");
         });
@@ -652,15 +767,61 @@ mod tests {
         // mode the guard exists to prevent.
         drop(worker);
 
-        let path = rust_log_path(dir.path(), today_utc());
-        let contents = read(&path);
+        // Discover the file rather than computing today's name: the appender
+        // stamps its own filename, and recomputing the date here would make
+        // this test fail for one instant per day if the event landed at
+        // 23:59:59 and the assertion ran after midnight.
+        let written: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read logs dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| is_rust_log_name(&e.file_name().to_string_lossy()))
+            .collect();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected exactly one daily log, found {:?}",
+            written.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+
+        let contents = read(&written[0].path());
         assert!(
             contents.contains("sentinel-line-179"),
             "the event never reached the file: {contents:?}"
         );
         assert!(
+            contents.contains("WARN"),
+            "the default filter must let a warning through: {contents:?}"
+        );
+        assert!(
             !contents.contains('\u{1b}'),
             "the on-disk copy must not carry ANSI escapes"
+        );
+    }
+
+    /// The naming the panic hook relies on is the naming the appender actually
+    /// produces. If these drift, a panic is written to a file the support
+    /// bundle does not collect — and nothing else would notice.
+    #[test]
+    fn the_appender_writes_the_filename_the_panic_hook_targets() {
+        let dir = temp();
+        let (subscriber, worker) = build_subscriber(dir.path()).expect("subscriber");
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!("naming check");
+        });
+        drop(worker);
+
+        let produced = std::fs::read_dir(dir.path())
+            .expect("read logs dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .find(|n| is_rust_log_name(n))
+            .expect("the appender wrote a file this module recognises");
+
+        let expected = rust_log_path(dir.path(), today_utc());
+        let expected = expected.file_name().expect("name").to_string_lossy();
+        assert_eq!(
+            produced, expected,
+            "the panic hook would write to a different file than the appender"
         );
     }
 
@@ -763,6 +924,56 @@ mod tests {
         for line in copied.lines().skip(1) {
             assert!(line.starts_with("line "), "half a line survived: {line:?}");
         }
+    }
+
+    /// A tail that already begins on a line boundary must keep its first line.
+    ///
+    /// The naive "drop everything up to the first newline" loses a whole
+    /// complete line here for nothing — and in the degenerate case below it
+    /// loses the entire file.
+    #[test]
+    fn a_tail_starting_on_a_line_boundary_keeps_its_first_line() {
+        let dir = temp();
+        let bundle = temp();
+        // 16 bytes: two 8-byte lines. A window of exactly 8 begins precisely
+        // after the first line's newline.
+        write(
+            &dir.path().join("candidcue-rust.2026-08-03.log"),
+            "aaaaaaa\nbbbbbbb\n",
+        );
+
+        copy_support_logs_with_limit(dir.path(), bundle.path(), 8).expect("copy");
+
+        let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
+        assert_eq!(
+            copied,
+            format!("{TRUNCATION_MARKER}bbbbbbb\n"),
+            "the last complete line must survive"
+        );
+    }
+
+    /// The degenerate case: the window's only newline is its final byte.
+    ///
+    /// Draining through it leaves nothing at all, so the bundle would contain a
+    /// file holding the truncation marker and not one line of log — which reads
+    /// as "the log was empty" rather than "the copy was wrong".
+    #[test]
+    fn a_tail_whose_only_newline_is_its_last_byte_is_not_emptied() {
+        let dir = temp();
+        let bundle = temp();
+        write(
+            &dir.path().join("candidcue-rust.2026-08-03.log"),
+            "xxxxxxxxxxxx\nyyyy\n",
+        );
+
+        // A 5-byte window is exactly "yyyy\n", which begins on a boundary.
+        copy_support_logs_with_limit(dir.path(), bundle.path(), 5).expect("copy");
+
+        let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
+        assert!(
+            copied.ends_with("yyyy\n"),
+            "the tail must not be drained to nothing: {copied:?}"
+        );
     }
 
     /// The bug that clearing logs would otherwise introduce. Unlinking the file

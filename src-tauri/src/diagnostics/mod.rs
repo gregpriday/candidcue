@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 
-pub(crate) mod logging;
+pub mod logging;
 
 /// The module-wide `allow(dead_code)` that used to sit at the top of this file
 /// is scoped to these two instead: `get_system_diagnostics` builds its own,

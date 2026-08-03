@@ -120,4 +120,17 @@ describe('diagnostics presentation is honest about what it knows', () => {
       expect(SUPPORT_BUNDLE_EXCLUSIONS).toContain(claim);
     }
   });
+
+  /**
+   * The disclosure is read immediately before the operator hands the folder to
+   * someone else, so understating it is the failure that matters. When the
+   * bundle started carrying logs (§179) this list still ended "nothing else",
+   * and the person exporting one had no way to know. Anything the Rust command
+   * writes has to be named here.
+   */
+  it('discloses the logs the bundle now carries', () => {
+    const listed = SUPPORT_BUNDLE_CONTENTS.join(' ').toLowerCase();
+    expect(listed).toContain('logs');
+    expect(listed).toContain('trace');
+  });
 });

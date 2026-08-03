@@ -113,14 +113,32 @@ pub fn run() {
              * points it at /dev/null — so until this line runs, every warning
              * this app can emit goes nowhere at all (§179).
              *
-             * The failure is propagated rather than swallowed: `logs_dir` was
-             * created with `?` two lines up, so this app already treats a
-             * writable log directory as a precondition for starting, and a
-             * silent fall back to stdout-only would rebuild the exact bug this
-             * replaces.
+             * A failure here does NOT stop the app. `create_dir_all` two lines
+             * up proves the directory exists, not that it can be written to —
+             * an existing read-only `logs/` satisfies it and then fails to open
+             * a log file. Propagating that would turn "cannot write logs" into
+             * "will not launch", and Tauri turns a setup error into a panic
+             * that a release build aborts on before this very hook is
+             * installed: the user would get an app that vanishes from Finder
+             * with nothing on screen and nothing on disk saying why.
+             *
+             * Refusing to start is the wrong trade for a teleprompter. It falls
+             * back to stdout, which is at least visible under `tauri dev`, and
+             * says why as loudly as it still can.
              */
-            let logging = crate::diagnostics::logging::init(&paths.logs_dir())?;
-            handle.manage(logging);
+            match crate::diagnostics::logging::init(&paths.logs_dir()) {
+                Ok(logging) => {
+                    handle.manage(logging);
+                }
+                Err(err) => {
+                    crate::diagnostics::logging::init_stdout_only();
+                    tracing::error!(
+                        error = %err,
+                        path = %paths.logs_dir().display(),
+                        "no log file: this run cannot be debugged from a support bundle"
+                    );
+                }
+            }
 
             /*
              * Start each run with an empty client trace — but keep the last one.

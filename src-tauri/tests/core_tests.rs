@@ -477,6 +477,125 @@ async fn clearing_logs_targets_the_log_directory_and_no_cache() {
     );
 }
 
+/// §179: the support bundle has to actually carry the logs.
+///
+/// This asserts the JOIN, not the copier. `diagnostics::logging` has its own
+/// tests proving it copies the right files given a directory — but every one of
+/// them passed while `export_support_bundle` did not call it at all, which is
+/// the state this issue was filed about. Deleting the `copy_support_logs` call
+/// from `write_support_bundle` fails here and nowhere else.
+///
+/// It goes through `write_support_bundle` rather than the command because the
+/// command opens a native folder picker: there is no deterministic way to drive
+/// it, which is precisely how the omission survived.
+#[tokio::test]
+async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
+    let h = harness().await;
+    let bundle = tempfile::tempdir().expect("bundle dir");
+
+    fs::create_dir_all(h.paths.logs_dir()).expect("logs dir");
+    fs::create_dir_all(h.paths.diagnostics_dir()).expect("diagnostics dir");
+    fs::write(
+        h.paths.logs_dir().join("client-trace.log"),
+        "the run in front of you\n",
+    )
+    .expect("live trace");
+    fs::write(
+        h.paths.logs_dir().join("client-trace.prev.log"),
+        "the run that crashed\n",
+    )
+    .expect("previous trace");
+    fs::write(
+        h.paths.logs_dir().join("candidcue-rust.2026-08-03.log"),
+        "a warning nobody could read before\n",
+    )
+    .expect("rust log");
+    fs::write(
+        h.paths.diagnostics_dir().join("recovery.json"),
+        "{\"kind\":\"startup_reconciliation\"}",
+    )
+    .expect("report");
+
+    let diagnostics = candidcue_lib::commands::settings_cmds::SystemDiagnostics {
+        app_version: "0.1.0".into(),
+        os: "macos".into(),
+        arch: "aarch64".into(),
+        database_integrity_ok: true,
+        script_count: 0,
+        session_count: 0,
+        data_dir: h.paths.root().to_string_lossy().to_string(),
+    };
+    candidcue_lib::commands::settings_cmds::write_support_bundle(
+        &h.paths,
+        bundle.path(),
+        &diagnostics,
+    )
+    .expect("bundle written");
+
+    // What the bundle always had.
+    assert!(bundle.path().join("diagnostics.json").is_file());
+    assert!(bundle.path().join("recovery.json").is_file());
+
+    // What it was missing, which is the only reason anyone exports one.
+    let logs = bundle.path().join("logs");
+    assert_eq!(
+        fs::read_to_string(logs.join("client-trace.log")).expect("live trace in bundle"),
+        "the run in front of you\n"
+    );
+    assert_eq!(
+        fs::read_to_string(logs.join("client-trace.prev.log")).expect("previous trace in bundle"),
+        "the run that crashed\n",
+        "a crash plus a relaunch must still reach whoever is debugging it"
+    );
+    assert_eq!(
+        fs::read_to_string(logs.join("candidcue-rust.2026-08-03.log")).expect("rust log in bundle"),
+        "a warning nobody could read before\n"
+    );
+}
+
+/// §179: "Clear logs" must not break logging.
+///
+/// The generic `clear_cache` loop unlinks every entry it finds, and one of them
+/// is the file the tracing appender is holding open — after which the appender
+/// writes to a nameless inode and the app logs to nowhere. `clear_cache` routes
+/// the `logs` kind to `clear_logs`, which truncates instead; removing that early
+/// return puts the daily log back through the unlinking loop and fails this.
+///
+/// The held handle is the whole test: an implementation that deleted and
+/// recreated the file would satisfy the existence check and still fail the last
+/// assertion, because the write would land on the orphaned inode.
+#[tokio::test]
+async fn clearing_logs_keeps_the_open_log_file_writable() {
+    use std::io::Write;
+
+    let h = harness().await;
+    fs::create_dir_all(h.paths.logs_dir()).expect("logs dir");
+    let daily = h.paths.logs_dir().join("candidcue-rust.2026-08-03.log");
+    fs::write(&daily, "before the clear\n").expect("daily log");
+    fs::write(h.paths.logs_dir().join("client-trace.log"), "trace\n").expect("trace");
+
+    // Stand in for the appender, which holds its file open for the run.
+    let mut held = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&daily)
+        .expect("hold the log open");
+
+    let cleared = candidcue_lib::diagnostics::logging::clear_logs(&h.paths.logs_dir())
+        .expect("clear the logs");
+    assert_eq!(cleared.removed_files, 2);
+
+    assert!(daily.exists(), "the appender's file must keep its name");
+    assert_eq!(fs::metadata(&daily).expect("meta").len(), 0);
+    assert!(!h.paths.logs_dir().join("client-trace.log").exists());
+
+    held.write_all(b"after the clear\n").expect("write");
+    assert_eq!(
+        fs::read_to_string(&daily).expect("read back"),
+        "after the clear\n",
+        "the appender must still be writing somewhere the user can read"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
