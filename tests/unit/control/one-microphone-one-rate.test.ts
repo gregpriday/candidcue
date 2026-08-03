@@ -5,7 +5,7 @@
  * THE DEFECT THIS FILE EXISTS FOR
  * ---------------------------------------------------------------------------
  * CandidCue attaches two `MediaStreamAudioSourceNode`s to one `MediaStream`:
- * `PcmCapture`, which encodes what Inworld transcribes, and the analyser graph
+ * `PcmCapture`, which encodes what the recogniser transcribes, and the analyser graph
  * behind the level meter and the §28.6 dead-input detector. Each built its own
  * `AudioContext` — the capture at `STT_SAMPLE_RATE_HZ`, the analyser at
  * whatever the hardware defaulted to.
@@ -57,7 +57,7 @@ describe('one microphone, one sample rate', () => {
     );
   });
 
-  it('keeps the capture on the rate it tells Inworld it is sending', () => {
+  it('keeps the capture on the rate it declares it is sending', () => {
     const capture = read('src/control/services/audio/capture.ts');
     expect(capture).toMatch(/new AudioContext\(\{\s*sampleRate:\s*rate\s*\}\)/);
     expect(capture).toMatch(/create\(STT_SAMPLE_RATE_HZ\)/);

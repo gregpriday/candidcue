@@ -3,10 +3,11 @@
 //! ---------------------------------------------------------------------------
 //! WHY THIS REPLACED A HOSTED SERVICE
 //! ---------------------------------------------------------------------------
-//! The app used to stream every take to Inworld over a websocket. That worked,
-//! and it cost an API key, a network round trip, a per-minute bill, and a class
-//! of failure — a revoked key, a dropped socket, a reconnect loop — that lands
-//! in the middle of a take and cannot be recovered from on stage.
+//! The app used to stream every take to a hosted recogniser over a websocket.
+//! That worked, and it cost an API key, a network round trip, a per-minute
+//! bill, and a class of failure — a revoked key, a dropped socket, a reconnect
+//! loop — that lands in the middle of a take and cannot be recovered from on
+//! stage.
 //!
 //! A streaming Zipformer transducer runs the same job on the presenter's own
 //! machine at a real-time factor around 0.03 — a few percent of one core. There

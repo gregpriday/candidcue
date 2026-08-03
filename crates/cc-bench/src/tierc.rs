@@ -198,7 +198,7 @@ pub fn run_tier_c_captured(
             serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
         let gold: GoldTimeline =
             serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
-        let events = crate::capture::read_events_jsonl(&dir.join("events.jsonl"))?;
+        let events = crate::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
         let source = std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
         if let Some(captured) = manifest.atom_count {

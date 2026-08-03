@@ -4,11 +4,20 @@
 //! ---------------------------------------------------------------------------
 //! WHAT THIS IS FOR
 //! ---------------------------------------------------------------------------
-//! Inworld's `transcribeConfig.prompts` is a soft bias — an array of strings
-//! that makes the recogniser likelier to write particular words. It is not a
-//! keyword lock and it cannot make a wrong word right. What it can do is win
-//! the coin-flips the model was going to lose anyway: `RustLight` over
-//! `Rust Light`, `Saoirse` over `Sersha`, `twenty-seven` over `27`.
+//! A recogniser vocabulary bias is a soft bias — a list of strings that makes
+//! the model likelier to write particular words. It is not a keyword lock and
+//! it cannot make a wrong word right. What it can do is win the coin-flips the
+//! model was going to lose anyway: `RustLight` over `Rust Light`, `Saoirse`
+//! over `Sersha`, `twenty-seven` over `27`.
+//!
+//! **Nothing in the shipping app sends these terms today.** The on-device
+//! recogniser can bias toward hotwords, but only under `modified_beam_search`
+//! and only with a `bpe.vocab` beside the model, and the bundle ships neither
+//! (see `src-tauri/src/commands/speech_cmds.rs::TranscriptionOptions`).
+//! Reinstating it is a model-packaging decision. This extractor stays because
+//! it is the half of that capability that is already correct and measured —
+//! `cc-bench vocab` exercises it — and rewriting it later from nothing would be
+//! throwing away the part that was never the problem.
 //!
 //! Two different wins, worth naming separately because they have different
 //! shapes:
@@ -62,12 +71,14 @@
 //! ---------------------------------------------------------------------------
 //! THE SANITISER IS NOT OPTIONAL
 //! ---------------------------------------------------------------------------
-//! The gateway rejects terms containing characters outside letters, digits,
-//! spaces and basic punctuation, and it rejects them with `INVALID_ARGUMENT`
-//! on the config frame — the frame that LEADS the socket. A bad character
-//! therefore does not degrade a take, it prevents one. Everything leaving this
-//! module goes through [`sanitize`], which is an allowlist, and anything it
-//! cannot clean is dropped rather than sent and hoped for.
+//! A term list is configuration a recogniser reads BEFORE it will accept audio,
+//! and the recogniser this was measured against rejected the whole list — not
+//! the offending term — over a single character outside letters, digits, spaces
+//! and basic punctuation. A bad character therefore does not degrade a take, it
+//! prevents one. Everything leaving this module goes through [`sanitize`],
+//! which is an allowlist, and anything it cannot clean is dropped rather than
+//! handed over and hoped for. Whatever consumes these terms next, that is the
+//! cheap side of the bet to be on.
 
 use crate::script::{ends_sentence, CompileOptions};
 
@@ -90,12 +101,12 @@ pub struct VocabToken<'a> {
     pub sentence: u32,
 }
 
-/// What a config frame may carry.
+/// How much of a term list this may fill.
 ///
 /// Defaults are deliberately modest. `max_terms` is the dilution budget
 /// discussed in the module docs; the two character limits exist so that a
 /// pathological script — a page of hyphenated chemical names — cannot produce
-/// a config frame large enough to be interesting to the gateway.
+/// a list large enough to be interesting to whatever is asked to hold it.
 #[derive(Debug, Clone, Copy)]
 pub struct VocabLimits {
     pub max_terms: usize,
@@ -867,7 +878,7 @@ fn rank(
     }
 
     let mut ranked: Vec<Candidate> = best.into_values().collect();
-    // Score first, then authored order. Never hash order — a config frame that
+    // Score first, then authored order. Never hash order — a term list that
     // differs run to run would make every measurement of this feature noise.
     ranked.sort_by(|a, b| b.score.cmp(&a.score).then(a.first.cmp(&b.first)));
 
@@ -905,9 +916,9 @@ fn contains_word(phrase: &str, word: &str) -> bool {
     phrase.split(' ').any(|part| part.eq_ignore_ascii_case(word))
 }
 
-/// Reduce a term to characters the gateway accepts, or reject it.
+/// Reduce a term to characters a recogniser will accept, or reject it.
 ///
-/// An allowlist, because the failure mode is a rejected config frame and a take
+/// An allowlist, because the failure mode is a rejected term list and a take
 /// that never starts. Letters (including non-ASCII, which is the point of half
 /// these terms), digits, single spaces, and the punctuation that appears INSIDE
 /// real terms: `.` `,` `'` `-` `:`. Everything else is removed — `$2.4 million`

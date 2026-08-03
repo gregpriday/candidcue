@@ -53,9 +53,8 @@ pub enum DecisionCode {
     ManualAnchor,
 }
 
-/// Input events, mirroring the wire frames the Rust STT session emits
-/// (`src-tauri/src/inworld/stream.rs::SttFrame`), with the receive-side audio
-/// clock attached.
+/// Input events, mirroring the frames the Rust STT session emits
+/// (`cc_stt::SttFrame`), with the receive-side audio clock attached.
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     ItemStarted {

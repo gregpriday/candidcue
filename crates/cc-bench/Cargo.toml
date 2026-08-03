@@ -1,15 +1,13 @@
 [package]
 name = "cc-bench"
 version = "0.1.0"
-description = "CandidCue alignment benchmark harness: fixtures, fal.ai TTS, live Inworld capture, offline replay, metrics"
+description = "CandidCue alignment benchmark harness: fixtures, fal.ai TTS, on-device capture, offline replay, metrics"
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
 cc-align = { path = "../cc-align" }
-# `inworld` is on here and nowhere else: re-capturing the frozen baseline in
-# bench/runs/ is the one remaining reason that client exists.
-cc-stt = { path = "../cc-stt", features = ["inworld"] }
+cc-stt = { path = "../cc-stt" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }

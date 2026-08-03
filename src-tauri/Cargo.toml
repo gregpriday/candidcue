@@ -71,9 +71,9 @@ image = { version = "0.25", default-features = false, features = [
 # that is what lets `cc-bench` replay captured takes offline and makes the
 # numbers in bench/REPORT.md mean anything.
 cc-align = { path = "../crates/cc-align" }
-# The on-device recogniser and the STT event protocol. Default features only —
-# the `inworld` feature (the hosted websocket client this replaced) stays off,
-# so the shipped binary carries no network speech path at all.
+# The on-device recogniser and the STT event protocol. It has no network stack
+# to enable — the hosted websocket client this replaced is gone — so the shipped
+# binary carries no network speech path at all.
 cc-stt = { path = "../crates/cc-stt" }
 base64 = "0.23.0"
 

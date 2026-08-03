@@ -3,8 +3,7 @@
 ## `quarterly-update-24k-mono.wav`
 
 Synthetic speech, PCM signed 16-bit little-endian, 24 kHz, mono — the exact
-format the Inworld streaming API accepts on
-`input_audio_buffer.append`. 9.36 s.
+format the fixture corpora were captured at. 9.36 s.
 
 Spoken text, which is what a test asserts against:
 

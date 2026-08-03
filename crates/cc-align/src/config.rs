@@ -314,7 +314,7 @@ pub struct AlignmentConfig {
     ///
     /// | recogniser | partial interval | right value |
     /// |---|---|---|
-    /// | Inworld (hosted) | 1000 ms | 300 |
+    /// | hosted (the frozen `bench/runs/` corpus) | 1000 ms | 300 |
     /// | streaming-zipformer-en-20M | 300 ms | 0 |
     /// | **x-asr 480 ms (shipping)** | **500 ms** | **400** |
     ///

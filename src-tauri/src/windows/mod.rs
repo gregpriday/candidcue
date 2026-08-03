@@ -1537,11 +1537,12 @@ mod tests {
     /// its own policy; CSP composes restrictively, so the stage gets the
     /// intersection.
     ///
-    /// Neither window needs an external origin now: the Inworld socket is held
-    /// in Rust (it needs an `Authorization` header the browser cannot send), so
-    /// the global policy dropped the provider host too. This test asserts both
-    /// halves, because the interesting failure is a future change re-opening
-    /// the control window's network and quietly widening the stage with it.
+    /// Neither window needs an external origin now: speech is on-device, so the
+    /// global policy dropped the provider host too and there is no remaining
+    /// reason for either webview to reach the network at all. This test asserts
+    /// both halves, because the interesting failure is a future change
+    /// re-opening the control window's network and quietly widening the stage
+    /// with it.
     #[test]
     fn stage_csp_grants_no_network() {
         let html = include_str!("../../../stage.html");
@@ -1557,52 +1558,56 @@ mod tests {
                 .find('"')
                 .expect("unterminated CSP content")];
 
-        let connect = csp
-            .split(';')
-            .map(str::trim)
-            .find(|d| d.starts_with("connect-src"))
-            .expect("the stage CSP must pin connect-src explicitly");
-        assert!(
-            !connect.contains("api.inworld.ai"),
-            "the stage must have no route to the provider: {connect}"
-        );
-        assert!(
-            !connect.contains('*'),
-            "the stage's connect-src must not contain a wildcard: {connect}"
-        );
-        for host in ["https:", "http://localhost", "ws:", "wss:"] {
-            assert!(
-                !connect.contains(host),
-                "the stage's connect-src must not allow {host}: {connect}"
-            );
-        }
+        assert_connect_src_is_local_only(csp, "the stage");
         for directive in ["object-src 'none'", "frame-src 'none'", "base-uri 'none'"] {
             assert!(csp.contains(directive), "the stage CSP must set {directive}");
         }
 
-        // And no window reaches the provider from JavaScript at all: the
-        // session is Rust's. A `connect-src` naming any remote host in the
-        // global policy means somebody moved the socket back into the webview,
-        // which cannot work — the key travels in a header the browser will not
-        // send — and would put the key in the renderer on the way to finding
-        // that out.
+        // And no window reaches ANY remote host from JavaScript: the recogniser
+        // is on-device and the database is Rust's, so there is nothing left for
+        // a webview to legitimately call out to. A `connect-src` naming a
+        // remote host in the global policy means a network path was reopened,
+        // and the script on the glass is the last thing that should be able to
+        // leave the machine.
         let config = include_str!("../../tauri.conf.json");
         let global_csp = config
             .split("\"csp\": \"")
             .nth(1)
             .and_then(|rest| rest.split('"').next())
             .expect("the global CSP must be present");
-        let global_connect = global_csp
+        assert_connect_src_is_local_only(global_csp, "the global policy");
+    }
+
+    /// Assert `csp`'s `connect-src` names EXACTLY the three local sources.
+    ///
+    /// An allowlist on purpose. This used to be a list of forbidden strings —
+    /// the speech provider's host, `https:`, `wss:` — which only ever caught
+    /// the reopenings somebody had already thought of: a bare `evil.example`
+    /// contains none of those tokens and sailed straight through. Since the
+    /// recogniser moved on-device there is no host a webview may legitimately
+    /// name, so the honest assertion is equality with the empty case rather
+    /// than a denylist that has to be extended every time.
+    ///
+    /// `http://ipc.localhost` is Tauri's own IPC endpoint, which is not the
+    /// network; `ipc:` is its scheme.
+    fn assert_connect_src_is_local_only(csp: &str, whose: &str) {
+        let connect = csp
             .split(';')
             .map(str::trim)
             .find(|d| d.starts_with("connect-src"))
-            .expect("the global CSP must pin connect-src explicitly");
-        for host in ["api.inworld.ai", "api.openai.com", "https:", "wss:"] {
-            assert!(
-                !global_connect.contains(host),
-                "no window may reach {host} from JavaScript: {global_connect}"
-            );
-        }
+            .unwrap_or_else(|| panic!("{whose} CSP must pin connect-src explicitly"));
+
+        let sources: std::collections::BTreeSet<&str> = connect
+            .trim_start_matches("connect-src")
+            .split_whitespace()
+            .collect();
+        let allowed: std::collections::BTreeSet<&str> =
+            ["'self'", "ipc:", "http://ipc.localhost"].into_iter().collect();
+
+        assert_eq!(
+            sources, allowed,
+            "{whose} connect-src must name exactly the local sources: {connect}"
+        );
     }
 
     /// The asset-protocol scope used to be `$APPDATA/scripts/**`, so every

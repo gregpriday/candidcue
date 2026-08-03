@@ -175,7 +175,10 @@ fn is_usable(dir: &Path, model: &ModelEntry, require_seal: bool) -> bool {
 /// `bundle.resources` also stopped `tauri dev` from seeing a model fetched into
 /// the source tree — Tauri only stages resources a build declares — and a
 /// contributor who has already run `pnpm models:fetch` should not have to
-/// re-download through the UI to get a working dev build.
+/// re-download through the UI to get a working dev build. Nothing sets it for
+/// you: `models:fetch` fills the source tree but does not export anything, so
+/// without this variable a dev build takes the same in-app download a user
+/// does. The README's "Running it" section carries the line to export.
 ///
 /// NOT sealed, deliberately: the files it points at were put there by the fetch
 /// script, which verified every one of them against the same catalogue. It is

@@ -1,8 +1,8 @@
 # CandidCue
 
 A voice-following teleprompter. You write a script in Markdown; it displays on a
-second screen behind your camera, usually through teleprompter glass; a speech
-recogniser bundled with the app transcribes you as you speak; and a local
+second screen behind your camera, usually through teleprompter glass; an
+on-device speech recogniser transcribes you as you speak; and a local
 alignment engine scrolls the script to keep your place. That is the whole product: it follows you, shows you where you
 are, and lets you jump forward and back.
 
@@ -10,9 +10,9 @@ Nothing about the display is generated at runtime — the model never writes wha
 you see. It transcribes, and a deterministic local engine decides where you are.
 
 Nothing leaves your machine either. Speech recognition runs on-device against a
-bundled streaming Zipformer transducer, so there is no account, no API key, and
-no audio upload. On the benchmark corpus it matches the hosted service it
-replaced — see `bench/REPORT.md`.
+streaming Zipformer transducer, so there is no account, no API key, and no audio
+upload. On the benchmark corpus it matches the hosted service it replaced — see
+`bench/REPORT.md`.
 
 ## Running it
 
@@ -26,12 +26,21 @@ and the **stage** window, which goes on your second display. On first run, take
 the **"Open the sample script"** button — the sample is written to be read out
 loud and tells you what to watch for while you read it.
 
-Voice following needs nothing configured — no key, no account, no model choice.
-It does need the model on disk, which is not in git:
+Voice following needs nothing configured — no key, no account. It does need the
+recogniser, which ships in neither git nor the installer: open **Settings ›
+Speech** and install it from there (~161 MB, checked against a pinned digest).
+Everything else — writing, importing, the stage — works without it.
+
+Contributors can skip that download by fetching into the source tree and
+pointing the app at it:
 
 ```bash
-pnpm models:fetch     # ~161 MB into src-tauri/models/
+pnpm models:fetch                              # ~161 MB into src-tauri/models/
+export CANDIDCUE_MODELS_DIR="$PWD/src-tauri/models"
 ```
+
+Without that variable nothing reads `src-tauri/models/`, and `pnpm tauri dev`
+takes the same in-app download a user does.
 
 The recogniser runs in Rust, on its own thread, beside the alignment engine that
 consumes it — the two share an audio clock, and a transcript frame never has to

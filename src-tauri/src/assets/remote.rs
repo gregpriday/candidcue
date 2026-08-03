@@ -166,8 +166,12 @@ fn too_large() -> AppError {
 // Fetch
 // ---------------------------------------------------------------------------
 
-/// Download and validate a remote image. Never reuses the app's shared
-/// provider client, which follows redirects and carries the Inworld key.
+/// Download and validate a remote image.
+///
+/// The URL comes from the operator, so every hop is built its own client
+/// (`net::client_for`) with automatic redirects OFF: a redirect is resolved
+/// here and revalidated from scratch, which is the only way a hop into a
+/// private address can be refused rather than merely noticed afterwards.
 pub async fn fetch_remote_image(
     url: &str,
     policy: &FetchPolicy,

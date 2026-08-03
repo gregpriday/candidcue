@@ -417,15 +417,14 @@ pub fn default_language() -> &'static str {
 /// The recogniser to record, given whatever a previous build persisted.
 ///
 /// Anything this build cannot load is replaced rather than honoured. The value
-/// on disk has twice now named a service the app no longer talks to — first a
-/// realtime provider's model, then Inworld's — and each time the stale string
-/// was forwarded to something that rejected it.
+/// on disk has twice now named a hosted service the app no longer talks to, and
+/// each time the stale string was forwarded to something that rejected it.
 ///
 /// It cannot be forwarded anywhere any more, because there is nothing to
 /// forward it to; but it is still reported in diagnostics and still shown in
-/// Settings, and a build that claims to be running `inworld/inworld-stt-1` while
-/// an on-device Zipformer does the listening is a lie in the one artefact whose
-/// whole job is to be believed.
+/// Settings, and a build that names a hosted recogniser while an on-device
+/// Zipformer does the listening is a lie in the one artefact whose whole job is
+/// to be believed.
 ///
 /// The test is now catalogue MEMBERSHIP rather than equality with one constant.
 /// The two agree exactly while one model ships, and they stop agreeing the
@@ -617,12 +616,15 @@ mod tests {
     /// build cannot run.
     ///
     /// The settings document is a JSON blob that survives a provider change,
-    /// and this field has now named three different things: a realtime
-    /// provider's model, then Inworld's, then the bundled recogniser. Twice
-    /// the stale value was forwarded to something that rejected it. It cannot
-    /// be forwarded anywhere any more, but it IS what diagnostics report, and
-    /// a bundle claiming a take was transcribed by a service the build cannot
-    /// reach sends whoever reads it after the wrong problem.
+    /// and this field has now named three different things: two hosted models
+    /// in turn, then the bundled recogniser. Twice the stale value was
+    /// forwarded to something that rejected it. It cannot be forwarded
+    /// anywhere any more, but it IS what diagnostics report, and a bundle
+    /// claiming a take was transcribed by a service the build cannot reach
+    /// sends whoever reads it after the wrong problem.
+    ///
+    /// The literals below are the actual strings sitting in real settings
+    /// documents on disk. They are data, not a live dependency.
     #[test]
     fn a_recogniser_name_this_build_cannot_load_is_rewritten() {
         for stale in [
@@ -857,7 +859,7 @@ mod tests {
         assert_eq!(settings.following, FollowingSettings::default());
     }
 
-    /// A settings document written before the switch to Inworld still carries
+    /// A settings document written before the sidecar was removed still carries
     /// `coaching`, `commands`, `audio.delayProfile` and the three `following`
     /// keys that went with the semantic sidecar. Serde ignores unknown fields,
     /// so those documents must still load — the alternative is
@@ -882,8 +884,9 @@ mod tests {
         assert_eq!(settings.following.feel, "calm", "surviving keys are kept");
         assert_eq!(settings.audio.vad_sensitivity, 0.8);
         // The retired `language: "en"` is carried through as-is rather than
-        // corrected; Inworld wants "en-US" and the UI offers only valid choices,
-        // so this is a value the user re-picks, not one to silently rewrite.
+        // corrected; the model's default is "en-US" and the UI offers only
+        // valid choices, so this is a value the user re-picks, not one to
+        // silently rewrite.
         assert_eq!(settings.audio.language, "en");
         assert!(validate(&settings).is_ok());
     }

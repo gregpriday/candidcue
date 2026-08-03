@@ -58,10 +58,10 @@ pub async fn import_remote_image<R: Runtime>(
     url: String,
 ) -> Result<ImportedAsset, AppError> {
     let script_id = ScriptId::parse(&script_id)?;
-    // A dedicated, credential-free, redirect-disabled client is built per
-    // fetch inside `assets::remote`. The shared provider client must never be
-    // used here: it follows redirects and is the one client that carries the
-    // Inworld key.
+    // A dedicated, credential-free, redirect-disabled client is built per hop
+    // inside `assets::remote`. Nothing here may be given a client that follows
+    // redirects on its own: this URL is operator-supplied, and a hop only
+    // counts as refused if it is checked before the request goes out.
     let imported = assets::import_remote_image(db.pool(), &paths, &script_id, &url).await?;
     allow_script_assets(&app, &paths, &script_id);
     Ok(imported)

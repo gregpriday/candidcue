@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A voice-following teleprompter. You write Markdown in the **control** window; it
-renders on a second display in the **stage** window; a bundled on-device model
+renders on a second display in the **stage** window; an on-device model
 transcribes your speech; a deterministic Rust engine decides where in the script
 you are and scrolls the stage to match. Nothing on the glass is model-generated
 — the model only transcribes, and it never leaves the machine.
@@ -87,20 +87,28 @@ webviews only ever see typed IPC results, and neither window's CSP allows a
 request to any remote host.
 
 There are **no secrets any more**. The app used to hold one — a hosted STT
-provider's API key, in the OS keychain — and the recogniser is now bundled, so
-the credential store went with it.
+provider's API key, in the OS keychain — and the recogniser now runs on-device,
+so the credential store went with it.
 
 Speech-to-text is `src-tauri/src/speech/`: a sherpa-onnx streaming Zipformer
-transducer (x-asr 480 ms, INT8, punctuated) over ~161 MB of ONNX graphs bundled
-as a Tauri resource. `cc_stt::local::ModelFiles::detect` works out how a bundle
-names its graphs — upstream is not consistent and there is no manifest. Renderer
-captures PCM → `push_transcription_audio` over IPC → a dedicated OS thread owns
-the decoder → frames come back as events. The thread is not optional: ONNX
-inference is blocking CPU work, and on the async runtime it would starve every
-other command for the length of a take.
+transducer (x-asr 480 ms, INT8, punctuated) over ~161 MB of ONNX graphs. The
+graphs are **not in the bundle** — `bundle.resources` is empty and a stock build
+ships zero model bytes. `cc_stt::local::ModelFiles::detect` works out how a
+model archive names its graphs — upstream is not consistent and there is no
+manifest. Renderer captures PCM → `push_transcription_audio` over IPC → a
+dedicated OS thread owns the decoder → frames come back as events. The thread is
+not optional: ONNX inference is blocking CPU work, and on the async runtime it
+would starve every other command for the length of a take.
 
-The model is **not in git** (`pnpm models:fetch`); `LocalSttConfig::validate`
-names the missing file rather than letting the C library return a bare null.
+The model is **not in git and not in the installer**. Users install it from
+**Settings › Speech**, which verifies the archive digest, extracts only
+catalogue-named members and seals the result. `model_store::resolve` then looks
+in a deliberate order: `CANDIDCUE_MODELS_DIR`, then that sealed download in
+`$APPDATA/models/`, then a bundled resource stock builds do not have.
+`pnpm models:fetch` only fills the source tree — **nothing reads that directory**
+unless you export `CANDIDCUE_MODELS_DIR` at it, so a dev build otherwise takes
+the same in-app download a user does. `LocalSttConfig::validate` names the
+missing file rather than letting the C library return a bare null.
 
 ### Alignment: pure crate, hosted by the app
 
@@ -178,11 +186,9 @@ src/workers/      compiler Web Worker
 src-tauri/src/    app.rs (command registry), commands/, windows/, align/, speech/,
                   coordinator/ (window generations, session, stage handshake),
                   database/, scripts/, assets/, sessions/, settings/
-src-tauri/models/ the bundled recogniser (fetched, gitignored)
+src-tauri/models/ dev-only recogniser fetch target (gitignored, never bundled)
 crates/           cc-align (engine), cc-stt (STT protocol + on-device
-                  recogniser; the hosted client survives behind the
-                  non-default `inworld` feature, for re-capturing the
-                  benchmark baseline only), cc-bench
+                  recogniser), cc-bench
 bench/            fixture scripts, immutable captured replay runs, results
 docs/             specifications
 ```
@@ -231,9 +237,12 @@ rather than implying the suite covered it.
   OpenAI semantic sidecar. Both were removed. Where a spec mentions coaching, a
   second model, or OpenAI, **the code is the authority** — see
   `src-tauri/src/speech/` for what actually happens now. The same applies to
-  every mention of Inworld: the app no longer talks to it, and the only code
-  that still can is `cc-stt`'s `inworld` feature, which exists so `bench/runs/`
-  can be re-captured.
+  every mention of Inworld, the hosted STT service the app used to stream takes
+  to: **no code talks to it and none can**. What survives is measurement — the
+  frozen corpora under `bench/runs/` and `bench/runs-inworld-new/` that the
+  on-device model was judged against, plus the prose in `bench/REPORT.md` that
+  records the comparison. Those replay offline through `cc-stt`'s own event
+  protocol; nothing re-captures them.
 - Two known honest gaps, documented in the README: `pauseLocation` is not
   supplied to the cadence lane (choppy-delivery detection cannot fire), and the
   variety score runs in its documented degraded mode.

@@ -92,8 +92,8 @@ const X_ASR_480MS: BundledModel = BundledModel {
     default_language: "en-US",
     tuning: LocalModelTuning {
         // Upstream's documented defaults for this model. rule2 at 1.2 s is
-        // close to Inworld's measured end-of-turn behaviour, which keeps
-        // utterance granularity comparable between the two recognisers.
+        // close to the end-of-turn behaviour the frozen corpora were captured
+        // under, which keeps utterance granularity comparable across them.
         rule1_min_trailing_silence: 2.4,
         rule2_min_trailing_silence: 1.2,
         rule3_min_utterance_length: 20.0,
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn an_unknown_id_is_not_resolved_to_something_else() {
-        assert!(model_by_id("inworld/inworld-stt-1").is_none());
+        assert!(model_by_id("some-vendor/some-hosted-stt-1").is_none());
         assert!(model_by_id("").is_none());
         assert_eq!(model_by_id(default_model().id), Some(default_model()));
         // Whitespace a settings document picked up must not hide a known model.

@@ -6,11 +6,11 @@
 //! The alignment engine is a pure crate (`crates/cc-align`): no I/O, no clocks,
 //! no randomness. This module is everything the crate deliberately refuses to
 //! know — where transcript frames come from, what the audio clock reads, and
-//! who wants to hear the answer. It sits next to the Inworld socket because
-//! that is where the frames and the audio clock already are: feeding the engine
-//! anywhere else would mean shipping both across a process boundary and
-//! re-deriving a clock on the far side, which is precisely the arrangement the
-//! previous TypeScript aligner failed under.
+//! who wants to hear the answer. It sits next to the speech session
+//! (`crate::speech`) because that is where the frames and the audio clock
+//! already are: feeding the engine anywhere else would mean shipping both
+//! across a process boundary and re-deriving a clock on the far side, which is
+//! precisely the arrangement the previous TypeScript aligner failed under.
 //!
 //! ---------------------------------------------------------------------------
 //! TWO COORDINATE SYSTEMS, ONE CONVERSION, IN ONE PLACE
@@ -97,16 +97,16 @@ pub type AlignmentSnapshot = cc_align::TokenSnapshot;
 ///     another's. Nothing is filtered on it here.
 ///
 ///   * `stream_generation` is the TRANSCRIPTION generation — Rust's own count
-///     of Inworld sockets, minted by `InworldClient::start_stream`. This is
+///     of recogniser sessions, minted by `SpeechEngine::start_stream`. This is
 ///     what a frame carries, and therefore the only thing a frame may be
 ///     filtered against.
 ///
-/// They are unrelated counters and they routinely disagree: the Preflight
-/// microphone test consumes socket generation 1, so the first real take runs on
-/// socket 2 while the coordinator is still on session 1. Comparing a frame's
-/// socket number against the take's session number therefore discards every
-/// word over a connection reporting perfect health — words heard, nothing
-/// followed, no error anywhere.
+/// They are unrelated counters and they routinely disagree: the microphone test
+/// consumes stream generation 1, so the first real take runs on stream 2 while
+/// the coordinator is still on session 1. Comparing a frame's stream number
+/// against the take's session number therefore discards every word from a
+/// recogniser reporting perfect health — words heard, nothing followed, no
+/// error anywhere.
 struct AlignmentSession {
     /// Echoed onto every snapshot as `session_generation`. Never a filter.
     label: u64,
@@ -212,15 +212,15 @@ impl AlignmentState {
         });
     }
 
-    /// Tie the armed session to the transcription socket now feeding it.
+    /// Tie the armed session to the recogniser stream now feeding it.
     ///
-    /// Called by `InworldClient::start_stream` at the moment a generation is
+    /// Called by `SpeechEngine::start_stream` at the moment a generation is
     /// minted, which is the only place that number exists — asking the frontend
     /// for it would be asking it to guess, and the guess it made was the
     /// session generation.
     ///
-    /// Binding BEFORE the socket task is spawned is what makes this exact: no
-    /// frame of the new stream can arrive first, and the previous stream's
+    /// Binding BEFORE the decoder thread is spawned is what makes this exact:
+    /// no frame of the new stream can arrive first, and the previous stream's
     /// frames stop being accepted the instant its successor exists.
     pub fn bind_stream(&self, generation: u64) {
         if let Some(session) = self.lock().as_mut() {
@@ -411,9 +411,9 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, snapshot: &AlignmentSna
     let _ = app.emit_to(CONTROL_LABEL, events::ALIGN_SNAPSHOT, snapshot);
 }
 
-/// Tie the armed alignment session to a newly minted transcription socket.
+/// Tie the armed alignment session to a newly minted recogniser stream.
 ///
-/// Called from `InworldClient::start_stream`, which is where the generation
+/// Called from `SpeechEngine::start_stream`, which is where the generation
 /// comes into existence. `try_state` rather than `state`: a runtime that never
 /// managed an `AlignmentState` (a Rust integration test standing up the stream
 /// alone) must not panic here — it simply has no alignment to bind.
@@ -1103,7 +1103,7 @@ mod starter_script_tests {
         tokens
     }
 
-    /// The two utterances Inworld returned, at the word counts the trace
+    /// The two utterances the recogniser returned, at the word counts the trace
     /// recorded — partials included, because a take is followed as it happens.
     const TAKE: &[(&str, &[&str], &str)] = &[
         (

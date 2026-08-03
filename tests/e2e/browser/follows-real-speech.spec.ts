@@ -6,7 +6,7 @@ import { test, expect } from '@playwright/test';
  * ---------------------------------------------------------------------------
  * WHY THIS EXISTS WHEN THERE IS ALREADY A BENCHMARK
  * ---------------------------------------------------------------------------
- * `cc-bench` replays real captured Inworld transcripts through the alignment
+ * `cc-bench` replays real captured transcripts through the alignment
  * engine and scores the result — and every number it produces is measured
  * against `Snapshot::display_at`, which is RUST's model of where the display
  * would be. Nothing in it renders a pixel. So the suite could report
@@ -25,7 +25,7 @@ import { test, expect } from '@playwright/test';
  * WHAT IS REAL HERE, AND WHAT IS NOT
  * ---------------------------------------------------------------------------
  * Real: the speech (a captured Tier-B run — TTS audio streamed at real time
- * through the live Inworld endpoint, with its recogniser errors intact), the
+ * through a live recogniser, with its errors intact), the
  * alignment engine, the atom-to-token projection the app publishes, the Svelte
  * stage, its motion controller, its layout, and the browser's own compositor.
  *

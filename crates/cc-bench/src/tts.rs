@@ -63,9 +63,8 @@ impl TtsEngine {
             // Gemini's TTS is instruction-following: bare text that LOOKS
             // like an instruction gets performed instead of read ("put a
             // real pause in the middle of this one" → it improvised its own
-            // commentary). The wrapper pins it to verbatim reading; verified
-            // via the Inworld sync endpoint that the wrapper itself is not
-            // spoken.
+            // commentary). The wrapper pins it to verbatim reading; verified by
+            // transcribing the result that the wrapper itself is not spoken.
             TtsEngine::Gemini => serde_json::json!({
                 "prompt": format!(
                     "Read aloud verbatim, word for word, changing nothing: {text}"

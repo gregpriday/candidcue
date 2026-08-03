@@ -10,10 +10,10 @@
 //! ---------------------------------------------------------------------------
 //! RE-BASED WHEN SPEECH RECOGNITION MOVED ON-DEVICE
 //! ---------------------------------------------------------------------------
-//! These constants used to describe Inworld: partials every 900 ms, because
-//! that is what the hosted service did. The shipping on-device transducer emits
-//! twice as often, so the old numbers modelled a cadence no recogniser in this
-//! app produces.
+//! These constants used to describe the hosted recogniser the app replaced:
+//! partials every 900 ms, because that is what it did. The shipping on-device
+//! transducer emits twice as often, so the old numbers modelled a cadence no
+//! recogniser in this app produces.
 //!
 //! That mattered for more than realism. `AlignmentConfig::partial_lag_ms` is
 //! the engine's correction for exactly this delay; tuning it against real

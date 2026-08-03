@@ -3,9 +3,8 @@
 //! ```text
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
 //! cc-bench synth-audio --workdir DIR            # fal.ai TTS → fixture audio
-//! cc-bench capture --workdir DIR [--pace 1.0]   # stream → bench/runs/
+//! cc-bench capture-local --workdir DIR --model DIR --runs DIR [--pace 1.0]
 //! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
-//! cc-bench prompt-ab --workdir DIR [--scripts a,b]  # live A/B of `prompts`
 //! cc-bench tier-b  --label L [--config C] [--out F]
 //! cc-bench compare baseline.json candidate.json
 //! ```
@@ -21,6 +20,10 @@ use cc_bench::suite::{
 };
 use cc_bench::tierc::TierCResult;
 use cc_bench::tts::{shared_rendered_dir, synthesize, wav_bytes, Synthesizer};
+
+/// Scripts `vocab` reports on when none are named: the three written to
+/// exercise term extraction — proper names, brand spellings, and figures.
+const VOCAB_SCRIPTS: &[&str] = &["names", "brands", "figures"];
 
 /// Render the Tier-C table, then the per-layout headline.
 ///
@@ -96,7 +99,6 @@ struct Flags {
     out: Option<PathBuf>,
     workdir: Option<PathBuf>,
     pace: f64,
-    scripts: Option<Vec<String>>,
     runs: Option<PathBuf>,
     /// `export-run`: seconds of audio to freeze. None means the whole run.
     seconds: Option<f64>,
@@ -135,7 +137,6 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         out: None,
         workdir: None,
         pace: 1.0,
-        scripts: None,
         runs: None,
         seconds: None,
         tier_b: None,
@@ -176,9 +177,6 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--layouts" => {
                 flags.layouts =
                     Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
-            }
-            "--scripts" => {
-                flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
             }
             other => anyhow::bail!("unknown flag {other}"),
         }
@@ -444,25 +442,15 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(synth_audio(&scripts_dir, &runs_dir, &workdir))?;
         }
-        Some("capture") => {
-            let flags = parse_flags(args[1..].iter())?;
-            let workdir = flags
-                .workdir
-                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
-            // `--runs` writes the capture somewhere other than the frozen
-            // corpus. That is what makes a CONTROLLED A/B possible: the TTS is
-            // not deterministic (the same plan re-synthesised differs by up to
-            // 9 s), so comparing a new local capture against the old frozen
-            // Inworld one would confound the recogniser with the audio. Point
-            // both recognisers at the same freshly rendered audio instead.
-            let runs_dir = flags.runs.unwrap_or(runs_dir);
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(capture_all(&workdir, &runs_dir, flags.pace))?;
-        }
         Some("capture-local") => {
-            // The same synthesised audio, heard by the on-device recogniser
-            // instead of the hosted one, written into its own corpus so
-            // `tier-b --runs` can score the two on one ruler.
+            // Synthesised audio heard by the on-device recogniser, written
+            // into its own corpus so `tier-b --runs` can score it on the same
+            // ruler as the corpora already in bench/.
+            //
+            // `--runs` is required rather than defaulted for a reason: the TTS
+            // is not deterministic (the same plan re-synthesised differs by up
+            // to 9 s), so a capture must never land on top of a frozen corpus —
+            // that would confound a recogniser change with an audio change.
             let flags = parse_flags(args[1..].iter())?;
             let workdir = flags
                 .workdir
@@ -489,10 +477,7 @@ fn main() -> anyhow::Result<()> {
             let names: Vec<String> = if args.len() > 1 {
                 args[1..].to_vec()
             } else {
-                cc_bench::prompt_ab::DEFAULT_SCRIPTS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
+                VOCAB_SCRIPTS.iter().map(|s| s.to_string()).collect()
             };
             for name in names {
                 let source = std::fs::read_to_string(scripts_dir.join(format!("{name}.md")))?;
@@ -507,22 +492,6 @@ fn main() -> anyhow::Result<()> {
                 }
                 println!();
             }
-        }
-        Some("prompt-ab") => {
-            let flags = parse_flags(args[1..].iter())?;
-            let workdir = flags
-                .workdir
-                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
-            let scripts = flags.scripts.unwrap_or_else(|| {
-                cc_bench::prompt_ab::DEFAULT_SCRIPTS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            });
-            let runtime = tokio::runtime::Runtime::new()?;
-            let results =
-                runtime.block_on(cc_bench::prompt_ab::run(&scripts_dir, &workdir, &scripts, flags.pace))?;
-            cc_bench::prompt_ab::report(&results);
         }
         Some("report") => {
             // cc-bench report <a-base> <a-opt> [<b-base> <b-opt>] — merged
@@ -591,7 +560,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
             let gold: cc_bench::plan::GoldTimeline =
                 serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
-            let events = cc_bench::capture::read_events_jsonl(&dir.join("events.jsonl"))?;
+            let events = cc_bench::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
             let source =
                 std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
             let script = cc_align::compile(&source, cc_align::CompileOptions::default());
@@ -683,7 +652,7 @@ fn main() -> anyhow::Result<()> {
                 serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
             let gold: cc_bench::plan::GoldTimeline =
                 serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
-            let events = cc_bench::capture::read_events_jsonl(&dir.join("events.jsonl"))?;
+            let events = cc_bench::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
             let source =
                 std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
             // Compiled twice: `replay` consumes one, and the projection and the
@@ -976,7 +945,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio --workdir DIR\n       cc-bench capture --workdir DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
+                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio --workdir DIR\n       cc-bench capture-local --workdir DIR --model DIR --runs DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
             );
         }
     }
@@ -1172,57 +1141,3 @@ fn capture_all_local(
     Ok(())
 }
 
-/// Stream every synthesised run through the live recogniser and persist the
-/// event logs as replay fixtures.
-async fn capture_all(
-    _workdir: &std::path::Path,
-    runs_dir: &std::path::Path,
-    pace: f64,
-) -> anyhow::Result<()> {
-    let tts_dir = shared_rendered_dir();
-    let mut dirs: Vec<_> = std::fs::read_dir(&tts_dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
-    dirs.sort();
-
-    for dir in dirs {
-        let name = dir.file_name().unwrap().to_string_lossy().to_string();
-        let out_dir = runs_dir.join(&name);
-        if out_dir.join("events.jsonl").exists() {
-            println!("skip {name} (already captured)");
-            continue;
-        }
-        if !dir.join("audio.wav").exists() || !dir.join("gold.json").exists() {
-            println!("skip {name} (synthesis incomplete)");
-            continue;
-        }
-        let wav = std::fs::read(dir.join("audio.wav"))?;
-        anyhow::ensure!(wav.len() > 44, "empty audio for {name}");
-        let pcm = &wav[44..]; // strip our own canonical WAV header
-        println!(
-            "capturing {name}: {:.1}s at {pace}× …",
-            pcm.len() as f64 / 48_000.0
-        );
-        let started = std::time::Instant::now();
-        let events = cc_bench::capture::capture_events(pcm, pace).await?;
-        let transcripts = events
-            .iter()
-            .filter(|e| matches!(e, cc_stt::SttFrame::Partial { .. } | cc_stt::SttFrame::Final { .. }))
-            .count();
-        println!(
-            "  {} events ({} transcripts) in {:.1}s",
-            events.len(),
-            transcripts,
-            started.elapsed().as_secs_f64()
-        );
-        anyhow::ensure!(transcripts > 0, "capture produced no transcripts for {name}");
-        std::fs::create_dir_all(&out_dir)?;
-        cc_bench::capture::write_events_jsonl(&out_dir.join("events.jsonl"), &events)?;
-        for file in ["gold.json", "manifest.json", "performance.txt"] {
-            std::fs::copy(dir.join(file), out_dir.join(file))?;
-        }
-    }
-    Ok(())
-}

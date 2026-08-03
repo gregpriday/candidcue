@@ -2,32 +2,25 @@
 //! speak it.
 //!
 //! [`SttFrame`] is the only thing the alignment engine, the replay harness and
-//! the evaluator know about a recogniser. Everything else — websockets, model
-//! files, audio clocks — lives behind it. That is what made replacing the
-//! provider a measurable change rather than a leap of faith: a captured log
-//! from either implementation replays through the same engine and is scored by
-//! the same evaluator.
+//! the evaluator know about a recogniser. Everything else — model files, audio
+//! clocks — lives behind it. That boundary is what let the recogniser be
+//! swapped as a measurable change rather than a leap of faith: a captured log
+//! replays through the same engine and is scored by the same evaluator
+//! whichever implementation wrote it, which is why the frozen corpora under
+//! `bench/runs*/` still mean something.
 //!
-//! * [`local`] — sherpa-onnx streaming Zipformer, on-device. **What the app
-//!   ships.** No network, no key, no per-minute cost.
-//! * `inworld` — the hosted websocket service the app used to depend on.
-//!   Behind the non-default `inworld` feature and kept for exactly one reason:
-//!   `bench/runs/` is the baseline the local model is judged against, and a
-//!   baseline you can no longer re-measure is a number you have to take on
-//!   faith. The app does not enable it.
+//! [`local`] — sherpa-onnx streaming Zipformer, on-device — is the only
+//! recogniser there is. No network, no key, no per-minute cost.
 
 pub mod local;
 pub mod models;
 pub mod word_times;
 
-#[cfg(feature = "inworld")]
-pub mod inworld;
-
 use serde::{Deserialize, Serialize};
 
-/// Sample rate of the benchmark fixture audio, and the rate the hosted service
-/// was configured for. The local recogniser resamples internally, so this is
-/// now a property of the fixtures rather than a constraint on capture.
+/// Sample rate of the benchmark fixture audio. The local recogniser resamples
+/// internally, so this is a property of the fixtures rather than a constraint
+/// on capture.
 pub const SAMPLE_RATE_HZ: u32 = 24_000;
 
 /// One word of a hypothesis, and when the recogniser believes it was spoken.
@@ -57,17 +50,18 @@ pub struct WordTime {
 /// Same shape the app's renderer receives, plus the audio clock at the moment
 /// the frame was observed — which is what the alignment benchmark needs.
 ///
-/// The audio clock is "how much audio the recogniser has consumed", however it
-/// consumed it: bytes handed to a socket, or samples handed to an ONNX graph.
-/// Both implementations define it that way, so the two are comparable.
+/// The audio clock is "how much audio the recogniser has consumed" — samples
+/// handed to the ONNX graph. Every corpus under `bench/runs*/` was captured
+/// against that same definition, which is what keeps them comparable.
 ///
-/// `word_times` is optional because it is genuinely absent rather than empty
-/// for two whole classes of frame: the hosted client never reported per-word
-/// timing, and every run captured in `bench/runs*/` predates the field. `None`
-/// means "this recogniser did not say", which a consumer must not confuse with
-/// "it said there were no words". Anything scoring word timing has to report
-/// legacy corpora as *unavailable* rather than treating a missing vector as
-/// zeroes.
+/// `word_times` is optional because it is genuinely absent rather than empty,
+/// two ways. Every run captured in `bench/runs*/` predates the field, so a
+/// whole corpus reads as untimed; and live, [`word_times::reconstruct`] declines
+/// rather than guesses when the recogniser hands back tokens and timestamps it
+/// cannot reconcile. `None` means "nothing was said about timing", which a
+/// consumer must not confuse with "it said there were no words". Anything
+/// scoring word timing has to report that as *unavailable* rather than treating
+/// a missing vector as zeroes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SttFrame {

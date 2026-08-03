@@ -129,8 +129,8 @@ describe('a take turns provider frames into words the aligner can follow', () =>
   });
 
   it('says nothing for a final that is only whitespace', () => {
-    // Inworld will happily return a transcript for silence — a 100 ms silent
-    // clip came back as "Yeah." from the sync endpoint during protocol work.
+    // A recogniser will happily return a transcript for silence — a 100 ms
+    // silent clip came back as "Yeah." during protocol work.
     // An empty or blank one must not become a transcript line the presenter
     // sees, nor a retained row.
     const h = harness();

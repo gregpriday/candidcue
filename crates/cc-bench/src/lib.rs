@@ -1,8 +1,7 @@
 //! cc-bench library: fixtures, gold timelines, synthetic events, TTS
-//! synthesis, live capture, replay, metrics and suite orchestration for the
+//! synthesis, capture, replay, metrics and suite orchestration for the
 //! CandidCue alignment engine.
 
-pub mod capture;
 pub mod capture_local;
 pub mod difficulty;
 pub mod dimming;
@@ -11,7 +10,6 @@ pub mod metrics;
 pub mod passgold;
 pub mod perceptual;
 pub mod plan;
-pub mod prompt_ab;
 pub mod replay;
 pub mod report;
 pub mod robustness;

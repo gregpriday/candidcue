@@ -1,11 +1,10 @@
 //! On-device streaming STT: sherpa-onnx + a streaming Zipformer transducer.
 //!
-//! This is the engine the app ships. It replaces a websocket to a paid service
-//! with model files on disk, and it emits the *same* [`SttFrame`]
-//! stream the Inworld client did — which is the whole point. The alignment
-//! engine, the replay harness and the evaluator are all written against that
-//! protocol, so swapping the recogniser underneath is a controlled experiment
-//! rather than a rewrite.
+//! This is the engine the app ships, and the only one: model files on disk, no
+//! network. It emits the [`SttFrame`] protocol the alignment engine, the replay
+//! harness and the evaluator are all written against, which is what lets the
+//! recogniser be changed underneath as a controlled experiment rather than a
+//! rewrite — and what keeps the frozen corpora under `bench/runs*/` readable.
 //!
 //! Two things about the shipping model are worth knowing before reading the
 //! code:
@@ -14,17 +13,17 @@
 //!   (UPPERCASE, unpunctuated), and nothing downstream cared either way —
 //!   `cc_align::normalize` folds case and strips punctuation before matching.
 //! * It is a *streaming* transducer, not a windowed encoder-decoder. A new
-//!   hypothesis is available roughly every time enough frames have arrived,
-//!   which is far more often than the ~1 s Inworld partial cadence. We emit on
-//!   every CHANGE rather than on a timer: the engine costs ~90 µs an event, and
-//!   earlier evidence is the entire product.
+//!   hypothesis is available roughly every time enough frames have arrived —
+//!   far more often than the ~1 s partial cadence the captured corpora were
+//!   recorded at. We emit on every CHANGE rather than on a timer: the engine
+//!   costs ~90 µs an event, and earlier evidence is the entire product.
 //!
 //! The bundle is not fixed: [`ModelFiles::detect`] works out how a given one
 //! names its graphs, because upstream is not consistent and ships no manifest.
 //!
-//! Utterance identity is minted here exactly as the Inworld client minted it —
-//! ids are `"{generation}-{ordinal}"` — so a captured log from either source is
-//! indistinguishable to the replay harness.
+//! Utterance identity is minted here in the shape the replay corpora already
+//! hold — ids are `"{generation}-{ordinal}"` — so a log captured today and one
+//! captured before this module existed are indistinguishable to the harness.
 
 use std::path::PathBuf;
 

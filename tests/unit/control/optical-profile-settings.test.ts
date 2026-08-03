@@ -52,7 +52,7 @@ const ipc = vi.hoisted(() => {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'inworld/inworld-stt-1',
+        transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         language: 'en',
       },
       commands: { wakePhrase: 'CandidCue', wakeMode: 'strict' },

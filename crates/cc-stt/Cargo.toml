@@ -1,28 +1,11 @@
 [package]
 name = "cc-stt"
 version = "0.1.0"
-description = "The STT event protocol, the on-device sherpa-onnx recogniser the app ships, and (behind a feature) the hosted client it replaced"
+description = "The STT event protocol and the on-device sherpa-onnx recogniser the app ships"
 edition.workspace = true
 rust-version.workspace = true
-
-[features]
-default = []
-# The hosted Inworld websocket client. Off by default: the app ships the
-# on-device recogniser and must not carry a network STT path. cc-bench turns it
-# on so the frozen baseline in bench/runs/ can be re-captured.
-inworld = [
-  "dep:tokio",
-  "dep:tokio-tungstenite",
-  "dep:futures-util",
-  "dep:base64",
-]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 sherpa-onnx = "1.13.4"
-
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"], optional = true }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"], optional = true }
-futures-util = { version = "0.3", optional = true }
-base64 = { version = "0.23", optional = true }

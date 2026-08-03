@@ -16,7 +16,7 @@
  * The stream is synthetic on purpose: it is the one part of the pipeline whose
  * ground truth we know exactly (the reader's position at every instant), which
  * is what makes "the display moved at the wrong speed" a decidable statement.
- * It reproduces the cadence measured against live Inworld: partials about once
+ * It reproduces the cadence measured against a live recogniser: partials about once
  * a second carrying words spoken ~300 ms earlier, finals ~1.4 s after the last
  * word of an utterance.
  */
@@ -40,7 +40,7 @@ const READER_ATOMS_S = 2.44;
 const PX_PER_ATOM = 84.5 / 9;
 const FRAME_MS = 1000 / 60;
 const TAKE_MS = 60_000;
-/** Provider cadence, measured live: see the Inworld notes in the README. */
+/** Recogniser cadence, measured live: see the cadence notes in the README. */
 const PARTIAL_PERIOD_MS = 1000;
 const PARTIAL_LAG_MS = 300;
 const ENDPOINT_LAG_MS = 1400;

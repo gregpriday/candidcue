@@ -1,12 +1,28 @@
 # CopyTree Ignore File
 #
-# Tuned for exporting CandidCue as AI context: ship the code, drop everything
-# else. What survives is src/, src-tauri/src/, the schema and capability files
-# that define real runtime behaviour, and the build config that wires them up.
+# Tuned for exporting CandidCue as AI context: ship the code that IS the
+# product, drop everything else. What survives is src/, src-tauri/src/, the
+# shipped crates (cc-align, cc-stt), the schema and capability files that
+# define real runtime behaviour, and the build config that wires them up.
+#
+# The bar for staying in: does reading this file teach you how the app works?
+# Measured data, generated output, prose about the app and tests that restate
+# the source all fail that bar, however interesting they are on their own.
 #
 # Nothing here is lost — bring any subtree back on demand:
-#   copytree --scope tests/unit --scope-include-ignored -S   # one subtree
-#   echo 'docs/**' >> .copytreeinclude                       # permanently
+#   copytree --scope bench --scope-include-ignored -S   # one subtree
+#   echo 'docs/**' >> .copytreeinclude                  # permanently
+#
+# This file is the "everything real" baseline, and it is at its floor: what
+# survives is ~104k lines of actual source, spread evenly (src-tauri/src 20%,
+# src/stage 19%, crates 15%, src/shared 9%, routes 9%, components 6%) with no
+# lump left to cut. To NARROW, scope per task rather than editing this file:
+#   copytree --scope src/stage --scope src/shared -S
+#
+# Also note ~42% of the export is inline Rust `#[cfg(test)]` modules (34% of
+# the Rust) and comment lines (49% of the TS/Svelte). Both live inside files
+# that have to stay, so no ignore pattern can reach them — don't go hunting
+# for a pattern that trims them.
 #
 # Syntax is .gitignore syntax, including directory pruning: once `dir/**` is
 # excluded the walker never descends into it, so a `!dir/sub/file` negation
@@ -18,12 +34,49 @@
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 # The suite is roughly half the export and mostly restates behaviour the source
-# already shows. Three homes: the tests/ tree, Rust integration tests, and
-# colocated *.test.ts sitting next to the module they cover.
+# already shows. Four homes: the tests/ tree, Rust integration tests in both
+# workspaces, and colocated *.test.ts sitting next to the module they cover.
+# (Rust `#[cfg(test)]` modules live inside the source files and necessarily
+# come along — no pattern can reach them.)
 tests/**
 src-tauri/tests/**
+crates/*/tests/**
 **/*.test.ts
 **/*.spec.ts
+
+# ── Benchmarks ───────────────────────────────────────────────────────────────
+# ~4.5 MB, over half the export, and none of it is the app. Three parts:
+#
+#   bench/runs*/     captured replay corpora — events.jsonl recogniser traces,
+#                    gold.json ground truth, manifests, spoken transcripts.
+#                    Pure measurement data. Also Git LFS, so without a fetch
+#                    these are ~130-byte pointers that read as truncated code.
+#   bench/results/   generated scores (already gitignored, listed for the prune)
+#   crates/cc-bench/ the offline harness. It ports the shipping TypeScript
+#                    follower into Rust to score the rendered stage, which
+#                    makes it a SECOND implementation of motion — actively
+#                    confusing as context, because it looks like product code
+#                    and isn't. src/stage/motion/ is the real one.
+#
+# bench/README.md and bench/REPORT.md are good engineering prose about what the
+# alignment engine measures, but they document results, not the codebase.
+bench/**
+crates/cc-bench/**
+
+# A one-off measurement probe, not a code path. src-tauri/src/speech/ +
+# crates/cc-stt/src/local.rs are what actually runs.
+crates/cc-stt/examples/**
+
+# ── Dev-only scaffolding ─────────────────────────────────────────────────────
+# mock-backend.ts is the fake `invokeOrMock` falls back to when the Tauri
+# runtime is absent (plain-browser dev). It is stub responses, not behaviour —
+# reading it teaches you the shape of the IPC surface, which contracts/ already
+# states properly, and the fake's guesses about what commands return.
+src/control/services/mock-backend.ts
+
+# Model-fetch tooling. How the 161 MB recogniser bundle lands on disk is a
+# build step (`pnpm models:fetch`), not something the app does at runtime.
+scripts/**
 
 # ── Specifications ───────────────────────────────────────────────────────────
 # ~660 KB of design prose describing an earlier architecture that included live
@@ -33,11 +86,21 @@ src-tauri/tests/**
 # by default.
 docs/**
 
+# ── Data blobs ───────────────────────────────────────────────────────────────
+# Word lists and vocabularies: large, flat, and they teach nothing the code
+# using them doesn't say better. common-words.txt is 8,500 lines of ordinary
+# English backing the "don't bias the recogniser on plain words" rule in
+# crates/cc-align/src/.
+crates/cc-align/assets/**
+src-tauri/models/**/tokens.txt
+
 # ── Lockfiles ────────────────────────────────────────────────────────────────
-# Enormous, generated, zero signal. package.json and Cargo.toml carry the
-# dependency story. (copytree would otherwise emit them structure-only.)
+# Enormous, generated, zero signal. package.json and the Cargo.toml manifests
+# carry the dependency story. (copytree would otherwise emit them
+# structure-only.) Both cargo workspaces have their own.
 pnpm-lock.yaml
 src-tauri/Cargo.lock
+crates/Cargo.lock
 
 # ── Test and build tooling ───────────────────────────────────────────────────
 # Config for how the project is tested, not what it does. vite.config.ts and
@@ -48,10 +111,16 @@ vitest.config.ts
 vitest.dom.config.ts
 
 # ── Binary assets and packaging ──────────────────────────────────────────────
-# Listener video, posters and app icons. Mostly binary and already dropped by
-# copytree's global excludes; this prunes the walk and the stray manifest.
+# Listener video, posters, fonts and app icons. Mostly binary and already
+# dropped by copytree's global excludes; this prunes the walk and the stray
+# manifest that rides along.
 assets/**
 src-tauri/icons/**
+
+# ── Generated schemas ────────────────────────────────────────────────────────
+# Tauri emits these from the capability files during build. The capabilities
+# themselves are the authored artefact and stay in.
+src-tauri/gen/**
 
 # ── Housekeeping ─────────────────────────────────────────────────────────────
 # Empty directory markers with nothing to say.

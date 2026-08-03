@@ -1,12 +1,12 @@
 /**
- * §14.2 C — the Preflight transcription test must not be able to stay
- * connected to Inworld on the owner's key while nobody is watching.
+ * §14.2 C — the Preflight transcription test must not be able to hold the
+ * microphone and the recogniser open while nobody is watching.
  *
  * Before this, `runTranscriptionTest` stored the session's disposer and the
  * ONLY two callers of it were component unmount and the top of
  * `runTranscriptionTest` itself. There was no Stop and no timeout: starting
- * the test and then reading something else on the page held a billable
- * realtime session open until the user navigated away.
+ * the test and then reading something else on the page held the microphone
+ * and a live decoder open until the user navigated away.
  *
  * Every test here asserts THE DISPOSER RAN. "A timer was scheduled" is not the
  * same claim — a scheduled timer whose callback forgets the disposer leaks
@@ -25,7 +25,7 @@ import type { TranscriptTestEvents } from '../../../src/control/services/voice-f
 
 interface Harness {
   session: MicTestSession;
-  /** The disposer the facade handed back — i.e. "close the billable session". */
+  /** The disposer the facade handed back — i.e. "close the live session". */
   dispose: ReturnType<typeof vi.fn>;
   snapshots: MicTestSnapshot[];
   events: TranscriptTestEvents;
@@ -155,13 +155,13 @@ describe('the session closes itself when it is forgotten', () => {
     expect(h.last().stoppedReason).toBe('max_duration');
   });
 
-  it('stops billing once the transport reports it cannot transcribe', async () => {
+  it('releases the microphone once the transport reports it cannot transcribe', async () => {
     const h = harness();
     await h.session.start('mic-1');
-    h.events.onError('Inworld rejected the API key.');
+    h.events.onError('The speech model could not be loaded.');
 
     expect(h.dispose).toHaveBeenCalledOnce();
-    expect(h.last().error).toBe('Inworld rejected the API key.');
+    expect(h.last().error).toBe('The speech model could not be loaded.');
   });
 
   it('leaves no timer armed after the session closed', async () => {
@@ -174,20 +174,20 @@ describe('the session closes itself when it is forgotten', () => {
   it('closes the moment the transcript comes back, because that is the answer', async () => {
     /*
      * The test exists to answer one question: is the microphone open and is
-     * Inworld returning text? A final transcript answers it. Staying connected
-     * after that is billing for a question that has been answered.
+     * the recogniser returning text? A final transcript answers it. Holding the
+     * input after that is holding it for a question that has been answered.
      *
      * This used to publish `success` and hold the transport for the full
      * 30-second idle timeout — and `running` reads false for `success`, so the
-     * screen took away the Stop button and the "billing your key" warning at
-     * the exact moment the session became invisible. Half a minute of realtime
-     * billing, with the UI insisting the test was over.
+     * screen took away the Stop button and the in-progress notice at the exact
+     * moment the session became invisible. Half a minute with the microphone
+     * live and the UI insisting the test was over.
      */
     const h = harness();
     await h.session.start('mic-1');
     h.events.onFinal('CandidCue is following my voice.');
 
-    expect(h.dispose, 'the billable session must be closed by the answer').toHaveBeenCalledOnce();
+    expect(h.dispose, 'the live session must be closed by the answer').toHaveBeenCalledOnce();
     expect(vi.getTimerCount(), 'and it must leave no deadline behind').toBe(0);
     // The user still sees what was heard, and why it stopped.
     expect(h.last().state).toBe('success');

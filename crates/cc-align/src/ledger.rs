@@ -1,7 +1,7 @@
 //! Transcript ledger: items, replacement partials, stability, and the
 //! alignment tail.
 //!
-//! Inworld sends full-restatement partials — each `Partial` for an item
+//! The recogniser sends full-restatement partials — each `Partial` for an item
 //! replaces the previous text for that item, and the text can shrink. The
 //! ledger reconciles each revision against the previous one so that atoms
 //! which survive revisions accumulate *stability*, and freshly changed

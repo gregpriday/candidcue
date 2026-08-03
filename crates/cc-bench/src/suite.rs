@@ -717,7 +717,7 @@ pub fn run_tier_b(
     config: &AlignmentConfig,
     label: &str,
 ) -> anyhow::Result<SuiteResult> {
-    use crate::capture::read_events_jsonl;
+    use crate::capture_local::read_events_jsonl;
     use crate::plan::GoldTimeline;
 
     let mut runs: Vec<RunMetrics> = Vec::new();

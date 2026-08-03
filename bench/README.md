@@ -11,20 +11,20 @@ under test is `crates/cc-stt`, which is also the one the app ships.
 
 ## Two recognisers, one ruler
 
-The app's speech-to-text was replaced: a hosted Inworld websocket became an
-on-device sherpa-onnx streaming Zipformer (EN 20M, INT8). Both speak the same
-`SttFrame` protocol, which is what makes the swap a measurement rather than a
+The app's speech-to-text was replaced: a hosted websocket recogniser became an
+on-device sherpa-onnx streaming Zipformer (EN 20M, INT8). Both spoke the same
+`SttFrame` protocol, which is what made the swap a measurement rather than a
 leap of faith — a captured log from either replays through the same engine and
 is scored by the same evaluator against the same gold timeline.
 
 ```
-bench/runs/         frozen Inworld captures — the BASELINE
+bench/runs/         frozen hosted captures — the BASELINE
 bench/runs-local/   the same audio, heard by the bundled model
 ```
 
 ```bash
 # The baseline, replayed (no network, no key):
-cargo run --release -p cc-bench -- tier-b --label inworld --out ../bench/results/baseline-tier-b.json
+cargo run --release -p cc-bench -- tier-b --label hosted --out ../bench/results/baseline-tier-b.json
 
 # The bundled model, on the same fixtures:
 cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-local \
@@ -60,21 +60,22 @@ recorded but never read — but the fixtures are more honest at 1.0x, and the
 model is ~16x faster than real time, so a faster pass would bake in latencies
 no presenter will ever see.
 
-The hosted client still exists, behind `cc-stt`'s non-default `inworld` feature
-which only `cc-bench` enables. It is kept for exactly one reason: a baseline you
-can no longer re-measure is a number you have to take on faith.
+**The hosted client is gone.** Nothing in the tree can reach that service, so
+the baseline corpora are frozen in the strong sense — they can be replayed and
+scored forever, and they can never be re-captured. Treat the numbers they
+produce as a historical reference point, not a live control.
 
 ## Layout
 
 ```
 bench/scripts/    Markdown fixture scripts (9, from 250 to 5,000 words)
-bench/runs/       Captured Inworld event logs — immutable replay fixtures
+bench/runs/       Captured hosted-recogniser event logs — immutable replay
+                  fixtures, no longer re-capturable
                   (events.jsonl + gold.json + manifest.json + performance.txt)
 bench/runs-local/ The same, heard by the bundled on-device recogniser
 bench/results/    Generated benchmark tables (local/gitignored JSON)
 crates/cc-align/  The alignment engine
 crates/cc-stt/    STT protocol + the on-device recogniser the app ships
-                  (+ the hosted client, behind the `inworld` feature)
 crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```
@@ -99,41 +100,31 @@ the error — a pointer parsed as JSONL is simply a fixture that yields no event
 If a Tier-B run reports no samples on a corpus that has them, check
 `git lfs ls-files` and `wc -c` on one `events.jsonl` before looking anywhere else.
 
-## Custom vocabulary (`transcribeConfig.prompts`)
+## Custom vocabulary — extractor only
 
-`inworld/inworld-stt-1` accepts a soft vocabulary bias, and
-`crates/cc-align/src/vocab.rs` builds one from a script: compound brands,
-initialisms, non-ASCII names, capitalised runs away from a sentence start, and
-figures in the notation the script wrote them in. Two commands drive it.
+`crates/cc-align/src/vocab.rs` builds a soft vocabulary bias from a script:
+compound brands, initialisms, non-ASCII names, capitalised runs away from a
+sentence start, and figures in the notation the script wrote them in.
 
 ```bash
 # What would this script send? No network, no cost.
 cc-bench vocab names brands figures
-
-# The same audio, streamed twice, differing in one field.
-cc-bench prompt-ab --workdir /tmp/ab --scripts names,brands,figures
 ```
 
-`prompt-ab` synthesises each script once (the clip cache makes the second
-stream free), streams it with an empty vocabulary and again with the extracted
-one, and prints three numbers per run because the two wins do not share a
-measurement:
+**Nothing sends these terms.** The bias was a feature of the hosted recogniser
+(`transcribeConfig.prompts`), and it did not survive the move on-device: sherpa
+can bias toward hotwords, but only under `modified_beam_search` and only with a
+`bpe.vocab` beside the model, and the bundle ships neither. Reinstating it is a
+model-packaging decision, not a flag — see
+`src-tauri/src/commands/speech_cmds.rs::TranscriptionOptions`.
 
-| column  | computed on | answers |
-|---|---|---|
-| `wer`   | canonical atoms | were the right WORDS heard |
-| `raw`   | bare lowercased surfaces | were they SPELLED the script's way |
-| `hits`  | verbatim term search | did the terms sent actually come back |
-
-`wer` folds `27` and `twenty-seven` onto one atom by design, so it cannot see a
-re-spelling; `raw` does nothing else. A bias the service ignores shows up as a
-flat `hits` column.
-
-`crates/cc-bench/tests/prompt_config.rs` is the cheap guard beside it: one
-second of silence against the live endpoint carrying a term per permitted
-character class, plus a deliberately invalid term as the control. It exists
-because the config frame LEADS the socket — a term the gateway dislikes does
-not degrade a take, it prevents one.
+The extractor stays because it is the half of the capability that is already
+correct and measured, and `cc-bench vocab` is what keeps it that way. The live
+A/B that used to sit here (`prompt-ab`, plus a gated config-frame guard) went
+with the client: it could only ever have measured a service nothing can reach.
+Terms still go through `sanitize` on the way out, on the same reasoning that
+justified it before — a term list is read BEFORE audio is accepted, so a bad
+character does not degrade a take, it prevents one.
 
 ## Spelling, not mishearing
 
@@ -200,7 +191,7 @@ The cost is one reversibly-dimmed word that never moves the document.
 
 **Tier A — deterministic synthetic.** Performance plans (read / pause / skip /
 retake / ad-lib / substitute / viewport ops) are expanded against the compiled
-script into a gold timeline; a simulator produces Inworld-cadence transcript
+script into a gold timeline; a simulator produces recogniser-cadence transcript
 events (full-restatement partials ~0.9 s, finals ~1.2 s after silence,
 seeded ASR-style corruption). Runs in seconds, byte-for-byte reproducible;
 this is what CI regression numbers come from.
@@ -208,8 +199,8 @@ this is what CI regression numbers come from.
 **Tier B — live end-to-end.** The same performances are rendered by three
 independent fal.ai TTS engines (`gemini-3.1-flash-tts`, `qwen-3-tts` 1.7 B,
 `xai/tts/v1`), stitched at 24 kHz mono PCM16 with real silence for pauses,
-streamed at real-time pace in 100 ms frames to the live Inworld endpoint,
-and the resulting event logs are captured as replay fixtures. Gold word
+streamed at real-time pace in 100 ms frames through the recogniser, and the
+resulting event logs are captured as replay fixtures. Gold word
 timing comes from per-segment clip boundaries (segments ≤ 12 words, so
 linear interpolation stays within ±1 word).
 
@@ -310,8 +301,9 @@ CC_ALIGN_DEBUG=1 cargo run --release -p cc-bench -- inspect starter retake
 CANDIDCUE_ALLOW_TTS_GENERATION=1 cargo run --release -p cc-bench -- \
     synth-audio --workdir /tmp/bench-work
 
-# Stream fixtures through live Inworld STT (needs INWORLD_API_KEY; ~real time)
-cargo run --release -p cc-bench -- capture --workdir /tmp/bench-work
+# Stream fixtures through the on-device recogniser (~real time)
+cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
+    --model ../src-tauri/models/x-asr-480ms --runs ../bench/runs-mine
 
 # Replay captured runs (offline, no network)
 cargo run --release -p cc-bench -- tier-b --label mine --out ../bench/results/mine-live.json

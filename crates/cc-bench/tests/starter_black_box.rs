@@ -1,6 +1,6 @@
 //! The black-box acceptance test the historical "0 of 26" failure demanded
 //! (spec §22.1): load the real starter script, feed a deterministic
-//! Inworld-cadence event sequence, and assert on what the PRESENTER would
+//! recogniser-cadence event sequence, and assert on what the PRESENTER would
 //! see — not on any internal score.
 
 use cc_bench::metrics::evaluate;
