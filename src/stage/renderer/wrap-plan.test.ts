@@ -255,6 +255,22 @@ describe('planning a block', () => {
     ).toBeNull();
   });
 
+  /*
+   * Inline code renders at `max(var(--stage-secondary-min), 0.92em)` and only
+   * the 0.92em arm is mirrored in `advance.ts`, so on a rig sitting on the
+   * optical resolver's angular floor the run is wider than it measures.
+   */
+  it('declines a block carrying an inline code run', () => {
+    const nodes: SafeRenderNode[] = [
+      text('Run the command '),
+      { type: 'text', text: 'pnpm tauri dev', marks: ['code'], tokenIndexes: [3, 4, 5] },
+      text(' before anything else at all', 6),
+    ];
+    expect(
+      planBlockBreaks(nodes, { columnWidthPx: 200, baseStyle: BASE, measure: fake }),
+    ).toBeNull();
+  });
+
   it('gets out of the way when the platform will not measure text', () => {
     const plan = planBlockBreaks([text(SENTENCE)], {
       columnWidthPx: 300,

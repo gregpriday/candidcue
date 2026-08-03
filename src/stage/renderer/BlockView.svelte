@@ -119,7 +119,7 @@
       </div>
     {:else if block.kind === 'heading'}
       <div class="heading" data-level={headingLevel} class:compact={compactHeading}>
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'cue'}
       <div class="cue-row">

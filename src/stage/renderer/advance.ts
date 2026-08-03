@@ -71,11 +71,18 @@ export interface AdvanceStyle {
  * `InlineNodes.svelte`.
  *
  * The real rule is `max(var(--stage-secondary-min), 0.92em)`, and the floor is
- * a resolved pixel value this module does not have. Measuring the 0.92em arm
- * alone is therefore an approximation, and an acceptable one: inline code is
- * rare in a spoken script, and the whole cost of getting it wrong is that the
- * browser re-wraps one line the way it would have wrapped every line before
- * this feature existed.
+ * a resolved pixel value this module does not have. It is not always the 0.92em
+ * arm that wins: `--stage-secondary-min` carries the optical resolver's hard
+ * 16-arcmin angular floor, and on a rig where that floor resolves above 0.92 of
+ * the body size, inline code is drawn WIDER than anything measured here.
+ *
+ * Which is why measuring the 0.92em arm alone is not an acceptable
+ * approximation. Under-measuring a PLANNED line does not degrade to the
+ * wrapping the browser did before this feature existed: the planned break is
+ * already in that line, so the browser's wrap lands IN ADDITION to it and
+ * strands a short fragment between the two — worse than either wrap on its own.
+ * `hasUnmeasurableInline` therefore refuses a block carrying a code mark
+ * outright, and no line is ever planned from these constants.
  */
 const CODE_FAMILY = 'ui-monospace, SFMono-Regular, Consolas, monospace';
 const CODE_SIZE_RATIO = 0.92;
@@ -243,10 +250,16 @@ const NON_BREAKING_SPACE = /[\u00A0\u202F\u2007\u2060\uFEFF]/;
  * block containing one is a block whose lines would be planned against a width
  * that is not the width being drawn. Those blocks are handed back to the
  * browser whole rather than planned wrongly.
+ *
+ * An inline `code` run is here for the same reason and a subtler cause: it is
+ * text, and it does measure, but only against the 0.92em arm of the rule above.
+ * The other arm is a runtime pixel value, so on the rigs where it wins the run
+ * is wider than its measurement and the line it sits on is planned short.
  */
 export function hasUnmeasurableInline(nodes: readonly SafeRenderNode[]): boolean {
   for (const node of nodes) {
     if (node.type === 'image' || node.type === 'cue' || node.type === 'table') return true;
+    if (node.type === 'text' && node.marks?.includes('code')) return true;
     if (node.type === 'link' && hasUnmeasurableInline(node.label)) return true;
   }
   return false;

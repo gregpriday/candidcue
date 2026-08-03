@@ -102,7 +102,7 @@ describe('drawing a planned break', () => {
 });
 
 describe('which blocks take a plan', () => {
-  it.each(['paragraph', 'heading', 'list_item', 'blockquote'] as const)(
+  it.each(['paragraph', 'list_item', 'blockquote'] as const)(
     'draws planned breaks in a %s, which is prose the presenter reads',
     (kind) => {
       const { container } = block(kind, new Set([2]));
@@ -117,6 +117,18 @@ describe('which blocks take a plan', () => {
    */
   it('leaves a code block to lay itself out', () => {
     const { container } = block('code', new Set([2]));
+    expect(container.querySelectorAll('br')).toHaveLength(0);
+  });
+
+  /*
+   * A heading renders at 1.05em-1.3em by level, or at the secondary floor when
+   * compact, and `wrap-plan.ts` declines every one of those sizes. So a heading
+   * token can never be in the set, and handing the set to the heading branch
+   * would only have worked because compiler token indexes happen to be unique
+   * across the whole script — which is not a property this join should rest on.
+   */
+  it('leaves a heading to lay itself out', () => {
+    const { container } = block('heading', new Set([2]));
     expect(container.querySelectorAll('br')).toHaveLength(0);
   });
 });
