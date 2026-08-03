@@ -576,10 +576,15 @@ fn copy_tail(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> 
     let mut tail = Vec::new();
     input.take(max_bytes).read_to_end(&mut tail)?;
     if preceding[0] != b'\n' {
-        // Mid-line. Drop the fragment. If there is no newline at all the whole
-        // tail is one enormous line, and keeping it beats emitting nothing.
+        // Mid-line. Drop the fragment, but only when a complete line survives
+        // it. If there is no newline at all the whole tail is one enormous
+        // line; if the only newline is the final byte, draining through it
+        // empties the buffer. Either way keeping the fragment beats emitting
+        // nothing.
         if let Some(cut) = tail.iter().position(|b| *b == b'\n') {
-            tail.drain(..=cut);
+            if cut + 1 < tail.len() {
+                tail.drain(..=cut);
+            }
         }
     }
 
@@ -975,27 +980,31 @@ mod tests {
         );
     }
 
-    /// The degenerate case: the window's only newline is its final byte.
+    /// The degenerate case: the window starts mid-line and its only newline is
+    /// its final byte.
     ///
-    /// Draining through it leaves nothing at all, so the bundle would contain a
-    /// file holding the truncation marker and not one line of log — which reads
-    /// as "the log was empty" rather than "the copy was wrong".
+    /// Draining through that newline leaves nothing at all, so the bundle would
+    /// contain a file holding the truncation marker and not one line of log —
+    /// which reads as "the log was empty" rather than "the copy was wrong".
     #[test]
     fn a_tail_whose_only_newline_is_its_last_byte_is_not_emptied() {
         let dir = temp();
         let bundle = temp();
+        // 18 bytes: a 10-byte line then a 6-byte one. A 4-byte window is
+        // "BBB\n" — the byte before it is a 'B', so the window starts mid-line,
+        // and the one newline it holds is its last byte.
         write(
             &dir.path().join("candidcue-rust.2026-08-03.log"),
-            "xxxxxxxxxxxx\nyyyy\n",
+            "AAAAAAAAAA\nBBBBBB\n",
         );
 
-        // A 5-byte window is exactly "yyyy\n", which begins on a boundary.
-        copy_support_logs_with_limit(dir.path(), bundle.path(), 5).expect("copy");
+        copy_support_logs_with_limit(dir.path(), bundle.path(), 4).expect("copy");
 
         let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
-        assert!(
-            copied.ends_with("yyyy\n"),
-            "the tail must not be drained to nothing: {copied:?}"
+        assert_eq!(
+            copied,
+            format!("{TRUNCATION_MARKER}BBB\n"),
+            "the tail must not be drained to nothing"
         );
     }
 
