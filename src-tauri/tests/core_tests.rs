@@ -553,48 +553,11 @@ async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
     );
 }
 
-/// §179: "Clear logs" must not break logging.
-///
-/// The generic `clear_cache` loop unlinks every entry it finds, and one of them
-/// is the file the tracing appender is holding open — after which the appender
-/// writes to a nameless inode and the app logs to nowhere. `clear_cache` routes
-/// the `logs` kind to `clear_logs`, which truncates instead; removing that early
-/// return puts the daily log back through the unlinking loop and fails this.
-///
-/// The held handle is the whole test: an implementation that deleted and
-/// recreated the file would satisfy the existence check and still fail the last
-/// assertion, because the write would land on the orphaned inode.
-#[tokio::test]
-async fn clearing_logs_keeps_the_open_log_file_writable() {
-    use std::io::Write;
-
-    let h = harness().await;
-    fs::create_dir_all(h.paths.logs_dir()).expect("logs dir");
-    let daily = h.paths.logs_dir().join("candidcue-rust.2026-08-03.log");
-    fs::write(&daily, "before the clear\n").expect("daily log");
-    fs::write(h.paths.logs_dir().join("client-trace.log"), "trace\n").expect("trace");
-
-    // Stand in for the appender, which holds its file open for the run.
-    let mut held = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&daily)
-        .expect("hold the log open");
-
-    let cleared = candidcue_lib::diagnostics::logging::clear_logs(&h.paths.logs_dir())
-        .expect("clear the logs");
-    assert_eq!(cleared.removed_files, 2);
-
-    assert!(daily.exists(), "the appender's file must keep its name");
-    assert_eq!(fs::metadata(&daily).expect("meta").len(), 0);
-    assert!(!h.paths.logs_dir().join("client-trace.log").exists());
-
-    held.write_all(b"after the clear\n").expect("write");
-    assert_eq!(
-        fs::read_to_string(&daily).expect("read back"),
-        "after the clear\n",
-        "the appender must still be writing somewhere the user can read"
-    );
-}
+// The "Clear logs" behaviour that goes with the above lives in
+// `ipc_roundtrip_tests::clearing_logs_through_the_command_keeps_the_open_log_writable`,
+// which drives the actual command. A version of it here called `clear_logs`
+// directly and claimed to guard the routing in `clear_cache` — it did not, and
+// a test whose docstring overstates what it covers is worse than no test.
 
 // ---------------------------------------------------------------------------
 // Settings

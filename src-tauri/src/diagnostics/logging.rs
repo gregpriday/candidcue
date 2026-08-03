@@ -56,8 +56,8 @@ const RUST_LOG_SUFFIX: &str = "log";
 const MAX_DAILY_LOG_FILES: usize = 9;
 
 /// The frontend's trace for the run in front of you, and the run before it.
-pub const CLIENT_TRACE: &str = "client-trace.log";
-pub const CLIENT_TRACE_PREV: &str = "client-trace.prev.log";
+pub(crate) const CLIENT_TRACE: &str = "client-trace.log";
+pub(crate) const CLIENT_TRACE_PREV: &str = "client-trace.prev.log";
 
 /// Truncate the client trace at 4 MB. Long enough for many sessions, small
 /// enough that a runaway caller cannot become a support problem of its own.
@@ -102,12 +102,12 @@ static CLIENT_TRACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Tauri drops managed state when the app itself goes down, which is exactly
 /// as long as the writer needs to live.
 #[derive(Debug)]
-pub struct LoggingGuard {
+pub(crate) struct LoggingGuard {
     _worker: tracing_appender::non_blocking::WorkerGuard,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum LoggingInitError {
+pub(crate) enum LoggingInitError {
     #[error("could not open the rolling log file: {0}")]
     Appender(#[from] tracing_appender::rolling::InitError),
     #[error("a tracing subscriber was already installed: {0}")]
@@ -126,10 +126,15 @@ pub enum LoggingInitError {
 /// the file layer in later, but the gap it closes is stdout-only output in a
 /// packaged build — which, per the module doc, goes to `/dev/null` regardless.
 /// It would be machinery bought with nothing.
-pub fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
+pub(crate) fn init(logs_dir: &Path) -> Result<LoggingGuard, LoggingInitError> {
     let (subscriber, worker) = build_subscriber(logs_dir)?;
-    subscriber.try_init()?;
+    // Before `try_init`, not after. The appender built cleanly, so the file is
+    // openable, and the hook writes to it directly rather than through the
+    // subscriber — so it is useful even on the path where installing the
+    // global dispatcher fails. Ordering it after would mean a `try_init`
+    // failure left a release build with no synchronous record of a panic.
     install_panic_hook(logs_dir.to_path_buf());
+    subscriber.try_init()?;
     Ok(LoggingGuard { _worker: worker })
 }
 
@@ -182,7 +187,7 @@ fn build_subscriber(
 /// Separate from `init` because it must not fail — by the time this is reached
 /// the app is already starting without the thing this module exists to provide,
 /// and turning that into a second failure would only make it harder to see.
-pub fn init_stdout_only() {
+pub(crate) fn init_stdout_only() {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::registry()
@@ -256,9 +261,13 @@ fn format_panic_record(
 ) -> String {
     /// Enough for any panic worth reading; short enough that formatting one
     /// cannot itself become the reason the crash goes unrecorded.
+    ///
+    /// It bounds the MESSAGE, not the finished record: the timestamp, thread
+    /// and location are all bounded already, and counting them here would mean
+    /// a long file path silently ate the budget for the panic text.
     const MAX_PANIC_MESSAGE: usize = 8 * 1024;
 
-    let mut record = String::with_capacity(MAX_PANIC_MESSAGE / 8);
+    let mut record = String::with_capacity(512);
     record.push_str(timestamp);
     record.push_str(" PANIC thread=");
     record.push_str(thread_name.unwrap_or("unnamed"));
@@ -280,9 +289,10 @@ fn format_panic_record(
     // arbitrarily long — `assert_eq!` on two big structures produces one — and
     // the old shape turned that into millions of allocations at the exact
     // moment the process is least able to afford them.
+    let budget = record.len() + MAX_PANIC_MESSAGE;
     let mut truncated = false;
     for c in message.chars() {
-        if record.len() >= MAX_PANIC_MESSAGE {
+        if record.len() >= budget {
             truncated = true;
             break;
         }
@@ -372,7 +382,7 @@ fn is_rust_log_name(name: &str) -> bool {
 /// the previous one alone rather than expiring it. If run B wrote nothing, then
 /// run A's trace is the newest evidence that exists, and the failure mode this
 /// whole issue is about is evidence being thrown away.
-pub fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
+pub(crate) fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     let live = logs_dir.join(CLIENT_TRACE);
     if !live.exists() {
@@ -383,7 +393,7 @@ pub fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
 
 /// Append one pre-formatted line to the live client trace, enforcing the size
 /// cap. The caller owns sanitising and formatting; this owns the file.
-pub fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Result<()> {
+pub(crate) fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Result<()> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     std::fs::create_dir_all(logs_dir)?;
     let path = logs_dir.join(CLIENT_TRACE);
@@ -398,7 +408,7 @@ pub fn append_client_trace(logs_dir: &Path, entry: &str) -> std::io::Result<()> 
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct LogClearStats {
+pub(crate) struct LogClearStats {
     pub removed_files: u32,
     pub removed_bytes: u64,
 }
@@ -420,7 +430,7 @@ pub struct LogClearStats {
 /// This is point-in-time, not a switch: lines already queued in the
 /// non-blocking writer can land immediately afterwards, and the app keeps
 /// logging. Clearing the logs is not the same as turning logging off.
-pub fn clear_logs(logs_dir: &Path) -> std::io::Result<LogClearStats> {
+pub(crate) fn clear_logs(logs_dir: &Path) -> std::io::Result<LogClearStats> {
     let _guard = CLIENT_TRACE_LOCK.lock();
     let mut stats = LogClearStats::default();
     if !logs_dir.exists() {
@@ -483,7 +493,7 @@ fn dir_size(path: &Path) -> u64 {
 /// An allowlist rather than "every `*.log`": the bundle is something a user
 /// hands to someone else, so what goes in it should be a decision made here and
 /// not a consequence of whatever happens to be sitting in the directory.
-pub fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
     copy_support_logs_with_limit(logs_dir, bundle_dir, MAX_BUNDLED_FILE_BYTES)
 }
 
@@ -804,11 +814,16 @@ mod tests {
     #[test]
     fn the_appender_writes_the_filename_the_panic_hook_targets() {
         let dir = temp();
+        // Bracket the write. Sampling the date only afterwards would make this
+        // fail for one instant a day, when the appender names a file at
+        // 23:59:59 and the assertion recomputes the date after midnight.
+        let before = today_utc();
         let (subscriber, worker) = build_subscriber(dir.path()).expect("subscriber");
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!("naming check");
         });
         drop(worker);
+        let after = today_utc();
 
         let produced = std::fs::read_dir(dir.path())
             .expect("read logs dir")
@@ -817,11 +832,19 @@ mod tests {
             .find(|n| is_rust_log_name(n))
             .expect("the appender wrote a file this module recognises");
 
-        let expected = rust_log_path(dir.path(), today_utc());
-        let expected = expected.file_name().expect("name").to_string_lossy();
-        assert_eq!(
-            produced, expected,
-            "the panic hook would write to a different file than the appender"
+        let candidates: Vec<String> = [before, after]
+            .iter()
+            .map(|d| {
+                rust_log_path(dir.path(), *d)
+                    .file_name()
+                    .expect("name")
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            candidates.contains(&produced),
+            "the panic hook would write to {candidates:?}, the appender wrote {produced:?}"
         );
     }
 

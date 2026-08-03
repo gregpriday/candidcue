@@ -200,6 +200,7 @@ const REPLAYED: &[&str] = &[
 
 struct Harness {
     _dir: tempfile::TempDir,
+    paths: DataPaths,
     _app: tauri::App<MockRuntime>,
     webview: WebviewWindow<MockRuntime>,
     /// A webview labelled `stage`, so `emit_to(STAGE_LABEL, …)` has somewhere
@@ -249,7 +250,7 @@ fn harness() -> Harness {
         .expect("mock app builds");
 
     app.manage(Database::new(pool));
-    app.manage(paths);
+    app.manage(paths.clone());
     app.manage(ScriptLocks::default());
     app.manage(AppCoordinator::default());
 
@@ -266,6 +267,7 @@ fn harness() -> Harness {
 
     Harness {
         _dir: dir,
+        paths,
         _app: app,
         webview,
         stage,
@@ -1550,4 +1552,57 @@ fn get_stage_status_binds_with_and_without_a_session_id() {
         );
         assert_eq!(status["sessionId"], json!(CAPTURED_SESSION));
     }
+}
+
+/// §179: "Clear logs" must not stop the app from logging.
+///
+/// This goes through the COMMAND, not through `clear_logs`, and that is the
+/// whole point. The generic `clear_cache` loop unlinks every entry it finds —
+/// including the daily file the tracing appender is holding open, after which
+/// the appender writes into an inode with no name and the app logs to nowhere
+/// the user can reach. `clear_cache` routes the `logs` kind to `clear_logs`,
+/// which truncates in place instead.
+///
+/// Deleting that early return in `settings_cmds::clear_cache` fails HERE. The
+/// unit test over `clear_logs` in `diagnostics::logging` stays green, because
+/// it never touches the routing — which is exactly the gap this closes.
+///
+/// The held handle is what distinguishes truncation from delete-and-recreate:
+/// a recreated file would satisfy the existence and length checks and still
+/// fail the final read, because the write would land on the orphaned inode.
+#[test]
+fn clearing_logs_through_the_command_keeps_the_open_log_writable() {
+    use std::io::Write;
+
+    let h = harness();
+    let logs = h.paths.logs_dir();
+    std::fs::create_dir_all(&logs).expect("logs dir");
+
+    let daily = logs.join("candidcue-rust.2026-08-03.log");
+    std::fs::write(&daily, "before the clear\n").expect("daily log");
+    std::fs::write(logs.join("client-trace.log"), "trace\n").expect("client trace");
+
+    // Stand in for the appender, which holds its file open for the whole run.
+    let mut held = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&daily)
+        .expect("hold the log open");
+
+    let result = h.expect_ok("clear_cache", json!({ "kind": "logs" }));
+    assert_eq!(result["kind"], json!("logs"));
+    assert_eq!(
+        result["removedFiles"], json!(2),
+        "both the daily log and the client trace should be reported"
+    );
+
+    assert!(daily.exists(), "the appender's file must keep its name");
+    assert_eq!(std::fs::metadata(&daily).expect("meta").len(), 0);
+    assert!(!logs.join("client-trace.log").exists());
+
+    held.write_all(b"after the clear\n").expect("write");
+    assert_eq!(
+        std::fs::read_to_string(&daily).expect("read back"),
+        "after the clear\n",
+        "the appender must still be writing somewhere the user can read"
+    );
 }

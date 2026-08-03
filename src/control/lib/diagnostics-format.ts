@@ -96,4 +96,4 @@ export const SUPPORT_BUNDLE_CONTENTS = [
 ] as const;
 
 export const SUPPORT_BUNDLE_EXCLUSIONS =
-  'A bundle never includes your API key, microphone audio, script text, or transcripts. Logs record step names, states and timings.';
+  'A bundle never includes your API key, microphone audio, script text, or transcripts. Logs record step names, states and timings — worth a look before you send one.';
