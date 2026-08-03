@@ -90,9 +90,9 @@ fn bundle_targets_stay_macos_only_until_other_hosts_are_proven() {
         })
         .iter()
         .map(|entry| {
-            entry.as_str().unwrap_or_else(|| {
-                panic!("every bundle target must be a string, found: {entry}")
-            })
+            entry
+                .as_str()
+                .unwrap_or_else(|| panic!("every bundle target must be a string, found: {entry}"))
         })
         .collect();
     requested.sort_unstable();
