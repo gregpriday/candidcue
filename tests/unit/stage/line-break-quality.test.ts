@@ -75,6 +75,17 @@ interface Score {
   holes: number;
   /** Paragraphs whose last line is one short word. */
   orphans: number;
+  /**
+   * Paragraphs whose last line is badly under-filled, at ANY word count.
+   *
+   * The orphan rule only reaches one or two words, so raising the raggedness
+   * weight can push a paragraph into a closing line of three or four words at a
+   * fifth of the column while every counter above stays flat — a retune that
+   * measured as an improvement did exactly that, turning "which makes the
+   * public parts more honest, not less." into "honest, not less.". This is the
+   * counter that would have caught it.
+   */
+  closingHoles: number;
   overflow: number;
 }
 
@@ -82,7 +93,7 @@ interface Score {
 function score(paragraphs: string[][][], target: number, max: number): Score {
   const s: Score = {
     lines: 0, hanging: 0, splitUnits: 0, splitNames: 0,
-    ragged: 0, holes: 0, orphans: 0, overflow: 0,
+    ragged: 0, holes: 0, orphans: 0, closingHoles: 0, overflow: 0,
   };
   let deviation = 0;
   let interior = 0;
@@ -112,8 +123,10 @@ function score(paragraphs: string[][][], target: number, max: number): Score {
         deviation += Math.abs(width - target);
         interior++;
         if (width < target * 0.5) s.holes++;
-      } else if (lines.length > 1 && words.length === 1 && width < target * 0.5) {
-        s.orphans++;
+      } else if (lines.length > 1) {
+        if (words.length === 1 && width < target * 0.5) s.orphans++;
+        // Word count deliberately not considered — that is the gap this counts.
+        if (width < target * 0.4) s.closingHoles++;
       }
     }
   }
@@ -255,16 +268,26 @@ describe('planned wrapping against the browser, on the benchmark scripts', () =>
     /*
      * What it costs, stated rather than hidden: better seams are bought with
      * shorter lines, and every extra line is another return sweep. Measured at
-     * 13-21% more lines depending on the column, and the sweep over fill ratios
-     * showed that cost is inherent to the trade rather than a tuning mistake —
-     * aiming 11% below the column changed it by about one line in a hundred.
+     * 11-15% more lines depending on the column.
+     *
+     * That number is the whole reason `MEASURE_WEIGHT` and
+     * `SHORT_LINE_WEAKNESS_FLOOR` are where they are — it started at 14-21%,
+     * which reads on a real stage as the prompter fidgeting with the script
+     * rather than as better phrasing. It does not go much lower without the
+     * model splitting number-units and pronoun-verb pairs at narrow columns,
+     * which is a worse failure than a short line; see the ceiling documented on
+     * `MEASURE_WEIGHT` and the note where a per-line toll was tried and
+     * rejected, both in `line-break/cost.ts`.
      */
-    expect(plannedLines).toBeLessThanOrEqual(Math.ceil(greedyLines * 1.25));
+    expect(plannedLines).toBeLessThanOrEqual(Math.ceil(greedyLines * 1.18));
   });
 
   it('never plans a line past the column', () => {
     for (const target of MEASURES) {
-      const max = Math.round(target * 1.12);
+      // The column IS the ceiling, exactly as `plannedWrap` and the stage pass
+      // it. Checking against a 12%-wider max would have been checking a limit
+      // the plan was never solved against, and would pass a line that overflows.
+      const max = target;
       for (const fixture of FIXTURES) {
         for (const words of fixture.paragraphs) {
           for (const line of plannedWrap(words, target)) {
@@ -280,14 +303,36 @@ describe('planned wrapping against the browser, on the benchmark scripts', () =>
   it('strands fewer closing lines than the browser', () => {
     let planned = 0;
     let greedy = 0;
+    let plannedHoles = 0;
+    let greedyHoles = 0;
     for (const target of MEASURES) {
-      const max = Math.round(target * 1.12);
+      const max = target;
       for (const fixture of FIXTURES) {
-        planned += score(fixture.paragraphs.map((w) => plannedWrap(w, target)), target, max).orphans;
-        greedy += score(fixture.paragraphs.map((w) => greedyWrap(w, max)), target, max).orphans;
+        const p = score(fixture.paragraphs.map((w) => plannedWrap(w, target)), target, max);
+        const g = score(fixture.paragraphs.map((w) => greedyWrap(w, max)), target, max);
+        planned += p.orphans;
+        greedy += g.orphans;
+        plannedHoles += p.closingHoles;
+        greedyHoles += g.closingHoles;
       }
     }
-    console.log(`\n  stranded closing lines: greedy ${greedy} → planned ${planned}`);
+    console.log(
+      `\n  stranded closing lines: greedy ${greedy} → planned ${planned}` +
+        `\n  under-filled closing lines (any word count): greedy ${greedyHoles} → planned ${plannedHoles}`,
+    );
     expect(planned).toBeLessThanOrEqual(greedy);
+    /*
+     * The counter the orphan rule cannot see: it reaches one or two words, and
+     * raising the raggedness weight fills the second-to-last line and dumps
+     * three or four into the remainder.
+     *
+     * Reported honestly as a LOOSE guard. It is worth having and it is not a
+     * tight gate: the retune that produced "honest, not less." where "which
+     * makes the public parts more honest, not less." would have fitted moved
+     * this corpus total by one, well inside the browser's own margin. Read the
+     * printed number when retuning; do not assume a green test means the
+     * closing lines are unchanged.
+     */
+    expect(plannedHoles).toBeLessThanOrEqual(greedyHoles);
   });
 });

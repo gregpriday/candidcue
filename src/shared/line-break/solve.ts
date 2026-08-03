@@ -17,6 +17,7 @@ import {
   OVERFLOW_PENALTY,
   OVERFLOW_PER_CHAR,
   SHORT_LINE_PER_CHAR,
+  SHORT_LINE_WEAKNESS_FLOOR,
 } from './cost';
 import { describeWord, type WordFacts } from './lexicon';
 import {
@@ -289,12 +290,25 @@ export function breakLines(
       } else {
         const deviation = (width - measure.targetChars) / measure.targetChars;
         cost += MEASURE_WEIGHT * deviation * deviation;
-        if (width < measure.minChars) {
+        /*
+         * A line the AUTHOR ended is never a hole.
+         *
+         * A forced break scores 0 like a sentence end, so once the floor below
+         * stopped the discount reaching zero it started charging authored short
+         * lines too — second-guessing a line break somebody typed on purpose,
+         * which is the one decision here that is not the model's to make.
+         */
+        const authored = !isLastLine && breakReasons[end - 1] === 'forced';
+        if (width < measure.minChars && !authored) {
           // Weighted by the seam, not by the shortfall alone — see the note on
           // the constant. `closing` is 0 at a sentence end and BREAK_BASE at an
           // ordinary break, so this is "how much of a hole is this, given how
-          // little reason there was to stop here".
-          const weakness = Math.min(1, closing / BREAK_BASE);
+          // little reason there was to stop here" — floored, so a good seam
+          // discounts a short line without excusing an arbitrarily short one.
+          const weakness = Math.max(
+            SHORT_LINE_WEAKNESS_FLOOR,
+            Math.min(1, closing / BREAK_BASE),
+          );
           cost += SHORT_LINE_PER_CHAR * (measure.minChars - width) * weakness;
         }
       }

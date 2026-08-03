@@ -33,8 +33,70 @@ import type { LineBreakReason } from './types';
  *
  * Squared rather than linear so that two mildly short lines are cheaper than
  * one severe one — the same reason typesetters minimise squared badness.
+ *
+ * Raised from 14 after the first version reached a real stage, where the
+ * breaker was shortening lines further than anything on the glass justified —
+ * on a 36-character column it put the single word "readable," on a line. At 14
+ * that line cost about 10 all in, against seam penalties reaching 52, so
+ * reaching a comma was worth almost any amount of measure.
+ *
+ * The ceiling on this constant is sharp and it is NOT the taste of the result:
+ * at 21 the model starts splitting a pronoun from its verb, and at 22 a number
+ * from its unit, both at narrow columns — buying a full line by committing the
+ * failures the module exists to prevent. 28 was measured and reverted for
+ * exactly that. `width.test.ts` gates it in the configuration the stage
+ * actually solves with, which is where those splits appear; the sweep in
+ * `line-break.test.ts` gives the solver 12% of slack and does not see them.
  */
-export const MEASURE_WEIGHT = 14;
+export const MEASURE_WEIGHT = 20;
+
+/**
+ * The least a hole can cost, however good the seam that closed it.
+ *
+ * The hole penalty is scaled by how WEAK the closing seam is, which is right:
+ * a ten-character line ending on "…on Monday," is a deliberate beat and a
+ * ten-character line ending mid-clause is damage. But the scale ran all the way
+ * to zero — `closing` is 0 at a sentence end and 1.5 at a comma against a
+ * `BREAK_BASE` of 10 — so the charge all but vanished exactly where the seam
+ * was best.
+ *
+ * Stated precisely, because the honest version is smaller than it sounds: a
+ * comma still paid 15% of the shortfall, so "readable," was not free, and the
+ * raggedness term above was already objecting. Neither constant moves that
+ * plan on its own — the floor and the weight only reach it together, and by
+ * about one unit of cost. What the floor contributes is that a good seam can no
+ * longer discount a hole to nearly nothing however severe it is.
+ *
+ * A line the AUTHOR ended is exempt entirely (see `solve.ts`): a forced break
+ * scores 0 like a sentence end, and without the exemption this floor would
+ * start charging people for line breaks they typed on purpose.
+ */
+export const SHORT_LINE_WEAKNESS_FLOOR = 0.28;
+
+/*
+ * A PER-LINE TOLL WAS TRIED HERE, AND IS NOT IN THE MODEL. WHY:
+ *
+ * The model's opinion about how MANY lines it uses is only indirect — each one
+ * pays its closing seam, which a strong seam discounts to nearly nothing — so a
+ * fixed charge per line is the obvious lever for "break less often", and every
+ * line really is a return sweep, so it is not a fudge factor either. Measured
+ * over the benchmark scripts it worked: at 12 it took the extra lines over the
+ * browser from 14-21% down to 9-11% while slightly IMPROVING the seam count.
+ *
+ * It is absent because of what it cost at the narrow end. At a 16-17 character
+ * column a toll of even 6 made the solver split a number from its unit, split a
+ * proper noun, and strand a verb from its pronoun — it bought the line back by
+ * committing the exact failures this module exists to prevent, and it did so
+ * where a presenter is least able to absorb them. Three of the glue guarantees
+ * fail at LINE_COST 6 and five at 20.
+ *
+ * The lever that turned out to be safe is the pair above: raggedness weight for
+ * how much an under-filled line costs, and a floor under the hole penalty so a
+ * good seam cannot excuse an arbitrarily short line. Anyone reaching for a
+ * per-line toll again should re-run `tests/unit/stage/line-break-quality.test.ts`
+ * AND the glue block in `src/shared/line-break.test.ts`, and should expect to
+ * have to raise the glue penalties to keep them dominant.
+ */
 
 /**
  * An ordinary break: legal, unremarkable, no punctuation and no seam.
