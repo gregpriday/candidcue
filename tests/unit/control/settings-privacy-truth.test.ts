@@ -1,7 +1,7 @@
 /**
  * #180 — the privacy disclosure is the one screen that must not overclaim.
  *
- * Two things were untrue at once, and both read as reassurance:
+ * Three things were untrue at once, and all three read as reassurance:
  *
  *  - "CandidCue checks for software updates." It does not. Both
  *    `check_for_update` and `install_update` return NOT_IMPLEMENTED, and no
@@ -11,6 +11,11 @@
  *    which reached Rust. `toRustPatch` maps `privacy.saveTranscript` and nothing
  *    else, so both wrote to the localStorage overlay and no code ever read them
  *    back. Logging ran either way; the channel selected nothing.
+ *  - "Your microphone is open only while a take or a microphone test is
+ *    running." Also false: the level meter holds an open capture the whole time
+ *    Audio settings is on screen with permission granted (see the `$effect`
+ *    guarded by `section !== 'audio' || micPermission !== 'granted'` — its own
+ *    comment says "The meter holds an open capture").
  *
  * These read the route SOURCE rather than mounting it. The defect class is
  * static copy and static control presence, and mounting a 3,000-line route
@@ -96,6 +101,18 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // application boundary, so silence here would be its own overclaim.
     expect(privacySection).toMatch(/Speech settings/i);
     expect(privacySection).toMatch(/image from a web address/i);
+  });
+
+  it('does not claim the microphone is open only during a take or test', () => {
+    // The level meter holds a capture for as long as Audio settings is open.
+    // Checked across the WHOLE route: the privacy section and the Microphone
+    // section both used to make this claim, and fixing one would leave
+    // Settings contradicting itself.
+    expect(flatSource).not.toMatch(/microphone is open only/i);
+    expect(flatSource).not.toMatch(/uses your microphone only/i);
+    // And the honest version is actually present, so this cannot be satisfied
+    // by deleting the disclosure instead of correcting it.
+    expect(privacySection).toMatch(/input meter/i);
   });
 
   it('no longer offers the two settings that decided nothing', () => {
