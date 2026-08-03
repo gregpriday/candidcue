@@ -477,6 +477,88 @@ async fn clearing_logs_targets_the_log_directory_and_no_cache() {
     );
 }
 
+/// §179: the support bundle has to actually carry the logs.
+///
+/// This asserts the JOIN, not the copier. `diagnostics::logging` has its own
+/// tests proving it copies the right files given a directory — but every one of
+/// them passed while `export_support_bundle` did not call it at all, which is
+/// the state this issue was filed about. Deleting the `copy_support_logs` call
+/// from `write_support_bundle` fails here and nowhere else.
+///
+/// It goes through `write_support_bundle` rather than the command because the
+/// command opens a native folder picker: there is no deterministic way to drive
+/// it, which is precisely how the omission survived.
+#[tokio::test]
+async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
+    let h = harness().await;
+    let bundle = tempfile::tempdir().expect("bundle dir");
+
+    fs::create_dir_all(h.paths.logs_dir()).expect("logs dir");
+    fs::create_dir_all(h.paths.diagnostics_dir()).expect("diagnostics dir");
+    fs::write(
+        h.paths.logs_dir().join("client-trace.log"),
+        "the run in front of you\n",
+    )
+    .expect("live trace");
+    fs::write(
+        h.paths.logs_dir().join("client-trace.prev.log"),
+        "the run that crashed\n",
+    )
+    .expect("previous trace");
+    fs::write(
+        h.paths.logs_dir().join("candidcue-rust.2026-08-03.log"),
+        "a warning nobody could read before\n",
+    )
+    .expect("rust log");
+    fs::write(
+        h.paths.diagnostics_dir().join("recovery.json"),
+        "{\"kind\":\"startup_reconciliation\"}",
+    )
+    .expect("report");
+
+    let diagnostics = candidcue_lib::commands::settings_cmds::SystemDiagnostics {
+        app_version: "0.1.0".into(),
+        os: "macos".into(),
+        arch: "aarch64".into(),
+        database_integrity_ok: true,
+        script_count: 0,
+        session_count: 0,
+        data_dir: h.paths.root().to_string_lossy().to_string(),
+    };
+    candidcue_lib::commands::settings_cmds::write_support_bundle(
+        &h.paths,
+        bundle.path(),
+        &diagnostics,
+    )
+    .expect("bundle written");
+
+    // What the bundle always had.
+    assert!(bundle.path().join("diagnostics.json").is_file());
+    assert!(bundle.path().join("recovery.json").is_file());
+
+    // What it was missing, which is the only reason anyone exports one.
+    let logs = bundle.path().join("logs");
+    assert_eq!(
+        fs::read_to_string(logs.join("client-trace.log")).expect("live trace in bundle"),
+        "the run in front of you\n"
+    );
+    assert_eq!(
+        fs::read_to_string(logs.join("client-trace.prev.log")).expect("previous trace in bundle"),
+        "the run that crashed\n",
+        "a crash plus a relaunch must still reach whoever is debugging it"
+    );
+    assert_eq!(
+        fs::read_to_string(logs.join("candidcue-rust.2026-08-03.log")).expect("rust log in bundle"),
+        "a warning nobody could read before\n"
+    );
+}
+
+// The "Clear logs" behaviour that goes with the above lives in
+// `ipc_roundtrip_tests::clearing_logs_through_the_command_keeps_the_open_log_writable`,
+// which drives the actual command. A version of it here called `clear_logs`
+// directly and claimed to guard the routing in `clear_cache` — it did not, and
+// a test whose docstring overstates what it covers is worse than no test.
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------

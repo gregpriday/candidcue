@@ -81,13 +81,19 @@ export function diagnosticsClipboardText(d: SystemDiagnostics): string {
 
 /**
  * What a support bundle actually contains (spec §44.11), stated before the
- * operator sends it to anyone. The command writes `diagnostics.json` plus the
- * JSON recovery reports from the diagnostics directory — nothing else.
+ * operator sends it to anyone.
+ *
+ * This list is a promise made to someone about to hand a folder to a stranger,
+ * so it has to track what `export_support_bundle` actually writes. It used to
+ * end "— nothing else", which stopped being true the moment the bundle started
+ * carrying logs (§179) — the disclosure went stale in the direction that
+ * matters, understating what leaves the machine.
  */
 export const SUPPORT_BUNDLE_CONTENTS = [
   'The facts listed above, as diagnostics.json.',
   'Recovery reports, which carry ids and counts — not script text.',
+  'Application logs from the last few days, and the step-by-step trace of the current and previous runs.',
 ] as const;
 
 export const SUPPORT_BUNDLE_EXCLUSIONS =
-  'A bundle never includes your API key, microphone audio, script text, or transcripts.';
+  'A bundle never includes your API key, microphone audio, script text, or transcripts. Logs record step names, states and timings — worth a look before you send one.';

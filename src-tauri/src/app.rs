@@ -12,8 +12,10 @@ use crate::scripts::{DataPaths, ScriptLocks};
 use crate::windows::{events, CONTROL_LABEL};
 
 pub fn run() {
-    diagnostics_init();
-
+    // Logging is initialised inside `setup`, not here. It needs the log
+    // directory, the log directory comes from the app data dir, and that needs
+    // an `AppHandle` which does not exist until the builder does. See
+    // `diagnostics::logging::init`.
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -102,7 +104,44 @@ pub fn run() {
             std::fs::create_dir_all(paths.logs_dir())?;
 
             /*
-             * Start each run with an empty client trace.
+             * Logs, before anything that might need explaining happens.
+             *
+             * This is the first thing after the directories exist, so the
+             * database connection, the migrations, the model recovery and the
+             * startup reconciliation below are all inside the captured window.
+             * A packaged build launched from Finder has no stdout — launchd
+             * points it at /dev/null — so until this line runs, every warning
+             * this app can emit goes nowhere at all (§179).
+             *
+             * A failure here does NOT stop the app. `create_dir_all` two lines
+             * up proves the directory exists, not that it can be written to —
+             * an existing read-only `logs/` satisfies it and then fails to open
+             * a log file. Propagating that would turn "cannot write logs" into
+             * "will not launch", and Tauri turns a setup error into a panic
+             * that a release build aborts on before this very hook is
+             * installed: the user would get an app that vanishes from Finder
+             * with nothing on screen and nothing on disk saying why.
+             *
+             * Refusing to start is the wrong trade for a teleprompter. It falls
+             * back to stdout, which is at least visible under `tauri dev`, and
+             * says why as loudly as it still can.
+             */
+            match crate::diagnostics::logging::init(&paths.logs_dir()) {
+                Ok(logging) => {
+                    handle.manage(logging);
+                }
+                Err(err) => {
+                    crate::diagnostics::logging::init_stdout_only();
+                    tracing::error!(
+                        error = %err,
+                        path = %paths.logs_dir().display(),
+                        "no log file: this run cannot be debugged from a support bundle"
+                    );
+                }
+            }
+
+            /*
+             * Start each run with an empty client trace — but keep the last one.
              *
              * It is a debugging artefact for the session in front of you, not
              * a history: appending across runs means whoever reads it has to
@@ -110,8 +149,18 @@ pub fn run() {
              * the tail of the wrong run is how you diagnose a bug that was
              * already fixed. The Rust log keeps accumulating; this one is
              * deliberately per-launch.
+             *
+             * It used to be DELETED here, which meant a crash followed by the
+             * reflex relaunch destroyed the only record of the crash. Renaming
+             * it keeps both properties: the live file still holds exactly one
+             * launch, and the launch that just died is still on disk.
              */
-            let _ = std::fs::remove_file(paths.logs_dir().join("client-trace.log"));
+            if let Err(err) = crate::diagnostics::logging::rotate_client_trace(&paths.logs_dir()) {
+                // Not fatal. The old trace stays where it is and the new run
+                // appends to it — worse to read, but nothing is lost, and
+                // refusing to start over a rename is out of proportion.
+                tracing::warn!(error = %err, "could not rotate the client trace");
+            }
 
             // Database: connect + run migrations before any command can run.
             let pool = tauri::async_runtime::block_on(database::init(&data_dir))?;
@@ -407,14 +456,4 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
             }
         }
     });
-}
-
-fn diagnostics_init() {
-    // Structured logs with env-filter; redaction rules land in `diagnostics`.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
 }
