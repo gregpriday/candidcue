@@ -74,7 +74,7 @@ export interface MicTestTimers {
 }
 
 export interface MicTestDeps {
-  /** Opens the billable session and resolves with ITS disposer. */
+  /** Opens the live capture session and resolves with ITS disposer. */
   open(deviceId: string | undefined, events: TranscriptTestEvents): Promise<Unsubscribe>;
   /** Push a new snapshot to the UI. */
   onChange(snapshot: MicTestSnapshot): void;

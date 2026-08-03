@@ -10,7 +10,9 @@ cc-align = { path = "../cc-align" }
 cc-stt = { path = "../cc-stt" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
+# Only what is left after the async capture path went: a runtime for the TTS
+# calls in `tts.rs`, and `time` for its retry backoff.
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
 num2words = "1.2.0"

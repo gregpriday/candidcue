@@ -7,9 +7,9 @@
  * This replaced a pipeline roughly four times its size, and almost everything
  * that went was machinery for deciding when a sentence had ended: a local
  * voice-activity detector, a noise-floor calibration, a speech gate, a commit
- * driver, and a manual `input_audio_buffer.commit`. The recogniser endpoints
- * server-side, so a take now streams unconditionally and the provider says
- * where the utterances are.
+ * driver, and a manual buffer commit. The recogniser does its own endpointing
+ * (sherpa's trailing-silence rules, in `cc_stt::local`), so a take now streams
+ * unconditionally and the recogniser says where the utterances are.
  *
  * That is not a simplification for its own sake. Every one of those mechanisms
  * was a way to hold a completely healthy connection open and transcribe

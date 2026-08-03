@@ -15,9 +15,10 @@
 //! and only with a `bpe.vocab` beside the model, and the bundle ships neither
 //! (see `src-tauri/src/commands/speech_cmds.rs::TranscriptionOptions`).
 //! Reinstating it is a model-packaging decision. This extractor stays because
-//! it is the half of that capability that is already correct and measured —
-//! `cc-bench vocab` exercises it — and rewriting it later from nothing would be
-//! throwing away the part that was never the problem.
+//! it is the half of that capability that is already correct and measured — the
+//! unit tests below hold it there, and `cc-bench vocab` prints what a script
+//! would send — and rewriting it later from nothing would be throwing away the
+//! part that was never the problem.
 //!
 //! Two different wins, worth naming separately because they have different
 //! shapes:
@@ -71,11 +72,13 @@
 //! ---------------------------------------------------------------------------
 //! THE SANITISER IS NOT OPTIONAL
 //! ---------------------------------------------------------------------------
-//! A term list is configuration a recogniser reads BEFORE it will accept audio,
-//! and the recogniser this was measured against rejected the whole list — not
-//! the offending term — over a single character outside letters, digits, spaces
-//! and basic punctuation. A bad character therefore does not degrade a take, it
-//! prevents one. Everything leaving this module goes through [`sanitize`],
+//! A term list is configuration a recogniser reads BEFORE it will accept audio.
+//! The recogniser this was measured against refused the configuration outright
+//! over a single character outside letters, digits, spaces and basic
+//! punctuation — so a bad character did not degrade a take, it prevented one.
+//! (What was measured was a one-term list; whether a mixed list would have lost
+//! only the bad term was never tested, which is itself a reason not to find
+//! out the hard way.) Everything leaving this module goes through [`sanitize`],
 //! which is an allowlist, and anything it cannot clean is dropped rather than
 //! handed over and hoped for. Whatever consumes these terms next, that is the
 //! cheap side of the bet to be on.

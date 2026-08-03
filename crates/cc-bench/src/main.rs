@@ -2,8 +2,8 @@
 //!
 //! ```text
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
-//! cc-bench synth-audio --workdir DIR            # fal.ai TTS → fixture audio
-//! cc-bench capture-local --workdir DIR --model DIR --runs DIR [--pace 1.0]
+//! cc-bench synth-audio [--runs DIR]              # fal.ai TTS → fixture audio
+//! cc-bench capture-local --model DIR --runs DIR [--pace 1.0]
 //! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
 //! cc-bench tier-b  --label L [--config C] [--out F]
 //! cc-bench compare baseline.json candidate.json
@@ -97,7 +97,6 @@ struct Flags {
     label: String,
     config: Option<PathBuf>,
     out: Option<PathBuf>,
-    workdir: Option<PathBuf>,
     pace: f64,
     runs: Option<PathBuf>,
     /// `export-run`: seconds of audio to freeze. None means the whole run.
@@ -135,7 +134,6 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         label: "run".into(),
         config: None,
         out: None,
-        workdir: None,
         pace: 1.0,
         runs: None,
         seconds: None,
@@ -161,7 +159,6 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--label" => flags.label = take()?,
             "--config" => flags.config = Some(PathBuf::from(take()?)),
             "--out" => flags.out = Some(PathBuf::from(take()?)),
-            "--workdir" => flags.workdir = Some(PathBuf::from(take()?)),
             "--pace" => flags.pace = take()?.parse()?,
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
             "--tier-b" => flags.tier_b = Some(PathBuf::from(take()?)),
@@ -431,16 +428,13 @@ fn main() -> anyhow::Result<()> {
         }
         Some("synth-audio") => {
             let flags = parse_flags(args[1..].iter())?;
-            let workdir = flags
-                .workdir
-                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
             // `--runs` names the corpus this audio is destined for. Synthesis
             // skips a run that corpus already holds, so pointing it at a fresh
             // corpus is what makes the audio get rendered a second time for a
             // different recogniser instead of being skipped as "captured".
             let runs_dir = flags.runs.unwrap_or(runs_dir);
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(synth_audio(&scripts_dir, &runs_dir, &workdir))?;
+            runtime.block_on(synth_audio(&scripts_dir, &runs_dir))?;
         }
         Some("capture-local") => {
             // Synthesised audio heard by the on-device recogniser, written
@@ -452,9 +446,6 @@ fn main() -> anyhow::Result<()> {
             // to 9 s), so a capture must never land on top of a frozen corpus —
             // that would confound a recogniser change with an audio change.
             let flags = parse_flags(args[1..].iter())?;
-            let workdir = flags
-                .workdir
-                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
             let model_dir = flags
                 .model
                 .ok_or_else(|| anyhow::anyhow!("--model <dir> required"))?;
@@ -462,7 +453,6 @@ fn main() -> anyhow::Result<()> {
                 .runs
                 .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
             capture_all_local(
-                &workdir,
                 &out_runs,
                 &model_dir,
                 flags.pace,
@@ -945,7 +935,7 @@ fn main() -> anyhow::Result<()> {
         }
         _ => {
             eprintln!(
-                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio --workdir DIR\n       cc-bench capture-local --workdir DIR --model DIR --runs DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
+                "usage: cc-bench tier-a|tier-b --label L [--config C] [--out F]\n       cc-bench synth-audio [--runs DIR]\n       cc-bench capture-local --model DIR --runs DIR [--pace P]\n       cc-bench compare A B\n       cc-bench gate-language --label LANG --tier-b B.json --tier-c C.json"
             );
         }
     }
@@ -956,7 +946,6 @@ fn main() -> anyhow::Result<()> {
 async fn synth_audio(
     scripts_dir: &std::path::Path,
     runs_dir: &std::path::Path,
-    _workdir: &std::path::Path,
 ) -> anyhow::Result<()> {
     let suite = build_suite(scripts_dir)?;
     let synth = Synthesizer::new()?;
@@ -1031,7 +1020,6 @@ async fn synth_audio(
 /// ~200 ms and belongs nowhere near the start of a take.
 #[allow(clippy::too_many_arguments)]
 fn capture_all_local(
-    _workdir: &std::path::Path,
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,

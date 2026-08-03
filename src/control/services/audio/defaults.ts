@@ -71,11 +71,10 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
    * control was built to reach, not a new regime.
    *
    * What it costs, stated plainly: at this sensitivity room tone can open a
-   * turn, and every turn is a commit and a billable transcription round trip.
-   * That is bounded rather than open-ended — `maxUtteranceMs` still forces a
-   * commit every 5 s at any setting, so the worst case is a steady trickle of
-   * short empty transcripts, not a runaway. Missing a presenter entirely is
-   * the worse failure, and it is the one that happened.
+   * turn, so the meter reads active in a silent room more often than it did.
+   * That is the cheap direction — the meter is the only thing reading it.
+   * Missing a presenter entirely is the worse failure, and it is the one that
+   * happened.
    */
   noiseFloorMargin: 1.8,
   minSpeechRms: 0.004,
@@ -98,26 +97,27 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
  * condenser in a quiet office and a laptop mic in a hotel room do not share a
  * noise floor), so the control has to do something real.
  *
- * What it must NOT do is move the commit cadence. This VAD is not only a
- * detector: `speech_ended` is the Realtime commit cue (§29.3), so every turn it
- * closes is a billable commit and a transcription round trip. `endOfTurnSilenceMs`
- * (420 ms), `maxUtteranceMs` (5 s) and `calibrationMs` are therefore fixed at
- * their A.6 values at every slider position, which bounds the damage in both
- * directions:
+ * What it must NOT do is move the turn cadence the meter reports.
+ * `endOfTurnSilenceMs` (420 ms), `maxUtteranceMs` (5 s) and `calibrationMs` are
+ * therefore fixed at their A.6 values at every slider position, which bounds
+ * the reading in both directions:
  *
  *  - at maximum sensitivity the threshold sits near the noise floor, so room
- *    tone can hold a turn open — but the unchanged 5 s forced commit still caps
- *    the worst case at one commit every five seconds, and reconciliation stays
- *    bounded because `max_utterance` re-anchors;
+ *    tone can hold a turn open — but the unchanged 5 s cap still closes it;
  *  - at minimum sensitivity quiet speech drops below threshold more often, so
  *    turns close sooner — but the unchanged 100 ms open plus 420 ms close means
- *    a turn can still never be shorter than about half a second, which is the
- *    floor on commit frequency and therefore on cost.
+ *    a turn can still never be shorter than about half a second.
+ *
+ * None of this gates what the recogniser hears. Audio streams unconditionally
+ * and `cc_stt::local` decides its own utterance boundaries; this VAD drives the
+ * level meter and the §28.6 dead-input check, and nothing else. (It was once
+ * the commit cue for a hosted recogniser, which is why the bounds are drawn
+ * this tightly — a threshold that moved the cadence moved the bill.)
  *
  * The threshold multiplier is confined to roughly ×0.64…×1.6 of the default
  * margin. That is a deliberately narrow band: wide enough to rescue a noisy room
  * or a quiet talker, too narrow to turn the VAD into something that either never
- * commits or commits on every breath.
+ * fires or fires on every breath.
  */
 export const VAD_SENSITIVITY_BOUNDS = {
   /** `noiseFloorMargin` at sensitivity 0 — hardest to trigger. */

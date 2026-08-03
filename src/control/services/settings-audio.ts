@@ -8,13 +8,17 @@
  * localStorage overlay, where a device id that does not exist on another
  * machine belongs.
  *
- * Sensitivity is different in kind. `speech_ended` from the local VAD is the
- * Realtime commit cue (§29.3), so where the speech threshold sits decides how
- * often audio is committed and transcribed on the user's own key. That makes it
- * the same class of setting as `following` (§47) and `coaching` (§30): it
- * changes how a session behaves and what it costs, so it has to outlive the
- * frontend's local storage rather than quietly returning to neutral the first
- * time that store is cleared.
+ * Sensitivity is different in kind. It describes a room and a microphone
+ * rather than a machine, and it is the number both meters judge speech by, so
+ * it belongs with `following` (§47): it changes what the app reports about a
+ * session, and it has to outlive the frontend's local storage rather than
+ * quietly returning to neutral the first time that store is cleared.
+ *
+ * (It used to be Rust-owned for a stronger reason — `speech_ended` was the
+ * commit cue for a hosted recogniser, so the threshold decided how much audio
+ * was sent and billed. That recogniser is gone and nothing commits any more.
+ * The setting stays server-side because a room's noise floor is still not
+ * per-machine capture state, not because it costs anything.)
  *
  * ONE SLIDER, AND BOTH METERS READ IT. Settings → Audio is where the setting
  * lives, because it is a property of a room and a microphone rather than of a

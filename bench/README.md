@@ -43,9 +43,8 @@ by default; new spending must be approved explicitly with
 `CANDIDCUE_ALLOW_TTS_GENERATION=1`:
 
 ```bash
-cargo run --release -p cc-bench -- synth-audio \
-    --workdir /tmp/bench-work --runs ../bench/runs-local
-cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
+cargo run --release -p cc-bench -- synth-audio --runs ../bench/runs-local
+cargo run --release -p cc-bench -- capture-local \
     --runs ../bench/runs-local --model ../src-tauri/models/x-asr-480ms
 ```
 
@@ -119,7 +118,8 @@ model-packaging decision, not a flag — see
 `src-tauri/src/commands/speech_cmds.rs::TranscriptionOptions`.
 
 The extractor stays because it is the half of the capability that is already
-correct and measured, and `cc-bench vocab` is what keeps it that way. The live
+correct and measured — its unit tests in `crates/cc-align/src/vocab.rs` are what
+hold it there; `cc-bench vocab` just prints, and asserts nothing. The live
 A/B that used to sit here (`prompt-ab`, plus a gated config-frame guard) went
 with the client: it could only ever have measured a service nothing can reach.
 Terms still go through `sanitize` on the way out, on the same reasoning that
@@ -299,14 +299,16 @@ CC_ALIGN_DEBUG=1 cargo run --release -p cc-bench -- inspect starter retake
 
 # Regenerate missing Tier B fixture audio (explicit fal.ai spend approval)
 CANDIDCUE_ALLOW_TTS_GENERATION=1 cargo run --release -p cc-bench -- \
-    synth-audio --workdir /tmp/bench-work
+    synth-audio --runs ../bench/runs-mine
 
 # Stream fixtures through the on-device recogniser (~real time)
-cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
+cargo run --release -p cc-bench -- capture-local \
     --model ../src-tauri/models/x-asr-480ms --runs ../bench/runs-mine
 
-# Replay captured runs (offline, no network)
-cargo run --release -p cc-bench -- tier-b --label mine --out ../bench/results/mine-live.json
+# Replay THAT capture — `--runs` on every step, or tier-b silently scores the
+# frozen corpus in bench/runs and labels the answer "mine"
+cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-mine \
+    --label mine --out ../bench/results/mine-live.json
 
 # Tier C: the rendered stage, across the layout sweep
 cargo run --release -p cc-bench -- tier-c --label mine --out ../bench/results/mine-c.json
@@ -614,14 +616,16 @@ repeated passages are where following actually breaks. `gate-language` reads the
 families off the run names and refuses a corpus that is missing one.
 
 ```bash
-# 1. Render the corpus. Both sides of any A/B must come from ONE fresh workdir:
-#    re-synthesis is not deterministic and clip lengths drift by seconds.
+# 1. Render the corpus. Both sides of any A/B must come from ONE render:
+#    re-synthesis is not deterministic and clip lengths drift by seconds. The
+#    machine-wide `tts/` directory is what makes that possible — point both
+#    captures at the same `--runs` corpus and neither re-renders.
 CANDIDCUE_ALLOW_TTS_GENERATION=1 \
-  cargo run --release -p cc-bench -- synth-audio --workdir /tmp/lang-fr --runs ../bench/runs-fr
+  cargo run --release -p cc-bench -- synth-audio --runs ../bench/runs-fr
 
 # 2. Stream it through the real recogniser at real-time pace.
 cargo run --release -p cc-bench -- capture-local \
-  --workdir /tmp/lang-fr --runs ../bench/runs-fr --model ../src-tauri/models/<model>
+  --runs ../bench/runs-fr --model ../src-tauri/models/<model>
 ```
 
 Each language also needs **its own `blank_penalty` sweep**. The shipping 3.0 was

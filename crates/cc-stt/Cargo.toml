@@ -7,5 +7,10 @@ rust-version.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
 sherpa-onnx = "1.13.4"
+
+# Test-only since the hosted wire client went: nothing on the shipping path
+# serialises a frame, it only derives the impls. Keeping it out of the normal
+# graph means the app does not build it.
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -110,7 +110,7 @@ pub type AlignmentSnapshot = cc_align::TokenSnapshot;
 struct AlignmentSession {
     /// Echoed onto every snapshot as `session_generation`. Never a filter.
     label: u64,
-    /// The socket whose frames this engine will accept, once one is bound.
+    /// The stream whose frames this engine will accept, once one is bound.
     /// `None` until a stream starts, and an unbound session follows nothing —
     /// which is correct: there is no audio yet to follow.
     stream_generation: Option<u64>,
@@ -143,7 +143,7 @@ impl AlignmentState {
     /// `label` is the take's SESSION generation — an identity echoed onto every
     /// snapshot, never a filter (see [`AlignmentSession`]). The session starts
     /// UNBOUND: it follows nothing until [`AlignmentState::bind_stream`] ties
-    /// it to the socket that will feed it.
+    /// it to the recogniser stream that will feed it.
     ///
     /// Replaces any session already running: a new take supersedes the old one,
     /// and keeping the previous engine alive would let speech from before the
@@ -168,11 +168,11 @@ impl AlignmentState {
         self.start_bound(label, None, tokens, language);
     }
 
-    /// Arm the engine, optionally already bound to a live socket.
+    /// Arm the engine, optionally already bound to a live stream.
     ///
     /// `stream_generation` is `Some` when a transcription stream is ALREADY
     /// running as the take arms. That happens because both calls are async IPC
-    /// and their landing order is not guaranteed: if the socket wins the race,
+    /// and their landing order is not guaranteed: if the stream wins the race,
     /// `bind_stream` has already fired against no session and would never fire
     /// again. Seeding here is what makes the binding order-independent — and a
     /// later `bind_stream` still supersedes it, so a stale seed cannot stick.
@@ -237,7 +237,7 @@ impl AlignmentState {
         self.lock().as_ref().map(|s| s.label)
     }
 
-    /// The socket this session accepts frames from, if one is bound.
+    /// The stream this session accepts frames from, if one is bound.
     pub fn bound_stream(&self) -> Option<u64> {
         self.lock().as_ref().and_then(|s| s.stream_generation)
     }
@@ -690,11 +690,11 @@ mod tests {
         assert!(snapshot.confirmed_token <= snapshot.observed_token);
     }
 
-    /// Frames from a superseded transcription socket must not reach the engine:
+    /// Frames from a superseded transcription stream must not reach the engine:
     /// this is the check that keeps the tail of a stopped take out of the next
     /// one's alignment.
     #[test]
-    fn frames_from_another_socket_are_ignored() {
+    fn frames_from_another_stream_are_ignored() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
         state.bind_stream(2);
@@ -712,16 +712,16 @@ mod tests {
 
     /// THE REGRESSION THIS FILE EXISTS FOR.
     ///
-    /// The take's session generation and the socket's generation are unrelated
+    /// The take's session generation and the stream's generation are unrelated
     /// counters, and they disagree the moment Preflight's microphone test has
-    /// consumed a socket. Filtering frames on the session number therefore
+    /// consumed a stream. Filtering frames on the session number therefore
     /// dropped every word of every take, over a connection reporting perfect
     /// health — "words heard 28, script followed 0 of 26", with nothing
     /// anywhere reporting an error.
     #[test]
-    fn a_take_follows_when_its_label_and_its_socket_disagree() {
+    fn a_take_follows_when_its_label_and_its_stream_disagree() {
         let state = AlignmentState::new();
-        // Session 1 (the first take) on socket 2 (Preflight took socket 1).
+        // Session 1 (the first take) on stream 2 (the mic test took stream 1).
         state.start(1, &tokens(SCRIPT));
         state.bind_stream(2);
 
@@ -735,7 +735,7 @@ mod tests {
                 },
                 2_000.0,
             )
-            .expect("a frame from the BOUND socket must reach the engine");
+            .expect("a frame from the BOUND stream must reach the engine");
 
         assert_eq!(snapshot.state, "following");
         assert!(
@@ -748,7 +748,7 @@ mod tests {
         assert_eq!(snapshot.session_generation, 1);
     }
 
-    /// An armed-but-unbound session follows nothing. There is no socket, so
+    /// An armed-but-unbound session follows nothing. There is no stream, so
     /// there is no audio — accepting a frame here would mean accepting one from
     /// a stream this take has nothing to do with.
     #[test]
@@ -769,12 +769,12 @@ mod tests {
             .is_none());
     }
 
-    /// The socket won the race: the stream was already running when the take
+    /// The stream won the race: it was already running when the take
     /// armed, so `bind_stream` fired against no session and will never fire
     /// again. Seeding at arm time is what keeps that ordering from silently
     /// costing the whole take.
     #[test]
-    fn a_session_armed_after_its_socket_still_follows() {
+    fn a_session_armed_after_its_stream_still_follows() {
         let state = AlignmentState::new();
         state.start_bound(1, Some(2), &tokens(SCRIPT), cc_align::AlignmentLanguage::English);
         assert_eq!(state.bound_stream(), Some(2));
@@ -791,10 +791,10 @@ mod tests {
             .is_some());
     }
 
-    /// A reconnect keeps the same socket generation, so following survives it;
-    /// a NEW socket rebinds, and the old one stops being heard.
+    /// A restart keeps the same stream generation, so following survives it;
+    /// a NEW stream rebinds, and the old one stops being heard.
     #[test]
-    fn rebinding_supersedes_the_previous_socket() {
+    fn rebinding_supersedes_the_previous_stream() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
         state.bind_stream(2);
@@ -1039,7 +1039,7 @@ mod tests {
         state.start(1, &tokens(SCRIPT));
         state.bind_stream(1);
         state.start(2, &tokens(&["completely", "different", "script", "text"]));
-        // A new take arms UNBOUND: the previous socket binding must not carry
+        // A new take arms UNBOUND: the previous stream binding must not carry
         // over, or the new engine would start listening to the old take.
         assert_eq!(state.bound_stream(), None);
         state.bind_stream(2);

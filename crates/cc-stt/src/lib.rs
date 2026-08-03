@@ -50,18 +50,21 @@ pub struct WordTime {
 /// Same shape the app's renderer receives, plus the audio clock at the moment
 /// the frame was observed — which is what the alignment benchmark needs.
 ///
-/// The audio clock is "how much audio the recogniser has consumed" — samples
-/// handed to the ONNX graph. Every corpus under `bench/runs*/` was captured
-/// against that same definition, which is what keeps them comparable.
+/// The audio clock is "how much source audio has been consumed", stated
+/// independently of how: samples fed to an ONNX graph today, bytes handed to a
+/// socket in the corpora captured before the recogniser moved on-device. Both
+/// measure the same thing, which is what keeps those corpora comparable with
+/// anything captured now.
 ///
-/// `word_times` is optional because it is genuinely absent rather than empty,
-/// two ways. Every run captured in `bench/runs*/` predates the field, so a
-/// whole corpus reads as untimed; and live, [`word_times::reconstruct`] declines
-/// rather than guesses when the recogniser hands back tokens and timestamps it
-/// cannot reconcile. `None` means "nothing was said about timing", which a
-/// consumer must not confuse with "it said there were no words". Anything
-/// scoring word timing has to report that as *unavailable* rather than treating
-/// a missing vector as zeroes.
+/// `word_times` is optional because it is genuinely absent rather than empty.
+/// Every run captured in `bench/runs*/` predates the field, so a whole corpus
+/// reads as untimed; `cc-bench` also produces frames with no timing on purpose
+/// (synthetic Tier A, and robustness transforms that discard it); and live,
+/// [`word_times::reconstruct`] declines rather than guesses when the recogniser
+/// hands back tokens and timestamps it cannot reconcile. `None` means "nothing
+/// was said about timing", which a consumer must not confuse with "it said
+/// there were no words". Anything scoring word timing has to report that as
+/// *unavailable* rather than treating a missing vector as zeroes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SttFrame {

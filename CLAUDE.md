@@ -117,7 +117,7 @@ Time enters as explicit audio-clock milliseconds. The *same* crate runs live in
 the app and offline in `cc-bench`, which is what makes benchmark numbers mean
 anything.
 
-`src-tauri/src/align/mod.rs` is its host: it sits next to the socket (where the
+`src-tauri/src/align/mod.rs` is its host: it sits next to the recogniser (where the
 frames and the audio clock already are) and owns **the one conversion in the
 system** between the engine's *atoms* (`$12` = two spoken words) and the app's
 *tokens* (`$12` = one measured span on the glass). Nothing downstream of that

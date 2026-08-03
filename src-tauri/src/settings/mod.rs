@@ -421,10 +421,12 @@ pub fn default_language() -> &'static str {
 /// each time the stale string was forwarded to something that rejected it.
 ///
 /// It cannot be forwarded anywhere any more, because there is nothing to
-/// forward it to; but it is still reported in diagnostics and still shown in
-/// Settings, and a build that names a hosted recogniser while an on-device
-/// Zipformer does the listening is a lie in the one artefact whose whole job is
-/// to be believed.
+/// forward it to. What it still is, is the value diagnostics report and
+/// Settings displays — so WITHOUT this repair a build would name a hosted
+/// recogniser while an on-device Zipformer did the listening, which is a lie in
+/// the one artefact whose whole job is to be believed. `get_settings` runs this
+/// on every read, so what a consumer sees is already repaired; only the row on
+/// disk stays stale until the next write.
 ///
 /// The test is now catalogue MEMBERSHIP rather than equality with one constant.
 /// The two agree exactly while one model ships, and they stop agreeing the
