@@ -16,7 +16,7 @@
  * path — the same `ipcInvoke` funnel a real window uses — rather than being
  * handed props a real backend never produces.
  */
-import { render, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import SpeechLanguagePicker from '../../src/control/components/SpeechLanguagePicker.svelte';
 import { setInvokeForTesting } from '../../src/control/services/ipc';
@@ -320,6 +320,75 @@ describe('a missing model is fixable here', () => {
     // Named "Try again" rather than "Download": the user already pressed
     // Download once and it did not work.
     expect(buttonLabelled(view, 'Try again')).not.toBeNull();
+  });
+});
+
+/**
+ * §181 — the third surface `STT_MODEL_NOT_INSTALLED` reaches.
+ *
+ * The two above it are routes out of `ensure_loaded`; this one is a separate
+ * raise site. `select_speech_language` refuses a language whose weights are not
+ * resolvable, `activate()` turns the rejection into `describeError(err)`, and
+ * that string is rendered here as an alert — so error copy written for a take
+ * that failed to start is also read next to a language row by someone who is
+ * not in a take at all.
+ *
+ * The row's own `notInstalled` rendering (above) does NOT prove this: that path
+ * reads a status snapshot and never touches `describeError`. What is modelled
+ * here is the race the snapshot cannot cover — the panel painted while the
+ * model was usable, and it stopped being usable before the click.
+ */
+describe('a language that cannot be activated says so in authored copy', () => {
+  it('renders the app’s own sentence rather than the backend’s', async () => {
+    const german = optionFixture({
+      languageTag: 'de-DE',
+      primarySubtag: 'de',
+      modelId: 'kroko-de',
+      active: false,
+      status: statusFixture({ modelId: 'kroko-de', installed: true }),
+    });
+    const options = optionsFixture({
+      languages: [optionFixture({ active: false }), german],
+    });
+    const { view } = await mount(options);
+
+    /*
+     * Verbatim from `speech_cmds.rs`. It is readable prose, which is the whole
+     * hazard: `describeError` prefers a `userMessage` that does not look like a
+     * code, so before this issue it reached the alert unedited and nothing in
+     * `errors.ts` had a say in what the picker said.
+     */
+    const backendMessage = 'Download this language before switching to it.';
+    setInvokeForTesting(async (command) => {
+      if (command === 'select_speech_language') {
+        throw {
+          code: 'STT_MODEL_NOT_INSTALLED',
+          category: 'validation',
+          userMessage: backendMessage,
+          recoverable: true,
+          correlationId: 'corr-1',
+        };
+      }
+      if (command === 'get_speech_language_options') return options as never;
+      return statusFixture() as never;
+    });
+
+    const select = view.container.querySelector('select')!;
+    select.value = 'de-DE';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => expect(buttonLabelled(view, 'Use ')?.disabled).toBe(false));
+    await fireEvent.click(buttonLabelled(view, 'Use ')!);
+
+    await waitFor(() => {
+      const alerts = Array.from(view.container.querySelectorAll('[role="alert"]'))
+        .map((node) => (node.textContent ?? '').replace(/\s+/g, ' ').trim());
+      expect(alerts.some((a) => a.includes('Settings → Speech'))).toBe(true);
+    });
+    const shown = text(view);
+    expect(shown).toContain('The speech model for the selected language is not installed.');
+    expect(shown).not.toContain(backendMessage);
+    // The rule the whole of `errors.ts` exists for, asserted on this screen too.
+    expect(shown).not.toContain('STT_MODEL_NOT_INSTALLED');
   });
 });
 

@@ -39,11 +39,30 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
  * plain English rather than implying one that does not exist.
  */
 const ERROR_COPY: Record<string, string> = {
-  /* -- the bundled recogniser --------------------------------------------- */
+  /* -- the on-device recogniser -------------------------------------------- */
   //
-  // A broken installation, not a broken account. There is no key, no quota and
-  // no provider to be down, so nothing here asks the presenter to go and fix
+  // A broken machine, not a broken account. There is no key, no quota and no
+  // provider to be down, so nothing here asks the presenter to go and fix
   // something on a website.
+  //
+  // Nor does anything here ask them to reinstall CandidCue any more, which is
+  // what `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` used to say. The
+  // weights were in the bundle when that copy was written; since §152 the stock
+  // installer ships none and the model is downloaded into the app-data
+  // directory instead. A reinstall leaves those bytes exactly as they were, so
+  // it was an instruction that could not work — the same defect as naming a
+  // greyed-out menu item, one step further along. The model is a DOWNLOAD, and
+  // the download lives in Settings → Speech.
+  //
+  // `STT_MODEL_NOT_INSTALLED` is the newest of the five and the most likely to
+  // be read: a first run that skips Welcome and starts a take reaches it. It is
+  // not a fault at all — it is the ordinary state of a machine that has not
+  // downloaded a model yet — which is why Rust raises it recoverable and why
+  // its copy is the only one whose remedy is something the user was always
+  // going to have to do. Note it does NOT mean "never downloaded": a deleted,
+  // unsealed, stale or half-extracted download all fail `model_store`'s
+  // usability check and arrive here too, so the copy says the model is not
+  // installed rather than guessing at a history it cannot see.
   //
   // Each one also names the fallback that EXISTS. These used to end "Manual and
   // fixed-speed modes still work", which they no longer do: Settings shows both
@@ -51,37 +70,47 @@ const ERROR_COPY: Record<string, string> = {
   // recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
   // the real answer.
   //
-  // The rescue is scoped — "In a take, …" — because these four strings have TWO
-  // surfaces, and only one of them has a transport to press. In a take they
-  // reach the failure toast, where `A` really does work. But `voice-live.ts`
-  // hands the same `describeError` output to `events.onError` on both the
-  // `startTranscription()` rejection and every `failed` frame, `MicTestSession`
-  // stores it as `snapshot.error`, and Settings → Audio renders it verbatim as
-  // `micError`. `startTranscription()` → `ensure_loaded()` is exactly where
+  // The rescue is scoped — "In a take, …" — because these five strings have
+  // THREE surfaces, and only one of them has a transport to press. In a take
+  // they reach the failure toast, where `A` really does work. But
+  // `voice-live.ts` hands the same `describeError` output to `events.onError`
+  // on both the `startTranscription()` rejection and every `failed` frame,
+  // `MicTestSession` stores it as `snapshot.error`, and Settings → Audio
+  // renders it verbatim as `micError`. `startTranscription()` →
+  // `ensure_loaded()` is exactly where `STT_MODEL_NOT_INSTALLED`,
   // `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` are raised, and the failed
-  // frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all four land on
+  // frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all five land on
   // that screen. There is no take there: `toggleAutoScroll()` returns early
   // while `state.active` is false, and the shortcut layer only binds `A` inside
   // a session, so a bare "Press A" is the old defect in new words. A conditional
   // is true on both surfaces; an imperative is true on neither more than one.
+  //
+  // The third surface belongs to `STT_MODEL_NOT_INSTALLED` alone, and it is a
+  // SECOND raise site rather than another route out of `ensure_loaded`:
+  // `select_speech_language` (`speech_cmds.rs`) refuses a language whose
+  // weights are not on the machine, `SpeechLanguagePicker.activate()` turns the
+  // rejection into `selectError = describeError(err)`, and the picker renders
+  // it in a `role="alert"`. That screen has no take either, and the picker is
+  // hosted by both Welcome and Settings — so the copy has to read as sense next
+  // to a language row, not only under a take that failed to start.
   //
   // For the same reason nothing here says "after the take" any more: the reader
   // in Settings has no take to be after. Every repair clause is phrased so it
   // holds with or without one, and any clause that cannot be is folded into the
   // "In a take" sentence (`STT_ENGINE_ERROR`'s stop-and-start).
   //
-  // The rescue comes BEFORE the repair in all four. Reinstalling and restarting
-  // both mean leaving CandidCue, which is not a thing anyone does mid-take; the
-  // keystroke that keeps the script moving is what the presenter needs in the
-  // second they are reading this, and the repair keeps until they are off
-  // camera.
+  // The rescue comes BEFORE the repair in all five. Downloading and restarting
+  // both mean putting the script down, which is not a thing anyone does
+  // mid-take; the keystroke that keeps the script moving is what the presenter
+  // needs in the second they are reading this, and the repair keeps until they
+  // are off camera.
   //
-  // All four say "start or stop", because `A` is a TOGGLE and none of these
+  // All five say "start or stop", because `A` is a TOGGLE and none of these
   // can promise which way it will move.
   //
   // `STT_ENGINE_ERROR` is the obvious case: it fires arbitrarily deep into a
   // take, and auto-scroll pauses following without pausing transcription, so
-  // the recogniser can die with the transport already running. The other three
+  // the recogniser can die with the transport already running. The other four
   // look like cold-start failures where `startLiveSession` has just set
   // `running: false` — but `resume()` re-enters `start()` after a hard pause
   // released the capture, and `autoScroll.running` deliberately survives a
@@ -89,10 +118,12 @@ const ERROR_COPY: Record<string, string> = {
   // transport armed, and telling that presenter to "start" auto-scroll would
   // stop their script. "Start or stop" is also the wording Settings and Live
   // already use for this key.
+  STT_MODEL_NOT_INSTALLED:
+    'The speech model for the selected language is not installed. In a take, press A to start or stop auto-scroll. Download it in Settings → Speech to follow your voice.',
   STT_MODEL_MISSING:
-    'The speech model is missing from this installation. In a take, press A to start or stop auto-scroll. Reinstall CandidCue to restore voice following.',
+    'The speech model files could not be found. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue, and reinstall it if this keeps happening.',
+    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue; if this keeps happening, remove the model in Settings → Speech and download it again.',
   STT_WORKER_FAILED:
     'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
   STT_ENGINE_ERROR:

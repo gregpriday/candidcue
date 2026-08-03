@@ -121,6 +121,7 @@ const {
   clearErrorDiagnostics,
   describeError,
   copyForErrorCode,
+  hasErrorCopy,
 } = await import('../../../src/control/services/errors');
 
 /**
@@ -130,10 +131,16 @@ const {
 const CODE_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 
 /**
- * The four the bundled recogniser can raise. They share one property no other
- * copy in the file has: two surfaces, only one of which has a take open.
+ * The five the on-device recogniser can raise. They share one property no other
+ * copy in the file has: more than one surface, and only one of those has a take
+ * open.
+ *
+ * `STT_MODEL_NOT_INSTALLED` reaches a third — `select_speech_language` refuses
+ * an uninstalled language and `SpeechLanguagePicker` renders `describeError` in
+ * an alert — which is asserted as a screen in `tests/dom/`.
  */
 const RECOGNISER_CODES = [
+  'STT_MODEL_NOT_INSTALLED',
   'STT_MODEL_MISSING',
   'STT_MODEL_LOAD_FAILED',
   'STT_WORKER_FAILED',
@@ -209,13 +216,21 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     expect(message).not.toContain('STT_MODEL_MISSING');
     expect(message).not.toMatch(CODE_TOKEN);
     expect(message).toContain('Voice following stopped.');
-    // What happened, and what to do about it. The recogniser is bundled, so
-    // the remedy is a reinstall — never an account, a key or a dashboard.
+    // What happened, and what to do about it. The recogniser runs on this
+    // machine, so the remedy is the model download — never an account, a key
+    // or a dashboard.
     expect(message).toMatch(/speech model/i);
-    // Not `/reinstall|manual mode/`: "manual mode" is a banned phrase now (see
+    // Not `/download|manual mode/`: "manual mode" is a banned phrase now (see
     // the Settings-guarded sweep below), so accepting it as an alternative here
     // would have let the very copy that test forbids satisfy this one.
-    expect(message).toMatch(/reinstall/i);
+    //
+    // This asserted `/reinstall/i` until #181. The model moved out of the
+    // bundle in §152, so a reinstall leaves it exactly as it was and the old
+    // copy sent the reader somewhere that could not help them; the remedy that
+    // does work is the download, and the screen it is on is named in full for
+    // the same reason the Diagnostics path is below.
+    expect(message).toMatch(/download/i);
+    expect(message).toMatch(/Settings → Speech/);
     // The fallback it points at has to be one that exists.
     expect(message).toMatch(/auto-scroll/i);
   });
@@ -229,13 +244,13 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     const [model, mic, network] = toastMessages();
     expect(new Set([model, mic, network]).size).toBe(3);
     // Each names the remedy that actually applies to it.
-    expect(model).toMatch(/reinstall/i);
+    expect(model).toMatch(/Settings → Speech/);
     expect(mic).toMatch(/System Settings|Privacy/i);
     expect(network).toMatch(/internet connection/i);
-    // …and not one that does not: reinstalling cannot grant a microphone
+    // …and not one that does not: a model download cannot grant a microphone
     // permission, and a privacy toggle cannot restore a missing model.
-    expect(mic).not.toMatch(/reinstall/i);
-    expect(network).not.toMatch(/reinstall/i);
+    expect(mic).not.toMatch(/Settings → Speech/);
+    expect(network).not.toMatch(/Settings → Speech/);
   });
 
   it('distinguishes a stopped session from an interrupted one', () => {
@@ -608,5 +623,93 @@ describe('recogniser copy stays true on the surface with no take', () => {
       expect(first, `${code} opens with a condition instead of the fault`).not.toMatch(SCOPED);
       expect(first).toMatch(/^The speech (?:model|recogniser)\b/);
     }
+  });
+});
+
+/**
+ * §181 — the remedy for a model that is not on the machine is the download,
+ * and the app has to say so itself.
+ *
+ * Two failures, one cause. The weights left the bundle in §152 and nothing in
+ * this file was told:
+ *
+ *  - `STT_MODEL_NOT_INSTALLED` had no copy at all. That did not read as
+ *    obviously broken, which is exactly what made it worth a test: Rust writes
+ *    a decent `userMessage` and `describeError` falls back to it, so the
+ *    presenter saw a reasonable sentence BY ACCIDENT. Reasonable-by-accident is
+ *    outside every rule this file enforces — the take-scoping, the banned
+ *    modes, the no-code sweep — and one edit on the Rust side away from not
+ *    being reasonable at all. The first test below therefore fails if the entry
+ *    is removed even though `describeError` would still emit sensible prose.
+ *
+ *  - `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` told the reader to
+ *    reinstall CandidCue. The model lives in the app-data directory now, so a
+ *    reinstall leaves it byte for byte where it was: an instruction that cannot
+ *    work, which is the same class of defect as naming a mode Settings marks
+ *    unavailable.
+ */
+describe('the model download is the remedy, not a reinstall', () => {
+  /** What Rust puts on the `AppError`, at both raise sites, verbatim. */
+  const BACKEND_MESSAGES = [
+    // `speech/mod.rs::not_installed`, reached through `ensure_loaded`.
+    'The speech model has not been downloaded yet. Open Settings › Speech to install it.',
+    // `speech_cmds.rs::select_speech_language`, refusing an uninstalled language.
+    'Download this language before switching to it.',
+  ];
+
+  /** The claim about what happened, which is always the leading sentence. */
+  const opener = (copy: string): string => copy.split(/(?<=\.)\s+/)[0]?.trim() ?? '';
+
+  it('authors the copy for a model that is not installed, rather than borrowing Rust’s', () => {
+    expect(hasErrorCopy('STT_MODEL_NOT_INSTALLED')).toBe(true);
+
+    for (const userMessage of BACKEND_MESSAGES) {
+      const shown = describeError({ code: 'STT_MODEL_NOT_INSTALLED', userMessage });
+      // The assertion that carries the issue: both backend sentences are
+      // perfectly readable, so passing one through would look fine on screen
+      // and still mean this file had no say in it.
+      expect(shown, 'the backend message reached the user unedited').not.toBe(userMessage);
+      expect(shown).toBe(copyForErrorCode('STT_MODEL_NOT_INSTALLED'));
+      expect(shown).toMatch(/Settings → Speech/);
+    }
+  });
+
+  it('never sends a presenter to reinstall the app for a model that is not in it', () => {
+    /*
+     * Blanket rather than "reinstall CandidCue", and that is the point: the
+     * model is a DOWNLOAD living outside the application bundle, so there is no
+     * true sentence about these five codes with "reinstall" in it. Remove it,
+     * download it again — those are the words for what Settings → Speech does.
+     *
+     * Deliberately not applied to every code: `REALTIME_CONFIG_REJECTED` and
+     * the update failures are about the app itself, where reinstalling is still
+     * honest advice.
+     */
+    for (const code of RECOGNISER_CODES) {
+      const copy = copyForErrorCode(code);
+      expect(copy, `${code} tells the reader to reinstall an app the model is not in: ${copy}`)
+        .not.toMatch(/\bre-?install/i);
+    }
+  });
+
+  it('points every model-state failure at the screen that can fix it', () => {
+    // The three raised while resolving or loading the weights. `WORKER`/`ENGINE`
+    // are runtime faults of a model that DID load, so a download is not their
+    // remedy and they are left out rather than padded to match.
+    for (const code of ['STT_MODEL_NOT_INSTALLED', 'STT_MODEL_MISSING', 'STT_MODEL_LOAD_FAILED']) {
+      const copy = copyForErrorCode(code);
+      expect(copy, `${code} does not name the screen that fixes it`).toMatch(/Settings → Speech/);
+      expect(copy, `${code} does not name the action that fixes it`).toMatch(/download/i);
+    }
+  });
+
+  it('keeps the two model-state failures distinguishable', () => {
+    // Different conditions, different sentences: one machine has no usable
+    // model, the other resolved a directory and could not find the files in it.
+    // Collapsing them into one string is the defect the file header names.
+    const notInstalled = copyForErrorCode('STT_MODEL_NOT_INSTALLED');
+    const missing = copyForErrorCode('STT_MODEL_MISSING');
+    expect(notInstalled).not.toBe(missing);
+    expect(opener(notInstalled)).not.toBe(opener(missing));
   });
 });

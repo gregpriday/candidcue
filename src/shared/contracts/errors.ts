@@ -40,8 +40,19 @@ export interface AppError {
 
 /** Stable application error codes (spec Appendix C.7). */
 export const APP_ERROR_CODES = [
-  // The bundled recogniser. All four mean "this installation is broken",
-  // which is why none of them are recoverable by anything the user can type.
+  /*
+   * The on-device recogniser.
+   *
+   * `STT_MODEL_NOT_INSTALLED` is the odd one out and deliberately so: since
+   * §152 the stock installer ships no weights, so "the model is not here" is an
+   * ORDINARY state a first run reaches rather than a damaged installation, and
+   * it is the only one of the five the user can clear themselves — Settings →
+   * Speech has the download. Rust raises it recoverable for that reason.
+   *
+   * The other four mean something on this machine is broken, which is why none
+   * of them are recoverable by anything the user can type.
+   */
+  'STT_MODEL_NOT_INSTALLED',
   'STT_MODEL_MISSING',
   'STT_MODEL_LOAD_FAILED',
   'STT_WORKER_FAILED',
