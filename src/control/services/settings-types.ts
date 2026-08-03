@@ -28,7 +28,6 @@ export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-
 
 export type LaunchBehavior = 'library' | 'recent';
 export type SessionMode = 'voice' | 'manual' | 'fixed';
-export type UpdateChannel = 'stable' | 'beta';
 
 /**
  * Re-exported from the contracts, where it lives because `StageSettings` and the
@@ -279,9 +278,16 @@ export interface AppSettings {
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
+  /**
+   * #180: `diagnosticLogging` and `updateChannel` used to live here too. Neither
+   * was ever read — no Rust mapping in `toRustPatch`, no consumer anywhere — so
+   * both were a stored preference that decided nothing, behind a toggle and a
+   * dropdown that implied otherwise. A field nobody reads is worse than a
+   * missing one: it reads as wired. If either genuinely ships, it comes back
+   * Rust-owned like `saveTranscript`, and must NOT adopt whatever stale value
+   * is still sitting in the localStorage overlay from the version that faked it.
+   */
   privacy: {
-    diagnosticLogging: boolean;
-    updateChannel: UpdateChannel;
     /**
      * §36.2 transcript retention. Rust-owned in both directions and 'off' by
      * default — it had no mapping in `settings.ts` at all, so the one setting
@@ -879,8 +885,6 @@ export function defaultAppSettings(): AppSettings {
     optical: { profiles: {}, activeRig: {} },
     following: defaultFollowingSettings(),
     privacy: {
-      diagnosticLogging: false,
-      updateChannel: 'stable',
       saveTranscript: 'off',
     },
   };

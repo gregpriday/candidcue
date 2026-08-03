@@ -2566,7 +2566,8 @@
           <div class="privacy">
             <h3 class="privacy-head">Local by default</h3>
             <p class="privacy-body">
-              Your Markdown scripts, imported images, and settings are stored on this device.
+              Your Markdown scripts, imported images, settings, and diagnostic logs are stored on
+              this device.
             </p>
             <h3 class="privacy-head">While voice tracking is active</h3>
             <p class="privacy-body">
@@ -2574,16 +2575,18 @@
               audio is transcribed on this machine by a recogniser built into CandidCue. It is not
               uploaded, and CandidCue does not save it.
             </p>
-            <h3 class="privacy-head">Nothing leaves this device</h3>
+            <h3 class="privacy-head">Your voice and your script stay here</h3>
             <p class="privacy-body">
               Neither your voice nor your script is sent anywhere. The words are recognised here and
               matched against your script here — there is no transcription account, no API key, and
               no third party involved in following you.
             </p>
-            <h3 class="privacy-head">CandidCue servers</h3>
+            <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
-              CandidCue checks for software updates. Your scripts and your audio are not sent to
-              CandidCue servers.
+              CandidCue does not check for updates on its own, and there is no CandidCue server for
+              it to check with. It reaches the network only when you ask it to: downloading a
+              language in Speech settings, or importing an image from a web address. Neither request
+              carries your scripts or your audio.
             </p>
           </div>
 
@@ -2604,22 +2607,14 @@
             <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>
           </div>
 
-          <Toggle
-            checked={$settings.privacy.diagnosticLogging}
-            label="Diagnostic logging"
-            description="Keeps redacted local logs to help diagnose problems"
-            onchange={(value) => void patchSettings('privacy', { diagnosticLogging: value })}
-          />
-          <Select
-            label="Update channel"
-            value={$settings.privacy.updateChannel}
-            options={[
-              { value: 'stable', label: 'Stable' },
-              { value: 'beta', label: 'Beta' },
-            ]}
-            onchange={(value) =>
-              void patchSettings('privacy', { updateChannel: value as 'stable' | 'beta' })}
-          />
+          <!--
+            #180: a "Diagnostic logging" toggle and an "Update channel" dropdown
+            used to sit here. Neither reached Rust — they wrote to the frontend
+            overlay and nothing ever read them back, so logging ran either way
+            and the channel selected nothing. The button below stays: unlike
+            those two it asks Rust a real question and reports the real answer,
+            which in this build is that update checks are not available.
+          -->
           <div class="row-actions">
             <Button size="sm" onclick={() => runUpdateCheck()}>Check for updates</Button>
             {#if updateNote}<span class="hint-line">{updateNote}</span>{/if}
