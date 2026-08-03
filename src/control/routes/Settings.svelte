@@ -2579,8 +2579,7 @@
             <p class="privacy-body">
               CandidCue does not check for updates on its own, and this build has no update service
               to check with. It reaches the network when you download a language in Speech settings,
-              and that request carries neither your script nor your audio. Opening a model's licence
-              link hands the address to your browser.
+              and that request carries neither your script nor your audio.
             </p>
           </div>
 
