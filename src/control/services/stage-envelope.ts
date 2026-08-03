@@ -76,6 +76,8 @@ export interface StageSettingsOverrides {
   pastDimming?: boolean;
   phraseHighlight?: boolean;
   showCues?: boolean;
+  /** The stage chooses its own line breaks. Absent means on. */
+  semanticLineBreaks?: boolean;
   /** Luminance of the text over the black field. Ignored when a rig is given. */
   textIntensity?: TextIntensity;
   /** Clean Take hides instrumentation; Diagnostic Take shows it. */
@@ -257,6 +259,9 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     mirrorX: overrides.mirrorX ?? false,
     mirrorY: overrides.mirrorY ?? false,
     showCues: overrides.showCues ?? true,
+    // Absent means on: a settings document written before the breaker existed
+    // is a presenter who has not chosen, not one who chose the old behaviour.
+    semanticLineBreaks: overrides.semanticLineBreaks ?? true,
     stageAcknowledgements: true,
     reducedMotion: false,
     paragraphSpacingEm: optics ? optics.paragraphSpacingEm : UNCALIBRATED_PARAGRAPH_SPACING_EM,
@@ -350,6 +355,7 @@ export function stageSettingsFromSettings(
     mirrorY: reader ? false : t.mirrorY,
     pastDimming: t.pastDimming,
     phraseHighlight: t.phraseHighlight,
+    semanticLineBreaks: t.semanticLineBreaks,
     textIntensity: t.textIntensity,
     stageMode: t.stageMode,
     readingCue: t.readingCue,

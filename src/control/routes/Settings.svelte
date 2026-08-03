@@ -2527,6 +2527,16 @@
             label="Past-text dimming"
             onchange={(value) => void patchSettings('teleprompter', { pastDimming: value })}
           />
+          <Toggle
+            checked={$settings.teleprompter.semanticLineBreaks}
+            label="Break lines at phrase boundaries"
+            onchange={(value) => void patchSettings('teleprompter', { semanticLineBreaks: value })}
+          />
+          <p class="hint-line">
+            The stage ends each line where a phrase ends rather than at the last word that fits,
+            so the sweep back to the left edge lands somewhere natural — never on "the", and
+            never through the middle of a name. Turn it off to wrap the way a browser does.
+          </p>
           <Select
             label="When a session ends"
             value={$settings.teleprompter.stageEndBehavior}

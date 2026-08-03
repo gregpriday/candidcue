@@ -95,6 +95,8 @@
   import { segmentText, stageFontStack } from './text';
   import { projectForPerformance, type PerformanceMode } from '../../shared/performance-view';
   import { clearFontMetricsCache, measureFontMetrics } from './fontMetrics';
+  import { clearAdvanceCache } from './advance';
+  import { EMPTY_WRAP_PLAN, planScriptBreaks } from './wrap-plan';
   import BlockView from './BlockView.svelte';
   import ReadingCue from './ReadingCue.svelte';
   import {
@@ -594,6 +596,10 @@
         // fallback measurement for every stack at once — which is right: a font
         // finishing is evidence about the whole document, not about one family.
         clearFontMetricsCache();
+        // Same reasoning, same moment: every advance measured before the real
+        // face arrived was measured against a fallback, and a line planned on
+        // those widths is planned for a font nobody is looking at.
+        clearAdvanceCache();
         fontEpoch += 1;
       },
       () => {
@@ -935,6 +941,49 @@
       ? Math.min(safeRect.width, optics.columnCh * 0.55 * optics.bodyFontSizePx)
       : (vw * settings.columnWidthPercent) / 100,
   );
+
+  /**
+   * Where the lines break, chosen rather than discovered.
+   *
+   * The browser breaks at the last word that fits; a prompter wants the break
+   * at the phrase boundary the eye returns from comfortably. `wrap-plan.ts`
+   * measures each word in the face it will be drawn in and asks the solver.
+   *
+   * Planned over the WHOLE document, not the render window. Per-block plans are
+   * independent, so windowing them would give the same lines — but the
+   * signature below is a layout fingerprint input, and one that moved every
+   * time the window scrolled would rebuild the line map mid-take for no reason.
+   *
+   * `fontEpoch` is read for its dependency alone: every advance measured before
+   * the real face loaded was measured against a fallback.
+   */
+  const wrapPlan = $derived.by(() => {
+    void fontEpoch;
+    // Off is exactly the pre-existing behaviour: nothing measured, nothing
+    // planned, the browser wraps. Absent means on — see the contract note.
+    if (settings.semanticLineBreaks === false) return EMPTY_WRAP_PLAN;
+    return planScriptBreaks(performanceBlocks, {
+      columnWidthPx,
+      baseStyle: {
+        fontStack: stageFontStack(settings.fontFamilyId),
+        fontSizePx: effective.fontSizePx,
+        fontWeight: optics?.fontWeight ?? settings.fontWeight ?? 500,
+        italic: false,
+        mono: false,
+        letterSpacingPx: effective.letterSpacingEm * effective.fontSizePx,
+      },
+      /*
+       * The microgap is drawn onto sentence-final tokens as `margin-inline-end`
+       * after this plan is made, and at ordinary stage sizes it is several
+       * times the safety margin. Planning without it would put a line over the
+       * column, the browser would wrap it, and the planned break would then
+       * strand the word it moved — the one way this feature could make a line
+       * worse rather than merely no better.
+       */
+      microgapPx,
+      microgapTokens,
+    });
+  });
 
   /**
    * The floor for presenter-readable text that is not body copy, in px.
@@ -1521,6 +1570,18 @@
       // own record of the value the current map was built at — see the note
       // there.
       microgapPx,
+      /*
+       * The chosen line breaks, for exactly the reason the font hash above is
+       * here: a fingerprint term nothing reads reactively is a term that never
+       * gets looked at.
+       *
+       * The clearest case is the presenter turning the breaker off mid-session.
+       * Every line in the document re-wraps at that moment and not one other
+       * input in this list moves, so without this no measurement pass would be
+       * scheduled at all — the map would keep describing lines that are no
+       * longer on the glass, which is worse than never having planned them.
+       */
+      wrapPlan.signature,
       vw,
       vh,
       displayScale,
@@ -1632,6 +1693,13 @@
        * changed.
        */
       fontHash: fontFingerprint(fontMetrics),
+      /*
+       * Where the lines were chosen to break. Not derivable from anything else
+       * here: two documents at one measure in one face plan differently,
+       * because the solver is trading line fullness against the quality of the
+       * seam, and that depends on the words.
+       */
+      wrapPlanSignature: wrapPlan.signature,
     };
     /*
      * The microgap, tracked here rather than in the fingerprint.
@@ -3367,6 +3435,7 @@
           assets={doc.assets}
           showCues={settings.showCues}
           {gapPx}
+          breakAfterTokens={wrapPlan.breakAfterTokens}
         />
       {/each}
       {#if renderWindow.trailingSpacePx > 0}

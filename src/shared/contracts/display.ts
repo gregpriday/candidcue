@@ -77,6 +77,15 @@ export interface StageSettings {
   mirrorX: boolean;
   mirrorY: boolean;
   showCues: boolean;
+  /**
+   * The stage chooses its own line breaks (`stage/renderer/wrap-plan.ts`).
+   *
+   * Optional, and absent means ON. Every stage settings document written before
+   * this existed lacks the field, and the presenter who opens one of those is
+   * asking for the current product rather than for a frozen copy of the old
+   * one — so the default has to live in the reader, not in a migration.
+   */
+  semanticLineBreaks?: boolean;
   stageAcknowledgements: boolean;
   reducedMotion: boolean;
   /** Vertical rhythm between blocks in em of the stage font (A.3, default 0.7). */

@@ -191,6 +191,24 @@ export interface LayoutFingerprint {
    * map under the old generation and skipping the semantic re-anchor.
    */
   performanceView: string;
+  /**
+   * A digest of the chosen line breaks (`stage/renderer/wrap-plan.ts`).
+   *
+   * The stage decides where lines break rather than letting the browser break
+   * at the last word that fits, and that decision moves every baseline below it
+   * — so it identifies the layout as surely as the font size does.
+   *
+   * It is NOT derivable from the other fields. Two documents at one measure in
+   * one face can plan differently, because the plan depends on the WORDS: the
+   * solver is trading line fullness against the quality of the seam it breaks
+   * on. `scriptCompileHash` moves when the text changes and this moves when the
+   * lines do, and the pair is what makes "same layout" mean it.
+   *
+   * Optional so every existing caller — and every fixture that builds a
+   * fingerprint by hand — keeps compiling; absent and empty both mean "nothing
+   * planned", which is the browser's own wrapping.
+   */
+  wrapPlanSignature?: string;
 }
 
 /**
