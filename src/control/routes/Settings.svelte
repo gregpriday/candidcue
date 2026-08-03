@@ -1395,15 +1395,7 @@
   async function runUpdateCheck(): Promise<void> {
     updateNote = 'Checking…';
     try {
-      const result = await settingsService.checkForUpdate();
-      updateNote =
-        result.status === 'available'
-          ? `Update available: ${result.availableVersion}`
-          : result.status === 'up_to_date'
-            ? 'CandidCue is up to date.'
-            : result.status === 'unsupported'
-              ? 'Update checks are not available in this build.'
-              : `Could not check for updates: ${result.message ?? 'unknown error'}`;
+      updateNote = settingsService.describeUpdateCheck(await settingsService.checkForUpdate());
     } catch (err) {
       updateNote = `Could not check for updates. ${describeError(err)}`;
     }
@@ -1599,7 +1591,7 @@
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="CandidCue uses your microphone while a test or a voice-tracking take is running, and while the input meter below is on screen. The audio is transcribed on this machine and is not recorded, saved, or uploaded."
+          description="CandidCue opens your microphone briefly when you grant access, while a test or a voice-tracking take is running, and while the input meter below is on screen. Audio from a test or a take is transcribed on this machine; the meter only measures how loud you are. Neither is recorded, saved, or uploaded."
         >
           {#if micPermission === 'unknown'}
             <div class="row-actions">
@@ -2571,10 +2563,11 @@
             </p>
             <h3 class="privacy-head">When your microphone is open</h3>
             <p class="privacy-body">
-              CandidCue opens your microphone while a take or a microphone test is running, and
-              while the input meter is on screen in Audio settings. The audio is transcribed on this
-              machine by the speech model installed here. It is not uploaded, and CandidCue does not
-              save it.
+              CandidCue opens your microphone briefly when you grant access, while a take or a
+              microphone test is running, and while the input meter is on screen in Audio settings.
+              Audio from a take or a test is transcribed on this machine by the speech model
+              installed here; the meter only measures how loud you are. None of it is uploaded, and
+              CandidCue does not save it.
             </p>
             <h3 class="privacy-head">Your voice and your script stay here</h3>
             <p class="privacy-body">
@@ -2584,10 +2577,10 @@
             </p>
             <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
-              CandidCue does not check for updates on its own, and there is no CandidCue server for
-              it to check with. It reaches the network only when you ask it to: downloading a
-              language in Speech settings, or importing an image from a web address. Neither request
-              carries your scripts or your audio.
+              CandidCue does not check for updates on its own, and this build has no update service
+              to check with. It reaches the network when you download a language in Speech settings,
+              and that request carries neither your script nor your audio. Opening a model's licence
+              link hands the address to your browser.
             </p>
           </div>
 

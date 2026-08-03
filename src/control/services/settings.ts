@@ -585,6 +585,29 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   }
 }
 
+/**
+ * The sentence a presenter reads for an update-check result.
+ *
+ * #180: this used to be a ternary chain inside the route, which made the one
+ * mapping the issue explicitly protects — NOT_IMPLEMENTED reported as
+ * "not available in this build" — untestable without mounting Settings. The
+ * failure it guards against is silent and specific: swap this arm with the
+ * `up_to_date` arm and a build that cannot check ANYTHING tells the presenter
+ * they are up to date. Pure and exported so that swap fails a test instead.
+ */
+export function describeUpdateCheck(result: UpdateCheckResult): string {
+  switch (result.status) {
+    case 'available':
+      return `Update available: ${result.availableVersion}`;
+    case 'up_to_date':
+      return 'CandidCue is up to date.';
+    case 'unsupported':
+      return 'Update checks are not available in this build.';
+    default:
+      return `Could not check for updates: ${result.message ?? 'unknown error'}`;
+  }
+}
+
 export async function getAppVersion(): Promise<string> {
   if (!isTauriRuntime()) return '0.1.0-dev';
   try {
