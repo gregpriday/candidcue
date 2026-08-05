@@ -43,9 +43,11 @@ const usedTokens = (): Map<string, string[]> => {
   const found = new Map<string, string[]>();
   for (const relPath of TOKEN_SOURCES) {
     for (const match of read(relPath).matchAll(/@@(LEGAL_[A-Z0-9_]+)@@/g)) {
-      const where = found.get(match[1]) ?? [];
+      const token = match[1];
+      if (!token) continue;
+      const where = found.get(token) ?? [];
       if (!where.includes(relPath)) where.push(relPath);
-      found.set(match[1], where);
+      found.set(token, where);
     }
   }
   return found;
@@ -57,7 +59,8 @@ const usedTokens = (): Map<string, string[]> => {
 const declaredTokens = (): Set<string> => {
   const declared = new Set<string>();
   for (const match of read(REGISTER).matchAll(/`(LEGAL_[A-Z0-9_]+)`/g)) {
-    declared.add(match[1]);
+    const token = match[1];
+    if (token) declared.add(token);
   }
   return declared;
 };
