@@ -80,14 +80,15 @@ recogniser into real transcript events.
 it proves the routes, stores, components and the exact IPC payloads the
 frontend emits — and says nothing about Rust behaviour or WKWebView.
 
-**Not verified at all, and this is the honest gap:** a complete take with a real
-microphone, a real Realtime session, a real second monitor and real teleprompter
-glass. macOS ships WKWebView, for which Apple provides no WebDriver, so no
-automated layer on this machine can drive the packaged app. The motion engine's
-actual pixels, the mirror through glass, and the live follow loop are unproven
-outside unit tests and need someone in front of a camera.
+**Verified by running it, not by automation:** complete takes with a real
+microphone, a real second monitor and real teleprompter glass. That is how the
+app is used, and it works. No automated layer reaches that far, and on this
+machine none can: macOS ships WKWebView, for which Apple provides no WebDriver,
+so nothing automated can drive the packaged app. The motion engine's real
+pixels, the mirror through glass and the live follow loop rest on use rather
+than on the suite — worth remembering whenever the follow loop changes.
 
-The reversible fuzzy dim frontier is a third: the engine can shade a word ahead
+The reversible fuzzy dim frontier is a fourth: the engine can shade a word ahead
 on close spelling or phonetic evidence, and the mechanism is proven correct in
 `cc-bench`'s own harness (100% recall on respellings and proper nouns, 100%
 rollback, no false bridge on unrelated speech). It has never fired on a recorded
