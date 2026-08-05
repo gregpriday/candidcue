@@ -42,6 +42,10 @@ account. We do not receive it, and we cannot retrieve it.
 - Images you import into a script, together with metadata such as the original
   filename.
 - Custom pronunciation and dictionary entries you add.
+- A cached analysis of each script, derived from its text, which speeds up
+  reopening it. "Clear analysis cache" in settings removes it.
+- Any optional pronunciation packs you have installed, and a record of which
+  ones they are.
 
 **Your settings and setup**
 
@@ -113,8 +117,11 @@ and is never written to disk either.
 
 Speech recognition runs locally against the model installed on your machine.
 Deciding where in your script you are, and scrolling the stage to match, is
-arithmetic performed on your machine. There is no transcription service, no API
-key and no third party involved in following you.
+arithmetic performed on your machine. There is no transcription service and no
+API key: no third party receives or processes your voice or your script in order
+to follow you. (The speech model itself is third-party software, which you
+install and which then runs entirely on your machine — see section 10 of the
+[EULA](EULA.md).)
 
 ## What CandidCue does on the network
 
@@ -127,8 +134,8 @@ nothing for it to verify.
 The network request this version makes is one you start: **downloading a speech
 recognition language from Speech settings.** That download:
 
-- goes to the model publisher's own release hosting, which is GitHub. The exact
-  source is shown in the application before you start;
+- goes to the model publisher's own release hosting, which is GitHub. The host
+  it will contact is named in the application before you start;
 - is verified against a SHA-256 hash recorded in the application, so a
   substituted file is rejected;
 - may involve more than one HTTP request, because a download can be redirected
@@ -181,16 +188,15 @@ application, this part does involve processing your personal data, and
 
 ## Server logs
 
-Our web host records ordinary server-log information when you visit, including
-your IP address, the time of the request, the page requested, the referring page
-and your browser's user-agent string. Every web server does this, and it is how
-the site is kept available and secure.
+Our web host, @@LEGAL_WEB_HOST_NAME@@, records ordinary server-log information
+when you visit: @@LEGAL_WEB_LOG_FIELDS@@. This is the routine logging that
+running a web server involves, and it is how the site is kept available and
+secure.
 
 - **Purpose:** operating the site, diagnosing faults, and detecting abuse.
 - **Lawful basis:** our legitimate interests in running and securing the site
   (GDPR Article 6(1)(f)).
 - **Retention:** @@LEGAL_WEB_LOG_RETENTION@@.
-- **Host:** @@LEGAL_WEB_HOST_NAME@@.
 
 @@LEGAL_WEBSITE_ANALYTICS_STATEMENT@@
 
@@ -199,8 +205,8 @@ the site is kept available and secure.
 Payment is handled by our Merchant of Record, @@LEGAL_MOR_NAME@@. When you buy
 CandidCue you enter into a purchase with them as the seller of record. They
 collect and process your payment details, billing address and tax information,
-and they are an **independent controller** for that data. We never see or hold
-your card details.
+and they are an **independent controller** for that data. We do not receive your
+full card number or its security code.
 
 See their privacy policy at @@LEGAL_MOR_PRIVACY_URL@@ for how they handle it.
 
@@ -252,12 +258,15 @@ Where the GDPR or the UK GDPR applies to you, you have the right to:
 To exercise any of these, email @@LEGAL_PRIVACY_EMAIL@@. We will respond within
 the time the law allows.
 
-**One important limit.** These rights apply to data we actually hold — website
-logs, order information and correspondence. They cannot apply to what is inside
-the application on your machine: your scripts, your session history and your
-transcripts never reach us, so there is nothing for us to produce, correct or
-erase. That data is under your control, and deleting it is something you do on
-your own device.
+**One important limit.** We cannot search, export, correct or delete data that
+exists only on your device, because it is not on any system we control. Your
+scripts, your session history and your transcripts do not reach us, so there is
+nothing there for us to produce or erase. You manage that data through CandidCue
+and your own operating system.
+
+Your rights do still apply to any copy you choose to send us — an exported log
+or a script attached to a support request, for example — and to the website
+logs, order information and correspondence we hold.
 
 If you bought through @@LEGAL_MOR_NAME@@ and your request concerns payment data,
 you may need to direct it to them as the controller for that data.
@@ -270,8 +279,13 @@ you may need to direct it to them as the controller for that data.
 operating system's own user account and file permissions. CandidCue restricts
 its own file access so that script bodies, revisions, the database, backups and
 logs are not reachable through the application's asset-loading layer. On the
-website and payment side, we rely on our host and our Merchant of Record, both of
-whom we expect to maintain appropriate technical and organisational measures.
+website and payment side, we assess the providers we use and put appropriate
+contractual and transfer safeguards in place; @@LEGAL_MOR_NAME@@ acts as an
+independent controller for payment data.
+
+**Automated decisions.** We do not use the personal data we hold to make solely
+automated decisions, or for profiling that produces legal or similarly
+significant effects.
 
 **Changes to this policy.** If we change what we collect or how we handle it, we
 will update this policy and change the effective date at the top. If a future

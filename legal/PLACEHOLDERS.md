@@ -83,6 +83,7 @@ reported it as a clean pass.
 | Token | What it is |
 |---|---|
 | `LEGAL_WEB_HOST_NAME` | Who serves the site |
+| `LEGAL_WEB_LOG_FIELDS` | The fields the host actually logs. **Verify against the host's documentation** — the policy used to assert IP, timestamp, path, referrer and user-agent as though every server logs exactly that set |
 | `LEGAL_WEB_LOG_RETENTION` | How long the host keeps access logs — get this from their documentation or DPA |
 | `LEGAL_TRANSFER_SAFEGUARDS` | e.g. Standard Contractual Clauses, UK IDTA, or an adequacy decision |
 | `LEGAL_WEBSITE_ANALYTICS_STATEMENT` | See below |
@@ -103,9 +104,62 @@ site.**
 Not placeholders, but on the same gate:
 
 - **Legal review.** These documents were drafted against the product's actual
-  behaviour, not by a lawyer. The clauses worth having reviewed specifically are
-  the evaluation trigger and cure period (EULA §3, §15), the liability cap
-  (§14), governing law (§16), and the consumer-law carve-outs throughout.
+  behaviour, not by a lawyer. An adversarial review raised the following, which
+  were left as drafting decisions and need a qualified opinion once the
+  governing law and target markets are fixed:
+
+  - **The evaluation trigger (EULA §3).** Evaluation now ends on the earlier of
+    your own decision and an objective "pattern of use" test. The purely
+    subjective version was probably unprovable, given that the product
+    deliberately collects no evidence. Confirm the objective limb is workable in
+    the chosen jurisdiction, and that an open-ended evaluation period does not
+    read as a licence to never pay.
+  - **Breach versus infringement (EULA §6, §15).** The draft deliberately makes
+    unregistered use a *contractual breach* and says so explicitly, rather than
+    putting the use outside the copyright licence. That matches the trusting
+    tone but is the softer of the two theories. It is a deliberate choice, and
+    a lawyer should confirm it is the intended one.
+  - **Estoppel and implied licence (EULA §6, §17).** Permanent, advertised,
+    deliberate non-enforcement is exactly the fact pattern from which an implied
+    licence or estoppel argument is built. §17 addresses it directly, but a
+    waiver clause cannot abolish estoppel where the law does not permit it.
+  - **The liability cap (EULA §14).** Now the price of the Registration, not
+    "paid in the last twelve months" — the earlier wording produced a cap of
+    zero for anyone who bought more than a year ago, which is an exclusion
+    rather than a cap and hard to defend against a consumer.
+  - **Warranty framing (EULA §13).** Rewritten to lead with statutory consumer
+    rights and then disclaim, rather than disclaiming and carving out. The
+    "speech recognition is probabilistic" disclosure needs checking against
+    unfair-terms rules, since voice-following is the product's central
+    description.
+  - **Transferability (EULA §4, §8).** Carve-out added for mandatory resale
+    rights, which exist in parts of Europe for perpetual downloaded licences.
+  - **Withdrawal mechanics (Refund Policy).** What legally constitutes "supply"
+    is not obvious here: the app is already usable during evaluation, and the
+    purchase delivers only a receipt and permission. Confirm with the Merchant
+    of Record which party begins supply and whether the withdrawal right is in
+    fact extinguished.
+  - **Merchant-of-Record role.** An MoR is usually a principal reseller, not the
+    developer's agent. The wording is deliberately neutral pending the actual
+    merchant agreement; confirm this policy is incorporated into the checkout
+    terms the MoR presents and reproduced or linked in the receipt.
+
+- **Assent for people who never buy.** The EULA relies on "by installing or
+  using CandidCue you accept this Agreement." Someone who evaluates and never
+  reaches checkout may never affirmatively accept anything, and a bare
+  by-using notice is materially weaker than a click-through. If the registration
+  obligation is to mean anything, the person who never pays is precisely the
+  person it has to bind. An acceptance step at first run would fix it and needs
+  no key, account, check or network call — but it is a product change, so it is
+  filed here rather than assumed. **Decide before sale.**
+
+- **Pre-contract product information.** EU/UK digital-content rules generally
+  require functionality, compatibility and interoperability information *before*
+  the contract is formed. Publish and verify on the product page or checkout:
+  supported macOS versions and hardware, microphone and second-display
+  requirements, the separate ~161 MB speech-model download and that it is not in
+  the installer, and the absence of any registration-related technical
+  protection. Preserve it in the order confirmation.
 - **Bundle metadata.** Deliberately left out of the docs PR, because unresolved
   placeholders must not be baked into a build artifact. Once
   `LEGAL_COPYRIGHT_HOLDER` is known, add to `src-tauri/tauri.conf.json` under
