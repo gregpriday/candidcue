@@ -88,7 +88,7 @@ so nothing automated can drive the packaged app. The motion engine's real
 pixels, the mirror through glass and the live follow loop rest on use rather
 than on the suite — worth remembering whenever the follow loop changes.
 
-The reversible fuzzy dim frontier is a third: the engine can shade a word ahead
+The reversible fuzzy dim frontier is a fourth: the engine can shade a word ahead
 on close spelling or phonetic evidence, and the mechanism is proven correct in
 `cc-bench`'s own harness (100% recall on respellings and proper nouns, 100%
 rollback, no false bridge on unrelated speech). It has never fired on a recorded

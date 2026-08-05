@@ -221,8 +221,8 @@ docs/             specifications
 
 **Verified by real use, not by anything above:** complete takes with a real
 microphone, a real second monitor and real teleprompter glass. The app is used
-this way and it works — but that is lived experience, not a row in a suite or a
-benchmark. macOS ships WKWebView, for which Apple provides no WebDriver, so
+this way and it works — but that is lived experience, not a row in a suite or
+a benchmark. macOS ships WKWebView, for which Apple provides no WebDriver, so
 nothing automated on this machine can drive the packaged app. A large green
 suite here has repeatedly coexisted with a broken product — when a change
 touches the live follow loop, say what the suite leaves unproven rather than
