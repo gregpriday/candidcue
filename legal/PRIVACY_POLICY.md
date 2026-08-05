@@ -104,8 +104,8 @@ as long as that screen is showing and permission is granted, not just while you
 are recording.
 
 Audio from a take or a test is transcribed on your machine by the speech model
-installed there. The meter only measures how loud you are; it does not transcribe
-anything.
+installed there. The meter only measures how loud you are; it does not
+transcribe anything.
 
 **Audio from a take is never written to disk and never leaves your machine.** It
 is held in memory, passed to the on-device recogniser, and discarded. The one
@@ -296,4 +296,5 @@ released.
 **Contact.** @@LEGAL_CONTROLLER_NAME@@, @@LEGAL_BUSINESS_ADDRESS@@ —
 @@LEGAL_PRIVACY_EMAIL@@.
 
-Related: [End User Licence Agreement](EULA.md) · [Refund Policy](REFUND_POLICY.md)
+Related: [End User Licence Agreement](EULA.md) ·
+[Refund Policy](REFUND_POLICY.md)

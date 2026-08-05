@@ -181,10 +181,19 @@ responsibility.** There is no server-side copy for us to restore.
 ## 10. Third-party components
 
 CandidCue includes third-party components under their own licences, which
-continue to govern those components. The speech recognition model is not part
-of CandidCue: it is published by a third party, downloaded from that third
-party when you choose to install it, and subject to that third party's licence,
-which is shown in the application.
+continue to govern those components.
+
+The speech recognition model is not part of CandidCue. It is published by a
+third party, downloaded from that third party when you choose to install it, and
+governed by that publisher's licence rather than by this Agreement — your
+Registration buys no rights in it.
+
+**The terms differ between models, and not every one of them is permissive.**
+CandidCue shows the licence, the attribution and any caveat for each model
+before you install it. Where a model's terms are ambiguous, the application says
+so rather than resolving the ambiguity for you. If you intend to use CandidCue
+commercially, read the terms of the model you choose; the Licensor cannot grant
+you rights in someone else's weights and does not purport to.
 
 ---
 

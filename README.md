@@ -125,10 +125,10 @@ authority — see `src-tauri/src/speech/` for what actually happens now.
 ## Legal
 
 CandidCue is proprietary. [`LICENSE`](LICENSE) covers this source; the
-[EULA](legal/EULA.md) covers the application. It is written for the honour-system
-registration model: CandidCue does not technically enforce registration and stays
-fully functional either way, but each person who moves from genuine evaluation to
-regular use is obliged to register.
+[EULA](legal/EULA.md) covers the application. It is written for the
+honour-system registration model: CandidCue does not technically enforce
+registration and stays fully functional either way, but each person who moves
+from genuine evaluation to regular use is obliged to register.
 
 The [privacy policy](legal/PRIVACY_POLICY.md) is the one worth reading, because
 the honest version is short: speech recognition runs on-device, nothing about
@@ -139,8 +139,9 @@ app makes is the speech-model download you start yourself. The
 These documents are drafted but not yet in force. Every fact that could not be
 established from this repository — the legal entity, the jurisdiction, the
 Merchant of Record, the website's log retention — is an `@@LEGAL_*@@`
-placeholder rather than a guess. [`legal/PLACEHOLDERS.md`](legal/PLACEHOLDERS.md)
-lists them, along with the commands that re-check every factual claim the
+placeholder rather than a guess.
+[`legal/PLACEHOLDERS.md`](legal/PLACEHOLDERS.md) lists them, along with the
+commands that re-check every factual claim the
 privacy policy makes about the code. Both must be cleared before CandidCue is
 sold.
 

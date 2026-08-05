@@ -53,7 +53,8 @@ section 6 of the [EULA](EULA.md). Your scripts and settings are yours and stay
 on your device.
 
 What changes is your Registration and your right to use CandidCue as a regular
-tool — not the software, and not your underlying permission to have it installed.
+tool — not the software, and not your underlying permission to have it
+installed.
 
 ## Your statutory rights if you are in the EU or the UK
 
@@ -109,4 +110,5 @@ For questions about the payment itself, @@LEGAL_MOR_NAME@@ can be reached
 through the details on your order confirmation. Their privacy policy is at
 @@LEGAL_MOR_PRIVACY_URL@@.
 
-Related: [End User Licence Agreement](EULA.md) · [Privacy Policy](PRIVACY_POLICY.md)
+Related: [End User Licence Agreement](EULA.md) ·
+[Privacy Policy](PRIVACY_POLICY.md)

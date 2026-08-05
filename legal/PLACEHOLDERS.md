@@ -32,10 +32,10 @@ both — this file names the tokens on purpose.)
 
 **Run this first, every time.** A gate whose whole success condition is "no
 output" passes just as quietly when the search itself is broken — a shell alias,
-a wrapper, a mistyped path or a `--glob` that matches nothing all produce a clean
-sheet. This file contains `@@LEGAL_SOMETHING@@` in the paragraph above, so the
-control below must find it. If it prints nothing, the two commands above prove
-nothing and their result must be discarded.
+a wrapper, a mistyped path or a `--glob` matching nothing all produce a
+clean sheet. This file contains `@@LEGAL_SOMETHING@@` in the paragraph above,
+so the control below must find it. If it prints nothing, the two commands above
+prove nothing and their result must be discarded.
 
 ```bash
 rg -n '@@LEGAL_[A-Z0-9_]+@@' legal/PLACEHOLDERS.md
@@ -229,8 +229,9 @@ The expected inventory, and the only one the policy is written against:
    through the shared hardened client in `src-tauri/src/net.rs`. User-initiated
    from Speech settings, hash-pinned. This is the one the policy describes.
 2. **A remote-image importer** — `src-tauri/src/assets/remote.rs`, reachable as
-   the `import_remote_image` command, wrapped by `src/control/services/assets.ts`.
-   **It has no UI caller**; nothing in the editor invokes it. The policy does not
+   the `import_remote_image` command, wrapped by
+   `src/control/services/assets.ts`. **It has no UI caller**; nothing in the
+   editor invokes it. The policy does not
    describe it, on the same reasoning that #180 used for the in-app copy: naming
    an action a user cannot take is its own kind of inaccuracy. **If a future
    version surfaces it, the policy must be revised** — it would send a
