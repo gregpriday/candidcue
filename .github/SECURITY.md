@@ -1,9 +1,11 @@
 # Security Policy
 
-If you think you have found a security vulnerability in CandidCue, email
-[security@candidcue.com](mailto:security@candidcue.com). Please don't open a
-public issue for it, and please give us a chance to ship a fix before you write
-it up publicly.
+If you think you have found a security vulnerability in CandidCue, please report
+it privately through GitHub:
+<https://github.com/gregpriday/candidcue/security/advisories/new>, or email
+[greg@siteorigin.com](mailto:greg@siteorigin.com). Please don't open a public
+issue for it, and please give us a chance to ship a fix before you write it up
+publicly.
 
 ## Supported versions
 
@@ -76,8 +78,8 @@ Examples rather than an exhaustive list:
 
 ## Reporting a vulnerability
 
-Email [security@candidcue.com](mailto:security@candidcue.com) and include what
-you can:
+Open a private advisory or email
+[greg@siteorigin.com](mailto:greg@siteorigin.com), and include what you can:
 
 - What the impact is, in a sentence or two.
 - The CandidCue version and the macOS version you saw it on.
@@ -91,19 +93,19 @@ Use synthetic scripts and test data where you can, and stop at the smallest
 proof that establishes impact. If you can't demonstrate the issue without
 sensitive material, email first and we'll sort out how to handle it.
 
-We don't publish a PGP key at the moment. Mail to this address may not be
-end-to-end encrypted, so send only what the report needs.
+We don't publish a PGP key at the moment. Email may not be end-to-end encrypted,
+so send only what the report needs.
 
 ## Response and coordinated disclosure
 
-Measured from when your email arrives:
+Measured from when your report arrives:
 
-- We'll acknowledge the report within 3 business days.
-- We'll come back with an initial assessment within 7 business days.
+- We aim to acknowledge the report within a few days.
+- We aim to come back with an initial assessment within two weeks.
 - From there we'll propose a fix or mitigation timeline based on severity, and
   coordinate public disclosure with you as part of it.
 
-The seven-day mark is when you hear our read on the issue, not when a fix ships.
+That second point is when you hear our read on the issue, not when a fix ships.
 We'd rather give you an honest timeline than a fast one we miss. If you don't
 hear from us inside those windows, send a follow-up, because something has gone
 wrong on our end.
