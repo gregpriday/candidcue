@@ -133,7 +133,7 @@ from genuine evaluation to regular use is obliged to register.
 The [privacy policy](legal/PRIVACY_POLICY.md) is the one worth reading, because
 the honest version is short: speech recognition runs on-device, nothing about
 your scripts or your audio leaves the machine, and the only network request the
-app makes is the speech-model download you start yourself. The
+app makes in normal use is the speech-model download you start yourself. The
 [refund policy](legal/REFUND_POLICY.md) is 30 days, no reason required.
 
 These documents are drafted but not yet in force. Every fact that could not be

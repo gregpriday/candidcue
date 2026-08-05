@@ -131,8 +131,9 @@ telemetry, no analytics, no advertising, no crash reporting upload, and no
 licence check — CandidCue does not verify a registration, because there is
 nothing for it to verify.
 
-The network request this version makes is one you start: **downloading a speech
-recognition language from Speech settings.** That download:
+The network request this version makes in normal use is one you start:
+**downloading a speech recognition language from Speech settings.** That
+download:
 
 - goes to the model publisher's own release hosting, which is GitHub. The host
   it will contact is named in the application before you start;
@@ -142,6 +143,11 @@ recognition language from Speech settings.** That download:
   or resumed after an interruption;
 - carries **none of your script, audio or transcripts.** It is a request for a
   file.
+
+CandidCue also contains a remote-image importer that would fetch an image from a
+URL you supply; no part of the interface currently invokes it, so it is not a
+request this version can make through normal use. If a future version surfaces
+it, this policy will be revised first.
 
 Like any download, that request tells GitHub your IP address. GitHub handles
 that under its own privacy policy; we receive nothing about it, and CandidCue

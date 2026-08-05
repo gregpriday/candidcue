@@ -19,13 +19,28 @@ a missed one is obvious on the page and trivial to grep for.
 Before the first paid build ships, both of these must return nothing:
 
 ```bash
+pnpm legal:check
+```
+
+`scripts/legal-gate.mjs` is the executable form of this gate. It exits non-zero
+today, on purpose — the tokens are still unresolved — and is deliberately **not**
+wired into `pnpm test`. It runs the two searches below, and it also fails when a
+legal document is missing or trivially short and when this register itself yields
+no tokens, so a broken search cannot be mistaken for a clean sheet.
+
+```bash
 rg -n '@@LEGAL_[A-Z0-9_]+@@' \
   LICENSE legal/EULA.md legal/PRIVACY_POLICY.md legal/REFUND_POLICY.md \
-  README.md package.json src-tauri/tauri.conf.json
+  README.md package.json src-tauri/tauri.conf.json .github/SECURITY.md
 
 rg -n -i '\b(TODO|TBD|FIXME|example\.com)\b' \
   LICENSE legal/EULA.md legal/PRIVACY_POLICY.md legal/REFUND_POLICY.md
 ```
+
+`tests/unit/legal-docs.test.ts` runs in the normal suite and holds the token set
+used across the documents equal to the set declared in the tables below, in both
+directions, so a document cannot grow an undeclared placeholder and this register
+cannot quietly lose one.
 
 (Run them from the repository root. `legal/PLACEHOLDERS.md` is excluded from
 both — this file names the tokens on purpose.)
@@ -58,7 +73,7 @@ reported it as a clean pass.
 | `LEGAL_LICENSOR_NAME` | Party to the EULA | Registered company name, or trading name if a sole trader |
 | `LEGAL_CONTROLLER_NAME` | GDPR controller | Usually the same as the licensor — must be a real legal person |
 | `LEGAL_BUSINESS_ADDRESS` | Postal address | GDPR Art. 13 requires a real one; a PO box may not be enough |
-| `LEGAL_SUPPORT_EMAIL` | Support and refunds | Must be monitored — the refund policy promises a reply |
+| `LEGAL_SUPPORT_EMAIL` | Support and refunds | Must be monitored — the refund policy promises a reply. Must not contradict the address already published in `.github/SECURITY.md` (greg@siteorigin.com); change both together if it moves |
 | `LEGAL_PRIVACY_EMAIL` | Data-subject requests | May be the same address |
 | `LEGAL_WEBSITE_ORIGIN` | e.g. `https://candidcue.com` | The distribution site (#193) |
 | `LEGAL_EFFECTIVE_DATE` | Date these take effect | Set when they are published, not when written |

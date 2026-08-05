@@ -14,7 +14,8 @@
     "test:dom": "vitest run --config vitest.dom.config.ts",
     "test:all": "vitest run && vitest run --config vitest.dom.config.ts",
     "tauri": "tauri",
-    "test:e2e": "playwright test --config=playwright.config.ts"
+    "test:e2e": "playwright test --config=playwright.config.ts",
+    "legal:check": "node scripts/legal-gate.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
