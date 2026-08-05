@@ -96,11 +96,11 @@
         "sourceUrl": "https://huggingface.co/Banafo/Kroko-ASR",
         "distributedVia": "https://github.com/k2-fsa/sherpa-onnx",
         "license": {
-          "id": "CC-BY-SA",
-          "name": "Creative Commons Attribution-ShareAlike",
-          "url": "https://huggingface.co/Banafo/Kroko-ASR"
+          "id": "CC-BY-SA-4.0",
+          "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+          "url": "https://creativecommons.org/licenses/by-sa/4.0/legalcode"
         },
-        "licenseNote": "Upstream states the licence as CC-BY-SA without naming a version. The source page is the authoritative statement of terms; this notice does not assert a version upstream has not.",
+        "licenseNote": "Upstream states the licence as CC-BY-SA and does not name a version. This catalogue records 4.0 — the most recent Attribution-ShareAlike version Creative Commons has published, and what an unversioned CC-BY-SA is taken to mean today — but that is an inference, and the source page remains the authoritative statement of terms. It covers Banafo's free community weights only: the Commercial and OEM models sold separately are different weights on their own terms, and nothing here grants a licence to those.",
         "modified": false
       }
     },
@@ -144,11 +144,11 @@
         "sourceUrl": "https://huggingface.co/Banafo/Kroko-ASR",
         "distributedVia": "https://github.com/k2-fsa/sherpa-onnx",
         "license": {
-          "id": "CC-BY-SA",
-          "name": "Creative Commons Attribution-ShareAlike",
-          "url": "https://huggingface.co/Banafo/Kroko-ASR"
+          "id": "CC-BY-SA-4.0",
+          "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+          "url": "https://creativecommons.org/licenses/by-sa/4.0/legalcode"
         },
-        "licenseNote": "Upstream states the licence as CC-BY-SA without naming a version. The source page is the authoritative statement of terms; this notice does not assert a version upstream has not.",
+        "licenseNote": "Upstream states the licence as CC-BY-SA and does not name a version. This catalogue records 4.0 — the most recent Attribution-ShareAlike version Creative Commons has published, and what an unversioned CC-BY-SA is taken to mean today — but that is an inference, and the source page remains the authoritative statement of terms. It covers Banafo's free community weights only: the Commercial and OEM models sold separately are different weights on their own terms, and nothing here grants a licence to those.",
         "modified": false
       }
     },
@@ -192,11 +192,11 @@
         "sourceUrl": "https://huggingface.co/Banafo/Kroko-ASR",
         "distributedVia": "https://github.com/k2-fsa/sherpa-onnx",
         "license": {
-          "id": "CC-BY-SA",
-          "name": "Creative Commons Attribution-ShareAlike",
-          "url": "https://huggingface.co/Banafo/Kroko-ASR"
+          "id": "CC-BY-SA-4.0",
+          "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+          "url": "https://creativecommons.org/licenses/by-sa/4.0/legalcode"
         },
-        "licenseNote": "Upstream states the licence as CC-BY-SA without naming a version. The source page is the authoritative statement of terms; this notice does not assert a version upstream has not.",
+        "licenseNote": "Upstream states the licence as CC-BY-SA and does not name a version. This catalogue records 4.0 — the most recent Attribution-ShareAlike version Creative Commons has published, and what an unversioned CC-BY-SA is taken to mean today — but that is an inference, and the source page remains the authoritative statement of terms. It covers Banafo's free community weights only: the Commercial and OEM models sold separately are different weights on their own terms, and nothing here grants a licence to those.",
         "modified": false
       }
     }

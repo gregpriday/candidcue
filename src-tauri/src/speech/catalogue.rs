@@ -539,6 +539,96 @@ mod tests {
         }
     }
 
+    /// Banafo ships Kroko in two tiers, and only one of them is CC-BY-SA.
+    ///
+    /// The community weights on Hugging Face are the free tier. Banafo also
+    /// sells Commercial & OEM models through `kroko.ai` — different weights,
+    /// their own terms, no relation to the licence pinned here beyond sharing
+    /// an author. The failure this guards against is quiet: someone adds a
+    /// Kroko model, copies the `attribution` block from the entry above it
+    /// because the fields are otherwise right, and the catalogue now states a
+    /// CC-BY-SA grant over weights nobody has a CC-BY-SA grant to. That claim
+    /// then travels — into `ATTRIBUTION.md` on the user's disk and into the
+    /// licence line in Settings › Speech — as if it had been checked.
+    ///
+    /// So the assertion runs the other way round from the obvious one. It does
+    /// NOT say every Banafo entry must be CC-BY-SA-4.0; a paid model recorded
+    /// under its actual terms is a perfectly good catalogue entry and this test
+    /// should not stand in its way. It says that an entry *carrying* this
+    /// licence must trace to the community repository the licence was read off.
+    /// A new community model from that same repository passes untouched. A
+    /// different source has to be looked at by a person before it can be
+    /// extended here, which is the whole point.
+    ///
+    /// The three current entries are pinned explicitly as well, because the
+    /// sweep alone would skip an entry that quietly lost its version — the
+    /// unversioned `CC-BY-SA` this replaced (§197) would not match the filter
+    /// and so would not be checked.
+    #[test]
+    fn the_banafo_community_licence_stays_with_reviewed_community_weights() {
+        const COMMUNITY_SOURCE: &str = "https://huggingface.co/Banafo/Kroko-ASR";
+        const COMMUNITY_LICENSE_ID: &str = "CC-BY-SA-4.0";
+        const COMMUNITY_LICENSE_NAME: &str =
+            "Creative Commons Attribution-ShareAlike 4.0 International";
+        const COMMUNITY_LICENSE_URL: &str =
+            "https://creativecommons.org/licenses/by-sa/4.0/legalcode";
+
+        for id in ["kroko-fr", "kroko-de", "kroko-es"] {
+            let entry = catalogue()
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} must stay in the catalogue"));
+            let a = &entry.attribution;
+            assert_eq!(a.author, "Banafo", "{id}: unexpected author");
+            assert_eq!(
+                a.source_url, COMMUNITY_SOURCE,
+                "{id}: the pinned licence was read off the community repository"
+            );
+            assert_eq!(
+                a.license.id, COMMUNITY_LICENSE_ID,
+                "{id}: the licence version is pinned — an unversioned CC-BY-SA \
+                 leaves the commercial-use position undecidable"
+            );
+            // Upstream names no version, so the version here is an inference and
+            // has to say so. The note is what carries that, and it is rendered
+            // verbatim in Settings › Speech as well as into ATTRIBUTION.md.
+            assert!(
+                a.license_note
+                    .as_deref()
+                    .is_some_and(|note| !note.trim().is_empty()),
+                "{id}: an inferred licence version needs a licenseNote saying it \
+                 was inferred"
+            );
+        }
+
+        for model in &catalogue().models {
+            let a = &model.attribution;
+            if a.author != "Banafo" || a.license.id != COMMUNITY_LICENSE_ID {
+                continue;
+            }
+            assert_eq!(
+                a.source_url, COMMUNITY_SOURCE,
+                "{}: CC-BY-SA-4.0 is pinned for Banafo's Kroko-ASR community \
+                 weights only. Commercial & OEM models are a different tier and \
+                 need their own licence recorded, not this one copied.",
+                model.id
+            );
+            assert_eq!(
+                a.license.name, COMMUNITY_LICENSE_NAME,
+                "{}: use the canonical CC-BY-SA-4.0 name",
+                model.id
+            );
+            // `render_attribution` writes "The full text of the {name} is at
+            // {url}", so this URL has to be somewhere the text actually is. It
+            // pointed at the Hugging Face page until §197, which made that
+            // sentence false; `sourceUrl` is where provenance belongs.
+            assert_eq!(
+                a.license.url, COMMUNITY_LICENSE_URL,
+                "{}: the licence URL must reach the licence text",
+                model.id
+            );
+        }
+    }
+
     /// The frontend carries its own copy of the model name, for the browser
     /// mock and the offline fallback — the two places Rust is not there to
     /// correct a stale value. Same `include_str!` trick the stage event names
