@@ -83,8 +83,6 @@ import { onShortcut } from '../lib/shortcuts';
   }
   let { sessionId, scriptId }: Props = $props();
 
-  let costOpen = $state(false);
-
   const stageFontSize = $derived($session.stageFontSizePx);
   /** §62: the stage window is gone; its quick-controls have nothing to talk to. */
   const stageAlive = $derived($session.stageAlive);
@@ -1659,77 +1657,6 @@ import { onShortcut } from '../lib/shortcuts';
     font-size: var(--text-xs);
     color: var(--text-muted);
     white-space: nowrap;
-  }
-
-  .cost {
-    position: relative;
-  }
-  .cost-pop {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 30;
-    width: 240px;
-    padding: var(--space-4);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
-  }
-  .cost-line {
-    margin: 0;
-    font-size: var(--text-xs);
-    color: var(--text-secondary);
-  }
-  .cost-value {
-    margin: var(--space-1) 0;
-    font-size: var(--text-2xl);
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-  }
-  .cost-note {
-    margin: 0;
-    font-size: var(--text-2xs);
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-  /* Two costs, visibly two things: a plain separator between the groups, not
-     a border on either box. */
-  .cost-group + .cost-group {
-    margin-top: var(--space-3);
-    padding-top: var(--space-3);
-    border-top: 1px solid var(--border);
-  }
-  .cost-value.unpriced {
-    font-size: var(--text-base);
-    color: var(--text-muted);
-    font-weight: 600;
-  }
-  .cost-budget {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
-    margin: var(--space-2) 0 var(--space-1);
-    font-size: var(--text-2xs);
-    color: var(--text-secondary);
-  }
-  .cost-budget input {
-    width: 72px;
-    padding: 3px var(--space-2);
-    border: 1px solid var(--border-control);
-    border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
-    color: var(--text-primary);
-    font: inherit;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-  }
-  /* Quiet focus: a background/border shift, never an accent ring. */
-  .cost-budget input:focus-visible {
-    outline: none;
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
   }
 
   /* --- §28.2 mid-session input recovery --- */
