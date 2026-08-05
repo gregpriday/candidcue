@@ -118,10 +118,10 @@ and is never written to disk either.
 Speech recognition runs locally against the model installed on your machine.
 Deciding where in your script you are, and scrolling the stage to match, is
 arithmetic performed on your machine. There is no transcription service and no
-API key: no third party receives or processes your voice or your script in order
-to follow you. (The speech model itself is third-party software, which you
-install and which then runs entirely on your machine — see section 10 of the
-[EULA](EULA.md).)
+API key: **no external service or third-party organisation receives your voice
+or your script.** The speech model is third-party software, but you install it
+and it runs entirely on your own machine — nobody on the other end of it sees
+anything (see section 10 of the [EULA](EULA.md)).
 
 ## What CandidCue does on the network
 

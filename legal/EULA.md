@@ -248,7 +248,9 @@ liability.
 If you are using CandidCue in the course of a business, the Licensor's total
 aggregate liability arising out of or relating to CandidCue or this Agreement is
 limited to the price originally paid for the Registration to which the claim
-relates.
+relates, or — where you hold no Registration, including while evaluating — to
+the price of a single Registration at the time the claim arose. This section
+does not reduce that amount to nil for want of a Registration.
 
 If you are a consumer, liability is limited only so far as applicable consumer
 law permits. No limitation in this section reduces a refund promised by the

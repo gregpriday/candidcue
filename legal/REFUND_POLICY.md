@@ -52,7 +52,8 @@ licence check, there is nothing to hand back and nothing that switches off — s
 section 6 of the [EULA](EULA.md). Your scripts and settings are yours and stay
 on your device.
 
-What changes is the licence, not the software.
+What changes is your Registration and your right to use CandidCue as a regular
+tool — not the software, and not your underlying permission to have it installed.
 
 ## Your statutory rights if you are in the EU or the UK
 
