@@ -30,10 +30,17 @@
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- Outbound HTTPS to api.openai.com for transcription and command
-       interpretation. Strictly this is an App Sandbox key and is inert under
-       the hardened runtime alone; it is declared so that enabling the sandbox
-       later does not silently kill the network. -->
+  <!-- Outbound HTTPS for the speech-model download in Settings › Speech, which
+       is the only network request the shipped app makes in normal use (§152) —
+       `import_remote_image` (src-tauri/src/assets/remote.rs) is registered and
+       ACL-allowed but has no UI caller. Transcription itself is on-device and
+       needs no network at all — this key predates that change and used to name
+       a hosted STT provider, which no code has talked to since. Strictly it is
+       an App Sandbox key and is inert under the hardened runtime alone; it is
+       declared so that enabling the sandbox later does not silently kill the
+       model download. Keep this comment true: it is a claim about the network
+       boundary, and legal/PRIVACY_POLICY.md and .github/SECURITY.md make the
+       same claim to users. -->
   <key>com.apple.security.network.client</key>
   <true/>
 </dict>

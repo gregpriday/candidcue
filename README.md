@@ -122,6 +122,29 @@ still governs tracking and motion, and the product spec covers everything else.
 Where they describe coaching, a second model, or OpenAI, the code is the
 authority — see `src-tauri/src/speech/` for what actually happens now.
 
+## Legal
+
+CandidCue is proprietary. [`LICENSE`](LICENSE) covers this source; the
+[EULA](legal/EULA.md) covers the application. It is written for the
+honour-system registration model: CandidCue does not technically enforce
+registration and stays fully functional either way, but each person who moves
+from genuine evaluation to regular use is obliged to register.
+
+The [privacy policy](legal/PRIVACY_POLICY.md) is the one worth reading, because
+the honest version is short: speech recognition runs on-device, nothing about
+your scripts or your audio leaves the machine, and the only network request the
+app makes in normal use is the speech-model download you start yourself. The
+[refund policy](legal/REFUND_POLICY.md) is 30 days, no reason required.
+
+These documents are drafted but not yet in force. Every fact that could not be
+established from this repository — the legal entity, the jurisdiction, the
+Merchant of Record, the website's log retention — is an `@@LEGAL_*@@`
+placeholder rather than a guess.
+[`legal/PLACEHOLDERS.md`](legal/PLACEHOLDERS.md) lists them, along with the
+commands that re-check every factual claim the
+privacy policy makes about the code. Both must be cleared before CandidCue is
+sold.
+
 ## Conventions
 
 Single quotes, no Prettier — ESLint only. Run renderer tests one file per
