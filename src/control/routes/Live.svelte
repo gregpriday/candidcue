@@ -28,6 +28,9 @@
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
   import { onRouteCommand } from '../stores/command-bus';
+  import Disclosure from '../components/Disclosure.svelte';
+  import { formatAccelerator } from '../lib/commands';
+  import { detectPlatform } from '../lib/platform';
   import PaneDivider from '../components/PaneDivider.svelte';
   import { PANE_LIMITS, setPaneWidth, workspace } from '../stores/workspace';
   import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
@@ -825,6 +828,21 @@ import { onShortcut } from '../lib/shortcuts';
    * anchored confirmation, and one teardown path (`endTake`).
    */
 
+  const mac = detectPlatform() === 'macos';
+
+  /**
+   * A transport key, spelled for this platform (§12.4).
+   *
+   * Through `formatAccelerator` — the same function the native menu and the
+   * Shortcuts dialog use — so a key advertised on a tooltip cannot be one the
+   * app does not answer. Plain keys (`Space`, `T`) have no modifiers to
+   * translate and pass through unchanged, which is what makes one helper serve
+   * both kinds.
+   */
+  function transportKey(spec: string): string {
+    return formatAccelerator(spec, mac);
+  }
+
   let appearanceOpen = $state(false);
 
   /*
@@ -1435,24 +1453,48 @@ import { onShortcut } from '../lib/shortcuts';
         onnoticeaction={handleNoticeAction}
       />
 
+      <!--
+        The follow CONTROLS stay visible — they are things an operator reaches
+        for mid-take, not readings. The numbers behind them do not: §12.6's
+        "raw alignment and performance details behind disclosure".
+      -->
       <p class="region-label">Following</p>
       <FollowControls follow={$smoothFollow} />
 
-      <FollowDiagnostics
-        follow={$smoothFollow}
-        developerMode={$settings.following.developerDiagnostics}
-      />
+      <Disclosure label="Follow diagnostics">
+        <FollowDiagnostics
+          follow={$smoothFollow}
+          developerMode={$settings.following.developerDiagnostics}
+        />
+      </Disclosure>
 
-      <p class="region-label">Transcript</p>
-      {#if $session.transcriptTail.length > 0}
-        <div class="transcript-tail">
-          {#each $session.transcriptTail as line, index (index)}
-            <p class="tail-line" class:latest={index === $session.transcriptTail.length - 1}>{line}</p>
-          {/each}
-        </div>
-      {:else}
-        <p class="region-empty">Speak and the latest transcript appears here.</p>
-      {/if}
+      <!--
+        THE RAW TRANSCRIPT IS BEHIND A DISCLOSURE (§12.6).
+
+        §12.6: default to a concise status summary, and put raw alignment,
+        transcript and performance detail behind disclosure. This is the raw
+        recogniser output — the most engineering-looking thing on the console —
+        and it was open by default, competing with the fault states above it for
+        the operator's attention while a take runs.
+
+        It stays one click away rather than moving to a Diagnostic mode,
+        because it is the first thing anybody looks at when following goes
+        wrong: "is it hearing me at all" is answered here and nowhere else on
+        this pane.
+      -->
+      <Disclosure label="Raw transcript">
+        {#if $session.transcriptTail.length > 0}
+          <div class="transcript-tail">
+            {#each $session.transcriptTail as line, index (index)}
+              <p class="tail-line" class:latest={index === $session.transcriptTail.length - 1}>
+                {line}
+              </p>
+            {/each}
+          </div>
+        {:else}
+          <p class="region-empty">Speak and the latest transcript appears here.</p>
+        {/if}
+      </Disclosure>
 
       <p class="region-label">Stage</p>
       {@render stageFaultNotice()}
@@ -1505,14 +1547,28 @@ import { onShortcut } from '../lib/shortcuts';
   <!-- Bottom transport (§15.1) — always visible -->
   <footer class="transport" bind:clientHeight={transportHeightPx}>
     <div class="transport-left">
+      <!--
+        Every transport control names its key (§12.4: "Show keyboard shortcuts
+        in tooltips and the Session menu"). During a take the operator's hands
+        are on the keyboard and the transport is across the desk, so the tooltip
+        is where somebody learns the key they will actually use.
+
+        `transportKey` spells them for this platform through the same
+        `formatAccelerator` the menu and the Shortcuts dialog use, so a key
+        cannot be advertised here in a form the app does not answer.
+      -->
       {#if !$session.prompting}
-        <Button variant="primary" onclick={() => startPrompting()}>
+        <Button
+          variant="primary"
+          title={`Start (${transportKey('Space')})`}
+          onclick={() => startPrompting()}
+        >
           <Icon name="play" size={16} />
           Start
         </Button>
       {:else if $session.paused === 'none'}
         <div class="pause-split">
-          <Button onclick={() => pauseListening()}>
+          <Button title={`Pause (${transportKey('Space')})`} onclick={() => pauseListening()}>
             <Icon name="pause" size={16} />
             Pause
           </Button>
@@ -1536,24 +1592,45 @@ import { onShortcut } from '../lib/shortcuts';
           />
         </div>
       {:else}
-        <Button variant="primary" onclick={() => resumeSession()}>
+        <Button
+          variant="primary"
+          title={`Resume (${transportKey('Space')})`}
+          onclick={() => resumeSession()}
+        >
           <Icon name="play" size={16} />
           Resume
         </Button>
       {/if}
-      <Button variant="danger" onclick={() => requestEndSession()}>
+      <!--
+        End keeps its own place at the end of the left group, never moving with
+        the primary control beside it (§12.4: "Place End Take separately and
+        consistently; do not let it move with secondary actions").
+      -->
+      <Button
+        variant="danger"
+        title={`End session (${transportKey('Mod+.')})`}
+        onclick={() => requestEndSession()}
+      >
         <Icon name="stop" size={14} />
         End session
       </Button>
     </div>
 
     <div class="transport-center">
-      <IconButton icon="chevron-left" label="Back one sentence" onclick={() => moveSentences(-1)} />
-      <IconButton icon="chevron-right" label="Forward one sentence" onclick={() => moveSentences(1)} />
+      <IconButton
+        icon="chevron-left"
+        label={`Back one sentence (${transportKey('Alt+Left')})`}
+        onclick={() => moveSentences(-1)}
+      />
+      <IconButton
+        icon="chevron-right"
+        label={`Forward one sentence (${transportKey('Alt+Right')})`}
+        onclick={() => moveSentences(1)}
+      />
       <IconButton icon="restore" label="Restart paragraph" onclick={() => restartParagraph()} />
       <IconButton
         icon="flag"
-        label="Add take marker"
+        label={`Add take marker (${transportKey('T')})`}
         onclick={() => {
           addTakeMarker();
           showToast('Take marker added', 'info', { durationMs: 1600 });
