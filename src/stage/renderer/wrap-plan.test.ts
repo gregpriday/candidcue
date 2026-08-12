@@ -387,7 +387,12 @@ describe('what it costs to plan', () => {
       );
     }
 
-    // Fastest of several runs — see `bestOf`.
+    /*
+     * Fastest of several runs — see `bestOf`. Note this now times a WARMED
+     * call where it used to time the first one, so it is a budget on the solve
+     * rather than on first-plan latency; the old form measured whichever the
+     * machine felt like giving it.
+     */
     const run = bestOf(() =>
       planScriptBreaks(blocks, {
         columnWidthPx: 620,

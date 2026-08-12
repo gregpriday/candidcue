@@ -19,6 +19,21 @@
  * number as the machine frees up. A genuine 2× regression in the algorithm
  * fails every one of the runs, so the assertion keeps all of its teeth.
  *
+ * ---------------------------------------------------------------------------
+ * WHAT A BUDGET MEASURED THIS WAY DOES AND DOES NOT CLAIM
+ * ---------------------------------------------------------------------------
+ * It claims a WARMED STEADY-STATE lower bound, and nothing else. A minimum
+ * cannot see a regression that only some runs suffer: a cold-start cost, an
+ * allocation pattern that provokes a collection every few passes, a cache-size
+ * cliff, a tail. Those are real regressions and these tests will not catch
+ * them — nor did the single-run version, reliably, since one sample on a busy
+ * machine is not a measurement of anything.
+ *
+ * One test changed meaning: the stage wrap-plan budget used to time a COLD
+ * first call and now times a warmed one, so it no longer says anything about
+ * first-plan latency. If that ever matters, it wants its own test that says so
+ * rather than a budget quietly doing two jobs.
+ *
  * Not exported from a test file, because two of the callers live under `src/`
  * and two under `tests/`, and a helper copied four times is a helper that drifts.
  */
@@ -38,13 +53,15 @@ export interface BestOfResult<T> {
 /**
  * Run `work` a few times and report the fastest.
  *
- * One untimed warm-up first: what these budgets are about is the solve, not the
- * JIT compiling it. Callers used to do this by hand and two of them forgot.
+ * ONE untimed warm-up: what these budgets are about is the solve, not the JIT
+ * compiling it. Callers used to do this by hand and two of them forgot. (The
+ * first version of this ran two, while its own comment said one — harmless
+ * here, and exactly the kind of drift between a comment and its code that makes
+ * a timing helper untrustworthy.)
  */
 export function bestOf<T>(work: () => T, runs: number = DEFAULT_RUNS): BestOfResult<T> {
-  work();
-  const runsMs: number[] = [];
   let value = work();
+  const runsMs: number[] = [];
   for (let i = 0; i < runs; i++) {
     const startedAt = performance.now();
     value = work();

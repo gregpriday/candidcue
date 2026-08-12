@@ -441,6 +441,25 @@ struct PendingRestore {
     /// original whole) or somebody else's directory.
     #[serde(default)]
     evacuated: Vec<String>,
+    /// The components that were NOT THERE when this restore started.
+    ///
+    /// Persisted for the same reason `evacuated` is. The commit creates the
+    /// scripts directory and the database whether or not they existed, so after
+    /// a crash the live path holds this restore's own output — and a resume
+    /// with no record of the absence would evacuate that output into quarantine
+    /// and journal it as the user's original. A rollback would then "restore" a
+    /// half-copied export over the top of nothing.
+    #[serde(default)]
+    absent: Vec<String>,
+    /// The restore finished; only the marker itself is left to remove.
+    ///
+    /// Set when the success path cannot delete the marker. Without it, a
+    /// removal that fails — a locked file, a read-only moment — means the next
+    /// launch REPLAYS a restore over data that has already been restored,
+    /// quarantining the result. The next launch sees this, removes the marker
+    /// and does nothing else.
+    #[serde(default)]
+    completed: bool,
 }
 
 /// Write the marker, replacing it whole.
@@ -450,11 +469,32 @@ struct PendingRestore {
 /// only record of what is in flight. A rename is atomic within a directory.
 fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError> {
     let temporary = marker.with_extension("json.writing");
-    std::fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(pending).map_err(|e| AppError::Internal(e.to_string()))?,
-    )?;
+    /*
+     * Flushed to the platter, not just to the page cache.
+     *
+     * The rename is atomic, which is what stops a torn marker — but atomic is
+     * not durable: after a power loss the rename can be visible with the file's
+     * contents missing, or neither can be. This marker is the only record of
+     * which components are already in quarantine, and a stale one is exactly
+     * the state the journal exists to prevent, so it is worth the two syncs.
+     */
+    {
+        let file = std::fs::File::create(&temporary)?;
+        let bytes = serde_json::to_vec_pretty(pending)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        use std::io::Write;
+        (&file).write_all(&bytes)?;
+        file.sync_all()?;
+    }
     std::fs::rename(&temporary, marker)?;
+    // And the directory entry itself. Without this the rename can be lost even
+    // though the file's own bytes survived.
+    #[cfg(unix)]
+    if let Some(parent) = marker.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
     Ok(())
 }
 
@@ -511,6 +551,8 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
             attempts: 0,
             quarantine_generation: None,
             evacuated: Vec::new(),
+            absent: Vec::new(),
+            completed: false,
         })
         .map_err(|e| AppError::Internal(e.to_string()))?,
     )?;
@@ -565,6 +607,23 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             let _ = std::fs::remove_file(&marker);
             AppError::invalid_input(format!("The pending restore was unreadable: {e}"))
         })?;
+
+    /*
+     * A restore that finished but could not delete its own marker. There is
+     * nothing left to do but remove it — replaying would quarantine the
+     * restored data and copy the export over it a second time.
+     */
+
+    /*
+     * A restore that finished but could not delete its own marker. There is
+     * nothing left to do but remove it — replaying would quarantine the
+     * restored data and copy the export over it a second time.
+     */
+    if pending.completed {
+        let _ = std::fs::remove_file(&marker);
+        tracing::info!("cleared the marker of a restore that had already finished");
+        return Ok(None);
+    }
 
     pending.attempts += 1;
     if pending.attempts > MAX_RESTORE_ATTEMPTS {
@@ -686,9 +745,23 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
 
     match outcome {
         Ok(()) => {
-            // Only now. An interrupted restore leaves the marker behind and
-            // the next launch resumes it; a finished one retires it.
-            let _ = std::fs::remove_file(&marker);
+            /*
+             * Only now. An interrupted restore leaves the marker behind and the
+             * next launch resumes it; a finished one retires it.
+             *
+             * And if it cannot be removed, SAY SO IN THE MARKER. A silently
+             * ignored failure here means the next launch replays a restore over
+             * data that has already been restored — quarantining the result and
+             * re-copying an export that may no longer exist. `completed` makes
+             * the next launch remove the marker and do nothing else.
+             */
+            if let Err(err) = std::fs::remove_file(&marker) {
+                tracing::warn!(error = %err, "could not remove the restore marker after a successful restore");
+                pending.completed = true;
+                if let Err(e) = write_marker(&marker, &pending) {
+                    tracing::error!(error = %e, "and could not mark it completed either");
+                }
+            }
             tracing::info!(
                 from = %export_root.display(),
                 previous = %previous.display(),
@@ -710,7 +783,6 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
              * is either "put back" or "not put back, and here is where it is".
              */
             let mut rollback_failures: Vec<String> = Vec::new();
-            let mut restored_any = false;
 
             /*
              * ONLY what was actually evacuated.
@@ -726,6 +798,36 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             for entry in evacuated.iter().rev() {
                 match entry {
                     Evacuated::Moved { quarantined, live } => {
+                        /*
+                         * Un-journal BEFORE the move, not after.
+                         *
+                         * The journal's claim is "the complete original is in
+                         * quarantine". The moment this move starts that stops
+                         * being true — a cross-filesystem move copies and then
+                         * removes, so an interruption part way through leaves a
+                         * PARTIAL tree behind — and a later attempt finding that
+                         * partial tree named in the journal would restore it as
+                         * if it were the user's data.
+                         *
+                         * Clearing first fails the other way: if the move then
+                         * fails, quarantine still holds the complete original
+                         * with nothing naming it, so later attempts refuse and
+                         * the error names the folder. Stuck and honest beats
+                         * proceeding from something that might be half a copy.
+                         */
+                        if let Some(name) =
+                            quarantined.file_name().map(|n| n.to_string_lossy().to_string())
+                        {
+                            if pending.evacuated.iter().any(|n| n == &name) {
+                                pending.evacuated.retain(|n| n != &name);
+                                if let Err(e) = write_marker(&marker, &pending) {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "could not update the restore journal before a rollback"
+                                    );
+                                }
+                            }
+                        }
                         // Remove whatever the commit put there, then move the
                         // original back over it.
                         if live.is_dir() {
@@ -733,26 +835,8 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                         } else {
                             let _ = std::fs::remove_file(live);
                         }
-                        match move_or_copy(quarantined, live) {
-                            Ok(()) => {
-                                /*
-                                 * Un-journal it. The journal describes what is
-                                 * IN quarantine, and this is no longer in
-                                 * there — a stale entry would let the next
-                                 * attempt trust whatever it finds at that path,
-                                 * which is the exact hole the journal was added
-                                 * to close.
-                                 */
-                                if let Some(name) =
-                                    quarantined.file_name().map(|n| n.to_string_lossy().to_string())
-                                {
-                                    pending.evacuated.retain(|n| n != &name);
-                                    restored_any = true;
-                                }
-                            }
-                            Err(e) => {
-                                rollback_failures.push(format!("{}: {e}", live.display()));
-                            }
+                        if let Err(e) = move_or_copy(quarantined, live) {
+                            rollback_failures.push(format!("{}: {e}", live.display()));
                         }
                     }
                     Evacuated::Absent { live } => {
@@ -773,21 +857,23 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                         };
                         if let Err(e) = removed {
                             rollback_failures.push(format!("{}: {e}", live.display()));
+                        } else if let Some(name) =
+                            live.file_name().map(|n| n.to_string_lossy().to_string())
+                        {
+                            // The absence is back, so the marker must stop
+                            // claiming this component was missing at the start:
+                            // the next attempt asks the same question again.
+                            if pending.absent.iter().any(|n| n == &name) {
+                                pending.absent.retain(|n| n != &name);
+                                if let Err(e) = write_marker(&marker, &pending) {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "could not update the restore journal after a rollback"
+                                    );
+                                }
+                            }
                         }
                     }
-                }
-            }
-
-            /*
-             * Best effort, and it has to be after the loop: if the marker
-             * cannot be rewritten, the next attempt sees a journal claiming
-             * more is in quarantine than there is, and refuses rather than
-             * trusting a path. Refusing is the safe direction, so a failure
-             * here is logged and not escalated.
-             */
-            if restored_any {
-                if let Err(e) = write_marker(&marker, &pending) {
-                    tracing::warn!(error = %e, "could not update the restore journal after a rollback");
                 }
             }
 
@@ -906,6 +992,24 @@ fn evacuate_component(
     previous: &Path,
     evacuated: &mut Vec<Evacuated>,
 ) -> Result<(), AppError> {
+    /*
+     * KNOWN ABSENT, from a previous attempt.
+     *
+     * Anything at the live path now is this restore's own output — the commit
+     * creates the scripts directory and the database whether or not they were
+     * there — so it must not be evacuated, and above all must not be journalled
+     * as the original. Set it aside and carry the absence forward, so a
+     * rollback still puts the absence back.
+     */
+    if pending.absent.iter().any(|n| n == name) {
+        if from.exists() {
+            set_aside(from, previous, attempt)?;
+        }
+        evacuated.push(Evacuated::Absent {
+            live: from.to_path_buf(),
+        });
+        return Ok(());
+    }
     let journalled = pending.evacuated.iter().any(|n| n == name);
     if to.exists() {
         let right_kind = match kind {
@@ -926,12 +1030,7 @@ fn evacuate_component(
             .with_action(crate::errors::RecoveryAction::RevealFolder));
         }
         if from.exists() {
-            let aside = previous.join(format!("interrupted-attempt-{attempt}"));
-            std::fs::create_dir_all(&aside)?;
-            let file_name = from
-                .file_name()
-                .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
-            move_or_copy(from, &aside.join(file_name))?;
+            set_aside(from, previous, attempt)?;
         }
         evacuated.push(Evacuated::Moved {
             quarantined: to,
@@ -971,8 +1070,28 @@ fn evacuate_component(
         evacuated.push(Evacuated::Absent {
             live: from.to_path_buf(),
         });
+        // Journalled like a move, and for the same reason: after a crash the
+        // next attempt has to know that what is now at the live path is this
+        // restore's output rather than the user's data.
+        pending.absent.push(name.to_string());
+        write_marker(marker, pending)?;
     }
     Ok(())
+}
+
+/// Move an interrupted attempt's output out of the way, keeping every byte.
+///
+/// Nothing in a restore deletes what it did not write, so the dead attempt's
+/// partial output goes under `interrupted-attempt-N/` rather than being removed
+/// — if it turns out to have been the only copy of something, it is still on
+/// disk and the folder says what it is.
+fn set_aside(from: &Path, previous: &Path, attempt: u32) -> Result<(), AppError> {
+    let aside = previous.join(format!("interrupted-attempt-{attempt}"));
+    std::fs::create_dir_all(&aside)?;
+    let file_name = from
+        .file_name()
+        .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
+    move_or_copy(from, &aside.join(file_name))
 }
 
 fn move_or_copy(from: &Path, to: &Path) -> Result<(), AppError> {

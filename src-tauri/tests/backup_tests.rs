@@ -1206,6 +1206,14 @@ fn pin_generation(dir: &Path, generation: &str) -> std::path::PathBuf {
 /// A test that simulates an interrupted attempt has to write this too: the
 /// journal — not the existence of the quarantine directory — is what tells a
 /// resume that the copy in there is the complete original.
+fn journal_absent(dir: &Path, names: &[&str]) {
+    let marker = dir.join("restore-pending.json");
+    let mut pending: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker).expect("marker")).expect("parses");
+    pending["absent"] = serde_json::json!(names);
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+}
+
 fn journal_evacuated(dir: &Path, names: &[&str]) {
     let marker = dir.join("restore-pending.json");
     let mut pending: serde_json::Value =
@@ -1640,4 +1648,129 @@ async fn a_rolled_back_component_stops_being_trusted_in_quarantine() {
         live.iter().any(|body| body.contains("Keep me.")),
         "the live scripts were set aside for a directory the restore never wrote, found {live:?}"
     );
+}
+
+#[tokio::test]
+async fn a_resume_does_not_mistake_its_own_output_for_the_users_data() {
+    /*
+     * The cross-launch half of "a rollback must put back an absence".
+     *
+     * The commit creates the scripts directory and the database whether or not
+     * they were there. So if a restore starts with no scripts tree, gets as far
+     * as copying the export in, and the process dies — the next launch finds a
+     * populated scripts directory that IS THIS RESTORE'S OWN OUTPUT.
+     *
+     * With absence recorded only in memory, that launch evacuated the output
+     * into quarantine and journalled it as the original. A later rollback would
+     * then restore a half-copied export as if it were the user's data, and the
+     * message would say the previous data had been put back.
+     *
+     * The marker now carries `absent`, so a resume knows better.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Original", "# Original\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // --- the interrupted first attempt ---------------------------------------
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+    // It found no scripts tree at all, and recorded that.
+    fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the scripts");
+    journal_absent(h.dir.path(), &["scripts"]);
+    // It evacuated the database, and recorded that.
+    let mut journalled: Vec<String> = Vec::new();
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("candidcue.sqlite3{suffix}");
+        let from = h.dir.path().join(&name);
+        if from.exists() {
+            fs::rename(&from, quarantine.join(&name)).expect("evacuate");
+            journalled.push(name);
+        }
+    }
+    journal_evacuated(
+        h.dir.path(),
+        &journalled.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    // ...and then it died half way through copying the export's scripts in.
+    let partial = h.paths.scripts_dir().join("half-written");
+    fs::create_dir_all(&partial).expect("partial");
+    fs::write(partial.join("script.md"), "# Truncated").expect("partial body");
+
+    // --- the next launch ------------------------------------------------------
+    let previous = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("the resume must finish")
+        .expect("a restore ran");
+
+    // The restore's own half-written output must NOT be sitting in quarantine
+    // under the name of the user's original scripts tree.
+    let quarantined_scripts = previous.join("scripts");
+    if quarantined_scripts.exists() {
+        let bodies: Vec<String> = fs::read_dir(&quarantined_scripts)
+            .expect("read")
+            .filter_map(|e| e.ok())
+            .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+            .collect();
+        assert!(
+            !bodies.iter().any(|b| b.contains("Truncated")),
+            "the dead attempt's output was quarantined as if it were the original: {bodies:?}"
+        );
+    }
+
+    // And the live tree is the export, not a mixture.
+    let live: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(live.iter().any(|b| b.contains("Keep me.")));
+    assert!(!live.iter().any(|b| b.contains("Truncated")));
+}
+
+#[tokio::test]
+async fn a_finished_restore_that_could_not_delete_its_marker_does_not_replay() {
+    /*
+     * `remove_file` on the marker was a `let _ =`. If it fails, the next launch
+     * replays a restore over data that has already been restored: it quarantines
+     * the result and copies the export in again — and if the export has since
+     * been deleted, it fails and keeps failing.
+     *
+     * The marker now carries `completed`, and a launch that sees it removes the
+     * marker and does nothing else. Simulated by writing the flag directly,
+     * which is exactly the state the failed removal leaves behind.
+     */
+    let h = harness().await;
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    let marker = h.dir.path().join("restore-pending.json");
+    let mut pending: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker).expect("marker")).expect("parses");
+    pending["completed"] = serde_json::json!(true);
+    // Point it at an export that is no longer there, so a replay could not
+    // quietly succeed and pass this test by accident.
+    pending["exportPath"] = serde_json::json!("/nonexistent/export");
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+
+    let outcome = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("a finished restore must not fail the launch");
+    assert!(outcome.is_none(), "it must not run a second time");
+    assert!(!marker.exists(), "and the marker is retired");
 }
