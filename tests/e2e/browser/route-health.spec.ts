@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { openScript } from './fixtures/library';
 import { watchPageErrors } from './fixtures/page-errors';
 
 /**
@@ -51,14 +52,12 @@ test('every control-window route renders and raises nothing', async ({ page }, t
 
   // Library.
   await page.goto('/control.html');
-  await expect(page.getByRole('heading', { name: 'Scripts' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All scripts' })).toBeVisible();
   await expectNotBlank(page);
 
   // Editor — the route the compiler-worker crash used to make unreachable.
-  await page
-    .getByRole('list', { name: 'Scripts' })
-    .getByRole('button', { name: /Sweep script/ })
-    .click();
+  // Double click: a single click SELECTS in the collection model (§10.2).
+  await openScript(page, /Sweep script/);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('A sentence for the compiler');
 
@@ -78,7 +77,7 @@ test('every control-window route renders and raises nothing', async ({ page }, t
   // Live, reached the only way it can be reached: one press of Present.
   await page.getByRole('button', { name: 'All scripts', exact: true }).click();
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
@@ -102,7 +101,7 @@ test('the welcome route renders on a first launch and hands off to the library',
     page.getByRole('heading', { name: 'Speak naturally. Keep your place.' }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Go to the library' }).click();
-  await expect(page.getByRole('heading', { name: 'Scripts' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All scripts' })).toBeVisible();
 
   errors.expectClean();
 });

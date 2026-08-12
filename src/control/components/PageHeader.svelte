@@ -14,6 +14,13 @@
     editableTitle?: boolean;
     ontitlechange?: (title: string) => void;
     /**
+     * The rendered title input, so File › Rename can put the caret in it.
+     *
+     * Exposed rather than found with a `querySelector` on a private class name,
+     * which would break silently the moment the class is renamed.
+     */
+    titleElement?: HTMLInputElement | null;
+    /**
      * Hold the metadata row's height even while there is nothing to put in it.
      *
      * Opt-in, because a header that never gains or loses its metadata should
@@ -34,6 +41,7 @@
     onback,
     editableTitle = false,
     ontitlechange,
+    titleElement = $bindable(null),
     reserveMetaSpace = false,
     status,
     actions,
@@ -116,6 +124,7 @@
         {#if editableTitle}
           <input
             class="title-input"
+            bind:this={titleElement}
             bind:value={draft}
             aria-label="Script title"
             onblur={commitTitle}

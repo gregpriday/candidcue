@@ -1145,7 +1145,26 @@ fn stage_directive_kinds_match_the_ts_contract() {
 fn commands_pinned_to_the_wry_runtime_are_the_known_set() {
     /// Empty on purpose. A command belongs here only if it genuinely cannot be
     /// written against a generic runtime — and none is, today.
-    const PINNED: &[&str] = &[];
+    /*
+     * `set_menu_state` is pinned to Wry, and it cannot be otherwise.
+     *
+     * It writes onto live `MenuItem<Wry>` / `CheckMenuItem<Wry>` handles held in
+     * `MenuRegistry`. Tauri's menu types are concrete in the runtime — there is
+     * no `MenuItem<R>` to store — so a runtime-generic version of this command
+     * would have nothing to apply its argument to.
+     *
+     * The cost is real and bounded: no MockRuntime test can invoke it. What that
+     * loses is coverage of one `HashMap` lookup and three setters, and what
+     * covers it instead is `menu.rs`'s own unit tests plus the fact that the
+     * decision content — which item is enabled, checked, or renamed — lives
+     * entirely in `lib/commands.ts` and is tested exhaustively there.
+     *
+     * `set_window_title` is deliberately NOT here. It looked equally pinned at
+     * first and is not: `get_webview_window`, `set_title` and the macOS
+     * `ns_window` hop are all available on `WebviewWindow<R>`, so it is generic
+     * and a round-trip test can reach it.
+     */
+    const PINNED: &[&str] = &["set_menu_state"];
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
     let mut found: BTreeSet<String> = BTreeSet::new();

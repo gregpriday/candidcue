@@ -85,6 +85,18 @@ commands.allow = [
   "clear_cache",
   "get_system_diagnostics",
   "export_support_bundle",
+  # Desktop shell (refinement §5, §6). Two one-way pushes of state the frontend
+  # already owns — the native menu's enabled/checked flags and the window title
+  # — plus one reveal that names exactly the directory it opens. None of them
+  # read anything back, so none can be used to learn a path the caller did not
+  # already have.
+  #
+  # The resting window frame is deliberately NOT here. Rust records it from its
+  # own Moved/Resized events (app.rs); exposing a command for it would have
+  # widened the ACL for something no caller wanted.
+  "set_menu_state",
+  "set_window_title",
+  "reveal_logs",
   # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
   # (docs/updates.md). Both were permitted here while always returning
   # NOT_IMPLEMENTED, which left an updater's ACL surface pre-approved.

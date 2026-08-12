@@ -1,0 +1,167 @@
+/**
+ * The application command vocabulary (desktop refinement §6.1).
+ *
+ * ---------------------------------------------------------------------------
+ * ONE ID PER ACTION, AND EVERY SURFACE DERIVES FROM IT
+ * ---------------------------------------------------------------------------
+ * Before this file the app had two independent action vocabularies: the
+ * `ShortcutAction` union in `control/lib/shortcuts.ts`, and whatever each route
+ * happened to wire to a button. There was no native menu at all, so nothing
+ * forced them to agree — a command could exist as a key and not as a control, or
+ * as a control and not as a key, and no test could see the gap.
+ *
+ * A native menu changes that, because a menu is a PUBLISHED list of what the
+ * application can do, with the key beside each entry. It cannot be allowed to
+ * drift from what the keys and buttons actually do. So the ids below are the one
+ * name for each action, and three surfaces derive from them:
+ *
+ *   - `src-tauri/src/menu.rs`  builds the native menu from these ids
+ *   - `src/control/lib/commands.ts`  binds each id to its execution + availability
+ *   - `src/control/components/ShortcutsDialog.svelte`  lists them
+ *
+ * The ids are string literals rather than a generated enum because Rust has to
+ * spell them too, and a Rust test `include_str!`s THIS FILE to assert the two
+ * sides still agree (`menu.rs`, `menu_ids_match_typescript_contract`). Keep them
+ * grep-able: no interpolation, no computed names.
+ *
+ * Naming is `category.action`, and the category is the menu the command lives
+ * in. That is not decoration — `menuCategory()` reads it, so a command cannot be
+ * filed in the menu its id does not name.
+ */
+
+/**
+ * Every command the application publishes.
+ *
+ * DELIBERATELY NOT every action the app can perform. A command here appears in
+ * the native menu, so each one has to be a thing a user would look for by name,
+ * has to be answerable from a menu (no "the control you are hovering"), and has
+ * to have an honest disabled state. Transport nudges that only make sense with a
+ * hand on the keyboard mid-take stay as plain shortcuts.
+ */
+export const COMMAND_IDS = [
+  // ---- File ----
+  'file.new-script',
+  'file.import-markdown',
+  'file.save',
+  'file.duplicate-script',
+  'file.rename-script',
+  'file.export-markdown',
+  'file.reveal-script',
+  'file.move-to-trash',
+  /**
+   * ⌘W, and it is always enabled — which is a deliberate departure from the
+   * "disable rather than fail" rule two paragraphs below.
+   *
+   * A menu accelerator CLAIMS its key from the window: registering ⌘W as "Close
+   * Script" and disabling it outside the editor does not hand ⌘W back to the
+   * window manager, it makes ⌘W do nothing at all on every other screen. On
+   * macOS that is a key every user expects to close a window, so the command
+   * covers both meanings: close the open script when one is open, close the
+   * window otherwise — and the window close is the ordinary close, so it still
+   * runs the save/session shutdown handshake in `windows/shutdown.rs`.
+   */
+  'file.close-script',
+  'file.present',
+  'file.present-prompter',
+  'file.present-reader',
+
+  // ---- Edit ----
+  // Undo/Redo/Cut/Copy/Paste/Select All are Tauri PREDEFINED menu items and are
+  // not listed here: predefined items are dispatched by the OS to the focused
+  // native control, which is the only way they can target CodeMirror, a text
+  // field and a search box correctly without the app guessing which has focus.
+  'edit.find',
+  'edit.find-next',
+  'edit.find-previous',
+  'edit.replace',
+
+  // ---- View ----
+  /**
+   * Settings, which on macOS lives in the application menu under ⌘, rather than
+   * under View — but is filed here because `menuCategory` reads the prefix and
+   * there is no `app.` menu on the other platforms. The prefix decides which
+   * menu the SHORTCUTS DIALOG groups it under; `menu.rs` decides where the
+   * native item is placed, and on macOS that is the application menu.
+   */
+  'view.settings',
+  'view.library',
+  'view.toggle-sidebar',
+  'view.toggle-outline',
+  'view.toggle-diagnostics',
+  'view.edit-mode',
+  'view.preview-mode',
+  'view.split-mode',
+  'view.zoom-in',
+  'view.zoom-out',
+  'view.actual-size',
+  'view.stage-appearance',
+
+  // ---- Session ----
+  'session.start-take',
+  'session.play-pause',
+  'session.previous-sentence',
+  'session.next-sentence',
+  'session.previous-chapter',
+  'session.next-chapter',
+  'session.blank-stage',
+  'session.toggle-mirror',
+  'session.take-marker',
+  'session.identify-displays',
+  'session.end-take',
+
+  // ---- Window ----
+  'window.main',
+
+  // ---- Help ----
+  'help.keyboard-shortcuts',
+  'help.setup-assistant',
+  'help.export-support-bundle',
+  'help.reveal-logs',
+  'help.privacy',
+] as const;
+
+export type CommandId = (typeof COMMAND_IDS)[number];
+
+/** The native menu a command belongs to. */
+export type CommandCategory = 'file' | 'edit' | 'view' | 'session' | 'window' | 'help';
+
+/**
+ * The menu a command lives in, read off its own id.
+ *
+ * Derived rather than declared so a command cannot be filed under one menu and
+ * named for another — the failure mode that makes a menu untrustworthy is an
+ * entry not being where its name says it is.
+ */
+export function menuCategory(id: CommandId): CommandCategory {
+  return id.slice(0, id.indexOf('.')) as CommandCategory;
+}
+
+/**
+ * Rust → control: a native menu item was chosen.
+ *
+ * One event for the whole menu rather than one per command. The payload names
+ * the command, the frontend registry decides what that means right now, and the
+ * SAME guard that a visible button goes through runs — which is the property
+ * that stops a menu item being a second, unguarded way to leave a running take.
+ */
+export const MENU_COMMAND_EVENT = 'menu://command';
+
+/**
+ * The enabled/checked state of one native menu item.
+ *
+ * Pushed control → Rust (`set_menu_state`) whenever route or session state
+ * changes. Rust holds the menu handles and can only be told; it has no view of
+ * which script is open or whether a take is running, and giving it one would
+ * mean two implementations of "can this happen now".
+ */
+export interface MenuItemState {
+  id: CommandId;
+  enabled: boolean;
+  /** Present only for commands that show a checkmark (toggles and modes). */
+  checked?: boolean;
+  /**
+   * A label that changes with state — Pause becomes Resume, Blank becomes
+   * Unblank. Absent means "keep the label the menu was built with".
+   */
+  label?: string;
+}

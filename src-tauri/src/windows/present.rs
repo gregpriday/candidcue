@@ -492,6 +492,19 @@ fn lock() -> std::sync::MutexGuard<'static, Option<PresentState>> {
     }
 }
 
+/// Is the control window presenting right now?
+///
+/// Exposed for the resting-frame recorder in `app.rs`, which must not store the
+/// monitor-filling borderless geometry a take applies — reopening the
+/// application at teleprompter size, with the window it saved being the one the
+/// user never chose, is the failure this guard exists to prevent.
+///
+/// Reads the same latch `plan` does, so there is one answer to "is a take on the
+/// glass" rather than two that can disagree.
+pub fn is_presenting() -> bool {
+    lock().is_some()
+}
+
 /// The window's frame as it stands right now.
 ///
 /// Every read here is a plain getter with no setter in front of it, so unlike

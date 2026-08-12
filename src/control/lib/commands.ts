@@ -1,0 +1,674 @@
+/**
+ * The application command registry (desktop refinement §6.1).
+ *
+ * ---------------------------------------------------------------------------
+ * ONE DEFINITION, FOUR SURFACES
+ * ---------------------------------------------------------------------------
+ * A command is defined once here and reaches the user four ways: the native
+ * menu, the keyboard, the Shortcuts dialog, and (for some) a toolbar button or
+ * context-menu row. Before this file each of those was wired independently,
+ * which is exactly the arrangement in which a menu item, a key and a button end
+ * up meaning three slightly different things — and only one of them is tested.
+ *
+ * ---------------------------------------------------------------------------
+ * AVAILABILITY IS ASKED, NEVER ASSUMED
+ * ---------------------------------------------------------------------------
+ * Every command declares `available(context)`. That predicate does three jobs at
+ * once, and they must not be separated:
+ *
+ *   1. it greys the native menu item out, so an impossible action is visibly
+ *      impossible rather than failing after it is chosen (§6.3);
+ *   2. it is checked again inside `runCommand` before the action fires, because
+ *      a menu's enabled state is a snapshot pushed some milliseconds ago and the
+ *      session can end in between;
+ *   3. it is what the Shortcuts dialog reads to say where a key works.
+ *
+ * ---------------------------------------------------------------------------
+ * COMMANDS DO NOT BYPASS GUARDS
+ * ---------------------------------------------------------------------------
+ * Every command that leaves a screen calls `navigate()`, which runs the same
+ * unsaved-work and end-take guards a sidebar click does. This is the single
+ * most important property of the file: a native menu that could end a running
+ * take without the confirmation the button shows would be a way to lose a take
+ * that only exists because the menu was added.
+ */
+import {
+  COMMAND_IDS,
+  menuCategory,
+  type CommandCategory,
+  type CommandId,
+  type MenuItemState,
+} from '../../shared/contracts/commands';
+import type { Route, SettingsSection } from '../stores/router';
+import type { SaveState } from '../stores/editor';
+import type { EditorLayout } from '../stores/workspace';
+
+export type { CommandId, CommandCategory, MenuItemState };
+export { COMMAND_IDS, menuCategory };
+
+/**
+ * Everything a command needs to know about the application right now.
+ *
+ * A flat snapshot rather than a bundle of store references, and that is
+ * deliberate: it makes every `available` predicate a pure function of plain
+ * data, so the whole availability matrix is testable without mounting a single
+ * component or faking a store.
+ */
+export interface CommandContext {
+  route: Route;
+  /** A take is running. Not the same as being on the Live route. */
+  sessionActive: boolean;
+  /** The take is paused (so Pause reads Resume). */
+  sessionPaused: boolean;
+  /** The stage is blanked (so Blank reads Unblank). */
+  stageBlanked: boolean;
+  /** The stage is mirrored (menu checkmark). */
+  stageMirrored: boolean;
+  /** A script is open in the editor. */
+  scriptOpen: boolean;
+  /** The editor's save state, so Save can be greyed out when there is nothing to do. */
+  saveState: SaveState;
+  editorHasUnsavedWork: boolean;
+  /** A row is selected in the Library, so File commands can act on it. */
+  librarySelectionId: string | null;
+  /** The Library is showing Trash, where Present and Rename mean nothing. */
+  libraryInTrash: boolean;
+  sidebarVisible: boolean;
+  outlineVisible: boolean;
+  diagnosticsVisible: boolean;
+  editorLayout: EditorLayout;
+  /** A presentation transition is in flight; nothing may start another. */
+  takeStarting: boolean;
+}
+
+/** What a command needs at the moment it runs — the doing half of the registry. */
+export interface CommandActions {
+  newScript(): void;
+  importMarkdown(): void;
+  save(): void;
+  duplicate(scriptId: string): void;
+  rename(scriptId: string): void;
+  exportMarkdown(scriptId: string): void;
+  revealScript(scriptId: string): void;
+  moveToTrash(scriptId: string): void;
+  closeScript(): void;
+  closeWindow(): void;
+  present(mode?: 'prompter' | 'reader'): void;
+  find(): void;
+  findNext(): void;
+  findPrevious(): void;
+  replace(): void;
+  showLibrary(): void;
+  toggleSidebar(): void;
+  toggleOutline(): void;
+  toggleDiagnostics(): void;
+  setEditorLayout(layout: EditorLayout): void;
+  stepScale(direction: 1 | -1 | 0): void;
+  stageAppearance(): void;
+  settings(): void;
+  startTake(): void;
+  playPause(): void;
+  moveSentence(delta: -1 | 1): void;
+  moveChapter(delta: -1 | 1): void;
+  blankStage(): void;
+  toggleMirror(): void;
+  takeMarker(): void;
+  identifyDisplays(): void;
+  endTake(): void;
+  showMainWindow(): void;
+  keyboardShortcuts(): void;
+  setupAssistant(): void;
+  exportSupportBundle(): void;
+  revealLogs(): void;
+  privacy(): void;
+}
+
+export interface CommandDefinition {
+  id: CommandId;
+  /** The label the native menu was BUILT with. */
+  label: string;
+  /**
+   * A label that replaces it under some state (Pause → Resume).
+   *
+   * Returning `null` means "keep the built label". Absent means the label never
+   * changes, which is the case for all but three commands.
+   */
+  dynamicLabel?: (context: CommandContext) => string | null;
+  /** Shown as a checkmark in the native menu. Absent means "not a check item". */
+  checked?: (context: CommandContext) => boolean;
+  available: (context: CommandContext) => boolean;
+  run: (actions: CommandActions, context: CommandContext) => void;
+  /**
+   * The key, in the app's own display spelling, for the Shortcuts dialog.
+   *
+   * Written with the platform-neutral `Mod` token and rendered per platform by
+   * `formatAccelerator`, so this file never has to know which machine it is on.
+   */
+  accelerator?: string;
+}
+
+/** True while a script is open somewhere a File command can act on it. */
+function targetScriptId(context: CommandContext): string | null {
+  if (context.route.name === 'editor') return context.route.scriptId;
+  if (context.route.name === 'library' && !context.libraryInTrash) return context.librarySelectionId;
+  return null;
+}
+
+/**
+ * A take is on the glass and must not be disturbed.
+ *
+ * Used as a blanket veto on the document commands. Not because they would
+ * crash — most would work — but because they all end by changing what is on
+ * screen, and what is on screen is being read aloud by somebody standing at a
+ * camera. §6.3's rule is that a menu must not offer an action whose consequence
+ * the user cannot see.
+ */
+function presenting(context: CommandContext): boolean {
+  return context.sessionActive || context.takeStarting;
+}
+
+/**
+ * On the editor, with a document actually loaded, and not mid-take.
+ *
+ * `scriptOpen` is the part that was missing. Being on the editor ROUTE is not
+ * the same as having a script in it: the route mounts, shows "Opening script…",
+ * and only then does the document arrive. Without this check Save and the whole
+ * Find family were enabled over an editor that had nothing in it — and Rename
+ * already asked the question, so the two were inconsistent as well as wrong.
+ */
+function editing(context: CommandContext): boolean {
+  return context.route.name === 'editor' && context.scriptOpen && !presenting(context);
+}
+
+export const COMMANDS: Record<CommandId, CommandDefinition> = {
+  // ------------------------------------------------------------------ File --
+  'file.new-script': {
+    id: 'file.new-script',
+    label: 'New Script',
+    accelerator: 'Mod+N',
+    /*
+     * Available on the Library and the Editor, not during a take, and NOT on
+     * the calibration wizard. Calibration holds a live stage window against a
+     * real panel and its steps carry state that is not on disk yet; dropping
+     * somebody into a new script from there abandons a measurement halfway.
+     */
+    available: (c) => !presenting(c) && c.route.name !== 'calibrate',
+    run: (a) => a.newScript(),
+  },
+  'file.import-markdown': {
+    id: 'file.import-markdown',
+    label: 'Import Markdown…',
+    accelerator: 'Mod+Shift+I',
+    available: (c) => !presenting(c) && c.route.name !== 'calibrate',
+    run: (a) => a.importMarkdown(),
+  },
+  'file.save': {
+    id: 'file.save',
+    label: 'Save',
+    accelerator: 'Mod+S',
+    /*
+     * Enabled whenever a script is open, including when everything is already
+     * saved.
+     *
+     * Greying Save out on a saved document is technically honest and practically
+     * hostile: ⌘S is a reflex, and a reflex that silently does nothing teaches
+     * people the app does not save. It is a flush — it costs a no-op write at
+     * worst — and the status bar reports the outcome either way.
+     */
+    available: (c) => editing(c),
+    run: (a) => a.save(),
+  },
+  'file.duplicate-script': {
+    id: 'file.duplicate-script',
+    label: 'Duplicate Script',
+    accelerator: 'Mod+D',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a, c) => {
+      const id = targetScriptId(c);
+      if (id !== null) a.duplicate(id);
+    },
+  },
+  'file.rename-script': {
+    id: 'file.rename-script',
+    label: 'Rename Script',
+    // Editor only. Renaming from the Library would need an inline edit on the
+    // row, and a menu item whose effect is invisible (the field it focuses is
+    // on another screen) is worse than one that is greyed out.
+    available: (c) => editing(c),
+    run: (a, c) => {
+      if (c.route.name === 'editor') a.rename(c.route.scriptId);
+    },
+  },
+  'file.export-markdown': {
+    id: 'file.export-markdown',
+    label: 'Export Markdown…',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a, c) => {
+      const id = targetScriptId(c);
+      if (id !== null) a.exportMarkdown(id);
+    },
+  },
+  'file.reveal-script': {
+    id: 'file.reveal-script',
+    label: 'Reveal in Finder',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a, c) => {
+      const id = targetScriptId(c);
+      if (id !== null) a.revealScript(id);
+    },
+  },
+  'file.move-to-trash': {
+    id: 'file.move-to-trash',
+    label: 'Move to Trash',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a, c) => {
+      const id = targetScriptId(c);
+      if (id !== null) a.moveToTrash(id);
+    },
+  },
+  'file.close-script': {
+    id: 'file.close-script',
+    label: 'Close Script',
+    accelerator: 'Mod+W',
+    dynamicLabel: (c) => (c.route.name === 'editor' ? 'Close Script' : 'Close Window'),
+    /*
+     * ALWAYS ENABLED. See the note on this id in the shared contract: a menu
+     * accelerator takes its key from the window whether or not the item is
+     * enabled, so a disabled Close Script does not give ⌘W back to the window
+     * manager — it makes ⌘W dead everywhere else in the app.
+     */
+    available: () => true,
+    run: (a, c) => {
+      if (c.route.name === 'editor') a.closeScript();
+      else a.closeWindow();
+    },
+  },
+  'file.present': {
+    id: 'file.present',
+    label: 'Present',
+    accelerator: 'Mod+Return',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a) => a.present(),
+  },
+  'file.present-prompter': {
+    id: 'file.present-prompter',
+    label: 'Prompter',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a) => a.present('prompter'),
+  },
+  'file.present-reader': {
+    id: 'file.present-reader',
+    label: 'Reader Window',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a) => a.present('reader'),
+  },
+
+  // ------------------------------------------------------------------ Edit --
+  'edit.find': {
+    id: 'edit.find',
+    label: 'Find…',
+    accelerator: 'Mod+F',
+    available: (c) => editing(c),
+    run: (a) => a.find(),
+  },
+  'edit.find-next': {
+    id: 'edit.find-next',
+    label: 'Find Next',
+    accelerator: 'Mod+G',
+    available: (c) => editing(c),
+    run: (a) => a.findNext(),
+  },
+  'edit.find-previous': {
+    id: 'edit.find-previous',
+    label: 'Find Previous',
+    accelerator: 'Mod+Shift+G',
+    available: (c) => editing(c),
+    run: (a) => a.findPrevious(),
+  },
+  'edit.replace': {
+    id: 'edit.replace',
+    label: 'Find and Replace…',
+    accelerator: 'Mod+Alt+F',
+    available: (c) => editing(c),
+    run: (a) => a.replace(),
+  },
+
+  // ------------------------------------------------------------------ View --
+  'view.settings': {
+    id: 'view.settings',
+    label: 'Settings…',
+    accelerator: 'Mod+,',
+    /*
+     * Not during a take, and that is a product decision rather than a technical
+     * one. Almost every setting here changes how a take behaves — the follow
+     * profile, the optical rig, the microphone — and a settings screen that
+     * silently disables two thirds of itself is a worse answer than a menu item
+     * that says "not now". §14.1 asks for the same thing from the other
+     * direction: disable unsafe changes during an active take.
+     */
+    available: (c) => !presenting(c),
+    run: (a) => a.settings(),
+  },
+  'view.library': {
+    id: 'view.library',
+    label: 'Show Library',
+    accelerator: 'Mod+Shift+L',
+    available: (c) => !presenting(c) && c.route.name !== 'library',
+    run: (a) => a.showLibrary(),
+  },
+  'view.toggle-sidebar': {
+    id: 'view.toggle-sidebar',
+    label: 'Show Sidebar',
+    accelerator: 'Mod+Alt+S',
+    checked: (c) => c.sidebarVisible,
+    // The sidebar is not rendered during a take, so the toggle would be a
+    // checkmark describing something that is not on screen.
+    available: (c) => !presenting(c),
+    run: (a) => a.toggleSidebar(),
+  },
+  'view.toggle-outline': {
+    id: 'view.toggle-outline',
+    label: 'Show Outline',
+    accelerator: 'Mod+Alt+O',
+    checked: (c) => c.outlineVisible,
+    available: (c) => c.route.name === 'editor' || c.route.name === 'live',
+    run: (a) => a.toggleOutline(),
+  },
+  'view.toggle-diagnostics': {
+    id: 'view.toggle-diagnostics',
+    label: 'Show Diagnostics',
+    accelerator: 'Mod+Alt+D',
+    checked: (c) => c.diagnosticsVisible,
+    available: (c) => c.route.name === 'live',
+    run: (a) => a.toggleDiagnostics(),
+  },
+  'view.edit-mode': {
+    id: 'view.edit-mode',
+    label: 'Edit',
+    accelerator: 'Mod+1',
+    checked: (c) => c.editorLayout === 'edit',
+    available: (c) => editing(c),
+    run: (a) => a.setEditorLayout('edit'),
+  },
+  'view.preview-mode': {
+    id: 'view.preview-mode',
+    label: 'Preview',
+    accelerator: 'Mod+2',
+    checked: (c) => c.editorLayout === 'preview',
+    available: (c) => editing(c),
+    run: (a) => a.setEditorLayout('preview'),
+  },
+  'view.split-mode': {
+    id: 'view.split-mode',
+    label: 'Edit and Preview',
+    accelerator: 'Mod+3',
+    checked: (c) => c.editorLayout === 'split',
+    available: (c) => editing(c),
+    run: (a) => a.setEditorLayout('split'),
+  },
+  'view.zoom-in': {
+    id: 'view.zoom-in',
+    label: 'Larger Editor Text',
+    accelerator: 'Mod+=',
+    available: (c) => editing(c),
+    run: (a) => a.stepScale(1),
+  },
+  'view.zoom-out': {
+    id: 'view.zoom-out',
+    label: 'Smaller Editor Text',
+    accelerator: 'Mod+-',
+    available: (c) => editing(c),
+    run: (a) => a.stepScale(-1),
+  },
+  'view.actual-size': {
+    id: 'view.actual-size',
+    label: 'Actual Size',
+    accelerator: 'Mod+0',
+    available: (c) => editing(c),
+    run: (a) => a.stepScale(0),
+  },
+  'view.stage-appearance': {
+    id: 'view.stage-appearance',
+    label: 'Stage Appearance…',
+    // Available DURING a take as well: adjusting brightness or type size mid-
+    // take is a normal thing to need, and the sheet opens on the operator plane.
+    available: (c) => c.route.name === 'live' || c.route.name === 'editor',
+    run: (a) => a.stageAppearance(),
+  },
+
+  // --------------------------------------------------------------- Session --
+  'session.start-take': {
+    id: 'session.start-take',
+    label: 'Start Take',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a) => a.startTake(),
+  },
+  'session.play-pause': {
+    id: 'session.play-pause',
+    label: 'Pause',
+    dynamicLabel: (c) => (c.sessionPaused ? 'Resume' : 'Pause'),
+    available: (c) => c.sessionActive,
+    run: (a) => a.playPause(),
+  },
+  'session.previous-sentence': {
+    id: 'session.previous-sentence',
+    label: 'Previous Sentence',
+    accelerator: 'Alt+Left',
+    available: (c) => c.sessionActive,
+    run: (a) => a.moveSentence(-1),
+  },
+  'session.next-sentence': {
+    id: 'session.next-sentence',
+    label: 'Next Sentence',
+    accelerator: 'Alt+Right',
+    available: (c) => c.sessionActive,
+    run: (a) => a.moveSentence(1),
+  },
+  'session.previous-chapter': {
+    id: 'session.previous-chapter',
+    label: 'Previous Section',
+    accelerator: 'Alt+Up',
+    available: (c) => c.sessionActive,
+    run: (a) => a.moveChapter(-1),
+  },
+  'session.next-chapter': {
+    id: 'session.next-chapter',
+    label: 'Next Section',
+    accelerator: 'Alt+Down',
+    available: (c) => c.sessionActive,
+    run: (a) => a.moveChapter(1),
+  },
+  'session.blank-stage': {
+    id: 'session.blank-stage',
+    label: 'Blank Stage',
+    dynamicLabel: (c) => (c.stageBlanked ? 'Show Stage' : 'Blank Stage'),
+    available: (c) => c.sessionActive,
+    run: (a) => a.blankStage(),
+  },
+  'session.toggle-mirror': {
+    id: 'session.toggle-mirror',
+    label: 'Mirror Stage',
+    checked: (c) => c.stageMirrored,
+    available: (c) => c.sessionActive,
+    run: (a) => a.toggleMirror(),
+  },
+  'session.take-marker': {
+    id: 'session.take-marker',
+    label: 'Add Take Marker',
+    available: (c) => c.sessionActive,
+    run: (a) => a.takeMarker(),
+  },
+  'session.identify-displays': {
+    id: 'session.identify-displays',
+    label: 'Identify Displays',
+    // Available at rest too: working out which physical panel is "Display 2" is
+    // a thing you do while SETTING UP, not only mid-take.
+    available: () => true,
+    run: (a) => a.identifyDisplays(),
+  },
+  'session.end-take': {
+    id: 'session.end-take',
+    label: 'End Take',
+    accelerator: 'Mod+.',
+    available: (c) => c.sessionActive,
+    run: (a) => a.endTake(),
+  },
+
+  // ---------------------------------------------------------------- Window --
+  'window.main': {
+    id: 'window.main',
+    label: 'CandidCue',
+    available: () => true,
+    run: (a) => a.showMainWindow(),
+  },
+
+  // ------------------------------------------------------------------ Help --
+  'help.keyboard-shortcuts': {
+    id: 'help.keyboard-shortcuts',
+    label: 'Keyboard Shortcuts',
+    accelerator: 'Mod+/',
+    available: () => true,
+    run: (a) => a.keyboardShortcuts(),
+  },
+  'help.setup-assistant': {
+    id: 'help.setup-assistant',
+    label: 'Setup Assistant',
+    available: (c) => !presenting(c),
+    run: (a) => a.setupAssistant(),
+  },
+  'help.export-support-bundle': {
+    id: 'help.export-support-bundle',
+    label: 'Export Support Bundle…',
+    available: () => true,
+    run: (a) => a.exportSupportBundle(),
+  },
+  'help.reveal-logs': {
+    id: 'help.reveal-logs',
+    label: 'Reveal Logs',
+    available: () => true,
+    run: (a) => a.revealLogs(),
+  },
+  'help.privacy': {
+    id: 'help.privacy',
+    label: 'Privacy and Local Processing',
+    available: (c) => !presenting(c),
+    run: (a) => a.privacy(),
+  },
+};
+
+/**
+ * Run a command, re-checking availability first.
+ *
+ * The second check is not belt-and-braces. The native menu's enabled flags were
+ * pushed some milliseconds ago — a take can end, a script can close, and a save
+ * can fail between the push and the click — and the menu has no way to know.
+ * Returns false when the command stood down, so a caller that wants to explain
+ * itself can.
+ */
+export function runCommand(
+  id: CommandId,
+  actions: CommandActions,
+  context: CommandContext,
+): boolean {
+  const command = COMMANDS[id];
+  if (!command.available(context)) return false;
+  command.run(actions, context);
+  return true;
+}
+
+/**
+ * The whole menu's state, for one `set_menu_state` push.
+ *
+ * Every command every time, rather than a diff. A diff would mean the menu's
+ * correctness depended on the frontend's memory of what it last sent, and the
+ * one bug that model produces — a stale item nobody re-sent — is invisible until
+ * somebody clicks the thing that should have been greyed out.
+ */
+export function menuStateFor(context: CommandContext): MenuItemState[] {
+  return COMMAND_IDS.map((id) => {
+    const command = COMMANDS[id];
+    const state: MenuItemState = { id, enabled: command.available(context) };
+    if (command.checked) state.checked = command.checked(context);
+    const label = command.dynamicLabel?.(context);
+    if (label !== null && label !== undefined) state.label = label;
+    return state;
+  });
+}
+
+/**
+ * Render an accelerator for the platform it will be pressed on (§25.3).
+ *
+ * macOS uses the glyphs because that is what macOS menus show and what users
+ * scan for; everywhere else uses words, because Windows and Linux menus do. The
+ * order is the platform's too — macOS is ⌃⌥⇧⌘, Windows is Ctrl+Alt+Shift.
+ */
+export function formatAccelerator(accelerator: string, isMac: boolean): string {
+  const parts = accelerator.split('+');
+  const key = parts[parts.length - 1] ?? '';
+  const modifiers = new Set(parts.slice(0, -1));
+
+  const displayKey = (() => {
+    switch (key) {
+      case 'Return':
+        return isMac ? '⏎' : 'Enter';
+      case 'Left':
+        return '←';
+      case 'Right':
+        return '→';
+      case 'Up':
+        return '↑';
+      case 'Down':
+        return '↓';
+      case '=':
+        return '+';
+      default:
+        return key.length === 1 ? key.toUpperCase() : key;
+    }
+  })();
+
+  if (isMac) {
+    let out = '';
+    if (modifiers.has('Ctrl')) out += '⌃';
+    if (modifiers.has('Alt')) out += '⌥';
+    if (modifiers.has('Shift')) out += '⇧';
+    if (modifiers.has('Mod')) out += '⌘';
+    return out + displayKey;
+  }
+
+  const words: string[] = [];
+  if (modifiers.has('Mod')) words.push('Ctrl');
+  if (modifiers.has('Ctrl')) words.push('Ctrl');
+  if (modifiers.has('Alt')) words.push('Alt');
+  if (modifiers.has('Shift')) words.push('Shift');
+  words.push(displayKey);
+  return words.join('+');
+}
+
+/** Commands grouped by menu, for the Shortcuts dialog. */
+export function commandsByCategory(): Array<{
+  category: CommandCategory;
+  commands: CommandDefinition[];
+}> {
+  const order: CommandCategory[] = ['file', 'edit', 'view', 'session', 'window', 'help'];
+  return order
+    .map((category) => ({
+      category,
+      commands: COMMAND_IDS.map((id) => COMMANDS[id]).filter(
+        (command) => menuCategory(command.id) === category,
+      ),
+    }))
+    .filter((group) => group.commands.length > 0);
+}
+
+/** Settings sections, so `view.settings` can restore the last one. */
+export function isSettingsSection(value: string): value is SettingsSection {
+  return (
+    value === 'general' ||
+    value === 'speech' ||
+    value === 'audio' ||
+    value === 'stage' ||
+    value === 'teleprompter' ||
+    value === 'following' ||
+    value === 'privacy'
+  );
+}

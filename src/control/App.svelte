@@ -9,6 +9,7 @@
   import { get } from 'svelte/store';
   import Button from './components/Button.svelte';
   import ConfirmHost from './components/ConfirmHost.svelte';
+  import ContextMenu from './components/ContextMenu.svelte';
   import SessionSummary from './components/SessionSummary.svelte';
   import ShortcutsDialog from './components/ShortcutsDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -20,7 +21,31 @@
   import Calibrate from './routes/Calibrate.svelte';
   import Recovery from './routes/Recovery.svelte';
   import Welcome from './routes/Welcome.svelte';
-  import { createAndOpenScript } from './lib/app-actions';
+  import {
+    createAndOpenScript,
+    exportScriptToFile,
+    importMarkdown,
+    openExternal,
+  } from './lib/app-actions';
+  import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
+  import { startTake, takeStarting } from './lib/start-take';
+  import { dispatchRouteCommand } from './stores/command-bus';
+  import {
+    composeWindowTitle,
+    installDragDrop,
+    installMenuCommands,
+    type DragHoverPayload,
+    type DragImportedPayload,
+    pushMenuState,
+    pushWindowTitle,
+    revealLogs,
+  } from './services/desktop-shell';
+  import {
+    stepDocumentScale,
+    updateWorkspace,
+    workspace,
+    type EditorLayout,
+  } from './stores/workspace';
   import {
     STOP_SESSION_CONFIRM_BODY,
     editorNavigationDecision,
@@ -29,7 +54,7 @@
     recentScriptIdForBoot,
   } from './lib/app-lifecycle';
 import { rememberReaderFrame } from './lib/reader-frame';
-  import { installShortcuts, onShortcut } from './lib/shortcuts';
+  import { emitShortcut, installShortcuts, onShortcut } from './lib/shortcuts';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
   import { describeError, errorCode } from './services/errors';
@@ -45,13 +70,27 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { initAppStatus } from './stores/app-status';
   import { requestConfirm } from './stores/confirm';
   import { editor, editorHasUnsavedWork, saveNow } from './stores/editor';
-  import { loadLibrary } from './stores/library';
+  import {
+    duplicateScript,
+    library,
+    loadLibrary,
+    moveScriptToTrash,
+  } from './stores/library';
+  import * as scriptsService from './services/scripts';
   import { awaitViewportSettled, exitPresentation, painted } from './services/control-window';
   import { canvasIsBlack, coverIsUp, presentingPhase, setPresentingPhase } from './stores/presenting';
-  import { navigate, registerNavigationGuard, route, setInitialRoute } from './stores/router';
+  import {
+    navigate,
+    registerNavigationGuard,
+    route,
+    setInitialRoute,
+    type SettingsSection,
+  } from './stores/router';
   import {
     awaitPendingPersistence,
     clearSession,
+    identifyStageDisplays,
+    liveMirrorX,
     session,
     stopSession,
   } from './stores/session';
@@ -60,6 +99,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   let ready = $state(false);
   let shortcutsOpen = $state(false);
+  /**
+   * Files are over the window right now (§20.2).
+   *
+   * Null when nothing is being dragged. Carries the count Rust would accept, so
+   * the overlay can say "not this kind of file" rather than inviting a drop that
+   * will be refused — §10.5's rule that an unsupported file gets a concise
+   * rejection instead of silence, applied a moment EARLIER than the drop.
+   */
+  let dragHover = $state<DragHoverPayload | null>(null);
 
   /*
    * Why boot has a failure state at all.
@@ -145,10 +193,126 @@ import { rememberReaderFrame } from './lib/reader-frame';
     else delete document.documentElement.dataset['presenting'];
   });
 
+  /*
+   * The menu bar, kept in step with the application.
+   *
+   * `ready` gates it deliberately: `menu::install` builds every item disabled,
+   * and the whole point of that is that the menu cannot act on a library that
+   * has not loaded or an editor that does not exist yet. Pushing state during
+   * boot would enable File › Present a beat before there is anything to
+   * present.
+   */
+  $effect(() => {
+    /*
+     * RECOVERY GETS A MENU TOO, and it is the one launch that needs one most.
+     *
+     * `menu::install` builds every item disabled and this effect is what
+     * enables them — but a boot that fails to open the database returns before
+     * `ready` is ever set, so the menu bar stayed entirely grey on the screen
+     * whose whole job is getting somebody out of trouble. Help › Reveal Logs
+     * and Export Support Bundle are exactly what that screen wants, and both
+     * are classified recovery-safe in Rust (`backup_tests.rs`).
+     *
+     * The context handed over is deliberately NOT `commandContext`: the stores
+     * it reads never loaded. `recoveryCommandContext` is a flat, honest "nothing
+     * is open and nothing can be started", which leaves the Help items enabled
+     * — they answer `() => true` — and everything else greyed.
+     */
+    if (recoveryStatus !== null) {
+      void pushMenuState(recoveryCommandContext);
+      return;
+    }
+    if (!ready) return;
+    void pushMenuState(commandContext);
+  });
+
+  /**
+   * The application as recovery sees it: nothing open, nothing runnable.
+   *
+   * A constant rather than a derived, because in recovery none of its inputs
+   * exist — the library never loaded, the editor never opened, and the session
+   * store is at its initial value.
+   */
+  const recoveryCommandContext: CommandContext = {
+    route: { name: 'library', view: 'all' },
+    sessionActive: false,
+    sessionPaused: false,
+    stageBlanked: false,
+    stageMirrored: false,
+    scriptOpen: false,
+    saveState: 'idle',
+    editorHasUnsavedWork: false,
+    librarySelectionId: null,
+    libraryInTrash: false,
+    sidebarVisible: false,
+    outlineVisible: false,
+    diagnosticsVisible: false,
+    editorLayout: 'edit',
+    takeStarting: false,
+  };
+
+  /*
+   * The window's title, and the macOS modified dot.
+   *
+   * `edited` is the editor's unsaved state rather than "the document differs
+   * from disk in some way": a conflict is NOT reported as modified, because the
+   * dot means "you have work that is not written" and a conflict means
+   * something stronger that the editor's own warning bar says properly.
+   *
+   * It is also gated on BEING IN THE EDITOR. The dot is a property of the
+   * document the window is showing, and the editor store outlives the route —
+   * so leaving a failed save for the Library used to show "Library — CandidCue"
+   * with a modified dot beside it, claiming unsaved work in a window that is not
+   * displaying a document at all.
+   */
+  $effect(() => {
+    if (!ready) return;
+    const title = composeWindowTitle({
+      routeName: $route.name,
+      scriptTitle: $route.name === 'editor' ? $editor.title : $session.scriptTitle || null,
+      libraryView: $route.name === 'library' ? $route.view : undefined,
+      sessionActive: $session.active,
+    });
+    const edited =
+      $route.name === 'editor' &&
+      $editor.saveState !== 'conflict' &&
+      editorHasUnsavedWork();
+    void pushWindowTitle(title, edited);
+  });
+
   onMount(() => {
     // §30.1 triage. Off unless the operator switched it on for this window;
     // see audio-trace.ts for why the audio path needs it at all.
     initAudioTrace();
+
+    /*
+     * Native menu clicks. Installed for the life of the window, and reading
+     * both context and actions at dispatch time — a menu bar outlives every
+     * route, so capturing either would pin the whole menu to whatever screen
+     * happened to be up when the app started.
+     */
+    const teardownMenu = installMenuCommands(
+      () => commandContext,
+      () => commandActions,
+    );
+
+    /*
+     * Markdown dropped on the window.
+     *
+     * Hosted by the shell rather than by the Library, because the drop target is
+     * the WINDOW: Rust reports a drag over the window and does not know which
+     * route is up. Dropping a script while the editor is open should still
+     * import it, which a Library-only listener would silently refuse.
+     */
+    const teardownDrop = installDragDrop({
+      onhover: (payload) => {
+        dragHover = payload.active ? payload : null;
+      },
+      onimported: (payload) => {
+        dragHover = null;
+        void handleDroppedImport(payload);
+      },
+    });
     /*
      * The boot sequence outlives the component if the shell is torn down
      * mid-launch (HMR, a reload landing on a slow IPC round trip). None of the
@@ -522,6 +686,8 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
     return () => {
       disposed = true;
+      teardownMenu();
+      teardownDrop();
       teardownShortcuts();
       teardownHelp();
       unregisterLiveGuard();
@@ -532,6 +698,303 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   async function newScriptFromSidebar(): Promise<void> {
     await createAndOpenScript('new');
+  }
+
+  /* ------------------------------------------------------------------------
+   * NATIVE MENU AND WINDOW IDENTITY (desktop refinement §5, §6)
+   *
+   * The shell is where this belongs and nowhere else. It is the one component
+   * mounted for the whole life of the window, it already holds the navigation
+   * guards every command has to respect, and it can see every store a command's
+   * availability depends on. A route owning any part of it would mean the menu
+   * went dead for the length of whatever route forgot to.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * The application, as a flat snapshot, for the availability predicates.
+   *
+   * Rebuilt by Svelte whenever any input changes, which is exactly the cadence
+   * the menu wants: a take starting, a script closing and a save failing are all
+   * things the menu bar has to notice within a frame.
+   *
+   * ---------------------------------------------------------------------------
+   * TWO FIELDS ARE PLAIN FUNCTION CALLS, AND THEY TRACK ONLY BY NEIGHBOURING
+   * ---------------------------------------------------------------------------
+   * `editorHasUnsavedWork()` and `liveMirrorX()` are ordinary functions that
+   * read their stores with `get()`. `get()` subscribes and immediately
+   * unsubscribes, so it registers NO dependency in a `$derived` — on their own,
+   * these two would compute once and then be stale for ever.
+   *
+   * They are correct here because `$editor.saveState` and `$session.active` are
+   * read in the same expression, and a `$` store read subscribes to the whole
+   * store rather than to the field. So any editor change re-runs the first and
+   * any session change re-runs the second — and `toggleStageMirror` does write
+   * the session store (`recomposeStageSettings`), which is what makes the mirror
+   * checkmark track.
+   *
+   * That is a real dependency held together by adjacency. If either `$` read is
+   * ever removed from this object, its neighbour goes silently stale: the menu
+   * would keep offering Save on a document with nothing to save, and the mirror
+   * checkmark would freeze. Keep both reads, or convert the two functions to
+   * derived stores.
+   */
+  const commandContext = $derived<CommandContext>({
+    route: $route,
+    sessionActive: $session.active,
+    sessionPaused: $session.paused !== 'none',
+    stageBlanked: $session.stageBlanked,
+    // Read through a function rather than from `SessionState`, because the
+    // mirror lives in the take's teleprompter snapshot — see `liveMirrorX`.
+    // `$session` is referenced so this recomputes when the take changes.
+    stageMirrored: $session.active ? liveMirrorX() : false,
+    scriptOpen: $editor.scriptId !== null,
+    saveState: $editor.saveState,
+    editorHasUnsavedWork: editorHasUnsavedWork(),
+    librarySelectionId: $library.selectedId,
+    libraryInTrash: $library.view === 'trash',
+    sidebarVisible: $workspace.sidebarVisible,
+    outlineVisible: $workspace.outlineVisible,
+    diagnosticsVisible: $workspace.diagnosticsVisible,
+    editorLayout: $workspace.editorLayout,
+    takeStarting: $takeStarting,
+  });
+
+  /**
+   * What each command actually does.
+   *
+   * Every entry that leaves a screen goes through `navigate()`, which runs the
+   * unsaved-work and end-take guards registered above. That is the property
+   * that makes a native menu safe to add: File › New Script from inside a take
+   * asks the same question the sidebar does, because it is the same code.
+   */
+  const commandActions: CommandActions = {
+    newScript: () => void createAndOpenScript('new'),
+    importMarkdown: () => void importMarkdown(),
+    save: () => void saveNow(),
+    duplicate: (scriptId) => void duplicateScript(scriptId),
+    rename: () => dispatchRouteCommand('file.rename-script'),
+    exportMarkdown: (scriptId) => {
+      const title = titleForScript(scriptId);
+      void exportScriptToFile(scriptId, title, 'markdown');
+    },
+    revealScript: (scriptId) => {
+      void scriptsService.revealScriptFolder(scriptId).catch((err: unknown) => {
+        showToast(`That script's folder could not be opened. ${describeError(err)}`, 'danger');
+      });
+    },
+    moveToTrash: (scriptId) => void confirmMoveToTrash(scriptId),
+    closeScript: () => void navigate({ name: 'library', view: get(library).view }),
+    /*
+     * ⌘W outside the editor.
+     *
+     * `window.close()` is deliberately NOT used: it bypasses the
+     * `CloseRequested` interception in `app.rs` on some webview builds, and that
+     * interception is the only thing that flushes an unsaved script and closes
+     * an open session row. Asking the WINDOW to close is what raises the event
+     * the handshake hangs off.
+     */
+    closeWindow: () => void requestWindowClose(),
+    present: (mode) => {
+      const id = commandTargetScriptId();
+      if (id === null) return;
+      void startTake(id, mode ? { presentationMode: mode } : {});
+    },
+    find: () => dispatchRouteCommand('edit.find'),
+    findNext: () => dispatchRouteCommand('edit.find-next'),
+    findPrevious: () => dispatchRouteCommand('edit.find-previous'),
+    replace: () => dispatchRouteCommand('edit.replace'),
+    showLibrary: () => void navigate({ name: 'library', view: get(library).view }),
+    toggleSidebar: () => updateWorkspace({ sidebarVisible: !get(workspace).sidebarVisible }),
+    toggleOutline: () => updateWorkspace({ outlineVisible: !get(workspace).outlineVisible }),
+    toggleDiagnostics: () =>
+      updateWorkspace({ diagnosticsVisible: !get(workspace).diagnosticsVisible }),
+    setEditorLayout: (layout: EditorLayout) => updateWorkspace({ editorLayout: layout }),
+    stepScale: (direction) => stepDocumentScale(direction),
+    stageAppearance: () => dispatchRouteCommand('view.stage-appearance'),
+    settings: () =>
+      void navigate({
+        name: 'settings',
+        // Reopen where they were. §14.4 asks for the selected section to
+        // persist, and ⌘, is the moment that matters — somebody returning to
+        // Settings almost always wants the row they were last looking at.
+        section: settingsSectionFromWorkspace(),
+      }),
+    /*
+     * The Session menu is routed through the SHORTCUT BUS rather than calling
+     * the session store directly.
+     *
+     * Live already subscribes there with every guard it needs — the
+     * delegate-to-the-embedded-stage list, the section bounds, the
+     * rig-resolved type ceiling. Calling `togglePlayPause()` from here would
+     * work and would skip all of them, which is how a menu item and a key come
+     * to do subtly different things.
+     */
+    startTake: () => {
+      const id = commandTargetScriptId();
+      if (id !== null) void startTake(id);
+    },
+    playPause: () => void emitShortcut('play-pause'),
+    moveSentence: (delta) => void emitShortcut(delta < 0 ? 'back-sentence' : 'forward-sentence'),
+    moveChapter: (delta) => void emitShortcut(delta < 0 ? 'prev-chapter' : 'next-chapter'),
+    blankStage: () => void emitShortcut('blank-stage'),
+    toggleMirror: () => void emitShortcut('toggle-mirror'),
+    takeMarker: () => void emitShortcut('take-marker'),
+    identifyDisplays: () => void identifyStageDisplays(),
+    endTake: () => void emitShortcut('stop-session'),
+    showMainWindow: () => void focusMainWindow(),
+    keyboardShortcuts: () => (shortcutsOpen = true),
+    setupAssistant: () => void navigate({ name: 'welcome' }),
+    exportSupportBundle: () => void exportSupportBundleFromMenu(),
+    revealLogs: () => {
+      void revealLogs().catch((err: unknown) => {
+        showToast(`The log folder could not be opened. ${describeError(err)}`, 'danger');
+      });
+    },
+    privacy: () => void navigate({ name: 'settings', section: 'privacy' }),
+  };
+
+  /** The script a File command acts on: the open one, or the selected row. */
+  function commandTargetScriptId(): string | null {
+    const current = get(route);
+    if (current.name === 'editor') return current.scriptId;
+    const lib = get(library);
+    if (current.name === 'library' && lib.view !== 'trash') return lib.selectedId;
+    return null;
+  }
+
+  function titleForScript(scriptId: string): string {
+    const open = get(editor);
+    if (open.scriptId === scriptId && open.title) return open.title;
+    return get(library).scripts.find((s) => s.id === scriptId)?.title ?? 'Script';
+  }
+
+  function settingsSectionFromWorkspace(): SettingsSection {
+    const stored = get(workspace).settingsSection;
+    return isSettingsSection(stored) ? stored : 'general';
+  }
+
+  async function confirmMoveToTrash(scriptId: string): Promise<void> {
+    const title = titleForScript(scriptId);
+    const accepted = await requestConfirm({
+      // Named, per §18.4: "Are you sure?" tells somebody with forty scripts
+      // nothing about which one is about to move.
+      title: 'Move to Trash?',
+      body: `“${title}” will move to Trash and can be restored for 30 days.`,
+      confirmLabel: 'Move to Trash',
+      danger: true,
+    });
+    if (!accepted) return;
+    /*
+     * Leave the editor FIRST when the script being trashed is the open one.
+     *
+     * Trashing the open script and staying put leaves the editor holding a
+     * document whose canonical file has moved — every subsequent autosave then
+     * fails against a path that is gone, and the conflict sheet appears for a
+     * conflict nobody caused. Navigation runs the save guard on the way out, so
+     * the last edits are flushed before the move.
+     */
+    if (get(route).name === 'editor' && get(editor).scriptId === scriptId) {
+      const left = await navigate({ name: 'library', view: get(library).view });
+      if (!left) return;
+    }
+    await moveScriptToTrash(scriptId);
+  }
+
+  async function exportSupportBundleFromMenu(): Promise<void> {
+    try {
+      const result = await exportSupportBundle();
+      if (result.cancelled) return;
+      showToast(
+        result.path === undefined
+          ? 'Support bundle saved.'
+          : `Support bundle saved to ${result.path}.`,
+        'success',
+      );
+    } catch (err) {
+      showToast(`The support bundle could not be written. ${describeError(err)}`, 'danger');
+    }
+  }
+
+  /**
+   * Report what a drop did, and open the script if exactly one arrived.
+   *
+   * "Exactly one" is the discriminator rather than "the last one": dropping a
+   * folder's worth of scripts is a bulk import, and yanking the user into the
+   * editor for whichever file the OS happened to list last would take them away
+   * from the list they are about to want to look at.
+   */
+  async function handleDroppedImport(payload: DragImportedPayload): Promise<void> {
+    for (const warning of payload.warnings) showToast(warning, 'info');
+
+    if (payload.rejected.length > 0) {
+      // Named, and capped. §10.5 asks for a concise rejection; a toast listing
+      // forty file names is not concise, and the first two are enough to make
+      // the KIND of file obvious, which is the actual information.
+      const names = payload.rejected.slice(0, 2).join(', ');
+      const rest = payload.rejected.length - 2;
+      showToast(
+        rest > 0
+          ? `CandidCue imports Markdown and plain text. ${names} and ${rest} more were not imported.`
+          : `CandidCue imports Markdown and plain text. ${names} was not imported.`,
+        'info',
+      );
+    }
+    if (payload.failed.length > 0) {
+      // Capped like the rejected list above. An unbounded join put forty file
+      // names in a toast, which is not a message anybody reads.
+      const names = payload.failed.slice(0, 2).join(', ');
+      const rest = payload.failed.length - 2;
+      showToast(
+        rest > 0
+          ? `${names} and ${rest} more could not be read. The files may be damaged or in use.`
+          : `${names} could not be read. The file may be damaged or in use.`,
+        'danger',
+      );
+    }
+    if (payload.imported === 0) return;
+
+    await loadLibrary();
+    if (payload.imported === 1 && payload.scriptId !== null) {
+      // Through `navigate`, so a drop while the editor holds unsaved work asks
+      // the same question every other way out of the editor asks.
+      const moved = await navigate({ name: 'editor', scriptId: payload.scriptId });
+      /*
+       * A VETOED navigation still imported the script.
+       *
+       * `navigate` returns false when a guard refuses — the operator chose
+       * "Stay in editor" at the unsaved-changes prompt. Returning silently
+       * there meant the drop appeared to do nothing at all: no editor, no
+       * notice, and the script sitting in a Library they are not looking at.
+       */
+      if (moved) return;
+      showToast('Script imported. It is in your library.', 'success');
+      return;
+    }
+    showToast(`${payload.imported} scripts imported`, 'success');
+  }
+
+  /** Ask the OS to close the window, so the shutdown handshake runs (§6.3). */
+  async function requestWindowClose(): Promise<void> {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } catch {
+      // Not a Tauri runtime. There is no window to close in browser dev, and
+      // `window.close()` on a page the user did not open by script is ignored
+      // anyway — so this is correctly a no-op rather than a failure.
+    }
+  }
+
+  /** Window › CandidCue — bring the one window forward. */
+  async function focusMainWindow(): Promise<void> {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      await win.unminimize();
+      await win.setFocus();
+    } catch {
+      /* browser dev */
+    }
   }
 
   /**
@@ -603,8 +1066,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
       {/if}
     </div>
   {:else}
-    {#if showSidebar}
-      <Sidebar onnew={() => void newScriptFromSidebar()} onshortcuts={() => (shortcutsOpen = true)} />
+    <!--
+      The sidebar is shown when the ROUTE has one and the user has not hidden
+      it. Two conditions rather than one, because they answer different
+      questions: the route decides whether a navigation rail is meaningful (a
+      take has none), and the workspace flag records a choice the user made and
+      that View › Show Sidebar toggles.
+    -->
+    {#if showSidebar && $workspace.sidebarVisible}
+      <Sidebar onnew={() => void newScriptFromSidebar()} />
     {/if}
     <main class="content">
       {#if $route.name === 'welcome'}
@@ -639,6 +1109,13 @@ import { rememberReaderFrame } from './lib/reader-frame';
   <ToastRegion />
   <ConfirmHost />
   <!--
+    One context menu for the whole window, hosted here. See
+    `stores/context-menu.ts`: a menu per row would be one popover component per
+    script in the Library, and "only one open at a time" would be a rule
+    everybody had to remember rather than a fact about the tree.
+  -->
+  <ContextMenu />
+  <!--
     The take's report, hosted here rather than on the route that produced it.
 
     A take now ends by navigating back to the editor, and the summary is the
@@ -665,6 +1142,38 @@ import { rememberReaderFrame } from './lib/reader-frame';
 -->
 {#if coverIsUp($presentingPhase)}
   <div class="present-cover" aria-hidden="true"></div>
+{/if}
+
+<!--
+  The drop target (§20.2), shown ONLY while files are genuinely over the window.
+
+  Outside `.shell` and `position: fixed` for the same reason the cover is: the
+  drop applies to the window rather than to a route, and a drop landing during a
+  route change must not be caught by an element that is being unmounted.
+
+  `pointer-events: none` throughout. This is a picture of what will happen, not
+  a surface to hit — intercepting the pointer would mean the drop landed on this
+  overlay rather than on the window, which is where Rust is listening.
+
+  Suppressed during a take. A presenter is reading off this glass, and a
+  full-window overlay appearing because somebody at the desk dragged a file past
+  the window would put a grey wash over the script mid-sentence.
+-->
+{#if dragHover !== null && !$session.active}
+  <div class="drop-target" class:rejecting={dragHover.accepted === 0} aria-hidden="true">
+    <div class="drop-card">
+      <p class="drop-title">
+        {dragHover.accepted === 0 ? 'CandidCue cannot import this' : 'Drop to import'}
+      </p>
+      <p class="drop-body">
+        {dragHover.accepted === 0
+          ? 'Markdown (.md) and plain text (.txt) files can be imported.'
+          : dragHover.accepted === 1
+            ? 'The file will be added to your library and opened.'
+            : `${dragHover.accepted} files will be added to your library.`}
+      </p>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -732,6 +1241,53 @@ import { rememberReaderFrame } from './lib/reader-frame';
     z-index: 9999;
     background: #000;
     pointer-events: none;
+  }
+
+  /*
+   * The drop target.
+   *
+   * A wash and an inset dashed rule rather than a solid panel: the user needs to
+   * see WHERE they are dropping, which means seeing the window underneath. The
+   * rule is inset by a comfortable margin so it reads as "into this window"
+   * rather than as a border that has appeared around the content.
+   */
+  .drop-target {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--bg-app) 72%, transparent);
+    box-shadow: inset 0 0 0 2px var(--accent);
+    /* A dashed inset rule, drawn without a second element. */
+    outline: 2px dashed var(--accent);
+    outline-offset: -12px;
+  }
+  .drop-target.rejecting {
+    box-shadow: inset 0 0 0 2px var(--border-strong);
+    outline-color: var(--border-strong);
+  }
+
+  .drop-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-5) var(--space-8);
+    text-align: center;
+  }
+  .drop-title {
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: 650;
+    letter-spacing: var(--ls-title);
+    color: var(--text-primary);
+  }
+  .drop-body {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
   }
 
   .boot {

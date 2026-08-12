@@ -6,6 +6,7 @@
  * itself on the same key; nothing fires behind a modal dialog.
  */
 import { currentRoute, type Route } from '../stores/router';
+import { detectPlatform } from './platform';
 
 export type ShortcutAction =
   | 'new-script'
@@ -155,6 +156,28 @@ function emit(action: ShortcutAction, event: KeyboardEvent): void {
   for (const handler of handlers) handler(action);
 }
 
+/**
+ * Fire a shortcut action without a keypress.
+ *
+ * The native Session menu's entries are the same actions as the transport keys,
+ * and the screens that own those actions — Live, above all — already subscribe
+ * here with every guard they need (the delegate-to-the-embedded-stage list, the
+ * section bounds, the rig-resolved type ceiling). Routing menu commands through
+ * this bus rather than reaching into those screens means the menu and the key
+ * are the SAME code path, so they cannot come to mean different things.
+ *
+ * Ownership is checked exactly as `installShortcuts` checks it. A menu item for
+ * a command the current screen does not own is already greyed out — but the menu
+ * state is a snapshot pushed some milliseconds ago, and the route can change
+ * under it.
+ */
+export function emitShortcut(action: ShortcutAction): boolean {
+  if (!shortcutAppliesToRoute(action, currentRoute().name)) return false;
+  if (handlers.size === 0) return false;
+  for (const handler of handlers) handler(action);
+  return true;
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -201,9 +224,18 @@ export function isModalOpen(doc?: { querySelector(sel: string): unknown } | null
   return Boolean(target?.querySelector('[role="dialog"][aria-modal="true"]'));
 }
 
+/**
+ * Is this a Mac? Delegated to `lib/platform.ts`, which is the ONE check.
+ *
+ * This used to run its own regular expression over `navigator.platform`, and by
+ * the time the desktop pass added a second one for the root platform attribute
+ * there were two user-agent tests in the tree that could disagree. §22.3 asks
+ * for exactly one, at the application root; this stays as a name because it
+ * reads better at the call sites that are about a KEY rather than about a
+ * platform, but it no longer knows anything.
+ */
 export function isMacPlatform(): boolean {
-  if (typeof navigator === 'undefined') return true;
-  return /Mac|iPhone|iPad/.test(navigator.platform ?? navigator.userAgent);
+  return detectPlatform() === 'macos';
 }
 
 /**

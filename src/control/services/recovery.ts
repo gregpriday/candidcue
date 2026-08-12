@@ -55,7 +55,31 @@ export async function getBootStatus(): Promise<BootStatusReport> {
   if (!isTauriRuntime()) {
     return { databaseReady: true, dataDirectory: '' };
   }
-  return await ipcInvoke<BootStatusReport>('get_boot_status');
+  const report = await ipcInvoke<BootStatusReport | null>('get_boot_status');
+  /*
+   * A REPLY THAT IS NOT A REPORT IS NOT A BOOT FAILURE.
+   *
+   * The shell reads `boot.databaseReady` the moment this resolves, so a `null`
+   * here threw a TypeError inside the boot sequence — which `App.svelte` catches
+   * as `bootFailure` and renders as "CandidCue could not finish starting:
+   * Cannot read properties of null". That is the WRONG SCREEN for the condition,
+   * and it is unrecoverable: the only action offered is a support bundle.
+   *
+   * It is reachable from any runtime that answers the command with nothing: the
+   * Playwright shim does exactly that for commands it has not modelled, which is
+   * why the entire browser journey suite booted into the failure screen. A real
+   * Rust build always answers with a report, so treating a non-report as "the
+   * database is fine, carry on" costs nothing there and turns a hard stop into a
+   * working application everywhere else.
+   *
+   * NOT the same trade as the `catch` in `App.svelte`, which fails CLOSED on a
+   * REJECTION — a command that exists and went wrong is a real signal. This is a
+   * command that answered, with a shape nobody has ever sent on purpose.
+   */
+  if (report === null || typeof report !== 'object' || typeof report.databaseReady !== 'boolean') {
+    return { databaseReady: true, dataDirectory: '' };
+  }
+  return report;
 }
 
 export async function listDatabaseBackups(): Promise<DatabaseBackup[]> {

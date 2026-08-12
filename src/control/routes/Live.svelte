@@ -27,6 +27,7 @@
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
+  import { onRouteCommand } from '../stores/command-bus';
   import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
   import {
     awaitViewportSettled,
@@ -823,6 +824,19 @@ import { onShortcut } from '../lib/shortcuts';
    */
 
   let appearanceOpen = $state(false);
+
+  /*
+   * View › Stage Appearance, from the native menu.
+   *
+   * The sheet belongs to this component, so the shell cannot open it — it
+   * publishes the command and this route answers. Without this the menu item was
+   * enabled on Live and did nothing at all.
+   */
+  $effect(() =>
+    onRouteCommand((command) => {
+      if (command === 'view.stage-appearance') appearanceOpen = true;
+    }),
+  );
   /** `requestEndSession`'s confirm dialog is up over the take. */
   let confirmingStop = $state(false);
   /**

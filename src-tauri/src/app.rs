@@ -141,6 +141,10 @@ pub fn run() {
             commands::get_system_diagnostics,
             commands::log_client_diagnostic,
             commands::export_support_bundle,
+            // Desktop shell (refinement §5, §6)
+            commands::set_menu_state,
+            commands::set_window_title,
+            commands::reveal_logs,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates
             // manually (docs/updates.md); both used to be registered here and
             // always returned NOT_IMPLEMENTED, which put a dead command on the
@@ -402,6 +406,33 @@ pub fn run() {
             handle.manage(crate::windows::shutdown::ShutdownState::default());
             install_close_coordinator(&handle);
 
+            /*
+             * The native menu, and the window's last resting frame.
+             *
+             * Both are deliberately at the END of setup rather than the start.
+             * `restore_window_frame` reads `DataPaths`, which is only managed a
+             * hundred lines up, and it moves the window — which is a thing best
+             * done once, before the first frame is painted, rather than
+             * competing with a webview that is already loading.
+             *
+             * `menu::install` builds every item DISABLED; the frontend enables
+             * what it can answer as soon as its stores are up. That ordering is
+             * the point: a menu bar live before the app has loaded a library is
+             * a menu bar whose File › Present acts on nothing.
+             */
+            crate::menu::install(&handle);
+            /*
+             * Markdown dropped on the window, imported IN RUST.
+             *
+             * See `windows/drag_drop.rs` for why the obvious JavaScript
+             * implementation is the wrong one: a dropped path is an absolute
+             * filesystem path chosen outside the app, and §50.7's rule is that
+             * no such path is ever named by, or passed through, the renderer.
+             */
+            crate::windows::drag_drop::install(&handle);
+            crate::commands::shell_cmds::restore_window_frame(&handle);
+            install_window_frame_recorder(&handle);
+
             tracing::info!("CandidCue started; database ready at {:?}", data_dir);
             Ok(())
         })
@@ -447,6 +478,117 @@ pub fn run() {
                 crate::windows::close_identify_overlays(handle);
             }
         });
+}
+
+/// Remember where the control window rests (desktop refinement §5.3).
+///
+/// A desktop application that reopens 1240 × 820 in the middle of the screen
+/// every launch, no matter how the user last arranged it, is one of the plainest
+/// tells that a window belongs to a web page rather than to the desktop. This is
+/// the recording half; `shell_cmds::restore_window_frame` is the replay.
+///
+/// Two things it deliberately does NOT do:
+///
+///   - it does not record while a take is running. Presentation rewrites the
+///     window to fill a monitor with no titlebar, and storing that would reopen
+///     the app at teleprompter size. `present::is_presenting` is the same latch
+///     the presentation state machine reads, so there is one answer.
+///   - it does not write on every event. A drag produces a `Moved` per frame;
+///     writing a file per frame would put a few hundred writes on the disk for
+///     one gesture. The frame is written at most once per second, and — because
+///     the last event of a drag is the one that matters — the recorder always
+///     writes once more after the window has been still for that interval.
+fn install_window_frame_recorder(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let Some(window) = app.get_webview_window(CONTROL_LABEL) else {
+        return;
+    };
+
+    /*
+     * ONE long-lived worker and a counter, not a thread per burst.
+     *
+     * The first version spawned a thread on the leading edge of each burst and
+     * had it poll a shared `Option<Instant>`. That had a lost-update race with
+     * no good outcome: the worker decided the timestamp was old enough, RELEASED
+     * the lock, then reacquired it to clear the slot — and an event arriving in
+     * that gap set a fresh timestamp, saw the slot occupied, declined to spawn,
+     * and then had its timestamp cleared by the departing worker. The trailing
+     * write of that gesture never happened. Running the other way round, an
+     * event immediately after the clear started a second worker while the first
+     * was still writing.
+     *
+     * A channel plus a monotonically increasing counter removes the shared
+     * mutable state entirely. Every event bumps the counter and pokes the
+     * worker; the worker sleeps, then writes ONLY if the counter has not moved
+     * since it woke — so the write always belongs to the last event of a
+     * gesture, and there is only ever one writer.
+     */
+    let generation = Arc::new(AtomicU64::new(0));
+    let (tx, rx) = mpsc::channel::<()>();
+
+    let handle = app.clone();
+    let worker_generation = generation.clone();
+    std::thread::spawn(move || {
+        // Ends when the sender is dropped, which happens when the window's
+        // event handler is torn down at shutdown. No leaked thread.
+        while rx.recv().is_ok() {
+            // Drain anything that piled up while we were writing, so a burst
+            // costs one wait rather than one per event.
+            while rx.try_recv().is_ok() {}
+            loop {
+                let before = worker_generation.load(Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(400));
+                if worker_generation.load(Ordering::SeqCst) == before {
+                    break;
+                }
+                // Still moving; wait again from the newer mark.
+            }
+            // Re-checked after the wait: a take can start during it, and the
+            // frame this would store is then the presentation's.
+            if crate::windows::present::is_presenting() {
+                continue;
+            }
+            let Some(window) = handle.get_webview_window(CONTROL_LABEL) else {
+                continue;
+            };
+            let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+                continue;
+            };
+            let Some(paths) = handle.try_state::<crate::scripts::DataPaths>() else {
+                continue;
+            };
+            if let Err(err) = crate::commands::shell_cmds::write_frame(
+                &paths,
+                crate::commands::shell_cmds::WindowFrame {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                },
+            ) {
+                tracing::debug!(error = ?err, "the window frame could not be recorded");
+            }
+        }
+    });
+
+    window.on_window_event(move |event| {
+        if !matches!(
+            event,
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+        ) {
+            return;
+        }
+        if crate::windows::present::is_presenting() {
+            return;
+        }
+        generation.fetch_add(1, Ordering::SeqCst);
+        // A closed channel means the worker is gone (shutdown). Nothing to do.
+        let _ = tx.send(());
+    });
 }
 
 /// Intercept the control window's close button.

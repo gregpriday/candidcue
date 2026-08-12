@@ -903,6 +903,22 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("publish_stage_document", "in-memory + an event"),
         ("publish_stage_command", "in-memory + an event"),
         ("get_stage_status", "read-only"),
+        /*
+         * Desktop shell (refinement §5, §6). All three are recovery-safe, and
+         * two of them are recovery-USEFUL.
+         *
+         * `set_menu_state` and `set_window_title` touch no database at all —
+         * they push state the frontend already holds onto the native menu and
+         * the window's titlebar. The recovery screen is still an application
+         * window and still wants a menu bar that greys out what it cannot do.
+         *
+         * `reveal_logs` opens one named directory. A boot that failed is
+         * exactly when somebody needs the log, and it reads nothing from the
+         * database to find it.
+         */
+        ("set_menu_state", "in-memory; native menu only"),
+        ("set_window_title", "window management"),
+        ("reveal_logs", "opens one named directory"),
     ];
 
     let app_rs = include_str!("../src/app.rs");
@@ -940,6 +956,7 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         include_str!("../src/commands/speech_cmds.rs"),
         include_str!("../src/commands/align_cmds.rs"),
         include_str!("../src/commands/recovery_cmds.rs"),
+        include_str!("../src/commands/shell_cmds.rs"),
     ]
     .concat();
 

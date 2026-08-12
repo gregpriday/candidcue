@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { collection, openScript, row, rowMenu } from './fixtures/library';
 
 /**
  * The library screen's APPEARANCE, in a real browser.
@@ -43,15 +44,20 @@ test.beforeEach(async ({ page }) => {
 
 test('a pointer-opened menu highlights nothing and moves focus anyway', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.locator('.title').first().waitFor();
+  const list = collection(page);
+  await list.getByRole('option').first().waitFor();
 
-  await list.getByRole('button', { name: 'Script actions' }).first().click();
+  await list.getByRole('button', { name: /^Actions for / }).first().click();
   const menu = page.locator('[role="menu"]');
   await menu.waitFor();
 
   // Focus IS inside the menu — that half of the ARIA pattern must hold.
-  const focusedLabel = await page.evaluate(() => document.activeElement?.textContent?.trim());
+  // `.item-label` rather than the whole row: a menu row now carries an optional
+  // right-aligned shortcut beside its label (§18.3), so `textContent` on the row
+  // reads "Duplicate⌘D".
+  const focusedLabel = await page.evaluate(() =>
+    document.activeElement?.querySelector('.item-label')?.textContent?.trim(),
+  );
   expect(focusedLabel).toBe('Open');
 
   /*
@@ -79,7 +85,7 @@ test('a pointer-opened menu highlights nothing and moves focus anyway', async ({
       menu.getByRole('menuitem').evaluateAll((els, resting) =>
         els
           .filter((el) => getComputedStyle(el).backgroundColor !== resting)
-          .map((el) => el.textContent?.trim()),
+          .map((el) => el.querySelector('.item-label')?.textContent?.trim()),
       backgrounds[0]),
     )
     .toEqual(['Duplicate']);
@@ -90,10 +96,10 @@ test('Enter on the trigger opens the menu with a visible highlight', async ({ pa
   // a click, so treating every click as pointer-originated left a keyboard user
   // with focus in the menu and nothing drawn to say where.
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.locator('.title').first().waitFor();
+  const list = collection(page);
+  await list.getByRole('option').first().waitFor();
 
-  const trigger = list.getByRole('button', { name: 'Script actions' }).first();
+  const trigger = list.getByRole('button', { name: /^Actions for / }).first();
   await trigger.focus();
   await page.keyboard.press('Enter');
 
@@ -134,58 +140,124 @@ test('Enter on the trigger opens the menu with a visible highlight', async ({ pa
   expect(ring).toBe('none');
 });
 
-test('a card is never painted as the chosen one, before or after opening it', async ({ page }) => {
+/*
+ * ---------------------------------------------------------------------------
+ * THIS TEST USED TO ASSERT THE OPPOSITE, AND IT WAS RIGHT TO
+ * ---------------------------------------------------------------------------
+ * It was called "a card is never painted as the chosen one". Its reasoning was
+ * sound for the code it guarded: `selectedId` existed as the Present shortcut's
+ * invisible target, so painting a row as chosen would have claimed a selection
+ * the user had not made and could not act on.
+ *
+ * Desktop refinement §10.2 removed the premise. Selection is real now — it is
+ * what the context menu, the File commands and the Delete key act on — so it has
+ * to be VISIBLE, and the new failure to guard against is the reverse: a
+ * selection that is drawn identically whether or not the list has focus, which
+ * §23.3 calls out because it leaves a keyboard user unable to tell where the
+ * next keystroke will land.
+ */
+test('the selected row is visibly selected, and focus is distinguishable from it', async ({
+  page,
+}) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.locator('.title').first().waitFor();
+  const list = collection(page);
+  await list.getByRole('option').first().waitFor();
 
-  const cardBackground = (title: string) =>
-    list
-      .locator('.card', { hasText: title })
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
-  const restingBackground = await cardBackground('Launch keynote');
-  // The card is a white panel, not a tint over the canvas — the ancestor of this
-  // component replaced the surface with a 5%-alpha wash on selection, and what
-  // showed through was clay over the page canvas.
-  expect(restingBackground).toBe('rgb(255, 255, 255)');
+  const background = (title: string) =>
+    row(page, title).evaluate((el) => getComputedStyle(el).backgroundColor);
 
-  // Open one for real, then come back to the list. The store remembers it as the
-  // Present shortcut's target; the screen must show no sign of that.
-  await list.getByRole('button', { name: /Weekly product update/ }).click();
+  // Click one to select it — a single click selects and does NOT open.
+  await row(page, 'Weekly product update').click();
+  await expect(row(page, 'Weekly product update')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toHaveCount(0);
+
+  /*
+   * POLLED, not read once.
+   *
+   * The row transitions its background, and `getComputedStyle` during a
+   * transition returns the INTERPOLATED value — so a single immediate read
+   * catches an alpha partway between transparent and the selected tint, and two
+   * such reads can land on the same intermediate value and compare equal. That
+   * is what made the first version of this test fail against a correct
+   * implementation. The neighbouring menu test polls for the same reason.
+   */
+  const settledBackground = async (title: string): Promise<string> => {
+    let last = '';
+    await expect
+      .poll(async () => {
+        const next = await background(title);
+        const stable = next === last;
+        last = next;
+        return stable;
+      })
+      .toBe(true);
+    return last;
+  };
+
+  const selected = await settledBackground('Weekly product update');
+  const unselected = await settledBackground('Launch keynote');
+  expect(selected).not.toBe(unselected);
+
+  // The selected-and-focused tone must differ from the selected-but-not-focused
+  // one: §23.3's requirement, and the easy thing to collapse into one colour.
+  await row(page, 'Weekly product update').focus();
+  const focusedTone = await settledBackground('Weekly product update');
+
+  await page.getByRole('searchbox', { name: 'Search scripts' }).focus();
+  const blurredTone = await settledBackground('Weekly product update');
+
+  expect(focusedTone).not.toBe(blurredTone);
+  // …and both still read as "selected" rather than reverting to the plain row.
+  expect(blurredTone).not.toBe(unselected);
+});
+
+test('selection survives opening a script and coming back', async ({ page }) => {
+  // §10.2: selection is a property of the collection, not of the visit. A user
+  // who opens a script, edits, and returns should find their place kept.
+  await page.goto('/control.html');
+  await collection(page).getByRole('option').first().waitFor();
+
+  await openScript(page, /Weekly product update/);
   await page.getByRole('textbox', { name: 'Script Markdown' }).waitFor();
   await page.getByRole('button', { name: 'All scripts' }).click();
-  await list.locator('.title').first().waitFor();
+  await collection(page).getByRole('option').first().waitFor();
 
-  // Nothing announces itself as current...
-  await expect(list.locator('[aria-current="true"]')).toHaveCount(0);
-  // ...the surface is untouched...
-  expect(await cardBackground('Weekly product update')).toBe(restingBackground);
-
-  // ...and there is no leading accent bar. This is the assertion that guards the
-  // removal: the bar was a `::before` on the card, so a `content` other than
-  // `none` on the script that was last opened means it has come back.
-  const marks = await list.locator('.card').evaluateAll((cards) =>
-    cards.map((el) => getComputedStyle(el, '::before').content),
-  );
-  expect(marks.every((content) => content === 'none')).toBe(true);
+  await expect(row(page, 'Weekly product update')).toHaveAttribute('aria-selected', 'true');
 });
 
 test('the overflow menu opens upward rather than off the bottom of the list', async ({ page }) => {
-  // `.page` scrolls, and the menu is absolutely positioned inside it, so the menu
-  // on the last card used to be clipped by the bottom of the list.
+  // `.list-area` scrolls, and the menu is absolutely positioned inside it, so the
+  // menu on the last row used to be clipped by the bottom of the list. Twenty-four
+  // rows rather than eight: the desktop pass made rows 52px instead of ~100px, so
+  // eight of them no longer fill the viewport and there is nothing to flip from.
   await installTauriShim(page, {
     welcomed: true,
-    seedScripts: Array.from({ length: 8 }, (_, i) => ({
-      id: `4444444${i}-4444-4444-8444-44444444444${i}`,
+    seedScripts: Array.from({ length: 24 }, (_, i) => ({
+      // Padded: at two digits the old template produced a nine-character first
+      // group, which is not a UUID and which the shim's id handling would treat
+      // inconsistently.
+      id: `4444${String(i).padStart(4, '0')}-4444-4444-8444-4444444444${String(i).padStart(2, '0')}`,
       title: `Script number ${i + 1}`,
       source: `# Script ${i + 1}\n\nNarration for take ${i + 1}.\n`,
     })),
   });
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.locator('.title').first().waitFor();
+  const list = collection(page);
+  await list.getByRole('option').first().waitFor();
 
-  const trigger = list.getByRole('button', { name: 'Script actions' }).last();
+  /*
+   * Hovered first, and that is not a workaround.
+   *
+   * §10.1: a row's actions are hidden until hover, focus or selection, so the
+   * list does not become a wall of buttons. `visibility: hidden` is not
+   * clickable, so reaching the last row's overflow means doing what a user does
+   * — putting the pointer on the row. Hovering also scrolls it into view, which
+   * is what puts the trigger near the bottom edge where the flip matters.
+   */
+  const lastRow = list.getByRole('option').last();
+  await lastRow.scrollIntoViewIfNeeded();
+  await lastRow.hover();
+  const trigger = lastRow.getByRole('button', { name: /^Actions for / });
   await trigger.click();
   const menu = page.locator('[role="menu"]');
   await menu.waitFor();

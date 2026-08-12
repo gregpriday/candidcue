@@ -4,6 +4,7 @@
  */
 export * from './core';
 export * from './alignment';
+export * from './commands';
 export * from './compiler';
 export * from './optical';
 export * from './display';

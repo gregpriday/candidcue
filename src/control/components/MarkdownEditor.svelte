@@ -10,7 +10,15 @@
   import { EditorState } from '@codemirror/state';
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-  import { searchKeymap } from '@codemirror/search';
+  import {
+    closeSearchPanel,
+    findNext,
+    findPrevious,
+    highlightSelectionMatches,
+    openSearchPanel,
+    search,
+    searchKeymap,
+  } from '@codemirror/search';
   import { editorTheme } from './cm-theme';
   import { insertBold, insertItalic } from '../lib/markdown-insert';
 
@@ -69,6 +77,60 @@
     view?.focus();
   }
 
+  /**
+   * Find and Replace, driven from the native Edit menu (§11.9).
+   *
+   * `searchKeymap` was already installed, so ⌘F worked for anybody who knew it
+   * existed. Nothing NAMED it — there was no menu, so Find, Find Next, Find
+   * Previous and Replace were four undiscoverable keys. These are the same
+   * CodeMirror commands the keymap binds, exposed so `Editor.svelte` can hand
+   * the menu's commands to the live view.
+   *
+   * `openSearchPanel` focuses its own field, which is the behaviour anybody
+   * pressing Find expects; Replace opens the same panel with the replace row
+   * shown, which is what `search({ ... })`'s configuration below controls.
+   */
+  export function openFind(): void {
+    if (view) openSearchPanel(view);
+  }
+
+  export function findNextMatch(): void {
+    if (view) findNext(view);
+  }
+
+  export function findPreviousMatch(): void {
+    if (view) findPrevious(view);
+  }
+
+  /**
+   * Replace opens the SAME panel as Find, then focuses its replace field.
+   *
+   * CodeMirror's default search panel carries the replace inputs already, so
+   * there is no second panel to open and no "replace mode" to switch into —
+   * Find and Replace differ only in which field the caret lands in. Both menu
+   * items exist because both are what a user looks for; pretending they open
+   * different surfaces would be inventing a distinction the editor does not
+   * have.
+   */
+  export function openReplace(): void {
+    if (!view) return;
+    openSearchPanel(view);
+    // The panel is added to the DOM synchronously by `openSearchPanel`, but the
+    // field is only focusable once it has been laid out.
+    requestAnimationFrame(() => {
+      const field = view?.dom.querySelector<HTMLInputElement>(
+        '.cm-search input[name="replace"]',
+      );
+      field?.focus();
+      field?.select();
+    });
+  }
+
+  /** Close the search panel — used when the editor unmounts mid-search. */
+  export function closeFind(): void {
+    if (view) closeSearchPanel(view);
+  }
+
   onMount(() => {
     internalValue = value;
     view = new EditorView({
@@ -83,6 +145,17 @@
             ...historyKeymap,
             ...searchKeymap,
           ]),
+          /*
+           * The search extension itself, not only its keymap.
+           *
+           * `searchKeymap` was installed on its own, which binds the keys but
+           * leaves the panel and the match highlighting to the extension —
+           * absent here, so ⌘F opened a panel with no highlighted matches and
+           * `findNext` had no query state to step through. Adding `search()`
+           * is what makes the Edit menu's Find family work at all.
+           */
+          search({ top: true }),
+          highlightSelectionMatches(),
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,
           cmPlaceholder(placeholder),

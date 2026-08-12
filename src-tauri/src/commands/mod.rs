@@ -10,6 +10,7 @@ pub mod speech_cmds;
 pub mod scripts_cmds;
 pub mod sessions_cmds;
 pub mod settings_cmds;
+pub mod shell_cmds;
 pub mod stage_cmds;
 
 pub use align_cmds::*;
@@ -20,6 +21,7 @@ pub use sessions_cmds::*;
 pub mod recovery_cmds;
 pub use recovery_cmds::*;
 pub use settings_cmds::*;
+pub use shell_cmds::*;
 pub use stage_cmds::*;
 
 /// Application version string, e.g. "0.1.0".

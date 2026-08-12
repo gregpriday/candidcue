@@ -30,6 +30,7 @@ import type { PresentationMode } from '../services/settings-types';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
+  import { onRouteCommand } from '../stores/command-bus';
   import * as assetsService from '../services/assets';
   import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
@@ -59,6 +60,8 @@ import type { PresentationMode } from '../services/settings-types';
   let { scriptId }: Props = $props();
 
   let editorRef: MarkdownEditor | null = $state(null);
+  /** The document-title field, so File › Rename can put the caret in it. */
+  let titleInput: HTMLInputElement | null = $state(null);
   let panelOpen = $state(true);
   let saveIssueOpen = $state(false);
   let conflictOpen = $state(false);
@@ -159,6 +162,51 @@ import type { PresentationMode } from '../services/settings-types';
       if (opening) return;
       if (action === 'save') void manualSave();
       if (action === 'present') void present();
+    }),
+  );
+
+  /*
+   * The native Edit and File menu commands only this screen can carry out.
+   *
+   * Find, Find Next, Find Previous and Replace act on the live CodeMirror view;
+   * Rename focuses the title field. None of those is something the shell can
+   * reach — it holds no component handles — so the shell publishes and this
+   * route answers, exactly as it already does for keyboard shortcuts.
+   *
+   * Without this subscription the four Edit-menu items and File › Rename were
+   * ENABLED and did nothing: `dispatchRouteCommand` drops a command with no
+   * listener, and there was no listener anywhere in the tree.
+   */
+  $effect(() =>
+    onRouteCommand((command) => {
+      if (opening) return;
+      switch (command) {
+        case 'edit.find':
+          // Preview mode has no editor to search. Switching to Edit first is
+          // what somebody pressing Find meant, rather than a key that appears
+          // to be broken in one of the two modes.
+          setEditorMode('edit');
+          void tick().then(() => editorRef?.openFind());
+          break;
+        case 'edit.find-next':
+          editorRef?.findNextMatch();
+          break;
+        case 'edit.find-previous':
+          editorRef?.findPreviousMatch();
+          break;
+        case 'edit.replace':
+          setEditorMode('edit');
+          void tick().then(() => editorRef?.openReplace());
+          break;
+        case 'file.rename-script':
+          void tick().then(() => {
+            titleInput?.focus();
+            titleInput?.select();
+          });
+          break;
+        default:
+          break;
+      }
     }),
   );
 
@@ -665,6 +713,7 @@ import type { PresentationMode } from '../services/settings-types';
       backLabel="Library"
       onback={() => goBack()}
       editableTitle
+      bind:titleElement={titleInput}
       ontitlechange={(t) => void setTitle(t)}
     >
       {#snippet status()}

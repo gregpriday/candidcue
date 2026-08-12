@@ -139,6 +139,12 @@ const SURFACE_TOKENS = [
   '--bg-hover-chrome',
   '--bg-hover-surface',
   '--empty-bg',
+  // Desktop chrome surfaces (refinement §26.1). Added with the compact toolbar
+  // and status bar, and they carry the SMALLEST text in the application —
+  // --text-2xs in the status bar — so they need this check more than most.
+  '--bg-toolbar',
+  '--bg-statusbar',
+  '--bg-row-selected-inactive',
 ];
 
 const THEMES = [
@@ -481,9 +487,24 @@ describe('tokens that used to be spelled out by hand', () => {
     expect(toggle).toContain('background: var(--accent-contrast)');
   });
 
-  it("the sidebar's hover lift uses the shared shadow", () => {
+  /**
+   * The sidebar has NO shadow at all now, hover or selected.
+   *
+   * This test used to assert that the rail's hover lift went through the shared
+   * `--shadow-hover` token rather than a hand-written one — which was the right
+   * check while there was a lift. Desktop refinement §7.1 and §9.3 removed it:
+   * elevation belongs to things that float, and a navigation row does not. The
+   * selected row is a tonal fill, and the raised white pill it replaced was the
+   * single strongest "SaaS dashboard" signal in the window.
+   *
+   * The check is inverted rather than deleted, because the failure it now
+   * guards against is real and easy: somebody reaching for `--shadow-card` to
+   * make the selected row "pop" would quietly put the pill back.
+   */
+  it('the sidebar carries no elevation on any row state', () => {
     const sidebar = read('src/control/components/Sidebar.svelte');
-    expect(sidebar).not.toMatch(/box-shadow: 0 3px 10px rgba\(/);
-    expect(sidebar).toContain('box-shadow: var(--shadow-hover)');
+    expect(sidebar).not.toMatch(/box-shadow:/);
+    // And the selected row is a tonal fill, not a surface change.
+    expect(sidebar).toContain('background: var(--bg-row-selected)');
   });
 });

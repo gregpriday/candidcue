@@ -1,21 +1,55 @@
 <!--
-  Script library (spec §12): search, sort, import, clean list rows with
-  metadata, trash behaviors with F.19 confirmations, F.7/§12.3 empty states.
+  The script collection (desktop refinement §10).
+
+  ---------------------------------------------------------------------------
+  A DESKTOP COLLECTION, NOT A CARD FEED
+  ---------------------------------------------------------------------------
+  This route used to be a stack of `ScriptCard` surfaces under a 28px page
+  heading, with a search box below the heading and a separate sort select. It
+  had a `selectedId` in the store that nothing drew, so "the selected script"
+  was a fiction the Present shortcut aimed at and the user could not see.
+
+  What a desktop collection is, and what each part is here for:
+
+    SELECTION      one row is selected, it is drawn, it survives opening a script
+                   and coming back, and every File command acts on it. Single
+                   click selects; double click (or Enter) opens. That split is
+                   what makes selection worth having — click-to-open leaves
+                   nothing standing for a menu or an inspector to act on.
+    KEYBOARD       arrows, Home/End, PageUp/PageDown, Enter to open, Delete to
+                   trash. The whole route is operable without a pointer (§10.2).
+    CONTEXT MENU   right-click selects the row first, then opens (§10.6).
+    DROP TARGET    Markdown dropped on the window imports. The paths are handled
+                   in Rust — see `windows/drag_drop.rs` for why.
+    STATUS BAR     the count lives at the bottom, not under a heading (§10.8).
+
+  ---------------------------------------------------------------------------
+  THE LIST IS ONE TAB STOP
+  ---------------------------------------------------------------------------
+  `role="listbox"` with roving tabindex: Tab reaches the list, arrows move
+  within it, Tab leaves. Fifty tab stops for fifty scripts would mean the
+  keyboard could not get past the Library.
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import Button from '../components/Button.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Icon from '../components/Icon.svelte';
+  import IconButton from '../components/IconButton.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
-  import PageHeader from '../components/PageHeader.svelte';
-  import ScriptCard from '../components/ScriptCard.svelte';
-  import Select from '../components/Select.svelte';
+  import ScriptRow from '../components/ScriptRow.svelte';
+  import StatusBar from '../components/StatusBar.svelte';
+  import type { StatusBarItem } from '../components/status-bar-item';
   import StatusPill from '../components/StatusPill.svelte';
+  import Toolbar from '../components/Toolbar.svelte';
   import { formatSpeakingDuration, relativeTime } from '../lib/format';
   import { createAndOpenScript, exportScriptToFile, importMarkdown } from '../lib/app-actions';
+  import { formatAccelerator } from '../lib/commands';
   import { onShortcut } from '../lib/shortcuts';
+  import { detectPlatform } from '../lib/platform';
   import { startTake } from '../lib/start-take';
   import * as scriptsService from '../services/scripts';
+  import { anchorFor, openContextMenu, type ContextMenuItem } from '../stores/context-menu';
   import { requestConfirm } from '../stores/confirm';
   import {
     collectTrashTargets,
@@ -32,23 +66,29 @@
   } from '../stores/library';
   import { navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
+  import { updateWorkspace, workspace } from '../stores/workspace';
   import type { ScriptSummary } from '../../shared/contracts';
   import type { ScriptSort } from '../services/scripts-types';
 
   let searchInput: HTMLInputElement | null = $state(null);
-  let listElement: HTMLUListElement | null = $state(null);
+  let listElement: HTMLElement | null = $state(null);
+  /** The element that actually scrolls — see `pageSize`. */
+  let scrollElement: HTMLElement | null = $state(null);
   /**
-   * Seeded from the store, not from empty.
+   * A destructive confirmation is open.
    *
-   * The store is a singleton and its query outlives this route, so opening a
-   * script from a set of search results and coming back used to restore the
-   * filtered list under a blank search box — with the ⌘K hint sitting in it, as
-   * though nothing had been typed. The results and the field now agree.
+   * Holding Delete fires the key handler repeatedly, and `requestConfirm`
+   * REPLACES its singleton request without resolving the one it displaced — so
+   * the first handler awaited a promise nobody would ever settle, and the second
+   * dialog asked about the same row. One at a time.
    */
+  let confirmingDelete = $state(false);
+  /** True while DOM focus is inside the list — drives the selection tone. */
+  let listFocused = $state(false);
   let query = $state($library.query);
   let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  const sortOptions = [
+  const sortOptions: Array<{ value: ScriptSort; label: string }> = [
     { value: 'recently_edited', label: 'Recently edited' },
     { value: 'name', label: 'Name' },
     { value: 'created', label: 'Created' },
@@ -56,34 +96,22 @@
   ];
 
   const inTrash = $derived($library.view === 'trash');
-  /**
-   * Recent is ordered by when a script was last opened — that IS the view — so
-   * the sort control has nothing to say there, the same way it has nothing to
-   * say in Trash.
-   */
   const showsSort = $derived($library.view === 'all');
-  const pageTitle = $derived(
-    $library.view === 'trash' ? 'Trash' : $library.view === 'recent' ? 'Recent' : 'Scripts',
+  const viewTitle = $derived(
+    $library.view === 'trash' ? 'Trash' : $library.view === 'recent' ? 'Recent' : 'All scripts',
   );
+  const scripts = $derived($library.scripts);
+  const selectedIndex = $derived(scripts.findIndex((script) => script.id === $library.selectedId));
+  const selected = $derived(selectedIndex >= 0 ? scripts[selectedIndex] : undefined);
+  const compact = $derived($workspace.libraryDensity === 'compact');
 
-  /**
-   * Empty Trash is offered unless the Trash is known to be empty.
-   *
-   * `trashTotal` counts the whole Trash rather than the rows a search has left
-   * on screen, so it is the only number that answers this. It is `null` when
-   * that count could not be read — and a filtered list of nothing says nothing
-   * at all about how much is behind it, so the action stays available.
-   *
-   * This predicate can afford to be generous: it decides whether to OFFER the
-   * action, not what the action removes. `confirmEmptyTrash` re-reads the Trash
-   * before asking, so a button shown over an empty Trash costs a notice, not a
-   * deletion.
-   */
   const canEmptyTrash = $derived(
     $library.trashTotal === null
       ? $library.scripts.length > 0 || $library.query.trim() !== ''
       : $library.trashTotal > 0,
   );
+
+  const mac = detectPlatform() === 'macos';
 
   $effect(() => {
     void loadLibrary();
@@ -91,9 +119,6 @@
       if (action === 'quick-search') searchInput?.focus();
       if (action === 'new-script') void createAndOpenScript('new');
       if (action === 'present') {
-        // The target is invisible by design (see `ScriptCard`), so a shortcut
-        // that resolves to nothing has to say so — otherwise ⌘⏎ is a key that
-        // sometimes works and never explains itself.
         if (inTrash) {
           showToast('Scripts in Trash cannot be presented. Restore one first.', 'info');
           return;
@@ -108,12 +133,37 @@
     });
     return () => {
       unsubscribe();
-      // A search typed on the way out would otherwise land 180ms later, on a
-      // screen that has gone: it sets the singleton's query and starts a load
-      // for a route nobody is looking at.
       if (searchDebounce) clearTimeout(searchDebounce);
     };
   });
+
+  /**
+   * Keep the selected row on screen when the keyboard moves it.
+   *
+   * Only for keyboard movement: `scrollIntoView` on every selection change
+   * would yank the list under a pointer user who clicked a row that was already
+   * half visible, which is a scroll they did not ask for.
+   */
+  function revealSelected(): void {
+    if (!listElement) return;
+    const row = listElement.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!row) return;
+    /*
+     * Feature-tested rather than called.
+     *
+     * `scrollIntoView` is not implemented in jsdom, so calling it unguarded
+     * threw out of a `requestAnimationFrame` callback — which is not a rejected
+     * promise anybody catches, it is an uncaught exception in a timer. The DOM
+     * suite reported it as an unhandled error and carried on, which is exactly
+     * the shape of failure that hides in a green run.
+     *
+     * Guarded rather than mocked in the test setup, because the same shape
+     * protects the real case too: a row removed between the selection changing
+     * and this frame arriving.
+     */
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
+    row.focus();
+  }
 
   function onSearchInput(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
@@ -121,64 +171,223 @@
     searchDebounce = setTimeout(() => setLibraryQuery(query), 180);
   }
 
-  /**
-   * ⌘K reaches the search field and used to end there — there was no key that
-   * carried you from the box into what it had found.
-   *
-   * In Trash the card body does nothing (its callbacks are withheld below), so
-   * the first thing worth landing on there is the row's own Restore button.
-   */
+  function clearSearch(): void {
+    query = '';
+    if (searchDebounce) clearTimeout(searchDebounce);
+    setLibraryQuery('');
+    searchInput?.focus();
+  }
+
   function onSearchKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'ArrowDown') return;
-    const first = listElement?.querySelector<HTMLButtonElement>(
-      inTrash ? 'li .actions button' : 'button.main',
-    );
-    if (!first) return;
+    /* Escape clears before it does anything else — §23.1's layered rule, with
+       the field's own content as the most local transient thing. */
+    if (event.key === 'Escape' && query !== '') {
+      event.preventDefault();
+      event.stopPropagation();
+      clearSearch();
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'Enter') return;
+    if (scripts.length === 0) return;
     event.preventDefault();
-    first.focus();
+    // Down (or Enter) carries you from the box into what it found — and selects
+    // the first result rather than merely focusing it, so the next keystroke
+    // acts on something.
+    selectScript(scripts[0]?.id ?? null);
+    requestAnimationFrame(revealSelected);
+  }
+
+  function moveSelection(delta: number): void {
+    if (scripts.length === 0) return;
+    const from = selectedIndex < 0 ? (delta > 0 ? -1 : scripts.length) : selectedIndex;
+    const next = Math.min(scripts.length - 1, Math.max(0, from + delta));
+    selectScript(scripts[next]?.id ?? null);
+    requestAnimationFrame(revealSelected);
+  }
+
+  function selectAt(index: number): void {
+    if (scripts.length === 0) return;
+    const bounded = Math.min(scripts.length - 1, Math.max(0, index));
+    selectScript(scripts[bounded]?.id ?? null);
+    requestAnimationFrame(revealSelected);
+  }
+
+  /**
+   * How many rows a Page key moves — a screenful, from the real geometry.
+   *
+   * Measured against the SCROLLPORT, not the list.
+   *
+   * `listElement` is the `<div role="listbox">`, whose height is the height of
+   * all its rows — it grows without bound and never scrolls. The element that
+   * scrolls is `.list-area` around it. Measuring the list meant a library of
+   * four hundred scripts computed a "page" of nearly four hundred rows, so
+   * PageDown was End and PageUp was Home.
+   *
+   * The row pitch is read from a real row rather than from the density token,
+   * so the separator between rows is included and the arithmetic cannot drift
+   * from the stylesheet.
+   */
+  function pageSize(): number {
+    const viewport = scrollElement?.clientHeight ?? 0;
+    const firstRow = listElement?.querySelector<HTMLElement>('[role="option"]');
+    const pitch = firstRow?.offsetHeight ?? (compact ? 38 : 52);
+    const visible = Math.floor(viewport / Math.max(1, pitch));
+    // Never zero (an unmeasured list) and never the whole list; one row of
+    // overlap is the convention, so the row you were reading stays on screen.
+    return Math.max(1, visible - 1);
+  }
+
+  /**
+   * Put focus back on the list after a mutation removed the focused row.
+   *
+   * Trashing, restoring or deleting from the keyboard removes the row that had
+   * focus. `loadLibrary` picks a surviving row as the new selection, but nothing
+   * was focusing it — so focus fell to `document.body` and the arrow keys
+   * stopped working, one keystroke into a keyboard-driven workflow.
+   *
+   * Only when focus was in the list to begin with: a mutation triggered from the
+   * toolbar or a context menu should not steal focus into the collection.
+   */
+  async function restoreFocusAfterMutation(hadFocus: boolean): Promise<void> {
+    if (!hadFocus) return;
+    await tick();
+    revealSelected();
+  }
+
+  function listKeydown(event: KeyboardEvent): void {
+    /*
+     * Keys pressed INSIDE a row's controls are not the list's.
+     *
+     * `ScriptRow` already declines them, but declining is not stopping: the
+     * event still bubbles to this handler on the container. Without this guard,
+     * arrowing through an open overflow menu also walked the Library's
+     * selection underneath it, and Delete inside that menu trashed the row.
+     *
+     * The test is "did this land on a row itself", which is true for the row
+     * elements (they carry `role="option"`) and false for every button, input
+     * and menu item inside one.
+     */
+    if (!(event.target instanceof HTMLElement) || event.target.getAttribute('role') !== 'option') {
+      return;
+    }
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        moveSelection(1);
+        return;
+      case 'ArrowUp':
+        event.preventDefault();
+        moveSelection(-1);
+        return;
+      case 'Home':
+        event.preventDefault();
+        selectAt(0);
+        return;
+      case 'End':
+        event.preventDefault();
+        selectAt(scripts.length - 1);
+        return;
+      case 'PageDown':
+        event.preventDefault();
+        moveSelection(pageSize());
+        return;
+      case 'PageUp':
+        event.preventDefault();
+        moveSelection(-pageSize());
+        return;
+      case 'Delete':
+      case 'Backspace': {
+        /*
+         * Delete moves to Trash, and Trash's Delete deletes permanently — both
+         * behind the confirmation the visible action uses. §10.2 asks for the
+         * platform semantics, and the platform semantics for a managed library
+         * are "the destructive key does the destructive thing, once you have
+         * said yes".
+         *
+         * `confirmingDelete` guards a HELD key: `requestConfirm` replaces its
+         * singleton without resolving the request it displaces, so a repeat
+         * would strand the first await for ever.
+         */
+        if (!selected || confirmingDelete) return;
+        event.preventDefault();
+        if (inTrash) void confirmDeleteForever(selected);
+        else void confirmTrash(selected);
+        return;
+      }
+      case 'ContextMenu':
+        if (selected && listElement) {
+          event.preventDefault();
+          const row = listElement.querySelector<HTMLElement>('[aria-selected="true"]');
+          if (row) openRowMenu(selected, anchorFor(row), row);
+        }
+        return;
+      default:
+        break;
+    }
+    /*
+     * Shift+F10 is the other keyboard context-menu chord, and on a Mac keyboard
+     * it is the only one — there is no Menu key.
+     */
+    if (event.key === 'F10' && event.shiftKey && selected && listElement) {
+      event.preventDefault();
+      const row = listElement.querySelector<HTMLElement>('[aria-selected="true"]');
+      if (row) openRowMenu(selected, anchorFor(row), row);
+    }
   }
 
   function openScript(script: ScriptSummary): void {
     void navigate({ name: 'editor', scriptId: script.id });
   }
 
-  /** Straight to the stage — the settings a take needs are already saved. */
   function presentScript(script: ScriptSummary): void {
     void startTake(script.id);
   }
 
+  /** True while DOM focus is inside the list, captured before a mutation. */
+  function focusWasInList(): boolean {
+    return listElement !== null && listElement.contains(document.activeElement);
+  }
+
   async function confirmTrash(script: ScriptSummary): Promise<void> {
-    const accepted = await requestConfirm({
-      title: 'Delete script?',
-      body: `${script.title} will move to Trash and can be restored for 30 days.`,
-      confirmLabel: 'Move to Trash',
-      danger: true,
-    });
-    // The outcome — moved, or why not — comes from the store, which is the one
-    // place that knows whether it happened. This used to toast "Moved to Trash"
-    // after the await, so a failure closed the sheet and said nothing.
-    if (accepted) await moveScriptToTrash(script.id);
+    const hadFocus = focusWasInList();
+    confirmingDelete = true;
+    try {
+      const accepted = await requestConfirm({
+        // Named. §18.4: "Are you sure?" tells somebody with forty scripts nothing.
+        title: 'Move to Trash?',
+        body: `“${script.title}” will move to Trash and can be restored for 30 days.`,
+        confirmLabel: 'Move to Trash',
+        danger: true,
+      });
+      if (!accepted) return;
+      await moveScriptToTrash(script.id);
+      await restoreFocusAfterMutation(hadFocus);
+    } finally {
+      confirmingDelete = false;
+    }
   }
 
   async function confirmDeleteForever(script: ScriptSummary): Promise<void> {
-    const accepted = await requestConfirm({
-      title: 'Delete permanently?',
-      // Naming it: this is the one action on this screen with no undo, and the
-      // sheet used to describe "the script" without saying which.
-      body: `“${script.title}” will be deleted permanently, along with its retained revisions and unshared local assets. This cannot be undone.`,
-      confirmLabel: 'Delete permanently',
-      danger: true,
-    });
-    if (accepted) await deleteScriptPermanently(script.id);
+    const hadFocus = focusWasInList();
+    confirmingDelete = true;
+    try {
+      const accepted = await requestConfirm({
+        title: 'Delete permanently?',
+        body: `“${script.title}” will be deleted permanently, along with its retained revisions and unshared local assets. This cannot be undone.`,
+        confirmLabel: 'Delete permanently',
+        danger: true,
+      });
+      if (!accepted) return;
+      await deleteScriptPermanently(script.id);
+      await restoreFocusAfterMutation(hadFocus);
+    } finally {
+      confirmingDelete = false;
+    }
   }
 
   async function confirmEmptyTrash(): Promise<void> {
-    // Read what is in the Trash BEFORE asking about it, and delete exactly that
-    // set. Counting first and enumerating after acceptance meant the sheet
-    // named one number and the deletes ran against another — anything trashed
-    // while the sheet was open went with them, unmentioned.
     const targets = await collectTrashTargets();
-    if (targets === null) return; // already reported
+    if (targets === null) return;
     if (targets.length === 0) {
       showToast('Trash is already empty.', 'info');
       await loadLibrary();
@@ -198,29 +407,29 @@
     if (accepted) await emptyTrash(targets);
   }
 
-  /**
-   * `exportScriptToFile` owns the outcome of an export: it returns quietly on a
-   * cancelled dialog and reports warnings, success and failure itself. There
-   * used to be an unconditional "Export ready" here as well, which meant a
-   * cancelled dialog and a failed write both ended in a success notice.
-   */
   async function exportScript(script: ScriptSummary): Promise<void> {
-    // No success toast here: `exportScriptToFile` owns every outcome, including
-    // its own 'Script exported'. A second one here fired unconditionally — so a
-    // cancelled or failed export still claimed the export was ready.
     await exportScriptToFile(script.id, script.title, 'markdown');
   }
 
-  /** Metadata as discrete parts — the card sets the separators, not this. */
-  function rowMeta(script: ScriptSummary): string[] {
-    return [
-      relativeTime(script.updatedAt),
-      `${script.spokenWordCount.toLocaleString()} words`,
-      formatSpeakingDuration(script.estimatedDurationSeconds),
-    ].filter(Boolean);
+  async function revealScript(script: ScriptSummary): Promise<void> {
+    try {
+      await scriptsService.revealScriptFolder(script.id);
+    } catch {
+      showToast('That script’s folder could not be opened.', 'danger');
+    }
   }
 
-  function rowMenu(script: ScriptSummary) {
+  const revealLabel = mac ? 'Reveal in Finder' : 'Show in File Explorer';
+
+  /**
+   * The row's actions, as one list used by BOTH the context menu and the
+   * overflow button.
+   *
+   * §10.6's last rule — do not duplicate every menu item as a visible row button
+   * — is only keepable if the two surfaces share a definition. Two lists drift,
+   * and the drift is invisible because nobody opens both.
+   */
+  function rowMenuItems(script: ScriptSummary): ContextMenuItem[] {
     if (inTrash) {
       return [
         { label: 'Restore', onselect: () => void restoreScriptFromTrash(script.id) },
@@ -234,135 +443,220 @@
     }
     return [
       { label: 'Open', onselect: () => openScript(script) },
-      { label: 'Present', onselect: () => presentScript(script) },
-      { label: 'Duplicate', onselect: () => void duplicateScript(script.id) },
-      { label: 'Export Markdown', onselect: () => void exportScript(script) },
-      // Ruled off: the only irreversible-looking action in the list should not
-      // sit one slot below "Export Markdown" with nothing between them.
-      { label: 'Move to Trash', danger: true, separated: true, onselect: () => void confirmTrash(script) },
+      {
+        label: 'Present',
+        shortcut: formatAccelerator('Mod+Return', mac),
+        onselect: () => presentScript(script),
+      },
+      {
+        label: 'Duplicate',
+        separated: true,
+        shortcut: formatAccelerator('Mod+D', mac),
+        onselect: () => void duplicateScript(script.id),
+      },
+      { label: 'Export Markdown…', onselect: () => void exportScript(script) },
+      { label: revealLabel, onselect: () => void revealScript(script) },
+      {
+        label: 'Move to Trash',
+        danger: true,
+        separated: true,
+        onselect: () => void confirmTrash(script),
+      },
     ];
   }
+
+  /**
+   * Right-click SELECTS FIRST, then opens (§10.6).
+   *
+   * Without this the menu acts on a row the user is pointing at while the
+   * selection highlight sits somewhere else — so "Move to Trash" appears to be
+   * about the highlighted script and is about the one under the cursor.
+   */
+  function openRowMenu(
+    script: ScriptSummary,
+    at: { x: number; y: number },
+    trigger: HTMLElement | null,
+  ): void {
+    selectScript(script.id);
+    openContextMenu({
+      x: at.x,
+      y: at.y,
+      label: `Actions for ${script.title}`,
+      items: rowMenuItems(script),
+      trigger,
+    });
+  }
+
+  function contextMenuFor(script: ScriptSummary, event: MouseEvent): void {
+    event.preventDefault();
+    openRowMenu(script, { x: event.clientX, y: event.clientY }, event.currentTarget as HTMLElement);
+  }
+
+  /** View options: sort and density in one compact menu (§10.4). */
+  const viewOptionItems = $derived([
+    ...(showsSort
+      ? sortOptions.map((option) => ({
+          label: option.label,
+          checked: $library.sort === option.value,
+          onselect: () => setLibrarySort(option.value),
+        }))
+      : []),
+    {
+      label: 'Compact rows',
+      checked: compact,
+      separated: showsSort,
+      onselect: () =>
+        updateWorkspace({ libraryDensity: compact ? 'comfortable' : 'compact' }),
+    },
+  ]);
+
+  const statusItems = $derived<StatusBarItem[]>(
+    (() => {
+      const items: StatusBarItem[] = [];
+      const shown = scripts.length;
+      const total = $library.total;
+      if ($library.loading && shown === 0) {
+        items.push({ key: 'loading', label: 'Loading…' });
+      } else if (shown < total) {
+        // Honest about the page ceiling: the number that matters is how many
+        // there are, not where the transport stops.
+        items.push({
+          key: 'count',
+          label: `${shown.toLocaleString()} of ${total.toLocaleString()} scripts`,
+        });
+      } else {
+        items.push({
+          key: 'count',
+          label: shown === 1 ? '1 script' : `${shown.toLocaleString()} scripts`,
+        });
+      }
+      if ($library.query.trim() !== '') {
+        items.push({ key: 'filter', label: `Filtered by “${$library.query.trim()}”` });
+      }
+      return items;
+    })(),
+  );
+
+  const trailingStatus = $derived<StatusBarItem[]>(
+    selected ? [{ key: 'selected', label: selected.title }] : [],
+  );
 </script>
 
 <div class="page">
-  <PageHeader title={pageTitle}>
+  <Toolbar title={viewTitle}>
+    {#snippet leading()}
+      <!--
+        Search in the PRIMARY toolbar, where it is stable across every Library
+        view (§10.4). The ⌘K keycap that used to sit inside the field is gone:
+        §10.4 asks for it in the tooltip and the native menu instead, because a
+        rendered keycap inside an input is a web command-palette signature.
+      -->
+      <div class="search">
+        <span class="search-icon"><Icon name="search" size={14} /></span>
+        <input
+          class="search-input"
+          type="search"
+          placeholder="Search scripts"
+          aria-label="Search scripts"
+          title={`Search scripts (${formatAccelerator('Mod+K', mac)})`}
+          value={query}
+          bind:this={searchInput}
+          oninput={onSearchInput}
+          onkeydown={onSearchKeydown}
+        />
+        {#if query !== ''}
+          <span class="search-clear">
+            <IconButton icon="x" label="Clear search" onclick={clearSearch} />
+          </span>
+        {/if}
+      </div>
+    {/snippet}
+
     {#snippet actions()}
+      <OverflowMenu items={viewOptionItems} label="View options" />
       {#if inTrash}
-        <!--
-          Driven by the whole Trash, not the loaded page: searching Trash for
-          something that does not match used to take the button away while
-          there was still a Trash to empty.
-        -->
         {#if canEmptyTrash}
           <Button variant="danger" onclick={() => confirmEmptyTrash()}>Empty Trash</Button>
         {/if}
       {:else}
-        <Button onclick={() => importMarkdown()}>
-          <Icon name="import" size={16} />
-          Import
-        </Button>
+        <!--
+          Import is secondary and New Script is primary (§10.4) — they used to be
+          two equally weighted buttons, which made the toolbar ask a question
+          instead of offering a default.
+        -->
+        <Button onclick={() => importMarkdown()}>Import</Button>
         <Button variant="primary" onclick={() => createAndOpenScript('new')}>
-          <Icon name="plus" size={16} />
+          <Icon name="plus" size={15} />
           New script
         </Button>
       {/if}
     {/snippet}
-  </PageHeader>
+  </Toolbar>
 
-  <div class="toolbar">
-    <div class="search">
-      <span class="search-icon"><Icon name="search" size={15} /></span>
-      <input
-        class="search-input"
-        type="search"
-        placeholder="Search scripts"
-        aria-label="Search scripts"
-        value={query}
-        bind:this={searchInput}
-        oninput={onSearchInput}
-        onkeydown={onSearchKeydown}
-      />
-      <!--
-        The shortcut is chrome, not placeholder text. It used to be three hard
-        spaces and "⌘K" inside the placeholder, which meant it shared the
-        placeholder's colour and baseline, vanished the moment anybody typed, and
-        drifted left as the field resized. `aria-hidden` because the input's own
-        label already names the field and the binding is announced elsewhere.
-      -->
-      {#if query === ''}
-        <kbd class="hint" aria-hidden="true">⌘K</kbd>
-      {/if}
-    </div>
-    {#if showsSort}
-      <div class="sort">
-        <Select
-          value={$library.sort}
-          options={sortOptions}
-          onchange={(value) => setLibrarySort(value as ScriptSort)}
-        />
-      </div>
-    {/if}
-  </div>
-
-  <div class="list-area">
+  <div class="list-area" bind:this={scrollElement}>
     <!--
-      A refresh that failed with rows already on screen: the list is stale, not
-      wrong, so it stays and the failure is reported over it. Deliberately not a
-      toast — `danger` toasts never expire, and a debounced search that keeps
-      failing would stack one per keystroke for a single ongoing condition.
+      A refresh that failed with rows on screen: the list is stale, not wrong, so
+      it stays and the failure is reported over it as a persistent bar (§10.7).
+      Deliberately not a toast — `danger` toasts never expire, and a debounced
+      search that keeps failing would stack one per keystroke.
     -->
-    {#if $library.error !== null && $library.scripts.length > 0}
+    {#if $library.error !== null && scripts.length > 0}
       <div class="stale" role="alert">
         <div class="stale-text">
           <p class="stale-title">Scripts could not be refreshed</p>
           <p class="stale-body">The results below are the previous ones. {$library.error}</p>
         </div>
-        <Button onclick={() => loadLibrary()}>Try again</Button>
+        <Button size="sm" onclick={() => loadLibrary()}>Try again</Button>
       </div>
     {/if}
 
-    {#if $library.loading && $library.scripts.length === 0}
-      <p class="loading">Loading scripts…</p>
-    {:else if $library.error !== null && $library.scripts.length === 0}
+    {#if $library.loading && scripts.length === 0}
       <!--
-        A read that failed is not an empty library. This branch has to come
-        before the empty states: without it a database error fell through to the
-        first-run invitation — "Write the words", Create, Import — which reads as
-        every script you had being gone, and offers to start you over.
+        Row skeletons, not a centred block (§10.7). Replacing the whole workspace
+        with "Loading scripts…" makes every launch look like a page navigation;
+        rows that are the right shape make it look like a list filling in.
       -->
+      <div class="skeletons" aria-hidden="true">
+        {#each Array.from({ length: 6 }) as _, index (index)}
+          <div class="skeleton" class:compact></div>
+        {/each}
+      </div>
+      <p class="sr-only" role="status">Loading scripts</p>
+    {:else if $library.error !== null && scripts.length === 0}
       <EmptyState title="Scripts could not be loaded" body={$library.error}>
         {#snippet actions()}
           <Button variant="primary" onclick={() => loadLibrary()}>Try again</Button>
         {/snippet}
       </EmptyState>
-    {:else if $library.scripts.length === 0}
-      <!--
-        The search miss is checked first. Trash used to win, so searching Trash
-        for something it does not hold answered "Trash is empty" — a much larger
-        claim, about the one place a script goes to be recoverable.
-      -->
+    {:else if scripts.length === 0}
       {#if $library.query.trim() !== ''}
-        <EmptyState title="No matching scripts" body="No titles or script text matched your search." />
+        <EmptyState title="No matching scripts" body="No titles or script text matched your search.">
+          {#snippet actions()}
+            <Button size="sm" onclick={clearSearch}>Clear search</Button>
+          {/snippet}
+        </EmptyState>
       {:else if inTrash}
-        <EmptyState title="Trash is empty" body="Deleted scripts stay here for 30 days before they are removed." />
+        <EmptyState
+          title="Trash is empty"
+          body="Deleted scripts stay here for 30 days before they are removed."
+        />
       {:else if $library.view === 'recent'}
-        <!--
-          Recent lists what has been opened, which is a different question from
-          whether anything has been written. Without this the view answered an
-          empty `last_opened_at` with "Write the words" and an offer to create
-          your first script, over a library that might hold fifty.
-        -->
         <EmptyState
           title="No recent scripts"
           body="Scripts appear here once you have opened them, most recently opened first."
         />
       {:else}
+        <!-- The one place the boxed editorial variant is still right: a genuine
+             first-use invitation, not a message inside a list. -->
         <EmptyState
+          variant="editorial"
           title="Write the words. CandidCue keeps your place."
           body="Create a script, or import Markdown you have already written."
         >
           {#snippet actions()}
-            <Button variant="primary" onclick={() => createAndOpenScript('new')}>Create a script</Button>
+            <Button variant="primary" onclick={() => createAndOpenScript('new')}>
+              Create a script
+            </Button>
             <Button onclick={() => importMarkdown()}>Import Markdown</Button>
             <Button variant="ghost" onclick={() => createAndOpenScript('sample')}>
               Try a sample script
@@ -371,61 +665,78 @@
         </EmptyState>
       {/if}
     {:else}
-      <ul class="list" aria-label={pageTitle} bind:this={listElement}>
-        {#each $library.scripts as script (script.id)}
-          <li>
-            <!--
-              Selection is recorded, not drawn: `selectedId` is the Present
-              shortcut's target and nothing else on this screen acts on it, so
-              the card has no selected treatment. See the note in ScriptCard.
+      <!--
+        ROVING TABINDEX, not `aria-activedescendant` — and the two must not be
+        mixed.
 
-              Both callbacks are WITHHELD in Trash rather than passed as
-              functions that do nothing. `ScriptCard` reads
-              `Boolean(onopen ?? onselect)` to decide whether the body is
-              interactive, so an `onopen` that internally returned `undefined`
-              still bought the row a hover lift and a focus edge — a card body
-              that invited a click and then ignored it. Withholding `onselect`
-              too keeps a trashed script from becoming the Present target.
-            -->
-            <ScriptCard
+        Both are valid listbox patterns and they are mutually exclusive.
+        `aria-activedescendant` keeps DOM focus on the CONTAINER and points at
+        the active option; roving tabindex moves real focus onto the option
+        itself. This list moves real focus (the row is what `revealSelected`
+        focuses, and what the context-menu key acts on), so it is the roving
+        pattern — and carrying `aria-activedescendant` as well would tell a
+        screen reader focus is on the container when it is not.
+      -->
+      <div
+        class="list"
+        role="listbox"
+        tabindex={-1}
+        aria-label={viewTitle}
+        bind:this={listElement}
+        onkeydown={listKeydown}
+        onfocusin={() => (listFocused = true)}
+        onfocusout={() => (listFocused = false)}
+      >
+        {#each scripts as script (script.id)}
+          <div class="row-slot" id={`script-row-${script.id}`}>
+            <ScriptRow
               title={script.title}
               excerpt={script.previewText || undefined}
-              meta={rowMeta(script)}
-              onselect={inTrash ? undefined : () => selectScript(script.id)}
+              duration={formatSpeakingDuration(script.estimatedDurationSeconds)}
+              modified={relativeTime(script.updatedAt)}
+              selected={$library.selectedId === script.id}
+              {listFocused}
+              {compact}
+              tabindex={$library.selectedId === script.id ? 0 : -1}
+              onselect={() => selectScript(script.id)}
               onopen={inTrash ? undefined : () => openScript(script)}
+              oncontextmenu={(event) => contextMenuFor(script, event)}
             >
               {#snippet status()}
+                <!-- Shown only when actionable (§10.1): "Prepared" on every
+                     healthy row is a badge that carries no information. -->
                 {#if script.hasWarnings}
                   <StatusPill tone="warning" label="Needs attention" />
-                {:else if script.status === 'ready'}
-                  <StatusPill tone="success" label="Prepared" />
                 {/if}
               {/snippet}
               {#snippet actions()}
-                {#if !inTrash}
-                  <Button onclick={() => presentScript(script)}>Present</Button>
+                {#if inTrash}
+                  <Button size="sm" onclick={() => restoreScriptFromTrash(script.id)}>
+                    Restore
+                  </Button>
                 {:else}
-                  <Button onclick={() => restoreScriptFromTrash(script.id)}>Restore</Button>
+                  <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
                 {/if}
-                <OverflowMenu items={rowMenu(script)} label="Script actions" />
+                <OverflowMenu items={rowMenuItems(script)} label={`Actions for ${script.title}`} />
               {/snippet}
-            </ScriptCard>
-          </li>
+            </ScriptRow>
+          </div>
         {/each}
-      </ul>
-      <!--
-        One page is all Rust will serve at a time, so past its ceiling the list
-        is a subset. It used to be a silent one. This states the count rather
-        than announcing a limit: the number that matters is how many there are,
-        not where the transport stops.
-      -->
-      {#if $library.scripts.length < $library.total}
-        <p class="count">
-          Showing {$library.scripts.length.toLocaleString()} of {$library.total.toLocaleString()} scripts.
-        </p>
-      {/if}
+      </div>
     {/if}
   </div>
+
+  <!--
+    The count is announced as well as painted. A search that narrows fifty
+    scripts to two is a change a screen-reader user has no other way to learn
+    about — the list itself is not a live region, and announcing every row would
+    be worse than saying nothing.
+  -->
+  <StatusBar
+    items={statusItems}
+    trailing={trailingStatus}
+    announcement={$library.loading ? undefined : (statusItems[0]?.label ?? undefined)}
+  />
 </div>
 
 <style>
@@ -435,54 +746,33 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    background: var(--bg-canvas);
   }
 
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-4) var(--page-x) 0;
-  }
-
+  /* ---- toolbar search ---- */
   .search {
     position: relative;
-    flex: 1 1 auto;
-    max-width: 420px;
+    display: flex;
+    align-items: center;
+    width: 260px;
+    max-width: 40vw;
   }
   .search-icon {
     position: absolute;
-    left: var(--space-3);
-    top: 50%;
-    transform: translateY(-50%);
+    left: var(--space-2);
+    display: inline-flex;
     color: var(--text-muted);
     pointer-events: none;
-    display: inline-flex;
   }
-  .hint {
+  .search-clear {
     position: absolute;
-    right: var(--space-2);
-    top: 50%;
-    transform: translateY(-50%);
+    right: 2px;
     display: inline-flex;
-    align-items: center;
-    height: 20px;
-    padding: 0 6px;
-    border: 1px solid var(--border-faint);
-    border-radius: 5px;
-    background: var(--bg-sunken);
-    color: var(--text-faint);
-    font-family: var(--font-ui);
-    font-size: var(--text-2xs);
-    font-weight: 600;
-    pointer-events: none;
   }
-
   .search-input {
     width: 100%;
-    height: var(--control-h);
-    /* Right padding clears the ⌘K capsule so a long query never runs under it. */
-    padding: 0 calc(var(--space-2) + 34px) 0 calc(var(--space-3) + 22px);
+    height: var(--toolbar-control-h);
+    padding: 0 30px 0 26px;
     border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
@@ -499,50 +789,80 @@
   .search-input:hover {
     border-color: var(--border-strong);
   }
-  /* Quiet focus on the search surface — no accent ring. */
+  /* Quiet focus on a surface — never an accent ring (the house rule). */
   .search-input:focus,
   .search-input:focus-visible {
     outline: none;
     border-color: var(--border-strong);
     background: var(--bg-elevated);
   }
-
-  .sort {
-    flex: 0 0 auto;
-    min-width: 170px;
+  /* The engine's own clear button would sit under ours. */
+  .search-input::-webkit-search-cancel-button {
+    display: none;
   }
 
+  /* ---- list ---- */
   .list-area {
     flex: 1 1 auto;
-    padding: var(--space-4) var(--page-x) var(--space-8);
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .loading {
-    color: var(--text-muted);
-    font-size: var(--text-sm);
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-2) var(--page-x) var(--space-6);
   }
 
   /*
-   * The failed-refresh notice. A full border rather than a leading rule: a
-   * one-sided border on a rounded box crescents at the corners.
+   * One continuous surface with hairlines between rows — not a stack of cards
+   * with gaps. The container has the border and the radius; the rows have
+   * neither, which is what makes a run of them read as a table.
    */
+  .list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-faint);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    overflow: hidden;
+  }
+  .list:focus {
+    outline: none;
+  }
+  .row-slot + .row-slot {
+    border-top: 1px solid var(--border-faint);
+  }
+
+  .skeletons {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-faint);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    overflow: hidden;
+  }
+  .skeleton {
+    height: var(--list-row-h);
+    border-bottom: 1px solid var(--border-faint);
+    /*
+     * A static tint, not a shimmer. §23.5 and §3.2: no perpetual motion, and a
+     * sweeping gradient across six rows is the most decorative animation a list
+     * can have. It reads as "these rows are not real yet" perfectly well
+     * standing still.
+     */
+    background: var(--bg-hover-surface);
+  }
+  .skeleton.compact {
+    height: var(--list-row-h-compact);
+  }
+  .skeleton:last-child {
+    border-bottom: none;
+  }
+
   .stale {
     display: flex;
     align-items: center;
     gap: var(--space-4);
-    margin-bottom: var(--space-3);
-    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--danger);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     background: var(--danger-soft);
   }
   .stale-text {
@@ -556,16 +876,22 @@
     color: var(--text-primary);
   }
   .stale-body {
-    margin: 2px 0 0;
-    font-size: var(--text-sm);
-    line-height: var(--lh-label);
+    margin: 1px 0 0;
+    font-size: var(--text-xs);
+    line-height: var(--lh-meta);
     color: var(--text-secondary);
   }
 
-  .count {
-    margin: var(--space-4) 0 0;
-    font-size: var(--text-xs);
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
+  /* Announced but not drawn — the skeletons carry the visual half. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

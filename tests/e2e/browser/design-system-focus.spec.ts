@@ -95,10 +95,18 @@ test('a shared control wears the accent ring; a raw row does not', async ({ page
   await page.goto('/control.html');
   // The sidebar's own button — the empty library renders a second "New script"
   // in the page body, so the role query alone is ambiguous.
-  await page.locator('.new-button').waitFor();
+  await page.getByRole('button', { name: 'New script' }).first().waitFor();
 
-  // The control: an explicit data-focus="control" opt-in.
-  const control = await tabTo(page, '.new-button');
+  /*
+   * The control is now the TOOLBAR's New script, not the sidebar's.
+   *
+   * Desktop refinement §7.1 turned the sidebar's raised call-to-action into an
+   * ordinary source-list row — so it is deliberately an unmarked row now and
+   * wears the quiet edge, which is the very thing the second half of this test
+   * asserts. `Button.svelte` is the shared control that opts in, and the
+   * Library toolbar renders one.
+   */
+  const control = await tabTo(page, '.button');
   expect(control.style, 'a control must still show a focus ring').not.toBe('none');
   expect(control.color).toBe(control.ring);
   // Drawn OUTSIDE the control, the way a ring around a small target should be.
@@ -126,7 +134,35 @@ test('a shared control wears the accent ring; a raw row does not', async ({ page
  */
 test('a selection drag out of a dialog does not dismiss it', async ({ page }) => {
   await page.goto('/control.html');
-  await page.getByRole('button', { name: 'Keyboard shortcuts' }).click();
+  /*
+   * Opened with the CHORD, dispatched onto the window.
+   *
+   * Desktop refinement §7.1 moved Keyboard Shortcuts out of the sidebar and into
+   * Help › Keyboard Shortcuts — and a browser-run spec has neither the sidebar
+   * row nor a native menu bar to click, so the chord is the only route left.
+   *
+   * Dispatched rather than pressed with `page.keyboard`, and the difference is
+   * about what this test is FOR: its subject is the dialog's pointer handling
+   * (a selection drag that overshoots the panel used to dismiss it), not the
+   * key that opened it. `keyboard.press` depends on the headless browser window
+   * holding OS focus, which is not a property this suite should be asserting on
+   * the way to testing something else. `resolveShortcut`'s handling of this
+   * chord is covered directly in `tests/unit/control/shortcuts.test.ts`.
+   */
+  await page.evaluate(() => {
+    const isMac = /Mac|iPhone|iPad/.test(
+      (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+        navigator.platform,
+    );
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '/',
+        metaKey: isMac,
+        ctrlKey: !isMac,
+        bubbles: true,
+      }),
+    );
+  });
 
   const dialog = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
   await expect(dialog).toBeVisible();

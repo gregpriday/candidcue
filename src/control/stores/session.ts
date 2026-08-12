@@ -3487,6 +3487,19 @@ export function livePresentationMode(): PresentationMode {
 }
 
 /**
+ * Is the take's script mirrored horizontally right now?
+ *
+ * Read by the native Session menu so its "Mirror Stage" checkmark reports the
+ * state rather than merely offering the verb. The mirror lives in the take's own
+ * teleprompter snapshot rather than in `SessionState`, because it is one of the
+ * settings a saved rig can resolve — so this reads exactly what
+ * `toggleStageMirror` writes and cannot answer from a stale copy.
+ */
+export function liveMirrorX(): boolean {
+  return (takeTeleprompter ?? currentTeleprompterSettings()).mirrorX;
+}
+
+/**
  * The saved teleprompter section this take is currently running, for the sheet
  * to persist when the operator presses OK.
  */

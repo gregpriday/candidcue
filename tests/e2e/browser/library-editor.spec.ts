@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim, SCRIPT_CONFLICT_ERROR } from './fixtures/tauri-shim';
+import { openScript, row } from './fixtures/library';
 
 /**
  * Library -> Editor journey, SHIM-BACKED (production IPC path).
@@ -34,11 +35,10 @@ test('opens a seeded script, edits it, and autosaves to a real save_script call'
   await page.goto('/control.html');
 
   // Library renders the seeded script (proves the boot list_scripts round-trip).
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await expect(list.locator('.title', { hasText: 'Launch keynote' })).toBeVisible();
+  await expect(row(page, 'Launch keynote')).toBeVisible();
 
   // Open it — the editor shows the title and the body text.
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('Welcome everyone to the show');
@@ -79,8 +79,7 @@ test('the count line is already there on a blank script, and typing does not mov
 }) => {
   await page.goto('/control.html');
 
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Blank canvas/ }).click();
+  await openScript(page, /Blank canvas/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
@@ -104,8 +103,7 @@ test('the count line is already there on a blank script, and typing does not mov
 
 test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution sheet', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
@@ -145,8 +143,7 @@ test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution shee
  */
 test('choosing the disk version writes the unsaved text to a new script first', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
@@ -188,8 +185,7 @@ test('choosing the disk version writes the unsaved text to a new script first', 
  */
 test('the undo history survives an Edit/Preview round trip', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
@@ -253,8 +249,7 @@ test('covers the whole editor while a script opens, then reveals it complete', a
   await page.goto('/control.html');
   await page.evaluate(() => window.__E2E__.setDelay('get_script', 600));
 
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
 
   // Covered: the panel is up and NOTHING else of the editor is on screen —
   // not the title, not the insert toolbar, not the text, not the outline.
@@ -318,8 +313,7 @@ test('covers the whole editor while a script opens, then reveals it complete', a
  */
 test('a compile during editing neither re-covers the editor nor moves the toolbar', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
 
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
@@ -368,8 +362,7 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
  */
 test('emptying the script reports zero without moving the toolbar', async ({ page }) => {
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
 
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
@@ -418,8 +411,7 @@ test('reveals the editor anyway when the compile worker never answers', async ({
   });
 
   await page.goto('/control.html');
-  const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  await openScript(page, /Launch keynote/);
 
   // The editor arrives regardless — the text is reachable and editable, which
   // is the thing that must never be locked away behind a compile.

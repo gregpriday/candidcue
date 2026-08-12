@@ -70,6 +70,22 @@ vi.mock('../../src/control/lib/shortcuts', () => ({ onShortcut: shortcuts.onShor
 
 const take = vi.hoisted(() => ({ startTake: vi.fn(async () => {}) }));
 vi.mock('../../src/control/lib/start-take', () => ({ startTake: take.startTake }));
+
+/**
+ * The router, spied.
+ *
+ * Opening a script is a NAVIGATION, and "did the route navigate" is the only
+ * assertion that actually proves a row opened. The first version of the
+ * rewritten tests checked that the mounted Library still contained a listbox
+ * afterwards — which is true whether or not `navigate` was called, because these
+ * tests mount the route directly rather than through the shell. That is a test
+ * that cannot fail.
+ */
+const router = vi.hoisted(() => ({ navigate: vi.fn(async () => true) }));
+vi.mock('../../src/control/stores/router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/control/stores/router')>();
+  return { ...actual, navigate: router.navigate };
+});
 vi.mock('../../src/control/stores/confirm', () => ({
   requestConfirm: confirm.requestConfirm,
   pendingConfirm: { subscribe: () => () => {} },
@@ -135,7 +151,25 @@ function buttonNamed(container: HTMLElement, name: string): HTMLButtonElement | 
   );
 }
 
+/**
+ * The overflow trigger on a script ROW, not the toolbar's view-options menu.
+ *
+ * The desktop pass gave the toolbar its own `aria-haspopup="menu"` button for
+ * sort and density, and it comes first in the document — so the unqualified
+ * query these tests used to make now opens the wrong menu and finds none of the
+ * row's actions. Matched by its accessible name, which the route builds from the
+ * script's title, because that is the thing that distinguishes the two.
+ */
+function rowMenuTrigger(container: HTMLElement): HTMLButtonElement | null {
+  return (
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]')).find(
+      (button) => (button.getAttribute('aria-label') ?? '').startsWith('Actions for '),
+    ) ?? null
+  );
+}
+
 beforeEach(async () => {
+  router.navigate.mockClear();
   confirm.requestConfirm.mockReset();
   confirm.requestConfirm.mockResolvedValue(false);
   shortcuts.handlers.clear();
@@ -154,10 +188,23 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-/** A cold start that fails: no rows have ever arrived. */
+/**
+ * A cold start that fails: no rows have ever arrived.
+ *
+ * The rows are dropped by CHANGING view and coming back, not by re-selecting
+ * the current one. `setLibraryView` used to clear unconditionally, so
+ * `setLibraryView('all')` from 'all' happened to reset the store — and this
+ * helper leaned on that. It is a no-op refresh now, deliberately: re-choosing
+ * the view you are already in is what the sidebar does when you come back from
+ * the editor, and clearing there discarded the selection every single time
+ * (§10.2 asks for exactly the opposite).
+ *
+ * Going out to Trash and back is the honest way to reach "no rows have ever
+ * arrived", and it exercises the clearing path this file cares about.
+ */
 async function bootWithoutRows(): Promise<void> {
   setInvokeForTesting(failing());
-  // A view change drops the rows, which is the state a real boot begins in.
+  setLibraryView('trash');
   setLibraryView('all');
   await loadLibrary();
 }
@@ -235,17 +282,24 @@ describe('what an empty result is allowed to claim', () => {
 });
 
 describe('the size of the list is stated rather than hidden', () => {
+  /*
+   * The count moved from a line under the list to the STATUS BAR (§10.8), and
+   * its wording changed with it: a status bar states what is on screen rather
+   * than announcing a limit. What is being guarded is unchanged — the number
+   * that matters is how many there are, not where the page ceiling stops.
+   */
   it('names how many there are when only a page of them is shown', async () => {
     setInvokeForTesting(serving([summary('a', 'Alpha')], 617));
     await loadLibrary();
     const container = await mount();
 
-    expect(text(container)).toContain('Showing 1 of 617 scripts.');
+    expect(text(container)).toContain('1 of 617 scripts');
   });
 
-  it('says nothing when the whole list is on screen', async () => {
+  it('states the plain count when the whole list is on screen', async () => {
     const container = await mount();
-    expect(text(container)).not.toContain('Showing');
+    expect(text(container)).not.toContain(' of ');
+    expect(text(container)).toMatch(/\d+ scripts|1 script/);
   });
 });
 
@@ -256,7 +310,10 @@ describe('the destructive confirmations name what they are about to remove', () 
     await loadLibrary();
     const container = await mount();
 
-    const menu = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    // The ROW's overflow, not the toolbar's. The toolbar gained a view-options
+    // menu in the desktop pass, and it is the first `aria-haspopup` in the
+    // document — so an unqualified query now opens the wrong menu.
+    const menu = rowMenuTrigger(container);
     menu?.click();
     await settle();
     buttonNamed(container, 'Delete permanently')?.click();
@@ -291,23 +348,202 @@ describe('the destructive confirmations name what they are about to remove', () 
   });
 });
 
-describe('a Trash row does not pretend its body is a button', () => {
-  it('withholds the interactive treatment the card gives a clickable row', async () => {
+/*
+ * The rows are `ScriptRow` now rather than `ScriptCard`, and Trash rows are
+ * selectable — which is the change §10.2 asked for, so that Restore and Delete
+ * Permanently have something to act on. What must NOT come back is a Trash row
+ * that offers to OPEN: a trashed script has no editor to go to, and the old
+ * defect was a body that invited a click and then ignored it.
+ */
+/*
+ * The activation model, which is the whole point of a selection-led collection:
+ * one click selects, two clicks (or Enter) open, and Trash never opens.
+ *
+ * These replace what `script-card-click.test.ts` guarded for the old card. That
+ * file's guarantees were event-level — activate exactly once, never twice, never
+ * from a nested control — and they matter more here, not less, because a row now
+ * carries buttons AND has its own activation.
+ */
+describe('the row activation model', () => {
+  it('selects on a single click and does not open', async () => {
+    setInvokeForTesting(serving([summary('a', 'Alpha'), summary('b', 'Bravo')]));
+    await loadLibrary();
+    const container = await mount();
+
+    const rows = container.querySelectorAll<HTMLElement>('[role="option"]');
+    rows[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle();
+
+    expect(get(library).selectedId).toBe('b');
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens exactly once on a double click', async () => {
+    const container = await mount();
+    const row = container.querySelector<HTMLElement>('[role="option"]');
+    row?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await settle();
+
+    expect(router.navigate).toHaveBeenCalledTimes(1);
+    expect(router.navigate).toHaveBeenCalledWith({ name: 'editor', scriptId: 'a' });
+  });
+
+  it('opens exactly once on Enter', async () => {
+    const container = await mount();
+    const row = container.querySelector<HTMLElement>('[role="option"]');
+    row?.focus();
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(router.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('never opens a Trash row', async () => {
     setInvokeForTesting(serving([summary('a', 'Alpha')]));
     setLibraryView('trash');
     await loadLibrary();
     const container = await mount();
 
-    const card = container.querySelector('.card');
-    expect(card).not.toBeNull();
-    // `ScriptCard` reads `Boolean(onopen ?? onselect)`, so a no-op function
-    // still bought the row a hover lift and a focus edge over a dead target.
-    expect(card?.classList.contains('interactive')).toBe(false);
+    const row = container.querySelector<HTMLElement>('[role="option"]');
+    expect(row?.getAttribute('aria-selected')).toBe('true');
+
+    row?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(router.navigate).not.toHaveBeenCalled();
   });
 
-  it('keeps the treatment on a live row', async () => {
+  /**
+   * The regression both reviewers found: a row's Enter handler swallowed keys
+   * pressed on the buttons INSIDE it.
+   *
+   * Enter on Present opened the script instead of presenting it; in Trash, where
+   * there is no open handler, Enter on Restore did nothing at all.
+   */
+  it('does not open when Enter is pressed on a control inside the row', async () => {
     const container = await mount();
-    expect(container.querySelector('.card')?.classList.contains('interactive')).toBe(true);
+    const present = buttonNamed(container, 'Present');
+    expect(present).not.toBeNull();
+
+    present?.focus();
+    present?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle();
+
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not move the selection when arrows are pressed inside a row menu', async () => {
+    setInvokeForTesting(serving([summary('a', 'Alpha'), summary('b', 'Bravo')]));
+    await loadLibrary();
+    const container = await mount();
+    expect(get(library).selectedId).toBe('a');
+
+    rowMenuTrigger(container)?.click();
+    await settle();
+
+    const item = container.querySelector<HTMLElement>('[role="menuitem"]');
+    item?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await settle();
+
+    // The list's own handler must not have seen it.
+    expect(get(library).selectedId).toBe('a');
+  });
+
+  it('does not trash the row when Delete is pressed inside a row menu', async () => {
+    const container = await mount();
+    rowMenuTrigger(container)?.click();
+    await settle();
+
+    const item = container.querySelector<HTMLElement>('[role="menuitem"]');
+    item?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    await settle();
+
+    expect(confirm.requestConfirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('keyboard navigation through the collection', () => {
+  async function threeRows(): Promise<HTMLElement> {
+    setInvokeForTesting(
+      serving([summary('a', 'Alpha'), summary('b', 'Bravo'), summary('c', 'Charlie')]),
+    );
+    await loadLibrary();
+    return mount();
+  }
+
+  it('moves the selection with the arrows and stops at the ends', async () => {
+    const container = await threeRows();
+    const row = () => container.querySelector<HTMLElement>('[aria-selected="true"]');
+
+    row()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await settle();
+    expect(get(library).selectedId).toBe('b');
+
+    row()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    await settle();
+    expect(get(library).selectedId).toBe('a');
+
+    // Already at the top: ArrowUp must not wrap to the bottom. A collection
+    // that wraps makes Home and End meaningless.
+    row()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    await settle();
+    expect(get(library).selectedId).toBe('a');
+  });
+
+  it('jumps to the ends with Home and End', async () => {
+    const container = await threeRows();
+    const row = () => container.querySelector<HTMLElement>('[aria-selected="true"]');
+
+    row()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    await settle();
+    expect(get(library).selectedId).toBe('c');
+
+    row()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    await settle();
+    expect(get(library).selectedId).toBe('a');
+  });
+
+  it('asks before trashing on Delete, naming the row', async () => {
+    const container = await threeRows();
+    const row = container.querySelector<HTMLElement>('[aria-selected="true"]');
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    await settle();
+
+    expect(confirm.requestConfirm).toHaveBeenCalledTimes(1);
+    expect(confirm.requestConfirm.mock.calls[0]?.[0].body).toContain('Alpha');
+  });
+
+  it('asks only once when Delete is held', async () => {
+    // `requestConfirm` replaces its singleton without resolving the request it
+    // displaces, so a repeat would strand the first await for ever.
+    const container = await threeRows();
+    const row = container.querySelector<HTMLElement>('[aria-selected="true"]');
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    await settle();
+
+    expect(confirm.requestConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a single tab stop: only the selected row is tabbable', async () => {
+    const container = await threeRows();
+    const rows = [...container.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(rows).toHaveLength(3);
+    const tabbable = rows.filter((r) => r.getAttribute('tabindex') === '0');
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('marks selection and focus as separate things', async () => {
+    // §23.3: a list where selected-and-focused looks the same as
+    // selected-but-not-focused tells a keyboard user nothing.
+    const container = await threeRows();
+    const row = container.querySelector<HTMLElement>('[aria-selected="true"]');
+    expect(row?.classList.contains('selected')).toBe(true);
+    // `list-focused` is applied only while focus is inside the list.
+    expect(row?.classList.contains('list-focused')).toBe(false);
   });
 });
 
@@ -368,10 +604,10 @@ describe('exporting reports itself once, from the helper that knows', () => {
     });
     await loadLibrary();
     const container = await mount();
-    const menu = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    const menu = rowMenuTrigger(container);
     menu?.click();
     await settle();
-    buttonNamed(container, 'Export Markdown')?.click();
+    buttonNamed(container, 'Export Markdown…')?.click();
     await settle();
 
     const said = vi.mocked(showToast).mock.calls.map((call) => String(call[0]));
@@ -495,7 +731,18 @@ describe('the search field and the results it filtered agree', () => {
 });
 
 describe('the search field leads somewhere', () => {
-  it('moves focus into the results on ArrowDown', async () => {
+  /*
+   * ArrowDown now SELECTS the first result rather than focusing a button inside
+   * it. That is the point of the collection model: the key that carries you out
+   * of the search box has to leave you somewhere the next keystroke means
+   * something, and in a selection-led list that is the selected row — from
+   * which the arrows keep working, Enter opens, and Delete trashes.
+   *
+   * It works identically in Trash, which is the other half of what changed:
+   * there used to be no selectable target there at all, so the key had to aim at
+   * the row's Restore button instead.
+   */
+  it('selects the first result on ArrowDown', async () => {
     const container = await mount();
     const input = container.querySelector<HTMLInputElement>('input.search-input');
     expect(input).not.toBeNull();
@@ -504,11 +751,11 @@ describe('the search field leads somewhere', () => {
     input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     await settle();
 
-    const first = container.querySelector<HTMLButtonElement>('button.main');
-    expect(document.activeElement).toBe(first);
+    const selected = container.querySelector('[aria-selected="true"]');
+    expect(selected).not.toBeNull();
   });
 
-  it('lands on Restore in Trash, where the card body does nothing', async () => {
+  it('selects the first Trash row too', async () => {
     setInvokeForTesting(serving([summary('a', 'Alpha')]));
     setLibraryView('trash');
     await loadLibrary();
@@ -519,7 +766,7 @@ describe('the search field leads somewhere', () => {
     input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     await settle();
 
-    expect((document.activeElement as HTMLElement | null)?.textContent?.trim()).toBe('Restore');
+    expect(container.querySelector('[aria-selected="true"]')?.textContent).toContain('Alpha');
   });
 
   it('leaves focus alone when there is nothing to move to', async () => {

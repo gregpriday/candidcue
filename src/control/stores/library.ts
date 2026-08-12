@@ -34,17 +34,29 @@ export interface LibraryState {
   query: string;
   sort: ScriptSort;
   /**
-   * The Present shortcut's target, and nothing else.
+   * The selected script — drawn, and the target of every command that acts on
+   * "the script in the Library" (desktop refinement §10.2).
    *
-   * `loadLibrary` falls back to the first script so the shortcut resolves the
-   * moment the library has loaded, with no clicking required. Nothing draws
-   * this: there used to be a `selectionIsExplicit` companion whose whole job was
-   * to keep that fallback from painting the top card as chosen, and it went with
-   * the treatment it was guarding (see `ScriptCard`).
+   * ---------------------------------------------------------------------------
+   * IT USED TO BE INVISIBLE, AND THAT WAS THE PROBLEM
+   * ---------------------------------------------------------------------------
+   * This was the Present shortcut's target and nothing else. Nothing drew it, so
+   * "the selected script" was a fiction: ⌘⏎ presented a script the user had no
+   * way of identifying, and there was no object for a context menu, an
+   * inspector, or a File menu command to act on. The Library was a list of links
+   * rather than a collection.
    *
-   * The fallback does not run in Trash. A trashed script is not presentable,
-   * and aiming an invisible shortcut at one meant ⌘⏎ in the Trash view tried to
-   * take a deleted script to the stage.
+   * It is now drawn, it survives opening a script and coming back, and the
+   * arrows move it. `loadLibrary` still falls back to the first row so the
+   * collection has a selection the moment it loads — which is what every desktop
+   * document manager does, and what makes the keyboard usable without a click
+   * first.
+   *
+   * THE TRASH EXCLUSION IS GONE. It existed because an invisible selection in
+   * Trash meant ⌘⏎ aimed at a deleted script; now that selection is visible and
+   * Present is greyed out in Trash by `lib/commands.ts` and refused by the
+   * route's own shortcut handler, a Trash selection is exactly what Restore and
+   * Delete Permanently need to act on.
    */
   selectedId: string | null;
   error: string | null;
@@ -137,11 +149,11 @@ export async function loadLibrary(): Promise<void> {
         scripts: page.items,
         total: page.total,
         trashTotal,
-        // A choice survives a reload as long as the script is still in the list;
-        // otherwise the fallback picks up the top of whatever is there now —
-        // except in Trash, where there is nothing worth aiming at.
-        selectedId:
-          current.view === 'trash' ? null : kept ? s.selectedId : page.items[0]?.id ?? null,
+        // A choice survives a reload as long as the script is still in the
+        // list; otherwise the fallback picks up the top of whatever is there
+        // now, so the collection always has a selection to act on. Applies in
+        // Trash too — see the note on `selectedId`.
+        selectedId: kept ? s.selectedId : page.items[0]?.id ?? null,
       };
     });
   } catch (err) {
@@ -155,6 +167,20 @@ export async function loadLibrary(): Promise<void> {
 }
 
 export function setLibraryView(view: LibraryView): void {
+  /*
+   * Re-choosing the CURRENT view is a refresh, not a change.
+   *
+   * The sidebar calls this on every click, including a click on the row that is
+   * already current — which is exactly what somebody does coming back from the
+   * editor. Clearing unconditionally meant that trip discarded the selection,
+   * so "open a script, come back" always landed on the top of the list rather
+   * than on the script you had just been working in. That is the one journey
+   * §10.2 names: selection must survive returning from the editor.
+   */
+  if (get(state).view === view) {
+    void loadLibrary();
+    return;
+  }
   // The rows on screen belong to the view being left. Holding them while the
   // next one loads would render live scripts as Trash rows, under a menu whose
   // entries delete permanently.

@@ -23,6 +23,18 @@
     danger?: boolean;
     disabled?: boolean;
     /**
+     * A checkmark, for menu rows that report state (§18.3).
+     *
+     * A tick in a reserved leading column is the platform convention, and the
+     * alternative this replaces — an "active" pill inside a menu row — is a menu
+     * row pretending to be a status chip. Its PRESENCE (not its value) reserves
+     * the column, so a menu with any checkable row keeps every label on one left
+     * edge and a menu with none is unaffected.
+     */
+    checked?: boolean;
+    /** A right-aligned key hint, already formatted for this platform. */
+    shortcut?: string;
+    /**
      * Draw a hairline above this item.
      *
      * A flag on the item rather than a separator entry in the array, because
@@ -102,7 +114,12 @@
   }
 
   function itemButtons(): HTMLElement[] {
-    return menu ? [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')] : [];
+    // Both roles — a checkable row is a `menuitemcheckbox`, and naming only
+    // `menuitem` would make the arrows skip every checked entry (the view-options
+    // menu is entirely checkable, so they would not move at all).
+    return menu
+      ? [...menu.querySelectorAll<HTMLElement>('[role="menuitem"],[role="menuitemcheckbox"]')]
+      : [];
   }
 
   function focusItem(index: number, highlight = true): void {
@@ -243,7 +260,8 @@
           class="item"
           class:danger={item.danger}
           class:active={highlighted && index === activeIndex}
-          role="menuitem"
+          role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+          aria-checked={item.checked === undefined ? undefined : item.checked}
           tabindex={menuItemTabIndex(activeIndex, index)}
           disabled={item.disabled}
           onclick={() => choose(item)}
@@ -254,7 +272,11 @@
             if (!item.disabled) focusItem(index);
           }}
         >
-          {item.label}
+          {#if items.some((entry) => entry.checked !== undefined)}
+            <span class="check" aria-hidden="true">{item.checked ? '✓' : ''}</span>
+          {/if}
+          <span class="item-label">{item.label}</span>
+          {#if item.shortcut}<span class="shortcut">{item.shortcut}</span>{/if}
         </button>
       {/each}
     </div>
@@ -302,6 +324,7 @@
   .item {
     display: flex;
     align-items: center;
+    gap: var(--space-2);
     width: 100%;
     height: 32px;
     text-align: left;
@@ -353,5 +376,24 @@
   }
   .item.danger.active:not(:disabled) {
     background: var(--danger-soft);
+  }
+
+  .check {
+    flex: 0 0 12px;
+    font-size: var(--text-xs);
+    color: var(--accent-strong);
+  }
+  .item-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Right-aligned, muted, tabular — the platform convention (§18.3). */
+  .shortcut {
+    flex: 0 0 auto;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    padding-left: var(--space-4);
   }
 </style>

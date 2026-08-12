@@ -433,7 +433,7 @@
     overflow-y: auto;
     display: grid;
     place-items: center;
-    padding: var(--space-10) var(--page-x);
+    padding: var(--space-10) var(--page-x-wide);
   }
 
   .inner {

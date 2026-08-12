@@ -21,6 +21,7 @@ pub mod database;
 pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
+pub mod menu;
 pub mod net;
 pub mod scripts;
 pub mod sessions;

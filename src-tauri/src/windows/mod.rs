@@ -10,6 +10,7 @@ use crate::coordinator::AppCoordinator;
 use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
+pub mod drag_drop;
 pub mod present;
 pub mod shutdown;
 pub mod sleep;

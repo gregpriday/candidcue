@@ -1,0 +1,343 @@
+<!--
+  One script in the Library collection (desktop refinement §10.1).
+
+  ---------------------------------------------------------------------------
+  A ROW, NOT A CARD
+  ---------------------------------------------------------------------------
+  `ScriptCard` drew each script as a rounded, bordered, shadowed surface that
+  lifted on hover, with two lines of excerpt and its own miniature metadata
+  layout. Fifty of those is a stack of floating tiles: nothing lines up column to
+  column, the eye has to re-find the title on every row, and the hover lift makes
+  a list feel like a page of links.
+
+  This is a 52px row on one continuous surface, separated by hairlines, with the
+  metadata in stable columns. §10.1's anatomy, in order: selection background,
+  title, one line of excerpt, duration, modified, readiness, trailing action.
+
+  ---------------------------------------------------------------------------
+  SELECTION AND FOCUS ARE DIFFERENT THINGS, DRAWN DIFFERENTLY
+  ---------------------------------------------------------------------------
+  §10.2 and §23.3 both insist on this and it is the property most easily lost.
+  Three states have to be told apart:
+
+    selected, list focused    accent tonal fill — this is the row commands act on
+    selected, list NOT focused  neutral fill — still the target, but the keyboard
+                              is somewhere else
+    focused, not selected     the quiet inset edge from the central focus policy
+
+  A list that draws all three the same way tells a keyboard user nothing about
+  where their next keystroke lands, which is the entire content of §23.3.
+
+  ---------------------------------------------------------------------------
+  ACTIONS APPEAR ON HOVER, FOCUS OR SELECTION
+  ---------------------------------------------------------------------------
+  §10.1: keep row actions hidden until hover, focus or selection so the list does
+  not become button-heavy. `visibility` rather than conditional rendering, so the
+  row's layout does not shift when the pointer crosses it — and so the buttons
+  stay in the tab order for the selected row, which is the one a keyboard user is
+  operating.
+-->
+<script lang="ts">
+  import type { Snippet } from 'svelte';
+
+  interface Props {
+    title: string;
+    excerpt?: string;
+    /** Right-aligned columns, in a fixed order the caller keeps stable. */
+    duration: string;
+    modified: string;
+    /** Shown only when it is actionable (§10.1). */
+    status?: Snippet;
+    actions?: Snippet;
+    selected?: boolean;
+    /** The list containing this row has DOM focus. */
+    listFocused?: boolean;
+    /** Compact density, for large libraries (§10.1). */
+    compact?: boolean;
+    /** Withheld in Trash, where the body does nothing. */
+    onselect?: () => void;
+    onopen?: () => void;
+    oncontextmenu?: (event: MouseEvent) => void;
+    /** The row element, so the list can scroll it into view and focus it. */
+    element?: HTMLElement | null;
+    onkeydown?: (event: KeyboardEvent) => void;
+    /** Roving tabindex: only the selected row is a tab stop. */
+    tabindex?: 0 | -1;
+  }
+
+  let {
+    title,
+    excerpt,
+    duration,
+    modified,
+    status,
+    actions,
+    selected = false,
+    listFocused = false,
+    compact = false,
+    onselect,
+    onopen,
+    oncontextmenu,
+    element = $bindable(null),
+    onkeydown,
+    tabindex = -1,
+  }: Props = $props();
+
+  const interactive = $derived(Boolean(onopen ?? onselect));
+
+  /**
+   * Controls that own their own events. Anything inside one of these is not the
+   * row's business.
+   */
+  const CONTROL_SELECTOR =
+    'button, a[href], input, select, textarea, [role="menu"], [role="menuitem"], [role="menuitemcheckbox"]';
+
+  /**
+   * Did this event belong to the row, or to a control sitting inside it?
+   *
+   * ---------------------------------------------------------------------------
+   * THE BUG THIS EXISTS TO PREVENT
+   * ---------------------------------------------------------------------------
+   * The row carries Present/Restore and an overflow menu. Their events BUBBLE.
+   * Without this test, the row's own handlers ran for all of them:
+   *
+   *   - Enter on Present opened the script instead of presenting it, because the
+   *     row saw Enter first, called `preventDefault()`, and opened;
+   *   - in Trash, where there is no `onopen`, Enter on Restore did nothing at
+   *     all — the row consumed the key and had nothing to do with it;
+   *   - arrows pressed inside the open overflow menu also moved the Library's
+   *     selection underneath it, and Delete inside the menu trashed the row.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY NOT `event.target === event.currentTarget`
+   * ---------------------------------------------------------------------------
+   * That was the first version and it was too strict, in a way only a real
+   * browser showed: a pointer event aimed at the row lands on whatever is under
+   * the cursor, which for most of the row's area is the `.title` span or the
+   * `.main` wrapper — not the row element. So double-clicking a script's NAME,
+   * the most obvious way to open one, did nothing at all.
+   *
+   * The question is not "was the row the exact target" but "did this come from
+   * something that owns the event", so the test is for an enclosing control,
+   * bounded to this row.
+   */
+  function fromRowItself(event: Event): boolean {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return true;
+    if (target === event.currentTarget) return true;
+    const control = target.closest(CONTROL_SELECTOR);
+    // A control OUTSIDE this row cannot have produced an event that bubbled to
+    // it, but bounding the search is what makes this safe against portals.
+    return control === null || !(event.currentTarget as HTMLElement).contains(control);
+  }
+
+  function click(event: MouseEvent): void {
+    // A single click SELECTS; it does not open. That is the desktop collection
+    // model §10.2 asks for, and it is what makes the inspector, the context
+    // menu and the File commands meaningful — they all act on "the selected
+    // script", which single-click-to-open would never leave standing.
+    //
+    // A click on a nested button still selects the row — pressing Present on a
+    // row plainly means "this one" — but it must not also open it.
+    onselect?.();
+    void event;
+  }
+
+  function dblclick(event: MouseEvent): void {
+    // Only a double click on the row's own surface opens. Double-clicking a
+    // button inside it is two activations of that button, not an open.
+    if (!fromRowItself(event)) return;
+    onopen?.();
+  }
+
+  function keydown(event: KeyboardEvent): void {
+    // A key pressed inside a nested control belongs to that control, and to
+    // nothing else. Returning without calling `onkeydown` also keeps it away
+    // from the LIST's handler, which owns arrows, Home/End and Delete.
+    if (!fromRowItself(event)) return;
+    // Enter opens the row it is on. Everything else — arrows, Home/End, Delete
+    // — belongs to the list, which owns cross-row movement.
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      onopen?.();
+      return;
+    }
+    onkeydown?.(event);
+  }
+</script>
+
+<!--
+  The linter reads `role="option"` as non-interactive and objects to the
+  tabindex. It is wrong here: an option inside a listbox that uses ROVING
+  TABINDEX is focusable by definition — that is what makes the pattern work —
+  and removing the tabindex would leave the list reachable only by pointer.
+-->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div
+  class="row"
+  class:selected
+  class:list-focused={listFocused}
+  class:compact
+  class:interactive
+  role={interactive ? 'option' : 'presentation'}
+  aria-selected={interactive ? selected : undefined}
+  tabindex={interactive ? tabindex : undefined}
+  bind:this={element}
+  data-focus="surface"
+  onclick={interactive ? click : undefined}
+  ondblclick={interactive ? dblclick : undefined}
+  oncontextmenu={oncontextmenu}
+  onkeydown={interactive ? keydown : undefined}
+>
+  <div class="main">
+    <span class="title">{title}</span>
+    <!--
+      ONE line of excerpt, and only outside compact density. §10.1: two full
+      lines in the default list is harder to scan than one, and the second line
+      is what turned every card into a paragraph.
+    -->
+    {#if excerpt && !compact}
+      <span class="excerpt">{excerpt}</span>
+    {/if}
+  </div>
+
+  <!--
+    Stable columns, tabular numerals, fixed widths. The point of a column is
+    that the eye can run down it; a duration that starts at a different x on
+    every row is not a column, it is trailing text.
+  -->
+  <span class="col duration">{duration}</span>
+  <span class="col modified">{modified}</span>
+  <span class="col status">{@render status?.()}</span>
+
+  {#if actions}
+    <div class="actions">{@render actions()}</div>
+  {/if}
+</div>
+
+<style>
+  .row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    height: var(--list-row-h);
+    padding: 0 var(--space-3);
+    min-width: 0;
+    /* No radius, no border, no shadow. The rows sit on one continuous surface
+       and are separated by the list's own hairlines (§10.1). */
+    background: transparent;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .compact {
+    height: var(--list-row-h-compact);
+    gap: var(--space-3);
+  }
+  .interactive {
+    cursor: default;
+  }
+
+  .interactive:hover {
+    background: var(--bg-hover-surface);
+  }
+
+  /*
+   * Selected-but-unfocused is a NEUTRAL fill; selected-and-focused is the accent
+   * one. See the note at the top: this pair is the whole of §23.3's requirement,
+   * and collapsing them into one colour is the easy mistake.
+   */
+  .selected {
+    background: var(--bg-row-selected-inactive);
+  }
+  .selected.list-focused,
+  .selected.list-focused:hover {
+    background: var(--bg-row-selected);
+  }
+  .selected:hover {
+    background: var(--bg-row-selected-inactive);
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .selected .title {
+    color: var(--text-primary);
+  }
+
+  .excerpt {
+    font-size: var(--text-xs);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .col {
+    flex: 0 0 auto;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
+  }
+  .duration {
+    width: 68px;
+  }
+  .modified {
+    width: 104px;
+  }
+  .status {
+    width: 92px;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /*
+   * Hidden until hover, focus or selection — but still occupying their space,
+   * so nothing reflows as the pointer travels down the list.
+   */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: 0 0 auto;
+    visibility: hidden;
+  }
+  .row:hover .actions,
+  .row:focus-within .actions,
+  .selected .actions {
+    visibility: visible;
+  }
+
+  /*
+   * At narrow widths the columns go before the excerpt does.
+   *
+   * §21.3 in miniature: collapse optional things before compressing the core.
+   * The title is the core; a last-modified stamp is not, and squeezing it to
+   * four characters is worse than dropping it.
+   */
+  @media (max-width: 900px) {
+    .duration {
+      display: none;
+    }
+  }
+  @media (max-width: 760px) {
+    .status {
+      display: none;
+    }
+  }
+</style>

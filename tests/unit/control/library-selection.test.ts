@@ -95,29 +95,41 @@ describe('library selection', () => {
 });
 
 /**
- * Trash is the one view the fallback must not run in.
+ * Selection in Trash.
  *
- * The fallback exists so ⌘⏎ has a target the moment the library loads. In Trash
- * that target was the first deleted script, and nothing drew it — so the
- * shortcut, in the view whose whole subject is scripts you have removed, sent
- * one of them to the stage.
+ * ---------------------------------------------------------------------------
+ * THIS USED TO ASSERT THE OPPOSITE, AND THAT WAS RIGHT AT THE TIME
+ * ---------------------------------------------------------------------------
+ * The old rule was that the fallback must never run in Trash. Its reasoning was
+ * sound for the code it was written against: `selectedId` was the Present
+ * shortcut's target and NOTHING DREW IT, so a fallback in Trash meant ⌘⏎ sent an
+ * invisible, arbitrary deleted script to the stage.
+ *
+ * Desktop refinement §10.2 removed the premise. Selection is drawn now, it is
+ * what Restore and Delete Permanently act on, and Present is greyed out in
+ * Trash by `lib/commands.ts` as well as refused by the route's own shortcut
+ * handler. A Trash view with no selection would instead be a view where the
+ * arrow keys have nothing to start from and the Delete key has nothing to
+ * delete — which is the failure the new rule prevents.
+ *
+ * The ⌘⏎ guard is asserted where it now lives (`commands.test.ts`: "offers
+ * nothing to act on for a selected row in Trash"), so nothing was traded away.
  */
-describe('the Present target in Trash', () => {
-  it('never falls back to a trashed script', async () => {
+describe('selection in Trash', () => {
+  it('selects the first row so the keyboard has somewhere to start', async () => {
     setLibraryView('trash');
     await loadLibrary();
     expect(get(library).scripts).toHaveLength(2);
-    expect(get(library).selectedId).toBeNull();
+    expect(get(library).selectedId).toBe('a');
   });
 
-  it('drops a live target on the way in rather than carrying it', async () => {
+  it('clears the live selection at the moment the view changes', async () => {
     await loadLibrary();
     expect(get(library).selectedId).toBe('a');
     setLibraryView('trash');
-    // Cleared at the moment of the switch, not a load later: the rows go with
-    // the view, and so does the thing that pointed at one of them.
-    expect(get(library).selectedId).toBeNull();
-    await loadLibrary();
+    // The rows go with the view, and so does the thing that pointed at one of
+    // them — a selection surviving the switch would highlight a Trash row that
+    // happens to share an index with a live script.
     expect(get(library).selectedId).toBeNull();
   });
 });

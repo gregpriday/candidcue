@@ -88,8 +88,17 @@
     cursor: not-allowed;
   }
 
+  /*
+   * `sm` is 28px, not 32.
+   *
+   * It used to be `--icon-control-h`, which was 32 while the default was 36. The
+   * desktop pass brought the default down to 32 — and left both variants
+   * resolving to the same number, so `size="sm"` silently stopped meaning
+   * anything and every row of buttons in the app lost its size hierarchy.
+   * `--toolbar-control-h` is the compact tier and keeps the two apart.
+   */
   .sm {
-    min-height: var(--icon-control-h);
+    min-height: var(--toolbar-control-h);
     padding-inline: var(--space-3);
     font-size: var(--text-sm);
   }

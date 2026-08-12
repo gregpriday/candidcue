@@ -68,39 +68,98 @@
   --prose-measure: 70ch;
   --prose-measure-narrow: 52ch;
 
-  /* ---- Geometry ---- */
-  --radius-sm: 8px; /* buttons, inputs, selects, small menu items */
-  --radius-md: 12px; /* cards, sheets, larger compound controls */
+  /* ---- Geometry ----
+
+     RADII ARE SMALLER THAN THEY WERE, AND THAT IS THE POINT (desktop §9.2).
+
+     The old scale was 8 / 12 / 16, applied nearly everywhere. Cumulatively that
+     is the single most web-like thing about a set of tokens: a native control is
+     a 5-6px rectangle, a native popover is a ~10px one, and only a large
+     contained media surface goes bigger. Rounding everything to 8 makes a
+     toolbar of small buttons read as a row of pills.
+
+     The rule now, and it is a rule about WHAT a thing is rather than how big:
+       --radius-sm   small controls — buttons, inputs, selects, menu rows
+       --radius-md   floating surfaces — popovers, dialogs, sheets
+       --radius-lg   contained media — stage previews, large visual areas
+       --radius-pill genuinely capsular things — status chips, switch tracks
+     Permanent panes (sidebars, inspectors, toolbars, status bars) get NO radius
+     at all; they meet at straight dividers. */
+  --radius-sm: 6px; /* buttons, inputs, selects, small menu items */
+  --radius-md: 10px; /* popovers, dialogs, sheets */
   --radius-lg: 16px; /* stage previews, large visual areas */
   --radius-pill: 999px; /* status capsules, toggles */
 
   --titlebar-h: 48px;
-  --toolbar-h: 56px; /* per-screen page header */
-  --panel-header-h: 36px;
+
+  /* ---- Desktop chrome bands (desktop §8.1) ----
+
+     A workspace toolbar is 44px and a status bar is 24px, and neither changes
+     height for any reason. That constancy is doing real work: the editor's save
+     state, the Live console's fault chips and the Library's result count all
+     appear and disappear, and a band that resized when they did would shove the
+     document under the cursor mid-sentence. Anything that cannot fit goes to
+     overflow rather than to a second line. */
+  --toolbar-h: 44px; /* the primary workspace toolbar */
+  --toolbar-h-secondary: 36px; /* the editor's formatting row */
+  --statusbar-h: 24px;
+  --panel-header-h: 32px;
+
   --row-h: 40px;
+  /* Source-list rows (sidebar, settings index): a desktop source list is
+     denser than a nav menu but never below a 30px pointer target. */
+  --source-row-h: 30px;
+  /* Collection rows (Library): comfortable by default, with a compact density
+     for people whose libraries have outgrown scrolling. */
+  --list-row-h: 52px;
+  --list-row-h-compact: 38px;
+
   --sidebar-w: 224px;
   --rail-w: 0px;
-  --statusbar-h: 0px;
-  --control-h: 40px; /* standard form control height */
-  --control-h-sm: 32px;
-  --control-h-lg: 42px; /* legacy — superseded by --button-h / --transport-control-h */
 
-  /* Explicit control geometry (refinement §4) — four sizes only: form controls
-     40px (--control-h), buttons 36px, compact icon controls 32px, live
-     transport 44px. Adjoining controls share a height so they read as related. */
-  --button-h: 36px;
+  /* ---- Pane dividers (desktop §21.1) ----
+
+     One pixel of line, ten pixels of grab. A one-pixel drag target is a target
+     nobody hits; a ten-pixel visible divider is a gutter. The two numbers are
+     separate tokens because they describe different things — what you see and
+     what you can reach — and a future change to one must not silently move the
+     other. */
+  --divider-w: 1px;
+  --divider-hit: 10px;
+
+  /* ---- Control geometry (desktop §9.1) ----
+
+     Four heights, and adjoining controls share one so they read as a group:
+
+       32px  form controls, buttons, icon buttons — the workspace default
+       36px  the hero action (Present) and multiline inputs
+       44px  live transport, which is operated at arm's length from a camera
+       28px  borderless toolbar buttons, which have the toolbar's own padding
+
+     These came down from 40/36/32. Web control proportions are comfortable and
+     cumulatively wrong for a tool: at 40px a settings section of eight rows is
+     a scroll, and at 32px it is a page. What did NOT come down is the transport
+     — §31.3's rule is that density belongs to lists, toolbars, settings rows and
+     inspectors, and never to the controls somebody reaches for mid-take. */
+  --control-h: 32px; /* standard form control height */
+  --control-h-sm: 28px;
+  --control-h-lg: 36px; /* hero action, multiline inputs */
+  --button-h: 32px;
   --icon-control-h: 32px;
+  --toolbar-control-h: 28px;
   --transport-control-h: 44px;
 
-  /* Sticky-header offsets (refinement §6) — the page header is taller than
-     --page-y, so sticky columns must clear the real header height. */
-  --header-back-h: 103px; /* back control + title */
-  --header-back-meta-h: 123px; /* back control + title + metadata */
+  /* Shared horizontal page inset — one rhythm across toolbars, page bodies,
+     steppers, editor/review content, and bottom action bars.
 
-  /* Shared horizontal page inset — one rhythm across headers, page bodies,
-     steppers, editor/review content, and bottom action bars. */
-  --page-x: var(--space-8); /* 32px */
-  --page-y: var(--space-7); /* 28px */
+     Tightened from 32px: §9.1 asks for 16-24 in dense working routes, and the
+     32px inset is what made every screen read as a web page's content column
+     rather than as a pane. `--page-x-wide` survives for the surfaces that are
+     genuinely reading material — the rendered preview, onboarding prose — where
+     breathing room is the feature rather than the decoration. */
+  --page-x: var(--space-5); /* 20px */
+  --page-x-wide: var(--space-8); /* 32px */
+  --page-y: var(--space-5); /* 20px */
 
   /* ---- Motion: three durations, two curves ----
      Enough to feel responsive; never decorative. Honor the reduced-motion
@@ -171,6 +230,36 @@
   --bg-hover-surface: #242932; /* rows/cards on panels */
   --accent-wash: rgba(224, 138, 99, 0.08); /* selected radio/index wash */
   --bg-selected: rgba(224, 138, 99, 0.16);
+
+  /* ---- Desktop surface grammar (desktop §26.1) ----
+
+     One token family per SEMANTIC surface, so a route cannot invent a
+     background to solve a local contrast problem. `--bg-toolbar` reads as part
+     of the window's chrome; `--bg-statusbar` sits a shade under it so the
+     bottom band is legible as a band without a second border.
+
+     `--bg-row-selected` and `--bg-row-selected-inactive` are separate on
+     purpose: §23.3 asks for selected-but-unfocused to be distinguishable from
+     selected-and-focused, because a list that looks identical either way tells
+     a keyboard user nothing about where their next keystroke will land. */
+  --bg-toolbar: #14171d;
+  --bg-statusbar: #12151a;
+  --bg-row-selected: rgba(224, 138, 99, 0.18);
+  /*
+   * #252a32, not the #262b33 this started as.
+   *
+   * A selected row carries `--text-faint` in its metadata columns, and one step
+   * brighter than this the pair lands at 4.49:1 — a miss by a hundredth, which
+   * `design-system-tokens.test.ts` caught. Darkening the fill rather than
+   * darkening the text keeps the three low-emphasis greys in the order the
+   * workspace block argues for at length.
+   */
+  --bg-row-selected-inactive: #252a32;
+  /* The line between permanent panes. Quieter than --border, because a pane
+     divider runs the full height of the window and a decorative-weight rule
+     there reads as a frame around the content. */
+  --divider: #262b33;
+  --divider-hover: #3b424e;
 
   /* Text. The two low-emphasis steps are pinned by the surface they can
      actually land on: --bg-hover-surface (#242932) is the brightest thing
@@ -273,6 +362,17 @@
   --bg-hover-chrome: #e8e3db; /* sidebar, nav, toolbar, breadcrumb/back controls */
   --bg-hover-surface: #f7f4ef; /* rows & cards on white panels */
   --bg-selected: rgba(183, 94, 59, 0.1);
+
+  /* Desktop surface grammar — see the studio block for what each one is for. */
+  --bg-toolbar: #f1ede7;
+  --bg-statusbar: #ece8e1;
+  --bg-row-selected: rgba(183, 94, 59, 0.14);
+  /* Lightened from #e4dfd7 for the same reason the studio value was darkened:
+     --text-faint sat at 4.40:1 on it. Still clearly a step down from the white
+     panel a Library row sits on, and from the #f7f4ef hover. */
+  --bg-row-selected-inactive: #e8e3db;
+  --divider: #e2ded6;
+  --divider-hover: #c7c1b6;
 
   --text-primary: #18191d;
   --text-secondary: #5d626c;
@@ -440,7 +540,8 @@ html[data-presenting='true'] body {
 
      data-focus="control"   small control — wears the accent ring
      data-focus="surface"   non-native focusable surface (a div with a role)
-     data-focus="delegate"  focus is drawn by an ancestor (see ScriptCard)
+     data-focus="delegate"  focus is drawn by an ancestor (a row whose body is
+                            the focusable thing, with controls inside it)
 
    Both treatments stay `outline` (never box-shadow) so panel overflow cannot
    clip them and no dimension changes. The quiet edge is inset (a negative
@@ -546,32 +647,54 @@ input[type='range']:active::-webkit-slider-thumb {
   background: var(--accent-strong);
 }
 
-/* Thin chrome scrollbars. */
-::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
+/* ============================================================================
+   SCROLLBARS — the workspace gets the platform's, the studio gets ours.
+
+   This used to be one global rule that restyled every scrollbar in the app to
+   an 11px always-visible bar. On macOS that is not a style choice, it is an
+   override of a SYSTEM PREFERENCE: WKWebView honours "show scroll bars
+   automatically / when scrolling / always" until a page defines
+   `::-webkit-scrollbar`, at which point the overlay behaviour is gone and every
+   pane grows a permanent 11px gutter. Beside the one-pixel pane dividers this
+   refinement introduces, that gutter is also the widest vertical line on screen
+   — competing with the dividers it sits next to (§9.5).
+
+   So the workspace theme declares nothing and inherits the platform's. The
+   studio theme and the stage keep a custom bar, because there the requirement
+   genuinely is visual control: a bright system scrollbar on the black glass is
+   exactly the kind of thing that ends up in shot.
+   ============================================================================ */
+:root:not([data-theme='workspace']) ::-webkit-scrollbar,
+[data-theme='studio'] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
-::-webkit-scrollbar-track {
+:root:not([data-theme='workspace']) ::-webkit-scrollbar-track,
+[data-theme='studio'] ::-webkit-scrollbar-track {
   background: transparent;
 }
-::-webkit-scrollbar-thumb {
+:root:not([data-theme='workspace']) ::-webkit-scrollbar-thumb,
+[data-theme='studio'] ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 8px;
 }
-::-webkit-scrollbar-thumb:hover {
+:root:not([data-theme='workspace']) ::-webkit-scrollbar-thumb:hover,
+[data-theme='studio'] ::-webkit-scrollbar-thumb:hover {
   background: var(--text-faint);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 /* A distinct grab step while actively dragging the bar. */
-::-webkit-scrollbar-thumb:active {
+:root:not([data-theme='workspace']) ::-webkit-scrollbar-thumb:active,
+[data-theme='studio'] ::-webkit-scrollbar-thumb:active {
   background: var(--text-secondary);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-corner {
+:root:not([data-theme='workspace']) ::-webkit-scrollbar-corner,
+[data-theme='studio'] ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
