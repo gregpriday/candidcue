@@ -1,13 +1,16 @@
 /**
  * Per-rig optical profiles, and the store they live in.
  *
- * The optical section has no Rust twin, so the localStorage overlay IS the
- * document for it. That is the arrangement with the quiet failure mode
- * `services/settings.ts` warns about in `mergeSection`: a section left out of
- * the merge does not throw and does not log — the setting simply reverts on
- * every read, and the control that writes it looks live while being inert. It
- * is exactly how the four dead teleprompter controls got there, so the section
- * that replaces them is pinned rather than assumed.
+ * They used to live only in the localStorage overlay, which the 1.0 readiness
+ * review named directly: clearing WebView storage erased every calibrated rig,
+ * the writes swallowed all errors, and the `display_profiles` table that
+ * described itself as the durable backstop had no callers at all. A rig is
+ * user-created data produced by physically measuring a room — the most
+ * expensive thing in this document to lose, and the least reproducible.
+ *
+ * Rust owns them now, in the revisioned settings document, so they are
+ * transactional, survive a cleared browser store, and are included in an
+ * export. What remains local is presentation and per-machine capture state.
  *
  * The service half runs against a fake `ipcInvoke` and a real in-memory
  * localStorage, so both halves of the adapter are genuinely exercised.
@@ -59,8 +62,14 @@ const ipc = vi.hoisted(() => {
   };
   return {
     calls,
+    document,
+    /** Make `update_settings` reject, to test the write ORDER. */
+    failUpdate: false,
     invoke: async (command: string, args?: unknown) => {
       calls.push({ command, args });
+      if (command === 'update_settings' && ipc.failUpdate) {
+        throw new Error('revision conflict');
+      }
       return document;
     },
   };
@@ -100,9 +109,27 @@ function rig(overrides: Partial<OpticalProfile> = {}): OpticalProfile {
 
 const EMPTY: OpticalSettings = { profiles: {}, activeRig: {} };
 
+/**
+ * The `optical` section of the Rust document under test.
+ *
+ * A getter/setter pair rather than a plain object, because the harness's
+ * `invoke` returns the same document instance every call — so a test that
+ * wants Rust to hold rigs has to mutate that instance, not replace it.
+ */
+const rustSettings = {
+  set optical(value: unknown) {
+    if (value === undefined) delete (ipc.document.value as Record<string, unknown>)['optical'];
+    else (ipc.document.value as Record<string, unknown>)['optical'] = value;
+  },
+  get optical(): unknown {
+    return (ipc.document.value as Record<string, unknown>)['optical'];
+  },
+};
+
 beforeEach(() => {
   ipc.calls.length = 0;
   store.clear();
+  rustSettings.optical = undefined;
 });
 
 describe('one panel, several mounting arrangements', () => {
@@ -309,21 +336,89 @@ describe('a stored profile is validated before the resolver walks it', () => {
   });
 });
 
-describe('the overlay is the document for the optical section', () => {
-  it('survives a reload, because nothing else stores it', async () => {
+describe('Rust is the authority for calibrated rigs', () => {
+  /*
+   * The optical section used to live ONLY in the localStorage overlay, and the
+   * tests that used to sit here asserted exactly that — "survives a reload,
+   * because nothing else stores it" and "sends nothing to Rust, which has no
+   * home for it". Both were accurate descriptions of the defect the 1.0
+   * readiness review named: clearing WebView storage erased every calibrated
+   * rig, and a `display_profiles` table that described itself as the durable
+   * backstop had no callers at all.
+   *
+   * A rig is user-created data produced by physically measuring a room. It is
+   * the most expensive thing in this document to lose and the least
+   * reproducible: a presentation mode somebody loses is one menu click, a
+   * viewing distance is a tape measure and a room.
+   */
+  it('sends the rigs to Rust, where clearing the browser store cannot reach them', async () => {
     const optical = withOpticalProfile(EMPTY, 'dsp-1', rig());
     await settings.updateSettings(4, { optical });
 
-    const reloaded = await settings.getSettings();
-    expect(activeOpticalProfile(reloaded.optical, 'dsp-1')).toEqual(rig());
+    const update = ipc.calls.find((c) => c.command === 'update_settings');
+    expect(update, 'a calibration must reach the persisted document').toBeDefined();
+    const patch = (update?.args as { patch?: Record<string, unknown> })?.patch;
+    expect(patch?.['optical']).toMatchObject({
+      profiles: optical.profiles,
+      activeRig: optical.activeRig,
+    });
   });
 
-  it('sends nothing to Rust, which has no home for it', async () => {
+  it('does not keep a copy in the overlay to contradict it later', async () => {
+    /*
+     * A cached copy outliving the document is how a rig somebody deleted comes
+     * back. `following`, `speech` and now `optical` are Rust-owned in both
+     * directions for exactly this reason.
+     */
     await settings.updateSettings(4, { optical: withOpticalProfile(EMPTY, 'dsp-1', rig()) });
-    // Overlay-only patches must not manufacture an empty Rust write, and must
-    // certainly not invent a section the persisted document does not have.
-    const update = ipc.calls.find((c) => c.command === 'update_settings');
-    expect(update).toBeUndefined();
+    const stored = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
+    expect(stored['optical'], 'the overlay must not shadow the document').toBeUndefined();
+  });
+
+  it('reads the rigs back from Rust, not from the overlay', async () => {
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+    // A conflicting overlay copy from before the move must lose.
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ optical: { profiles: {}, activeRig: {} } }),
+    );
+
+    const loaded = await settings.getSettings();
+    expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toEqual(rig());
+  });
+
+  it('writes an overlay-only calibration through to Rust exactly once', async () => {
+    /*
+     * The migration, and the half that is easy to omit. Reading the overlay as
+     * a fallback keeps an upgrading user's rig on screen — and leaves Rust
+     * holding nothing, so the measurement still dies the day the browser store
+     * is cleared. That is the failure the move exists to end, so the read
+     * records what it found and the store writes it through.
+     */
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    rustSettings.optical = undefined;
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } },
+      }),
+    );
+
+    const loaded = await settings.getSettings();
+    expect(
+      activeOpticalProfile(loaded.optical, 'dsp-1'),
+      'the rig must still be usable during the upgrade',
+    ).toEqual(rig());
+    expect(
+      settings.pendingOpticalAdoption(),
+      'and it must be flagged for writing through, not merely read',
+    ).not.toBeNull();
+
+    // Once Rust holds it, there is nothing left to adopt.
+    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+    await settings.getSettings();
+    expect(settings.pendingOpticalAdoption()).toBeNull();
   });
 
   it('drops a stored rig the resolver would refuse, and the choice of it', async () => {
@@ -351,5 +446,48 @@ describe('the overlay is the document for the optical section', () => {
   it('starts uncalibrated rather than guessing at a rig', async () => {
     const loaded = await settings.getSettings();
     expect(loaded.optical).toEqual({ profiles: {}, activeRig: {} });
+  });
+});
+
+describe('the properties the 1.0 readiness review asked for', () => {
+  it('a cleared WebView store does not erase a calibrated rig', async () => {
+    /*
+     * The acceptance criterion, stated as a test. This is what was NOT true:
+     * every measured viewing distance and lens placement lived in
+     * localStorage, so a storage clear — by the OS under pressure, or by a
+     * user clicking something that says "website data" — took the room
+     * measurement with it.
+     */
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+
+    store.clear(); // the whole WebView store, gone
+
+    const loaded = await settings.getSettings();
+    expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toEqual(rig());
+  });
+
+  it('a settings write that Rust rejects leaves nothing behind in the overlay', async () => {
+    /*
+     * The transaction-order defect. `applyOverlayPatch` used to run BEFORE the
+     * Rust update, so a rejected write left the store reverted and the overlay
+     * holding the value anyway — and on a later launch that stale overlay
+     * could override the Rust-owned document. The screen showed a setting that
+     * had failed to save, and kept showing it.
+     */
+    ipc.failUpdate = true;
+    try {
+      await expect(
+        settings.updateSettings(4, { teleprompter: { mirrorX: true } as never }),
+      ).rejects.toThrow();
+
+      const stored = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
+      expect(
+        stored['teleprompter'],
+        'a rejected write must not leave the value in the local overlay',
+      ).toBeUndefined();
+    } finally {
+      ipc.failUpdate = false;
+    }
   });
 });

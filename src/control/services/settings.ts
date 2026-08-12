@@ -96,6 +96,15 @@ interface RustSettings {
   audio: Partial<RustAudioSettings> & { transcriptionModel: string; language: string };
   /** Companion §47 — absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
+  /**
+   * §52 calibrated rigs. Absent in documents written before the section
+   * existed, which is exactly the state the one-time overlay migration below
+   * looks for — see `opticalAwaitingAdoption`.
+   */
+  optical?: {
+    profiles?: Record<string, unknown>;
+    activeRig?: Record<string, unknown>;
+  };
 }
 
 interface RustRevisioned {
@@ -165,13 +174,35 @@ function loadOverlay(): Overlay {
   }
 }
 
+/**
+ * Did the last overlay write fail, and why?
+ *
+ * The write used to be wrapped in a bare `catch {}` with a comment saying the
+ * fields "fall back to defaults next launch" — which is true, and is not
+ * something the user was ever told. A quota-exceeded or disabled-storage error
+ * meant every per-machine preference silently reverted at the next launch, over
+ * and over, with the settings screen reporting success each time.
+ *
+ * What is left in the overlay after the §52 move is presentation and
+ * per-machine capture state, not measured data: the calibrated rigs, the
+ * following profile, the retention consent and the speech selection are all
+ * Rust-owned now. So a failure here is worth SAYING and not worth refusing a
+ * settings change over — the authoritative half already committed by the time
+ * this runs.
+ */
+let lastOverlayFailure: string | null = null;
+
+export function overlayStorageFailure(): string | null {
+  return lastOverlayFailure;
+}
+
 function saveOverlay(overlay: Overlay): void {
+  if (typeof localStorage === 'undefined') return;
   try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlay));
-    }
-  } catch {
-    // Non-fatal; overlay fields fall back to defaults next launch.
+    localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlay));
+    lastOverlayFailure = null;
+  } catch (err) {
+    lastOverlayFailure = err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -192,7 +223,7 @@ function mergeSection<T extends object>(base: T, patch: Partial<T> | undefined):
  * that lists a calibration the resolver would refuse is worse than an empty
  * one: the presenter believes a distance is saved and stops re-measuring it.
  */
-function opticalFromOverlay(
+function opticalFromStored(
   base: OpticalSettings,
   patch: Partial<OpticalSettings> | undefined,
 ): OpticalSettings {
@@ -272,6 +303,19 @@ export function pendingStageModeAdoption(): PresentationMode | null {
 }
 
 /**
+ * Calibrated rigs still living only in the overlay, waiting to reach Rust.
+ *
+ * Exactly the same mechanism as `stageModeAwaitingAdoption`, and it matters
+ * more: a presentation mode somebody loses is one menu click to set again, and
+ * a viewing distance somebody loses is a tape measure and a room.
+ */
+let opticalAwaitingAdoption: OpticalSettings | null = null;
+
+export function pendingOpticalAdoption(): OpticalSettings | null {
+  return opticalAwaitingAdoption;
+}
+
+/**
  * A stored reading-window frame, or null if it is not one.
  *
  * Validated field-by-field rather than cast, which `loadOverlay`'s note argues
@@ -346,6 +390,27 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   stageModeAwaitingAdoption =
     !modeIsPersisted && overlayStatedAMode(overlay.stage) ? resolvedMode : null;
 
+  /*
+   * Calibrated rigs: Rust the moment it has any, the overlay until then.
+   *
+   * The same shape as the presentation-mode migration above, and for the same
+   * reason. Reading the overlay as a fallback is only half a move: somebody
+   * who calibrated a rig last month and has not opened Calibrate since would
+   * leave Rust holding nothing, so the day their WebView store is cleared the
+   * measurement is gone — which is precisely the failure the move is for.
+   *
+   * So the read RECORDS what it found and `loadSettings` writes it through
+   * once. `profiles` is the test rather than `activeRig`: a document can
+   * legitimately have rigs and no active selection, but an active selection
+   * with no rigs is not a calibration anyone made.
+   */
+  const rustHasOptical = Object.keys(rust.optical?.profiles ?? {}).length > 0;
+  const resolvedOptical = rustHasOptical
+    ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
+    : opticalFromStored(defaults.optical, overlay.optical);
+  opticalAwaitingAdoption =
+    !rustHasOptical && Object.keys(resolvedOptical.profiles).length > 0 ? resolvedOptical : null;
+
   return {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
@@ -382,7 +447,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       presentationMode: resolvedMode,
       readerFrame: readerFrameFromRust(rust.stageBehavior.readerFrame),
     },
-    optical: opticalFromOverlay(defaults.optical, overlay.optical),
+    optical: resolvedOptical,
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.
     privacy: {
@@ -461,6 +526,34 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     // decides whether spoken words reach disk could not be changed at all.
     put('general', 'saveTranscript', patch.privacy.saveTranscript);
   }
+  if (patch.optical) {
+    /*
+     * §52 calibrated rigs — the section this file lost hardest.
+     *
+     * It had no Rust mapping at all, so every measured viewing distance and
+     * lens placement lived only in the localStorage overlay: cleared by the
+     * OS under storage pressure, wiped by a "clear website data" action nobody
+     * associates with an app, and written through a `try` that swallowed every
+     * failure. A calibrated rig is user-created data produced by measuring a
+     * physical room, and it is the single most expensive thing in this
+     * document to lose.
+     *
+     * Both maps are sent WHOLE, and Rust REPLACES them rather than merging
+     * (see `REPLACED_MAPS` in settings/mod.rs). `merge_json` recurses into
+     * objects, which is right for a document of named scalars and wrong for a
+     * map whose keys are the data: a rig the user deleted is simply not
+     * mentioned by the patch, so a merge would leave it in place. A
+     * calibration that comes back from the dead is worse than one that was
+     * never saved — the picker offers a measurement of a room the presenter
+     * has left.
+     */
+    if (patch.optical.profiles !== undefined) {
+      (rust.optical ??= {}).profiles = patch.optical.profiles;
+    }
+    if (patch.optical.activeRig !== undefined) {
+      (rust.optical ??= {}).activeRig = patch.optical.activeRig;
+    }
+  }
   return rust;
 }
 
@@ -476,7 +569,11 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'speech') continue;
+    // Rust-owned in both directions. `optical` joined them when calibrated
+    // rigs moved out of the overlay (§52): a cached copy of a measurement
+    // would outlive the document and could contradict it, which is how a rig
+    // somebody deleted comes back.
+    if (key === 'following' || key === 'speech' || key === 'optical') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
@@ -531,22 +628,46 @@ export async function getSettings(): Promise<AppSettings> {
   }
 }
 
+/**
+ * Persist a settings patch.
+ *
+ * ## Rust first, then the overlay
+ *
+ * The order is the fix, and the old order was a real defect. This used to call
+ * `applyOverlayPatch(patch)` FIRST and then send the Rust update. A rejected
+ * write — a revision conflict, a validation failure, a database that had gone
+ * away — left the store reverted and the overlay holding the value anyway, and
+ * on a later launch that stale overlay could override the Rust-owned document
+ * for any field duplicated into an overlaid section. The user's screen showed a
+ * setting that had failed to save, and kept showing it.
+ *
+ * So Rust commits first and the overlay is only written once it has. The
+ * remaining window — Rust committed, the overlay write then failed — leaves the
+ * authoritative half correct and the local presentation half stale until the
+ * next successful write, which is the right way round for the two to disagree.
+ */
 export async function updateSettings(
   expectedRevision: number,
   patch: Partial<AppSettings>,
 ): Promise<AppSettings> {
   if (!isTauriRuntime()) return mockSettings.update(expectedRevision, patch);
 
-  applyOverlayPatch(patch);
   const rustPatch = toRustPatch(patch);
   if (Object.keys(rustPatch).length === 0) {
-    // Overlay-only change: nothing to persist in Rust.
+    // Nothing Rust owns changed, so there is no authoritative write to wait
+    // for. The overlay IS the document for these fields.
+    applyOverlayPatch(patch);
     return getSettings();
   }
+
   const revisioned = await ipcInvoke<RustRevisioned>('update_settings', {
     expectedRevision,
     patch: rustPatch,
   });
+
+  // Only now. A throw above leaves the overlay untouched, which is what makes
+  // a failed save actually fail.
+  applyOverlayPatch(patch);
 
   return fromRust(revisioned);
 }

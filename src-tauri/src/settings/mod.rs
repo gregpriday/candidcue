@@ -20,6 +20,9 @@ pub struct AppSettings {
     pub stage_behavior: StageBehaviorSettings,
     pub audio: AudioSettings,
     pub following: FollowingSettings,
+    /// Calibrated teleprompter rigs (§52). See [`OpticalSettings`].
+    #[serde(default)]
+    pub optical: OpticalSettings,
 }
 
 impl Default for AppSettings {
@@ -31,8 +34,47 @@ impl Default for AppSettings {
             stage_behavior: StageBehaviorSettings::default(),
             audio: AudioSettings::default(),
             following: FollowingSettings::default(),
+            optical: OpticalSettings::default(),
         }
     }
+}
+
+/// Calibrated teleprompter rigs, and which one is in force on each panel.
+///
+/// ## Why this is here and not in localStorage
+///
+/// It was in localStorage — the whole optical section was, including every
+/// measured viewing distance and lens placement. That is user-created data
+/// produced by physically measuring a room, and WebView storage is not a place
+/// to keep it: it is cleared by the OS under pressure, wiped by a "clear
+/// website data" action the user does not associate with an app, quota-limited,
+/// and — since the writes were wrapped in a `try` that swallowed everything —
+/// capable of failing silently. The 1.0 readiness review called this out
+/// directly: clearing WebView storage erased calibrated rigs, and a
+/// `display_profiles` SQLite table that described itself as the durable
+/// backstop had no callers at all.
+///
+/// It lives in the settings document rather than in that table because the
+/// document already has every property this needs and the table has none of
+/// them: it is revisioned with optimistic concurrency, written
+/// transactionally, and included in an export. A second store would have been a
+/// second authority, which is the defect being fixed rather than a fix for it.
+///
+/// ## Why the values are opaque JSON
+///
+/// Rust does not interpret a rig. The frontend's `normalizeOpticalProfile` is
+/// the validator — it knows the field ranges, the framing presets and the lens
+/// placements, and it DROPS a rig that no longer normalises rather than
+/// repairing it, because a picker offering a calibration the resolver would
+/// refuse is worse than an empty one. Restating those rules here would create
+/// two definitions of a valid rig that nothing forces to agree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OpticalSettings {
+    /// `opticalRigKey(displayFingerprint, rigName)` → the rig document.
+    pub profiles: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Display fingerprint → the name of the rig in force on that panel.
+    pub active_rig: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -394,6 +436,37 @@ pub fn selected_model(settings: &AppSettings) -> &'static crate::speech::Bundled
 }
 
 /// Recursive JSON merge: objects merge key-by-key, everything else replaces.
+/// Sections whose maps a patch REPLACES rather than merges into.
+///
+/// `merge_json` recurses into objects, which is right for a settings document
+/// made of named scalars: a patch mentions the two fields it changes and says
+/// nothing about the other forty.
+///
+/// It is wrong for a map whose KEYS are the data. `optical.profiles` is keyed
+/// by rig, so a merge can only ever add or update one — a rig the user deleted
+/// is simply not mentioned by the patch, and therefore survives. Deleting a rig
+/// is precisely what the delete button is for, and a calibration that comes
+/// back from the dead is worse than one that was never saved: the picker offers
+/// a measurement of a room the presenter has left.
+///
+/// So these paths are emptied before the merge runs, which makes the patch's
+/// value the whole value. Named explicitly rather than inferred from shape,
+/// because "this object is a map" is not something a JSON document says.
+const REPLACED_MAPS: [(&str, &str); 2] = [("optical", "profiles"), ("optical", "activeRig")];
+
+fn clear_replaced_maps(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    for (section, key) in REPLACED_MAPS {
+        // Only when the patch actually carries a new value for it. A patch that
+        // says nothing about rigs must not delete them.
+        if patch.get(section).and_then(|s| s.get(key)).is_none() {
+            continue;
+        }
+        if let Some(existing) = base.get_mut(section).and_then(|s| s.get_mut(key)) {
+            *existing = serde_json::json!({});
+        }
+    }
+}
+
 fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     match (base, patch) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
@@ -571,6 +644,7 @@ pub async fn update_settings(
 
     let mut base = serde_json::to_value(&current.value)
         .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
+    clear_replaced_maps(&mut base, &patch);
     merge_json(&mut base, &patch);
     let merged: AppSettings = serde_json::from_value(base)
         .map_err(|e| AppError::invalid_input("Settings patch has an invalid shape.")
