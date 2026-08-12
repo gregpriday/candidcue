@@ -188,9 +188,33 @@ export const CONTROL_EVENT = {
   scriptExternalChange: 'script://external-change',
   deviceOrDisplayChange: 'app://device-or-display-change',
   diagnosticWarning: 'diagnostic://warning',
+  /**
+   * Rust → control: the window is closing, or the application is quitting.
+   *
+   * The frontend has one bounded chance to flush a debounced save, finish the
+   * take, persist the reader frame and stop audio, then answer with
+   * `app://shutdown-complete`. Rust waits, and proceeds regardless once the
+   * deadline passes — a WebView that cannot answer must not be able to stop a
+   * user quitting.
+   *
+   * Before this existed, closing the window or pressing ⌘Q went straight to
+   * process exit: a save still inside its debounce window was simply lost, and
+   * the session row stayed open until the next launch swept it.
+   */
+  shutdownRequested: 'app://shutdown-requested',
 } as const;
 
 export type ControlEventName = (typeof CONTROL_EVENT)[keyof typeof CONTROL_EVENT];
+
+/**
+ * Control → Rust: the shutdown sequence has finished (or given up).
+ *
+ * A distinct name from `shutdownRequested`, and that is not stylistic. Tauri
+ * fans a webview emit out to every webview's listeners regardless of target,
+ * so an event control emits must never share a name with one control listens
+ * for — the same reason `escapePressed`/`motionReport` exist as separate names.
+ */
+export const SHUTDOWN_COMPLETE_EVENT = 'app://shutdown-complete';
 
 /* ---------------------------------------------------------------------------
  * Inbound payloads (control/Rust → stage)

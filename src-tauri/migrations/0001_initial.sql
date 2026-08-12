@@ -1,34 +1,55 @@
--- CandidCue initial schema (spec Appendix B).
--- Timestamps are UTC RFC 3339 strings; convert to local time only in UI.
+-- CandidCue 1.0 baseline schema.
+--
+-- This is a SQUASH. It replaces the original `0001_initial.sql` (which was
+-- written against the full spec, including features that were later removed)
+-- and `0002_session_takes.sql`. CandidCue has never been publicly released, so
+-- before the first stable version is the cheapest — and last — moment to decide
+-- which tables are real product contracts. After 1.0 ships, every one of them
+-- needs a compatibility migration forever.
+--
+-- What was dropped, and why:
+--
+--   app_meta            no reader and no writer. A key/value side table with
+--                       no keys.
+--   tracking_profiles   named tracking presets. The product settled on one
+--                       following configuration in Settings; nothing ever
+--                       wrote a row.
+--   dictionary_entries  the pronunciation dictionary of the OpenAI-era
+--                       pipeline. Speech-to-script matching is now the
+--                       deterministic engine in crates/cc-align, which
+--                       normalises rather than looking terms up.
+--   script_analyses     cached results from the semantic sidecar. There is no
+--                       sidecar and no second model.
+--   listener_packs      the Listener (§106), removed.
+--   scripts.selected_listener_pack_id, scripts.listener_overrides_json
+--                       ditto.
+--   scripts.selected_tracking_profile_id
+--                       the foreign key into tracking_profiles.
+--   display_profiles.listener_geometry_json
+--                       ditto.
+--   sessions.estimated_cost_usd
+--                       per-take API spend. Transcription runs on this
+--                       machine; a take costs nothing, and a column that can
+--                       only ever hold 0 invites a UI to display it.
+--
+-- Timestamps are UTC RFC 3339 strings; convert to local time only in the UI.
 -- JSON columns are validated in Rust before insert/update.
 
-CREATE TABLE app_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
+-- Per-display stage configuration. Kept and load-bearing: this is where
+-- optical calibration lives durably, rather than in WebView localStorage.
 CREATE TABLE display_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     display_fingerprint TEXT,
     display_descriptor_json TEXT,
     stage_settings_json TEXT NOT NULL,
-    listener_geometry_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE tracking_profiles (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    profile_version INTEGER NOT NULL,
-    built_in INTEGER NOT NULL DEFAULT 0,
-    settings_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
+-- The database INDEXES scripts; the canonical Markdown file on disk is the
+-- authority for their content (§48.1). Startup reconciliation repairs this
+-- table from those files, which is what makes it rebuildable.
 CREATE TABLE scripts (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -44,17 +65,12 @@ CREATE TABLE scripts (
     last_compile_hash TEXT,
     last_compile_version TEXT,
     selected_display_profile_id TEXT,
-    selected_tracking_profile_id TEXT,
-    selected_listener_pack_id TEXT,
-    listener_overrides_json TEXT,
     script_settings_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_opened_at TEXT,
     trashed_at TEXT,
     FOREIGN KEY (selected_display_profile_id) REFERENCES display_profiles(id)
-        ON DELETE SET NULL,
-    FOREIGN KEY (selected_tracking_profile_id) REFERENCES tracking_profiles(id)
         ON DELETE SET NULL
 );
 
@@ -116,56 +132,7 @@ CREATE TABLE script_asset_references (
     FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT
 );
 
-CREATE TABLE dictionary_entries (
-    id TEXT PRIMARY KEY,
-    script_id TEXT,
-    written_term TEXT NOT NULL,
-    canonical_spoken TEXT NOT NULL,
-    aliases_json TEXT NOT NULL DEFAULT '[]',
-    category TEXT,
-    source TEXT NOT NULL DEFAULT 'user'
-        CHECK (source IN ('user', 'directive', 'generated')),
-    approved INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(script_id, written_term COLLATE NOCASE),
-    FOREIGN KEY (script_id) REFERENCES scripts(id) ON DELETE CASCADE
-);
-
-CREATE INDEX idx_dictionary_global
-    ON dictionary_entries(script_id, written_term COLLATE NOCASE);
-
-CREATE TABLE script_analyses (
-    id TEXT PRIMARY KEY,
-    script_id TEXT NOT NULL,
-    source_hash TEXT NOT NULL,
-    analyzer_version TEXT NOT NULL,
-    model TEXT,
-    prompt_schema_version TEXT,
-    dictionary_version TEXT,
-    language TEXT NOT NULL,
-    result_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(script_id, source_hash, analyzer_version,
-           model, prompt_schema_version, dictionary_version, language),
-    FOREIGN KEY (script_id) REFERENCES scripts(id) ON DELETE CASCADE
-);
-
-CREATE TABLE listener_packs (
-    pack_id TEXT NOT NULL,
-    version TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    manifest_rel_path TEXT NOT NULL,
-    selected_variant TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL,
-    state TEXT NOT NULL
-        CHECK (state IN ('installing', 'installed', 'failed', 'rollback')),
-    last_verified_at TEXT,
-    installed_at TEXT NOT NULL,
-    last_used_at TEXT,
-    PRIMARY KEY (pack_id, version)
-);
-
+-- One revisioned row keyed 'app' holding the whole settings document (§48.2).
 CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL,
@@ -189,7 +156,6 @@ CREATE TABLE sessions (
     retake_count INTEGER NOT NULL DEFAULT 0,
     reconnect_count INTEGER NOT NULL DEFAULT 0,
     manual_correction_count INTEGER NOT NULL DEFAULT 0,
-    estimated_cost_usd REAL,
     metrics_json TEXT,
     transcript_retained INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -215,3 +181,49 @@ CREATE TABLE session_transcript_items (
     UNIQUE(session_id, commit_sequence),
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
+
+-- §36.3 take history: the per-take detail that sits on top of the §36.1
+-- session record.
+--
+-- `sessions` is one row per SESSION with scalar counters, and `retake_count`
+-- plus a `sectionsReached` number inside `metrics_json` were the whole of what
+-- survived a take. That is enough to say "you did four takes" and nothing else:
+-- not when each one ran, not where it started or stopped, not which sections it
+-- covered, and not where the presenter marked a checkpoint.
+--
+-- Checkpoints and sections are JSON columns rather than child tables on
+-- purpose. They are written once, whole, at the end of a take and read back
+-- whole by the review screen; nothing queries inside them, and two more tables
+-- with two more foreign keys would buy a join nobody needs.
+CREATE TABLE session_takes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    -- `${sessionId}:${passOrdinal}` — the take-pass identity.
+    take_pass_id TEXT NOT NULL,
+    -- 1-based, ascending. A retake opens the next ordinal; it never rewrites
+    -- the previous one, which is what UNIQUE below enforces at the storage
+    -- layer rather than trusting the caller.
+    pass_ordinal INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_ms INTEGER,
+    start_token_index INTEGER NOT NULL DEFAULT 0,
+    end_token_index INTEGER,
+    -- JSON array of authored block ids, in the order they were first reached.
+    sections_json TEXT NOT NULL DEFAULT '[]',
+    -- JSON array of { atMs, tokenIndex, blockId, sentenceId, kind }.
+    checkpoints_json TEXT NOT NULL DEFAULT '[]',
+    -- §36.3 distinguishes AUTOMATIC retake transitions (the aligner decided the
+    -- presenter went back and re-read) from MANUAL ones (the operator pressed
+    -- restart, which is what opens the next ordinal). Only the automatic ones
+    -- need counting here; every manual retake is a row of its own.
+    automatic_retakes INTEGER NOT NULL DEFAULT 0,
+    -- §36.3 confidence summary: the mean alignment confidence across the pass.
+    -- NULL when the take produced no snapshots at all, never a confident 0.
+    confidence_mean REAL,
+    created_at TEXT NOT NULL,
+    UNIQUE(session_id, pass_ordinal),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_session_takes_session ON session_takes(session_id, pass_ordinal);

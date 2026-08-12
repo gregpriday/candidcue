@@ -726,6 +726,54 @@ export interface ClearResult {
   clearedBytes: number;
 }
 
+/**
+ * The result of "Export all data", with the field the old shape lacked.
+ *
+ * `complete` is not decoration. The previous adapter returned `{ path,
+ * cancelled }` and dropped the warnings, so a failed database snapshot was
+ * invisible and Settings announced "Export ready" over a folder that could
+ * contain no database at all. Rust decides completeness — it is the only place
+ * that knows whether every section was written and checksummed — and every
+ * caller has to read it to say anything.
+ */
+export interface DataExportResult {
+  cancelled: boolean;
+  path?: string;
+  /** False when any section failed. The folder is then named `-INCOMPLETE`. */
+  complete?: boolean;
+  scriptsCopied?: number;
+  fileCount?: number;
+  totalBytes?: number;
+  warnings?: string[];
+  /** What the export deliberately leaves out — model files, logs. */
+  excluded?: string[];
+}
+
+/**
+ * The result of SCHEDULING a restore. Nothing has been restored yet.
+ *
+ * Restoring is two-phase on purpose. The database pool is open on the file a
+ * restore replaces, and swapping it underneath does not do what it looks like:
+ * on Unix the existing connections keep writing to the renamed inode, and
+ * SQLite recreates its journal beside the file that replaced it. So Rust
+ * validates the export here — manifest, every checksum, no path escaping the
+ * folder, no symlinks — and applies it at the next launch, before any pool
+ * exists.
+ *
+ * `restartRequired` is therefore always true, and the UI has to say so:
+ * without it, a successful schedule looks exactly like nothing happening.
+ */
+export interface RestoreResult {
+  cancelled: boolean;
+  /** How many scripts the export contains — what WILL be restored. */
+  scriptsInExport?: number;
+  /** When the export being restored was taken. */
+  createdAt?: string;
+  /** The CandidCue version that wrote it. */
+  appVersion?: string;
+  restartRequired?: boolean;
+}
+
 /*
  * `UpdateCheckResult` used to be declared here.
  *

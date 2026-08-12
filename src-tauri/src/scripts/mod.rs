@@ -278,8 +278,12 @@ pub struct ScriptDocument {
     pub settings: ScriptSettings,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_display_profile_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_tracking_profile_id: Option<String>,
+    /*
+     * No `selected_tracking_profile_id`. `tracking_profiles` was dropped in
+     * the 1.0 schema baseline: named tracking presets never shipped, nothing
+     * ever wrote a row, and the product settled on one following
+     * configuration in Settings.
+     */
     /// True when the canonical file changed outside CandidCue and the file
     /// content (authority, spec §48.1) was adopted during this read.
     pub externally_changed: bool,
@@ -350,8 +354,6 @@ pub struct ScriptMetadataPatch {
     pub settings: Option<ScriptSettings>,
     #[serde(default, with = "double_option")]
     pub selected_display_profile_id: Option<Option<String>>,
-    #[serde(default, with = "double_option")]
-    pub selected_tracking_profile_id: Option<Option<String>>,
     /// Force a revision snapshot with this reason (e.g. `pre_session`,
     /// `before_destructive_edit`); otherwise the 5-minute policy applies.
     pub revision_reason: Option<String>,

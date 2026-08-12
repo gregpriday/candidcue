@@ -14,12 +14,15 @@ use crate::sessions::{
 
 #[tauri::command]
 pub async fn start_session(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     coordinator: State<'_, AppCoordinator>,
     input: StartSessionInput,
 ) -> Result<SessionRecord, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&input.script_id)?;
 
     // Transcript retention is gated by settings (spec §36.2) and fixed at
@@ -44,11 +47,14 @@ pub async fn start_session(
 
 #[tauri::command]
 pub async fn end_session(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     coordinator: State<'_, AppCoordinator>,
     session_id: String,
     summary: Option<EndSessionSummary>,
 ) -> Result<SessionRecord, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let record =
         sessions::end_session(db.pool(), &session_id, summary.unwrap_or_default()).await?;
     coordinator.end_session(&session_id);
@@ -57,10 +63,13 @@ pub async fn end_session(
 
 #[tauri::command]
 pub async fn append_session_transcript(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     session_id: String,
     items: Vec<TranscriptItemInput>,
 ) -> Result<u32, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     sessions::append_transcript_items(db.pool(), &session_id, items).await
 }
 
@@ -69,10 +78,13 @@ pub async fn append_session_transcript(
 /// different take.
 #[tauri::command]
 pub async fn record_session_take(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     session_id: String,
     take: SessionTakeInput,
 ) -> Result<SessionTakeRecord, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     sessions::record_take(db.pool(), &session_id, take).await
 }
 

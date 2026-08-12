@@ -17,6 +17,8 @@ pub use assets_cmds::*;
 pub use speech_cmds::*;
 pub use scripts_cmds::*;
 pub use sessions_cmds::*;
+pub mod recovery_cmds;
+pub use recovery_cmds::*;
 pub use settings_cmds::*;
 pub use stage_cmds::*;
 

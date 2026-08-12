@@ -1389,13 +1389,55 @@
     }
   }
 
+  /**
+   * Export, and say what actually happened.
+   *
+   * This used to be `result.cancelled ? null : 'Export ready'` — a success
+   * toast for any result that was not a cancelled picker. The adapter beneath
+   * it discarded Rust's warnings, so a failed database snapshot produced the
+   * word "ready" over a folder that could contain no database at all.
+   *
+   * `runMaintenance` only knows how to show a success toast, so an incomplete
+   * export cannot go through it: it is a `danger` toast, and the sentence comes
+   * from `describeExport`, which is pure and tested.
+   */
   async function runExportAllData(): Promise<void> {
-    await runMaintenance(
-      () => settingsService.exportAllData(),
-      // Rust runs the folder picker; a cancelled picker is not a failure and
-      // is not worth a toast.
-      (result) => (result.cancelled ? null : 'Export ready'),
-    );
+    try {
+      const result = await settingsService.exportAllData();
+      // A cancelled picker is not a failure and is not worth a toast.
+      if (result.cancelled) return;
+      const message = settingsService.describeExport(result);
+      if (message) showToast(message, result.complete ? 'success' : 'danger');
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
+  }
+
+  /**
+   * Restore from an export folder.
+   *
+   * Rust validates the manifest and every checksum and then SCHEDULES the
+   * restore; the swap happens at the next launch, before any database pool
+   * exists. Swapping the file underneath the running pool is not something a
+   * filesystem lets you do meaningfully.
+   *
+   * So the toast says "quit and reopen", and says that nothing has changed
+   * yet — otherwise a successful schedule reads as a completed restore, and
+   * the user closes the app believing the work is already done.
+   */
+  async function runRestoreAllData(): Promise<void> {
+    try {
+      const result = await settingsService.restoreAllData();
+      if (result.cancelled) return;
+      showToast(
+        `Ready to restore ${result.scriptsInExport} scripts from the export taken on ` +
+          `${result.createdAt?.slice(0, 10) ?? 'an earlier date'}. ` +
+          `Quit and reopen CandidCue to apply it — nothing has changed yet.`,
+        'success',
+      );
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
   }
 
   /*
@@ -2604,8 +2646,18 @@
           </div>
 
           <div class="row-actions">
+            <!--
+              "Export all scripts" was the honest name for what this used to
+              do. It exports everything now — the database, the whole canonical
+              scripts tree, and the settings and calibrations that used to be
+              left out entirely — with a manifest and a checksum per file, so
+              it can be restored rather than only looked at.
+            -->
             <Button onclick={() => void runExportAllData()}>
-              Export all scripts
+              Export all data
+            </Button>
+            <Button variant="ghost" onclick={() => void runRestoreAllData()}>
+              Restore from export…
             </Button>
             <Button
               variant="ghost"

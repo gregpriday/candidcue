@@ -51,7 +51,11 @@ export interface SessionRecord {
   retakeCount: number;
   reconnectCount: number;
   manualCorrectionCount: number;
-  estimatedCostUsd?: number;
+  /*
+   * No `estimatedCostUsd`. It was per-take API spend from the hosted
+   * transcription era; the column went with the 1.0 schema baseline.
+   * Transcription runs on this machine, so a take costs nothing.
+   */
   /** False when `general.saveTranscript` is 'off' — fixed at session start. */
   transcriptRetained: boolean;
 }
@@ -64,7 +68,6 @@ export interface EndSessionSummaryInput {
   retakeCount?: number;
   reconnectCount?: number;
   manualCorrectionCount?: number;
-  estimatedCostUsd?: number;
   metrics?: Record<string, unknown>;
 }
 

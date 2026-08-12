@@ -34,10 +34,13 @@ pub async fn list_scripts(
 
 #[tauri::command]
 pub async fn create_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     input: CreateScriptInput,
 ) -> Result<ScriptSummary, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     repo::create_script(db.pool(), &paths, input).await
 }
 
@@ -67,6 +70,7 @@ pub async fn get_script<R: Runtime>(
 
 #[tauri::command]
 pub async fn save_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
@@ -75,6 +79,8 @@ pub async fn save_script(
     source: String,
     metadata_patch: Option<ScriptMetadataPatch>,
 ) -> Result<SaveResult, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::save_script(
         db.pool(),
@@ -90,56 +96,71 @@ pub async fn save_script(
 
 #[tauri::command]
 pub async fn rename_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
     title: String,
     expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::rename_script(db.pool(), &locks, &script_id, &title, expected_revision).await
 }
 
 #[tauri::command]
 pub async fn duplicate_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<ScriptSummary, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::duplicate_script(db.pool(), &paths, &locks, &script_id).await
 }
 
 #[tauri::command]
 pub async fn trash_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
     expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::trash_script(db.pool(), &locks, &script_id, expected_revision).await
 }
 
 #[tauri::command]
 pub async fn restore_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
     expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::restore_script(db.pool(), &locks, &script_id, expected_revision).await
 }
 
 #[tauri::command]
 pub async fn permanently_delete_script(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<(), AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::permanently_delete_script(db.pool(), &paths, &locks, &script_id).await
 }
@@ -166,6 +187,7 @@ pub async fn get_revision(
 
 #[tauri::command]
 pub async fn restore_revision(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
@@ -173,6 +195,8 @@ pub async fn restore_revision(
     revision_id: String,
     expected_revision: i64,
 ) -> Result<SaveResult, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     repo::restore_revision(
         db.pool(),
@@ -195,12 +219,15 @@ pub async fn restore_revision(
 /// `get_script`. `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn import_script<R: Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     request: Option<ImportRequest>,
 ) -> Result<Option<ImportResult>, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let Some(path) = crate::dialogs::pick_script_to_import(&app).await? else {
         return Ok(None);
     };

@@ -17,10 +17,61 @@ pub fn run() {
     // an `AppHandle` which does not exist until the builder does. See
     // `diagnostics::logging::init`.
     tauri::Builder::default()
+        /*
+         * One instance, and it must be FIRST.
+         *
+         * The plugin works by having the second process hand its arguments to
+         * the first and exit. That handover happens during plugin
+         * initialisation, so every plugin registered before this one would run
+         * in the doomed process — and `setup` below is where the database pool
+         * opens, interrupted model installs are recovered, and startup
+         * reconciliation rewrites script files. None of that is designed as a
+         * multi-process transaction.
+         *
+         * SQLite can coordinate two writers. The things around it cannot: the
+         * canonical Markdown tree, `model_store`'s staging/backup/commit
+         * sequence, the deterministic partial-download paths, and
+         * reconciliation's repair pass are all guarded by in-memory locks
+         * (`ScriptLocks`, the model-operation mutex) that a second process
+         * simply does not participate in. `model_store`'s own comments already
+         * account for "another process may be doing this" and cannot actually
+         * defend against it.
+         *
+         * The callback runs in the SURVIVING process, so the right thing to do
+         * with a second launch is to show the window the user was really
+         * asking for.
+         */
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let Some(window) = app.get_webview_window(CONTROL_LABEL) else {
+                // No control window means the first instance is still inside
+                // `setup` — or has lost its window entirely. Either way there
+                // is nothing to focus, and the second process has already done
+                // the important half of its job by declining to start.
+                tracing::warn!("second launch: no control window to focus");
+                return;
+            };
+            // Unminimise before focusing: a minimised window accepts focus
+            // without coming back on screen, which looks exactly like the app
+            // refusing to open.
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            tracing::info!("second launch refused; focused the running instance");
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            // Recovery (§48.5). These work on FILES and never open the damaged
+            // database for writing, because the failures they exist for are
+            // the ones that stop the application starting at all.
+            commands::get_boot_status,
+            commands::list_database_backups,
+            commands::restore_database_backup,
+            commands::rebuild_database_index,
+            commands::rescue_scripts,
+            commands::reveal_data_folder,
+            commands::write_unsaved_recovery,
             // Scripts (spec §46.2)
             commands::list_scripts,
             commands::create_script,
@@ -78,6 +129,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::export_all_data,
+            commands::restore_all_data,
             commands::clear_cache,
             commands::get_system_diagnostics,
             commands::log_client_diagnostic,
@@ -164,8 +216,41 @@ pub fn run() {
                 tracing::warn!(error = %err, "could not rotate the client trace");
             }
 
-            // Database: connect + run migrations before any command can run.
-            let pool = tauri::async_runtime::block_on(database::init(&data_dir))?;
+            /*
+             * Database: connect + run migrations before any command can run.
+             *
+             * A failure here used to `?` straight out of `setup`, which aborts
+             * startup BEFORE a webview exists — so `DATABASE_CORRUPT` and a
+             * failed migration, the two failures most likely to need a human,
+             * removed every in-app recovery action at exactly the moment one
+             * was needed. In a release build (`panic = "abort"`) the user got
+             * an application that vanished from the Dock with nothing on
+             * screen saying why.
+             *
+             * The failure is carried into the running app instead. The window
+             * opens, `get_boot_status` reports what happened, and the frontend
+             * renders recovery instead of the application. See
+             * `database::BootStatus`.
+             */
+            let (pool, boot_status) = match tauri::async_runtime::block_on(database::init(&data_dir))
+            {
+                Ok(pool) => (pool, database::BootStatus::Ready),
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        "database did not come up; starting in recovery mode"
+                    );
+                    // An empty in-memory pool so that `State<'_, Database>` is
+                    // managed and no command panics on the way to the recovery
+                    // screen. Nothing on disk is opened.
+                    let scratch = tauri::async_runtime::block_on(
+                        database::in_memory_recovery_pool(),
+                    )?;
+                    (scratch, database::BootStatus::Failed(err))
+                }
+            };
+            let database_ready = boot_status.is_ready();
+            handle.manage(boot_status);
             handle.manage(Database::new(pool.clone()));
             handle.manage(paths.clone());
             handle.manage(ScriptLocks::default());
@@ -229,7 +314,18 @@ pub fn run() {
             // lock set: a private `ScriptLocks::default()` locks nothing that
             // a command would respect, which is exactly how a repair could
             // race a save.
-            let reconciliation = {
+            //
+            // Skipped entirely in recovery mode. Reconciliation REPAIRS: it
+            // deletes stale temp files, inserts recovered rows, purges trash
+            // and rewrites index state. Running any of that against the scratch
+            // in-memory pool would compare the canonical files on disk against
+            // an empty database and "recover" every one of them into a store
+            // that disappears when the process exits — while touching the real
+            // files on the way.
+            let reconciliation = if !database_ready {
+                tracing::warn!("recovery mode: skipping startup reconciliation");
+                Ok(Default::default())
+            } else {
                 let locks = handle.state::<ScriptLocks>();
                 tauri::async_runtime::block_on(async {
                     let report = crate::scripts::reconcile::run_startup_reconciliation(
@@ -279,12 +375,47 @@ pub fn run() {
                 }
             }
 
+            handle.manage(crate::windows::shutdown::ShutdownState::default());
+            install_close_coordinator(&handle);
+
             tracing::info!("CandidCue started; database ready at {:?}", data_dir);
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while running CandidCue")
         .run(|handle, event| {
+            /*
+             * Quit (⌘Q, the application menu, a logout) as well as a window
+             * close. `ExitRequested` fires before the process goes away and
+             * can be prevented, which is what gives the frontend its one
+             * bounded chance to flush.
+             *
+             * `ShutdownState` makes the handshake idempotent: on macOS ⌘Q can
+             * produce both a window close and an exit request, and asking the
+             * frontend to flush while it is already flushing would be worse
+             * than not asking.
+             */
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                let state = handle.state::<crate::windows::shutdown::ShutdownState>();
+                if !state.is_finished() {
+                    api.prevent_exit();
+                    let handle = handle.clone();
+                    // Off the event loop: the handshake blocks for up to
+                    // SHUTDOWN_DEADLINE, and blocking the loop would stop the
+                    // webview being able to answer at all — a deadlock that
+                    // would always time out.
+                    std::thread::spawn(move || {
+                        // Only the caller that OWNS the handshake exits. A
+                        // non-owner returns immediately because the claim is
+                        // already taken, and exiting there would kill the
+                        // process while the owner was still flushing.
+                        if crate::windows::shutdown::run_shutdown_handshake(&handle) {
+                            handle.exit(0);
+                        }
+                    });
+                }
+            }
+
             // Never let the display-sleep assertion outlive the app, and take
             // any lingering identification overlay down with us (§52.4, §52.7).
             if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
@@ -292,6 +423,36 @@ pub fn run() {
                 crate::windows::close_identify_overlays(handle);
             }
         });
+}
+
+/// Intercept the control window's close button.
+///
+/// Closing the window is a quit on macOS as far as a user is concerned — there
+/// is one window and no dock-icon reopen — but it arrives as a WINDOW event,
+/// not an application one, so it needs its own interception. Both paths reach
+/// the same handshake, and `ShutdownState` stops them running it twice.
+fn install_close_coordinator(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window(CONTROL_LABEL) else {
+        tracing::warn!("no control window to install the close coordinator on");
+        return;
+    };
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let state = handle.state::<crate::windows::shutdown::ShutdownState>();
+            if state.is_finished() {
+                return;
+            }
+            api.prevent_close();
+            let handle = handle.clone();
+            std::thread::spawn(move || {
+                // Owner-only exit; see the ExitRequested handler above.
+                if crate::windows::shutdown::run_shutdown_handshake(&handle) {
+                    handle.exit(0);
+                }
+            });
+        }
+    });
 }
 
 /// Stage → Rust event bridge (spec §43.5, §46.9): handshake progress,

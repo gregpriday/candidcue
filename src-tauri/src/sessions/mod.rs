@@ -29,8 +29,13 @@ pub struct SessionRecord {
     pub retake_count: i64,
     pub reconnect_count: i64,
     pub manual_correction_count: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub estimated_cost_usd: Option<f64>,
+    /*
+     * No `estimated_cost_usd`. It was per-take API spend from the hosted
+     * transcription era. Transcription runs on this machine now, so a take
+     * costs nothing — and a field that can only ever hold 0 is an invitation
+     * for a screen to display a confident zero for a number that has no
+     * meaning. The column went with it in the 1.0 schema baseline.
+     */
     pub transcript_retained: bool,
 }
 
@@ -63,8 +68,6 @@ pub struct EndSessionSummary {
     pub reconnect_count: Option<i64>,
     #[serde(default)]
     pub manual_correction_count: Option<i64>,
-    #[serde(default)]
-    pub estimated_cost_usd: Option<f64>,
     /// Aggregate tracking quality metrics without transcript text.
     #[serde(default)]
     pub metrics: Option<serde_json::Value>,
@@ -307,7 +310,6 @@ fn record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<SessionRecord, sqlx:
         retake_count: row.try_get("retake_count")?,
         reconnect_count: row.try_get("reconnect_count")?,
         manual_correction_count: row.try_get("manual_correction_count")?,
-        estimated_cost_usd: row.try_get("estimated_cost_usd")?,
         transcript_retained: row.try_get::<i64, _>("transcript_retained")? != 0,
     })
 }
@@ -379,7 +381,6 @@ pub async fn end_session(
             retake_count = COALESCE(?, retake_count),
             reconnect_count = COALESCE(?, reconnect_count),
             manual_correction_count = COALESCE(?, manual_correction_count),
-            estimated_cost_usd = COALESCE(?, estimated_cost_usd),
             metrics_json = COALESCE(?, metrics_json)
          WHERE id = ?",
     )
@@ -391,7 +392,6 @@ pub async fn end_session(
     .bind(summary.retake_count)
     .bind(summary.reconnect_count)
     .bind(summary.manual_correction_count)
-    .bind(summary.estimated_cost_usd)
     .bind(summary.metrics.as_ref().and_then(|m| serde_json::to_string(m).ok()))
     .bind(session_id)
     .execute(pool)

@@ -249,6 +249,10 @@ fn harness() -> Harness {
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
 
+    // The mutating commands take `State<'_, BootStatus>` and refuse to run in
+    // recovery mode, so the harness has to declare which mode it exercises.
+    // `Ready` is the ordinary one; the recovery refusal has its own tests.
+    app.manage(candidcue_lib::database::BootStatus::Ready);
     app.manage(Database::new(pool));
     app.manage(paths.clone());
     app.manage(ScriptLocks::default());

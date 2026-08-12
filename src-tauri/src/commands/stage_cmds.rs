@@ -125,9 +125,12 @@ pub fn get_stage_status<R: Runtime>(app: AppHandle<R>, _session_id: Option<Strin
 
 #[tauri::command]
 pub async fn save_display_profile(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     profile: DisplayProfile,
 ) -> Result<DisplayProfile, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     windows::save_display_profile(db.pool(), profile).await
 }
 

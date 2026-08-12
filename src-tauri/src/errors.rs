@@ -231,7 +231,11 @@ impl AppError {
 
     /// Stable, redacted user-facing copy. The UI maps `code` to localized
     /// strings; this is only the fallback.
-    fn user_message(&self) -> String {
+    ///
+    /// Public since the recovery screen needs it: a boot failure has no
+    /// authored copy to look up, because the whole point is that the
+    /// application never started.
+    pub fn user_message(&self) -> String {
         if let AppError::Structured { user_message, .. } = self {
             return user_message.clone();
         }

@@ -18,6 +18,7 @@
   import Live from './routes/Live.svelte';
   import Settings from './routes/Settings.svelte';
   import Calibrate from './routes/Calibrate.svelte';
+  import Recovery from './routes/Recovery.svelte';
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
   import {
@@ -32,6 +33,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
   import { describeError, errorCode } from './services/errors';
+  import {
+    getBootStatus,
+    writeUnsavedRecovery,
+    type BootStatusReport,
+  } from './services/recovery';
+  import { installShutdownHandshake } from './services/shutdown';
   import { listScripts } from './services/scripts';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
@@ -60,6 +67,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * route, a store that failed to load, or a component further down the shell.
    */
   let bootFailure = $state<string | null>(null);
+  /**
+   * Set when Rust reports the database did not come up.
+   *
+   * Distinct from `bootFailure`, which is "something threw during boot". This
+   * one is a specific, actionable state with its own screen: the application
+   * must not open, and recovery must.
+   */
+  let recoveryStatus = $state<BootStatusReport | null>(null);
   let bootExporting = $state(false);
   let bootExportNote = $state<string | null>(null);
 
@@ -302,6 +317,38 @@ import { rememberReaderFrame } from './lib/reader-frame';
         await exitPresentation().catch(() => {});
         setPresentingPhase('off');
 
+        /*
+         * Did the database come up? Asked FIRST, before anything reads it.
+         *
+         * `database::init` failing used to abort Tauri's setup hook, which
+         * runs before a webview exists — so `DATABASE_CORRUPT` and a failed
+         * migration could never reach the boot-failure screen written for
+         * them, and the user got an application that vanished. Rust carries
+         * the failure into the running process now, and this is where the
+         * shell decides to render recovery instead of the app.
+         *
+         * A REJECTION here fails closed, and that is a change from the first
+         * version of this code. `getBootStatus` already answers
+         * `{ databaseReady: true }` without touching IPC when there is no Tauri
+         * runtime — a browser dev session — so a rejection means the command
+         * exists and something went wrong asking it. Treating that as "assume
+         * the database is fine" would open the editor over an unknown backend,
+         * which is the exact situation this guard was added for.
+         */
+        const boot = await getBootStatus().catch(
+          (err: unknown): BootStatusReport => ({
+            databaseReady: false,
+            code: 'DATABASE_UNAVAILABLE',
+            message: `CandidCue could not determine whether its database opened. ${describeError(err)}`,
+            dataDirectory: '',
+          }),
+        );
+        if (!boot.databaseReady) {
+          if (disposed) return;
+          recoveryStatus = boot;
+          return;
+        }
+
         const status = await initAppStatus();
 
         /*
@@ -363,12 +410,79 @@ import { rememberReaderFrame } from './lib/reader-frame';
       }
     })();
 
+    /*
+     * Close and quit, coordinated (§47.6).
+     *
+     * Rust intercepts both, asks here, and waits ~4s. Before this, closing the
+     * window or pressing ⌘Q went straight to process exit: a debounced save
+     * still inside its window was simply lost, the take's session row stayed
+     * open until the next launch swept it as abandoned, and the reader frame
+     * was never persisted.
+     *
+     * The steps are built at shutdown time rather than captured now, so they
+     * see the state as it is when the user quits, not as it was at boot.
+     */
+    const teardownShutdown = installShutdownHandshake(() => [
+      {
+        /*
+         * First, and the only irreplaceable one. Everything below is
+         * repaired, re-derived or restarted on the next launch; the newest
+         * edits to a script are not.
+         *
+         * `saveNow()` RESOLVES WHEN THE SAVE FAILS. That is correct while the
+         * app is open — a conflict or a failed write is reported through store
+         * state and the editor's own sheets — and wrong at the moment it
+         * closes, because there is no longer a screen to report to. Awaiting
+         * it and moving on would have quit with the text gone and the step
+         * recorded as completed.
+         *
+         * So the flush is checked, and anything still unsaved is parked in
+         * `quarantine/unsaved/` rather than lost. Never written over the
+         * canonical file: in a conflict that file holds someone else's newer
+         * text, and overwriting it here would resolve the conflict by
+         * destroying one side of it, silently, during a quit.
+         */
+        name: 'flush-editor',
+        run: async () => {
+          await saveNow();
+          if (!editorHasUnsavedWork()) return;
+
+          const { scriptId, source } = get(editor);
+          if (scriptId === null) return;
+          const at = await writeUnsavedRecovery(scriptId, source);
+          // Thrown so the step is reported as FAILED. It did not do what it
+          // was for — the script was not saved — and Rust logs the reason.
+          throw new Error(`the script could not be saved; its text is at ${at}`);
+        },
+      },
+      {
+        // Through the same path a normal end uses, so a take that ended by
+        // quitting is not a different kind of record from one that ended by
+        // pressing End.
+        name: 'end-take',
+        run: () => {
+          if (!get(session).active) return;
+          stopSession();
+          clearSession();
+        },
+      },
+      {
+        // So the next take opens where this one was.
+        name: 'reader-frame',
+        run: async () => {
+          const restored = await exitPresentation().catch(() => null);
+          await rememberReaderFrame(restored);
+        },
+      },
+    ]);
+
     return () => {
       disposed = true;
       teardownShortcuts();
       teardownHelp();
       unregisterLiveGuard();
       unregisterSaveGuard();
+      teardownShutdown();
     };
   });
 
@@ -410,7 +524,16 @@ import { rememberReaderFrame } from './lib/reader-frame';
 </script>
 
 <div class="shell" data-theme={theme}>
-  {#if !ready}
+  {#if recoveryStatus !== null}
+    <!--
+      Rendered INSTEAD of the application, not on top of it. The rule the
+      readiness review asked for is that the normal application cannot open
+      until recovery has produced a writable, valid database — so there is no
+      route past this, and the recovery actions all end by saying "quit and
+      reopen", which is what re-runs `database::init`.
+    -->
+    <Recovery status={recoveryStatus} />
+  {:else if !ready}
     <div class="boot">
       {#if bootFailure === null}
         <p class="boot-mark">CandidCue</p>

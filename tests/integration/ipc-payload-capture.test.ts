@@ -220,7 +220,6 @@ describe('captured IPC payloads (production services → wire)', () => {
         retakeCount: 1,
         reconnectCount: 0,
         manualCorrectionCount: 2,
-        estimatedCostUsd: 0.014,
       }),
     );
     await capture('append_session_transcript', () =>

@@ -388,6 +388,37 @@ impl SpeechEngine {
         }
     }
 
+    /// End whatever session is live, whatever its generation.
+    ///
+    /// `stop_stream` takes a generation because every ordinary caller has one
+    /// and stale generations must not stop a newer take. Shutdown has no
+    /// generation and is not racing anything — the process is going away — and
+    /// a session left running holds the decoder thread and a microphone the OS
+    /// shows as in use until the process is reaped.
+    pub fn shutdown(&self) {
+        /*
+         * A poisoned lock must not abort here.
+         *
+         * Every other caller `.expect()`s, and that is defensible mid-session:
+         * a poisoned recogniser mutex means a decoder thread panicked, and
+         * continuing would be pretending the engine is fine. This one runs
+         * during shutdown, where the whole point is a BOUNDED exit — panicking
+         * inside the close handler of a release build (`panic = "abort"`)
+         * turns "quit" into "crash", and the user loses the flush that the
+         * handshake was waiting on.
+         */
+        let mut guard = match self.session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("stt session mutex was poisoned; stopping the session anyway");
+                poisoned.into_inner()
+            }
+        };
+        if let Some(session) = guard.take() {
+            session.stop();
+        }
+    }
+
     /// Generation of the live session, if any. Diagnostics only.
     pub fn active_generation(&self) -> Option<u64> {
         self.session

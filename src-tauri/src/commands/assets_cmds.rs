@@ -34,11 +34,14 @@ fn allow_script_assets<R: Runtime>(app: &AppHandle<R>, paths: &DataPaths, script
 /// asset protocol. `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn import_image<R: Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,
 ) -> Result<Option<ImportedAsset>, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     let Some(source) = crate::dialogs::pick_image_to_import(&app).await? else {
         return Ok(None);
@@ -51,12 +54,15 @@ pub async fn import_image<R: Runtime>(
 
 #[tauri::command]
 pub async fn import_remote_image<R: Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,
     url: String,
 ) -> Result<ImportedAsset, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     // A dedicated, credential-free, redirect-disabled client is built per hop
     // inside `assets::remote`. Nothing here may be given a client that follows
@@ -82,11 +88,14 @@ pub async fn resolve_asset_urls<R: Runtime>(
 
 #[tauri::command]
 pub async fn remove_asset_reference(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,
     asset_id: String,
 ) -> Result<(), AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     assets::remove_asset_reference(db.pool(), &script_id, &asset_id).await?;
     // Basic GC after unreferencing (spec §24.8).

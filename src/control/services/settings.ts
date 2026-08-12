@@ -39,6 +39,8 @@ import {
   type PresentationMode,
   type ReaderFrame,
   type SessionMode,
+  type DataExportResult,
+  type RestoreResult,
   type TranscriptRetention,
 } from './settings-types';
 import { DEV_APP_VERSION } from '../../shared/version';
@@ -99,6 +101,26 @@ interface RustSettings {
 interface RustRevisioned {
   revision: number;
   value: RustSettings;
+}
+
+/** Mirror of `backup::DataExportResult`. */
+interface RustExportResult {
+  path: string;
+  complete: boolean;
+  scriptsCopied: number;
+  fileCount: number;
+  totalBytes: number;
+  warnings: string[];
+  excluded: string[];
+}
+
+/** Mirror of `backup::RestoreResult`. */
+interface RustRestoreResult {
+  path: string;
+  appVersion: string;
+  createdAt: string;
+  scriptsInExport: number;
+  restartRequired: boolean;
 }
 
 const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
@@ -539,11 +561,71 @@ export async function updateSettings(
  * same as `import_script`/`export_script`, and returns `null` when the
  * operator cancels.
  */
-export async function exportAllData(): Promise<{ path?: string; cancelled: boolean }> {
+export async function exportAllData(): Promise<DataExportResult> {
   if (!isTauriRuntime()) return { cancelled: true };
-  const result = await ipcInvoke<{ path: string } | null>('export_all_data');
+  const result = await ipcInvoke<RustExportResult | null>('export_all_data');
   if (result === null) return { cancelled: true };
-  return { path: result.path, cancelled: false };
+  /*
+   * Every field is carried through, and `complete` is the one that matters.
+   *
+   * This adapter used to return `{ path, cancelled }` and throw away both the
+   * script count and the warnings — so a failed database snapshot arrived here
+   * as a warning string, was discarded, and Settings said "Export ready" about
+   * a folder with no database in it. The type now makes that impossible to
+   * repeat by accident: a caller cannot report success without reading
+   * `complete`, because there is no other way to know.
+   */
+  return {
+    cancelled: false,
+    path: result.path,
+    complete: result.complete,
+    scriptsCopied: result.scriptsCopied,
+    fileCount: result.fileCount,
+    totalBytes: result.totalBytes,
+    warnings: result.warnings,
+    excluded: result.excluded,
+  };
+}
+
+/**
+ * The sentence Settings shows after an export.
+ *
+ * Pure and exported so the claim is testable without a filesystem. The failure
+ * it exists to prevent is specific and was live: "Export ready" displayed over
+ * an export that is missing the database.
+ */
+export function describeExport(result: DataExportResult): string | null {
+  if (result.cancelled) return null;
+  if (result.complete) {
+    return `Export complete — ${result.fileCount} files.`;
+  }
+  const first = result.warnings?.[0] ?? 'part of the export could not be written';
+  return `Export INCOMPLETE and must not be used as a backup: ${first}`;
+}
+
+/**
+ * SCHEDULE a restore from an export folder.
+ *
+ * Rust validates the manifest and every checksum, then writes a marker; the
+ * swap happens at the next launch, before any database pool exists. Replacing
+ * the file underneath the open pool — which the first version of this did —
+ * leaves existing connections writing to the renamed inode on Unix and fails
+ * outright on Windows, in both cases after the scripts tree has already moved.
+ *
+ * So the caller must tell the user to restart. A schedule that succeeded looks
+ * exactly like nothing happening otherwise.
+ */
+export async function restoreAllData(): Promise<RestoreResult> {
+  if (!isTauriRuntime()) return { cancelled: true };
+  const result = await ipcInvoke<RustRestoreResult | null>('restore_all_data');
+  if (result === null) return { cancelled: true };
+  return {
+    cancelled: false,
+    scriptsInExport: result.scriptsInExport,
+    createdAt: result.createdAt,
+    appVersion: result.appVersion,
+    restartRequired: result.restartRequired,
+  };
 }
 
 export async function clearCache(

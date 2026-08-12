@@ -81,6 +81,7 @@ cc-align = { path = "../crates/cc-align" }
 # binary carries no network speech path at all.
 cc-stt = { path = "../crates/cc-stt" }
 base64 = "0.23.0"
+tauri-plugin-single-instance = "2.4.3"
 
 [dev-dependencies]
 tempfile = "3"

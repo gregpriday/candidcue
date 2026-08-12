@@ -580,7 +580,14 @@ fn destination_taking_export_commands_run_their_own_picker() {
 
     for (command, result_type) in [
         ("export_support_bundle", "Option<SupportBundleResult>"),
-        ("export_all_data", "Option<DataExportResult>"),
+        // The export result type moved to `crate::backup` when the export
+        // gained a manifest, per-file checksums and a `complete` flag; the
+        // rule it is checked against — a cancelled picker is `None`, never an
+        // error — is unchanged.
+        ("export_all_data", "Option<crate::backup::DataExportResult>"),
+        // Same contract on the way back in. A restore that the user cancels
+        // out of must not surface as a failure.
+        ("restore_all_data", "Option<crate::backup::RestoreResult>"),
     ] {
         // No `(` in the needle: these commands are now generic over the Tauri
         // runtime (`pub async fn export_all_data<R: Runtime>(…)`) so that they

@@ -70,6 +70,16 @@ commands.allow = [
   "get_settings",
   "update_settings",
   "export_all_data",
+  "restore_all_data",
+  # Recovery (§48.5). Reachable because a failed `database::init` no longer
+  # aborts Tauri's setup hook before a webview exists.
+  "get_boot_status",
+  "list_database_backups",
+  "restore_database_backup",
+  "rebuild_database_index",
+  "rescue_scripts",
+  "reveal_data_folder",
+  "write_unsaved_recovery",
   "clear_cache",
   "get_system_diagnostics",
   "export_support_bundle",

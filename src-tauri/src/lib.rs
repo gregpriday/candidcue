@@ -14,6 +14,7 @@
 pub mod align;
 pub mod app;
 pub mod assets;
+pub mod backup;
 pub mod commands;
 pub mod coordinator;
 pub mod database;

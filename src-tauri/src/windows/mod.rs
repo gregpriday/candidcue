@@ -11,6 +11,7 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
 pub mod present;
+pub mod shutdown;
 pub mod sleep;
 
 pub use present::{set_control_presenting, ControlPresentationState, PresentMode, ReaderFrame};
@@ -47,6 +48,14 @@ pub mod events {
     /// command's answer.
     pub const SPEECH_MODEL_PROGRESS: &str = "speech://model-progress";
     pub const DEVICE_OR_DISPLAY_CHANGE: &str = "app://device-or-display-change";
+    /// Rust → control: close/quit is happening; flush and answer.
+    pub const SHUTDOWN_REQUESTED: &str = "app://shutdown-requested";
+    /// Control → Rust: the shutdown sequence finished, or gave up.
+    ///
+    /// A different name from the request on purpose. Tauri fans a webview emit
+    /// out to every webview's listeners regardless of target, so an event
+    /// control emits must not share a name with one control listens for.
+    pub const SHUTDOWN_COMPLETE: &str = "app://shutdown-complete";
     pub const DIAGNOSTIC_WARNING: &str = "diagnostic://warning";
     pub const IDENTIFY_DISPLAYS: &str = "app://identify-displays";
     /// Rust → control: the same `AlignmentSnapshot` the stage receives, for
@@ -1388,6 +1397,8 @@ mod tests {
             events::SCRIPT_EXTERNAL_CHANGE,
             events::DEVICE_OR_DISPLAY_CHANGE,
             events::DIAGNOSTIC_WARNING,
+            events::SHUTDOWN_REQUESTED,
+            events::SHUTDOWN_COMPLETE,
             events::STAGE_LOAD_SESSION,
             events::STAGE_APPLY_COMMAND,
             events::STAGE_CLOSE_SESSION,

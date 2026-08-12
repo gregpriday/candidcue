@@ -32,10 +32,13 @@ const SPEECH_SELECTION_KEYS: [&str; 2] = ["language", "transcriptionModel"];
 
 #[tauri::command]
 pub async fn update_settings(
+    boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     expected_revision: i64,
     patch: serde_json::Value,
 ) -> Result<RevisionedSettings, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     if let Some(audio) = patch.get("audio").and_then(serde_json::Value::as_object) {
         if let Some(key) = SPEECH_SELECTION_KEYS
             .iter()
@@ -50,30 +53,28 @@ pub async fn update_settings(
     settings::update_settings(db.pool(), expected_revision, patch).await
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DataExportResult {
-    pub path: String,
-    pub scripts_copied: u32,
-    pub warnings: Vec<String>,
-}
-
-/// Export all data (spec §47.7): scripts tree copy + consistent SQLite
-/// snapshot via `VACUUM INTO`.
+/// Export everything the user made (spec §47.7).
+///
+/// The work is in `crate::backup`, which writes to a staging directory,
+/// checksums every file, and only then gives the export a name that says
+/// whether it is whole. This command is the trust boundary: it runs the folder
+/// picker in Rust, because the dialog plugin is deliberately not granted to
+/// JavaScript (§50.7), and validates the destination before handing it on.
 ///
 /// C5: this used to take `destination: String` from the webview. Nothing could
-/// supply it — the dialog plugin is not granted to JavaScript — so
-/// `exportAllData()` invoked with `{ destination: undefined }`, the key was
-/// dropped from the JSON, deserialization failed, and the un-`catch`ed promise
-/// meant the operator saw no export, no toast and no error. The picker now
-/// runs here, in the same trusted operation as the copy (spec §50.7).
-/// `Ok(None)` means the operator cancelled.
+/// supply it, so `exportAllData()` invoked with `{ destination: undefined }`,
+/// the key was dropped from the JSON, deserialization failed, and the
+/// un-`catch`ed promise meant the operator saw no export, no toast and no
+/// error. `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_all_data<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
-) -> Result<Option<DataExportResult>, AppError> {
+) -> Result<Option<crate::backup::DataExportResult>, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let Some(dest_root) =
         crate::dialogs::pick_destination_folder(&app, "Choose a folder for the export").await?
     else {
@@ -84,56 +85,44 @@ pub async fn export_all_data<R: tauri::Runtime>(
             "Choose an existing folder for the export.",
         ));
     }
-    let export_dir = dest_root.join(format!(
-        "CandidCue-export-{}",
-        chrono::Utc::now().format("%Y%m%d-%H%M%S")
-    ));
-    fs::create_dir_all(&export_dir)?;
-
-    let mut warnings = Vec::new();
-
-    // Consistent database snapshot.
-    let db_copy = export_dir.join("candidcue.sqlite3");
-    if let Err(err) = sqlx::query(&format!(
-        "VACUUM INTO '{}'",
-        db_copy.display().to_string().replace('\'', "''")
-    ))
-    .execute(db.pool())
-    .await
-    {
-        warnings.push(format!("Database snapshot failed: {err}"));
-    }
-
-    // Scripts tree (canonical Markdown, revisions, assets).
-    let mut scripts_copied = 0u32;
-    let scripts_dir = paths.scripts_dir();
-    if scripts_dir.exists() {
-        let target = export_dir.join("scripts");
-        copy_tree(&scripts_dir, &target)?;
-        scripts_copied = fs::read_dir(&target)?.count() as u32;
-    }
-
-    Ok(Some(DataExportResult {
-        path: export_dir.to_string_lossy().to_string(),
-        scripts_copied,
-        warnings,
-    }))
+    crate::backup::export_all_data(db.pool(), &paths, &dest_root)
+        .await
+        .map(Some)
 }
 
-fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    fs::create_dir_all(to)?;
-    for entry in fs::read_dir(from)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let target = to.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_tree(&entry.path(), &target)?;
-        } else if file_type.is_file() {
-            fs::copy(entry.path(), &target)?;
-        }
-        // Symlinks are intentionally skipped.
+/// Restore from an export written by [`export_all_data`].
+///
+/// Refuses before it changes anything: unknown export format, missing
+/// manifest, an export marked incomplete, a checksum mismatch, a path pointing
+/// outside the export, or a symlink. Only then does it move the current state
+/// into quarantine — where it stays, whatever happens next — and commit.
+///
+/// The restored database is NOT adopted by the running process. The pool is
+/// open on the file that was just replaced underneath it, and reconnecting a
+/// live application to a different database mid-session is a far larger change
+/// than this needs to be. The result says to restart, and the frontend says so.
+#[tauri::command]
+pub async fn restore_all_data<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
+    app: tauri::AppHandle<R>,
+    paths: State<'_, DataPaths>,
+) -> Result<Option<crate::backup::RestoreResult>, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
+    let Some(export_root) = crate::dialogs::pick_destination_folder(
+        &app,
+        "Choose the CandidCue export folder to restore from",
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    if !export_root.is_absolute() || !export_root.is_dir() {
+        return Err(AppError::unsafe_path("Choose an existing export folder."));
     }
-    Ok(())
+    crate::backup::restore_all_data(&paths, &export_root)
+        .await
+        .map(Some)
 }
 
 #[derive(Debug, Clone, Serialize)]

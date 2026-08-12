@@ -3486,7 +3486,6 @@ export function stopSession(): SessionSummary {
       retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,
       manualCorrectionCount: s.counts.jumps,
-      estimatedCostUsd: 0,
       metrics: {
         sectionsReached: s.blocksSeen.length,
         durationSeconds: s.elapsedSeconds,
