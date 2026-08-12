@@ -361,6 +361,8 @@ describe('Rust is the authority for calibrated rigs', () => {
     expect(patch?.['optical']).toMatchObject({
       profiles: optical.profiles,
       activeRig: optical.activeRig,
+      // The authority marker travels with every write. See below.
+      migrated: true,
     });
   });
 
@@ -377,7 +379,11 @@ describe('Rust is the authority for calibrated rigs', () => {
 
   it('reads the rigs back from Rust, not from the overlay', async () => {
     const key = opticalRigKey('dsp-1', 'Desk hood');
-    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+    rustSettings.optical = {
+      migrated: true,
+      profiles: { [key]: rig() },
+      activeRig: { 'dsp-1': 'Desk hood' },
+    };
     // A conflicting overlay copy from before the move must lose.
     store.set(
       OVERLAY_KEY,
@@ -415,10 +421,83 @@ describe('Rust is the authority for calibrated rigs', () => {
       'and it must be flagged for writing through, not merely read',
     ).not.toBeNull();
 
-    // Once Rust holds it, there is nothing left to adopt.
-    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+    // Once Rust has taken ownership, there is nothing left to adopt.
+    rustSettings.optical = {
+      migrated: true,
+      profiles: { [key]: rig() },
+      activeRig: { 'dsp-1': 'Desk hood' },
+    };
     await settings.getSettings();
     expect(settings.pendingOpticalAdoption()).toBeNull();
+  });
+
+  it('does not resurrect a rig the user deleted after the migration', async () => {
+    /*
+     * The defect a verification pass found in the first version of this move.
+     *
+     * Authority was decided by "does Rust hold any profiles?". So:
+     *
+     *   1. the legacy overlay rig is adopted into Rust;
+     *   2. the stale overlay copy is left behind, because `applyOverlayPatch`
+     *      skips `optical` and nothing else ever removes it;
+     *   3. the user deletes their last calibration;
+     *   4. Rust's map is now empty, which read as "not migrated yet";
+     *   5. the overlay became authoritative again and the deleted rig came
+     *      back — and was re-adopted.
+     *
+     * A calibration returning from the dead is worse than one that was never
+     * saved: the picker offers a measurement of a room the presenter has left.
+     * An explicit `migrated` marker is what makes an EMPTY document a real
+     * answer.
+     */
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    // A legacy overlay copy that was never cleaned up.
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } },
+      }),
+    );
+    // Rust has taken ownership and holds nothing — the user deleted their last rig.
+    rustSettings.optical = { migrated: true, profiles: {}, activeRig: {} };
+
+    const loaded = await settings.getSettings();
+    expect(loaded.optical.profiles, 'a deleted rig must stay deleted').toEqual({});
+    expect(
+      settings.pendingOpticalAdoption(),
+      'and an owned document must never be re-migrated from the stale copy',
+    ).toBeNull();
+  });
+
+  it('clears the legacy overlay copy once, and only after the write lands', async () => {
+    /*
+     * Ordering. The legacy copy has to OUTLIVE the write that adopts it — if
+     * that write fails, the fallback the user is relying on must still be
+     * there — and it has to be gone once the write lands, or it sits as a
+     * second answer waiting for the first to look absent.
+     */
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } },
+      }),
+    );
+
+    /*
+     * The read alone must not touch it — the store only calls
+     * `forgetOverlayOptical` after the durable write succeeds, and a read that
+     * cleaned up eagerly would destroy the fallback the moment anything went
+     * wrong afterwards.
+     */
+    await settings.getSettings();
+    const afterRead = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
+    expect(afterRead['optical'], 'a read must never remove the fallback').toBeDefined();
+
+    // And the explicit cleanup, which the store calls only on success, does.
+    settings.forgetOverlayOptical();
+    const afterSuccess = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
+    expect(afterSuccess['optical']).toBeUndefined();
   });
 
   it('drops a stored rig the resolver would refuse, and the choice of it', async () => {
@@ -459,7 +538,11 @@ describe('the properties the 1.0 readiness review asked for', () => {
      * measurement with it.
      */
     const key = opticalRigKey('dsp-1', 'Desk hood');
-    rustSettings.optical = { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } };
+    rustSettings.optical = {
+      migrated: true,
+      profiles: { [key]: rig() },
+      activeRig: { 'dsp-1': 'Desk hood' },
+    };
 
     store.clear(); // the whole WebView store, gone
 

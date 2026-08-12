@@ -71,6 +71,20 @@ impl Default for AppSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OpticalSettings {
+    /// Has this document taken ownership of the calibrations yet?
+    ///
+    /// The authority marker, and it exists because "does Rust hold any rigs?"
+    /// is the wrong question. Using a non-empty `profiles` map as the test
+    /// meant an EMPTY one read as "not authoritative yet" — so deleting your
+    /// last calibration made the document look unmigrated, the stale
+    /// localStorage copy became authoritative again, and the rig you just
+    /// deleted came back and was re-adopted.
+    ///
+    /// `false` for every document written before the move, which is exactly
+    /// the set that still needs the one-time migration. Once it is `true` this
+    /// document is the answer, empty or not.
+    #[serde(default)]
+    pub migrated: bool,
     /// `opticalRigKey(displayFingerprint, rigName)` → the rig document.
     pub profiles: std::collections::BTreeMap<String, serde_json::Value>,
     /// Display fingerprint → the name of the rig in force on that panel.

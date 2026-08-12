@@ -102,6 +102,8 @@ interface RustSettings {
    * looks for — see `opticalAwaitingAdoption`.
    */
   optical?: {
+    /** Has this document taken ownership of the calibrations? */
+    migrated?: boolean;
     profiles?: Record<string, unknown>;
     activeRig?: Record<string, unknown>;
   };
@@ -316,6 +318,21 @@ export function pendingOpticalAdoption(): OpticalSettings | null {
 }
 
 /**
+ * Drop the legacy `optical` section from the overlay.
+ *
+ * Called by the store once the durable write has SUCCEEDED, and not before.
+ * Leaving the legacy copy behind was a real defect rather than untidiness:
+ * `applyOverlayPatch` skips `optical`, so nothing else would ever remove it,
+ * and it sat there as a second answer waiting for the first to look absent.
+ */
+export function forgetOverlayOptical(): void {
+  const overlay = loadOverlay() as Record<string, unknown>;
+  if (!('optical' in overlay)) return;
+  delete overlay['optical'];
+  saveOverlay(overlay as Overlay);
+}
+
+/**
  * A stored reading-window frame, or null if it is not one.
  *
  * Validated field-by-field rather than cast, which `loadOverlay`'s note argues
@@ -404,12 +421,21 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
    * legitimately have rigs and no active selection, but an active selection
    * with no rigs is not a calibration anyone made.
    */
-  const rustHasOptical = Object.keys(rust.optical?.profiles ?? {}).length > 0;
-  const resolvedOptical = rustHasOptical
+  /*
+   * The AUTHORITY MARKER, not "does Rust hold any rigs?".
+   *
+   * The first version tested `profiles` for emptiness, which has a nasty
+   * failure: delete your last calibration, and the document looks unmigrated
+   * again — so the stale overlay copy becomes authoritative, the rig you just
+   * deleted comes back, and the migration re-adopts it. A calibration
+   * returning from the dead is worse than one that was never saved: the picker
+   * offers a measurement of a room the presenter has left.
+   */
+  const rustOwnsOptical = rust.optical?.migrated === true;
+  const resolvedOptical = rustOwnsOptical
     ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
     : opticalFromStored(defaults.optical, overlay.optical);
-  opticalAwaitingAdoption =
-    !rustHasOptical && Object.keys(resolvedOptical.profiles).length > 0 ? resolvedOptical : null;
+  opticalAwaitingAdoption = rustOwnsOptical ? null : resolvedOptical;
 
   return {
     ...mapped,
@@ -553,6 +579,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     if (patch.optical.activeRig !== undefined) {
       (rust.optical ??= {}).activeRig = patch.optical.activeRig;
     }
+    // Any write of this section takes ownership. After this the document is
+    // the answer whether or not it holds a single rig.
+    (rust.optical ??= {}).migrated = true;
   }
   return rust;
 }

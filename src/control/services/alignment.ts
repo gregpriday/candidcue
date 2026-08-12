@@ -149,16 +149,15 @@ export async function setAlignmentPosition(token: number): Promise<void> {
  * evidence arrives, rather than asserting a lock the presenter has just
  * disputed.
  *
- * The window is the visible token range, so the prior covers the screen — the
- * reader saying "here" means "on this screen", not "at this word".
+ * Takes no range. The engine reopens its search over the viewport the STAGE
+ * already reports (`stage://viewport-hint`) — the tokens actually on the
+ * glass. A range computed here would be the control window's second opinion
+ * about what the reader can see, and the first version of this computed it
+ * from the engine's own current position: the one place it is demonstrably
+ * not finding them.
  */
-export async function reacquireAlignment(
-  firstToken: number,
-  lastToken: number,
-): Promise<void> {
-  if (!Number.isFinite(firstToken) || !Number.isFinite(lastToken)) return;
-  if (lastToken < firstToken) return;
-  await ipcInvoke<void>('reacquire_alignment', { firstToken, lastToken });
+export async function reacquireAlignment(): Promise<void> {
+  await ipcInvoke<void>('reacquire_alignment');
 }
 
 /**

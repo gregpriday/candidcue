@@ -564,14 +564,24 @@ impl Engine {
     ///   Nothing has been established yet, and moving it would be the
     ///   assertion this exists to avoid.
     ///
-    /// `window_atoms` widens the prior either side of `around_atom`. It is the
-    /// visible region, so the caller passes what is actually on the glass.
-    pub fn reacquire(&mut self, around_atom: u32, window_atoms: u32, at_audio_ms: f64) -> Snapshot {
-        let len = self.script.len() as u32;
-        let first = around_atom.saturating_sub(window_atoms);
-        let last = around_atom.saturating_add(window_atoms).min(len);
-        self.set_viewport_hint(first, last);
-
+    /// ## Where the prior comes from
+    ///
+    /// The viewport hint the STAGE already reports — the tokens actually on
+    /// the glass, arriving over `stage://viewport-hint` and applied by
+    /// `align::apply_viewport_hint`. It is deliberately not recomputed here.
+    ///
+    /// The first version fabricated a fixed ±150-atom window around the
+    /// engine's own `observedToken`, which is close to the mistake this method
+    /// replaced: the engine's current answer is what the presenter is
+    /// disputing, so centring the search on it prioritises the passage most
+    /// likely to be wrong. The stage knows what the reader can see; the engine
+    /// does not, and should not guess.
+    ///
+    /// An existing hint is therefore KEPT rather than overwritten. When there
+    /// is none — a take that has published no viewport yet — the search simply
+    /// runs unweighted, which is the honest answer to "I do not know what you
+    /// are looking at".
+    pub fn reacquire(&mut self, at_audio_ms: f64) -> Snapshot {
         self.state = TrackingState::Searching;
         // Nothing is established, so nothing claims to be.
         self.confidence = 0.0;
@@ -3285,7 +3295,7 @@ mod reacquire_tests {
         assert!(asserted.confidence > 0.5, "a manual move asserts a position");
 
         let mut engine = fresh_engine();
-        let reacquired = engine.reacquire(4, 3, 1_000.0);
+        let reacquired = engine.reacquire(1_000.0);
         assert_eq!(
             reacquired.state,
             TrackingState::Searching,
@@ -3298,24 +3308,46 @@ mod reacquire_tests {
         );
     }
 
-    /// The prior is the visible range, not the engine's own cursor.
+    /// The prior is the STAGE's viewport, and a reacquisition does not touch it.
     ///
-    /// Seeding with `confirmedToken` asked the engine to look exactly where it
-    /// was already looking — the one place it is demonstrably not finding the
-    /// reader.
+    /// Behavioural, and it replaces a test that read this very file looking for
+    /// the string `self.set_viewport_hint(first, last)` — which proved that a
+    /// line of code existed and nothing about what the engine does.
+    ///
+    /// The rule: `reacquire` must not overwrite the hint the stage published.
+    /// The first version fabricated a ±150-atom window around the engine's own
+    /// `observedToken`, which is close to the mistake it replaced — that
+    /// position is exactly what the presenter is disputing.
     #[test]
-    fn a_reacquisition_sets_a_viewport_prior_around_the_visible_range() {
+    fn a_reacquisition_leaves_the_stage_viewport_prior_alone() {
         let mut engine = fresh_engine();
-        engine.clear_viewport_hint();
-        engine.reacquire(10, 4, 1_000.0);
-        // The hint is private state; its effect is what is observable, so this
-        // asserts the engine accepted a window rather than the exact bounds.
-        // The anti-vacuity partner is the test above: without the hint call,
-        // `reacquire` would be indistinguishable from clearing state.
-        let source = include_str!("tracker.rs");
+
+        // The stage says the reader can see the END of the script.
+        engine.set_viewport_hint(14, 19);
+        let before = engine.snapshot(DecisionCode::NoEvidence, 0.0, 0.0);
+        let _ = before;
+
+        // A reacquisition while the engine believes it is at the START.
+        engine.set_manual_position(1, 500.0);
+        engine.reacquire(1_000.0);
+
+        /*
+         * Evidence matching the far end of the script must win, because that
+         * is where the stage says the reader is looking. If `reacquire` had
+         * replaced the hint with a window around the engine's own position,
+         * the near duplicate would.
+         */
+        let snapshot = engine.handle(SessionEvent::Final {
+            item_id: "i1".into(),
+            text: "sierra tango".into(),
+            audio_end_ms: 2_000.0,
+            acoustic_end_ms: None,
+            word_times: None,
+        });
         assert!(
-            source.contains("self.set_viewport_hint(first, last)"),
-            "reacquire must express its prior through the viewport hint"
+            snapshot.observed > 12.0,
+            "the stage's viewport must still be steering the search, got {}",
+            snapshot.observed
         );
     }
 
@@ -3324,7 +3356,7 @@ mod reacquire_tests {
     #[test]
     fn a_reacquisition_cuts_evidence_continuity() {
         let mut engine = fresh_engine();
-        engine.reacquire(4, 3, 7_500.0);
+        engine.reacquire(7_500.0);
         assert_eq!(
             engine.tail_horizon_ms, 7_500.0,
             "words spoken before the reacquisition must not drag the cursor back"
@@ -3339,7 +3371,7 @@ mod reacquire_tests {
         let mut engine = fresh_engine();
         engine.set_manual_position(12, 500.0);
         let before = engine.confirmed;
-        engine.reacquire(4, 3, 1_000.0);
+        engine.reacquire(1_000.0);
         assert_eq!(
             engine.confirmed, before,
             "a reacquisition asks a question; it does not answer it"

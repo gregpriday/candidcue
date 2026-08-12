@@ -1988,7 +1988,7 @@ function finishTake(sessionId: string | null, endTokenIndex: number | undefined)
   if (take === null || sessionId === null) return;
   const durationMs = Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs));
   const confidenceMean = takeConfidenceMean(take);
-  void recordSessionTake(sessionId, {
+  void trackPersistence(recordSessionTake(sessionId, {
     takePassId: take.takePassId,
     passOrdinal: take.passOrdinal,
     startedAt: take.startedAtIso,
@@ -2000,7 +2000,7 @@ function finishTake(sessionId: string | null, endTokenIndex: number | undefined)
     checkpoints: [...take.checkpoints],
     automaticRetakes: take.automaticRetakes,
     ...(confidenceMean === null ? {} : { confidenceMean }),
-  }).catch(() => {
+  })).catch(() => {
     // §36.3 is history, not state. Losing a row costs a line in the review
     // screen; failing the stop path would cost the take.
   });
@@ -2046,6 +2046,46 @@ function bufferTranscriptItem(item: {
 }
 
 /**
+ * Persistence that has been STARTED but not yet acknowledged.
+ *
+ * Every durable write a take makes — the retained transcript tail, the take
+ * row, the session row — is issued with `void promise.catch(...)` so that a
+ * slow database can never stall the live loop. That is right during a take and
+ * wrong at the moment the process is about to exit: the close/quit handshake
+ * was reporting "the take was finished" while those writes were still in
+ * flight, and Rust would then exit out from under them.
+ *
+ * So every one of them is registered here, and
+ * {@link awaitPendingPersistence} is what the shutdown sequence awaits. The
+ * next launch can close an orphaned session row, but it cannot reconstruct a
+ * lost transcript or take.
+ */
+const pendingPersistence = new Set<Promise<unknown>>();
+
+/** Register a fire-and-forget write so shutdown can wait for it. */
+function trackPersistence<T>(promise: Promise<T>): Promise<T> {
+  pendingPersistence.add(promise);
+  void promise.finally(() => pendingPersistence.delete(promise)).catch(() => {});
+  return promise;
+}
+
+/**
+ * Wait for every durable write a take started.
+ *
+ * Settles rather than rejects: a write that failed is a failure the take
+ * already reported, and re-throwing here would abandon the shutdown steps
+ * after this one. What matters is that the process does not exit while the
+ * write is still on the wire.
+ */
+export async function awaitPendingPersistence(): Promise<void> {
+  // A write can start another (the take row closes, then the session row), so
+  // drain until the set is empty rather than snapshotting it once.
+  while (pendingPersistence.size > 0) {
+    await Promise.allSettled([...pendingPersistence]);
+  }
+}
+
+/**
  * Write out everything buffered so far. `force` is retained on the signature
  * because the call sites read better for it, but every item is now ready the
  * moment it arrives — see {@link TRANSCRIPT_FLUSH_INTERVAL_MS}.
@@ -2055,7 +2095,7 @@ function flushTranscript(sessionId: string, force: boolean): void {
   if (!transcriptRetained || transcriptBuffer.length === 0) return;
   const ready = transcriptBuffer;
   transcriptBuffer = [];
-  void appendSessionTranscript(
+  void trackPersistence(appendSessionTranscript(
     sessionId,
     ready.map((item) => ({
       commitSequence: item.commitSequence,
@@ -2065,8 +2105,10 @@ function flushTranscript(sessionId: string, force: boolean): void {
       transcript: item.transcript,
       disposition: item.disposition,
     })),
-  ).catch(() => {
+  )).catch(() => {
     // Retention is best-effort: a failed write must never interrupt a take.
+    // `trackPersistence` above is what stops the PROCESS EXITING before it
+    // lands — a different concern from whether the take is interrupted.
   });
 }
 
@@ -2097,16 +2139,16 @@ function currentFollowingSettings(): FollowingSettings {
   }
 }
 
-/**
- * How far either side of the displayed position a reacquisition searches.
+/*
+ * A `REACQUIRE_WINDOW_TOKENS` constant used to live here — ±150 atoms around
+ * the engine's own `observedToken`, handed to the aligner as a search prior.
  *
- * A screen of prompter text at a readable size is on the order of 60–120
- * spoken words, so ±150 covers what the presenter can see with room for the
- * display's own lead and lag. It is a PRIOR, not a bound: the engine ranks
- * candidates, and a reader who has genuinely jumped further can still be found
- * — this only says where to look first.
+ * Two things were wrong with computing it here. The centre was the engine's
+ * current answer, which is the position the presenter is disputing; and the
+ * control window does not know what is on the glass. The STAGE reports its
+ * viewport over `stage://viewport-hint` and Rust already holds it, so the
+ * reacquisition uses that and this passes no range at all.
  */
-const REACQUIRE_WINDOW_TOKENS = 150;
 
 const followActions = {
   nudge(deltaSentences: number): void {
@@ -2129,17 +2171,13 @@ const followActions = {
    * support it. A reacquisition holds instead, which is the safe direction for
    * a follower that must never run ahead.
    *
-   * The window is centred on the DISPLAYED position rather than the confirmed
-   * one — the reader is looking at the glass, not at the engine's conservative
-   * anchor — and spans a screen either side, because "here" means "on this
-   * screen" and not "at this word".
+   * The search prior is the STAGE's own viewport, which Rust already holds
+   * from `stage://viewport-hint` — the tokens actually on the glass. Nothing
+   * is computed here: the control window does not know what the reader can
+   * see, and the engine's own position is the thing being disputed.
    */
   reAnchor(): void {
-    const snapshot = get(state).snapshot;
-    if (snapshot === null || snapshot === undefined) return;
-    const centre = snapshot.observedToken ?? snapshot.confirmedToken;
-    if (!Number.isFinite(centre)) return;
-    driver?.reacquire(Math.max(0, centre - REACQUIRE_WINDOW_TOKENS), centre + REACQUIRE_WINDOW_TOKENS);
+    driver?.reacquire();
     noteReposition();
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },
@@ -3509,7 +3547,7 @@ export function stopSession(): SessionSummary {
      */
     const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed();
     finishTake(s.sessionId, endTokenIndex);
-    void endSessionRecord(s.sessionId, {
+    void trackPersistence(endSessionRecord(s.sessionId, {
       endTokenIndex,
       commandCount: 0,
       retakeCount: s.counts.retakes,
@@ -3520,7 +3558,7 @@ export function stopSession(): SessionSummary {
         durationSeconds: s.elapsedSeconds,
         endingLocation: summary.endingLocation,
       },
-    }).catch(() => {
+    })).catch(() => {
       // A session that cannot be closed is closed at next launch instead
       // (`sessions::close_orphaned_sessions`); never block the stop path.
     });

@@ -416,6 +416,12 @@ struct PendingRestore {
     export_path: String,
     requested_at: String,
     app_version: String,
+    /// How many launches have tried to apply this.
+    ///
+    /// Bounds the retry an unconsumed marker would otherwise allow forever. An
+    /// interrupted restore resumes; an impossible one stops and says so.
+    #[serde(default)]
+    attempts: u32,
 }
 
 /// Validate an export and SCHEDULE it. Nothing live is touched here.
@@ -468,6 +474,7 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
             export_path: export_path.to_string_lossy().to_string(),
             requested_at: crate::util::now_iso(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
+            attempts: 0,
         })
         .map_err(|e| AppError::Internal(e.to_string()))?,
     )?;
@@ -498,14 +505,52 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         return Ok(None);
     }
 
-    // Consume the marker FIRST. A restore that fails must not be retried on
-    // every launch forever; the failure is reported once, loudly, and the user
-    // still has both the export and their data.
-    let raw = std::fs::read(&marker)?;
-    std::fs::remove_file(&marker)?;
+    /*
+     * The marker survives until the restore SUCCEEDS.
+     *
+     * It used to be consumed first, on the reasoning that a failing restore
+     * must not be retried forever. That trades one problem for a worse one: a
+     * crash or a power loss part way through the copy left partial live data,
+     * no marker, and no automatic retry — an application that will not open
+     * and no record of what was happening to it.
+     *
+     * Bounded instead of abandoned. Each attempt increments a counter in the
+     * marker, and after `MAX_RESTORE_ATTEMPTS` the marker is retired and the
+     * failure reported — so a genuinely impossible restore stops, and an
+     * interrupted one resumes.
+     */
+    const MAX_RESTORE_ATTEMPTS: u32 = 3;
 
-    let pending: PendingRestore = serde_json::from_slice(&raw)
-        .map_err(|e| AppError::invalid_input(format!("The pending restore was unreadable: {e}")))?;
+    let raw = std::fs::read(&marker)?;
+    let mut pending: PendingRestore = serde_json::from_slice(&raw)
+        .map_err(|e| {
+            // An unreadable marker cannot be counted or retried; remove it so
+            // the next launch is not stuck on it.
+            let _ = std::fs::remove_file(&marker);
+            AppError::invalid_input(format!("The pending restore was unreadable: {e}"))
+        })?;
+
+    pending.attempts += 1;
+    if pending.attempts > MAX_RESTORE_ATTEMPTS {
+        let _ = std::fs::remove_file(&marker);
+        return Err(AppError::structured(
+            "RESTORE_FAILED",
+            crate::errors::ErrorCategory::Storage,
+            format!(
+                "CandidCue tried to restore from {} on {} launches and could not finish. \
+                 It has stopped trying; your previous data is in the quarantine folder.",
+                pending.export_path, MAX_RESTORE_ATTEMPTS
+            ),
+            true,
+        )
+        .with_action(crate::errors::RecoveryAction::RevealFolder));
+    }
+    // Record the attempt before making it, so a hard crash still counts.
+    std::fs::write(
+        &marker,
+        serde_json::to_vec_pretty(&pending).unwrap_or_default(),
+    )?;
+
     let export_root = PathBuf::from(&pending.export_path);
 
     let manifest = read_and_validate_manifest(&export_root)?;
@@ -564,6 +609,9 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
 
     match outcome {
         Ok(()) => {
+            // Only now. An interrupted restore leaves the marker behind and
+            // the next launch resumes it; a finished one retires it.
+            let _ = std::fs::remove_file(&marker);
             tracing::info!(
                 from = %export_root.display(),
                 previous = %previous.display(),
@@ -572,30 +620,61 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             Ok(Some(previous))
         }
         Err(err) => {
-            // Put it back. Best-effort by necessity — the filesystem may be
-            // the reason we are here — and the moved-aside copy is on disk
-            // either way, which the error names.
+            /*
+             * Put it back, and say whether that WORKED.
+             *
+             * The first version ignored every error here and then told the
+             * user their previous data had been restored — a claim it had not
+             * checked. It also used a bare `rename`, while the forward path
+             * uses `move_or_copy`: across filesystems the evacuation would
+             * succeed by copying and the rollback would fail by renaming.
+             *
+             * The quarantine copy is on disk either way, so the honest answer
+             * is either "put back" or "not put back, and here is where it is".
+             */
+            let mut rollback_failures: Vec<String> = Vec::new();
+
             let _ = std::fs::remove_dir_all(&live_scripts);
             let _ = std::fs::remove_file(&live_database);
-            let _ = std::fs::rename(previous.join(SCRIPTS_DIR), &live_scripts);
+
+            let quarantined_scripts = previous.join(SCRIPTS_DIR);
+            if quarantined_scripts.exists() {
+                if let Err(e) = move_or_copy(&quarantined_scripts, &live_scripts) {
+                    rollback_failures.push(format!("scripts: {e}"));
+                }
+            }
             for suffix in ["", "-wal", "-shm"] {
                 let from = previous.join(format!("{DATABASE_NAME}{suffix}"));
                 if from.exists() {
-                    let _ = std::fs::rename(&from, paths.root().join(format!("{DATABASE_NAME}{suffix}")));
+                    let to = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
+                    if let Err(e) = move_or_copy(&from, &to) {
+                        rollback_failures.push(format!("{DATABASE_NAME}{suffix}: {e}"));
+                    }
                 }
             }
-            Err(AppError::structured(
-                "RESTORE_FAILED",
-                crate::errors::ErrorCategory::Storage,
+
+            let message = if rollback_failures.is_empty() {
                 format!(
                     "The restore did not finish and CandidCue put your previous data back. \
                      A copy of it is also at {}.",
                     previous.display()
-                ),
+                )
+            } else {
+                format!(
+                    "The restore did not finish, and CandidCue could not fully put your \
+                     previous data back either. All of it is at {} — nothing was deleted.",
+                    previous.display()
+                )
+            };
+
+            Err(AppError::structured(
+                "RESTORE_FAILED",
+                crate::errors::ErrorCategory::Storage,
+                message,
                 true,
             )
             .with_action(crate::errors::RecoveryAction::RevealFolder)
-            .with_log(err.to_string()))
+            .with_log(format!("{err}; rollback: {rollback_failures:?}")))
         }
     }
 }

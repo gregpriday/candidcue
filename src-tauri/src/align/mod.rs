@@ -357,31 +357,27 @@ impl AlignmentState {
     ///
     /// Distinct from `set_position_and_publish`, which asserts a position.
     /// See `Engine::reacquire` for why the two must not be the same call.
-    pub fn reacquire_and_publish<R: tauri::Runtime>(
-        &self,
-        app: &tauri::AppHandle<R>,
-        first_token: f64,
-        last_token: f64,
-    ) {
-        if let Some(snapshot) = self.reacquire(first_token, last_token) {
+    pub fn reacquire_and_publish<R: tauri::Runtime>(&self, app: &tauri::AppHandle<R>) {
+        if let Some(snapshot) = self.reacquire() {
             publish(app, &snapshot);
         }
     }
 
-    fn reacquire(&self, first_token: f64, last_token: f64) -> Option<AlignmentSnapshot> {
+    fn reacquire(&self) -> Option<AlignmentSnapshot> {
         let mut guard = self.lock();
         let session = guard.as_mut()?;
-        // The ONE conversion in the system, in the module that owns it: the
-        // caller speaks in rendered tokens, the engine in atoms.
-        let first = session.engine.script.atom_at(first_token).round().max(0.0) as u32;
-        let last = session.engine.script.atom_at(last_token).round().max(0.0) as u32;
-        let centre = first + (last.saturating_sub(first)) / 2;
-        // Half the visible span either side, so the prior covers the screen
-        // and a little beyond it — the reader saying "here" means "on this
-        // screen", not "at this word".
-        let window = (last.saturating_sub(first) / 2).max(1);
+        /*
+         * No window is passed in.
+         *
+         * The engine reopens its search over whatever viewport the STAGE last
+         * reported — the tokens actually on the glass. The first version had
+         * the caller fabricate ±150 atoms around the engine's own
+         * `observedToken`, which is close to the mistake this replaced: that
+         * position is exactly what the presenter is disputing, so centring on
+         * it prioritises the passage most likely to be wrong.
+         */
         let at = session.last_audio_ms;
-        let snapshot = session.engine.reacquire(centre, window, at);
+        let snapshot = session.engine.reacquire(at);
         Some(project_to_tokens(&snapshot, &session.engine.script, session.label))
     }
 

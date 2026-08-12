@@ -48,7 +48,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { awaitViewportSettled, exitPresentation, painted } from './services/control-window';
   import { canvasIsBlack, coverIsUp, presentingPhase, setPresentingPhase } from './stores/presenting';
   import { navigate, registerNavigationGuard, route, setInitialRoute } from './stores/router';
-  import { clearSession, session, stopSession } from './stores/session';
+  import {
+    awaitPendingPersistence,
+    clearSession,
+    session,
+    stopSession,
+  } from './stores/session';
   import { loadSettings } from './stores/settings';
   import { showToast } from './stores/toasts';
 
@@ -460,10 +465,25 @@ import { rememberReaderFrame } from './lib/reader-frame';
         // quitting is not a different kind of record from one that ended by
         // pressing End.
         name: 'end-take',
-        run: () => {
-          if (!get(session).active) return;
-          stopSession();
-          clearSession();
+        run: async () => {
+          if (get(session).active) {
+            stopSession();
+            clearSession();
+          }
+          /*
+           * AWAITED, and that is the whole point of this step.
+           *
+           * `stopSession` issues the retained transcript tail, the take row
+           * and the session-row closure as `void promise.catch(…)` — right
+           * during a take, where a slow database must never stall the live
+           * loop, and wrong at the moment the process exits. Without this the
+           * handshake reported "the take was finished" and Rust exited out
+           * from under three writes that were still on the wire.
+           *
+           * The next launch can close an orphaned session row. It cannot
+           * reconstruct a lost transcript or take.
+           */
+          await awaitPendingPersistence();
         },
       },
       {

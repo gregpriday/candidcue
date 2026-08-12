@@ -90,6 +90,17 @@ async function adoptOpticalFromOverlay(): Promise<void> {
       optical: pending,
     });
     state.set(saved);
+    /*
+     * Only now, and this ordering is the fix.
+     *
+     * The legacy overlay copy has to outlive the write that adopts it — if the
+     * write fails, the fallback the user is relying on must still be there.
+     * And it has to be removed once the write lands, or it sits as a second
+     * answer: `applyOverlayPatch` skips `optical`, so nothing else would ever
+     * clear it, and a user who later deleted their last rig would find it
+     * resurrected from the copy.
+     */
+    settingsService.forgetOverlayOptical();
   } catch (err) {
     showToast(
       'CandidCue could not move your saved teleprompter calibrations into permanent ' +

@@ -64,7 +64,7 @@ export interface TrackingDriver {
    * is the one place it is demonstrably not finding the reader. See
    * `Engine::reacquire`.
    */
-  reacquire(firstToken: number, lastToken: number): void;
+  reacquire(): void;
 }
 
 export function newSessionId(): string {
@@ -166,8 +166,8 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
     moveToToken(tokenIndex: number) {
       moveTo(tokenIndex);
     },
-    reacquire(firstToken: number, lastToken: number) {
-      void reacquireAlignment(firstToken, lastToken).catch(() => {
+    reacquire() {
+      void reacquireAlignment().catch(() => {
         // A reacquisition that cannot reach Rust leaves the engine exactly as
         // it was, which is the state the presenter was complaining about —
         // but it is not worth a dialog mid-take, and the toast has already
@@ -307,7 +307,7 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
       sentenceIndex = best;
       emit('following', 'manualAnchor', 0.95);
     },
-    reacquire(firstToken: number, lastToken: number) {
+    reacquire() {
       /*
        * The mock mirrors the REAL behaviour, which is the point of it being a
        * separate method at all: a reacquisition goes to `searching` and holds,
@@ -315,12 +315,6 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
        * here would be stronger than production, and a mock being stronger than
        * production is exactly what hid the conflict branch in the editor.
        */
-      let best = 0;
-      const centre = (firstToken + lastToken) / 2;
-      sentences.forEach((s, i) => {
-        if (s.startTokenIndex <= centre) best = i;
-      });
-      sentenceIndex = best;
       emit('searching', 'noEvidence', 0);
     },
     dispose() {

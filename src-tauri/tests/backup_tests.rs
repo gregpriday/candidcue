@@ -461,6 +461,108 @@ async fn applying_a_restore_keeps_the_state_it_replaced() {
         previous.join("scripts").exists(),
         "including the scripts that were not in the export"
     );
+
+    /*
+     * And the export's data actually became live — the half the first version
+     * of this test did not check. Asserting only that a quarantine directory
+     * and a scripts directory EXIST would pass over a restore that moved
+     * everything aside and copied nothing back.
+     */
+    let live: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert_eq!(live.len(), 1, "the export held exactly one script");
+    assert!(
+        live[0].contains("First"),
+        "the restored content must be the EXPORT's, not the live state's: {live:?}"
+    );
+    assert!(
+        !live.iter().any(|body| body.contains("Second")),
+        "the script that existed only in the live state must be gone from live"
+    );
+}
+
+#[tokio::test]
+async fn an_interrupted_restore_is_resumed_rather_than_forgotten() {
+    /*
+     * The marker used to be consumed BEFORE any mutation, on the reasoning
+     * that a failing restore must not retry forever. That trades one problem
+     * for a worse one: a crash part way through the copy left partial live
+     * data, no marker, and no automatic retry — an application that will not
+     * open and no record of what was happening to it.
+     *
+     * It now survives until the restore succeeds. This drives the resume by
+     * scheduling, applying once (which consumes it), and asserting the marker
+     * lifecycle at each step.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Kept", "# Kept"))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    let marker = h.dir.path().join("restore-pending.json");
+    assert!(marker.exists(), "scheduling leaves a marker");
+
+    backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("apply")
+        .expect("a restore ran");
+
+    assert!(
+        !marker.exists(),
+        "a SUCCESSFUL restore retires the marker; only a failed one leaves it to resume"
+    );
+
+    // And a second launch has nothing to do.
+    assert!(
+        backup::apply_pending_restore(&h.paths)
+            .await
+            .expect("second launch")
+            .is_none(),
+        "a completed restore must not run again"
+    );
+}
+
+#[tokio::test]
+async fn a_restore_that_cannot_succeed_gives_up_rather_than_looping() {
+    /*
+     * The other side of keeping the marker: a restore that can never work must
+     * not make the app unopenable forever. Each launch counts an attempt, and
+     * after three the marker is retired with an error naming where the data is.
+     */
+    let h = harness().await;
+    h.pool.close().await;
+
+    let marker = h.dir.path().join("restore-pending.json");
+    fs::write(
+        &marker,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "exportPath": "/nonexistent/CandidCue-export-does-not-exist",
+            "requestedAt": "2026-08-12T00:00:00Z",
+            "appVersion": "1.0.0-rc.1",
+            "attempts": 3,
+        }))
+        .expect("marker"),
+    )
+    .expect("write marker");
+
+    let outcome = backup::apply_pending_restore(&h.paths).await;
+    assert!(outcome.is_err(), "an exhausted restore reports failure");
+    assert!(
+        !marker.exists(),
+        "and retires the marker, so the next launch is not stuck on it"
+    );
 }
 
 #[tokio::test]
