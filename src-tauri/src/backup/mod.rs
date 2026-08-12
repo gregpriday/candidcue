@@ -490,10 +490,7 @@ fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError>
     // And the directory entry itself. Without this the rename can be lost even
     // though the file's own bytes survived — and a discarded error here would
     // mean reporting a durable write that is not one.
-    #[cfg(unix)]
-    if let Some(parent) = marker.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
-    }
+    sync_dir(parent_of(marker))?;
     Ok(())
 }
 
@@ -723,7 +720,18 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         } else {
             std::fs::create_dir_all(&live_scripts)?;
         }
+        sync_dir(parent_of(&live_scripts))?;
         std::fs::copy(export_root.join(DATABASE_NAME), &live_database)?;
+        /*
+         * Durable before it is called a success.
+         *
+         * `verify_database_file` below reads it straight back, and a read
+         * satisfied from the page cache proves nothing about what is on disk.
+         * The marker is then flagged `completed` — durably — so a crash here
+         * would retire a restore whose database never landed.
+         */
+        sync_file(&live_database)?;
+        sync_dir(parent_of(&live_database))?;
 
         // The restored database has to open and pass its own integrity check
         // before this is called a success. A copy that arrived truncated would
@@ -772,12 +780,8 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             }
             match std::fs::remove_file(&marker) {
                 Ok(()) => {
-                    #[cfg(unix)]
-                    if let Some(parent) = marker.parent() {
-                        if let Ok(dir) = std::fs::File::open(parent) {
-                            let _ = dir.sync_all();
-                        }
-                    }
+                    // The removal, durably: otherwise the marker can come back.
+                    let _ = sync_dir(parent_of(&marker));
                 }
                 Err(err) => tracing::warn!(
                     error = %err,
@@ -1138,18 +1142,71 @@ fn set_aside(from: &Path, previous: &Path, attempt: u32) -> Result<(), AppError>
     move_or_copy(from, &aside.join(file_name))
 }
 
+/// fsync a directory, so an entry created or removed inside it is durable.
+///
+/// A rename is atomic and a copy returns success long before either reaches the
+/// platter. The restore journal writes down "this component is now safely in
+/// quarantine" immediately afterwards, and that record IS durable — so without
+/// this, a power loss can leave a marker naming bytes that never landed, which
+/// is the one way a rollback could restore an incomplete original over live
+/// data.
+///
+/// No-op off Unix: Windows has no directory handle to flush, and its rename is
+/// journalled by the filesystem instead.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// fsync one file by path.
+fn sync_file(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+/// The directory an entry lives in, for the two syncs a move needs.
+fn parent_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(Path::new("."))
+}
+
 fn move_or_copy(from: &Path, to: &Path) -> Result<(), AppError> {
     match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // Both ends: the entry appeared in one directory and vanished from
+            // another, and either half can be lost on its own.
+            sync_dir(parent_of(to))?;
+            let from_parent = parent_of(from);
+            if from_parent != parent_of(to) {
+                sync_dir(from_parent)?;
+            }
+            Ok(())
+        }
         Err(err) if err.raw_os_error() == Some(18) => {
-            // EXDEV. Copy, verify it landed, and only then remove the source.
+            /*
+             * EXDEV. Copy, get it onto the platter, and only then remove the
+             * source.
+             *
+             * The order is the whole point: `fs::copy` reaching the page cache
+             * is not the original being safe somewhere else, and the source is
+             * about to be deleted on the strength of it.
+             */
             if from.is_dir() {
                 copy_tree(from, to)?;
+                sync_dir(parent_of(to))?;
                 std::fs::remove_dir_all(from)?;
             } else {
                 std::fs::copy(from, to)?;
+                sync_file(to)?;
+                sync_dir(parent_of(to))?;
                 std::fs::remove_file(from)?;
             }
+            sync_dir(parent_of(from))?;
             Ok(())
         }
         Err(err) => Err(err.into()),
@@ -1411,12 +1468,13 @@ pub fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
              * live data. The cost is one fsync per file on a path that runs
              * once per export or restore.
              */
-            std::fs::File::open(&target)?.sync_all()?;
+            sync_file(&target)?;
         }
     }
-    // The directory entries themselves, for the same reason.
-    #[cfg(unix)]
-    std::fs::File::open(to)?.sync_all()?;
+    // The directory entry itself, for the same reason. The PARENT is synced by
+    // the caller, which is the one that knows whether this tree appearing is
+    // the fact being recorded.
+    sync_dir(to)?;
     Ok(())
 }
 
