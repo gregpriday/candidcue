@@ -1738,16 +1738,23 @@ async fn a_resume_does_not_mistake_its_own_output_for_the_users_data() {
 }
 
 #[tokio::test]
-async fn a_finished_restore_that_could_not_delete_its_marker_does_not_replay() {
+async fn a_marker_flagged_completed_is_retired_rather_than_replayed() {
     /*
      * `remove_file` on the marker was a `let _ =`. If it fails, the next launch
-     * replays a restore over data that has already been restored: it quarantines
-     * the result and copies the export in again — and if the export has since
-     * been deleted, it fails and keeps failing.
+     * replays a restore over data that has already been restored: it sets the
+     * result aside and copies the export in again — and if the export has since
+     * been deleted, it fails and keeps failing. The success path now records
+     * `completed` durably BEFORE removing the marker, so both the failed
+     * removal and a crash in that window land on the same recorded state.
      *
-     * The marker now carries `completed`, and a launch that sees it removes the
-     * marker and does nothing else. Simulated by writing the flag directly,
-     * which is exactly the state the failed removal leaves behind.
+     * SCOPE, precisely — the name says what it proves. This covers the READ
+     * side: a marker carrying `completed` is retired without a replay, even
+     * when the export it names has since vanished (so a replay could not pass
+     * this by accident). It does NOT prove the write side, because making
+     * `remove_file` fail while leaving the same directory writable enough for
+     * `write_marker` to succeed cannot be arranged: both act on one directory.
+     * The ordering that makes the write side work is asserted by reading it,
+     * and the residual is documented at the call site.
      */
     let h = harness().await;
     let dest = tempfile::tempdir().expect("dest");

@@ -22,7 +22,9 @@
  * ---------------------------------------------------------------------------
  * WHAT A BUDGET MEASURED THIS WAY DOES AND DOES NOT CLAIM
  * ---------------------------------------------------------------------------
- * It claims a WARMED STEADY-STATE lower bound, and nothing else. A minimum
+ * It claims that at least one warmed run came in under the budget — best-case
+ * behaviour, not a bound on execution time, and worth being precise about
+ * because "lower bound" reads like the opposite of what a minimum shows. A minimum
  * cannot see a regression that only some runs suffer: a cold-start cost, an
  * allocation pattern that provokes a collection every few passes, a cache-size
  * cliff, a tail. Those are real regressions and these tests will not catch
@@ -31,7 +33,7 @@
  *
  * One test changed meaning: the stage wrap-plan budget used to time a COLD
  * first call and now times a warmed one, so it no longer says anything about
- * first-plan latency. If that ever matters, it wants its own test that says so
+ * first-plan latency (which is what a presenter actually waits for). If that ever matters, it wants its own test that says so
  * rather than a budget quietly doing two jobs.
  *
  * Not exported from a test file, because two of the callers live under `src/`

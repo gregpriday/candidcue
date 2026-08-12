@@ -488,12 +488,11 @@ fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError>
     }
     std::fs::rename(&temporary, marker)?;
     // And the directory entry itself. Without this the rename can be lost even
-    // though the file's own bytes survived.
+    // though the file's own bytes survived — and a discarded error here would
+    // mean reporting a durable write that is not one.
     #[cfg(unix)]
     if let Some(parent) = marker.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+        std::fs::File::open(parent)?.sync_all()?;
     }
     Ok(())
 }
@@ -609,15 +608,10 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         })?;
 
     /*
-     * A restore that finished but could not delete its own marker. There is
-     * nothing left to do but remove it — replaying would quarantine the
-     * restored data and copy the export over it a second time.
-     */
-
-    /*
-     * A restore that finished but could not delete its own marker. There is
-     * nothing left to do but remove it — replaying would quarantine the
-     * restored data and copy the export over it a second time.
+     * A restore that finished but could not delete its own marker — or crashed
+     * in the window between recording that it finished and removing it. There
+     * is nothing left to do but remove it: replaying would set the restored
+     * data aside and copy the export over it a second time.
      */
     if pending.completed {
         let _ = std::fs::remove_file(&marker);
@@ -755,12 +749,41 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
              * re-copying an export that may no longer exist. `completed` makes
              * the next launch remove the marker and do nothing else.
              */
-            if let Err(err) = std::fs::remove_file(&marker) {
-                tracing::warn!(error = %err, "could not remove the restore marker after a successful restore");
-                pending.completed = true;
-                if let Err(e) = write_marker(&marker, &pending) {
-                    tracing::error!(error = %e, "and could not mark it completed either");
+            pending.completed = true;
+            /*
+             * Recorded BEFORE the delete, not after it fails.
+             *
+             * Between "the restore succeeded" and "the marker is gone" there is
+             * a window, and a crash inside it used to mean the next launch
+             * replayed the whole restore over data that had already been
+             * restored. Writing the flag first — durably, see `write_marker` —
+             * turns that window into a launch that reads `completed`, removes
+             * the marker and does nothing else.
+             *
+             * HONEST LIMIT: if the flag cannot be written AND the marker cannot
+             * be removed, there is nowhere left to record that this finished,
+             * and the next launch will resume. It is not destructive — the
+             * originals are still in quarantine, and a resume sets the restored
+             * state aside rather than deleting it — but it is work nobody
+             * asked for, and both failures are logged.
+             */
+            if let Err(e) = write_marker(&marker, &pending) {
+                tracing::error!(error = %e, "could not record that the restore finished");
+            }
+            match std::fs::remove_file(&marker) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    if let Some(parent) = marker.parent() {
+                        if let Ok(dir) = std::fs::File::open(parent) {
+                            let _ = dir.sync_all();
+                        }
+                    }
                 }
+                Err(err) => tracing::warn!(
+                    error = %err,
+                    "could not remove the restore marker after a successful restore; \
+                     it is flagged completed, so the next launch will retire it"
+                ),
             }
             tracing::info!(
                 from = %export_root.display(),
@@ -815,18 +838,32 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                          * the error names the folder. Stuck and honest beats
                          * proceeding from something that might be half a copy.
                          */
+                        let mut journal_cleared = true;
                         if let Some(name) =
                             quarantined.file_name().map(|n| n.to_string_lossy().to_string())
                         {
                             if pending.evacuated.iter().any(|n| n == &name) {
                                 pending.evacuated.retain(|n| n != &name);
                                 if let Err(e) = write_marker(&marker, &pending) {
-                                    tracing::warn!(
-                                        error = %e,
-                                        "could not update the restore journal before a rollback"
-                                    );
+                                    /*
+                                     * And STOP. Moving on with the journal
+                                     * still claiming a complete original is in
+                                     * quarantine is the state this ordering
+                                     * exists to avoid: interrupt the move and
+                                     * a later attempt trusts half a copy.
+                                     * Leaving the original where it is costs
+                                     * the user a manual step and the message
+                                     * below names the folder.
+                                     */
+                                    pending.evacuated.push(name.clone());
+                                    journal_cleared = false;
+                                    rollback_failures
+                                        .push(format!("{}: journal not updated: {e}", live.display()));
                                 }
                             }
+                        }
+                        if !journal_cleared {
+                            continue;
                         }
                         // Remove whatever the commit put there, then move the
                         // original back over it.
@@ -1063,6 +1100,13 @@ fn evacuate_component(
                 evacuated.push(Evacuated::Absent {
                     live: from.to_path_buf(),
                 });
+                // Journalled, exactly like the branch below. This one was
+                // missed at first, and the miss is the whole defect the
+                // persisted absence exists to prevent: a component recorded
+                // only in memory looks like the user's original to the next
+                // launch once the commit has created something at that path.
+                pending.absent.push(name.to_string());
+                write_marker(marker, pending)?;
             }
             Err(e) => return Err(e),
         }
@@ -1356,8 +1400,23 @@ pub fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
             copy_tree(&entry.path(), &target)?;
         } else if file_type.is_file() {
             std::fs::copy(entry.path(), &target)?;
+            /*
+             * Flushed, because a caller writes down that this copy is COMPLETE.
+             *
+             * `move_or_copy` falls back to copy-then-remove across filesystems,
+             * and the restore journal then records the component as safely in
+             * quarantine. `fs::copy` only reaches the page cache, so a power
+             * loss could leave the journal naming bytes that are not there —
+             * and a later rollback would restore an incomplete original over
+             * live data. The cost is one fsync per file on a path that runs
+             * once per export or restore.
+             */
+            std::fs::File::open(&target)?.sync_all()?;
         }
     }
+    // The directory entries themselves, for the same reason.
+    #[cfg(unix)]
+    std::fs::File::open(to)?.sync_all()?;
     Ok(())
 }
 
