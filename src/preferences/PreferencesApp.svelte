@@ -59,7 +59,8 @@
   import { loadSettings } from '../control/stores/settings';
   import { showToast } from '../control/stores/toasts';
   import { isSettingsSection } from '../control/lib/commands';
-  import { reloadWorkspace, workspace, WORKSPACE_STORAGE_KEY } from '../control/stores/workspace';
+  import { SETTINGS_OVERLAY_KEY } from '../control/services/settings';
+  import { workspace } from '../control/stores/workspace';
 
   let ready = $state(false);
   let failure = $state<string | null>(null);
@@ -93,14 +94,20 @@
     /*
      * Overlay settings, which never reach Rust.
      *
-     * Stage font, stage type size and mirror live in `localStorage` rather than
-     * in the settings document, so `settings://changed` says nothing about
-     * them. `localStorage` raises a `storage` event in the OTHER documents of
-     * the origin, which is precisely this case, and re-reading the workspace
-     * store from it is what keeps the two windows agreeing about the stage.
+     * Stage font and stage type size are composed into the settings document
+     * from a `localStorage` overlay (`services/settings.ts`), not written to the
+     * database — so `settings://changed` says nothing about them and this window
+     * would keep showing what it read at launch. `localStorage` raises a
+     * `storage` event in the OTHER documents of the origin, which is exactly
+     * this case; re-reading composes the document again from Rust plus the
+     * overlay as it now stands.
+     *
+     * The WORKSPACE store is deliberately not watched. It holds this window's
+     * own pane geometry, and adopting another window's layout would move panes
+     * under the user's hands.
      */
-    const teardownOverlay = installOverlaySync([WORKSPACE_STORAGE_KEY], () => {
-      reloadWorkspace();
+    const teardownOverlay = installOverlaySync([SETTINGS_OVERLAY_KEY], () => {
+      void loadSettings(true);
     });
 
     /*

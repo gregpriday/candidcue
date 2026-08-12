@@ -134,7 +134,18 @@ interface RustRestoreResult {
   restartRequired: boolean;
 }
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+/**
+ * Exported so another WINDOW can watch it.
+ *
+ * The overlaid fields — stage font, stage type size, the presentation-mode
+ * toggles — never reach Rust, so `settings://changed` says nothing about them
+ * and a second window would go on showing the value it read at launch.
+ * `localStorage` raises a `storage` event in the OTHER documents of the origin
+ * when this key moves, and that is the only signal there is. See
+ * `installOverlaySync` in `services/settings-sync.ts`.
+ */
+export const SETTINGS_OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = SETTINGS_OVERLAY_KEY;
 
 type Overlay = Partial<{
   [K in keyof AppSettings]: Partial<AppSettings[K]>;

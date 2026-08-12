@@ -72,7 +72,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
     type BootStatusReport,
   } from './services/recovery';
   import { installShutdownHandshake } from './services/shutdown';
-  import { emitSettingsSection, installSettingsSync } from './services/settings-sync';
+  import {
+    emitSettingsSection,
+    installOverlaySync,
+    installSettingsSync,
+  } from './services/settings-sync';
+  import { SETTINGS_OVERLAY_KEY } from './services/settings';
   import { listScripts } from './services/scripts';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
@@ -356,6 +361,21 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * optimistic-concurrency check nobody could account for.
      */
     const teardownSettingsSync = installSettingsSync();
+
+    /*
+     * And the OVERLAY, which the broadcast above cannot carry.
+     *
+     * Stage font and stage type size are composed into the settings document
+     * from a `localStorage` overlay rather than written to the database, so a
+     * change made in the Settings window commits no revision and emits no
+     * `settings://changed`. This is the window that composes the take from
+     * those values; without this it would go on using the ones it read at
+     * launch, and the presenter would see the old type size on the glass while
+     * Settings showed the new one.
+     */
+    const teardownOverlaySync = installOverlaySync([SETTINGS_OVERLAY_KEY], () => {
+      void loadSettings(true);
+    });
 
     const teardownDrop = installDragDrop({
       onhover: (payload) => {
@@ -743,6 +763,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       teardownMenuFocus();
       teardownDrop();
       teardownSettingsSync();
+      teardownOverlaySync();
       teardownShortcuts();
       teardownHelp();
       unregisterLiveGuard();

@@ -32,17 +32,20 @@
  */
 import { writable, type Readable } from 'svelte/store';
 
-/**
- * Exported so another WINDOW can watch it.
+/*
+ * NOT shared between windows, and not watched for `storage` events.
  *
- * The overlay settings that live in here — stage font, stage type size — never
- * reach Rust, so `settings://changed` says nothing about them and the Settings
- * window would go on showing the value it read at mount. `localStorage` raises
- * a `storage` event in the other documents of the origin when this key moves,
- * and that is the only signal there is; see `installOverlaySync`.
+ * This is pane geometry: which rails are open, how wide they are, the
+ * editor/preview split. Adopting another window's copy would move panes under
+ * somebody's hands, and there is nothing here a second window edits. The
+ * overlay that DOES need cross-window sync is the settings overlay in
+ * `services/settings.ts`, which is a different key for a different reason.
+ *
+ * `settingsSection` is the one field two windows both touch, and it is handed
+ * over deliberately — written and flushed before the window opens, and
+ * broadcast when it is already open — rather than by watching storage.
  */
-export const WORKSPACE_STORAGE_KEY = 'candidcue.workspace.v1';
-const STORAGE_KEY = WORKSPACE_STORAGE_KEY;
+const STORAGE_KEY = 'candidcue.workspace.v1';
 
 /** Which panes each route can show, and the range each may be dragged to. */
 export const PANE_LIMITS = {
@@ -269,26 +272,6 @@ const state = writable<WorkspaceState>(load());
 
 export const workspace: Readable<WorkspaceState> = { subscribe: state.subscribe };
 
-/**
- * Re-read the workspace from storage, discarding what is held here.
- *
- * For the case where ANOTHER WINDOW wrote it: `localStorage` is shared across
- * webviews of one origin, and the `storage` event says a key moved without
- * saying what it now holds. Re-reading is the whole update — this store's
- * source of truth genuinely is storage, unlike the settings document, whose
- * source of truth is the database and which is therefore broadcast in full.
- *
- * Any pending write-behind of OUR OWN is cancelled first, because it would
- * otherwise land afterwards and put back exactly the value just superseded.
- */
-export function reloadWorkspace(): void {
-  if (flushTimer !== null) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-  pending = null;
-  state.set(load());
-}
 
 /**
  * Write-behind, so a drag does not put one storage write on the main thread per
