@@ -21,10 +21,15 @@ pnpm install
 pnpm tauri dev
 ```
 
-That opens two windows: the **control** window, where you write and configure,
-and the **stage** window, which goes on your second display. On first run, take
-the **"Open the sample script"** button — the sample is written to be read out
-loud and tells you what to watch for while you read it.
+That opens the **control** window, where you write and configure. Pressing
+Present reshapes THAT window into the prompter — the supported production path
+is single-window (`src/control/lib/start-take.ts`), which is what removed the
+cross-WebView critical path a take used to depend on. A separate **stage**
+window still exists for the preview and compatibility paths, and
+`src/stage/` is the renderer both use.
+
+On first run, take the **"Open the sample script"** button — the sample is
+written to be read out loud and tells you what to watch for while you read it.
 
 Voice following needs nothing configured — no key, no account. It does need the
 recogniser, which ships in neither git nor the installer: open **Settings ›

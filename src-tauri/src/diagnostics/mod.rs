@@ -8,7 +8,11 @@
 
 use serde::Serialize;
 
-pub(crate) mod logging;
+// `pub` rather than `pub(crate)`: the support-bundle privacy canaries in
+// `tests/backup_tests.rs` drive `copy_support_logs` directly. That test is the
+// only thing standing between "callers pass step names, not user content" —
+// a convention — and a script line reaching a file the user emails to support.
+pub mod logging;
 
 /// The module-wide `allow(dead_code)` that used to sit at the top of this file
 /// is scoped to these two instead: `get_system_diagnostics` builds its own,

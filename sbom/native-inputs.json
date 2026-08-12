@@ -1,0 +1,96 @@
+{
+  "recordedAt": "2026-08-12T13:31:40.938Z",
+  "note": "Prebuilt native libraries fetched by sherpa-onnx-sys during the build. They are in the signed artifact and in neither lockfile, so their digests are recorded here as part of the release provenance.",
+  "libraries": [
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libespeak-ng.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 446248,
+      "sha256": "12126c13b1f5561e78954a8ead1300c9ea0b916f722782a5bda6d6c51a3faca3"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libkaldi-decoder-core.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 729056,
+      "sha256": "40eb8ec9f3b9b1439627c0b116f3c10f29bb5d54bbab3c3e67a228aa1848f38e"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libkaldi-native-fbank-core.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 233656,
+      "sha256": "0e2dc988d3e241a545eb7bc5f8f5b11bf2fb788954b85943af669c6b200f9746"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libkissfft-float.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 19944,
+      "sha256": "3026b0df246e13abc03e991180a75b28760bc191a1451a21f637262d7dfa1e69"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libonnxruntime.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 68886248,
+      "sha256": "a5a9867ec20d66263569d2a487cf7ce1be7a167f961342bc1cef2419d4a52995"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libpiper_phonemize.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 381920,
+      "sha256": "702af32f5273ac82710b5b2d10dd597eba1ccfd2ef740bf04682b94c33329521"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-c-api.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 373032,
+      "sha256": "426d316158d7a5f260c7fac177d686e5cef5acff519a5a5a0c9c6210b9afcf4d"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-core.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 14394112,
+      "sha256": "fa391e4c4c1401991860706d929d1bb24ed256abc7754162a79421091474f616"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-cxx-api.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 150072,
+      "sha256": "da2e192d98c6a21f623582d5b56933e2d8333342c7c4369198659a49832412f2"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-fst.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 2535400,
+      "sha256": "9d4eaa4b855dc3b9502a303ebf7e368bfcdd51bfe506a3b3e692675b7f941956"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-fstfar.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 55920,
+      "sha256": "403cecbf46ea012e8b7062d314b533d56d92ac425caa6065e01109e552fdeae8"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-kaldifst-core.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 1585872,
+      "sha256": "8cb96b0664ee1b7a2592965442a540df70390e683e242852535554fc964d3d7a"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libsherpa-onnx-portaudio_static.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 124128,
+      "sha256": "fffa50c2fcfc883bd8e1c9c7be29200656f473e5edd4299beedff1de00e19e02"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libssentencepiece_core.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 151000,
+      "sha256": "f88eba8838d0580283281e36bad2dcb706f7a02b98713f8688d253599e4be19e"
+    },
+    {
+      "path": "src-tauri/target/sherpa-onnx-prebuilt/sherpa-onnx-v1.13.4-osx-arm64-static-lib/lib/libucd.a",
+      "release": "sherpa-onnx-v1.13.4-osx-arm64-static-lib",
+      "bytes": 206336,
+      "sha256": "40cde73c1b4c76a221f7660ebee126fd5d790653aafc94d78e54d254b35b81b3"
+    }
+  ]
+}

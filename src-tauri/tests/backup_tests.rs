@@ -789,3 +789,137 @@ async fn the_mutating_commands_actually_carry_the_guard() {
         );
     }
 }
+
+/* ------------------------------------------- support-bundle privacy canaries */
+
+/// A support bundle must not carry the user's name or a URL's query string.
+///
+/// The 1.0 readiness review's point was precise: the diagnostics module's
+/// comments say callers pass step names, states and timings rather than user
+/// content, and *that is a convention, not an enforceable type boundary*.
+///
+/// A convention cannot be tested. Two things can:
+///
+///  1. that the shapes which DO leak reliably are redacted on the way into the
+///     bundle — an absolute path under a home directory carries the person's
+///     real name, and a URL carries its query string;
+///  2. that the diagnostic call sites do not interpolate script or transcript
+///     text, which no pattern can recognise and which therefore has to be
+///     checked structurally. That is the test below this one.
+#[tokio::test]
+async fn a_support_bundle_redacts_paths_and_urls() {
+    use candidcue_lib::scripts::DataPaths;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = DataPaths::new(dir.path().to_path_buf());
+    std::fs::create_dir_all(paths.logs_dir()).expect("logs dir");
+
+    std::fs::write(
+        paths.logs_dir().join("candidcue-rust.2026-08-12.log"),
+        "2026-08-12T10:00:00Z INFO opened /Users/aurelia-fitzwilliam/Documents/keynote/script.md\n\
+         2026-08-12T10:00:01Z INFO fetched https://models.example.com/x-asr.tar.bz2?token=SECRETVALUE\n\
+         2026-08-12T10:00:02Z INFO alignment settled in 12ms\n",
+    )
+    .expect("write log");
+
+    let bundle = tempfile::tempdir().expect("bundle");
+    candidcue_lib::diagnostics::logging::copy_support_logs(&paths.logs_dir(), bundle.path())
+        .expect("copy logs");
+
+    let copied = std::fs::read_to_string(bundle.path().join("logs/candidcue-rust.2026-08-12.log"))
+        .expect("the bundle must contain the log");
+
+    // Anti-vacuity: an empty or missing copy would satisfy every ban below.
+    assert!(
+        copied.contains("alignment settled in 12ms"),
+        "the bundle must still carry the diagnostics it exists for: {copied}"
+    );
+
+    assert!(
+        !copied.contains("aurelia-fitzwilliam"),
+        "a home-directory path carries the user's real name:\n{copied}"
+    );
+    assert!(
+        !copied.contains("SECRETVALUE"),
+        "a URL query string carries whatever was in it:\n{copied}"
+    );
+    assert!(
+        copied.contains("models.example.com"),
+        "the host is the diagnostic value and must survive:\n{copied}"
+    );
+}
+
+/// No diagnostic call interpolates script or transcript text.
+///
+/// The half no pattern can catch, checked structurally instead. `trace(...)`
+/// and `log_client_diagnostic` both take a composed `String`, so the boundary
+/// is the CALL SITE — and a call site is something a test can read.
+#[test]
+fn diagnostic_calls_do_not_interpolate_user_content() {
+    let mut offenders = Vec::new();
+    let mut inspected = 0usize;
+
+    for rel in glob_sources() {
+        let source = std::fs::read_to_string(&rel).unwrap_or_default();
+        for (index, line) in source.lines().enumerate() {
+            if !line.contains("trace(") && !line.contains("logClientDiagnostic(") {
+                continue;
+            }
+            inspected += 1;
+            /*
+             * The variables that hold user content. A diagnostic line
+             * interpolating any of them is putting the user's writing, or
+             * what they said out loud, into a file they may email to support.
+             */
+            for banned in [
+                "${source}",
+                "${text}",
+                "${transcript}",
+                "${s.source}",
+                "${script.source}",
+                "${title}",
+            ] {
+                if line.contains(banned) {
+                    offenders.push(format!("{}:{}: {}", rel.display(), index + 1, line.trim()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        inspected > 0,
+        "found no diagnostic call sites at all, so this test proved nothing"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these diagnostic calls interpolate user content:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+fn glob_sources() -> Vec<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .join("src");
+    let mut found = Vec::new();
+    let mut pending = vec![root];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .extension()
+                .map(|e| e == "ts" || e == "svelte")
+                .unwrap_or(false)
+            {
+                found.push(path);
+            }
+        }
+    }
+    found
+}

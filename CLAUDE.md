@@ -4,10 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A voice-following teleprompter. You write Markdown in the **control** window; it
-renders on a second display in the **stage** window; an on-device model
-transcribes your speech; a deterministic Rust engine decides where in the script
-you are and scrolls the stage to match. Nothing on the glass is model-generated
+A voice-following teleprompter. You write Markdown in the **control** window;
+pressing Present reshapes that window into the prompter on your chosen display
+(single-window is the supported production path — `src/control/lib/start-take.ts`
+— with the separate **stage** window kept for preview and compatibility); an
+on-device model transcribes your speech; a deterministic Rust engine decides
+where in the script you are and scrolls the prompter to match. Nothing on the glass is model-generated
 — the model only transcribes, and it never leaves the machine.
 
 Tauri 2 + Svelte 5 (runes) + TypeScript frontend, Rust core, SQLite.

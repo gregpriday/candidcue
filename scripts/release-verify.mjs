@@ -143,6 +143,12 @@ const STEPS = [
   },
   {
     tier: 'full',
+    name: 'supply chain',
+    command: ['node', ['scripts/verify-supply-chain.mjs', 'licences']],
+    proves: 'no production dependency is under an unreviewed licence',
+  },
+  {
+    tier: 'full',
     name: 'no model weights',
     command: ['node', ['scripts/verify-no-model-weights.mjs']],
     proves: 'the bundle configuration declares no speech-model payload',

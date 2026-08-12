@@ -493,7 +493,7 @@ fn dir_size(path: &Path) -> u64 {
 /// An allowlist rather than "every `*.log`": the bundle is something a user
 /// hands to someone else, so what goes in it should be a decision made here and
 /// not a consequence of whatever happens to be sitting in the directory.
-pub(crate) fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
+pub fn copy_support_logs(logs_dir: &Path, bundle_dir: &Path) -> std::io::Result<()> {
     copy_support_logs_with_limit(logs_dir, bundle_dir, MAX_BUNDLED_FILE_BYTES)
 }
 
@@ -529,17 +529,104 @@ fn copy_support_logs_with_limit(
         // holding nothing. But it is reported rather than swallowed — a bundle
         // silently missing the log someone is about to go looking for is how
         // this issue happened in the first place.
-        if let Err(err) = copy_tail(&entry.path(), &dest.join(&name), max_bytes) {
+        if let Err(err) = copy_tail_redacted(&entry.path(), &dest.join(&name), max_bytes) {
             tracing::warn!(file = %name, error = %err, "a log file could not be added to the support bundle");
         }
     }
     Ok(())
 }
 
+/// Redact the things a log line should not carry out of the machine.
+///
+/// ## What this can and cannot do
+///
+/// It CANNOT tell script text from any other prose. There is no pattern for
+/// "a sentence the user wrote", so the defence against script and transcript
+/// content reaching a log is the CALLERS — diagnostics take step names, states
+/// and timings — and `support_bundle_redaction_tests` pins the shapes that can
+/// be recognised.
+///
+/// What it CAN do is the list the readiness review actually named: paths,
+/// URLs, and device names. Those leak reliably and identifiably:
+///
+/// * an absolute path under the user's home carries their **real name**, which
+///   is in every `/Users/somebody/…` this app logs;
+/// * a URL carries a query string, and a query string carries whatever was in
+///   it.
+///
+/// Applied on the way INTO the bundle rather than at the log call, deliberately.
+/// The local log is a debugging tool on the user's own machine and full paths
+/// are what make it useful there; the bundle is the copy that leaves.
+pub(crate) fn redact_log_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+
+    while !rest.is_empty() {
+        // A URL: keep the scheme and host, drop everything after it.
+        if let Some(start) = rest.find("http://").or_else(|| rest.find("https://")) {
+            out.push_str(&rest[..start]);
+            let url = &rest[start..];
+            let end = url
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                .unwrap_or(url.len());
+            let (url, tail) = url.split_at(end);
+            // Scheme + host, then a marker. Enough to say WHICH service was
+            // reached, which is the diagnostic value, without the query.
+            let host_end = url
+                .char_indices()
+                .skip("https://".len())
+                .find(|(_, c)| *c == '/' || *c == '?')
+                .map(|(i, _)| i)
+                .unwrap_or(url.len());
+            out.push_str(&url[..host_end]);
+            if host_end < url.len() {
+                out.push_str("/[redacted]");
+            }
+            rest = tail;
+            continue;
+        }
+
+        // An absolute path under a user home. `/Users/name/…` on macOS,
+        // `/home/name/…` elsewhere — the segment after it is the person.
+        if let Some(start) = rest.find("/Users/").or_else(|| rest.find("/home/")) {
+            out.push_str(&rest[..start]);
+            let path = &rest[start..];
+            let prefix_len = if path.starts_with("/Users/") { "/Users/".len() } else { "/home/".len() };
+            let after_name = path[prefix_len..]
+                .find('/')
+                .map(|i| prefix_len + i)
+                .unwrap_or(path.len());
+            out.push_str("~");
+            rest = &path[after_name..];
+            continue;
+        }
+
+        out.push_str(rest);
+        break;
+    }
+    out
+}
+
 /// Copy a file, or its last `max_bytes` if it is bigger than that.
 ///
 /// The tail is aligned to the next line boundary so the bundle never opens on
 /// half a log line, and a marker says why the beginning is missing.
+/// Copy the tail, then redact what leaves the machine.
+///
+/// Two steps rather than one because the tail logic is about BYTES — it aligns
+/// to a line boundary inside a file being appended to — and redaction is about
+/// LINES. Interleaving them would mean redacting a partial line.
+fn copy_tail_redacted(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> {
+    copy_tail(source, dest, max_bytes)?;
+    let raw = std::fs::read_to_string(dest)?;
+    let redacted: String = raw
+        .lines()
+        .map(redact_log_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dest, if raw.ends_with('\n') { format!("{redacted}\n") } else { redacted })
+}
+
 fn copy_tail(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> {
     let mut input = std::fs::File::open(source)?;
     let len = input.metadata()?.len();
