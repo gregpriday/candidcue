@@ -186,7 +186,6 @@ pub async fn create_script(
      */
     crate::util::create_dir_all_durable(&paths.assets_dir(&id))?;
     crate::util::create_dir_all_durable(&paths.revisions_dir(&id))?;
-    crate::util::sync_dir(&paths.scripts_dir())?;
     /*
      * The script DIRECTORY's own entry, in `scripts/`.
      *

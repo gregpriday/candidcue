@@ -221,9 +221,18 @@ pub async fn export_all_data(
         ],
         complete,
     };
-    std::fs::write(
-        staging.join(MANIFEST_NAME),
-        serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?,
+    /*
+     * The manifest, flushed.
+     *
+     * It is what vouches for every other byte in the export, and a directory
+     * fsync commits the ENTRY, not the file's contents — so an export could be
+     * published with a manifest that reads as empty or truncated, which
+     * `restore_all_data` would then refuse. The thing it refuses would be an
+     * export the user was told was ready.
+     */
+    crate::util::atomic_write(
+        &staging.join(MANIFEST_NAME),
+        &serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?,
     )?;
 
     // 5. Give it its real name, which encodes the answer.
@@ -385,9 +394,16 @@ async fn write_settings_document(
                 "displayProfiles": profiles,
             });
             let target = staging.join(SETTINGS_NAME);
+            // `atomic_write`, so the bytes are on the platter: a directory
+            // fsync commits the entry, not the file's contents, and this
+            // section carries settings that exist nowhere else on disk.
             match serde_json::to_vec_pretty(&document)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| std::fs::write(&target, &bytes).map(|_| bytes.len()).map_err(|e| e.to_string()))
+                .and_then(|bytes| {
+                    crate::util::atomic_write(&target, &bytes)
+                        .map(|()| bytes.len())
+                        .map_err(|e| e.to_string())
+                })
             {
                 Ok(bytes) => sections.push(ExportSection {
                     name: "settings".into(),

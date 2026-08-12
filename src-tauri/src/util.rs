@@ -139,7 +139,17 @@ where
     let dir = dest
         .parent()
         .ok_or_else(|| AppError::Internal("atomic_write: destination has no parent".into()))?;
-    fs::create_dir_all(dir)?;
+    /*
+     * Durably, because this can be the directory the write depends on.
+     *
+     * Startup reconciliation recovers an orphaned script file without
+     * recreating its `revisions/` folder, so the next save creates it here —
+     * and then writes the pre-save text into it and commits a durable revision
+     * row. A plain `create_dir_all` leaves that folder's entry in the page
+     * cache, so a power loss takes the retained pre-save text with it while the
+     * canonical file has already been overwritten.
+     */
+    create_dir_all_durable(dir)?;
     let base = dest
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
