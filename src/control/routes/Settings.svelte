@@ -135,8 +135,17 @@
 
   interface Props {
     section: SettingsSection;
+    /**
+     * Dismiss this surface (§14.1).
+     *
+     * Supplied by the Preferences window, where Settings is a WINDOW and the
+     * gesture is "I am finished" rather than "take me back". Absent means the
+     * route is being hosted somewhere with a place to return to, and the
+     * toolbar shows the back control instead.
+     */
+    onclose?: () => void;
   }
-  let { section }: Props = $props();
+  let { section, onclose }: Props = $props();
 
   /**
    * The sections, each with the words somebody might search for.
@@ -1532,12 +1541,22 @@
 </script>
 
 <div class="page">
+  <!--
+    In a WINDOW, the trailing control is Done; there is nowhere to go back to.
+    §14.1: "Remove Back to Library from Settings if it becomes a separate
+    window." The prop is optional so the route still works in the control window
+    if it is ever hosted there again — but the Preferences window always
+    supplies it, so the back control is gone in practice.
+  -->
   <Toolbar
     title="Settings"
-    backLabel="Library"
-    onback={() => navigate({ name: 'library', view: 'all' })}
+    backLabel={onclose ? undefined : 'Library'}
+    onback={onclose ? undefined : () => navigate({ name: 'library', view: 'all' })}
   >
     {#snippet actions()}
+      {#if onclose}
+        <Button variant="primary" onclick={onclose}>Done</Button>
+      {/if}
       <!--
         Settings search (§14.2), in the toolbar where it is stable across every
         section. It filters the INDEX rather than the rows: a section list that

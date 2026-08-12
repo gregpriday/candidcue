@@ -165,6 +165,12 @@ mod keys {
     pub const ACTUAL_SIZE: &str = "CmdOrCtrl+0";
     pub const END_TAKE: &str = "CmdOrCtrl+.";
     pub const SHORTCUTS: &str = "CmdOrCtrl+/";
+    // The Insert family. Bold and Italic are the keys CodeMirror's own keymap
+    // already answers (`MarkdownEditor.svelte`); naming them here is what makes
+    // them discoverable rather than what makes them work.
+    pub const BOLD: &str = "CmdOrCtrl+B";
+    pub const ITALIC: &str = "CmdOrCtrl+I";
+    pub const LINK: &str = "CmdOrCtrl+K";
 }
 
 /// Build and install the application menu.
@@ -349,6 +355,38 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?;
     menu.append(&edit)?;
 
+    /*
+     * Insert — §11.4's "clearly discoverable Insert menu in the native menu bar".
+     *
+     * These are the editor's formatting-row controls, given names and keys. The
+     * row is a set of glyphs and icons whose meanings have to be hovered for;
+     * this is where somebody finds out that a Cue and a Take Marker exist at
+     * all, and it is the only surface that can say so without being on the
+     * screen already.
+     */
+    let insert = Submenu::with_items(
+        app,
+        "Insert",
+        true,
+        &[
+            &item("insert.heading", "Heading", None)?,
+            &sep()?,
+            &item("insert.bold", "Bold", Some(keys::BOLD))?,
+            &item("insert.italic", "Italic", Some(keys::ITALIC))?,
+            &item("insert.link", "Link", Some(keys::LINK))?,
+            &sep()?,
+            &item("insert.image", "Image…", None)?,
+            &item("insert.diagram", "Diagram", None)?,
+            &sep()?,
+            // The teleprompter's own two. They are last and ruled off because
+            // they are the ones that mean something to a TAKE rather than to a
+            // document — §11.4's grouping.
+            &item("insert.cue", "Cue", None)?,
+            &item("insert.take-marker", "Take Marker", None)?,
+        ],
+    )?;
+    menu.append(&insert)?;
+
     let view = Submenu::with_items(
         app,
         "View",
@@ -441,6 +479,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let maximize = PredefinedMenuItem::maximize(app, None)?;
     let separator = sep()?;
     let main_window = item("window.main", "CandidCue", None)?;
+    // §20.4: the Settings window is listed, and choosing it brings the existing
+    // one forward rather than making a second.
+    let settings_window = item("window.settings", "CandidCue Settings", None)?;
     window_items.push(&minimize);
     window_items.push(&maximize);
     #[cfg(target_os = "macos")]
@@ -449,6 +490,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     window_items.push(&bring_all);
     window_items.push(&separator);
     window_items.push(&main_window);
+    window_items.push(&settings_window);
     let window = Submenu::with_items(app, "Window", true, &window_items)?;
     menu.append(&window)?;
 

@@ -29,6 +29,8 @@ const PAGE_SIZE = 500;
 
 export interface LibraryState {
   loading: boolean;
+  /** True while a `loadMore` is in flight, so the button can say so. */
+  loadingMore: boolean;
   scripts: ScriptSummary[];
   view: LibraryView;
   query: string;
@@ -75,6 +77,7 @@ export interface LibraryState {
 
 const state = writable<LibraryState>({
   loading: false,
+  loadingMore: false,
   scripts: [],
   view: 'all',
   query: '',
@@ -146,6 +149,7 @@ export async function loadLibrary(): Promise<void> {
       return {
         ...s,
         loading: false,
+        loadingMore: false,
         scripts: page.items,
         total: page.total,
         trashTotal,
@@ -162,7 +166,62 @@ export async function loadLibrary(): Promise<void> {
     // refresh, not the discovery that the library is empty, and blanking the
     // list would put a database read error behind the first-run invitation to
     // start writing — which is what a wiped library looks like.
-    state.update((s) => ({ ...s, loading: false, error: describeError(err) }));
+    state.update((s) => ({ ...s, loading: false, loadingMore: false, error: describeError(err) }));
+  }
+}
+
+/**
+ * Load the next page and append it (§10.2).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS HAD TO EXIST
+ * ---------------------------------------------------------------------------
+ * `loadLibrary` asks for page zero and a ceiling of `PAGE_SIZE`, and that was
+ * the whole of the transport. The count line said "Showing 500 of 812", which
+ * was honest — and the other 312 were unreachable by keyboard AND by pointer.
+ * There was no gesture in the product that could see them.
+ *
+ * Appending rather than replacing, and guarded three ways: nothing to fetch,
+ * a fetch already running, and a generation that has moved. The last is the
+ * important one — switching view or typing in the search box starts a fresh
+ * read, and a page that arrives afterwards belongs to a list that is gone. It
+ * would append Trash rows under live ones, beneath a menu whose entries delete
+ * permanently.
+ */
+export async function loadMoreScripts(): Promise<void> {
+  const current = get(state);
+  if (current.loadingMore || current.loading) return;
+  if (current.scripts.length >= current.total) return;
+
+  const generation = loadGeneration;
+  state.update((s) => ({ ...s, loadingMore: true }));
+  try {
+    const page = await scriptsService.listScripts(
+      { view: current.view, query: current.query },
+      current.sort,
+      { page: Math.floor(current.scripts.length / PAGE_SIZE), pageSize: PAGE_SIZE },
+    );
+    if (generation !== loadGeneration) return;
+    state.update((s) => {
+      // De-duplicated by id: a script created or renamed between the two reads
+      // can shift the ordering, and appending blindly would show it twice —
+      // which for a keyed `{#each}` is a crash rather than a cosmetic fault.
+      const seen = new Set(s.scripts.map((script) => script.id));
+      const added = page.items.filter((item) => !seen.has(item.id));
+      return {
+        ...s,
+        loadingMore: false,
+        scripts: [...s.scripts, ...added],
+        total: page.total,
+      };
+    });
+  } catch (err) {
+    if (generation !== loadGeneration) return;
+    state.update((s) => ({ ...s, loadingMore: false, error: describeError(err) }));
+  } finally {
+    if (generation === loadGeneration) {
+      state.update((s) => (s.loadingMore ? { ...s, loadingMore: false } : s));
+    }
   }
 }
 

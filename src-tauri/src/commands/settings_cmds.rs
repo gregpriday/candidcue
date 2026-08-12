@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
@@ -31,7 +31,8 @@ pub async fn get_settings(db: State<'_, Database>) -> Result<RevisionedSettings,
 const SPEECH_SELECTION_KEYS: [&str; 2] = ["language", "transcriptionModel"];
 
 #[tauri::command]
-pub async fn update_settings(
+pub async fn update_settings<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     boot: State<'_, crate::database::BootStatus>,
     db: State<'_, Database>,
     expected_revision: i64,
@@ -50,7 +51,34 @@ pub async fn update_settings(
             .with_detail("field", format!("audio.{key}")));
         }
     }
-    settings::update_settings(db.pool(), expected_revision, patch).await
+    let updated = settings::update_settings(db.pool(), expected_revision, patch).await?;
+
+    /*
+     * TELL EVERY WINDOW, because there is now more than one that cares.
+     *
+     * Settings moved into its own Preferences window (§14.1), and each webview
+     * has its own copy of the settings store — they are separate JavaScript
+     * contexts, so a write in one is invisible to the other. Without this the
+     * two would silently diverge: change the stage font in Preferences and the
+     * control window would go on composing takes from the value it read at
+     * launch, until something else happened to reload it.
+     *
+     * A BROADCAST rather than a targeted emit, and it carries the whole
+     * revisioned document rather than a "something changed" nudge. Carrying the
+     * document means a listener adopts the new state without a second round
+     * trip — and, more importantly, without a window between the two in which it
+     * would answer questions from a copy it already knows is stale.
+     *
+     * The window that made the change receives it too and adopts an identical
+     * value, which is a no-op rather than a loop: `revision` only moves when a
+     * write actually lands.
+     */
+    if let Err(err) = app.emit(crate::windows::events::SETTINGS_CHANGED, &updated) {
+        // Not a failure of the write, which has already committed. A window that
+        // missed the broadcast re-reads on its next natural load.
+        tracing::warn!(error = %err, "the settings change could not be broadcast");
+    }
+    Ok(updated)
 }
 
 /// Export everything the user made (spec §47.7).

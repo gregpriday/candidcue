@@ -42,7 +42,7 @@ import type { PresentationMode } from '../services/settings-types';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
-  import { onDroppedImages, onRouteCommand } from '../stores/command-bus';
+  import { onDroppedImages, onInsertCommand, onRouteCommand } from '../stores/command-bus';
   import * as assetsService from '../services/assets';
   import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
@@ -252,6 +252,50 @@ import type { PresentationMode } from '../services/settings-types';
    * ENABLED and did nothing: `dispatchRouteCommand` drops a command with no
    * listener, and there was no listener anywhere in the tree.
    */
+  /*
+   * The native Insert menu (§11.4), answered by the same functions the
+   * formatting row calls.
+   *
+   * One subscription for the whole family: the menu names them and gives them
+   * keys, the toolbar shows them, and both end in `lib/markdown-insert.ts` — so
+   * there is no second implementation to drift.
+   */
+  $effect(() =>
+    onInsertCommand((kind) => {
+      if (opening) return;
+      // Insertions need a live editor; from Preview this switches to Edit and
+      // leaves a split alone, exactly as the Find family does.
+      void ensureEditingSurface().then(() => {
+        switch (kind) {
+          case 'heading':
+            withView(inserts.cycleHeading);
+            break;
+          case 'bold':
+            withView(inserts.insertBold);
+            break;
+          case 'italic':
+            withView(inserts.insertItalic);
+            break;
+          case 'link':
+            withView(inserts.insertLink);
+            break;
+          case 'image':
+            void insertImage();
+            break;
+          case 'diagram':
+            withView(inserts.insertDiagram);
+            break;
+          case 'cue':
+            withView(inserts.insertCue);
+            break;
+          case 'take-marker':
+            withView(inserts.insertTakeMarker);
+            break;
+        }
+      });
+    }),
+  );
+
   $effect(() =>
     onRouteCommand((command) => {
       if (opening) return;

@@ -165,6 +165,27 @@ pub fn set_drop_target_script<R: tauri::Runtime>(
     Ok(())
 }
 
+/// Open the Preferences window, or bring it forward (§14.1).
+///
+/// The window's lifecycle is entirely Rust's — see `windows/preferences.rs`.
+/// The frontend asks; it does not get to create a second one.
+#[tauri::command]
+pub fn open_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), AppError> {
+    crate::windows::preferences::open(&app)
+}
+
+/// Close the Preferences window from inside it (its own Done control).
+///
+/// A command rather than `window.close()` in the renderer, for the same reason
+/// the control window's ⌘W goes through the window manager: closing is a window
+/// operation, and routing it through Rust keeps one implementation of what
+/// closing means rather than two that can drift.
+#[tauri::command]
+pub fn close_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), AppError> {
+    crate::windows::preferences::close(&app);
+    Ok(())
+}
+
 /// Open the log directory in the platform file browser (Help › Reveal Logs).
 ///
 /// Points at the logs directory specifically rather than the data root, which

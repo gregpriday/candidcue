@@ -79,6 +79,8 @@ export default defineConfig({
         control: fileURLToPath(new URL('./control.html', import.meta.url)),
         stage: fileURLToPath(new URL('./stage.html', import.meta.url)),
         identify: fileURLToPath(new URL('./identify.html', import.meta.url)),
+        // §14.1: Settings is its own window, so it is its own entry point.
+        preferences: fileURLToPath(new URL('./preferences.html', import.meta.url)),
       },
     },
   },

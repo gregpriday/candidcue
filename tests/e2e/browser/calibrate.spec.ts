@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { openPreferences } from './fixtures/preferences';
 
 /**
  * The calibration wizard's promise that leaving costs you nothing, SHIM-BACKED.
@@ -41,7 +42,7 @@ const LAST_STEP = 'How hot should the type burn?';
 
 /** Settings → Stage display, the section that owns the mirror switches and Calibrate. */
 async function openStageDisplay(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
     .getByRole('button', { name: 'Stage display', exact: true })

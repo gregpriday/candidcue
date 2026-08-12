@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 async function mount(): Promise<HTMLElement> {
-  const { container } = render(Sidebar, { props: { onnew: vi.fn() } });
+  const { container } = render(Sidebar, { props: { onnew: vi.fn(), onsettings: vi.fn() } });
   await tick();
   return container;
 }

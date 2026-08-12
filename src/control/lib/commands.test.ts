@@ -72,7 +72,7 @@ describe('the command registry', () => {
   it('files every command in the menu its id names', () => {
     for (const id of COMMAND_IDS) {
       const category = menuCategory(id);
-      expect(['file', 'edit', 'view', 'session', 'window', 'help']).toContain(category);
+      expect(['file', 'edit', 'insert', 'view', 'session', 'window', 'help']).toContain(category);
     }
   });
 
@@ -82,6 +82,14 @@ describe('the command registry', () => {
     }
   });
 
+  /**
+   * Two commands may share an ACTION, but never a key.
+   *
+   * `view.settings` and `window.settings` are deliberately the same thing
+   * reached two ways — ⌘, and the Window menu — so only one of them carries the
+   * accelerator. The check below is what stops a second one quietly acquiring
+   * it, which on a native menu means one of the two simply never fires.
+   */
   it('never lists the same accelerator on two commands', () => {
     const seen = new Map<string, CommandId>();
     for (const id of COMMAND_IDS) {
@@ -122,6 +130,17 @@ describe('availability during a take', () => {
     // fault is exactly when an operator reaches for diagnostics.
     'view.toggle-diagnostics',
     'window.main',
+    /*
+     * Settings is reachable mid-take, and that is a change from the route it
+     * replaced. As a ROUTE it had to be refused: opening it took the stage off
+     * the screen. As a WINDOW it opens beside the take without disturbing it —
+     * and an operator hunting a microphone problem mid-take is exactly who needs
+     * it. The controls that would be unsafe to change during a take refuse
+     * individually, which is §14.1's own rule.
+     */
+    'window.settings',
+    // Same action, same answer — see the note on `view.settings`.
+    'view.settings',
     'help.keyboard-shortcuts',
     'help.export-support-bundle',
     'help.reveal-logs',
@@ -139,7 +158,9 @@ describe('availability during a take', () => {
     const starting = context({ takeStarting: true, librarySelectionId: 'script-1' });
     expect(COMMANDS['file.present'].available(starting)).toBe(false);
     expect(COMMANDS['session.start-take'].available(starting)).toBe(false);
-    expect(COMMANDS['view.settings'].available(starting)).toBe(false);
+    // Settings is NOT in this list: it is a window now and opening one disturbs
+    // nothing. See the note on `view.settings`.
+    expect(COMMANDS['view.settings'].available(starting)).toBe(true);
   });
 });
 
@@ -360,6 +381,7 @@ describe('commandsByCategory', () => {
     expect(groups.map((group) => group.category)).toEqual([
       'file',
       'edit',
+      'insert',
       'view',
       'session',
       'window',

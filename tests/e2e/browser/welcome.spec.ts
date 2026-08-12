@@ -3,6 +3,49 @@ import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
 
 /**
+ * The readiness rows open the SETTINGS WINDOW at a section (§14.1, §16.1).
+ *
+ * They used to navigate the control window to a Settings route, and these tests
+ * asserted the section's nav button had become current. Settings is its own
+ * window now: nothing navigates, and in a browser there is no window to open —
+ * so what is asserted is the two facts that still matter and that this layer can
+ * actually see.
+ *
+ *   1. the app ASKED for the Settings window (`open_preferences` on the wire);
+ *   2. it asked for the right SECTION, which is recorded in the shared
+ *      workspace store before the window is opened.
+ *
+ * That the window then appears, is single-instance, and opens at that section is
+ * `windows/preferences.rs` and `PreferencesApp.svelte` — packaged-app behaviour.
+ */
+async function expectSettingsOpenedAt(page: Page, section: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__E2E__.calls.filter((c) => c.command === 'open_preferences').length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  /*
+   * POLLED: `updateWorkspace` writes through a 250ms debounce, so the store is
+   * correct immediately and `localStorage` is correct a moment later. That is
+   * deliberate — a drag must not put one synchronous JSON write on the main
+   * thread per pointer frame — and it means a read here races the flush.
+   */
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const raw = localStorage.getItem('candidcue.workspace.v1');
+        return raw === null
+          ? null
+          : (JSON.parse(raw) as { settingsSection?: string }).settingsSection;
+      }),
+    )
+    .toBe(section);
+}
+
+
+/**
  * The first-launch readiness rows, SHIM-BACKED.
  *
  * Real behaviour asserted: the two setup tasks Welcome names now REPORT state
@@ -122,11 +165,7 @@ test('the display row shows a checking state and leaving mid-probe leaves the ap
 
   // Leave before the reply arrives...
   await micRow(page).getByRole('button', { name: 'Set up microphone' }).click();
-  await expect(
-    page
-      .getByRole('navigation', { name: 'Settings sections' })
-      .getByRole('button', { name: 'Audio', exact: true }),
-  ).toHaveAttribute('aria-current', 'page');
+  await expectSettingsOpenedAt(page, 'audio');
 
   // ...then outlive it. Waiting on the shim's own completion record rather
   // than on a sleep longer than the delay, which is the same assertion with a
@@ -135,8 +174,28 @@ test('the display row shows a checking state and leaving mid-probe leaves the ap
     .poll(() => page.evaluate(() => window.__E2E__.settled.filter((c) => c === 'list_displays').length))
     .toBe(1);
 
-  // The screen the probe returned to is still the one the user asked for.
-  await expect(page.getByLabel('Input device')).toBeVisible();
+  /*
+   * WHAT THIS TEST IS ACTUALLY FOR, restated for a Settings that is a window.
+   *
+   * The defect was a slow `list_displays` resolving AFTER the user had moved on
+   * and writing its result over whatever screen they had reached. It used to be
+   * checkable by asserting the Audio section was still up.
+   *
+   * Nothing navigates now — Settings opens beside this screen (§14.1) — so the
+   * equivalent guarantee is that the late reply leaves WELCOME exactly as it
+   * was: still the screen on the glass, still undismissed, and the display row
+   * updated in place rather than the page being rebuilt around it.
+   */
+  await expect(page.getByRole('heading', heading)).toBeVisible();
+  await expect(micRow(page)).toBeVisible();
+  // Asking to see a setting is not finishing onboarding.
+  expect(await welcomedFlag(page)).toBeNull();
+  // …and exactly one request for the window, not one per probe tick.
+  expect(
+    await page.evaluate(
+      () => window.__E2E__.calls.filter((c) => c.command === 'open_preferences').length,
+    ),
+  ).toBe(1);
   errors.expectClean();
 });
 
@@ -260,11 +319,7 @@ test('a pinned display that is not connected warns and names where the take will
 
   await row.getByRole('button', { name: 'Fix display' }).click();
 
-  await expect(
-    page
-      .getByRole('navigation', { name: 'Settings sections' })
-      .getByRole('button', { name: 'Stage display', exact: true }),
-  ).toHaveAttribute('aria-current', 'page');
+  await expectSettingsOpenedAt(page, 'stage');
 
   // Looking at a setting is not finishing onboarding.
   expect(await welcomedFlag(page)).toBeNull();
@@ -282,11 +337,7 @@ test('the microphone fix-link opens Audio settings and leaves welcome undismisse
   await expect(page.getByRole('heading', heading)).toBeVisible();
   await micRow(page).getByRole('button', { name: 'Set up microphone' }).click();
 
-  await expect(
-    page
-      .getByRole('navigation', { name: 'Settings sections' })
-      .getByRole('button', { name: 'Audio', exact: true }),
-  ).toHaveAttribute('aria-current', 'page');
+  await expectSettingsOpenedAt(page, 'audio');
 
   expect(await welcomedFlag(page)).toBeNull();
 
@@ -406,7 +457,24 @@ test('reader mode reports the current window instead of asking for a second scre
  * stub cannot demonstrate following, so offering it first asked new users to
  * supply the demo themselves.
  */
-test('the sample script is the primary action and leads the three CTAs', async ({ page }) => {
+/*
+ * ---------------------------------------------------------------------------
+ * THIS ASSERTED THE OPPOSITE ORDER, AND THE REASONING WAS GOOD
+ * ---------------------------------------------------------------------------
+ * The sample used to lead, because it is the only one of the three that hands
+ * back something written to be read ALOUD — and reading aloud is the only way
+ * to see what this app does.
+ *
+ * §16.1 asks for "Create a script" to be primary, and what settles it is which
+ * option is a DEAD END. Somebody who came to write their own script and is
+ * offered a demo as the loudest thing on screen has to decline it first;
+ * somebody who wanted the demo loses nothing by it being second, because it is
+ * right there and named. A setup assistant's job is to get out of the way.
+ *
+ * What has NOT changed and is still asserted: exactly one primary, and Import
+ * quieter than both (§16.1's "avoid multiple equally weighted calls to action").
+ */
+test('creating a script is the primary action, with the sample beside it', async ({ page }) => {
   const errors = watchPageErrors(page);
   await installTauriShim(page);
   await page.goto('/control.html');
@@ -415,13 +483,15 @@ test('the sample script is the primary action and leads the three CTAs', async (
 
   const actions = page.locator('.actions button');
   await expect(actions).toHaveText([
-    'Open the sample script',
     'Create your first script',
+    'Open the sample script',
     'Import Markdown',
   ]);
   await expect(actions.first()).toHaveClass(hasToken('primary'));
   await expect(actions.nth(1)).not.toHaveClass(hasToken('primary'));
-  await expect(actions.nth(2)).not.toHaveClass(hasToken('primary'));
+  // Import is the quietest of the three (§16.1): a returning user reaches for
+  // it, and they have File › Import Markdown and ⇧⌘I.
+  await expect(actions.nth(2)).toHaveClass(hasToken('ghost'));
 
   errors.expectClean();
 });

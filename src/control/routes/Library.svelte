@@ -40,6 +40,21 @@
   screen readers flatten them. The alternative — actions reachable only through
   the context menu — was judged worse for the far more common case.
 -->
+<script lang="ts" module>
+  /**
+   * Where each Library view was scrolled to, for the length of this session.
+   *
+   * Module-level so it survives the route unmounting — which is exactly what
+   * opening a script does — and per view because All, Recent and Trash are
+   * different lists whose offsets mean nothing to each other.
+   *
+   * NOT persisted. It is a within-session position rather than a preference,
+   * and restoring a scroll into a collection that changed between launches
+   * would land somewhere arbitrary with the confidence of somewhere chosen.
+   */
+  const scrollOffsets = new Map<string, number>();
+</script>
+
 <script lang="ts">
   import { tick } from 'svelte';
   import Button from '../components/Button.svelte';
@@ -71,6 +86,7 @@
     moveScriptToTrash,
     restoreScriptFromTrash,
     selectScript,
+    loadMoreScripts,
     setLibraryQuery,
     setLibrarySort,
   } from '../stores/library';
@@ -122,6 +138,38 @@
   );
 
   const mac = detectPlatform() === 'macos';
+
+  /*
+   * Put the list back where it was (§10.2).
+   *
+   * Opening a script unmounts this route, so returning rebuilt the list at the
+   * top — which for anybody with more than a screenful means hunting for the
+   * script they were just in. The offset is kept per VIEW, because All, Recent
+   * and Trash are different lists and a position in one means nothing in
+   * another.
+   *
+   * Module-level rather than in the workspace store: it is a within-session
+   * position, not a preference, and persisting it across launches would restore
+   * a scroll into a list that has since changed underneath it.
+   */
+  $effect(() => {
+    const view = $library.view;
+    const element = scrollElement;
+    if (!element) return;
+    const saved = scrollOffsets.get(view);
+    if (saved !== undefined && scripts.length > 0) {
+      // After the rows exist, or there is nothing to scroll through yet.
+      requestAnimationFrame(() => {
+        if (scrollElement === element) element.scrollTop = saved;
+      });
+    }
+    const remember = () => scrollOffsets.set(view, element.scrollTop);
+    element.addEventListener('scroll', remember, { passive: true });
+    return () => {
+      remember();
+      element.removeEventListener('scroll', remember);
+    };
+  });
 
   $effect(() => {
     void loadLibrary();
@@ -733,6 +781,28 @@
           </div>
         {/each}
       </div>
+
+      {#if scripts.length < $library.total}
+        <!--
+          The rest of the collection, reachable (§10.2).
+
+          The count line used to say "Showing 500 of 812" and stop there — an
+          honest sentence about 312 scripts no gesture in the product could
+          reach. A button rather than infinite scroll: a desktop collection with
+          a scrollbar whose length is a lie is worse than one more press, and a
+          keyboard user can reach a button.
+        -->
+        <div class="more">
+          <Button
+            disabled={$library.loadingMore}
+            onclick={() => void loadMoreScripts()}
+          >
+            {$library.loadingMore
+              ? 'Loading…'
+              : `Show more (${(($library.total ?? 0) - scripts.length).toLocaleString()} remaining)`}
+          </Button>
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -812,6 +882,12 @@
   }
 
   /* ---- list ---- */
+  .more {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-4) 0 var(--space-2);
+  }
+
   .list-area {
     flex: 1 1 auto;
     min-height: 0;

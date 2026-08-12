@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import ShortcutsDialog from '../../src/control/components/ShortcutsDialog.svelte';
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from '../../src/control/components/dialog-focus';
 import { isMacPlatform, SHORTCUT_OWNERSHIP } from '../../src/control/lib/shortcuts';
+import { COMMANDS, COMMAND_IDS, formatAccelerator } from '../../src/control/lib/commands';
 
 /* jsdom is not a platform, so the modifier is read the same way the dialog
    reads it rather than assumed to be the Mac one. */
@@ -79,7 +80,14 @@ function labelsIn(caption: string): string[] {
 describe('the shortcuts reference is grouped by the screen that answers each key', () => {
   it('heads every group with a caption and two column headers', () => {
     open();
-    expect(tables().length).toBe(4);
+    /*
+     * More than four tables now: the menu commands are listed first, one table
+     * per menu, derived from the registry (§6.1). The count is not asserted
+     * here — it moves whenever a command gains a key, which is exactly the
+     * change this page is supposed to absorb without an edit. What every table
+     * still owes is a caption and two scoped column headers.
+     */
+    expect(tables().length).toBeGreaterThanOrEqual(4);
     for (const table of tables()) {
       expect(captionOf(table)).toBeTruthy();
       const headers = [...table.querySelectorAll('thead th')];
@@ -88,16 +96,23 @@ describe('the shortcuts reference is grouped by the screen that answers each key
       // is what makes them mean "column" to a screen reader rather than just
       // being bold text.
       expect(headers.map((th) => th.getAttribute('scope'))).toEqual(['col', 'col']);
-      expect(headers.map((th) => th.textContent?.trim())).toEqual(['Action', 'Shortcut']);
+      // The menu tables head their first column "Command"; the screen-scoped
+      // ones head it "Action". Both are the same kind of thing to a reader.
+      expect(headers[0]?.textContent?.trim()).toMatch(/^(Action|Command)$/);
+      expect(headers[1]?.textContent?.trim()).toBe('Shortcut');
     }
   });
 
-  it('names the four groups in the order the app is used', () => {
+  it('names the screen groups in the order the app is used', () => {
     open();
     // The screens that answer nothing are named in the component but drop out
     // here, because a table headed "Settings" with no rows says the opposite of
     // what is true.
-    expect(tables().map(captionOf)).toEqual(['Everywhere', 'Library', 'Editor', 'During a take']);
+    //
+    // The MENU tables come first now (see the section below), so this asserts
+    // the tail — the screen-scoped groups — rather than the whole page.
+    const captions = tables().map(captionOf);
+    expect(captions.slice(-4)).toEqual(['Everywhere', 'Library', 'Editor', 'During a take']);
   });
 
   it('puts each key under the screen that actually answers it', () => {
@@ -230,5 +245,79 @@ describe('the shortcuts reference is grouped by the screen that answers each key
       c.textContent?.trim().startsWith('Editor'),
     );
     expect(caption?.textContent).toContain('while the script text has focus');
+  });
+});
+
+
+/**
+ * The menu half of the page, and the guarantee that it cannot drift.
+ *
+ * §6.1's rule is that one definition feeds every surface. The native menu and
+ * this dialog now both read `COMMANDS`, and these tests are what make that a
+ * fact rather than an intention: a command that gains an accelerator appears
+ * here without anybody editing this file, and one whose accelerator changes
+ * changes here too.
+ *
+ * The corresponding Rust half — that `menu.rs` binds the same chord the registry
+ * advertises — is `menu_accelerators_match_the_typescript_registry`.
+ */
+describe('the shortcuts reference lists the menu commands from the registry', () => {
+  function commandRows(): Map<string, string> {
+    const rows = new Map<string, string>();
+    for (const row of document.querySelectorAll('tr[data-command]')) {
+      const id = row.getAttribute('data-command') ?? '';
+      const keys = row.querySelector('.keys')?.textContent?.trim() ?? '';
+      rows.set(id, keys);
+    }
+    return rows;
+  }
+
+  it('prints every command that has a key, and no command that has none', () => {
+    open();
+    const rendered = commandRows();
+    const expected = COMMAND_IDS.filter((id) => COMMANDS[id].accelerator !== undefined);
+
+    expect([...rendered.keys()].sort()).toEqual([...expected].sort());
+    // Anti-vacuity: a page that rendered nothing would satisfy a subset check.
+    expect(expected.length).toBeGreaterThan(15);
+  });
+
+  it('prints each key exactly as the registry spells it for this platform', () => {
+    open();
+    const mac = isMacPlatform();
+    for (const [id, keys] of commandRows()) {
+      const command = COMMANDS[id as (typeof COMMAND_IDS)[number]];
+      expect(keys, `${id} is printed as "${keys}"`).toBe(
+        formatAccelerator(command.accelerator!, mac),
+      );
+    }
+  });
+
+  it('groups the commands under the menu their id names', () => {
+    open();
+    const captions = tables().map(captionOf);
+    // Every menu that has at least one accelerator gets a table, headed with the
+    // menu's own name — so somebody who saw the key in the menu bar can find it
+    // again here under the same word.
+    expect(captions).toContain('File menu');
+    expect(captions).toContain('Edit menu');
+    expect(captions).toContain('Insert menu');
+    expect(captions).toContain('View menu');
+  });
+
+  it('never advertises one chord for two different things', () => {
+    /*
+     * The page is the app's promise about its own keyboard, and the one way it
+     * can lie without any single row being wrong is by printing the same chord
+     * twice. Menu accelerators are claimed by the OS, so a duplicate is not a
+     * cosmetic clash — one of the two simply never fires.
+     */
+    open();
+    const seen = new Map<string, string>();
+    for (const [id, keys] of commandRows()) {
+      const previous = seen.get(keys);
+      expect(previous, `${keys} is on both ${previous} and ${id}`).toBeUndefined();
+      seen.set(keys, id);
+    }
   });
 });

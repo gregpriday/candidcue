@@ -17,8 +17,6 @@
   import Editor from './routes/Editor.svelte';
   import Library from './routes/Library.svelte';
   import Live from './routes/Live.svelte';
-  import Settings from './routes/Settings.svelte';
-  import Calibrate from './routes/Calibrate.svelte';
   import Recovery from './routes/Recovery.svelte';
   import Welcome from './routes/Welcome.svelte';
   import {
@@ -29,11 +27,16 @@
   } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
   import { startTake, takeStarting } from './lib/start-take';
-  import { dispatchDroppedImages, dispatchRouteCommand } from './stores/command-bus';
+  import {
+    dispatchDroppedImages,
+    dispatchInsert,
+    dispatchRouteCommand,
+  } from './stores/command-bus';
   import {
     composeWindowTitle,
     installDragDrop,
     installMenuCommands,
+    openPreferences,
     type DragHoverPayload,
     type DragImportedPayload,
     pushMenuState,
@@ -65,6 +68,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     type BootStatusReport,
   } from './services/recovery';
   import { installShutdownHandshake } from './services/shutdown';
+  import { installSettingsSync } from './services/settings-sync';
   import { listScripts } from './services/scripts';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
@@ -147,19 +151,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
    */
   const theme = $derived($route.name === 'live' && $session.active ? 'studio' : 'workspace');
   /*
-   * Calibration keeps the sidebar.
+   * The two screens this window still has.
    *
-   * It is a settings flow — reached from Settings, and returning there when it
-   * finishes — so hiding the chrome would strand somebody mid-wizard with no
-   * way out but the window controls. Only the take hides navigation, and it
-   * does so because a presenter is reading.
+   * Settings and Calibration moved to the Preferences window (§14.1), so the
+   * old note about calibration keeping the sidebar has moved with them —
+   * that window has no sidebar at all, and its own Done control is the way out.
+   * Only a take hides the rail here, and it does so because a presenter is
+   * reading.
    */
-  const showSidebar = $derived(
-    $route.name === 'library' ||
-      $route.name === 'editor' ||
-      $route.name === 'settings' ||
-      $route.name === 'calibrate',
-  );
+  const showSidebar = $derived($route.name === 'library' || $route.name === 'editor');
 
   /**
    * What the main region is, for the landmark's accessible name (§23.2).
@@ -332,6 +332,16 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * route is up. Dropping a script while the editor is open should still
      * import it, which a Library-only listener would silently refuse.
      */
+    /*
+     * Adopt settings written by the Preferences window.
+     *
+     * Two webviews, two copies of the document. Without this, changing the stage
+     * font in Settings would leave this window composing the next take from the
+     * value it read at launch — and its next own write would fail an
+     * optimistic-concurrency check nobody could account for.
+     */
+    const teardownSettingsSync = installSettingsSync();
+
     const teardownDrop = installDragDrop({
       onhover: (payload) => {
         dragHover = payload.active ? payload : null;
@@ -716,6 +726,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       disposed = true;
       teardownMenu();
       teardownDrop();
+      teardownSettingsSync();
       teardownShortcuts();
       teardownHelp();
       unregisterLiveGuard();
@@ -839,14 +850,18 @@ import { rememberReaderFrame } from './lib/reader-frame';
     setEditorLayout: (layout: EditorLayout) => updateWorkspace({ editorLayout: layout }),
     stepScale: (direction) => stepDocumentScale(direction),
     stageAppearance: () => dispatchRouteCommand('view.stage-appearance'),
-    settings: () =>
-      void navigate({
-        name: 'settings',
-        // Reopen where they were. §14.4 asks for the selected section to
-        // persist, and ⌘, is the moment that matters — somebody returning to
-        // Settings almost always wants the row they were last looking at.
-        section: settingsSectionFromWorkspace(),
-      }),
+    insert: (what) => dispatchInsert(what),
+    /*
+     * ⌘, opens a WINDOW now (§14.1), it does not navigate.
+     *
+     * That is the whole point: changing a preference no longer costs you the
+     * script you had open, and closing Settings puts you back where you were
+     * because you never went anywhere. The section it opens at comes from the
+     * workspace store, which is `localStorage` and therefore shared across
+     * webviews — so the window opens where this one last left Settings, with no
+     * coordination at all.
+     */
+    settings: () => void openSettingsWindow(),
     /*
      * The Session menu is routed through the SHORTCUT BUS rather than calling
      * the session store directly.
@@ -878,7 +893,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         showToast(`The log folder could not be opened. ${describeError(err)}`, 'danger');
       });
     },
-    privacy: () => void navigate({ name: 'settings', section: 'privacy' }),
+    privacy: () => void openSettingsWindow('privacy'),
   };
 
   /** The script a File command acts on: the open one, or the selected row. */
@@ -896,9 +911,23 @@ import { rememberReaderFrame } from './lib/reader-frame';
     return get(library).scripts.find((s) => s.id === scriptId)?.title ?? 'Script';
   }
 
-  function settingsSectionFromWorkspace(): SettingsSection {
-    const stored = get(workspace).settingsSection;
-    return isSettingsSection(stored) ? stored : 'general';
+  /**
+   * Open Settings, optionally at a named section.
+   *
+   * The section is recorded in the workspace store BEFORE the window opens
+   * rather than passed to it: the store is `localStorage`, which is shared
+   * between webviews of the same origin, and the Preferences window reads it on
+   * mount. That means one mechanism serves both "reopen where I was" and "open
+   * at Privacy", instead of a window-creation argument that only the second
+   * needs.
+   */
+  async function openSettingsWindow(section?: SettingsSection): Promise<void> {
+    if (section) updateWorkspace({ settingsSection: section });
+    try {
+      await openPreferences();
+    } catch (err) {
+      showToast(`Settings could not be opened. ${describeError(err)}`, 'danger');
+    }
   }
 
   async function confirmMoveToTrash(scriptId: string): Promise<void> {
@@ -1124,7 +1153,10 @@ import { rememberReaderFrame } from './lib/reader-frame';
       that View › Show Sidebar toggles.
     -->
     {#if showSidebar && $workspace.sidebarVisible}
-      <Sidebar onnew={() => void newScriptFromSidebar()} />
+      <Sidebar
+        onnew={() => void newScriptFromSidebar()}
+        onsettings={() => void openSettingsWindow()}
+      />
     {/if}
     <!--
       A NAMED landmark (§23.2).
@@ -1143,11 +1175,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
         <Editor scriptId={$route.scriptId} />
       {:else if $route.name === 'live'}
         <Live sessionId={$route.sessionId} scriptId={$route.scriptId} />
-      {:else if $route.name === 'settings'}
-        <Settings section={$route.section} />
-      {:else if $route.name === 'calibrate'}
-        <Calibrate displayFingerprint={$route.displayFingerprint} rigName={$route.rigName} />
       {:else}
+        <!--
+          Settings and Calibration are NOT rendered here any more (§14.1).
+          Both live in the Preferences window; `openSettingsWindow` opens it and
+          `Settings.svelte` navigates to Calibrate inside it. Nothing in this
+          window sets those routes, so falling through to the Library is the
+          correct answer for a route that cannot occur rather than a hole.
+        -->
         <!--
           A route with no branch used to paint an empty `<main>`.
 

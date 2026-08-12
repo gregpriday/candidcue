@@ -355,6 +355,29 @@ function readerFrameFromRust(stored: unknown): ReaderFrame | null {
 }
 
 /** Rust document + overlay → the UI settings view. */
+/**
+ * Adapt a revisioned document Rust pushed, rather than one this window read.
+ *
+ * The `settings://changed` broadcast (§14.1) carries exactly what `get_settings`
+ * returns, so the same adapter applies — exported so `stores/settings.ts` can
+ * adopt a payload without a second round trip to fetch what it was just handed.
+ *
+ * Defensive about the SHAPE because this one arrives as an event payload rather
+ * than as a typed command result: an event is delivered by evaluating JSON in
+ * the webview, and a malformed one must leave the store alone rather than
+ * replace a working document with `undefined`s.
+ */
+export function adaptRevisionedSettings(payload: unknown): AppSettings | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const candidate = payload as Partial<RustRevisioned>;
+  if (typeof candidate.revision !== 'number' || typeof candidate.value !== 'object') return null;
+  try {
+    return fromRust(candidate as RustRevisioned);
+  } catch {
+    return null;
+  }
+}
+
 function fromRust(revisioned: RustRevisioned): AppSettings {
   const rust = revisioned.value;
   const overlay = loadOverlay();

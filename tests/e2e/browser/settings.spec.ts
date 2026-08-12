@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { openPreferences } from './fixtures/preferences';
 
 /**
  * Settings round-trip journey, SHIM-BACKED.
@@ -18,7 +19,7 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
 
   // Into Settings, then the Stage display section — mirroring describes the
   // rig, not the type, so it lives with the panel it is a property of.
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: 'Stage display', exact: true }).click();
 
   const mirror = page.getByRole('switch', { name: 'Horizontal mirror' });
@@ -56,7 +57,7 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
 
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: 'Audio', exact: true }).click();
 
   const slider = page.getByRole('slider', { name: 'Voice-detection sensitivity' });
@@ -109,7 +110,7 @@ test('the input picker offers the system default and every input, and remembers 
   await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
 
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: 'Audio', exact: true }).click();
 
   const picker = page.getByLabel('Input device');
@@ -183,7 +184,7 @@ test('a microphone grant remembered on this machine is not asked for again', asy
   });
   await page.goto('/control.html');
 
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: 'Audio', exact: true }).click();
 
   await expect(page.getByLabel('Input device')).toBeVisible();
@@ -261,7 +262,7 @@ async function openSettingsSection(
   page: import('@playwright/test').Page,
   section: string,
 ): Promise<void> {
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: section, exact: true }).click();
 }
 

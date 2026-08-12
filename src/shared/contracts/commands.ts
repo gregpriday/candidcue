@@ -75,6 +75,20 @@ export const COMMAND_IDS = [
   'edit.find-previous',
   'edit.replace',
 
+  // ---- Insert ----
+  // §11.4: "Add a clearly discoverable Insert menu in the native menu bar."
+  // These are the same commands the editor's formatting row runs, so the two
+  // surfaces cannot come to mean different things — and the menu is what gives
+  // them names and keys a user can find without hovering every button.
+  'insert.heading',
+  'insert.bold',
+  'insert.italic',
+  'insert.link',
+  'insert.image',
+  'insert.diagram',
+  'insert.cue',
+  'insert.take-marker',
+
   // ---- View ----
   /**
    * Settings, which on macOS lives in the application menu under ⌘, rather than
@@ -111,6 +125,8 @@ export const COMMAND_IDS = [
 
   // ---- Window ----
   'window.main',
+  /** The Settings window, listed while it is open (§20.4). */
+  'window.settings',
   /*
    * NO `window.reopen-stage`, and no Stage entry.
    *
@@ -141,7 +157,14 @@ export const COMMAND_IDS = [
 export type CommandId = (typeof COMMAND_IDS)[number];
 
 /** The native menu a command belongs to. */
-export type CommandCategory = 'file' | 'edit' | 'view' | 'session' | 'window' | 'help';
+export type CommandCategory =
+  | 'file'
+  | 'edit'
+  | 'insert'
+  | 'view'
+  | 'session'
+  | 'window'
+  | 'help';
 
 /**
  * The menu a command lives in, read off its own id.

@@ -11,6 +11,7 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
 pub mod drag_drop;
+pub mod preferences;
 pub mod present;
 pub mod shutdown;
 pub mod sleep;
@@ -57,6 +58,14 @@ pub mod events {
     /// command's answer.
     pub const SPEECH_MODEL_PROGRESS: &str = "speech://model-progress";
     pub const DEVICE_OR_DISPLAY_CHANGE: &str = "app://device-or-display-change";
+    /// Rust → every window: the settings document changed, and here it is.
+    ///
+    /// Broadcast rather than targeted, because Settings now lives in its own
+    /// window (§14.1) and each webview holds its own copy of the store. It
+    /// carries the whole revisioned document so a listener adopts the new state
+    /// without a second round trip — and without a window in between where it
+    /// would answer from a copy it already knows is stale.
+    pub const SETTINGS_CHANGED: &str = "settings://changed";
     /// Rust → control: close/quit is happening; flush and answer.
     pub const SHUTDOWN_REQUESTED: &str = "app://shutdown-requested";
     /// Control → Rust: the shutdown sequence finished, or gave up.

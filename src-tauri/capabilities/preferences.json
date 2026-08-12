@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preferences-capability",
+  "description": "The Settings window (desktop refinement §14.1). It is granted the SAME application-command permission as the control window, and that is a deliberate decision rather than convenience: Settings is where the speech model is downloaded and verified, where displays are listed and identified, where the optical rigs are calibrated, where a backup is exported or restored, and where the support bundle is written. Narrowing the grant would mean maintaining a second list that has to be widened every time a setting gains a backing command — and a list that is wrong in the closed direction fails as a broken screen, which is the kind of failure people work around by widening it in a hurry. What actually bounds this window is that it holds no session, no library and no editor: there is nothing here for a compromised renderer to reach that the control window does not already expose. `opener:default` and the dialog plugin are withheld exactly as they are for control — every picker runs in Rust.",
+  "windows": ["preferences"],
+  "permissions": ["core:default", "allow-control-commands"]
+}

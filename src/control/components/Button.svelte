@@ -73,15 +73,34 @@
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out),
-      transform var(--dur-press) var(--ease-out),
       opacity var(--dur-fast) var(--ease-out);
   }
   .button:hover:not(:disabled) {
     background: var(--bg-hover-surface);
     border-color: var(--border-strong);
   }
+  /*
+   * A press DARKENS; it does not shrink (§23.5, §9.3).
+   *
+   * `transform: scale(0.98)` is a mobile-app affordance and it is what a
+   * toolbar full of them reads as. §23.5 asks for nonessential hover lift and
+   * button scaling to be removed, and §9.3 says the same about press scaling
+   * specifically. What replaces it is a real press state — one the previous
+   * recipe did not have at all, because the transform was doing that job.
+   */
   .button:active:not(:disabled) {
-    transform: scale(0.98);
+    background: var(--bg-secondary);
+    border-color: var(--border-strong);
+  }
+  .primary:active:not(:disabled) {
+    background: var(--accent-strong);
+  }
+  .danger-primary:active:not(:disabled) {
+    background: var(--danger-strong);
+  }
+  .ghost:active:not(:disabled),
+  .danger:active:not(:disabled) {
+    background: var(--bg-hover-chrome);
   }
   .button:disabled {
     opacity: 0.5;

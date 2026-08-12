@@ -60,7 +60,12 @@
   let { items = [], trailing = [], extra, announcement }: Props = $props();
 </script>
 
-<footer class="statusbar">
+<!--
+  A NAMED landmark (§23.2). `<footer>` at the top level of a route is already
+  `contentinfo`; the name is what lets a screen-reader user jump to the
+  document's state instead of walking the route to find it.
+-->
+<footer class="statusbar" aria-label="Status">
   {#if announcement !== undefined}
     <p class="announcement" role="status" aria-live="polite">{announcement}</p>
   {/if}

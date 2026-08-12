@@ -99,6 +99,10 @@ commands.allow = [
   # A SCRIPT ID, not a path — the repository resolves it itself, so this is the
   # same contract `import_image` has always had.
   "set_drop_target_script",
+  # Window management for the Settings window (§14.1). Creating and closing a
+  # window neither reads nor writes anything the caller could not already see.
+  "open_preferences",
+  "close_preferences",
   "reveal_logs",
   # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
   # (docs/updates.md). Both were permitted here while always returning

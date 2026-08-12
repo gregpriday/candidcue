@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { openScript } from './fixtures/library';
+import { openPreferences } from './fixtures/preferences';
 import { watchPageErrors } from './fixtures/page-errors';
 
 /**
@@ -61,9 +62,18 @@ test('every control-window route renders and raises nothing', async ({ page }, t
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('A sentence for the compiler');
 
-  // Settings, every section. A section that throws on mount is exactly the
-  // failure mode this sweep is for.
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  /*
+   * Settings, every section — in its own WINDOW now (§14.1), which is its own
+   * page. The sweep loads it directly for the reason `fixtures/preferences.ts`
+   * sets out: a browser cannot open a native window, and the surface under test
+   * is the same either way.
+   *
+   * A section that throws on mount is exactly the failure mode this sweep is
+   * for, and moving Settings to another entry point makes it MORE worth
+   * sweeping, not less: it now boots on its own, with its own settings load and
+   * its own voice-facade binding.
+   */
+  await openPreferences(page);
   const nav = page.getByRole('navigation', { name: 'Settings sections' });
   for (const section of SETTINGS_SECTIONS) {
     await nav.getByRole('button', { name: section, exact: true }).click();
@@ -73,6 +83,10 @@ test('every control-window route renders and raises nothing', async ({ page }, t
     );
     await expectNotBlank(page);
   }
+
+  // Back to the control window for the rest of the sweep.
+  await page.goto('/control.html');
+  await expect(page.getByRole('heading', { name: 'All scripts' })).toBeVisible();
 
   // Live, reached the only way it can be reached: one press of Present.
   await page.getByRole('button', { name: 'All scripts', exact: true }).click();

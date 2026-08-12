@@ -13,6 +13,31 @@ export const settings = { subscribe: state.subscribe };
 
 let loaded = false;
 
+/**
+ * Adopt a settings document another window wrote (§14.1).
+ *
+ * Called by `services/settings-sync.ts` when Rust broadcasts a change. It
+ * REPLACES the store rather than merging, because the payload is the whole
+ * document at its new revision — merging would leave this window's
+ * `expectedRevision` pointing at a version that no longer exists, which is the
+ * conflict this whole mechanism exists to prevent.
+ *
+ * A payload that does not parse is ignored rather than adopted. An event is
+ * delivered by evaluating JSON in the webview, so a malformed one is possible in
+ * a way a typed command result is not, and replacing a working document with
+ * nothing would be far worse than missing one update.
+ *
+ * `loaded` is set: a window that has been handed the current document has, for
+ * every purpose, loaded it.
+ */
+export function adoptSettings(payload: unknown): boolean {
+  const adapted = settingsService.adaptRevisionedSettings(payload);
+  if (adapted === null) return false;
+  state.set(adapted);
+  loaded = true;
+  return true;
+}
+
 export async function loadSettings(force = false): Promise<AppSettings> {
   if (loaded && !force) return get(state);
   const value = await settingsService.getSettings();

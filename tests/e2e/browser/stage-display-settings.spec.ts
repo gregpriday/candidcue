@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { openPreferences } from './fixtures/preferences';
 
 /**
  * The stage-display picker, SHIM-BACKED, focused on a DEGRADED path.
@@ -32,7 +33,7 @@ test('a rejecting display enumeration leaves an actionable error and a working r
   await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], failListDisplays: true });
   await page.goto('/control.html');
 
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
     .getByRole('button', { name: 'Stage display', exact: true })
@@ -64,7 +65,7 @@ test('the chosen display is remembered, and Automatic names what it resolves to'
   await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
   await page.goto('/control.html');
 
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
     .getByRole('button', { name: 'Stage display', exact: true })

@@ -21,6 +21,7 @@
     type ShortcutOwnership,
     type ShortcutScope,
   } from '../lib/shortcuts';
+  import { commandsByCategory, formatAccelerator, type CommandCategory } from '../lib/commands';
 
   interface Props {
     open: boolean;
@@ -164,6 +165,57 @@
    * than counting rows and hoping. The editor's own keys carry none: they are
    * not in the table, which is exactly what the empty value says.
    */
+  /**
+   * The menu commands, READ FROM THE REGISTRY (§6.1).
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THIS SECTION EXISTS SEPARATELY FROM THE TABLE BELOW
+   * ---------------------------------------------------------------------------
+   * This page used to be built entirely from `rows` — a hand-written list keyed
+   * to `ShortcutAction`. That was right while every key in the app went through
+   * the window listener. It stopped being the whole story when the native menu
+   * arrived: File › Duplicate, View › Show Outline, Insert › Cue and two dozen
+   * others carry accelerators that `resolveShortcut` has never heard of, because
+   * the OS dispatches them. None of them could appear here, so the page called
+   * "every key the app answers" was missing most of them.
+   *
+   * So the menu's half is DERIVED, from the same `COMMANDS` the menu is built
+   * from and the same `formatAccelerator` that spells them for this platform. A
+   * command cannot gain a key without appearing here, and cannot appear here
+   * with a key it does not have.
+   *
+   * The transport table below is still hand-written, and still necessary: Space,
+   * B, T, A and the bracket keys have no menu item and no command id — they are
+   * plain keys owned by the screen that is up, which is exactly what
+   * `SHORTCUT_OWNERSHIP` describes. Folding those into the registry is the
+   * remaining half of §6.1.
+   */
+  const MENU_CAPTIONS: Record<CommandCategory, string> = {
+    file: 'File',
+    edit: 'Edit',
+    insert: 'Insert',
+    view: 'View',
+    session: 'Session',
+    window: 'Window',
+    help: 'Help',
+  };
+
+  const mac = isMacPlatform();
+
+  const menuGroups = commandsByCategory()
+    .map((group) => ({
+      category: group.category,
+      caption: MENU_CAPTIONS[group.category],
+      rows: group.commands
+        .filter((command) => command.accelerator !== undefined)
+        .map((command) => ({
+          label: command.label.replace(/…$/, ''),
+          keys: formatAccelerator(command.accelerator!, mac),
+          id: command.id,
+        })),
+    }))
+    .filter((group) => group.rows.length > 0);
+
   const groups = GROUP_ORDER.map((scope) => ({
     scope,
     caption: GROUP_CAPTIONS[scope],
@@ -193,8 +245,36 @@
     supposed to open on.
   -->
   <p class="intro" data-autofocus tabindex="-1">
-    Every key the app answers, and the screen that answers it.
+    Every key the app answers. The menu keys work wherever the command does; the
+    rest belong to the screen that answers them.
   </p>
+
+  <!--
+    The menu's own keys, derived from the command registry — see `menuGroups`.
+    `data-command` carries the id so the suite can check the rendered page
+    against `COMMANDS` entry by entry rather than counting rows.
+  -->
+  {#each menuGroups as group (group.category)}
+    <table class="shortcuts">
+      <caption>
+        <span class="group">{group.caption} menu</span>
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">Command</th>
+          <th scope="col" class="keys">Shortcut</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each group.rows as row (row.id)}
+          <tr data-command={row.id}>
+            <td class="action">{row.label}</td>
+            <td class="keys">{row.keys}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/each}
   {#each groups as group (group.scope)}
     <table class="shortcuts">
       <caption>

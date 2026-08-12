@@ -45,6 +45,23 @@ import type { Route, SettingsSection } from '../stores/router';
 import type { SaveState } from '../stores/editor';
 import type { EditorLayout } from '../stores/workspace';
 
+/**
+ * The insertions the native Insert menu offers.
+ *
+ * A union rather than eight separate action methods: they are one family, the
+ * editor answers all of them the same way, and a new one should not mean a new
+ * field on `CommandActions` that every caller has to implement.
+ */
+export type InsertKind =
+  | 'heading'
+  | 'bold'
+  | 'italic'
+  | 'link'
+  | 'image'
+  | 'diagram'
+  | 'cue'
+  | 'take-marker';
+
 export type { CommandId, CommandCategory, MenuItemState };
 export { COMMAND_IDS, menuCategory };
 
@@ -108,6 +125,8 @@ export interface CommandActions {
   stepScale(direction: 1 | -1 | 0): void;
   stageAppearance(): void;
   settings(): void;
+  /** One of the editor's insertions, by name (§11.4). */
+  insert(what: InsertKind): void;
   startTake(): void;
   playPause(): void;
   moveSentence(delta: -1 | 1): void;
@@ -335,20 +354,92 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     run: (a) => a.replace(),
   },
 
+  // ---------------------------------------------------------------- Insert --
+  /*
+   * Every one of these is the SAME function the formatting row calls, reached
+   * through the route command bus so it lands on the live CodeMirror view
+   * (§11.4). They share `editing()`, so the whole menu greys out together the
+   * moment there is no document to insert into.
+   *
+   * `insert.bold` and `insert.italic` carry ⌘B and ⌘I — the keys CodeMirror's
+   * own keymap already answers. Naming them here is what makes them
+   * discoverable; the keymap is what makes them work whether or not the menu is
+   * ever opened.
+   */
+  'insert.heading': {
+    id: 'insert.heading',
+    label: 'Heading',
+    available: (c) => editing(c),
+    run: (a) => a.insert('heading'),
+  },
+  'insert.bold': {
+    id: 'insert.bold',
+    label: 'Bold',
+    accelerator: 'Mod+B',
+    available: (c) => editing(c),
+    run: (a) => a.insert('bold'),
+  },
+  'insert.italic': {
+    id: 'insert.italic',
+    label: 'Italic',
+    accelerator: 'Mod+I',
+    available: (c) => editing(c),
+    run: (a) => a.insert('italic'),
+  },
+  'insert.link': {
+    id: 'insert.link',
+    label: 'Link',
+    accelerator: 'Mod+K',
+    available: (c) => editing(c),
+    run: (a) => a.insert('link'),
+  },
+  'insert.image': {
+    id: 'insert.image',
+    label: 'Image…',
+    available: (c) => editing(c),
+    run: (a) => a.insert('image'),
+  },
+  'insert.diagram': {
+    id: 'insert.diagram',
+    label: 'Diagram',
+    available: (c) => editing(c),
+    run: (a) => a.insert('diagram'),
+  },
+  'insert.cue': {
+    id: 'insert.cue',
+    label: 'Cue',
+    available: (c) => editing(c),
+    run: (a) => a.insert('cue'),
+  },
+  'insert.take-marker': {
+    id: 'insert.take-marker',
+    label: 'Take Marker',
+    available: (c) => editing(c),
+    run: (a) => a.insert('take-marker'),
+  },
+
   // ------------------------------------------------------------------ View --
   'view.settings': {
     id: 'view.settings',
     label: 'Settings…',
     accelerator: 'Mod+,',
     /*
-     * Not during a take, and that is a product decision rather than a technical
-     * one. Almost every setting here changes how a take behaves — the follow
-     * profile, the optical rig, the microphone — and a settings screen that
-     * silently disables two thirds of itself is a worse answer than a menu item
-     * that says "not now". §14.1 asks for the same thing from the other
-     * direction: disable unsafe changes during an active take.
+     * AVAILABLE DURING A TAKE, and that is what changed when Settings became a
+     * window (§14.1).
+     *
+     * As a ROUTE it had to be refused: opening it navigated the control window,
+     * which during a take means taking the stage off the screen. As a window it
+     * opens beside the take and disturbs nothing — and an operator hunting a
+     * microphone fault mid-take is precisely the person who needs it.
+     *
+     * §14.1 states the rule directly: keep Settings available while the main
+     * window is in a non-destructive session state, and disable UNSAFE CHANGES
+     * during an active take. That second half belongs to the individual
+     * controls, next to the thing each one would break, not to the door.
+     *
+     * `window.settings` is the same action from the Window menu and must agree.
      */
-    available: (c) => !presenting(c),
+    available: () => true,
     run: (a) => a.settings(),
   },
   'view.library': {
@@ -536,6 +627,18 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     available: () => true,
     run: (a) => a.showMainWindow(),
   },
+  'window.settings': {
+    id: 'window.settings',
+    label: 'CandidCue Settings',
+    /*
+     * Always enabled, because choosing it OPENS the window if it is not there.
+     * §20.4: "Bring an existing window forward instead of creating duplicates"
+     * — the Window menu entry and ⌘, are the same action, and Rust enforces the
+     * single instance.
+     */
+    available: () => true,
+    run: (a) => a.settings(),
+  },
 
   // ------------------------------------------------------------------ Help --
   'help.keyboard-shortcuts': {
@@ -664,7 +767,15 @@ export function commandsByCategory(): Array<{
   category: CommandCategory;
   commands: CommandDefinition[];
 }> {
-  const order: CommandCategory[] = ['file', 'edit', 'view', 'session', 'window', 'help'];
+  const order: CommandCategory[] = [
+    'file',
+    'edit',
+    'insert',
+    'view',
+    'session',
+    'window',
+    'help',
+  ];
   return order
     .map((category) => ({
       category,

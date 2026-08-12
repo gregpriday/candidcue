@@ -17,6 +17,7 @@
  * user in the form of a toast they cannot act on.
  */
 import type { CommandId } from '../../shared/contracts/commands';
+import type { InsertKind } from '../lib/commands';
 
 /** The subset of commands that only a mounted route can perform. */
 export type RouteCommand = Extract<
@@ -37,6 +38,28 @@ const handlers = new Set<Handler>();
 export function onRouteCommand(handler: Handler): () => void {
   handlers.add(handler);
   return () => handlers.delete(handler);
+}
+
+/**
+ * The editor's insertions, from the native Insert menu (§11.4).
+ *
+ * Their own channel rather than eight `RouteCommand` ids, for the same reason
+ * `InsertKind` is a union: they are one family answered one way, and the bus
+ * should not grow a case per Markdown construct.
+ */
+type InsertHandler = (kind: InsertKind) => void;
+
+const insertHandlers = new Set<InsertHandler>();
+
+export function onInsertCommand(handler: InsertHandler): () => void {
+  insertHandlers.add(handler);
+  return () => insertHandlers.delete(handler);
+}
+
+export function dispatchInsert(kind: InsertKind): boolean {
+  if (insertHandlers.size === 0) return false;
+  for (const handler of insertHandlers) handler(kind);
+  return true;
 }
 
 /** Publish a route command. Returns true when something was listening. */

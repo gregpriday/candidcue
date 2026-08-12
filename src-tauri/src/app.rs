@@ -145,6 +145,8 @@ pub fn run() {
             commands::set_menu_state,
             commands::set_window_title,
             commands::set_drop_target_script,
+            commands::open_preferences,
+            commands::close_preferences,
             commands::reveal_logs,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates
             // manually (docs/updates.md); both used to be registered here and

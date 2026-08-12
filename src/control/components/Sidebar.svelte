@@ -67,9 +67,11 @@
 
   interface Props {
     onnew: () => void;
+    /** Opens the Settings window — see the note in `activate`. */
+    onsettings: () => void;
   }
 
-  let { onnew }: Props = $props();
+  let { onnew, onsettings }: Props = $props();
 
   /** Every row the arrows walk, in visual order. New Script is one of them. */
   type Row =
@@ -115,7 +117,16 @@
         void goToView(row.view);
         break;
       case 'settings':
-        void navigate({ name: 'settings', section: 'general' });
+        /*
+         * A WINDOW, not a destination (§14.1).
+         *
+         * The row stays in the rail because §7.1 only asked to move it out
+         * "if user testing shows the sidebar entry does not aid discovery" —
+         * and it plainly does, for anybody who has not learned ⌘,. What changed
+         * is what it does: opening Settings no longer takes the script off the
+         * screen, so the row is no longer a place you go.
+         */
+        onsettings();
         break;
     }
   }

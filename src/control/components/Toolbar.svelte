@@ -131,7 +131,17 @@
 </script>
 
 <div class="toolbar-stack">
-  <header class="toolbar">
+  <!--
+    A NAMED banner landmark (§23.2).
+
+    `<header>` at the top level of a route is ALREADY a banner — the role is
+    implicit and writing it out is redundant, which the a11y linter says too.
+    What was missing is the NAME: "jump to the banner" in a window that also has
+    a navigation rail, a main region, an inspector and a status bar tells you
+    nothing about which one you reached. The name is the route's own title, so
+    the announcement says which toolbar.
+  -->
+  <header class="toolbar" aria-label={`${title} toolbar`}>
     {#if onback}
       <!--
         In the SAME ROW as the title. §8.1 names the separate back row as the

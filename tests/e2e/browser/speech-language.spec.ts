@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
+import { openPreferences } from './fixtures/preferences';
 import { watchPageErrors } from './fixtures/page-errors';
 
 /**
@@ -88,7 +89,7 @@ function languageOptions(overrides: Record<string, unknown> = {}): Record<string
 }
 
 async function openSpeechSettings(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openPreferences(page);
   await page.getByRole('button', { name: 'Speech', exact: true }).click();
 }
 

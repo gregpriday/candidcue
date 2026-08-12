@@ -42,7 +42,11 @@
   } from '../services/speech-models';
   import type { DisplayDescriptor } from '../services/stage-types';
   import { markWelcomed } from '../stores/app-status';
-  import { navigate } from '../stores/router';
+  import { navigate, type SettingsSection } from '../stores/router';
+  import { openPreferences } from '../services/desktop-shell';
+  import { updateWorkspace } from '../stores/workspace';
+  import { describeError } from '../services/errors';
+  import { showToast } from '../stores/toasts';
   import { loadSettings, settings } from '../stores/settings';
 
   /**
@@ -288,16 +292,37 @@
    * opens the microphone screen and quits still gets this screen back next
    * launch, which is the honest outcome — they have not started yet.
    */
+  /*
+   * The readiness rows open the SETTINGS WINDOW (§14.1), at their own section.
+   *
+   * They used to navigate the control window to the Settings route, which is
+   * exactly the trip §16.1 asks a setup assistant not to make: somebody halfway
+   * through getting ready is sent to another screen and has to find their way
+   * back. Now the window opens beside the checklist and closing it leaves them
+   * where they were, with the row they came to fix visibly answered.
+   *
+   * The section is recorded in the workspace store first — `localStorage`, and
+   * therefore shared between webviews — which is how the window knows where to
+   * open without a creation argument. See `openSettingsWindow` in `App.svelte`,
+   * which does the same thing for the Privacy command.
+   */
+  function openSettingsAt(section: SettingsSection): void {
+    updateWorkspace({ settingsSection: section });
+    void openPreferences().catch((err: unknown) => {
+      showToast(`Settings could not be opened. ${describeError(err)}`, 'danger');
+    });
+  }
+
   function openMicrophoneSettings(): void {
-    void navigate({ name: 'settings', section: 'audio' });
+    openSettingsAt('audio');
   }
 
   function openDisplaySettings(): void {
-    void navigate({ name: 'settings', section: 'stage' });
+    openSettingsAt('stage');
   }
 
   function openSpeechSettings(): void {
-    void navigate({ name: 'settings', section: 'speech' });
+    openSettingsAt('speech');
   }
 
   function skipToLibrary(): void {
@@ -320,17 +345,26 @@
     </p>
 
     <!--
-      The sample script leads. It is the only one of these three that hands back
-      something written to be read ALOUD — it exercises pauses, going off script
-      and restarting — and reading aloud is the only way to see what this app
-      actually does. An empty script cannot demonstrate following, so offering
-      it first asked new users to supply the demo themselves.
+      §16.1: "Make 'Create a script' the primary action. Make 'Open sample'
+      secondary."
+
+      This was the other way round, and the reasoning was real: the sample is
+      the only one of the three that hands back something written to be read
+      ALOUD, and reading aloud is the only way to see what this app does. An
+      empty script cannot demonstrate following.
+
+      What settles it is which one is a DEAD END. Somebody who came here to
+      write their own script and is offered a demo as the loudest thing on the
+      screen has to decline it first; somebody who wanted the demo and is
+      offered "Create" first loses nothing — the sample is right beside it,
+      named, and one press away. The stronger argument was about teaching the
+      product, and a setup assistant's job is to get out of the way.
     -->
     <div class="actions">
-      <Button variant="primary" onclick={() => createAndOpenScript('sample')}>
-        Open the sample script
+      <Button variant="primary" onclick={() => createAndOpenScript('new')}>
+        Create your first script
       </Button>
-      <Button onclick={() => createAndOpenScript('new')}>Create your first script</Button>
+      <Button onclick={() => createAndOpenScript('sample')}>Open the sample script</Button>
       <!--
         Import is TERTIARY (§16.1): three equally weighted buttons is a screen
         asking a question rather than offering a way in. It is also the one of
