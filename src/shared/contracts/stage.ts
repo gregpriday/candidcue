@@ -184,8 +184,12 @@ export const CONTROL_EVENT = {
    * windows — the stage follows it, control reports on it.
    */
   alignmentSnapshot: 'align://snapshot',
-  identifyDisplays: 'app://identify-displays',
-  scriptExternalChange: 'script://external-change',
+  /*
+   * `identifyDisplays` and `scriptExternalChange` used to be declared here.
+   * Rust emitted both to this window and nothing listened, because the command
+   * each accompanied already returns the fact: `get_script` carries
+   * `externallyChanged`, and `identify_displays` returns its session.
+   */
   deviceOrDisplayChange: 'app://device-or-display-change',
   diagnosticWarning: 'diagnostic://warning',
   /**

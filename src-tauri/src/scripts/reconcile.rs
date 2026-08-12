@@ -231,3 +231,37 @@ fn remove_older_than(dir: &std::path::Path, age: Duration) -> std::io::Result<()
     }
     Ok(())
 }
+
+/// Startup reconciliation findings, kept until the frontend asks for them.
+///
+/// ## Why this exists
+///
+/// Reconciliation runs to completion inside Tauri's `setup` hook — before the
+/// control webview has executed a line of JavaScript. A Tauri event is
+/// delivered by evaluating JS in the target webview and is never queued, so the
+/// `diagnostic://warning` this used to emit landed on a page with no listeners
+/// and was simply gone. The code's own comment described the emit as "best
+/// effort" and pointed at a diagnostics file as the fallback, which is a file
+/// nobody opens.
+///
+/// The findings are held here instead and read once the frontend is up. The
+/// event survives as a nudge for a window that is already listening; it is no
+/// longer the only way to hear about a repair that touched somebody's scripts.
+#[derive(Debug)]
+pub struct StartupFindings {
+    report: std::sync::Mutex<Option<RecoveryReport>>,
+}
+
+impl StartupFindings {
+    pub fn new(report: RecoveryReport) -> Self {
+        Self {
+            report: std::sync::Mutex::new(Some(report)),
+        }
+    }
+
+    /// Take the findings. Once — they are a report on THIS launch, and a
+    /// second reader is a second window showing the same one-time notice.
+    pub fn take(&self) -> Option<RecoveryReport> {
+        self.report.lock().ok().and_then(|mut held| held.take())
+    }
+}

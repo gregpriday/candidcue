@@ -1,7 +1,7 @@
 //! Script commands (spec §46.2). Invoke argument names are the camelCase
 //! forms of the Rust parameters (Tauri convention), e.g. `expectedRevision`.
 
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Runtime, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
@@ -14,7 +14,6 @@ use crate::scripts::{
     SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks, ScriptMetadataPatch,
     ScriptPage, ScriptSummary,
 };
-use crate::windows::{events, CONTROL_LABEL};
 
 #[tauri::command]
 pub async fn list_scripts(
@@ -45,9 +44,8 @@ pub async fn create_script(
 }
 
 #[tauri::command]
-pub async fn get_script<R: Runtime>(
+pub async fn get_script(
     boot: State<'_, crate::database::BootStatus>,
-    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
@@ -57,17 +55,18 @@ pub async fn get_script<R: Runtime>(
     boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     let document = repo::get_script(db.pool(), &paths, &locks, &script_id).await?;
-    if document.externally_changed {
-        let _ = app.emit_to(
-            CONTROL_LABEL,
-            events::SCRIPT_EXTERNAL_CHANGE,
-            serde_json::json!({
-                "scriptId": script_id.as_str(),
-                "scriptRevision": document.summary.script_revision,
-                "sourceHash": document.source_hash,
-            }),
-        );
-    }
+    /*
+     * No `script://external-change` event.
+     *
+     * It was emitted here and NOTHING listened for it — the fact it carried is
+     * already on the value this command returns, as `externally_changed`, and
+     * the editor reads it from there. A second delivery channel for a fact the
+     * response already holds is a race waiting to matter: the event can arrive
+     * before the caller has processed the reply it belongs to.
+     *
+     * The 1.0 readiness review asked for exactly this: "remove redundant event
+     * surfaces when the command response already carries the complete fact".
+     */
     Ok(document)
 }
 

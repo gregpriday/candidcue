@@ -497,6 +497,20 @@
     if (section === 'stage' || section === 'teleprompter') void loadDisplays();
   });
 
+  /**
+   * Refresh when a monitor is plugged, unplugged or rearranged.
+   *
+   * Rust has always polled the topology and emitted
+   * `app://device-or-display-change`; nothing listened, so the watcher was
+   * burning a timer to tell nobody and this list went stale the moment
+   * somebody unplugged a monitor mid-setup — the exact situation a display
+   * picker exists for.
+   */
+  $effect(() => {
+    if (section !== 'stage' && section !== 'teleprompter') return;
+    return stageService.onDisplayTopologyChange(() => void loadDisplays());
+  });
+
   async function loadDisplays(): Promise<void> {
     displaysLoading = true;
     displaysError = null;

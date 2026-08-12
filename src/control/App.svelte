@@ -35,6 +35,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { describeError, errorCode } from './services/errors';
   import {
     getBootStatus,
+    getStartupFindings,
     writeUnsavedRecovery,
     type BootStatusReport,
   } from './services/recovery';
@@ -403,6 +404,29 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * lives outside the boot branch and is mounted for the whole life of the
          * shell. Raised last so it lands on the app rather than on the splash.
          */
+        /*
+         * Anything startup reconciliation repaired, collected now that there
+         * is a window to tell.
+         *
+         * Rust emits `diagnostic://warning` for this too, but that emit
+         * happens inside `setup` — before this webview has run any JavaScript
+         * — so it can land on a page with no listeners and vanish. Asking is
+         * the delivery that cannot be raced.
+         */
+        void getStartupFindings()
+          .then((findings) => {
+            if (findings === null || disposed) return;
+            showToast(
+              'CandidCue repaired some script records while starting. ' +
+                'Settings › Diagnostics has the details.',
+              'info',
+            );
+          })
+          .catch(() => {
+            // An older build has no such command. The diagnostics file and the
+            // log still hold the report.
+          });
+
         if (settingsWarning !== null) {
           showToast(
             `CandidCue could not load your settings, so this launch is using defaults. ${settingsWarning}`,

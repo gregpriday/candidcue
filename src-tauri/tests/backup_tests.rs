@@ -851,6 +851,10 @@ fn every_registered_command_is_classified_for_recovery_mode() {
     const RECOVERY_SAFE: &[(&str, &str)] = &[
         ("app_version", "reads package info; the recovery screen shows it"),
         ("get_boot_status", "the question recovery mode exists to answer"),
+        (
+            "get_startup_findings",
+            "reads managed state and clears it; a repair report is worth showing whatever mode the app is in",
+        ),
         ("list_database_backups", "read-only, and recovery needs it"),
         ("rescue_scripts", "copies canonical files OUT; the first thing a user wants"),
         ("reveal_data_folder", "opens Finder; the last resort that always works"),

@@ -26,7 +26,15 @@ pub const IDENTIFY_LABEL_PREFIX: &str = "identify-";
 // `stage_event_names_match_ts_contract` test enforces the pairing.
 pub mod events {
     // Rust → control.
-    pub const SCRIPT_EXTERNAL_CHANGE: &str = "script://external-change";
+    /*
+     * `SCRIPT_EXTERNAL_CHANGE` and `IDENTIFY_DISPLAYS` used to be declared
+     * here. Both were emitted to control and neither had a listener, because
+     * the command each accompanied already returns the fact — `get_script`
+     * carries `externallyChanged`, and `identify_displays` returns its
+     * session. An event nobody consumes is not a feature that is waiting to be
+     * wired: it is a second delivery channel that can arrive before the reply
+     * it belongs to.
+     */
     pub const STAGE_READY: &str = "stage://ready";
     pub const STAGE_CLOSED: &str = "stage://closed";
     pub const STAGE_ERROR: &str = "stage://error";
@@ -421,7 +429,11 @@ pub fn identify_displays<R: Runtime>(
     }
     schedule_identify_close(app, IDENTIFY_DURATION_MS);
 
-    let _ = app.emit_to(CONTROL_LABEL, events::IDENTIFY_DISPLAYS, &session);
+    /*
+     * No `app://identify-displays` event either. The session it announced is
+     * RETURNED, synchronously, on the next line — and nothing listened for the
+     * event. See the note in `scripts_cmds::get_script`.
+     */
     Ok(session)
 }
 
@@ -1393,8 +1405,6 @@ mod tests {
             events::STAGE_READY,
             events::STAGE_CLOSED,
             events::STAGE_ERROR,
-            events::IDENTIFY_DISPLAYS,
-            events::SCRIPT_EXTERNAL_CHANGE,
             events::DEVICE_OR_DISPLAY_CHANGE,
             events::DIAGNOSTIC_WARNING,
             events::SHUTDOWN_REQUESTED,

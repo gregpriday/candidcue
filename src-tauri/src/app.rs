@@ -72,6 +72,7 @@ pub fn run() {
             commands::rescue_scripts,
             commands::reveal_data_folder,
             commands::write_unsaved_recovery,
+            commands::get_startup_findings,
             // Scripts (spec §46.2)
             commands::list_scripts,
             commands::create_script,
@@ -363,9 +364,26 @@ pub fn run() {
                 Ok(report) => {
                     if report.has_findings() {
                         tracing::warn!(?report, "startup reconciliation had findings");
-                        // Best effort: the control webview may not have
-                        // installed its listener yet, so the recovery report is
-                        // also written to the diagnostics directory.
+                        /*
+                         * STORED, then announced — not announced and hoped for.
+                         *
+                         * This used to be an emit alone, with a comment
+                         * admitting the race: reconciliation finishes inside
+                         * `setup`, which is before the control webview has
+                         * executed a line of JavaScript, so the event lands on
+                         * a page with no listeners and is gone. A Tauri event
+                         * is delivered by evaluating JS in the target webview
+                         * and is never queued.
+                         *
+                         * The findings now sit in managed state that the
+                         * frontend QUERIES once it is up
+                         * (`get_startup_findings`). The event stays as a nudge
+                         * for a window that is already listening; it is no
+                         * longer the only delivery.
+                         */
+                        handle.manage(crate::scripts::reconcile::StartupFindings::new(
+                            report.clone(),
+                        ));
                         let _ = handle.emit_to(
                             CONTROL_LABEL,
                             events::DIAGNOSTIC_WARNING,

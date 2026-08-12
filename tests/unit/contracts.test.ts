@@ -48,7 +48,19 @@ describe('shared contracts', () => {
     expect(STAGE_EVENT.intent).toBe('stage://intent');
     expect(CONTROL_EVENT.stageReady).toBe('stage://ready');
     expect(CONTROL_EVENT.stageClosed).toBe('stage://closed');
-    expect(CONTROL_EVENT.identifyDisplays).toBe('app://identify-displays');
+    /*
+     * `identifyDisplays` and `scriptExternalChange` are gone. Rust emitted
+     * both to the control window and nothing listened, because the command
+     * each accompanied already returns the fact — `identify_displays` returns
+     * its session, `get_script` carries `externallyChanged`. A second delivery
+     * channel for a fact the response already holds is a race waiting to
+     * matter.
+     */
+    expect(CONTROL_EVENT).not.toHaveProperty('identifyDisplays');
+    expect(CONTROL_EVENT).not.toHaveProperty('scriptExternalChange');
+    // The one app:// event that DOES have a consumer: Settings refreshes its
+    // display list when a monitor is plugged, unplugged or rearranged.
+    expect(CONTROL_EVENT.deviceOrDisplayChange).toBe('app://device-or-display-change');
   });
 
   it('type-checks representative contract shapes', () => {

@@ -298,6 +298,32 @@ pub async fn write_unsaved_recovery(
     Ok(target.to_string_lossy().to_string())
 }
 
+/// What startup reconciliation found, if anything, on THIS launch.
+///
+/// Read once and cleared. Reconciliation finishes inside Tauri's `setup` hook,
+/// which is before the control webview has run any JavaScript, so the
+/// `diagnostic://warning` it emits can land on a page with no listeners — the
+/// code's own comment called the emit "best effort" and pointed at a
+/// diagnostics file as the fallback, which is a file nobody opens.
+///
+/// A repair that rewrote somebody's script index is worth telling them about,
+/// so the findings wait here to be collected rather than being shouted into an
+/// empty room.
+#[tauri::command]
+pub async fn get_startup_findings<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Option<serde_json::Value>, AppError> {
+    use tauri::Manager;
+    // Managed only when there WERE findings, so its absence is the ordinary
+    // answer and not an error.
+    let Some(findings) = app.try_state::<crate::scripts::reconcile::StartupFindings>() else {
+        return Ok(None);
+    };
+    Ok(findings
+        .take()
+        .and_then(|report| serde_json::to_value(report).ok()))
+}
+
 /// Show the data folder in the file manager.
 ///
 /// The last resort that always works, and the one a support conversation ends

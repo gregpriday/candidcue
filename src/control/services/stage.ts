@@ -13,7 +13,8 @@ import type {
   StageStatePayload,
   StageStatus,
   } from '../../shared/contracts';
-import { invokeOrMock } from './ipc';
+import { CONTROL_EVENT } from '../../shared/contracts/stage';
+import { invokeOrMock, isTauriRuntime } from './ipc';
 import { mockStage } from './mock-backend';
 import type {
   DisplayDescriptor,
@@ -251,4 +252,38 @@ export async function waitForStageReady(
         });
     }, 400);
   });
+}
+
+/**
+ * Notice a monitor being plugged, unplugged or rearranged.
+ *
+ * Rust polls the display topology every two seconds and emits
+ * `app://device-or-display-change` when it moves — and until this existed
+ * NOTHING listened. The 1.0 readiness review named it directly: an emitted
+ * event with no consumer has no product effect, so the watcher was burning a
+ * timer to tell nobody, and a display list on screen went stale the moment
+ * somebody unplugged a monitor.
+ *
+ * The payload is deliberately ignored. It says the topology CHANGED; what it
+ * changed to is `list_displays`, which is the one answer that cannot be stale
+ * by the time it is read.
+ */
+export function onDisplayTopologyChange(handler: () => void): () => void {
+  if (!isTauriRuntime()) return () => {};
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  void (async () => {
+    const { listen } = await import('@tauri-apps/api/event');
+    const stop = await listen(CONTROL_EVENT.deviceOrDisplayChange, () => handler());
+    if (cancelled) stop();
+    else unlisten = stop;
+  })().catch(() => {
+    // A missing listener means the list refreshes when a section is opened,
+    // which is what happened before this existed. Not worth escalating.
+  });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+    unlisten = null;
+  };
 }
