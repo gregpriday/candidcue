@@ -18,12 +18,15 @@ use crate::speech::SpeechEngine;
 /// frames from a superseded session can never reach a newer engine.
 #[tauri::command]
 pub async fn start_alignment(
+    boot: tauri::State<'_, crate::database::BootStatus>,
     db: tauri::State<'_, Database>,
     state: tauri::State<'_, AlignmentState>,
     speech: tauri::State<'_, SpeechEngine>,
     generation: u64,
     tokens: Vec<AlignToken>,
 ) -> Result<(), AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     if tokens.is_empty() {
         return Err(AppError::invalid_input(
             "cannot align against a script with no spoken tokens",

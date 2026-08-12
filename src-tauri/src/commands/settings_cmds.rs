@@ -188,9 +188,12 @@ pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>
 /// cache and does not live under `cache/`.
 #[tauri::command]
 pub async fn clear_cache(
+    boot: State<'_, crate::database::BootStatus>,
     paths: State<'_, DataPaths>,
     kind: String,
 ) -> Result<ClearResult, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let dirs = clear_cache_targets(&paths, &kind)?;
 
     /*

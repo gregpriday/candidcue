@@ -46,12 +46,15 @@ pub async fn create_script(
 
 #[tauri::command]
 pub async fn get_script<R: Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<ScriptDocument, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     let document = repo::get_script(db.pool(), &paths, &locks, &script_id).await?;
     if document.externally_changed {
@@ -249,6 +252,7 @@ pub async fn import_script<R: Runtime>(
 /// `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_script<R: Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
@@ -256,6 +260,8 @@ pub async fn export_script<R: Runtime>(
     script_id: String,
     request: ExportRequest,
 ) -> Result<Option<ExportResult>, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let script_id = ScriptId::parse(&script_id)?;
     // Validate the format before showing a dialog the operator cannot satisfy.
     let (extension, label) = export_format_extension(&request.format)?;

@@ -562,8 +562,25 @@ pub(crate) fn redact_log_line(line: &str) -> String {
     let mut rest = line;
 
     while !rest.is_empty() {
-        // A URL: keep the scheme and host, drop everything after it.
-        if let Some(start) = rest.find("http://").or_else(|| rest.find("https://")) {
+        /*
+         * A URL: keep the scheme and host, drop everything after it.
+         *
+         * The EARLIEST of the two schemes, not "http:// if present else
+         * https://". `find("http://").or_else(…)` takes the http one wherever
+         * it is, so a line holding
+         *
+         *     https://secret.example/?token=x then http://other.example/
+         *
+         * started at the LATER url and copied the earlier one — query string
+         * and all — through as ordinary prefix text.
+         */
+        let next_url = match (rest.find("http://"), rest.find("https://")) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        if let Some(start) = next_url {
             out.push_str(&rest[..start]);
             let url = &rest[start..];
             let end = url
@@ -618,13 +635,34 @@ pub(crate) fn redact_log_line(line: &str) -> String {
 /// LINES. Interleaving them would mean redacting a partial line.
 fn copy_tail_redacted(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> {
     copy_tail(source, dest, max_bytes)?;
-    let raw = std::fs::read_to_string(dest)?;
-    let redacted: String = raw
-        .lines()
-        .map(redact_log_line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(dest, if raw.ends_with('\n') { format!("{redacted}\n") } else { redacted })
+
+    /*
+     * A destination that cannot be redacted is REMOVED, not left behind.
+     *
+     * `copy_tail` has already written the raw bytes by the time this reads
+     * them back, so a log containing invalid UTF-8 used to fail the decode,
+     * get logged as a warning by the caller, and leave the UNREDACTED copy
+     * sitting in the bundle — the exact opposite of what this function is for.
+     */
+    let raw = match std::fs::read_to_string(dest) {
+        Ok(raw) => raw,
+        Err(err) => {
+            let _ = std::fs::remove_file(dest);
+            return Err(err);
+        }
+    };
+
+    /*
+     * Split on '\n' rather than `lines()`, which strips a trailing '\r' and
+     * would silently rewrite a CRLF log as LF. Redaction must not re-encode
+     * the file it is redacting.
+     */
+    let redacted: Vec<String> = raw.split('\n').map(|line| redact_log_line(line)).collect();
+    if let Err(err) = std::fs::write(dest, redacted.join("\n")) {
+        let _ = std::fs::remove_file(dest);
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn copy_tail(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Result<()> {

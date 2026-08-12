@@ -30,6 +30,26 @@ import { APP_ERROR_CODES } from '../../../src/shared/contracts/errors';
 
 const ROOT = resolve(__dirname, '../../..');
 
+/**
+ * What this test CANNOT see, stated rather than left as an assumption.
+ *
+ * The matcher below reads string literals. A code assembled from a constant or
+ * returned by a helper is invisible to it — `net.rs` builds its URL-refusal
+ * codes from `HopLabels` fields, for instance. Those are declared and covered
+ * today, and nothing checks that they stay so.
+ *
+ * Widening the matcher to "any SCREAMING_SNAKE literal in Rust" was tried and
+ * is worse: it sweeps in event names (`STAGE_MOTION_REPORT`), header names and
+ * enum labels, and the allow-list needed to suppress them becomes the thing
+ * that rots. A narrow matcher with a stated blind spot beats a broad one whose
+ * exceptions nobody maintains.
+ *
+ * If a code ever needs to be built rather than written, add it to
+ * `APP_ERROR_CODES` and give it copy in the same commit — the two tests below
+ * that compare the registries against each other will keep it honest from
+ * there.
+ */
+
 /** Every stable code Rust can put on the wire. */
 function rustCodes(): Set<string> {
   const found = new Set<string>();
@@ -41,13 +61,34 @@ function rustCodes(): Set<string> {
      * enum variants. Both are matched on the literal, because a code that
      * reaches the frontend is always a literal somewhere.
      */
-    for (const match of source.matchAll(/AppError::structured\(\s*"([A-Z][A-Z0-9_]*)"/g)) {
+    /*
+     * Both spellings of the constructor. A verification pass found the narrow
+     * `AppError::structured(` version evadable by `Self::structured(` — which
+     * the constructors inside `errors.rs` already use, so the evasion was not
+     * hypothetical.
+     */
+    for (const match of source.matchAll(
+      /(?:AppError|Self)::structured\(\s*"([A-Z][A-Z0-9_]*)"/g,
+    )) {
       found.add(match[1]!);
     }
+
+    /*
+     * And every literal inside `code()`, which is the other place a code is
+     * minted. Taken from the whole FUNCTION BODY rather than from `=> "…"`
+     * arms: the two NETWORK codes are returned from inside an `if`, so an
+     * arm-shaped matcher missed them, and any future arm written that way
+     * would be missed too.
+     */
     if (rel.endsWith('errors.rs')) {
-      // The `code()` mapping: `AppError::Storage(_) => "SCRIPT_SAVE_FAILED",`
-      for (const match of source.matchAll(/=>\s*"([A-Z][A-Z0-9_]{3,})"/g)) {
-        found.add(match[1]!);
+      const start = source.indexOf('pub fn code(&self)');
+      if (start !== -1) {
+        // To the next `pub fn`, so this reads one function and not the file.
+        const after = source.indexOf('\n    pub fn ', start + 1);
+        const body = source.slice(start, after === -1 ? undefined : after);
+        for (const match of body.matchAll(/"([A-Z][A-Z0-9_]{3,})"/g)) {
+          found.add(match[1]!);
+        }
       }
     }
   }

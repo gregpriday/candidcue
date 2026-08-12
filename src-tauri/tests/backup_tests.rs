@@ -723,71 +723,171 @@ async fn recovery_mode_refuses_commands_that_would_write() {
     assert!(failed.require_recovery().is_ok());
 }
 
-#[tokio::test]
-async fn the_mutating_commands_actually_carry_the_guard() {
+#[test]
+fn every_registered_command_is_classified_for_recovery_mode() {
     /*
-     * Structural, and deliberately so: the test above proves the guard
-     * FUNCTION works, which is worth nothing if it is not called. A command
-     * added later without it is the whole failure mode, and nothing else in
-     * the suite would notice.
+     * ENUMERATED, not listed.
+     *
+     * The first version of this test checked a hand-maintained list of twenty
+     * command names — which is worth almost nothing: a command added later
+     * without a guard is invisible to it, and that is precisely the failure
+     * mode. A verification pass found eight real mutators it had missed,
+     * including the speech-model download and delete, which write to the app
+     * data directory, and `clear_cache`, which deletes logs.
+     *
+     * So this reads the ACTUAL command registry from `app.rs` and requires
+     * every command to be one of three things:
+     *
+     *   1. guarded with `require_ready()`  — refuses to run in recovery mode;
+     *   2. guarded with `require_recovery()` — destructive, and only correct
+     *      when the database did NOT open;
+     *   3. named in `RECOVERY_SAFE` below, with a reason.
+     *
+     * A new command is therefore an explicit decision. Adding one without
+     * touching this file fails.
      */
+    const RECOVERY_SAFE: &[(&str, &str)] = &[
+        ("app_version", "reads package info; the recovery screen shows it"),
+        ("get_boot_status", "the question recovery mode exists to answer"),
+        ("list_database_backups", "read-only, and recovery needs it"),
+        ("rescue_scripts", "copies canonical files OUT; the first thing a user wants"),
+        ("reveal_data_folder", "opens Finder; the last resort that always works"),
+        (
+            "write_unsaved_recovery",
+            "parks text a failed save would otherwise lose; must work when nothing else does",
+        ),
+        (
+            "export_support_bundle",
+            "the boot-failure screen offers it, so it must work when the database did not open",
+        ),
+        (
+            "log_client_diagnostic",
+            "the recovery screen's own failures have to be recordable",
+        ),
+        (
+            "get_settings",
+            "read-only against whichever pool is managed; the recovery screen reads the theme",
+        ),
+        ("get_speech_engine_status", "reads engine state; no app-data write"),
+        ("get_speech_model_status", "reads the model store; no write"),
+        ("get_speech_language_options", "reads the catalogue; no write"),
+        ("preload_speech_engine", "loads a model into memory; touches no app data"),
+        ("cancel_speech_model_download", "stops a write rather than making one"),
+        ("push_transcription_audio", "in-memory; the session it feeds is already guarded"),
+        ("stop_transcription", "ends a session; stopping is always allowed"),
+        ("stop_alignment", "ditto"),
+        ("set_alignment_position", "in-memory engine state"),
+        ("reacquire_alignment", "in-memory engine state"),
+        ("list_scripts", "read-only"),
+        ("list_revisions", "read-only"),
+        ("get_revision", "read-only"),
+        ("reveal_script_folder", "opens Finder"),
+        ("resolve_asset_urls", "read-only"),
+        ("list_sessions", "read-only"),
+        ("list_session_takes", "read-only"),
+        ("list_displays", "read-only"),
+        ("identify_displays", "shows overlays; no persistence"),
+        ("list_display_profiles", "read-only"),
+        ("get_system_diagnostics", "read-only; a support request needs it"),
+        ("open_model_licence", "opens a validated url"),
+        ("open_stage", "window management"),
+        ("close_stage", "window management"),
+        ("set_stage_fullscreen", "window management"),
+        ("set_control_presenting", "window management"),
+        ("publish_stage_document", "in-memory + an event"),
+        ("publish_stage_command", "in-memory + an event"),
+        ("get_stage_status", "read-only"),
+    ];
+
+    let app_rs = include_str!("../src/app.rs");
+    let handler = app_rs
+        .split("invoke_handler")
+        .nth(1)
+        .expect("app.rs must register commands")
+        .split("])")
+        .next()
+        .expect("the handler list must be delimited");
+
+    let registered: Vec<String> = handler
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("commands::"))
+        .filter_map(|rest| rest.split(',').next())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+
+    // Anti-vacuity: a parser that stopped matching would classify nothing and
+    // pass, which is the shape of the defect this test replaces.
+    assert!(
+        registered.len() > 40,
+        "only found {} registered commands; the parser is broken",
+        registered.len()
+    );
+
     let sources = [
+        include_str!("../src/commands/mod.rs"),
         include_str!("../src/commands/scripts_cmds.rs"),
         include_str!("../src/commands/assets_cmds.rs"),
         include_str!("../src/commands/sessions_cmds.rs"),
         include_str!("../src/commands/settings_cmds.rs"),
         include_str!("../src/commands/stage_cmds.rs"),
+        include_str!("../src/commands/speech_cmds.rs"),
+        include_str!("../src/commands/align_cmds.rs"),
+        include_str!("../src/commands/recovery_cmds.rs"),
     ]
     .concat();
 
-    for command in [
-        "create_script",
-        "save_script",
-        "rename_script",
-        "duplicate_script",
-        "trash_script",
-        "restore_script",
-        "permanently_delete_script",
-        "restore_revision",
-        "import_script",
-        "import_image",
-        "import_remote_image",
-        "remove_asset_reference",
-        "start_session",
-        "end_session",
-        "append_session_transcript",
-        "record_session_take",
-        "update_settings",
-        "export_all_data",
-        "restore_all_data",
-        "save_display_profile",
-    ] {
-        let body = sources
-            .split(&format!("pub async fn {command}"))
-            .nth(1)
-            .unwrap_or_else(|| panic!("{command} must exist"));
-        // Only the first ~2 KB: the guard is the first statement of the body,
-        // and scanning the whole rest of the file would match the next
-        // command's guard instead.
-        let head = &body[..body.len().min(2048)];
-        assert!(
-            head.contains("boot.require_ready()?"),
-            "{command} writes, so it must refuse to run in recovery mode"
-        );
+    let safe: std::collections::HashMap<&str, &str> = RECOVERY_SAFE.iter().copied().collect();
+    let mut unclassified = Vec::new();
+
+    for command in &registered {
+        let Some(body) = sources.split(&format!("pub async fn {command}")).nth(1) else {
+            // Not async — `app_version` is a plain fn. Still has to be classified.
+            if sources.contains(&format!("pub fn {command}")) {
+                if !safe.contains_key(command.as_str()) {
+                    unclassified.push(command.clone());
+                }
+                continue;
+            }
+            panic!("{command} is registered but has no definition");
+        };
+        /*
+         * Bounded to THIS function's body.
+         *
+         * A fixed 2 KB window was the first attempt and it was vacuous: the
+         * command bodies here are short, so the window ran past the end of one
+         * function into the next command's guard and every command looked
+         * guarded. Removing a real guard did not fail the test — which is the
+         * precise failure this whole test exists to catch, reproduced inside
+         * the test itself. Cut at the next command instead.
+         */
+        let head = body
+            .split("#[tauri::command]")
+            .next()
+            .unwrap_or(body);
+        let guarded =
+            head.contains("boot.require_ready()?") || head.contains("boot.require_recovery()?");
+        if !guarded && !safe.contains_key(command.as_str()) {
+            unclassified.push(command.clone());
+        }
     }
 
-    let recovery = include_str!("../src/commands/recovery_cmds.rs");
-    for command in ["rebuild_database_index", "restore_database_backup"] {
-        let body = recovery
-            .split(&format!("pub async fn {command}"))
-            .nth(1)
-            .unwrap_or_else(|| panic!("{command} must exist"));
-        let head = &body[..body.len().min(2048)];
-        assert!(
-            head.contains("boot.require_recovery()?"),
-            "{command} is destructive and must refuse to run against a healthy database"
-        );
-    }
+    assert!(
+        unclassified.is_empty(),
+        "these commands are neither guarded nor declared recovery-safe:\n  {}\n\n\
+         Add `boot.require_ready()?` if the command writes anything, or add it to \
+         RECOVERY_SAFE with the reason it is safe to run while the database is unavailable.",
+        unclassified.join("\n  ")
+    );
+
+    // And the other direction: a stale RECOVERY_SAFE entry naming a command
+    // that no longer exists is a claim nobody is checking.
+    let stale: Vec<&str> = RECOVERY_SAFE
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !registered.iter().any(|r| r == name))
+        .collect();
+    assert!(stale.is_empty(), "RECOVERY_SAFE names unregistered commands: {stale:?}");
 }
 
 /* ------------------------------------------- support-bundle privacy canaries */
@@ -818,7 +918,8 @@ async fn a_support_bundle_redacts_paths_and_urls() {
         paths.logs_dir().join("candidcue-rust.2026-08-12.log"),
         "2026-08-12T10:00:00Z INFO opened /Users/aurelia-fitzwilliam/Documents/keynote/script.md\n\
          2026-08-12T10:00:01Z INFO fetched https://models.example.com/x-asr.tar.bz2?token=SECRETVALUE\n\
-         2026-08-12T10:00:02Z INFO alignment settled in 12ms\n",
+         2026-08-12T10:00:02Z INFO mirror https://first.example/a?leak=EARLIERSECRET then http://second.example/b\n\
+         2026-08-12T10:00:03Z INFO alignment settled in 12ms\n",
     )
     .expect("write log");
 
@@ -846,6 +947,24 @@ async fn a_support_bundle_redacts_paths_and_urls() {
     assert!(
         copied.contains("models.example.com"),
         "the host is the diagnostic value and must survive:\n{copied}"
+    );
+
+    /*
+     * Two urls on one line, https first.
+     *
+     * The first version of the redactor did `find("http://").or_else(||
+     * find("https://"))`, which starts at whichever `http://` appears —
+     * possibly the LATER one — and copies everything before it through as
+     * ordinary prefix text. The earlier https url, query string and all,
+     * survived untouched.
+     */
+    assert!(
+        !copied.contains("EARLIERSECRET"),
+        "an https url earlier in the line than an http one must still be redacted:\n{copied}"
+    );
+    assert!(
+        copied.contains("first.example") && copied.contains("second.example"),
+        "both hosts are diagnostic and must survive:\n{copied}"
     );
 }
 

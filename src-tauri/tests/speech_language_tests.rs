@@ -55,6 +55,9 @@ fn harness() -> Harness {
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
 
+    // `select_speech_language` and `start_speech_model_download` refuse to run
+    // in recovery mode, so the harness has to declare which mode it exercises.
+    app.manage(candidcue_lib::database::BootStatus::Ready);
     app.manage(Database::new(pool));
     app.manage(paths);
     app.manage(AppCoordinator::default());

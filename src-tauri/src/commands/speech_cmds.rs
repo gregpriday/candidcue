@@ -165,11 +165,14 @@ pub struct TranscriptionOptions {}
 /// take ended out of the next take's audio.
 #[tauri::command]
 pub async fn start_transcription<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     speech: State<'_, SpeechEngine>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let model = selected_model(&db).await?;
     speech.start_stream(app, model)
 }
@@ -236,10 +239,13 @@ pub async fn get_speech_model_status<R: tauri::Runtime>(
 /// `speech://model-progress` and this hands back the status to paint now.
 #[tauri::command]
 pub async fn start_speech_model_download<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     models: State<'_, SpeechModelManager>,
     model_id: Option<String>,
 ) -> Result<SpeechModelStatus, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let entry = resolve_entry(model_id.as_deref())?;
     models.start(&app, entry)
 }
@@ -261,10 +267,13 @@ pub async fn cancel_speech_model_download<R: tauri::Runtime>(
 /// `SpeechModelManager::delete`.
 #[tauri::command]
 pub async fn delete_speech_model<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     models: State<'_, SpeechModelManager>,
     model_id: Option<String>,
 ) -> Result<SpeechModelStatus, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     let entry = resolve_entry(model_id.as_deref())?;
     models.delete(&app, entry)
 }
@@ -323,11 +332,14 @@ pub struct SelectSpeechLanguageInput {
 /// about it) or swap the model out from under a live session.
 #[tauri::command]
 pub async fn select_speech_language<R: tauri::Runtime>(
+    boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     coordinator: State<'_, AppCoordinator>,
     input: SelectSpeechLanguageInput,
 ) -> Result<RevisionedSettings, AppError> {
+    // Recovery mode owns no writable database (database::BootStatus).
+    boot.require_ready()?;
     if take_is_running(&coordinator) {
         return Err(AppError::structured(
             "STT_LANGUAGE_CHANGE_BLOCKED",
