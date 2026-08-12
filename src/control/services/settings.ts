@@ -282,6 +282,25 @@ function overlayStatedAMode(stored: unknown): boolean {
 }
 
 /**
+ * Does the legacy overlay actually hold a calibration to move?
+ *
+ * The same question `overlayStatedAMode` asks for the presentation mode, and it
+ * was missing here — so a fresh install with nothing to migrate still flagged an
+ * adoption, wrote an empty `optical` section on its first launch purely to plant
+ * the marker, and could raise "CandidCue could not move your saved teleprompter
+ * calibrations into permanent storage" at somebody who has never calibrated
+ * anything.
+ *
+ * Nothing is lost by not writing: `updateSettings` stamps `migrated: true` on
+ * every optical write, so the first REAL calibration plants the marker itself.
+ */
+function overlayHoldsRigs(stored: unknown): boolean {
+  if (!isPlainObject(stored)) return false;
+  const profiles = stored['profiles'];
+  return isPlainObject(profiles) && Object.keys(profiles).length > 0;
+}
+
+/**
  * The mode that is still only in localStorage, waiting to be written to Rust.
  *
  * ---------------------------------------------------------------------------
@@ -435,7 +454,8 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   const resolvedOptical = rustOwnsOptical
     ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
     : opticalFromStored(defaults.optical, overlay.optical);
-  opticalAwaitingAdoption = rustOwnsOptical ? null : resolvedOptical;
+  opticalAwaitingAdoption =
+    rustOwnsOptical || !overlayHoldsRigs(overlay.optical) ? null : resolvedOptical;
 
   return {
     ...mapped,

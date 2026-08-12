@@ -7,19 +7,10 @@
 //! excluded.
 
 /// Options mirroring the per-script settings that affect spoken content.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SpokenTextOptions {
     pub read_headings: bool,
     pub read_image_alt_text: bool,
-}
-
-impl Default for SpokenTextOptions {
-    fn default() -> Self {
-        Self {
-            read_headings: false,
-            read_image_alt_text: false,
-        }
-    }
 }
 
 /// Extract approximate spoken plain text from Markdown.

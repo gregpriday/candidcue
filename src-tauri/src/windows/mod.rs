@@ -993,7 +993,6 @@ pub fn stage_status<R: Runtime>(app: &AppHandle<R>) -> StageStatus {
 
 /// Payload cap for a stage document envelope (spec §46.10).
 const MAX_STAGE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
-/// Payload cap for a tracking snapshot.
 
 /* ---------------------------------------------------------------------------
  * Typed control → stage payloads (§46.6)

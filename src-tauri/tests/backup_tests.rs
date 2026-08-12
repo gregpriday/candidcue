@@ -645,6 +645,46 @@ async fn a_rebuild_moves_the_database_aside_and_never_deletes_it() {
     );
 }
 
+#[tokio::test]
+async fn a_rebuild_does_not_fail_over_a_sidecar_that_is_not_there() {
+    /*
+     * The race this covers, which failed a release gate once and then would not
+     * reproduce: `rebuild_database_index` used to test `exists()` and then
+     * rename. SQLite removes `-wal` and `-shm` when the last connection closes,
+     * and that can land AFTER `close()` has returned — so the check saw a
+     * sidecar, the rename did not find it, and the rebuild failed with "No such
+     * file or directory" having ALREADY moved the main database. The user was
+     * left with no live database and an operation that reported failure.
+     *
+     * HONEST LIMIT: this test does NOT fail against the pre-check version. The
+     * window cannot be opened deterministically without an injection point in
+     * the product, so what is pinned here is the surrounding property — every
+     * combination of present and absent sidecars produces the same outcome —
+     * and the guarantee against the race itself rests on the shape of the code
+     * (rename, then tolerate a source that is no longer there), not on this.
+     */
+    for sidecars in [vec![], vec!["-wal"], vec!["-wal", "-shm"]] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = DataPaths::new(dir.path().to_path_buf());
+        fs::write(dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+        for suffix in &sidecars {
+            fs::write(dir.path().join(format!("candidcue.sqlite3{suffix}")), b"x").expect("sidecar");
+        }
+
+        let quarantine = backup::rebuild_database_index(&paths)
+            .unwrap_or_else(|e| panic!("rebuild with sidecars {sidecars:?} failed: {e:?}"));
+
+        assert!(!dir.path().join("candidcue.sqlite3").exists());
+        assert!(quarantine.join("candidcue.sqlite3").exists());
+        for suffix in &sidecars {
+            assert!(
+                quarantine.join(format!("candidcue.sqlite3{suffix}")).exists(),
+                "a sidecar that WAS there must still be moved"
+            );
+        }
+    }
+}
+
 /* -------------------------------------------- pre-migration backup policy */
 
 #[tokio::test]
@@ -1160,6 +1200,20 @@ fn pin_generation(dir: &Path, generation: &str) -> std::path::PathBuf {
     dir.join("quarantine").join(generation)
 }
 
+/// Record components as evacuated in the marker, the way a real attempt does
+/// after each successful move.
+///
+/// A test that simulates an interrupted attempt has to write this too: the
+/// journal — not the existence of the quarantine directory — is what tells a
+/// resume that the copy in there is the complete original.
+fn journal_evacuated(dir: &Path, names: &[&str]) {
+    let marker = dir.join("restore-pending.json");
+    let mut pending: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker).expect("marker")).expect("parses");
+    pending["evacuated"] = serde_json::json!(names);
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+}
+
 #[tokio::test]
 async fn a_rollback_never_deletes_something_it_did_not_move() {
     /*
@@ -1325,15 +1379,22 @@ async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
     // --- what the interrupted first attempt had already done -----------------
     let quarantine = pin_generation(h.dir.path(), "test-generation");
     fs::create_dir_all(&quarantine).expect("quarantine");
-    // 1. the originals, evacuated;
+    // 1. the originals, evacuated — and JOURNALLED, which is what makes them
+    //    recognisable as originals rather than as a half-finished copy;
+    let mut journalled = vec!["scripts".to_string()];
     fs::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
     for suffix in ["", "-wal", "-shm"] {
-        let from = h.dir.path().join(format!("candidcue.sqlite3{suffix}"));
+        let name = format!("candidcue.sqlite3{suffix}");
+        let from = h.dir.path().join(&name);
         if from.exists() {
-            fs::rename(&from, quarantine.join(format!("candidcue.sqlite3{suffix}")))
-                .expect("evacuate database");
+            fs::rename(&from, quarantine.join(&name)).expect("evacuate database");
+            journalled.push(name);
         }
     }
+    journal_evacuated(
+        h.dir.path(),
+        &journalled.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
     // 2. a PARTIAL copy of the export, left live by the crash.
     let partial = h.paths.scripts_dir().join("half-written");
     fs::create_dir_all(&partial).expect("partial");
@@ -1380,5 +1441,203 @@ async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
     assert!(
         previous.join("scripts").is_dir(),
         "the quarantined original must not have been moved or overwritten"
+    );
+}
+
+#[tokio::test]
+async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
+    /*
+     * "This restore has a quarantine generation" is not proof that this
+     * restore put anything in it.
+     *
+     * The generation is minted and recorded BEFORE the first move, so a first
+     * attempt that refuses an obstruction still leaves the name in the marker
+     * — and a rule that trusted an occupied path "because we are resuming"
+     * would accept that same obstruction on the very next launch, then set the
+     * live original aside in its favour. The journal is written after a move
+     * succeeds, so it says what is actually in there.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Precious", "# Precious\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // An obstruction of the RIGHT KIND — a file where the database's original
+    // would go — so nothing but the journal can tell it apart from one.
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+    fs::write(quarantine.join("candidcue.sqlite3"), b"not a database").expect("obstruct");
+
+    let live_db = h.dir.path().join("candidcue.sqlite3");
+    #[cfg(unix)]
+    let before = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(&live_db).expect("live database").ino()
+    };
+
+    for attempt in 1..=2 {
+        assert!(
+            backup::apply_pending_restore(&h.paths).await.is_err(),
+            "attempt {attempt} must refuse an obstruction it cannot account for"
+        );
+        assert!(live_db.is_file(), "attempt {attempt} removed the live database");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                fs::metadata(&live_db).expect("live database").ino(),
+                before,
+                "attempt {attempt} replaced the live database"
+            );
+        }
+        // And the obstruction is still exactly what it was — not adopted, not
+        // overwritten, not moved aside.
+        assert_eq!(
+            fs::read(quarantine.join("candidcue.sqlite3")).expect("obstruction"),
+            b"not a database",
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
+    /*
+     * A rollback has to restore what was NOT there.
+     *
+     * The commit creates the scripts directory and the database whether or not
+     * they existed before, so a journal of moves alone left anything newly
+     * created sitting live after a failed restore — with the message saying
+     * the previous data had been put back. Here the scripts directory is
+     * missing before the restore (a user who lost it, which is a reason to
+     * restore in the first place), and the database verification fails after
+     * the commit has recreated it.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Precious", "# Precious\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    let export_root = std::path::PathBuf::from(&export.path);
+
+    /*
+     * Damage the export's DATABASE in a way its manifest still vouches for, so
+     * the failure lands where nothing else can reach: after the evacuation and
+     * after the copy, in `verify_database_file`. Every earlier gate checks the
+     * manifest, so the manifest has to agree with the damage.
+     */
+    let garbage = vec![0u8; 4096];
+    fs::write(export_root.join("candidcue.sqlite3"), &garbage).expect("damage the database");
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&garbage);
+        hex::encode(hasher.finalize())
+    };
+    let manifest_path = export_root.join("manifest.json");
+    let mut manifest = manifest_of(&export_root);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["path"] == serde_json::json!("candidcue.sqlite3") {
+            file["sha256"] = serde_json::json!(digest);
+            file["bytes"] = serde_json::json!(garbage.len());
+        }
+    }
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).expect("json"))
+        .expect("rewrite manifest");
+
+    backup::restore_all_data(&h.paths, &export_root)
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // The state the restore is FOR: the scripts tree is gone.
+    fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the scripts");
+
+    assert!(
+        backup::apply_pending_restore(&h.paths).await.is_err(),
+        "a database that fails its integrity check must fail the restore"
+    );
+
+    assert!(
+        !h.paths.scripts_dir().exists(),
+        "the rollback left behind a scripts directory the commit created; \
+         'put your previous data back' has to include putting back the absence"
+    );
+    // And the component that WAS there is back.
+    assert!(
+        h.dir.path().join("candidcue.sqlite3").is_file(),
+        "the evacuated database must have been rolled back"
+    );
+}
+
+#[tokio::test]
+async fn a_rolled_back_component_stops_being_trusted_in_quarantine() {
+    /*
+     * The journal has to describe what is IN quarantine right now, not what
+     * once went there.
+     *
+     * A rollback moves the originals back, emptying those quarantine paths. If
+     * the journal still named them, the next attempt would treat ANYTHING it
+     * found at one of those paths as its own evacuated original — and set the
+     * live copy aside in its favour. That is the hole the journal exists to
+     * close, reopened by a stale entry.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Precious", "# Precious\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // Attempt 1 fails during the DATABASE evacuation, so the scripts tree is
+    // evacuated, journalled, and then rolled back.
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker")).expect("obstruct");
+    assert!(backup::apply_pending_restore(&h.paths).await.is_err());
+
+    let marker: serde_json::Value =
+        serde_json::from_slice(&fs::read(h.dir.path().join("restore-pending.json")).expect("marker"))
+            .expect("parses");
+    let journal = marker["evacuated"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !journal.iter().any(|n| n == "scripts"),
+        "a component that was rolled back must not still be listed as quarantined, got {journal:?}"
+    );
+
+    /*
+     * And the consequence, which is the reason the journal is checked at all:
+     * something else at that path is refused rather than adopted. If `scripts`
+     * were still journalled, the live tree would be set aside in favour of this
+     * directory.
+     */
+    fs::create_dir_all(quarantine.join("scripts").join("not-ours")).expect("second obstruction");
+    assert!(backup::apply_pending_restore(&h.paths).await.is_err());
+    let live: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("the live scripts must still be there")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(
+        live.iter().any(|body| body.contains("Keep me.")),
+        "the live scripts were set aside for a directory the restore never wrote, found {live:?}"
     );
 }

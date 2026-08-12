@@ -250,6 +250,12 @@ pub(crate) fn smoothstep(u: f64) -> f64 {
 /// `ease <= 0` returns the exact hard minimum, so every limit in this file can
 /// be restored to its previous behaviour by zeroing one config value.
 /// `a.min(cap)`, with the corner rounded off over a knee of width `ease`.
+/*
+ * `!(x > 0.0)` rather than `x <= 0.0` in both guards below, deliberately: the
+ * two differ on NaN, and NaN is exactly what these are defending against. A
+ * NaN knee width would propagate into every limit in this file.
+ */
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn soft_min(a: f64, cap: f64, ease: f64) -> f64 {
     if !(ease > 0.0) || !cap.is_finite() || !a.is_finite() {
         return a.min(cap);
@@ -3018,11 +3024,12 @@ mod tests {
             };
             let mut engine = Engine::new(jump_script(), config);
             engine.set_manual_position(0, 0.0);
-            let mut out = Vec::new();
-            out.push(final_item(&mut engine, 1, "region 0 holds ordinary", 600.0));
-            out.push(final_item(&mut engine, 2, "material here region 1", 1_200.0));
-            out.push(final_item(&mut engine, 3, DISTANT, 1_900.0));
-            out.push(final_item(&mut engine, 4, "region 3 holds ordinary", 2_600.0));
+            let out = vec![
+                final_item(&mut engine, 1, "region 0 holds ordinary", 600.0),
+                final_item(&mut engine, 2, "material here region 1", 1_200.0),
+                final_item(&mut engine, 3, DISTANT, 1_900.0),
+                final_item(&mut engine, 4, "region 3 holds ordinary", 2_600.0),
+            ];
             serde_json::to_string(&out).unwrap()
         };
 

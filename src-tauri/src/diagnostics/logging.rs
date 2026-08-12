@@ -613,7 +613,7 @@ pub(crate) fn redact_log_line(line: &str) -> String {
                 .find('/')
                 .map(|i| prefix_len + i)
                 .unwrap_or(path.len());
-            out.push_str("~");
+            out.push('~');
             rest = &path[after_name..];
             continue;
         }
@@ -657,7 +657,7 @@ fn copy_tail_redacted(source: &Path, dest: &Path, max_bytes: u64) -> std::io::Re
      * would silently rewrite a CRLF log as LF. Redaction must not re-encode
      * the file it is redacting.
      */
-    let redacted: Vec<String> = raw.split('\n').map(|line| redact_log_line(line)).collect();
+    let redacted: Vec<String> = raw.split('\n').map(redact_log_line).collect();
     if let Err(err) = std::fs::write(dest, redacted.join("\n")) {
         let _ = std::fs::remove_file(dest);
         return Err(err);

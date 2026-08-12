@@ -55,7 +55,40 @@ export async function getBootStatus(): Promise<BootStatusReport> {
   if (!isTauriRuntime()) {
     return { databaseReady: true, dataDirectory: '' };
   }
-  return await ipcInvoke<BootStatusReport>('get_boot_status');
+  const answer = await ipcInvoke<unknown>('get_boot_status');
+  /*
+   * Validated, not dereferenced.
+   *
+   * `boot.databaseReady` on whatever came back is one malformed reply away
+   * from a `TypeError` thrown out of the shell's startup path — which is
+   * exactly what happened: a backend that answered `null` produced "Cannot
+   * read properties of null (reading 'databaseReady')" on the generic
+   * could-not-start screen, telling the user nothing and pointing the reader
+   * at the wrong file.
+   *
+   * An unusable answer fails CLOSED, for the same reason a rejection does
+   * (see the caller in `App.svelte`): the command exists, it was asked, and
+   * what came back cannot be read. Assuming the database is fine on the
+   * strength of an answer nobody can parse is the situation this whole gate
+   * was added for.
+   */
+  if (typeof answer !== 'object' || answer === null) {
+    return {
+      databaseReady: false,
+      code: 'DATABASE_UNAVAILABLE',
+      message:
+        'CandidCue could not determine whether its database opened: it asked, and the ' +
+        'answer could not be read.',
+      dataDirectory: '',
+    };
+  }
+  const report = answer as Partial<BootStatusReport>;
+  return {
+    ...report,
+    // A missing flag is not a `true` flag.
+    databaseReady: report.databaseReady === true,
+    dataDirectory: typeof report.dataDirectory === 'string' ? report.dataDirectory : '',
+  };
 }
 
 export async function listDatabaseBackups(): Promise<DatabaseBackup[]> {

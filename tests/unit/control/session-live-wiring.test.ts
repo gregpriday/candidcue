@@ -378,6 +378,17 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
     );
     expect(raised[0]!.message).toMatch(/missing from the saved transcript/i);
 
+    /*
+     * And the SUMMARY the presenter is looking at is corrected, not just
+     * shouted over. `stopSession` computes the flags synchronously, so the last
+     * write of every take settles after the answer about it has been given: the
+     * dialog said "Saved" a moment ago and would have gone on saying it.
+     */
+    const ended = get(session).summary;
+    expect(ended, 'the take dialog is still showing this summary').not.toBeNull();
+    expect(ended!.transcriptSaved).toBe(false);
+    expect(ended!.transcriptPartial).toBe(true);
+
     // A second take, whose writes all succeed, is unaffected.
     records.appendSessionTranscript.mockClear();
     start({ transcriptRetained: true });

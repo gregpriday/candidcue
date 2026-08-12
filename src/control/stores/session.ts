@@ -2181,6 +2181,31 @@ function flushTranscript(sessionId: string, force: boolean): void {
       // write that failed before it started.
       transcriptRetentionDegraded = true;
       transcriptBuffer = [...ready, ...transcriptBuffer];
+    } else if (transcriptEpoch === epoch + 1) {
+      /*
+       * The take is over and its summary is on screen saying the transcript was
+       * saved — because at the moment that was computed, this write had not
+       * failed yet. `stopSession` issues the final append and reads the flags
+       * synchronously, so the last write of every take settles after the answer
+       * about it has been given.
+       *
+       * So correct the answer where it is. The summary lives in the store and
+       * the dialog renders it, so this reaches the screen the presenter is
+       * looking at rather than only the toast beside it.
+       *
+       * `epoch + 1` and not merely "different": teardown bumps once, and a new
+       * take bumps again. One step means the take that just ended, which is the
+       * take whose summary is being shown; two or more means somebody has moved
+       * on and this is no longer their business.
+       */
+      state.update((s) =>
+        s.summary
+          ? {
+              ...s,
+              summary: { ...s.summary, transcriptSaved: false, transcriptPartial: true },
+            }
+          : s,
+      );
     }
     showToast(
       stillTheSameTake
@@ -3642,15 +3667,17 @@ export function stopSession(): SessionSummary {
     summary.transcriptPartial =
       transcriptRetained && (transcriptRetentionDegraded || transcriptBuffer.length > 0);
     /*
-     * HONEST LIMIT: the tail append issued two lines up has not settled yet,
-     * so a failure in THAT write cannot reach the two flags above. The
-     * summary reports everything known at this moment; a late failure is
-     * delivered by the toast in `flushTranscript`'s catch, which says
-     * explicitly that the section is missing from the take that just ended.
+     * The tail append issued two lines up has not settled yet, so a failure in
+     * THAT write cannot reach the two flags above at this moment — and making
+     * `stopSession` async to wait for it is a larger change than it looks: it
+     * is called from a navigation guard, a shortcut and the shutdown sequence,
+     * and two of those cannot await.
      *
-     * Closing this properly means making `stopSession` async, which is a
-     * larger change than it looks: it is called from a navigation guard, a
-     * shortcut and the shutdown sequence, and two of those cannot await.
+     * So the correction comes to the summary instead of the summary waiting
+     * for it: `flushTranscript`'s catch patches this object in the store when
+     * the write that fails belongs to the take that just ended. The dialog
+     * renders from the store, so a summary that said "Saved" a moment ago
+     * changes to "Partly saved" in front of the presenter.
      */
     // §36.3: close the take that was running. Before the session row is closed,
     // so a listener reading the history the moment the session ends sees the

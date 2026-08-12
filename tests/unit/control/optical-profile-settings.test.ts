@@ -539,6 +539,40 @@ describe('Rust is the authority for calibrated rigs', () => {
     const loaded = await settings.getSettings();
     expect(loaded.optical).toEqual({ profiles: {}, activeRig: {} });
   });
+
+  it('does not migrate an empty overlay, or write to plant a marker nobody needs', async () => {
+    /*
+     * A fresh install has nothing to move. Flagging an adoption anyway made the
+     * first launch write an empty `optical` section purely to plant the
+     * authority marker — and put "CandidCue could not move your saved
+     * teleprompter calibrations into permanent storage" in front of somebody
+     * who has never calibrated anything if that write failed.
+     *
+     * Nothing is lost: `updateSettings` stamps `migrated: true` on every
+     * optical write, so the first real calibration plants the marker itself.
+     * `overlayStatedAMode` already gated the presentation-mode migration this
+     * way; this is the same gate, which the comment claimed and the code did
+     * not.
+     */
+    rustSettings.optical = undefined;
+    store.set(OVERLAY_KEY, JSON.stringify({ optical: { profiles: {}, activeRig: {} } }));
+
+    await settings.getSettings();
+    expect(settings.pendingOpticalAdoption()).toBeNull();
+
+    // And an overlay that DOES hold a rig is still migrated.
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: {
+          profiles: { [opticalRigKey('dsp-1', 'Desk hood')]: rig() },
+          activeRig: { 'dsp-1': 'Desk hood' },
+        },
+      }),
+    );
+    await settings.getSettings();
+    expect(settings.pendingOpticalAdoption()).not.toBeNull();
+  });
 });
 
 describe('the properties the 1.0 readiness review asked for', () => {

@@ -33,7 +33,22 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+/*
+ * These drive a real shell script: `tar`, `sha256sum`, a curl shim and a fake
+ * archive per case. On an idle machine each case is well under a second; with
+ * the rest of the suite running in parallel workers the first one has been
+ * measured at 45 SECONDS, against vitest's 5 s default — so the release gate
+ * failed on a test that had found nothing wrong.
+ *
+ * A generous ceiling rather than a tight one, deliberately: this file is about
+ * what the script DOES (which bytes it installs, what it refuses), and it owns
+ * no performance claim at all. The budgets that do own one are in
+ * `src/shared/perf-budget.ts`, and they take the fastest of several runs
+ * instead of widening.
+ */
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 const REPO_ROOT = resolve(__dirname, '../..');
 const SCRIPT = join(REPO_ROOT, 'scripts/fetch-stt-model.sh');

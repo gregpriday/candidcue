@@ -325,10 +325,7 @@ impl LineMap {
     }
 
     pub fn line_top_px(&self, line: usize) -> f64 {
-        self.line_y
-            .get(line)
-            .copied()
-            .unwrap_or_else(|| self.doc_h_px)
+        self.line_y.get(line).copied().unwrap_or(self.doc_h_px)
     }
 
     pub fn first_atom_of_line(&self, line: usize) -> u32 {
@@ -417,6 +414,13 @@ impl MotionLimits {
 /// `stoppingDistancePx` — the three-phase S-curve stop. Ported exactly,
 /// including the reason it takes `a`: a jerk-limited plant that is still
 /// accelerating has already committed to travel that `v²/2a` cannot see.
+///
+/// `!(x > 0.0)` rather than `x <= 0.0` throughout, and clippy's swap would
+/// change the behaviour: the two differ on NaN. This is a PORT — the shipping
+/// TypeScript reads `!(v > 0)` for the same reason — so the guard has to keep
+/// answering the same way on the same inputs or the Tier C numbers stop
+/// describing the product.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn stopping_distance_px(v: f64, a: f64, a_brake: f64, jerk_max: f64) -> f64 {
     if !(v > 0.0) {
         return 0.0;
@@ -445,6 +449,9 @@ pub fn stopping_distance_px(v: f64, a: f64, a_brake: f64, jerk_max: f64) -> f64 
 
 /// `jerkLimitedAccel` — the largest |a| that can still be ramped to zero inside
 /// the remaining velocity headroom, including the discrete `dt` term.
+///
+/// NaN-safe guards, as above.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn jerk_limited_accel(headroom: f64, jerk_max: f64, dt: f64) -> f64 {
     if !(headroom > 0.0) {
         return 0.0;
@@ -494,7 +501,7 @@ impl Plant {
         max_px: f64,
     ) -> StepResult {
         let target = target_px.clamp(min_px, max_px);
-        let integrated = dt_ms.max(0.0).min(MAX_FRAME_DT_MS);
+        let integrated = dt_ms.clamp(0.0, MAX_FRAME_DT_MS);
         let a_before = self.a;
         let a_brake = limits.a_max.max(0.0) * BRAKE_AUTHORITY;
         let envelope_dt = SUBSTEP_MS / 1000.0;

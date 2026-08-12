@@ -4353,13 +4353,14 @@ Rust → control:
 
 > **Superseded.** Of that list, only `stage://ready`, `stage://closed`,
 > `stage://error` and `app://device-or-display-change` still exist.
-> `script://external-change`, `diagnostic://warning` and
-> `update://available`/`update://progress` were all removed: each was emitted to
-> a window with no listener, and what they announced is now returned by the
-> command that produces it (`get_script` carries `externallyChanged`,
-> `get_startup_findings` collects reconciliation findings) or does not exist at
-> all (1.0 updates manually — see `docs/updates.md`). The `listener://` pair
-> belongs to the removed hosted sidecar. `src-tauri/src/windows/mod.rs::events`
+> `script://external-change` and `diagnostic://warning` were removed because
+> each was emitted to a window with no listener, and what they announced is
+> returned by the command that produces it — `get_script` carries
+> `externallyChanged`, and `get_startup_findings` collects reconciliation
+> findings. `update://available`/`update://progress` were never emitted at all:
+> they were reserved for an updater that 1.0 does not have (updates are manual —
+> see `docs/updates.md`). The `listener://` pair belongs to the removed hosted
+> sidecar. `src-tauri/src/windows/mod.rs::events`
 > and `src/shared/contracts/stage.ts` are the authority, and a test pairs them
 > in both directions.
 

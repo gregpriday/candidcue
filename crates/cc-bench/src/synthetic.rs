@@ -375,11 +375,17 @@ mod cadence_tests {
     /// often while every hypothesis carries more pipeline latency than the gap
     /// between them, which is exactly what a low-latency chunked model with a
     /// deep encoder does. The only real coupling is the one above.
-    #[test]
-    fn the_modelled_timings_are_non_negative() {
+    /*
+     * Compile-time, because these are constants: as a `#[test]` every one of
+     * these assertions had a value the compiler already knew, so the test could
+     * not fail — it passed whatever the constants said. A `const` block is
+     * checked when the file is built, which is what "these have to be timings"
+     * was always meant to mean.
+     */
+    const _: () = {
         assert!(PARTIAL_LAG_MS >= 0.0);
         assert!(PARTIAL_EVERY_MS > 0.0);
         assert!(FINAL_DELAY_MS > 0.0);
         assert!(ONSET_DELAY_MS >= 0.0);
-    }
+    };
 }

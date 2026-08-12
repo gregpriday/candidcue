@@ -221,3 +221,65 @@ describe('the recovery screen offers the actions the review asked for', () => {
     expect(recoverySource).toMatch(/previousStateAt/);
   });
 });
+
+describe('an answer the shell cannot read is not an answer that it started', () => {
+  /*
+   * The whole browser journey suite ran into this: a backend that replied
+   * `null` to `get_boot_status` made `boot.databaseReady` throw a `TypeError`
+   * out of the startup path, and every route landed on the generic "CandidCue
+   * could not finish starting" screen reading "Cannot read properties of null
+   * (reading 'databaseReady')".
+   *
+   * Two defects in one: the shell died on a shape it never checked, and what
+   * it told the user named a JavaScript property instead of the problem.
+   *
+   * Each case installs its own backend with `doMock` rather than leaning on
+   * the file-level `vi.mock`: the browser-dev test above calls `doUnmock`,
+   * which removes the mapping for the rest of the file, so anything after it
+   * that assumed the hoisted mock would silently be talking to the real
+   * module — and `isTauriRuntime()` is false there, which is the one answer
+   * that makes every assertion here vacuous.
+   */
+  async function bootStatusFrom(answer: unknown) {
+    vi.resetModules();
+    vi.doMock('../../../src/control/services/ipc', () => ({
+      isTauriRuntime: () => true,
+      BackendUnavailableError: class extends Error {},
+      ipcInvoke: async () => answer,
+    }));
+    const { getBootStatus } = await import('../../../src/control/services/recovery');
+    const status = await getBootStatus();
+    vi.doUnmock('../../../src/control/services/ipc');
+    vi.resetModules();
+    return status;
+  }
+
+  const bad: Array<[string, unknown]> = [
+    ['null', null],
+    ['a string', 'ready'],
+    ['a number', 1],
+  ];
+  for (const [label, answer] of bad) {
+    it(`treats ${label} as "could not determine", not as ready`, async () => {
+      const status = await bootStatusFrom(answer);
+      expect(status.databaseReady).toBe(false);
+      expect(status.code).toBe('DATABASE_UNAVAILABLE');
+      // And the message is about the database, not about a property access.
+      expect(status.message ?? '').toMatch(/database/i);
+      expect(status.message ?? '').not.toMatch(/undefined|null|properties of/i);
+    });
+  }
+
+  it('does not read a missing flag as a set one', async () => {
+    // An object with no `databaseReady` is not a document that says yes.
+    const status = await bootStatusFrom({ dataDirectory: '/data' });
+    expect(status.databaseReady).toBe(false);
+  });
+
+  it('passes a well-formed answer through unchanged', async () => {
+    expect(await bootStatusFrom({ databaseReady: true, dataDirectory: '/data' })).toEqual({
+      databaseReady: true,
+      dataDirectory: '/data',
+    });
+  });
+});

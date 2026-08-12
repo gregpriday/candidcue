@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import type { CompiledBlock, SafeRenderNode } from '../../shared/contracts';
 import { flattenWords, type AdvanceMeasurer, type AdvanceStyle } from './advance';
 import { planBlockBreaks, planScriptBreaks } from './wrap-plan';
+import { bestOf, budgetMessage } from '../../shared/perf-budget';
 
 const BASE: AdvanceStyle = {
   fontStack: 'Test',
@@ -386,19 +387,21 @@ describe('what it costs to plan', () => {
       );
     }
 
-    const started = performance.now();
-    const plan = planScriptBreaks(blocks, {
-      columnWidthPx: 620,
-      baseStyle: BASE,
-      measure: fake,
-    });
-    const elapsed = performance.now() - started;
+    // Fastest of several runs — see `bestOf`.
+    const run = bestOf(() =>
+      planScriptBreaks(blocks, {
+        columnWidthPx: 620,
+        baseStyle: BASE,
+        measure: fake,
+      }),
+    );
+    const plan = run.value;
 
     // Every paragraph reaches several lines, so the plan is substantial rather
     // than a few blocks that happened to fit.
     expect(plan.breakAfterTokens.size).toBeGreaterThan(200);
     expect(plan.unplannedBlocks).toBe(0);
-    expect(elapsed).toBeLessThan(400);
+    expect(run.elapsedMs, budgetMessage('whole-script wrap plan', run, 400)).toBeLessThan(400);
   });
 });
 

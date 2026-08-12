@@ -113,8 +113,7 @@ impl BootStatus {
 /// which is the correct outcome for input the user was never meant to be able
 /// to give.
 pub async fn in_memory_recovery_pool() -> Result<SqlitePool, AppError> {
-    let options = SqliteConnectOptions::from_str("sqlite::memory:")
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")?
         .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -176,8 +175,7 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
 
     let pre_existing = db_path.exists() && std::fs::metadata(&db_path).map(|m| m.len() > 0).unwrap_or(false);
 
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
@@ -489,8 +487,7 @@ async fn write_pre_migration_backup(
 /// truncated copy behind. This is cheap relative to a migration and it is the
 /// difference between "a backup exists" and "a backup works".
 async fn verify_backup(path: &Path) -> Result<(), AppError> {
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(false)
         .read_only(true);
 

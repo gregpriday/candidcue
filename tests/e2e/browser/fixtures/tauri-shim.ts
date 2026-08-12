@@ -583,6 +583,22 @@ function shimBody(config: ShimConfig): void {
       case 'app_version':
         return '0.1.0-e2e';
 
+      /*
+       * The shell asks this BEFORE it routes anywhere, so the shim has to
+       * answer it or every journey lands on the recovery screen instead of the
+       * app. It is modelled rather than left to the `default: null` below for
+       * the same reason the app validates the reply: `null` is not a boot
+       * status, and a test that ran against one would be testing the failure
+       * path by accident.
+       */
+      case 'get_boot_status':
+        return { databaseReady: true, dataDirectory: '/tmp/candidcue-e2e' };
+
+      // Nothing was repaired at startup. `null` is the ordinary answer here,
+      // and the shell treats it as "nothing to report".
+      case 'get_startup_findings':
+        return null;
+
       case 'get_settings':
         return settingsDoc;
 

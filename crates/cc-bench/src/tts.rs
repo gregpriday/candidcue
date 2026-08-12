@@ -430,6 +430,26 @@ fn push_silence(pcm: &mut Vec<u8>, ms: u32) {
     pcm.resize(pcm.len() + bytes, 0);
 }
 
+/// Wrap raw PCM in a WAV container (for listening/debugging in the temp dir).
+pub fn wav_bytes(pcm: &[u8]) -> Vec<u8> {
+    let data = pcm.len() as u32;
+    let mut wav = Vec::with_capacity(44 + pcm.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data.to_le_bytes());
+    wav.extend_from_slice(pcm);
+    wav
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -469,24 +489,4 @@ mod tests {
             expected.parent().unwrap().join("tts"),
         );
     }
-}
-
-/// Wrap raw PCM in a WAV container (for listening/debugging in the temp dir).
-pub fn wav_bytes(pcm: &[u8]) -> Vec<u8> {
-    let data = pcm.len() as u32;
-    let mut wav = Vec::with_capacity(44 + pcm.len());
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(36 + data).to_le_bytes());
-    wav.extend_from_slice(b"WAVEfmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-    wav.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());
-    wav.extend_from_slice(&16u16.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data.to_le_bytes());
-    wav.extend_from_slice(pcm);
-    wav
 }
