@@ -663,6 +663,19 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
     }
     let previous = paths.quarantine_dir().join(&generation);
     std::fs::create_dir_all(&previous)?;
+    /*
+     * The generation's own directory ENTRY, durably.
+     *
+     * Everything below fsyncs what it moves into this directory and records it
+     * in the marker — but a directory whose entry never reached the platter
+     * takes its contents with it, and the marker would survive naming
+     * originals that are no longer anywhere. Both levels, because
+     * `create_dir_all` may have created `quarantine/` itself on the first
+     * export or restore this installation has ever done.
+     */
+    let quarantine_root = paths.quarantine_dir();
+    sync_dir(&quarantine_root)?;
+    sync_dir(parent_of(&quarantine_root))?;
 
     let live_scripts = paths.scripts_dir();
     let live_database = paths.root().join(DATABASE_NAME);
@@ -896,6 +909,10 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                         } else {
                             Ok(())
                         };
+                        // The removal has to be durable before the marker
+                        // stops recording the absence: an entry that comes back
+                        // after a power loss would be read as the original.
+                        let removed = removed.and_then(|()| sync_dir(parent_of(live)));
                         if let Err(e) = removed {
                             rollback_failures.push(format!("{}: {e}", live.display()));
                         } else if let Some(name) =
@@ -1136,6 +1153,8 @@ fn evacuate_component(
 fn set_aside(from: &Path, previous: &Path, attempt: u32) -> Result<(), AppError> {
     let aside = previous.join(format!("interrupted-attempt-{attempt}"));
     std::fs::create_dir_all(&aside)?;
+    // Its entry in the generation directory, before anything is moved into it.
+    sync_dir(previous)?;
     let file_name = from
         .file_name()
         .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
@@ -1334,6 +1353,11 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
     std::fs::create_dir_all(&quarantine)?;
+    // The directory entry itself, before the only copy of the database is
+    // renamed into it. Same reason as the restore's generation directory.
+    let quarantine_root = paths.quarantine_dir();
+    sync_dir(&quarantine_root)?;
+    sync_dir(parent_of(&quarantine_root))?;
 
     /*
      * Rename first and ask questions after, rather than `exists()` then rename.
