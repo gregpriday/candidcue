@@ -43,9 +43,12 @@
 //! - the `README.txt` and `.json` sidecars beside a quarantined or exported
 //!   artefact — they describe it, and a description that does not survive
 //!   costs an explanation rather than data;
-//! - the rescue copy `rescue_scripts` writes to a folder the user chose, and
-//!   the asset copies inside a Markdown export — the managed originals are
-//!   untouched, so the answer to losing one is to run it again;
+//! - the rescue copy `rescue_scripts` writes to a folder the user chose — the
+//!   managed originals are untouched, so the answer to losing it is to run it
+//!   again. (A Markdown export's `assets/` used to be listed here too. It is
+//!   not: `export_script` creates that folder through `create_dir_all_durable`
+//!   and writes each image with `atomic_write`, because an export reports
+//!   success and a folder left in the page cache takes every image with it.)
 //! - the moves that a permanent delete and its rollback make between the live
 //!   tree and quarantine — an interruption leaves the row and the folder
 //!   disagreeing about where a script is, which the startup reconciliation
