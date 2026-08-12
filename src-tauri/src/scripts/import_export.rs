@@ -520,7 +520,10 @@ async fn install_bundle_assets(
     source: &str,
 ) -> Result<(), AppError> {
     let assets_dir = paths.assets_dir(new_id);
-    fs::create_dir_all(&assets_dir)?;
+    // Durably: the rows registering these assets are committed below, and a
+    // folder left in the page cache would leave the database naming images
+    // that are nowhere.
+    crate::util::create_dir_all_durable(&assets_dir)?;
 
     let mut tx = pool.begin().await?;
     for (file_name, bytes) in assets {
@@ -617,7 +620,11 @@ pub async fn export_script(
             atomic_write(&destination, source.as_bytes())?;
             if options.include_assets && !asset_files.is_empty() {
                 let export_assets = parent.join("assets");
-                fs::create_dir_all(&export_assets)?;
+                // Durably: `atomic_write` below flushes each image and the
+                // folder it sits in, but that folder is itself new, and an
+                // entry left in the page cache takes every image with it —
+                // after the export has reported success.
+                crate::util::create_dir_all_durable(&export_assets)?;
                 for file in &asset_files {
                     if let Some(name) = file.file_name() {
                         // atomic_write, not fs::copy: the rename replaces a
