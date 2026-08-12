@@ -174,8 +174,19 @@ pub async fn create_script(
     let now = now_iso();
     let canonical = paths.canonical_file(&id);
     atomic_write(&canonical, source.as_bytes())?;
-    fs::create_dir_all(paths.assets_dir(&id))?;
-    fs::create_dir_all(paths.revisions_dir(&id))?;
+    /*
+     * Durably, all of it.
+     *
+     * `atomic_write` flushes the file and the folder it sits in — but that
+     * folder is `scripts/<id>`, itself new, and `assets/` and `revisions/` are
+     * new entries inside it. The database row naming this script IS durable, so
+     * an unflushed entry anywhere in that chain leaves the library listing a
+     * script whose file is nowhere, or a first revision written into a folder
+     * that no longer exists.
+     */
+    crate::util::create_dir_all_durable(&paths.assets_dir(&id))?;
+    crate::util::create_dir_all_durable(&paths.revisions_dir(&id))?;
+    crate::util::sync_dir(&paths.scripts_dir())?;
     /*
      * The script DIRECTORY's own entry, in `scripts/`.
      *
@@ -719,20 +730,31 @@ pub async fn duplicate_script(
     let now = now_iso();
     let new_canonical = paths.canonical_file(&new_id);
     atomic_write(&new_canonical, source.as_bytes())?;
-    fs::create_dir_all(paths.revisions_dir(&new_id))?;
+    crate::util::create_dir_all_durable(&paths.revisions_dir(&new_id))?;
 
     // Copy assets directory.
     let src_assets = paths.assets_dir(script_id);
     let dst_assets = paths.assets_dir(&new_id);
-    fs::create_dir_all(&dst_assets)?;
+    crate::util::create_dir_all_durable(&dst_assets)?;
     if src_assets.exists() {
+        let mut copied_any = false;
         for entry in fs::read_dir(&src_assets)? {
             let entry = entry?;
             if entry.file_type()?.is_file() {
-                fs::copy(entry.path(), dst_assets.join(entry.file_name()))?;
+                let target = dst_assets.join(entry.file_name());
+                fs::copy(entry.path(), &target)?;
+                // The copy, not just the intention to have made it: the row
+                // below registers these assets durably.
+                crate::util::sync_file(&target)?;
+                copied_any = true;
             }
         }
+        if copied_any {
+            crate::util::sync_dir(&dst_assets)?;
+        }
     }
+    // And the duplicate's own directory entry in `scripts/`.
+    crate::util::sync_dir(&paths.scripts_dir())?;
 
     let settings = parse_settings(&row.script_settings_json);
     let (plain, words, duration) = stats_for(&source, &settings);

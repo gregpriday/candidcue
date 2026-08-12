@@ -1881,20 +1881,65 @@ async fn a_pre_baseline_quarantine_interrupted_between_its_renames_is_finished_t
     assert!(!dir.path().join("rebuild-pending.json").exists());
 }
 
-#[tokio::test]
-async fn a_new_script_directory_is_durable_before_the_row_that_names_it() {
+#[test]
+fn the_database_commits_durably_because_some_of_it_exists_nowhere_else() {
     /*
-     * `atomic_write` fsyncs the file it writes and the directory that file sits
-     * in — which for a NEW script is `scripts/<id>`, itself new. Its entry in
-     * `scripts/` was never flushed, and the database row naming the script IS
-     * durable, so a power loss could leave the library listing a script whose
-     * file is nowhere: it shows in the list and opening it reports the file
-     * missing.
+     * WAL + `synchronous = NORMAL` does not fsync on commit: a transaction that
+     * returned success can be lost to a power cut. For a script that is
+     * survivable — the Markdown file is the authority and the row is rebuilt
+     * from it. For settings, session and take history, and a retained
+     * transcript there is no such copy: "saved" has to mean saved.
      *
-     * Crash durability cannot be asserted from a test without a fault-injecting
-     * filesystem. What this pins is the call: creating a script syncs the
-     * scripts directory. It is a source-level assertion and says so.
+     * A source assertion, because the alternative is cutting power to a
+     * machine. It is worth having anyway: this is one word in one builder, and
+     * changing it back would be silent everywhere else.
      */
+    let source = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/database/mod.rs"),
+    )
+    .expect("database/mod.rs");
+    let code: String = source
+        .lines()
+        .filter(|line| {
+            let t = line.trim_start();
+            !(t.starts_with("//") || t.starts_with('*') || t.starts_with("/*"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        code.contains("SqliteSynchronous::Full"),
+        "the live pool must commit durably"
+    );
+    assert!(
+        !code.contains("SqliteSynchronous::Normal"),
+        "and must not go back to a mode that acknowledges a write it has not flushed"
+    );
+}
+
+#[tokio::test]
+async fn creating_a_script_commits_every_directory_it_makes() {
+    /*
+     * The chain a new script needs: `scripts/` holds `<id>/`, which holds the
+     * canonical file plus `assets/` and `revisions/`. `atomic_write` flushes the
+     * file and its immediate directory; every entry ABOVE that was left in the
+     * page cache, while the database row naming the script was durable — so a
+     * power loss could leave the library showing a script whose file is nowhere,
+     * or a first revision written into a directory that no longer exists.
+     *
+     * Behavioural half: the directories really are created. Source half: they
+     * are created through the durable helper, which is the part a test cannot
+     * observe without cutting power.
+     */
+    let h = harness().await;
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Chain", "# Chain"))
+        .await
+        .expect("create");
+    let id = candidcue_lib::scripts::ScriptId::parse(&created.id).expect("id");
+    assert!(h.paths.canonical_file(&id).is_file());
+    assert!(h.paths.assets_dir(&id).is_dir());
+    assert!(h.paths.revisions_dir(&id).is_dir());
+    h.pool.close().await;
+
     let repo_source = fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scripts/repo.rs"),
     )
@@ -1903,20 +1948,14 @@ async fn a_new_script_directory_is_durable_before_the_row_that_names_it() {
         .find("pub async fn create_script")
         .expect("create_script exists")..];
     let create = &create[..create.find("\npub ").unwrap_or(create.len())];
-    assert!(
-        create.contains("sync_dir(&paths.scripts_dir())"),
-        "a new script's directory entry must be flushed before the row that names it"
-    );
-
-    // And the ordinary path still works end to end.
-    let h = harness().await;
-    let created = repo::create_script(&h.pool, &h.paths, create_input("Durable", "# Durable"))
-        .await
-        .expect("create");
-    let id = candidcue_lib::scripts::ScriptId::parse(&created.id).expect("id");
-    assert!(
-        h.paths.canonical_file(&id).is_file(),
-        "the canonical file must exist after a create"
-    );
-    h.pool.close().await;
+    for expected in [
+        "create_dir_all_durable(&paths.assets_dir(&id))",
+        "create_dir_all_durable(&paths.revisions_dir(&id))",
+        "sync_dir(&paths.scripts_dir())",
+    ] {
+        assert!(
+            create.contains(expected),
+            "creating a script must go through `{expected}`"
+        );
+    }
 }

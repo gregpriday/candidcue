@@ -153,7 +153,10 @@ pub fn corrupt_database_error(detail: &str) -> AppError {
 /// Create the app data directory if needed, open the pool, verify integrity,
 /// take a pre-migration backup, then run migrations.
 pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
-    std::fs::create_dir_all(app_data_dir)?;
+    // Durable: on a first run this creates the data root itself, and an entry
+    // that never reached the platter takes the database and every script under
+    // it with it.
+    crate::util::create_dir_all_durable(app_data_dir)?;
     let db_path = app_data_dir.join(DB_FILE_NAME);
 
     /*
@@ -189,7 +192,24 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
     let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        /*
+         * FULL, not NORMAL.
+         *
+         * In WAL mode `NORMAL` does not fsync on commit: a transaction that
+         * returned success can be lost to a power cut, and the database is
+         * still consistent afterwards — just missing it. That is the standard
+         * trade and it is the wrong one here, because several things live ONLY
+         * in this file. Settings, session and take history, and a retained
+         * transcript have no canonical copy on disk to rebuild from, unlike a
+         * script, whose Markdown file is the authority. "Saved" has to mean
+         * saved for them.
+         *
+         * The cost is one fsync per commit on a workload of a few writes a
+         * minute: a debounced script save, a transcript append every fifteen
+         * seconds, the odd settings patch. That is not a hot path, and it is
+         * measured by nothing this application does in a take.
+         */
+        .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
 
@@ -445,7 +465,9 @@ async fn write_pre_migration_backup(
     pending: &[i64],
 ) -> Result<std::path::PathBuf, AppError> {
     let backups = app_data_dir.join("backups");
-    std::fs::create_dir_all(&backups)?;
+    // Durable: this snapshot is about to be the only copy of the pre-migration
+    // state, and a directory entry that never landed takes it with it.
+    crate::util::create_dir_all_durable(&backups)?;
 
     let applied_high: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations")
         .fetch_one(pool)
@@ -466,6 +488,17 @@ async fn write_pre_migration_backup(
             .execute(pool)
             .await?;
     }
+
+    /*
+     * On the platter before the migrations that make it matter.
+     *
+     * `VACUUM INTO` returning success means the bytes reached the page cache,
+     * and the very next thing this launch does is run destructive schema
+     * changes against the live database. A power loss in between would take
+     * the only pre-migration state with it.
+     */
+    crate::util::sync_file(&target)?;
+    crate::util::sync_dir(&backups)?;
 
     verify_backup(&target).await?;
 

@@ -293,7 +293,10 @@ pub async fn write_unsaved_recovery(
     let script_id = crate::scripts::ScriptId::parse(&script_id)?;
 
     let dir = paths.quarantine_dir().join("unsaved");
-    std::fs::create_dir_all(&dir)?;
+    // Durably, ancestors included: `quarantine/` and `quarantine/unsaved` can
+    // both be new here, and the file about to be written into them is the only
+    // copy of text the user has been told was parked.
+    crate::util::create_dir_all_durable(&dir)?;
     let target = dir.join(format!(
         "{}-{}.md",
         script_id.as_str(),
@@ -308,7 +311,6 @@ pub async fn write_unsaved_recovery(
      * loss, or a machine that goes down during the shutdown this runs in, left
      * an acknowledged rescue file empty or absent.
      */
-    crate::util::sync_dir(&dir)?;
     crate::util::atomic_write(&target, source.as_bytes())?;
 
     std::fs::write(

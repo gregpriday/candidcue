@@ -160,7 +160,12 @@ pub fn run() {
             // Data directory layout (spec §47.1).
             let data_dir = handle.path().app_data_dir()?;
             let paths = DataPaths::new(data_dir.clone());
-            std::fs::create_dir_all(paths.scripts_dir())?;
+            /*
+             * `scripts/` durably, because it is where user data lives and on a
+             * first run its entry — and the data root's — are both new. Cache
+             * and logs are regenerable, so they take the cheap version.
+             */
+            crate::util::create_dir_all_durable(&paths.scripts_dir())?;
             std::fs::create_dir_all(paths.cache_dir())?;
             std::fs::create_dir_all(paths.logs_dir())?;
 

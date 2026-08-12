@@ -68,6 +68,46 @@ pub fn sync_dir(dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+/// `create_dir_all`, with every directory it creates made durable.
+///
+/// ---------------------------------------------------------------------------
+/// WHY THE PLAIN VERSION IS NOT ENOUGH
+/// ---------------------------------------------------------------------------
+/// A directory entry is metadata in its PARENT, and `create_dir_all` returns as
+/// soon as the entry exists in the page cache. Every write underneath it can
+/// then be fsynced perfectly and still vanish, because the folder holding them
+/// was never committed — and the SQLite row naming the file IS durable, so what
+/// survives is a library listing a script whose file is nowhere.
+///
+/// This creates the same directories and then fsyncs the parent of each one it
+/// actually had to create, deepest last. Directories that already existed are
+/// left alone: their entries are long since on disk, and syncing them would
+/// cost an fsync per call on the hot path for nothing.
+pub fn create_dir_all_durable(dir: &Path) -> Result<(), AppError> {
+    // Which ancestors are missing, deepest first, before anything is created.
+    let mut missing: Vec<&Path> = Vec::new();
+    let mut cursor = Some(dir);
+    while let Some(path) = cursor {
+        if path.exists() {
+            break;
+        }
+        missing.push(path);
+        cursor = path.parent();
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(dir)?;
+    // Shallowest first: a parent's entry has to be durable before the child's
+    // entry inside it means anything.
+    for created in missing.iter().rev() {
+        if let Some(parent) = created.parent() {
+            sync_dir(parent)?;
+        }
+    }
+    Ok(())
+}
+
 /// fsync one file by path, for callers that produced it some other way.
 pub fn sync_file(path: &Path) -> Result<(), AppError> {
     fs::File::open(path)?.sync_all()?;
@@ -151,11 +191,17 @@ where
         return Err(err.into());
     }
 
-    // Make the directory entry itself durable. Best effort: some filesystems
-    // (and Windows) do not support opening a directory for sync.
-    if let Ok(dir_handle) = fs::File::open(dir) {
-        let _ = dir_handle.sync_all();
-    }
+    /*
+     * Make the directory entry itself durable, and REPORT if that fails.
+     *
+     * This used to swallow both the open and the sync. The rename is what
+     * publishes the new contents, so an unflushed directory entry means an
+     * acknowledged save can revert to the previous version after a power loss —
+     * and the caller was told it had been written. `sync_dir` is already a
+     * documented no-op off Unix, which is the case the swallowing was there
+     * for, so nothing is lost by letting a real error through.
+     */
+    sync_dir(dir)?;
     Ok(())
 }
 
