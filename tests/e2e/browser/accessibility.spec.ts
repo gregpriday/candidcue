@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim, SCRIPT_CONFLICT_ERROR } from './fixtures/tauri-shim';
+import { openScript } from './fixtures/library';
 
 /**
  * Accessibility as a journey, SHIM-BACKED but the value is REAL BROWSER FOCUS —
@@ -32,7 +33,7 @@ test('the conflict dialog traps focus and returns it to the opener on Escape', a
   await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
   await page.goto('/control.html');
 
-  await page.getByRole('list', { name: 'Scripts' }).getByRole('button', { name: /Panel talk/ }).click();
+  await openScript(page, /Panel talk/);
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
@@ -82,7 +83,7 @@ test('the conflict dialog traps focus and returns it to the opener on Escape', a
 test('the insert toolbar is one tab stop with arrow-key navigation', async ({ page }) => {
   await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
   await page.goto('/control.html');
-  await page.getByRole('list', { name: 'Scripts' }).getByRole('button', { name: /Panel talk/ }).click();
+  await openScript(page, /Panel talk/);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
 
   const toolbar = page.getByRole('toolbar', { name: 'Insert' });

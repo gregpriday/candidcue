@@ -57,11 +57,21 @@ export function detectPlatform(
     ? {}
     : navigator,
 ): Platform {
+  /*
+   * EMPTY IS ABSENT, and `??` does not know that.
+   *
+   * The first version of this chained `userAgentData?.platform ?? platform ??
+   * userAgent`, which reads correctly and is wrong: `navigator.platform` is an
+   * EMPTY STRING in jsdom and in some hardened webviews, and an empty string is
+   * not nullish — so the chain stopped there and the user agent, the one field
+   * that still named the platform, was never read.
+   *
+   * The first NON-EMPTY value wins instead.
+   */
   const hint = (
-    agent.userAgentData?.platform ??
-    agent.platform ??
-    agent.userAgent ??
-    ''
+    [agent.userAgentData?.platform, agent.platform, agent.userAgent].find(
+      (value) => typeof value === 'string' && value.trim() !== '',
+    ) ?? ''
   ).toLowerCase();
   if (hint.includes('win')) return 'windows';
   if (hint.includes('mac') || hint.includes('iphone') || hint.includes('ipad')) return 'macos';

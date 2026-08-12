@@ -161,6 +161,34 @@ import { rememberReaderFrame } from './lib/reader-frame';
       $route.name === 'calibrate',
   );
 
+  /**
+   * What the main region is, for the landmark's accessible name (§23.2).
+   *
+   * Named rather than left anonymous because this window has several regions —
+   * a navigation rail, a toolbar, an inspector, a status bar — and "main" on its
+   * own tells a screen-reader user which of them they have jumped to only by
+   * elimination. It follows the route, so the answer is always the thing on
+   * screen rather than a fixed word chosen once.
+   */
+  const mainLandmarkLabel = $derived(
+    (() => {
+      switch ($route.name) {
+        case 'editor':
+          return $editor.title ? `Script: ${$editor.title}` : 'Script editor';
+        case 'live':
+          return 'Live console';
+        case 'settings':
+          return 'Settings';
+        case 'calibrate':
+          return 'Display calibration';
+        case 'welcome':
+          return 'Setup';
+        default:
+          return 'Script library';
+      }
+    })(),
+  );
+
   /* Keep the document root in sync so scrollbars/body match the shell. */
   $effect(() => {
     document.documentElement.dataset['theme'] = theme;
@@ -1098,7 +1126,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
     {#if showSidebar && $workspace.sidebarVisible}
       <Sidebar onnew={() => void newScriptFromSidebar()} />
     {/if}
-    <main class="content">
+    <!--
+      A NAMED landmark (§23.2).
+
+      Screen-reader users navigate by landmark, and an unnamed `<main>` in a
+      window that also has a navigation rail and (per route) a toolbar, an
+      inspector and a status bar is one anonymous region among several. The name
+      follows the route, so "jump to main" announces where it lands.
+    -->
+    <main class="content" aria-label={mainLandmarkLabel}>
       {#if $route.name === 'welcome'}
         <Welcome />
       {:else if $route.name === 'library'}

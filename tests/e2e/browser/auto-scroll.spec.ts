@@ -40,7 +40,7 @@ const SCRIPT = {
 async function present(page: Page): Promise<void> {
   await page.goto('/control.html');
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();

@@ -60,7 +60,7 @@ test('the script does not stop and start while the presenter reads', async ({ pa
   await page.setViewportSize({ width: 1600, height: 700 });
   await page.goto('/control.html');
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();

@@ -64,7 +64,7 @@ async function compileOnce(browser: Browser): Promise<void> {
      * for a warm-up. The editor reaches the same worker import and stops there.
      */
     await page
-      .getByRole('list', { name: 'Scripts' })
+      .getByRole('listbox')
       .getByRole('button', { name: /Dependency warm-up/ })
       .first()
       .click();

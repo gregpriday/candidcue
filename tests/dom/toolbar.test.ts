@@ -1,6 +1,23 @@
 /**
- * PageHeader.svelte — the heading, the edit that has to be abandonable, and the
- * metadata row that has to hold its height.
+ * Toolbar.svelte — the heading, and the edit that has to be abandonable.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS FILE USED TO TEST `PageHeader.svelte`, WHICH IS GONE
+ * ---------------------------------------------------------------------------
+ * The desktop pass replaced that component with the compact `Toolbar`: a single
+ * 44px row instead of a back control, a 28px title and a metadata line stacked
+ * into ~103px of chrome (§8). The GUARANTEES below moved with it and are
+ * unchanged — an editable title still has to be a real `<h1>`, still has to be
+ * abandonable, and still must not report a blank as a name. Deleting them along
+ * with the component would have retired three defects' worth of protection for
+ * a refactor that kept every one of the behaviours.
+ *
+ * The metadata-row cases are the exception, and they are gone rather than
+ * ported. `PageHeader` reserved an empty row so a compile-derived metadata line
+ * appearing and vanishing did not resize the header. `Toolbar` has no such row:
+ * its height is a token, the metadata moved to the status bar, and the property
+ * those tests protected — the band does not move — is asserted directly in
+ * `tests/e2e/browser/library-editor.spec.ts` against the real engine.
  *
  * Three defects met in the heading and none of them is visible from the
  * outside: with `editableTitle` set, the `<h1>` was REPLACED by an `<input>`,
@@ -24,10 +41,10 @@
 import { render } from '@testing-library/svelte';
 import { flushSync, tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
-import PageHeader from '../../src/control/components/PageHeader.svelte';
+import Toolbar from '../../src/control/components/Toolbar.svelte';
 
 function renderHeader(props: Record<string, unknown> = {}) {
-  return render(PageHeader, { props: { title: 'Panel talk', ...props } });
+  return render(Toolbar, { props: { title: 'Panel talk', ...props } });
 }
 
 const headings = (container: HTMLElement): HTMLElement[] => [
@@ -53,7 +70,7 @@ function press(input: HTMLInputElement, key: string): KeyboardEvent {
   return event;
 }
 
-describe('PageHeader — the heading', () => {
+describe('Toolbar — the heading', () => {
   it('renders exactly one level-one heading when the title is static', () => {
     const { container, getByRole } = renderHeader();
     expect(headings(container)).toHaveLength(1);
@@ -94,7 +111,7 @@ describe('PageHeader — the heading', () => {
   });
 });
 
-describe('PageHeader — committing an edit', () => {
+describe('Toolbar — committing an edit', () => {
   it('reports a changed title once, trimmed', () => {
     const ontitlechange = vi.fn();
     const { container } = renderHeader({ editableTitle: true, ontitlechange });
@@ -132,7 +149,7 @@ describe('PageHeader — committing an edit', () => {
   });
 });
 
-describe('PageHeader — abandoning an edit', () => {
+describe('Toolbar — abandoning an edit', () => {
   it('Escape restores the saved title and reports nothing', async () => {
     const ontitlechange = vi.fn();
     const { container } = renderHeader({ editableTitle: true, ontitlechange });
@@ -187,7 +204,7 @@ describe('PageHeader — abandoning an edit', () => {
   });
 });
 
-describe('PageHeader — focus treatment', () => {
+describe('Toolbar — focus treatment', () => {
   it('the back control is a small control, so it keeps the accent ring', () => {
     const { container } = renderHeader({ onback: () => {} });
     expect(container.querySelector('.back')?.getAttribute('data-focus')).toBe('control');
@@ -200,69 +217,3 @@ describe('PageHeader — focus treatment', () => {
   });
 });
 
-describe('the page header metadata row', () => {
-  it('renders no row at all when there is no metadata and none is expected', () => {
-    const { container } = render(PageHeader, { props: { title: 'Settings' } });
-    expect(container.querySelector('.meta')).toBeNull();
-  });
-
-  it('renders the metadata when it has some, without being asked to reserve space', () => {
-    const { container } = render(PageHeader, {
-      props: { title: 'Calibrate this display', meta: 'Studio Display' },
-    });
-    expect(container.querySelector('.meta')?.textContent).toBe('Studio Display');
-  });
-
-  it('holds an empty row when space is reserved and there is nothing to say yet', () => {
-    const { container } = render(PageHeader, {
-      props: { title: 'Launch keynote', reserveMetaSpace: true },
-    });
-    const row = container.querySelector('.meta');
-    expect(row).not.toBeNull();
-    expect(row?.textContent).toBe('');
-  });
-
-  it('keeps the reserved empty row out of the accessibility tree', () => {
-    // Height is a layout concern. A blank line is not something to announce.
-    const { container } = render(PageHeader, {
-      props: { title: 'Launch keynote', reserveMetaSpace: true },
-    });
-    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
-  });
-
-  it('announces the metadata once it arrives', () => {
-    const { container } = render(PageHeader, {
-      props: { title: 'Launch keynote', meta: '412 words · 2m 45s · 3 cues', reserveMetaSpace: true },
-    });
-    const row = container.querySelector('.meta');
-    expect(row?.textContent).toBe('412 words · 2m 45s · 3 cues');
-    expect(row?.getAttribute('aria-hidden')).toBeNull();
-  });
-
-  it('keeps the row across metadata arriving and leaving again', async () => {
-    /*
-     * The transition, which is where the height was lost. The row has to be
-     * there before the compile answers and still be there after a script is
-     * emptied back to no spoken words — that second direction is the one
-     * waiting for the first compile cannot cover on its own.
-     *
-     * jsdom does not lay out, so this pins the row's PRESENCE and its
-     * announcement; that the present row has a height is the `min-height` on
-     * the single `.meta` rule, and the browser geometry test covers it.
-     */
-    const { container, rerender } = render(PageHeader, {
-      props: { title: 'Launch keynote', reserveMetaSpace: true },
-    });
-    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
-
-    await rerender({ title: 'Launch keynote', meta: '412 words', reserveMetaSpace: true });
-    expect(container.querySelector('.meta')?.textContent).toBe('412 words');
-    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBeNull();
-
-    await rerender({ title: 'Launch keynote', meta: '', reserveMetaSpace: true });
-    const emptied = container.querySelector('.meta');
-    expect(emptied).not.toBeNull();
-    expect(emptied?.textContent).toBe('');
-    expect(emptied?.getAttribute('aria-hidden')).toBe('true');
-  });
-});

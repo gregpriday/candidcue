@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
+import { openScript } from './fixtures/library';
 
 const SCRIPT = {
   id: '44444444-4444-4444-8444-444444444444',
@@ -14,7 +15,7 @@ const SCRIPT = {
 async function present(page: Page): Promise<void> {
   await page.goto('/control.html');
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
@@ -128,7 +129,7 @@ test('nothing of the take is on screen until the window has finished changing sh
   await page.evaluate(() => window.__E2E__.setDelay('set_control_presenting', 1500));
 
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
@@ -352,7 +353,7 @@ test('the script is never painted at a position it then leaves', async ({ page }
   });
 
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
@@ -430,7 +431,7 @@ test('a font that lands late does not open the take at a position it then leaves
   });
 
   await page
-    .getByRole('list', { name: 'Scripts' })
+    .getByRole('listbox')
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
@@ -966,10 +967,8 @@ test('the appearance panel applies live and restores what it opened on', async (
 test('the Present menu offers both shapes and marks the current default', async ({ page }) => {
   const errors = watchPageErrors(page);
   await page.goto('/control.html');
-  await page
-    .getByRole('list', { name: 'Scripts' })
-    .getByRole('button', { name: /Single-window walkthrough/ })
-    .click();
+  // Double click: the collection selects on a single click (§10.2).
+  await openScript(page, /Single-window walkthrough/);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
 
   // The main half still says Present and still presents — the common case must
@@ -992,10 +991,8 @@ test('the Present menu offers both shapes and marks the current default', async 
 test('choosing a shape presents in it and makes it the default for next time', async ({ page }) => {
   const errors = watchPageErrors(page);
   await page.goto('/control.html');
-  await page
-    .getByRole('list', { name: 'Scripts' })
-    .getByRole('button', { name: /Single-window walkthrough/ })
-    .click();
+  // Double click: the collection selects on a single click (§10.2).
+  await openScript(page, /Single-window walkthrough/);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
 
   await page.getByRole('button', { name: 'How to present' }).click();

@@ -259,10 +259,24 @@
   /*
    * Reserves the macOS traffic-light zone and nothing more.
    *
-   * The height is the titlebar's, so the mark sits level with the window
-   * buttons rather than under them.
+   * ---------------------------------------------------------------------------
+   * macOS ONLY, AND THAT IS THE WHOLE REASON THE PLATFORM ATTRIBUTE EXISTS
+   * ---------------------------------------------------------------------------
+   * Tauri gives every macOS window `NSWindowStyleMaskFullSizeContentView` (see
+   * `windows/present.rs`), so the traffic lights float OVER this rail's top-left
+   * corner and something has to hold that space open. Windows and Linux draw a
+   * real titlebar above the content, so there is nothing overlapping and the
+   * reserve is 28px of nothing at the top of the sidebar.
+   *
+   * This is the one place §22.3's platform attribute pays for itself: a genuine
+   * difference in window chrome, expressed once at the root, rather than a
+   * `navigator.platform` test inside a component. It is deliberately NOT used to
+   * make one platform look like the other.
    */
   .brand-row {
+    display: none;
+  }
+  :global(html[data-platform='macos']) .brand-row {
     display: flex;
     align-items: center;
     height: 28px;
