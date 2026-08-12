@@ -44,7 +44,15 @@ import { normalizePhrase, normalizeToken } from './normalize';
 import { tokenizeText } from './tokenize';
 import { segmentSentences } from './segment';
 
-export const COMPILER_VERSION = '1.0.0';
+/*
+ * Bumped for the grammatical-sentence-end field.
+ *
+ * This is the compiled-document cache key. A document compiled by 1.0.0 has no
+ * `grammaticalSentenceEnd` on any token, and alignment falls back to
+ * navigation units when it is absent — correct, and it means a cached document
+ * silently keeps the old braking behaviour until something invalidates it.
+ */
+export const COMPILER_VERSION = '1.1.0';
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_WORDS_PER_MINUTE = 130;
 const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
@@ -1636,13 +1644,52 @@ function finalize(
       headingStarts.push({ draftIndex: d, tokenStart: blockTokenStart });
     }
 
-    // Sentence ranges over the block's spoken text.
+    /*
+     * NAVIGATION ranges over the block's spoken text.
+     *
+     * A list item and a heading are ONE navigation unit however many sentences
+     * they contain (§25.5) — jumping by sentence should move by bullet, not
+     * mid-bullet.
+     */
     const sentenceRanges =
       draft.tokens.length === 0
         ? []
         : draft.singleSentence
           ? [{ start: 0, end: draft.spokenText.length, text: draft.spokenText }]
           : segmentSentences(draft.spokenText);
+
+    /*
+     * GRAMMATICAL ranges, published separately.
+     *
+     * The two used to be the same list, and that conflation was a real
+     * following defect: alignment reuses navigation units as sentence ends, so
+     * a bullet holding two sentences reported one boundary and the display
+     * could be carried straight over the full stop inside it. Prose got the
+     * braking; a bulleted script did not.
+     *
+     * Always the real segmentation, never collapsed. Identical to
+     * `sentenceRanges` for an ordinary paragraph, which is why nothing changes
+     * for prose.
+     */
+    const grammaticalRanges =
+      draft.tokens.length === 0 ? [] : segmentSentences(draft.spokenText);
+
+    /*
+     * The LAST token of each grammatical range, by text offset.
+     *
+     * Recorded as a set of `textStart` values rather than token indexes,
+     * because the indexes are not assigned until the emit loop below has
+     * normalised and possibly dropped tokens. Matching on the offset the
+     * segmentation actually used is what keeps the two in step.
+     */
+    const grammaticalEndOffsets = new Set<number>();
+    for (const range of grammaticalRanges) {
+      let last: TokenDraft | undefined;
+      for (const token of draft.tokens) {
+        if (token.textStart >= range.start && token.textStart < range.end) last = token;
+      }
+      if (last) grammaticalEndOffsets.add(last.textStart);
+    }
 
     // Bucket tokens into sentences by text offset.
     let rangeIndex = 0;
@@ -1680,6 +1727,17 @@ function finalize(
           normalized,
           source: { utf16Start: tokenDraft.srcStart, utf16End: tokenDraft.srcEnd },
           ...(tokenDraft.overrideVisual ? { overrideVisual: tokenDraft.overrideVisual } : {}),
+          /*
+           * Ends a GRAMMATICAL sentence — a different question from ending a
+           * navigation unit, and the one alignment should brake on.
+           *
+           * Omitted rather than set false, so a compiled document is unchanged
+           * for the tokens this does not apply to and an older consumer reads
+           * `undefined` exactly as it read a missing field before.
+           */
+          ...(grammaticalEndOffsets.has(tokenDraft.textStart)
+            ? { grammaticalSentenceEnd: true }
+            : {}),
         });
         for (const ref of tokenDraft.renderRefs) {
           (ref.tokenIndexes ??= []).push(spokenTokens.length - 1);

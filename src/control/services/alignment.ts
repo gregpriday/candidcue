@@ -90,21 +90,28 @@ export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
     line: sentenceOrdinals.get(token.sentenceId) ?? 0,
     para: blockOrdinals.get(token.blockId) ?? 0,
     /*
-     * A missing sentence list leaves this false everywhere, which is the same
-     * defensive stance as the ordinals above: the engine falls back to braking
-     * at paragraph ends, which is where it braked before sentences reached it.
-     * Losing the finer ceiling is a worse take, not a broken one.
+     * A GRAMMATICAL sentence end, with the navigation unit as the fallback.
      *
-     * KNOWN GAP: `SentenceUnit` is a NAVIGATION unit, and a list item is
-     * deliberately one of them however many sentences it contains (§25.5, see
-     * `singleSentence` in `compile.ts`). So a multi-sentence bullet reports one
-     * boundary — at the end of the item — and the display may still be carried
-     * across a full stop inside it. That is the behaviour this whole change
-     * replaces for prose, so a bullet is no worse off than before, but it is
-     * not protected either. Closing it means publishing grammatical sentence
-     * ends separately from navigation units rather than reusing these.
+     * These were the same thing, and the conflation was a following defect:
+     * `SentenceUnit` is a NAVIGATION unit, and a list item is deliberately one
+     * of them however many sentences it contains (§25.5, see `singleSentence`
+     * in `compile.ts`). So a multi-sentence bullet reported ONE boundary — at
+     * the end of the item — and the display could be carried straight across
+     * the full stop inside it. Prose got the braking; a bulleted script did
+     * not.
+     *
+     * The compiler now publishes `grammaticalSentenceEnd` alongside, from the
+     * real segmentation rather than the collapsed one, and it is identical to
+     * the navigation end for an ordinary paragraph — which is why nothing
+     * changes for prose.
+     *
+     * The fallback matters for a document compiled by an older build: it has
+     * no `grammaticalSentenceEnd` at all, and reading that as "no sentence
+     * ends anywhere" would take the engine back to braking only at paragraph
+     * ends. `??` on the boolean rather than `||`, so an explicit `false` from
+     * a future compiler is respected.
      */
-    sentenceEnd: sentenceEnds.has(token.index),
+    sentenceEnd: token.grammaticalSentenceEnd ?? sentenceEnds.has(token.index),
   }));
 }
 

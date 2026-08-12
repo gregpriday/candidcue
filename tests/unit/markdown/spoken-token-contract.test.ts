@@ -127,20 +127,58 @@ describe('the spoken-token contract with the alignment engine', () => {
   });
 
   /*
-   * Pins the known gap rather than leaving it to be discovered on a stage.
-   * A list item is ONE navigation unit by design (§25.5), so a bullet holding
-   * two sentences reports one boundary and the display can still be carried
-   * over the full stop inside it. Not a regression — that is what every
-   * paragraph did before — but not the protection prose gets either. If
-   * grammatical sentence ends are ever published separately from navigation
-   * units, this expectation is the one that should change.
+   * This is the expectation the old version of this test said should change.
+   *
+   * It used to read "reports a multi-sentence list item as a single unit, for
+   * now", pinning a known gap: `SentenceUnit` is a NAVIGATION unit, a list
+   * item is deliberately one of them however many sentences it holds (§25.5),
+   * and alignment reused those units as sentence ends. So a bullet with two
+   * sentences reported ONE boundary and the display could be carried straight
+   * over the full stop inside it. Prose got the braking that keeps a
+   * prediction from running past a pause; a bulleted script did not.
+   *
+   * The compiler publishes `grammaticalSentenceEnd` separately now, from the
+   * real segmentation rather than the collapsed one.
    */
-  it('reports a multi-sentence list item as a single unit, for now', () => {
+  it('brakes at a sentence end INSIDE a list item', () => {
     const compiled = compile('- Alpha bravo. Charlie delta.', { scriptId: 'bullets' });
     const tokens = alignTokensFor(compiled);
 
     expect(tokens.map((t) => t.surface)).toEqual(['Alpha', 'bravo', 'Charlie', 'delta']);
-    expect(tokens.filter((t) => t.sentenceEnd).map((t) => t.surface)).toEqual(['delta']);
+    expect(tokens.filter((t) => t.sentenceEnd).map((t) => t.surface)).toEqual([
+      'bravo',
+      'delta',
+    ]);
+  });
+
+  it('still treats the whole list item as ONE navigation unit', () => {
+    /*
+     * The other half, and the reason grammatical ends could not simply replace
+     * navigation units. Jumping by sentence should move by BULLET — a
+     * "next sentence" that lands mid-bullet is not what anyone means by it.
+     *
+     * Both facts are now true at once, which is the point of publishing them
+     * separately.
+     */
+    const compiled = compile('- Alpha bravo. Charlie delta.', { scriptId: 'bullets' });
+    expect(compiled.sentences).toHaveLength(1);
+    expect(compiled.sentences[0]).toMatchObject({ startTokenIndex: 0, endTokenIndex: 3 });
+  });
+
+  it('changes nothing for ordinary prose', () => {
+    /*
+     * Anti-regression. For a paragraph the collapsed and real segmentations are
+     * identical, so the grammatical ends must land exactly where the navigation
+     * ends always did — otherwise this "fix" quietly re-times every prose take
+     * in the corpus.
+     */
+    const compiled = compile('Alpha bravo. Charlie delta.', { scriptId: 'prose' });
+    const tokens = alignTokensFor(compiled);
+    expect(tokens.filter((t) => t.sentenceEnd).map((t) => t.surface)).toEqual([
+      'bravo',
+      'delta',
+    ]);
+    expect(compiled.sentences).toHaveLength(2);
   });
 
   /*

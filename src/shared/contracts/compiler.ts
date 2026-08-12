@@ -138,6 +138,24 @@ export interface SpokenToken {
    * the visual term survives.
    */
   overrideVisual?: string;
+  /**
+   * This token ends a GRAMMATICAL sentence.
+   *
+   * Deliberately separate from `SentenceUnit`, which is a NAVIGATION unit: a
+   * list item or a heading is one navigation unit however many sentences it
+   * contains (§25.5), because jumping by sentence should move by bullet.
+   *
+   * Alignment used to reuse the navigation units as sentence ends, and that
+   * conflation was a real following defect — a bullet holding two sentences
+   * reported one boundary, so the display could be carried straight over the
+   * full stop inside it. Prose got the braking that stops a prediction running
+   * past a pause; a bulleted script did not.
+   *
+   * Absent rather than `false` on the tokens it does not apply to, so a
+   * compiled document is unchanged for them and an older consumer reads
+   * `undefined` exactly as it read a missing field before.
+   */
+  grammaticalSentenceEnd?: boolean;
 }
 
 export interface CueEvent {
