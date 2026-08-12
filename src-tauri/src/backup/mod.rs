@@ -1374,7 +1374,21 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
     for suffix in ["", "-wal", "-shm"] {
         let from = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
         match std::fs::rename(&from, quarantine.join(format!("{DATABASE_NAME}{suffix}"))) {
-            Ok(()) => moved = true,
+            Ok(()) => {
+                /*
+                 * Both directories, before the live name is reused.
+                 *
+                 * A rename is atomic but not durable. This one is the only copy
+                 * of the database moving to the only place that will hold it,
+                 * and the next thing to happen at the live path is a fresh
+                 * database being created there — so a power loss with the
+                 * rename unflushed could leave the old file with no durable
+                 * name at all.
+                 */
+                sync_dir(&quarantine)?;
+                sync_dir(paths.root())?;
+                moved = true;
+            }
             // `!from.exists()` as well as the error kind: a `NotFound` from
             // `rename` can also mean the DESTINATION directory has gone, and
             // swallowing that would skip a move that really was needed.
