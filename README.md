@@ -58,6 +58,37 @@ pnpm check       # typecheck (svelte-check) — authoritative
 cd src-tauri && cargo test
 ```
 
+### Release verification
+
+One command, and CI runs the same one. There is no hand-assembled subset that
+counts as equivalent — that ambiguity is what made the 1.0 readiness review
+unable to certify a release.
+
+```bash
+pnpm release:verify --tier=fast   # gates only: completeness, versions, legal
+pnpm release:verify --tier=code   # + typecheck, node, dom, both cargo workspaces
+pnpm release:verify               # + clippy, browser journeys, production build
+pnpm release:verify --list        # print the plan without running it
+```
+
+`--tier=fast` is worth running on its own; it takes under a second and covers
+the two gates that fail most usefully:
+
+```bash
+pnpm verify:repo     # every referenced input exists in this checkout
+pnpm version:check   # package.json / Cargo.toml / tauri.conf.json / version.ts agree
+pnpm version:set 1.0.0   # change all four at once
+```
+
+`pnpm legal:check` is **expected to fail** until the business fills in the
+`@@LEGAL_*@@` placeholders — that failure is the commercial release gate. Pass
+`--allow-legal-failure` for a development build; the run then says loudly that
+it is not releasable.
+
+Toolchains are pinned exactly: `.nvmrc` for Node, `rust-toolchain.toml` for the
+Rust compiler. The latter names a specific release rather than `stable`, so two
+machines a month apart build the same tag with the same compiler.
+
 The live network smoke test is gone with the service it tested. What replaced it
 is stronger: `cc-bench` streams recorded speech through the real recogniser
 offline and scores where the display ended up, so "a session that connects and
@@ -147,6 +178,11 @@ sold.
 
 ## Conventions
 
-Single quotes, no Prettier — ESLint only. Run renderer tests one file per
-invocation (`./node_modules/.bin/vitest run <file>`, not `npx`). Don't run
-`cargo fmt`; the tree predates it and it would rewrite unrelated files.
+Single quotes, no Prettier, and — as of this writing — no ESLint either: there
+is no ESLint configuration in the tree, so "ESLint only" would be a claim about
+tooling that does not exist. `pnpm check` (svelte-check) is the authoritative
+static check for the frontend, and Clippy is for both Rust workspaces.
+
+Run renderer tests one file per invocation (`./node_modules/.bin/vitest run
+<file>`, not `npx`). Don't run `cargo fmt`; the tree predates it and it would
+rewrite unrelated files.

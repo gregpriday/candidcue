@@ -246,7 +246,6 @@ const ipc = vi.hoisted(() => {
         autosaveDebounceMs: 600,
         revisionIntervalMinutes: 5,
         wordsPerMinuteEstimate: 130,
-        updateCheck: 'daily',
         analyticsEnabled: false,
         saveTranscript: 'off',
       },

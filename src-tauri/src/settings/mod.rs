@@ -43,8 +43,16 @@ pub struct GeneralSettings {
     pub autosave_debounce_ms: u32,
     pub revision_interval_minutes: u32,
     pub words_per_minute_estimate: u32,
-    /// 'off' | 'launch' | 'daily' | 'weekly'.
-    pub update_check: String,
+    /*
+     * No `update_check`. It was a String defaulting to "daily" that nothing
+     * scheduled and nothing read — a persisted claim that the app checks for
+     * updates every day, in a build with no updater at all. CandidCue 1.0
+     * updates manually (docs/updates.md).
+     *
+     * Removing it is safe for documents already on disk: serde ignores unknown
+     * fields, so an existing settings row carrying `updateCheck` still
+     * deserialises and simply drops it on the next write.
+     */
     pub analytics_enabled: bool,
     /// 'off' | '1d' | '7d' | '30d' | 'forever' (spec §36.2).
     pub save_transcript: String,
@@ -57,7 +65,6 @@ impl Default for GeneralSettings {
             autosave_debounce_ms: 600,
             revision_interval_minutes: 5,
             words_per_minute_estimate: 130,
-            update_check: "daily".into(),
             analytics_enabled: false,
             save_transcript: "off".into(),
         }
@@ -1044,5 +1051,53 @@ mod tests {
 
         assert_eq!(settings.editor.font_size_px, 19, "surviving keys are kept");
         assert!(validate(&settings).is_ok());
+    }
+
+    /// The same rule one level down: a retired field inside a section that is
+    /// still very much alive.
+    ///
+    /// `general.updateCheck` was a String defaulting to `"daily"` that nothing
+    /// ever scheduled and nothing ever read. It went with the rest of the
+    /// updater surface when CandidCue 1.0 settled on manual updates
+    /// (docs/updates.md), and every settings document written before that
+    /// still has it on disk.
+    ///
+    /// The test above covers a whole removed SECTION, which `AppSettings`
+    /// tolerates by not using `deny_unknown_fields`. This covers a removed
+    /// FIELD, which `GeneralSettings` tolerates for the same reason — and they
+    /// are separate derives, so adding `deny_unknown_fields` to the inner
+    /// struct alone would break this while leaving the section test green. A
+    /// user who upgrades would lose their words-per-minute estimate, their
+    /// open-to preference and their transcript-retention choice because of one
+    /// key nobody reads.
+    #[test]
+    fn a_document_carrying_the_removed_update_check_field_still_loads() {
+        let stored = serde_json::json!({
+            "schemaVersion": 1,
+            "general": {
+                "openTo": "last_script",
+                "wordsPerMinuteEstimate": 155,
+                "updateCheck": "daily",
+                "saveTranscript": "7d",
+            },
+        });
+
+        let settings: AppSettings = serde_json::from_value(stored)
+            .expect("a document carrying the retired updateCheck field still loads");
+
+        assert_eq!(settings.general.open_to, "last_script");
+        assert_eq!(
+            settings.general.words_per_minute_estimate, 155,
+            "the settings beside the retired key must survive the upgrade"
+        );
+        assert_eq!(settings.general.save_transcript, "7d");
+        assert!(validate(&settings).is_ok());
+
+        // And it must not come back on the way out: the next write drops it.
+        let written = serde_json::to_value(&settings).expect("serializes");
+        assert!(
+            written["general"].get("updateCheck").is_none(),
+            "the retired field must not be written back out"
+        );
     }
 }

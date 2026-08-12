@@ -191,7 +191,6 @@ function shimBody(config: ShimConfig): void {
         autosaveDebounceMs: 800,
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
-        updateCheck: 'startup',
         analyticsEnabled: false,
         saveTranscript: 'off',
       },

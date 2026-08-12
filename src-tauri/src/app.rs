@@ -82,8 +82,10 @@ pub fn run() {
             commands::get_system_diagnostics,
             commands::log_client_diagnostic,
             commands::export_support_bundle,
-            commands::check_for_update,
-            commands::install_update,
+            // No `check_for_update` / `install_update`. CandidCue 1.0 updates
+            // manually (docs/updates.md); both used to be registered here and
+            // always returned NOT_IMPLEMENTED, which put a dead command on the
+            // ACL that a later change could have quietly filled in.
             // Sessions (spec §36)
             commands::start_session,
             commands::end_session,

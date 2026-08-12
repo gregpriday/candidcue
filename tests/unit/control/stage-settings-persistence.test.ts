@@ -24,7 +24,6 @@ const ipc = vi.hoisted(() => {
         autosaveDebounceMs: 800,
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
-        updateCheck: 'startup',
         analyticsEnabled: false,
         saveTranscript: 'off',
       },

@@ -1,6 +1,6 @@
 [package]
 name = "candidcue"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 description = "CandidCue — voice-following teleprompter"
 authors = ["Greg Priday"]
 edition = "2021"

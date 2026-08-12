@@ -150,7 +150,25 @@ for (const line of checked) console.log(`  ok   ${line}`);
 console.log(`  scanned ${TOKEN_SCANNED.length} files for @@LEGAL_*@@ tokens`);
 console.log(`  scanned ${LEGAL_DOCS.length} published documents for TODO/TBD/FIXME/example.com`);
 
+// Two different kinds of failure, with two different exit codes.
+//
+// `release-verify.mjs --allow-legal-failure` lets a DEVELOPMENT build past the
+// expected pre-release state: the scan ran, everything it needed was readable,
+// and the only thing wrong is that the business has not supplied the values
+// yet. That is exit 2.
+//
+// Everything else — a missing document, an emptied one, a drafting marker, an
+// unreadable file, an empty register — is exit 1 and is NOT suppressible. Those
+// mean the gate itself is broken or a published document has been damaged, and
+// suppressing them would let a build ship on the strength of a check that never
+// really ran. Before this split, one flag hid both.
+const PLACEHOLDER_FAILURE = 2;
+const BROKEN_GATE = 1;
+
 if (failures.length > 0) {
+  const placeholderFailures = failures.filter((line) => line.includes('unresolved placeholder'));
+  const onlyPlaceholders = placeholderFailures.length === failures.length && tokenHits > 0;
+
   console.error('');
   console.error(`legal gate FAILED — ${failures.length} problem${failures.length === 1 ? '' : 's'}:`);
   for (const line of failures) console.error(`  ${line}`);
@@ -161,8 +179,14 @@ if (failures.length > 0) {
         `This is expected before release — see ${REGISTER} for what each one needs.`
     );
   }
+  if (!onlyPlaceholders) {
+    console.error(
+      'At least one failure is NOT an unresolved placeholder, so this is a broken gate or a ' +
+        'damaged document rather than the expected pre-release state. It cannot be suppressed.'
+    );
+  }
   console.error('CandidCue must not ship a paid build until this exits 0.');
-  process.exit(1);
+  process.exit(onlyPlaceholders ? PLACEHOLDER_FAILURE : BROKEN_GATE);
 }
 
 console.log('');

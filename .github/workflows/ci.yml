@@ -1,0 +1,195 @@
+name: CI
+
+# The tree had no CI at all before the 1.0 readiness pass. Every claim about
+# what passes was a claim about somebody's laptop, which is exactly what made
+# the release un-certifiable.
+#
+# Every step below is named OUT OF the release plan in
+# `scripts/release-verify.mjs` via `--only=`, rather than hand-copied. CI wants
+# these in parallel jobs and the release wants them in one ordered pass; naming
+# them from the same list is what stops the two definitions drifting.
+# `tests/integration/release-gates.test.ts` asserts that every step in the plan
+# is claimed by some job in this file, so a step added to the plan without a
+# home here fails a test rather than quietly never running.
+#
+# The one deliberate difference from a release run is the legal gate. It is
+# expected to fail until the business fills in the `@@LEGAL_*@@` placeholders,
+# and blocking every push on that would train people to ignore a red CI — so
+# this workflow passes `--allow-legal-failure`, which suppresses ONLY the legal
+# gate's exit code 2 ("scan clean, values not supplied"). A legal gate that
+# crashed or found a damaged document exits 1 and still fails the build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The alignment engine is deterministic and the suites are chatty; a backtrace
+  # on a CI-only failure is usually the whole investigation.
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Seconds, not minutes. A missing input or a version drift should never cost
+  # a full build to discover, and this job gates the expensive ones.
+  gates:
+    name: Repository gates
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The benchmark corpus is Git LFS. Without this the fixtures are
+          # ~130-byte pointers and a benchmark run finds no events rather than
+          # failing loudly — see bench/README.md.
+          lfs: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Completeness, versions, legal
+        run: >
+          node scripts/release-verify.mjs --allow-legal-failure
+          --only='repository completeness,version sync,legal gate'
+
+  frontend:
+    name: Frontend (typecheck, node, dom)
+    runs-on: macos-15
+    needs: gates
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # No version here: `packageManager` in package.json is the one source,
+          # and a second number would be a second thing that can drift.
+          run_install: false
+
+      - name: Install with the committed lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and both vitest projects
+        run: >
+          node scripts/release-verify.mjs
+          --only='typecheck,node tests,dom tests'
+
+  browser:
+    name: Browser journeys
+    runs-on: macos-15
+    needs: gates
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright
+        run: node scripts/release-verify.mjs --only='browser journeys'
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: .playwright/
+          retention-days: 7
+
+  rust:
+    name: Rust (${{ matrix.workspace }})
+    runs-on: macos-15
+    needs: gates
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Two workspaces on purpose: the alignment core builds without Tauri
+          # or a WebView, and keeping that true is a property worth testing.
+          - workspace: app
+            cache: src-tauri
+            steps: rust tests (app),clippy (app)
+          - workspace: alignment
+            cache: crates
+            steps: rust tests (alignment),clippy (alignment)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install the pinned toolchain
+        # rust-toolchain.toml pins an exact compiler; rustup honours it, so
+        # naming a version here as well would create a second source of truth.
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.cache }}
+
+      - name: Tests and Clippy
+        run: node scripts/release-verify.mjs --only='${{ matrix.steps }}'
+
+  # Proves the thing a green test suite has repeatedly failed to prove here:
+  # that the application actually bundles.
+  bundle:
+    name: Unsigned bundle
+    runs-on: macos-15
+    needs: [frontend, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Frontend build and bundle-config model check
+        run: >
+          node scripts/release-verify.mjs
+          --only='production frontend build,no model weights'
+
+      - name: Build the .app
+        # `--bundles app` produces the application bundle without spending the
+        # extra minutes on a DMG. Signing and notarisation need credentials and
+        # live in the release workflow; this proves the artifact assembles.
+        run: pnpm tauri build --bundles app
+
+      - name: The built bundle must contain no speech-model weights
+        # The configuration check above says the CONFIG declares no model
+        # resources. This walks the actual payload, which is the half that
+        # catches a build script rather than a config edit. The installer ships
+        # zero model bytes by design (§152) — the recogniser is downloaded
+        # in-app — and ~161 MB of ONNX appearing here would change the size,
+        # the licensing story and the privacy copy of the artifact at once.
+        run: >
+          node scripts/verify-no-model-weights.mjs
+          src-tauri/target/release/bundle/macos/CandidCue.app

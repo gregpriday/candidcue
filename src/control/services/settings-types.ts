@@ -726,19 +726,14 @@ export interface ClearResult {
   clearedBytes: number;
 }
 
-/**
- * `unsupported` is the honest v1 answer: no updater plugin is wired
- * (spec §44.10), so `check_for_update` returns NOT_IMPLEMENTED. It used to be
- * reported as `up_to_date`, which is a claim CandidCue cannot make, and which
- * would have hidden real network/auth failures once an updater shipped (C8).
+/*
+ * `UpdateCheckResult` used to be declared here.
+ *
+ * CandidCue 1.0 updates manually (docs/updates.md), so there is no check to
+ * have a result. The type is not "reserved for later": an updater is a feature
+ * with signing, endpoint, rollback and privacy work attached, and it should
+ * arrive with its own contract rather than find one already waiting.
  */
-export interface UpdateCheckResult {
-  status: 'up_to_date' | 'available' | 'error' | 'unsupported';
-  currentVersion: string;
-  availableVersion?: string;
-  /** Present on `error`: what actually went wrong. */
-  message?: string;
-}
 
 /**
  * The uncalibrated stage appearance, in one place.

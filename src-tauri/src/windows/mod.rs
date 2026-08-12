@@ -29,15 +29,22 @@ pub mod events {
     pub const STAGE_READY: &str = "stage://ready";
     pub const STAGE_CLOSED: &str = "stage://closed";
     pub const STAGE_ERROR: &str = "stage://error";
-    pub const UPDATE_AVAILABLE: &str = "update://available";
-    pub const UPDATE_PROGRESS: &str = "update://progress";
+    /*
+     * `UPDATE_AVAILABLE` and `UPDATE_PROGRESS` used to be declared here,
+     * described as reserved for application updates.
+     *
+     * CandidCue 1.0 updates manually (docs/updates.md). Nothing emitted them
+     * and nothing listened for them; they were a reserved slot in a public
+     * event vocabulary for a feature that does not exist, which is how an
+     * updater gets switched on without the signing and privacy work it needs.
+     */
     /// A speech model's install progressing, finishing, or failing (§152).
     ///
-    /// Its own name rather than `UPDATE_PROGRESS`: that pair is reserved for
-    /// application updates, and a screen listening for "something is
-    /// downloading" would not be able to tell a 128 MB recogniser from a new
-    /// version of CandidCue. The payload is the whole `SpeechModelStatus`, so
-    /// a listener never has to merge an event with a command's answer.
+    /// Its own name rather than a shared "download progress" event: a screen
+    /// listening for "something is downloading" could not otherwise tell a
+    /// 128 MB recogniser from anything else. The payload is the whole
+    /// `SpeechModelStatus`, so a listener never has to merge an event with a
+    /// command's answer.
     pub const SPEECH_MODEL_PROGRESS: &str = "speech://model-progress";
     pub const DEVICE_OR_DISPLAY_CHANGE: &str = "app://device-or-display-change";
     pub const DIAGNOSTIC_WARNING: &str = "diagnostic://warning";

@@ -213,8 +213,23 @@ rg -n 'tauri-plugin-updater|@tauri-apps/plugin-updater' \
   package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/capabilities
 ```
 
-Expect no matches. `check_for_update` and `install_update` return
-`NOT_IMPLEMENTED`; `src-tauri/src/updates/mod.rs` is an unwired stub.
+Expect no matches. CandidCue 1.0 updates manually and has **no update surface
+at all** — no plugin, no endpoint, no commands, no settings field. See
+`docs/updates.md`.
+
+This paragraph used to say that `check_for_update` and `install_update` return
+`NOT_IMPLEMENTED` and that `src-tauri/src/updates/mod.rs` is an unwired stub.
+All three are gone, along with an `update_check` setting that defaulted to
+`"daily"` and a "Check for updates" button. A privacy statement should describe
+behaviour that exists; a dormant half-updater is exactly the thing that turns a
+true privacy claim into a false one without anyone editing the policy.
+
+```bash
+rg -n 'check_for_update|install_update|update_check|updateCheck|update://' \
+  src src-tauri/src src-tauri/permissions src-tauri/capabilities
+```
+
+Expect no matches outside comments recording the removal.
 
 **Nothing transmits telemetry, analytics or crash reports**
 

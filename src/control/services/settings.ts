@@ -13,7 +13,8 @@
  *    toggles, …) persist in a local overlay (localStorage) — they belong to
  *    display profiles / frontend state per §52, not the Rust document.
  */
-import { describeError, errorCode } from './errors';
+// `describeError`/`errorCode` used to be imported here for `checkForUpdate`,
+// which classified an updater failure. There is no updater (docs/updates.md).
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
@@ -39,8 +40,8 @@ import {
   type ReaderFrame,
   type SessionMode,
   type TranscriptRetention,
-  type UpdateCheckResult,
 } from './settings-types';
+import { DEV_APP_VERSION } from '../../shared/version';
 
 /* ---------------------------------------------------------------------------
  * Rust settings twins (src-tauri/src/settings/mod.rs, camelCase over IPC)
@@ -53,7 +54,11 @@ interface RustSettings {
     autosaveDebounceMs: number;
     revisionIntervalMinutes: number;
     wordsPerMinuteEstimate: number;
-    updateCheck: string;
+    /*
+     * No `updateCheck`. Rust dropped the field with the updater stubs; serde
+     * ignores it on documents already on disk. Declaring it here would put the
+     * dead contract back on the TypeScript side of the boundary.
+     */
     analyticsEnabled: boolean;
     saveTranscript: string;
   };
@@ -563,57 +568,53 @@ export async function clearCache(
   return { kind, clearedFiles: result.removedFiles, clearedBytes: result.removedBytes };
 }
 
-/**
- * Check for an application update.
+/*
+ * `checkForUpdate` and `describeUpdateCheck` used to live here.
  *
- * C8: every error used to be swallowed into `{ status: 'up_to_date' }`, so the
- * `'error'` branch was unreachable and a network or auth failure would read as
- * "you are up to date" the moment a real updater shipped. NOT_IMPLEMENTED — the
- * v1 state, where no updater plugin is wired (spec §44.10) — is now reported as
- * `unsupported`; everything else is reported as the failure it is.
+ * They were the honest half of a dishonest feature: the button asked Rust a
+ * real question and Rust always answered NOT_IMPLEMENTED, which the sentence
+ * faithfully reported as "not available in this build". The rest of the
+ * surface was not honest — a `updateCheck: 'daily'` default nothing scheduled,
+ * an `UpdateCheckCadence` enum, two registered commands. CandidCue 1.0 updates
+ * manually, so all of it is gone rather than half of it (docs/updates.md).
+ * Settings now states the running version and how to get a newer build, which
+ * is a claim the app can actually keep.
  */
-export async function checkForUpdate(): Promise<UpdateCheckResult> {
-  if (!isTauriRuntime()) return mockSettings.checkForUpdate();
-  const version = await getAppVersion().catch(() => '0.1.0');
-  try {
-    return await ipcInvoke<UpdateCheckResult>('check_for_update');
-  } catch (err) {
-    if (errorCode(err) === 'NOT_IMPLEMENTED') {
-      return { status: 'unsupported', currentVersion: version };
-    }
-    return { status: 'error', currentVersion: version, message: describeError(err) };
-  }
-}
 
 /**
- * The sentence a presenter reads for an update-check result.
+ * The version of the running build.
  *
- * #180: this used to be a ternary chain inside the route, which made the one
- * mapping the issue explicitly protects — NOT_IMPLEMENTED reported as
- * "not available in this build" — untestable without mounting Settings. The
- * failure it guards against is silent and specific: swap this arm with the
- * `up_to_date` arm and a build that cannot check ANYTHING tells the presenter
- * they are up to date. Pure and exported so that swap fails a test instead.
+ * Rust is the authority: `app_version` reads the package info of the SIGNED
+ * BUNDLE, which is the number a support request needs. The fallback is the
+ * generated `DEV_APP_VERSION` rather than a literal — two hard-coded `0.1.0`
+ * strings used to sit in this file and were never touched by a version bump,
+ * so a browser-dev diagnostics paste reported a version that had not been real
+ * for months. `pnpm version:check` now fails on a literal here at all.
  */
-export function describeUpdateCheck(result: UpdateCheckResult): string {
-  switch (result.status) {
-    case 'available':
-      return `Update available: ${result.availableVersion}`;
-    case 'up_to_date':
-      return 'CandidCue is up to date.';
-    case 'unsupported':
-      return 'Update checks are not available in this build.';
-    default:
-      return `Could not check for updates: ${result.message ?? 'unknown error'}`;
-  }
-}
-
 export async function getAppVersion(): Promise<string> {
-  if (!isTauriRuntime()) return '0.1.0-dev';
+  if (!isTauriRuntime()) return DEV_APP_VERSION;
   try {
     return await ipcInvoke<string>('app_version');
   } catch (err) {
-    if (err instanceof BackendUnavailableError) return '0.1.0-dev';
+    if (err instanceof BackendUnavailableError) return DEV_APP_VERSION;
     throw err;
   }
+}
+
+/**
+ * What Settings tells a presenter about updates.
+ *
+ * Exported and pure so the claim is testable without mounting the route. The
+ * failure this guards against is the one the old code made structurally
+ * possible: text that implies CandidCue watches for new versions. It does not,
+ * and this sentence must never say otherwise.
+ */
+export function describeUpdatePolicy(currentVersion: string): string {
+  return (
+    `You are running CandidCue ${currentVersion}. ` +
+    `CandidCue never checks for updates and never contacts an update service. ` +
+    `To update, download the newest build from the official CandidCue website ` +
+    `and replace the app in your Applications folder — your scripts, settings ` +
+    `and calibrations are stored separately and are left untouched.`
+  );
 }

@@ -383,16 +383,18 @@ pub fn write_support_bundle(
     Ok(())
 }
 
-/// Updater is not wired in v1 (spec §44.10 planned; plugin absent).
-#[tauri::command]
-pub async fn check_for_update() -> Result<serde_json::Value, AppError> {
-    Err(AppError::not_implemented("Update checks"))
-}
-
-#[tauri::command]
-pub async fn install_update() -> Result<(), AppError> {
-    Err(AppError::not_implemented("Update installation"))
-}
+/*
+ * `check_for_update` and `install_update` used to sit here, both returning
+ * NOT_IMPLEMENTED forever.
+ *
+ * CandidCue 1.0 updates manually (docs/updates.md). Two always-failing commands
+ * on a registered ACL, beside an `update_check: "daily"` default that nothing
+ * ever scheduled, described a product that checks for updates — and the gap
+ * between that description and the code was one plugin registration wide. The
+ * commands, the cadence field, the `UpdateCheckCadence` enum and the frontend
+ * "Check for updates" button all went together, so there is now one story:
+ * Settings shows the running version and says how to get a newer one.
+ */
 
 /// Frontend diagnostic line → the process log AND a file (spec §30.1 triage).
 ///

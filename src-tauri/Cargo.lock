@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "candidcue"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-trait",
  "base64 0.23.0",

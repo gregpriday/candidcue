@@ -3,10 +3,10 @@
  *
  * Three things were untrue at once, and all three read as reassurance:
  *
- *  - "CandidCue checks for software updates." It does not. Both
- *    `check_for_update` and `install_update` return NOT_IMPLEMENTED, and no
- *    updater plugin is wired at all — nothing in `package.json`, nothing in
- *    `Cargo.toml`, no `plugins` section in `tauri.conf.json`.
+ *  - "CandidCue checks for software updates." It does not, and it now says so.
+ *    `check_for_update`/`install_update` used to return NOT_IMPLEMENTED behind
+ *    a button; CandidCue 1.0 has no updater at all and the section states the
+ *    manual-update policy instead (docs/updates.md).
  *  - A "Diagnostic logging" toggle and an "Update channel" dropdown, neither of
  *    which reached Rust. `toRustPatch` maps `privacy.saveTranscript` and nothing
  *    else, so both wrote to the localStorage overlay and no code ever read them
@@ -20,9 +20,9 @@
  * These read the route SOURCE rather than mounting it. The defect class is
  * static copy and static control presence, and mounting a 3,000-line route
  * would drag in microphone, display, model and diagnostics setup to prove
- * something about a paragraph. The one behavioural claim the issue explicitly
- * protects — NOT_IMPLEMENTED reported as "unsupported" — IS driven through the
- * real service path at the bottom of this file, because that one is behaviour.
+ * something about a paragraph. The claims that ARE behaviour — the version
+ * comes from Rust, and the update sentence never implies a check — are driven
+ * through the real service path at the bottom of this file.
  *
  * Assertions are on CLAIMS, not on prose. Pinning the paragraphs verbatim would
  * break on a rewording that is just as true, which teaches people to delete the
@@ -35,12 +35,9 @@ const ipc = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
-    /** What `check_for_update` should do. Default: the shipped v1 answer. */
-    updateFailure: { code: 'NOT_IMPLEMENTED' } as unknown,
     invoke: async (command: string) => {
       calls.push(command);
       if (command === 'app_version') return '9.9.9-test';
-      if (command === 'check_for_update') throw ipc.updateFailure;
       throw new Error(`unexpected command ${command}`);
     },
   };
@@ -57,8 +54,34 @@ const settingsSource = readFileSync(
   'utf8',
 );
 
-/** Line wrapping is not a claim. Everything below reads the flattened text. */
-const flatSource = settingsSource.replace(/\s+/g, ' ');
+/**
+ * Line wrapping is not a claim, and neither is a comment.
+ *
+ * Comments are stripped BEFORE flattening. Every ban in this file is about what
+ * the screen says, and the comments in this route routinely quote the copy they
+ * are explaining why we removed — the note recording that a "Check for updates"
+ * button used to be here contains the string "Check for updates". Scanning raw
+ * source made the postmortem fail the test it was written to explain, which
+ * teaches exactly the wrong lesson: delete the explanation.
+ *
+ * The stripping is SCOPED, which matters more than it looks. `<!-- -->` is a
+ * comment anywhere in a Svelte file, so it goes everywhere. `/* *\/` and `//`
+ * are comments only inside the `<script>` block; in markup they are ordinary
+ * text, and stripping them there would delete rendered copy — so a paragraph
+ * reading `// CandidCue checks for updates daily.` would become invisible to
+ * every ban below. Narrowing JS-comment removal to the script region closes
+ * that. The `renders comment-shaped copy` test at the bottom guards it.
+ */
+const SCRIPT_END = '</script>';
+const scriptEnd = settingsSource.indexOf(SCRIPT_END);
+const scriptRegion = scriptEnd === -1 ? '' : settingsSource.slice(0, scriptEnd);
+const markupRegion = scriptEnd === -1 ? settingsSource : settingsSource.slice(scriptEnd);
+
+const withoutComments = (
+  scriptRegion.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ') + markupRegion
+).replace(/<!--[\s\S]*?-->/g, ' ');
+
+const flatSource = withoutComments.replace(/\s+/g, ' ');
 
 /**
  * The privacy Section only, so a ban cannot be satisfied — or defeated — by
@@ -90,12 +113,37 @@ describe('#180 the privacy section describes what the app actually does', () => 
       /Local by default/,
     );
     expect(privacySection, 'capture runs to the last control in the section').toMatch(
-      /\{#if updateNote\}/,
+      /data-testid="update-policy"/,
     );
   });
 
   it('does not claim CandidCue checks for updates', () => {
+    /*
+     * Banning the one sentence that used to be here is not enough — a reworded
+     * claim ("CandidCue checks for updates daily", "we let you know when a new
+     * version is out") is the same lie and would sail past a literal ban. So
+     * the rule is the SHAPE: no sentence in this section may put CandidCue in
+     * the position of doing the checking or the telling.
+     */
     expect(privacySection).not.toMatch(/checks for software updates/i);
+    expect(privacySection).not.toMatch(/checks? for (?:new )?(?:updates|versions)(?! on its own)/i);
+    expect(privacySection).not.toMatch(/\b(?:notifies?|tells?|lets? you know|alerts?)\b[^.]*\bnew(?:er)? (?:version|build|release)/i);
+    expect(privacySection).not.toMatch(/\bup to date\b/i);
+
+    /*
+     * Naming an update service is only a lie when it is ASSERTED. The shipping
+     * copy says "CandidCue has no update service and never contacts one",
+     * which is the most useful sentence on the screen and which a flat ban on
+     * the phrase would delete. So every mention has to be negated.
+     */
+    for (const mention of privacySection.matchAll(
+      /(.{0,24})update (?:server|service|feed|channel|endpoint)/gi,
+    )) {
+      expect(
+        mention[1],
+        `"${mention[0]}" asserts an update service rather than denying one`,
+      ).toMatch(/\b(?:no|not|never|without)\b/i);
+    }
   });
 
   it('does not invent a CandidCue server to be private from', () => {
@@ -140,28 +188,54 @@ describe('#180 the privacy section describes what the app actually does', () => 
   });
 
   it('no longer offers the two settings that decided nothing', () => {
-    expect(settingsSource).not.toMatch(/label="Diagnostic logging"/);
-    expect(settingsSource).not.toMatch(/label="Update channel"/);
+    expect(withoutComments).not.toMatch(/label="Diagnostic logging"/);
+    expect(withoutComments).not.toMatch(/label="Update channel"/);
     /*
      * Structural, not spelling. The bans above only catch the exact attributes
      * that used to be here; this catches a renamed or re-spelled revival, and
      * says the real rule: this section offers no interactive setting at all
-     * now, only maintenance buttons and the update check.
+     * now, only maintenance buttons.
      */
     expect(privacySection, 'no Toggle may return to this section').not.toMatch(/<Toggle\b/);
     expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
   });
 
-  it('keeps the update check, which asks Rust a real question', () => {
-    // Unlike the two removed controls, this button does not pretend to persist
-    // a choice — it queries the backend and reports whatever comes back. The
-    // issue explicitly protects it.
-    expect(privacySection).toMatch(/Check for updates/);
-    // The button must still be wired to the check, not left as decoration.
-    expect(privacySection).toMatch(/runUpdateCheck\(\)/);
-    // The sentence itself now lives in `settings.ts` as `describeUpdateCheck`,
-    // and is asserted behaviourally at the bottom of this file.
-    expect(settingsSource).toMatch(/describeUpdateCheck/);
+  it('offers no update action, because CandidCue 1.0 has no updater', () => {
+    /*
+     * A "Check for updates" button used to survive here on the grounds that it
+     * asked Rust a real question. The answer was always "not available in this
+     * build", which makes it an action with no outcome — the same defect as the
+     * two controls #180 deleted, one level down. CandidCue 1.0 updates manually
+     * (docs/updates.md) and the section states that instead.
+     */
+    expect(privacySection, 'no update-check button may return').not.toMatch(/Check for updates/i);
+    expect(withoutComments, 'no update-check handler may return').not.toMatch(/runUpdateCheck/);
+
+    /*
+     * Structural, not spelling — the same escalation as the Toggle/Select rule
+     * above. Banning the old LABEL and the old HANDLER NAME leaves
+     * `<Button onclick={() => findNewerBuilds()}>Find newer builds</Button>`
+     * passing, which is the identical defect wearing different words. The real
+     * rule is that this section contains no interactive control at all beyond
+     * the maintenance actions, which live in their own `row-actions` block.
+     */
+    const updateBlock = privacySection.slice(privacySection.indexOf('<h3 class="privacy-head">Updates'));
+    expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toContain(
+      'data-testid="update-policy"',
+    );
+    expect(updateBlock, 'the Updates block must offer no button').not.toMatch(/<Button\b/);
+
+    /*
+     * The rendered node must actually consume the policy sentence. Asserting
+     * only that `describeUpdatePolicy` appears SOMEWHERE in the route would
+     * pass with its result discarded and misleading static copy in the node.
+     */
+    expect(updateBlock, 'the visible node must render the policy state').toMatch(
+      /data-testid="update-policy"[^>]*>\s*\{updateNote/,
+    );
+    expect(withoutComments, 'the policy state must come from the pure function').toMatch(
+      /updateNote = settingsService\.describeUpdatePolicy\(/,
+    );
   });
 });
 
@@ -179,60 +253,100 @@ describe('#180 the dead privacy settings are gone from the settings shape', () =
   });
 });
 
-describe('#180 an unwired updater still reports itself honestly', () => {
+describe('the manual-update policy is stated truthfully', () => {
   beforeEach(() => {
     ipc.calls.length = 0;
-    ipc.updateFailure = { code: 'NOT_IMPLEMENTED' };
   });
 
-  it('reports NOT_IMPLEMENTED as unsupported rather than up to date', async () => {
-    const { checkForUpdate } = await import('../../../src/control/services/settings');
-    const result = await checkForUpdate();
-    // "up_to_date" here would be the worst possible answer: it tells a
-    // presenter they are current when nothing was ever checked.
-    expect(result).toStrictEqual({ status: 'unsupported', currentVersion: '9.9.9-test' });
+  it('reports the version the signed bundle carries, not a literal', async () => {
     /*
-     * The button's whole claim to staying on screen is that it asks Rust a real
-     * question. Without this, an implementation that skipped the IPC entirely
-     * and returned `unsupported` outright would pass the assertion above — and
-     * would be exactly the inert control this issue deleted two of.
+     * `getAppVersion` used to fall back to a hard-coded '0.1.0' twice in this
+     * file, and both survived every version bump — so a support paste could
+     * report a version that had not been real for months. The version must come
+     * from Rust, which reads it from the bundle's package info.
      */
-    expect(ipc.calls).toEqual(['app_version', 'check_for_update']);
+    const { getAppVersion } = await import('../../../src/control/services/settings');
+    expect(await getAppVersion()).toBe('9.9.9-test');
+    expect(ipc.calls).toEqual(['app_version']);
   });
 
-  it('still reports a real failure as a failure', async () => {
+  it('never implies CandidCue watches for new versions', async () => {
     /*
-     * The anti-vacuity partner to the test above: if every error collapsed to
-     * "unsupported", that test would pass while hiding genuine breakage the day
-     * an updater ships.
+     * The failure this guards against is the one the old code made structurally
+     * possible: a sentence that reads as reassurance about a check that never
+     * happens. Asserting only that SOME sentence is produced would pass with
+     * "CandidCue is up to date." in it — the single worst thing this screen
+     * could say.
+     */
+    const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
+    const sentence = describeUpdatePolicy('9.9.9-test');
+
+    expect(sentence, 'the running version must be quotable from this line').toContain('9.9.9-test');
+    expect(sentence, 'the policy must be stated, not implied').toMatch(/never checks for updates/i);
+    expect(sentence, 'the user must be told how to actually update').toMatch(/download/i);
+
+    expect(sentence).not.toMatch(/up to date/i);
+    expect(sentence).not.toMatch(/checking/i);
+    expect(sentence).not.toMatch(/update (?:available|server|service is)/i);
+
+    /*
+     * The bans above are all about the WORD "check", and a sentence can imply
+     * a check without using it: "CandidCue never checks for updates manually;
+     * it polls the release feed at launch and tells you when a newer build
+     * exists" satisfies every assertion above while describing an updater.
      *
-     * The code must be one `errorCode` actually RECOGNISES. Its CODE_TOKEN
-     * demands an underscore, so a bare 'NETWORK' parses to null — and a broken
-     * `errorCode(err) !== null` implementation would then pass both tests while
-     * reporting every recognised failure as "unsupported".
+     * So this bans the MECHANISMS too. It is not an exhaustive list of ways to
+     * be misleading — no ban list is — but it covers the vocabulary anyone
+     * would reach for when wiring the feature back up, which is when this test
+     * needs to fire.
      */
-    const { checkForUpdate } = await import('../../../src/control/services/settings');
-    ipc.updateFailure = { code: 'NETWORK_OFFLINE', userMessage: 'host unreachable' };
-    const result = await checkForUpdate();
-    expect(result.status).toBe('error');
-    expect(result.currentVersion).toBe('9.9.9-test');
-    expect(result.message, 'a failure must say what went wrong').toBeTruthy();
+    expect(sentence).not.toMatch(/\bpolls?\b|\bpolling\b/i);
+    expect(sentence).not.toMatch(/release feed|update feed|manifest|endpoint/i);
+    expect(sentence).not.toMatch(/\b(?:notifies?|tells?|alerts?|lets? you know)\b/i);
+    expect(sentence).not.toMatch(/\bautomatic(?:ally)?\b/i);
+
+    /*
+     * And the positive claim must be unqualified. "never checks for updates
+     * manually" and "never checks for updates without asking" both match the
+     * `/never checks for updates/i` above while meaning the opposite.
+     */
+    expect(sentence).toMatch(/never checks for updates and never contacts/i);
   });
 
-  it('tells the presenter an unwired build cannot check, not that it is current', async () => {
+  it('would still see comment-shaped copy if it were ever rendered', () => {
     /*
-     * The mapping the issue explicitly protects, tested directly. Asserting
-     * only that the sentence exists SOMEWHERE in the route would pass with the
-     * `unsupported` and `up_to_date` arms swapped — which is the one outcome
-     * worse than saying nothing: "CandidCue is up to date." from a build that
-     * has never checked anything.
+     * The guard on the comment stripping above.
+     *
+     * Stripping is how this file stopped failing on its own postmortems, and
+     * it is also the easiest way to blind every ban in it: strip `/* *\/` and
+     * `//` from the WHOLE file and a rendered paragraph beginning `//` — or
+     * one wrapped in `/* *\/` — disappears before a single assertion runs.
+     * Markup keeps its JS-comment delimiters as ordinary text, and this proves
+     * the stripper honours that.
      */
-    const { describeUpdateCheck } = await import('../../../src/control/services/settings');
-    expect(describeUpdateCheck({ status: 'unsupported', currentVersion: '9.9.9-test' })).toBe(
-      'Update checks are not available in this build.',
+    const markup = '<p>/* banned text */</p>\n<p>\n  // banned text\n</p>';
+    const stripped = (
+      "<script lang=\"ts\">\n  // gone\n  /* also gone */\n</script>\n" + markup
+    )
+      .replace(/^[\s\S]*?<\/script>/, (script) =>
+        script.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' '),
+      )
+      .replace(/<!--[\s\S]*?-->/g, ' ');
+
+    expect(stripped, 'script comments must go').not.toContain('gone');
+    expect(stripped, 'rendered text that merely looks like a comment must stay').toContain(
+      'banned text',
     );
-    expect(describeUpdateCheck({ status: 'up_to_date', currentVersion: '9.9.9-test' })).toBe(
-      'CandidCue is up to date.',
-    );
+  });
+
+  it('says what happens to user data across a manual update', async () => {
+    /*
+     * "Replace the app in your Applications folder" is an instruction people
+     * hesitate over precisely because it sounds destructive. Scripts, settings
+     * and calibrations live in the app data directory, not the bundle, so the
+     * sentence must say so — otherwise the honest policy reads as a warning.
+     */
+    const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
+    expect(describeUpdatePolicy('1.2.3')).toMatch(/scripts, settings/i);
   });
 });

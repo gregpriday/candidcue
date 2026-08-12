@@ -1,2 +1,16 @@
+# Pinned to an EXACT release, not `stable`.
+#
+# `channel = "stable"` was a moving target: two machines a month apart compiled
+# the same tag with different compilers, which is not a release anyone can
+# reproduce. It also meant a new stable could turn a green tree red with no
+# commit in between.
+#
+# Bumping this is a deliberate change: update the version here, run both cargo
+# workspaces' tests and Clippy, and record the new compiler in the release
+# provenance. `src-tauri/Cargo.toml` and `crates/*/Cargo.toml` declare
+# `rust-version = "1.85"` as the MINIMUM they support; this is what the release
+# is actually built with.
 [toolchain]
-channel = "stable"
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]

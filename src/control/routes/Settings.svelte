@@ -149,6 +149,7 @@
   ];
 
   let engineStatus = $state<SpeechEngineStatus | null>(null);
+  /** The update policy sentence, filled in once the running version is known. */
   let updateNote = $state('');
   let diagnostics = $state<SystemDiagnostics | null>(null);
   let diagnosticsError = $state<string | null>(null);
@@ -228,6 +229,11 @@
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
   $effect(() => {
     if (section === 'privacy') void loadDiagnostics();
+  });
+
+  /** Same screen, same rule — the update policy sentence needs the version. */
+  $effect(() => {
+    if (section === 'privacy') void loadUpdatePolicy();
   });
 
   /* ------------------------------------------------------------- displays */
@@ -1392,13 +1398,17 @@
     );
   }
 
-  async function runUpdateCheck(): Promise<void> {
-    updateNote = 'Checking…';
-    try {
-      updateNote = settingsService.describeUpdateCheck(await settingsService.checkForUpdate());
-    } catch (err) {
-      updateNote = `Could not check for updates. ${describeError(err)}`;
-    }
+  /*
+   * `runUpdateCheck` used to sit here behind a "Check for updates" button that
+   * could only ever report that checking is unavailable. CandidCue 1.0 updates
+   * manually, so the section states the policy instead of offering an action
+   * that has no outcome (docs/updates.md).
+   */
+  async function loadUpdatePolicy(): Promise<void> {
+    const version = await settingsService.getAppVersion().catch(() => null);
+    // A version we could not read is worth saying plainly. Inventing one here
+    // is how the old `'0.1.0'` fallbacks ended up in support pastes.
+    updateNote = settingsService.describeUpdatePolicy(version ?? 'an unknown version');
   }
 </script>
 
@@ -2587,9 +2597,9 @@
             </p>
             <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
-              CandidCue does not check for updates on its own, and this build has no update service
-              to check with. It reaches the network when you download a language in Speech settings,
-              and that request carries neither your script nor your audio.
+              CandidCue has no update service and never contacts one. The only time it reaches the
+              network is when you download a language in Speech settings, and that request carries
+              neither your script nor your audio.
             </p>
           </div>
 
@@ -2611,17 +2621,22 @@
           </div>
 
           <!--
-            #180: a "Diagnostic logging" toggle and an "Update channel" dropdown
-            used to sit here. Neither reached Rust — they wrote to the frontend
-            overlay and nothing ever read them back, so logging ran either way
-            and the channel selected nothing. The button below stays: unlike
-            those two it asks Rust a real question and reports the real answer,
-            which in this build is that update checks are not available.
+            #180 removed a "Diagnostic logging" toggle and an "Update channel"
+            dropdown from here: neither reached Rust, so logging ran either way
+            and the channel selected nothing. A "Check for updates" button
+            survived that pass because it asked Rust a real question — but the
+            only answer Rust could give was "not available in this build".
+
+            CandidCue 1.0 updates manually, so the whole update surface is now
+            one true statement rather than an action with no outcome
+            (docs/updates.md). The version comes from Rust, which reads it from
+            the signed bundle, so this line is also what a support request
+            should be asked to quote.
           -->
-          <div class="row-actions">
-            <Button size="sm" onclick={() => runUpdateCheck()}>Check for updates</Button>
-            {#if updateNote}<span class="hint-line">{updateNote}</span>{/if}
-          </div>
+          <h3 class="privacy-head">Updates</h3>
+          <p class="privacy-body" data-testid="update-policy">
+            {updateNote || 'Reading the installed version…'}
+          </p>
         </Section>
 
         <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->

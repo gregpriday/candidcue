@@ -229,36 +229,16 @@ const records = vi.hoisted(() => ({
 
 vi.mock('../../src/control/services/stage', () => stage);
 vi.mock('../../src/control/services/session-records', () => records);
-vi.mock('../../src/control/services/semantic-sidecar', () => ({
-  SemanticSidecar: class {
-    scheduler = {
-      getDiagnostics: () => ({
-        requestsByLane: {},
-        usage: {
-          inputTokens: 0,
-          cachedInputTokens: 0,
-          outputTokens: 0,
-          reasoningTokens: 0,
-          totalTokens: 0,
-        },
-        availability: 'disabled' as const,
-        estimatedCostUsd: null,
-      }),
-      getAvailability: () => 'disabled' as const,
-      getBudget: () => ({
-        maxRequestsPerSession: 400,
-        maxRequestsPerHour: 600,
-        maxTotalTokens: 1_500_000,
-      }),
-    };
-    attachContextSource(): void {}
-    cancelInFlight(): void {}
-    setMode(): void {}
-    setRequestLimit(): void {}
-    setPrices(): void {}
-    dispose(): void {}
-  },
-}));
+/*
+ * A vi.mock of `services/semantic-sidecar` used to sit here.
+ *
+ * The OpenAI semantic sidecar was removed from the product; the module does
+ * not exist. Nothing imports it, so the mock never applied and the factory
+ * below it — a whole fake scheduler with token budgets and cost estimates —
+ * was inert. It survived because a mock of a missing module is silent: vitest
+ * only resolves the path if something asks for it. The repository completeness
+ * gate (scripts/verify-repository.mjs) is what finally named it.
+ */
 vi.mock('../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };

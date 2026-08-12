@@ -33,7 +33,10 @@ const SRC = join(ROOT, 'src');
  */
 const UNWIRED_BY_DESIGN: Record<string, string> = {
   remove_asset_reference: 'Asset GC runs from the compiler side; no UI affordance yet.',
-  install_update: 'No updater plugin is wired in v1 (§44.10).',
+  // `install_update` used to be waived here as "no updater plugin is wired in
+  // v1". That waiver was the problem in miniature: an unreachable command with
+  // a note explaining why it is fine to leave registered. CandidCue 1.0 updates
+  // manually (docs/updates.md), so the command is gone rather than excused.
   save_display_profile:
     'Single-window presentation has no independently selected stage display to persist.',
   list_display_profiles:

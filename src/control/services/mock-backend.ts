@@ -19,11 +19,7 @@ import {
   hashSource,
   plainExcerpt,
 } from '../lib/format';
-import type {
-  AppSettings,
-  ClearResult,
-  UpdateCheckResult,
-} from './settings-types';
+import type { AppSettings, ClearResult } from './settings-types';
 import { defaultAppSettings } from './settings-types';
 import type {
   DisplayDescriptor,
@@ -268,10 +264,7 @@ export const mockSettings = {
   clearCache(kind: string): ClearResult {
     return { kind, clearedFiles: 0, clearedBytes: 0 };
   },
-  checkForUpdate(): UpdateCheckResult {
-    // Browser dev has no updater either; say so rather than claim currency.
-    return { status: 'unsupported', currentVersion: '0.1.0-dev' };
-  },
+  // No `checkForUpdate`: CandidCue 1.0 has no updater to mock.
 };
 
 /* ------------------------------------------------------------ speech */
