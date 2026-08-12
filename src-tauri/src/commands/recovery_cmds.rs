@@ -166,7 +166,31 @@ pub async fn restore_database_backup(
     })?;
 
     let quarantine = backup::rebuild_database_index(&paths)?;
-    std::fs::copy(&source, paths.root().join("candidcue.sqlite3"))?;
+
+    /*
+     * Staged, flushed, checked, then renamed into place.
+     *
+     * A direct `fs::copy` onto the live path is a partial database the moment
+     * it is interrupted, and the previous one has already been moved aside — so
+     * the next launch opens whatever landed. Copying to a sibling first means
+     * the live name only ever refers to a file that is complete: the copy is
+     * fsynced, verified with the same integrity check the backup itself had to
+     * pass, and only then does the rename publish it.
+     */
+    let live = paths.root().join("candidcue.sqlite3");
+    let staging = paths.root().join("candidcue.sqlite3.restoring");
+    let _ = std::fs::remove_file(&staging);
+    std::fs::copy(&source, &staging)?;
+    crate::util::sync_file(&staging)?;
+    if let Err(err) = backup::verify_database_file(&staging).await {
+        let _ = std::fs::remove_file(&staging);
+        return Err(AppError::invalid_input(format!(
+            "The backup did not survive being copied into place, so nothing was published.              Your previous database is at {}: {err}",
+            quarantine.display()
+        )));
+    }
+    std::fs::rename(&staging, &live)?;
+    crate::util::sync_dir(paths.root())?;
 
     Ok(RecoveryOutcome {
         previous_state_at: quarantine.to_string_lossy().to_string(),
@@ -275,7 +299,17 @@ pub async fn write_unsaved_recovery(
         script_id.as_str(),
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     ));
-    std::fs::write(&target, source.as_bytes())?;
+    /*
+     * `atomic_write`, not `fs::write`: this is the ONLY copy.
+     *
+     * The text is here because saving it failed, the window is closing, and the
+     * user has been told it was parked. `fs::write` returns as soon as the
+     * bytes reach the page cache, and the process is about to exit — so a power
+     * loss, or a machine that goes down during the shutdown this runs in, left
+     * an acknowledged rescue file empty or absent.
+     */
+    crate::util::sync_dir(&dir)?;
+    crate::util::atomic_write(&target, source.as_bytes())?;
 
     std::fs::write(
         dir.join("README.txt"),

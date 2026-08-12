@@ -1880,3 +1880,43 @@ async fn a_pre_baseline_quarantine_interrupted_between_its_renames_is_finished_t
     assert_eq!(fs::read(&wal).expect("read"), b"orphaned wal");
     assert!(!dir.path().join("rebuild-pending.json").exists());
 }
+
+#[tokio::test]
+async fn a_new_script_directory_is_durable_before_the_row_that_names_it() {
+    /*
+     * `atomic_write` fsyncs the file it writes and the directory that file sits
+     * in — which for a NEW script is `scripts/<id>`, itself new. Its entry in
+     * `scripts/` was never flushed, and the database row naming the script IS
+     * durable, so a power loss could leave the library listing a script whose
+     * file is nowhere: it shows in the list and opening it reports the file
+     * missing.
+     *
+     * Crash durability cannot be asserted from a test without a fault-injecting
+     * filesystem. What this pins is the call: creating a script syncs the
+     * scripts directory. It is a source-level assertion and says so.
+     */
+    let repo_source = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scripts/repo.rs"),
+    )
+    .expect("repo.rs");
+    let create = &repo_source[repo_source
+        .find("pub async fn create_script")
+        .expect("create_script exists")..];
+    let create = &create[..create.find("\npub ").unwrap_or(create.len())];
+    assert!(
+        create.contains("sync_dir(&paths.scripts_dir())"),
+        "a new script's directory entry must be flushed before the row that names it"
+    );
+
+    // And the ordinary path still works end to end.
+    let h = harness().await;
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Durable", "# Durable"))
+        .await
+        .expect("create");
+    let id = candidcue_lib::scripts::ScriptId::parse(&created.id).expect("id");
+    assert!(
+        h.paths.canonical_file(&id).is_file(),
+        "the canonical file must exist after a create"
+    );
+    h.pool.close().await;
+}

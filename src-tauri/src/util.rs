@@ -46,6 +46,34 @@ pub fn file_fingerprint(path: &Path) -> Result<String, AppError> {
 /// writes to the same destination. The parent-directory sync is what makes the
 /// new directory entry survive power loss; without it the rename itself is not
 /// durable even though the file contents are.
+/// fsync a directory, so an entry created or removed inside it survives a power
+/// loss.
+///
+/// [`atomic_write`] does this for the directory the file it writes lives in.
+/// This is for the callers that create the DIRECTORY: a new script's folder is
+/// an entry in `scripts/`, and an entry that never reached the platter takes
+/// everything under it with it.
+///
+/// No-op off Unix, which has no directory handle to flush and journals its
+/// renames instead.
+pub fn sync_dir(dir: &Path) -> Result<(), AppError> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+    }
+    Ok(())
+}
+
+/// fsync one file by path, for callers that produced it some other way.
+pub fn sync_file(path: &Path) -> Result<(), AppError> {
+    fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
 pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), AppError> {
     atomic_write_with(dest, |file| {
         file.write_all(contents)?;

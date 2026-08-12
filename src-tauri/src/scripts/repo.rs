@@ -176,6 +176,17 @@ pub async fn create_script(
     atomic_write(&canonical, source.as_bytes())?;
     fs::create_dir_all(paths.assets_dir(&id))?;
     fs::create_dir_all(paths.revisions_dir(&id))?;
+    /*
+     * The script DIRECTORY's own entry, in `scripts/`.
+     *
+     * `atomic_write` fsyncs the file and the directory it sits in — but that
+     * directory is `scripts/<id>`, which is itself new, and an entry that never
+     * reached the platter takes its contents with it. The row about to be
+     * inserted below IS durable, so a power loss here left the database naming
+     * a script whose file is nowhere: the library shows it and opening it
+     * reports the file missing.
+     */
+    crate::util::sync_dir(&paths.scripts_dir())?;
 
     let settings = ScriptSettings::default();
     let (plain, words, duration) = stats_for(&source, &settings);
