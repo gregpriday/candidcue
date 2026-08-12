@@ -2,6 +2,40 @@
   The session dock — one quiet control location, bottom left.
 
   ---------------------------------------------------------------------------
+  THE DESKTOP REFINEMENT'S §13.2 AUDIT: NOTHING CHANGED HERE, ON PURPOSE
+  ---------------------------------------------------------------------------
+  The desktop-structure pass reduced radii, control heights and shadow use
+  across the whole control window. It stopped at this file, and the reason is
+  written into the review itself: §29.6 says to change stage appearance only
+  where real-device testing demonstrates a problem, and §31.5 lists weakening
+  the stage architecture among the changes that would make the product worse.
+
+  What the audit found, and why each item stands:
+
+    40px buttons        §13.2 asks whether they remain usable viewed directly
+                        at the rig. They are sized for exactly that — see the
+                        note below on the 48px pointer target claimed by a
+                        pseudo-element — and shrinking them to match the
+                        workspace's new 32px would be applying a density rule
+                        to the one surface §31.3 exempts from it.
+
+    12px radius         §13.2 offers a flatter dock "if the current control
+                        group looks too pill-like". At 12px on a 40px square
+                        this is a squircle rather than a capsule, and deciding
+                        it looks wrong needs eyes on a real panel at a real
+                        viewing distance. Nobody has had those since the
+                        question was asked.
+
+    the chrome shadow   §9.3 keeps shadows for genuinely floating things. This
+                        dock floats over moving text on glass, which is the
+                        clearest case for one in the product.
+
+  So the honest state is: audited, unchanged, and waiting on the one kind of
+  evidence that could justify changing it. The control window's tokens no
+  longer reach in here — `--stage-chrome-*` are the stage's own — so a future
+  density pass cannot alter this surface by accident.
+
+  ---------------------------------------------------------------------------
   WHY IT IS ONE THING AND WHY IT IS UNMIRRORED
   ---------------------------------------------------------------------------
   The stage used to distribute its furniture between five independent anchors:

@@ -28,6 +28,8 @@
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
   import { onRouteCommand } from '../stores/command-bus';
+  import PaneDivider from '../components/PaneDivider.svelte';
+  import { PANE_LIMITS, setPaneWidth, workspace } from '../stores/workspace';
   import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
   import {
     awaitViewportSettled,
@@ -1132,26 +1134,70 @@ import { onShortcut } from '../lib/shortcuts';
   replace is the kind that rots: a pill added to one status bar and not the
   other reads as a pill that works sometimes.
 -->
+<!--
+  The console's continuous health, as STATUS LIGHTS (§12.3, §9.4).
+
+  ---------------------------------------------------------------------------
+  WHY THESE STOPPED BEING PILLS
+  ---------------------------------------------------------------------------
+  This was a row of four `StatusPill`s of equal visual weight: the mode, the
+  connection, the stage, the microphone. §9.4's test is whether the capsule
+  SHAPE helps scanning, and for four adjacent always-present states it does the
+  opposite — every one of them shouts equally, so a genuine fault reads exactly
+  like "Mic live". §12.3 asks for a small coloured light plus text for
+  continuous states, with pills reserved for the exceptional and the actionable.
+
+  So: a dot and a word for each, and a pill kept for the one state that is
+  neither continuous nor healthy — a stage that has closed, which is a fault
+  with an action behind it.
+
+  Colour is never the whole signal. Each light is accompanied by its own words
+  ("Mic live", "Mic lost"), so the state survives a monochrome display and a
+  colour-blind reader.
+-->
 {#snippet statusPills()}
-  <StatusPill tone="accent" label={modeLabel} dot={false} />
+  <span class="live-status">
+    <span class="status-dot accent" aria-hidden="true"></span>
+    {modeLabel}
+  </span>
   <!--
     Only a voice take has a realtime connection and an open microphone to
     report. Anything else says so plainly instead of showing the
     `initial` optimism of "Connected · Mic live".
   -->
   {#if hasVoiceTransport}
-    <StatusPill tone={connection.tone} label={connection.label} />
+    <span class="live-status">
+      <span class="status-dot {connection.tone}" aria-hidden="true"></span>
+      {connection.label}
+    </span>
+    <span class="live-status">
+      <span
+        class="status-dot {$session.micState === 'live'
+          ? 'success'
+          : $session.micState === 'muted'
+            ? 'neutral'
+            : 'danger'}"
+        aria-hidden="true"
+      ></span>
+      {$session.micState === 'live'
+        ? 'Mic live'
+        : $session.micState === 'muted'
+          ? 'Mic off'
+          : 'Mic lost'}
+    </span>
+  {:else}
+    <span class="live-status">
+      <span class="status-dot neutral" aria-hidden="true"></span>
+      No microphone
+    </span>
   {/if}
+  <!--
+    A pill, and the only one: the stage closing is exceptional, it is a fault,
+    and there is something to do about it. That is exactly §9.4's remaining
+    case for the shape.
+  -->
   {#if !stageAlive}
     <StatusPill tone="danger" label="Stage closed" />
-  {/if}
-  {#if hasVoiceTransport}
-    <StatusPill
-      tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
-      label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
-    />
-  {:else}
-    <StatusPill tone="neutral" label="No microphone" />
   {/if}
 {/snippet}
 
@@ -1278,7 +1324,8 @@ import { onShortcut } from '../lib/shortcuts';
 
   <!-- Main three-region area (§15.1) -->
   <div class="main">
-    <aside class="outline" aria-label="Sections">
+    {#if $workspace.outlineVisible}
+    <aside class="outline" aria-label="Sections" style="width: {$workspace.liveOutlineWidth}px">
       <p class="region-label">Sections</p>
       {#if flatOutline.length > 0}
         <ul class="outline-list">
@@ -1300,6 +1347,17 @@ import { onShortcut } from '../lib/shortcuts';
         <p class="region-empty">No headings in this script.</p>
       {/if}
     </aside>
+    <PaneDivider
+      orientation="vertical"
+      side="leading"
+      label="Sections width"
+      value={$workspace.liveOutlineWidth}
+      min={PANE_LIMITS.liveOutline.min}
+      max={PANE_LIMITS.liveOutline.max}
+      defaultValue={PANE_LIMITS.liveOutline.default}
+      onresize={(w) => setPaneWidth('liveOutline', w)}
+    />
+    {/if}
 
     <section class="preview" aria-label="Stage preview">
       {#if $session.stageBlanked}
@@ -1336,7 +1394,27 @@ import { onShortcut } from '../lib/shortcuts';
       {/if}
     </section>
 
-    <aside class="diagnostics" aria-label="Tracking">
+    {#if $workspace.diagnosticsVisible}
+    <!--
+      A real divider on both rails (§12.2).
+
+      These were `grid-template-columns: 200px minmax(0,1fr) 304px` with a media
+      query that HID the outline below 1100px — a laid-out console rather than an
+      operated one. An operator working a rig wants the diagnostics wide while
+      hunting a fault and narrow while reading; the widths are theirs now, and
+      they are remembered.
+    -->
+    <PaneDivider
+      orientation="vertical"
+      side="trailing"
+      label="Diagnostics width"
+      value={$workspace.diagnosticsWidth}
+      min={PANE_LIMITS.liveDiagnostics.min}
+      max={PANE_LIMITS.liveDiagnostics.max}
+      defaultValue={PANE_LIMITS.liveDiagnostics.default}
+      onresize={(w) => setPaneWidth('liveDiagnostics', w)}
+    />
+    <aside class="diagnostics" aria-label="Tracking" style="width: {$workspace.diagnosticsWidth}px">
       <p class="region-label">Tracking</p>
       <FollowStatePanel
         follow={$smoothFollow}
@@ -1409,6 +1487,7 @@ import { onShortcut } from '../lib/shortcuts';
         the pace. Its starting speed is under Settings → Teleprompter.
       </p>
     </aside>
+    {/if}
   </div>
 
   <!-- Bottom transport (§15.1) — always visible -->
@@ -1632,6 +1711,46 @@ import { onShortcut } from '../lib/shortcuts';
     background: var(--bg-chrome);
     border-bottom: 1px solid var(--border);
   }
+  /*
+   * A status light: a 7px dot and a word (§12.3).
+   *
+   * Deliberately quieter than the pill it replaces. Four of these sit together
+   * and none of them is news — they are the console's resting vital signs, and
+   * a fault has to be able to shout over them. `--live-status-*` colours come
+   * from the shared status tokens so a warning here is the same warning
+   * everywhere else.
+   */
+  .live-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--text-faint);
+  }
+  .status-dot.accent {
+    background: var(--accent);
+  }
+  .status-dot.success {
+    background: var(--success);
+  }
+  .status-dot.warning {
+    background: var(--warning);
+  }
+  .status-dot.danger {
+    background: var(--danger);
+  }
+  .status-dot.neutral {
+    background: var(--text-faint);
+  }
+
   .status-left {
     display: flex;
     align-items: center;
@@ -1875,19 +1994,26 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /* --- main regions --- */
+  /*
+   * OPERATED PANES, not a fixed grid (§12.2).
+   *
+   * This was `grid-template-columns: 200px minmax(0,1fr) 304px` with a media
+   * query that HID the outline below 1100px. Two things were wrong with that:
+   * the widths were the designer's rather than the operator's, and the
+   * disappearance was silent — a rail that vanishes when the window narrows
+   * looks like a bug the first time it happens, and there was no way to ask for
+   * it back.
+   *
+   * Both rails are now dragged, remembered, and toggled from View (⌥⌘O and
+   * ⌥⌘D). The stage preview keeps `flex: 1 1 auto` with `min-width: 0`, so it
+   * takes what is left and shrinks last — §12.2's rule that the least critical
+   * pane collapses before the preview stops being useful.
+   */
   .main {
     flex: 1 1 auto;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 200px minmax(0, 1fr) 304px;
-  }
-  @media (max-width: 1100px) {
-    .main {
-      grid-template-columns: minmax(0, 1fr) 288px;
-    }
-    .outline {
-      display: none;
-    }
+    display: flex;
+    min-width: 0;
   }
 
   .region-label {
@@ -1906,11 +2032,14 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   .outline {
+    /* The width is an inline style from the persisted pane size; the divider
+       beside it is what changes it. No border — the divider draws the line. */
+    flex: 0 0 auto;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-4);
+    padding: var(--space-3);
     background: var(--bg-chrome);
-    border-right: 1px solid var(--border);
   }
   .outline-list {
     list-style: none;
@@ -1962,6 +2091,9 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* --- stage preview --- */
   .preview {
+    /* Takes what is left, shrinks last — §12.2: collapse the least critical
+       pane before the stage preview stops being useful. */
+    flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
     overflow: hidden;
@@ -2024,14 +2156,15 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* --- diagnostics --- */
   .diagnostics {
+    flex: 0 0 auto;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    padding: var(--space-4);
+    padding: var(--space-3);
     background: var(--bg-chrome);
-    border-left: 1px solid var(--border);
   }
   .session-status {
     font-size: var(--text-xs);
