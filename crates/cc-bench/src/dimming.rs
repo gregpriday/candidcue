@@ -33,6 +33,9 @@ fn metric(
 
 fn final_word(engine: &mut Engine, ordinal: usize, heard: &str, at_ms: f64) -> Snapshot {
     engine.handle(SessionEvent::Final {
+        // Synthetic: nothing said about the acoustic end, so the configured
+        // endpoint lag applies exactly as it always has.
+        acoustic_end_ms: None,
         item_id: format!("dimming-{ordinal}"),
         text: heard.to_string(),
         audio_end_ms: at_ms,

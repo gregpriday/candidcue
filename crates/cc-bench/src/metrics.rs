@@ -1047,12 +1047,14 @@ mod tests {
         let mut engine = Engine::new(script, AlignmentConfig::default());
         let anchored = engine.set_manual_position(2, 0.0);
         let provisional = engine.handle(SessionEvent::Final {
+            acoustic_end_ms: None,
             item_id: "one".into(),
             text: "presentor".into(),
             audio_end_ms: 350.0,
             word_times: None,
         });
         let retracted = engine.handle(SessionEvent::Final {
+            acoustic_end_ms: None,
             item_id: "two".into(),
             text: "banana".into(),
             audio_end_ms: 700.0,

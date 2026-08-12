@@ -77,6 +77,24 @@ pub struct Item {
     pub is_final: bool,
     pub audio_start_ms: f64,
     pub audio_end_ms: Option<f64>,
+    /// When the last word of this item was actually SPOKEN, if the host could
+    /// say.
+    ///
+    /// `audio_end_ms` is when the final was produced, which for a silence
+    /// endpoint is a whole endpoint lag after the speaking stopped — that lag
+    /// is what `endpoint_lag_ms` subtracts. The subtraction is a category
+    /// error for the other two ways an utterance ends: a final closed by the
+    /// utterance-length cap, or by an explicit stop, has NO trailing silence,
+    /// so subtracting 1.4 s dates the last word 1.4 seconds before it was
+    /// said, and the display settles onto a pause that never happened.
+    ///
+    /// The engine does not know sherpa's endpoint rules and must not: time
+    /// enters here as explicit audio-clock milliseconds. `src-tauri/src/align`
+    /// maps the recogniser's close reason — and its per-token timestamps,
+    /// where it reports them — onto this field. `None` means "nothing was said
+    /// about it", which is every frame in the frozen corpora, and falls back to
+    /// the configured lag exactly as before.
+    pub acoustic_end_ms: Option<f64>,
     /// Audio clock value when the latest revision of this item arrived.
     pub last_seen_audio_ms: f64,
     pub revision_count: u32,
@@ -121,6 +139,7 @@ impl Ledger {
             is_final: false,
             audio_start_ms,
             audio_end_ms: None,
+            acoustic_end_ms: None,
             last_seen_audio_ms: audio_start_ms,
             revision_count: 0,
             retracted_atoms: 0,
@@ -143,6 +162,7 @@ impl Ledger {
         atoms: Vec<QueryWord>,
         is_final: bool,
         audio_ms: f64,
+        acoustic_end_ms: Option<f64>,
     ) -> u32 {
         // An item can, in principle, receive a transcript before its
         // ItemStarted was observed (reconnect races). Open it here.
@@ -207,6 +227,7 @@ impl Ledger {
         item.last_seen_audio_ms = audio_ms;
         if is_final {
             item.audio_end_ms = Some(audio_ms);
+            item.acoustic_end_ms = acoustic_end_ms;
         }
         retracted
     }
@@ -280,9 +301,25 @@ impl Ledger {
                 continue;
             }
             let start = item.audio_start_ms;
-            let end = match item.audio_end_ms {
-                Some(end) => end - endpoint_lag_ms,
-                None => item.last_seen_audio_ms - partial_lag_ms,
+            /*
+             * When this item stopped being spoken.
+             *
+             * A host-supplied acoustic end wins over the lag arithmetic. It is
+             * either a measurement (the last token's own timestamp) or a
+             * statement that there was no trailing silence to subtract (a
+             * length-cap or explicit-stop close), and both beat a constant
+             * that was inherited from a different recogniser and describes
+             * only the silence-endpoint case.
+             *
+             * The fallback is unchanged, which is what keeps every frozen
+             * fixture replaying identically: none of them carries an acoustic
+             * end, so all of them take the `endpoint_lag_ms` branch exactly as
+             * they always did.
+             */
+            let end = match (item.acoustic_end_ms, item.audio_end_ms) {
+                (Some(acoustic), _) => acoustic,
+                (None, Some(end)) => end - endpoint_lag_ms,
+                (None, None) => item.last_seen_audio_ms - partial_lag_ms,
             }
             .max(start + 1.0);
             let mut resolved = f64::NEG_INFINITY;
@@ -415,7 +452,7 @@ mod tests {
                 measured_start_ms: None,
             })
             .collect();
-        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms)
+        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms, None)
     }
 
     fn ledger_with(texts: &[(&str, bool)]) -> (Ledger, Interner) {
@@ -481,7 +518,7 @@ mod tests {
                 measured_start_ms: times.get(i).copied().flatten(),
             })
             .collect();
-        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms);
+        ledger.revise_atoms(interner, item_id, words, is_final, audio_ms, None);
     }
 
     /// The interpolated times, for comparison. Whatever a measurement does, it
@@ -837,5 +874,83 @@ mod tests {
         assert_eq!(surfaces, vec!["3", "4", "5", "6"]);
         assert_eq!(tail[0].item_index, 0);
         assert_eq!(tail[1].item_index, 1);
+    }
+}
+
+#[cfg(test)]
+mod acoustic_end_tests {
+    use super::*;
+
+    fn interner() -> Interner {
+        Interner::default()
+    }
+
+    fn word(surface: &str) -> QueryWord {
+        QueryWord {
+            surface: surface.to_string(),
+            phonetic: crate::normalize::phonetic_key(surface),
+            filler: false,
+            stopword: false,
+            measured_start_ms: None,
+        }
+    }
+
+    /// Three atoms in one item, closed at `audio_end_ms`, with the host's
+    /// answer for when speaking actually stopped.
+    fn tail_of(acoustic_end_ms: Option<f64>) -> Vec<f64> {
+        let mut ledger = Ledger::default();
+        let mut interner = interner();
+        ledger.item_started("i1", 1_000.0);
+        ledger.revise_atoms(
+            &mut interner,
+            "i1",
+            vec![word("alpha"), word("bravo"), word("charlie")],
+            true,
+            5_000.0,
+            acoustic_end_ms,
+        );
+        ledger
+            .tail(16, 300.0, 1_400.0)
+            .into_iter()
+            .map(|atom| atom.audio_ms)
+            .collect()
+    }
+
+    /// The behaviour every frozen corpus depends on. None of them carries an
+    /// acoustic end, so all of them must take the `endpoint_lag_ms` branch
+    /// exactly as they did before the field existed — otherwise every recorded
+    /// baseline in `bench/` silently stops describing the code.
+    #[test]
+    fn without_an_acoustic_end_the_configured_lag_still_applies() {
+        let times = tail_of(None);
+        // The item spans 1000 → (5000 - 1400); the last atom sits at the end.
+        assert_eq!(times.last().copied(), Some(3_600.0));
+    }
+
+    /// The correctness fix. A final closed by the utterance-length cap or by an
+    /// explicit stop has NO trailing silence, so the host reports the receipt
+    /// time as the acoustic end — and subtracting 1.4 s from it, as the engine
+    /// used to do unconditionally, dated the last word 1.4 seconds before it
+    /// was said.
+    #[test]
+    fn an_acoustic_end_overrides_the_lag_entirely() {
+        let times = tail_of(Some(5_000.0));
+        assert_eq!(
+            times.last().copied(),
+            Some(5_000.0),
+            "a host-supplied end must not have a lag subtracted from it as well"
+        );
+    }
+
+    /// Anti-vacuity: the two branches must actually differ. If the override
+    /// were dropped, both tests above would agree and neither would fail.
+    #[test]
+    fn the_two_branches_disagree_by_the_whole_endpoint_lag() {
+        let with_lag = tail_of(None).last().copied().expect("atoms");
+        let measured = tail_of(Some(5_000.0)).last().copied().expect("atoms");
+        assert!(
+            (measured - with_lag - 1_400.0).abs() < 1.0,
+            "the difference is the whole endpoint lag: {measured} vs {with_lag}"
+        );
     }
 }

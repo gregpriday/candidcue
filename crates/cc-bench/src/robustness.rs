@@ -64,7 +64,15 @@ fn observed_series(
                 audio_ms: *audio_ms,
                 word_times: None,
             },
-            SttFrame::Final { item_id, text, audio_end_ms, .. } => SessionEvent::Final {
+            SttFrame::Final {
+                item_id,
+                text,
+                audio_end_ms,
+                close_reason,
+                acoustic_end_ms,
+                ..
+            } => SessionEvent::Final {
+                acoustic_end_ms: close_reason.acoustic_end(*audio_end_ms, *acoustic_end_ms),
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
@@ -96,11 +104,25 @@ fn map_text(events: &[SttFrame], f: impl Fn(&str) -> String) -> Vec<SttFrame> {
                 wall_ms: *wall_ms,
                 word_times: None,
             },
-            SttFrame::Final { item_id, text, audio_end_ms, wall_ms, .. } => SttFrame::Final {
+            SttFrame::Final {
+                item_id,
+                text,
+                audio_end_ms,
+                wall_ms,
+                close_reason,
+                ..
+            } => SttFrame::Final {
                 item_id: item_id.clone(),
                 text: f(text),
                 audio_end_ms: *audio_end_ms,
                 wall_ms: *wall_ms,
+                // Preserved: this transform perturbs the TEXT, and how the
+                // utterance closed is not a property of its text.
+                close_reason: *close_reason,
+                // Dropped with `word_times`, and for the same reason — a
+                // rewritten hypothesis has different words, so per-word timing
+                // and the last word's own time no longer describe it.
+                acoustic_end_ms: None,
                 word_times: None,
             },
             other => other.clone(),
@@ -144,11 +166,24 @@ fn scale_time(events: &[SttFrame], scale: f64) -> Vec<SttFrame> {
                 // the word outside the utterance it belongs to.
                 word_times: scale_word_times(word_times, scale),
             },
-            SttFrame::Final { item_id, text, audio_end_ms, wall_ms, word_times } => SttFrame::Final {
+            SttFrame::Final {
+                item_id,
+                text,
+                audio_end_ms,
+                wall_ms,
+                close_reason,
+                acoustic_end_ms,
+                word_times,
+            } => SttFrame::Final {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: audio_end_ms * scale,
                 wall_ms: wall_ms * scale,
+                close_reason: *close_reason,
+                // Scaled with everything else: this perturbation stretches the
+                // take's clock, and a measurement left at its old value would
+                // fall outside the utterance it belongs to.
+                acoustic_end_ms: acoustic_end_ms.map(|ms| ms * scale),
                 word_times: scale_word_times(word_times, scale),
             },
             other => other.clone(),
@@ -687,6 +722,8 @@ mod tests {
                 text: "alpha bravo charlie delta echo".into(),
                 audio_end_ms: 2_600.0,
                 wall_ms: 2_600.0,
+                close_reason: cc_stt::CloseReason::Silence,
+                acoustic_end_ms: None,
                 word_times: None,
             },
         ]

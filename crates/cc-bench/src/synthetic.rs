@@ -200,6 +200,18 @@ pub fn generate_events(gold: &GoldTimeline, corruption: &Corruption, seed: u64) 
             text,
             audio_end_ms: final_at,
             wall_ms: final_at,
+            /*
+             * Tier A models a silence endpoint: `final_at` is placed an
+             * endpoint lag after the last synthetic word, which is exactly
+             * what an endpoint rule firing on trailing silence produces.
+             * Saying so explicitly keeps the synthetic scenarios exercising
+             * the same ledger branch the recorded corpora do.
+             */
+            close_reason: cc_stt::CloseReason::Silence,
+            // Synthetic audio has no recogniser and therefore no measurement.
+            // `None` means "nothing was said about timing", which the ledger
+            // must not confuse with a measurement of zero.
+            acoustic_end_ms: None,
             word_times: None,
         });
     }

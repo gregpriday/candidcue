@@ -73,7 +73,22 @@ pub enum SttFrame {
         generation: u64,
         item_id: String,
         text: String,
+        /// The audio clock when the final was produced — a receipt time.
         audio_end_ms: f64,
+        /// When the last word was actually SPOKEN, where that can be said.
+        ///
+        /// Carried across the boundary rather than folded into
+        /// `audio_end_ms` because they answer different questions and only one
+        /// of them is a measurement. The alignment host uses it to date the
+        /// end of the utterance; without it the engine subtracts a single
+        /// endpoint-lag constant, which is right for a silence endpoint and a
+        /// category error for a length cap or an explicit stop — both of which
+        /// have no trailing silence to subtract. See `cc_stt::CloseReason`.
+        ///
+        /// Skipped when absent so the renderer's payload is unchanged for the
+        /// frames that cannot say.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        acoustic_end_ms: Option<f64>,
     },
     /// `connecting` | `connected` | `degraded` | `closed`
     #[serde(rename_all = "camelCase")]
@@ -357,6 +372,8 @@ fn run_session<R: tauri::Runtime>(
             item_id,
             text,
             audio_end_ms,
+            close_reason,
+            acoustic_end_ms,
             word_times,
             ..
         } => emit_transcript(
@@ -366,6 +383,10 @@ fn run_session<R: tauri::Runtime>(
                 item_id,
                 text,
                 audio_end_ms,
+                // The one translation, shared with the offline replay harness
+                // so a benchmark number is a statement about the engine rather
+                // than about the benchmark.
+                acoustic_end_ms: close_reason.acoustic_end(audio_end_ms, acoustic_end_ms),
             },
             audio_end_ms,
             word_times.as_deref(),
@@ -519,6 +540,7 @@ mod tests {
             item_id: "3-0".into(),
             text: "hello".into(),
             audio_end_ms: 2_400.0,
+            acoustic_end_ms: None,
         })
         .unwrap();
         assert_eq!(final_frame["kind"], "final");

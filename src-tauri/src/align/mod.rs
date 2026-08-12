@@ -318,10 +318,14 @@ impl AlignmentState {
                 item_id,
                 text,
                 audio_end_ms,
+                acoustic_end_ms,
             } if *generation == bound => SessionEvent::Final {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
+                // Already translated from the recogniser's close reason in
+                // `speech::session`; the engine only ever sees milliseconds.
+                acoustic_end_ms: *acoustic_end_ms,
                 word_times: timed(),
             },
             // Transport, failure and audio-drop frames say nothing about where
@@ -505,6 +509,7 @@ mod tests {
                     item_id: "7-0".into(),
                     text: heard.into(),
                     audio_end_ms: 3_000.0,
+                    acoustic_end_ms: None,
                 },
                 3_000.0,
             )
@@ -536,6 +541,7 @@ mod tests {
         // corrected end whether or not it was measured.
         let heard = "good morning everyone and welcome to the quarterly review nevertheless";
         let frame = || SttFrame::Final {
+                    acoustic_end_ms: None,
             generation: 7,
             item_id: "7-0".into(),
             text: heard.into(),
@@ -666,6 +672,7 @@ mod tests {
         let snapshot = french
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: "nos revenus ont augmenté de 12,5 pour cent ce trimestre".into(),
@@ -700,6 +707,7 @@ mod tests {
         state.bind_stream(2);
         let stale = state.observe(
             &SttFrame::Final {
+                    acoustic_end_ms: None,
                 generation: 1,
                 item_id: "1-0".into(),
                 text: "good morning everyone".into(),
@@ -728,6 +736,7 @@ mod tests {
         let snapshot = state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 2,
                     item_id: "2-0".into(),
                     text: "good morning everyone and welcome".into(),
@@ -759,6 +768,7 @@ mod tests {
         assert!(state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: "good morning everyone".into(),
@@ -781,6 +791,7 @@ mod tests {
         assert!(state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 2,
                     item_id: "2-0".into(),
                     text: "good morning everyone".into(),
@@ -803,6 +814,7 @@ mod tests {
         assert!(state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 2,
                     item_id: "2-0".into(),
                     text: "good morning".into(),
@@ -814,6 +826,7 @@ mod tests {
         assert!(state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 3,
                     item_id: "3-0".into(),
                     text: "good morning".into(),
@@ -856,6 +869,7 @@ mod tests {
         assert!(state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: "good morning".into(),
@@ -894,6 +908,7 @@ mod tests {
         let snapshot = state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: "we raised twelve dollars million last year".into(),
@@ -932,6 +947,7 @@ mod tests {
             let snapshot = state
                 .observe(
                     &SttFrame::Final {
+                    acoustic_end_ms: None,
                         generation: 1,
                         item_id: format!("1-{i}"),
                         text: (*text).into(),
@@ -967,6 +983,7 @@ mod tests {
         let snapshot = state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: heard,
@@ -1047,6 +1064,7 @@ mod tests {
         let snapshot = state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 2,
                     item_id: "2-0".into(),
                     text: "completely different".into(),
@@ -1161,6 +1179,7 @@ mod starter_script_tests {
             last = state
                 .observe(
                     &SttFrame::Final {
+                    acoustic_end_ms: None,
                         generation: 1,
                         item_id: (*item_id).to_string(),
                         text: (*final_text).to_string(),
@@ -1409,6 +1428,7 @@ mod canonicalization_contract_tests {
         let snapshot = state
             .observe(
                 &SttFrame::Final {
+                    acoustic_end_ms: None,
                     generation: 1,
                     item_id: "1-0".into(),
                     text: "welcome to r and d this quarter".into(),

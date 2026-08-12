@@ -76,7 +76,25 @@ pub enum SessionEvent {
     Final {
         item_id: String,
         text: String,
+        /// The audio clock when the final was PRODUCED — not when the last
+        /// word was spoken.
         audio_end_ms: f64,
+        /// When the last word was actually spoken, if the host could say.
+        ///
+        /// `audio_end_ms` is a receipt time. For a silence endpoint it runs a
+        /// whole endpoint lag after the speaking stopped, and
+        /// `AlignmentConfig::endpoint_lag_ms` subtracts that. For the other two
+        /// ways an utterance closes — the length cap, or an explicit stop —
+        /// there is no trailing silence at all, and that subtraction dates the
+        /// last word before it happened.
+        ///
+        /// The engine does not know the recogniser's endpoint rules and must
+        /// not: time enters as explicit audio-clock milliseconds, and
+        /// `src-tauri/src/align` does the translation from
+        /// `cc_stt::CloseReason` and per-token timestamps. `None` means
+        /// "nothing was said about it" — every frame in the frozen corpora —
+        /// and takes the configured lag exactly as before.
+        acoustic_end_ms: Option<f64>,
         /// See [`SessionEvent::Partial::word_times`].
         word_times: Option<Vec<TranscriptWordTime>>,
     },
@@ -545,6 +563,8 @@ impl Engine {
                     atoms,
                     false,
                     audio_ms,
+                    // A partial has not ended, so there is no end to date.
+                    None,
                 );
                 self.update(audio_ms)
             }
@@ -552,6 +572,7 @@ impl Engine {
                 item_id,
                 text,
                 audio_end_ms,
+                acoustic_end_ms,
                 word_times,
             } => {
                 let atoms = self.query_words_for(&text, word_times.as_deref());
@@ -561,6 +582,7 @@ impl Engine {
                     atoms,
                     true,
                     audio_end_ms,
+                    acoustic_end_ms,
                 );
                 self.update(audio_end_ms)
             }
@@ -1916,6 +1938,10 @@ mod tests {
             item_id: format!("item-{ordinal}"),
             text: text.to_string(),
             audio_end_ms: at_ms,
+            // The default for every existing test: nothing said about the
+            // acoustic end, so the configured endpoint lag applies exactly as
+            // it did before this field existed.
+            acoustic_end_ms: None,
             word_times: None,
         })
     }
@@ -1961,6 +1987,7 @@ mod tests {
             });
             engine
                 .handle(SessionEvent::Final {
+            acoustic_end_ms: None,
                     item_id: "item-0".into(),
                     text: heard.to_string(),
                     audio_end_ms: 4_000.0,

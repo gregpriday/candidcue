@@ -101,6 +101,8 @@ pub fn replay(
                 item_id,
                 text,
                 audio_end_ms,
+                close_reason,
+                acoustic_end_ms,
                 word_times,
                 ..
             } => (
@@ -108,6 +110,11 @@ pub fn replay(
                     item_id: item_id.clone(),
                     text: text.clone(),
                     audio_end_ms: *audio_end_ms,
+                    // The same translation the live host does, from the same
+                    // function — the harness has to feed the engine exactly
+                    // what the app does, or a benchmark number is a statement
+                    // about the benchmark.
+                    acoustic_end_ms: close_reason.acoustic_end(*audio_end_ms, *acoustic_end_ms),
                     word_times: engine_word_times(word_times),
                 },
                 *audio_end_ms,

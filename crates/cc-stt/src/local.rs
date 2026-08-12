@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 
-use crate::{SttFrame, WordTime};
+use crate::{CloseReason, SttFrame, WordTime};
 
 /// The token table. Every sherpa transducer bundle names this the same.
 pub const TOKENS_FILE: &str = "tokens.txt";
@@ -421,6 +421,11 @@ pub struct LocalRecognizer {
     /// than for the one resident in memory. Load-time and session-time tuning
     /// reaching different answers is not a bug worth being able to have.
     prime_ms: u32,
+    /// Rule 3's hard utterance cap, in seconds, carried for the same reason as
+    /// `prime_ms`: a session has to know it to tell a length-cap endpoint from
+    /// a silence one, and asking a freshly built default would answer for
+    /// whichever model happened to be first in the crate.
+    utterance_cap_seconds: f32,
 }
 
 impl LocalRecognizer {
@@ -444,6 +449,7 @@ impl LocalRecognizer {
         sys.rule1_min_trailing_silence = config.rule1_min_trailing_silence;
         sys.rule2_min_trailing_silence = config.rule2_min_trailing_silence;
         sys.rule3_min_utterance_length = config.rule3_min_utterance_length;
+        let utterance_cap_seconds = config.rule3_min_utterance_length;
         sys.blank_penalty = config.blank_penalty;
         sys.max_active_paths = config.max_active_paths;
 
@@ -451,6 +457,7 @@ impl LocalRecognizer {
             .map(|inner| Self {
                 inner,
                 prime_ms: config.prime_ms,
+                utterance_cap_seconds,
             })
             .ok_or_else(|| {
                 format!(
@@ -498,6 +505,9 @@ impl LocalRecognizer {
             open_item_start_ms: 0.0,
             prime_offset_ms: prime_ms as f64,
             last_word_times: None,
+            // Carried so `drain` can tell a length-cap endpoint from a silence
+            // one — see `close_item`.
+            utterance_cap_ms: f64::from(self.utterance_cap_seconds) * 1000.0,
         }
     }
 }
@@ -524,6 +534,13 @@ pub struct LocalSession<'a> {
     /// inside it is held to — a word cannot have been spoken before the
     /// utterance containing it began.
     open_item_start_ms: f64,
+    /// Rule 3's hard utterance cap, in milliseconds.
+    ///
+    /// Kept on the session because `is_endpoint` is one boolean over three
+    /// rules and the C API does not say which fired. An utterance that has run
+    /// this long was closed by the cap, which means there is no trailing
+    /// silence — the distinction the alignment ledger needs. See `close_item`.
+    utterance_cap_ms: f64,
     /// How far the recogniser's own clock runs AHEAD of the audio clock.
     ///
     /// Priming feeds the decoder silence that is deliberately invisible to
@@ -600,7 +617,29 @@ impl LocalSession<'_> {
         // Endpointing is only meaningful once the pending frames are decoded,
         // which is why this follows the loop rather than sharing it.
         if self.recognizer.is_endpoint(&self.stream) {
-            self.close_item(emit);
+            /*
+             * WHICH endpoint rule fired, inferred from the utterance's length.
+             *
+             * sherpa's `is_endpoint` is one boolean over three rules, and the C
+             * API does not say which one tripped it. Rule 3 is the hard length
+             * cap, so an utterance that has reached that length was closed by
+             * it — there is no trailing silence and the speaker was very likely
+             * mid-sentence. Rules 1 and 2 both require silence.
+             *
+             * Inference, and labelled as such: a rule-2 endpoint landing within
+             * a frame of the cap is indistinguishable from a rule-3 one here.
+             * That boundary case is rare and the two answers differ by at most
+             * one endpoint lag, which is precisely the error this replaces on
+             * every LONG utterance rather than one unlucky one.
+             */
+            let spoken_ms = self.audio_ms() - self.open_item_start_ms;
+            let cap_ms = self.utterance_cap_ms;
+            let reason = if spoken_ms >= cap_ms {
+                CloseReason::LengthCap
+            } else {
+                CloseReason::Silence
+            };
+            self.close_item(emit, reason);
             self.recognizer.reset(&self.stream);
         }
     }
@@ -710,7 +749,15 @@ impl LocalSession<'_> {
     }
 
     /// Close the open utterance, if any, with the last hypothesis as its final.
-    fn close_item(&mut self, emit: &mut impl FnMut(SttFrame)) {
+    ///
+    /// `reason` is not decoration. The alignment ledger corrects `audio_end_ms`
+    /// by an endpoint-lag constant to recover when the last word was spoken,
+    /// and that correction is only meaningful when an endpoint rule waited out
+    /// a stretch of silence. A cap or an explicit finish has no trailing
+    /// silence at all, so the same subtraction dates the last word before it
+    /// happened. Until this argument existed the ledger could not tell the
+    /// three apart — see `AlignmentConfig::endpoint_lag_ms`.
+    fn close_item(&mut self, emit: &mut impl FnMut(SttFrame), reason: CloseReason) {
         let Some(item_id) = self.open_item.take() else {
             // Endpoint on silence: reset the decoder, mint nothing.
             self.last_text.clear();
@@ -719,15 +766,25 @@ impl LocalSession<'_> {
         };
         let text = std::mem::take(&mut self.last_text);
         self.last_emitted_ms = self.last_emitted_ms.max(self.audio_ms());
+        // Taken, not copied: the next utterance decodes in a new segment
+        // against a new origin, and inheriting these would date its first
+        // words to the previous one.
+        let word_times = self.last_word_times.take();
+        // The last token's own measured time, where there is one. Reported
+        // beside the receipt clock rather than instead of it: they answer
+        // different questions and only this one is a measurement.
+        let acoustic_end_ms = word_times
+            .as_ref()
+            .and_then(|times| times.last())
+            .map(|word| word.start_ms);
         emit(SttFrame::Final {
             item_id,
             text,
             audio_end_ms: self.audio_ms(),
             wall_ms: self.wall_ms(),
-            // Taken, not copied: the next utterance decodes in a new segment
-            // against a new origin, and inheriting these would date its first
-            // words to the previous one.
-            word_times: self.last_word_times.take(),
+            close_reason: reason,
+            acoustic_end_ms,
+            word_times,
         });
     }
 
@@ -743,7 +800,9 @@ impl LocalSession<'_> {
             self.publish(emit);
         }
         self.publish(emit);
-        self.close_item(emit);
+        // The take ended. No endpoint rule fired and there is no trailing
+        // silence — the audio simply stops.
+        self.close_item(emit, CloseReason::ExplicitFinish);
         emit(SttFrame::Closed {});
     }
 }
