@@ -1781,3 +1781,62 @@ async fn a_marker_flagged_completed_is_retired_rather_than_replayed() {
     assert!(outcome.is_none(), "it must not run a second time");
     assert!(!marker.exists(), "and the marker is retired");
 }
+
+#[tokio::test]
+async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_opens() {
+    /*
+     * Three renames are not one operation.
+     *
+     * A rebuild moves `candidcue.sqlite3`, then `-wal`, then `-shm`. A crash
+     * between the first and the second leaves a WAL live beside no database —
+     * and the next launch creates a fresh database at that path, whereupon
+     * SQLite finds a WAL whose header belongs to a file that no longer exists
+     * and discards it. Every page committed to that WAL and not yet
+     * checkpointed goes with it, so the copy the rebuild promised to keep is
+     * missing exactly the most recent work.
+     *
+     * The rebuild now writes its intent down first, and `database::init`
+     * finishes the move before opening anything.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(dir.path().join("quarantine")).expect("quarantine");
+
+    // The state the crash leaves: the database already moved, its WAL not.
+    let quarantine = dir.path().join("quarantine").join("pre-rebuild-interrupted");
+    fs::create_dir_all(&quarantine).expect("generation");
+    fs::write(quarantine.join("candidcue.sqlite3"), b"the moved database").expect("moved");
+    fs::write(dir.path().join("candidcue.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
+    fs::write(dir.path().join("candidcue.sqlite3-shm"), b"orphaned shm").expect("orphan shm");
+    fs::write(
+        dir.path().join("rebuild-pending.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "quarantine": quarantine.to_string_lossy(),
+        }))
+        .expect("json"),
+    )
+    .expect("marker");
+
+    // A launch. `init` finishes the rebuild before it opens anything.
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    pool.close().await;
+
+    assert!(
+        quarantine.join("candidcue.sqlite3-wal").is_file(),
+        "the orphaned WAL must be kept beside the database it belongs to"
+    );
+    assert!(quarantine.join("candidcue.sqlite3-shm").is_file());
+    assert_eq!(
+        fs::read(quarantine.join("candidcue.sqlite3-wal")).expect("read"),
+        b"orphaned wal",
+        "and it must be the same bytes, not a WAL SQLite made for the new database"
+    );
+    assert!(
+        !dir.path().join("rebuild-pending.json").exists(),
+        "a finished rebuild retires its marker"
+    );
+    // The database that was quarantined is untouched by any of this.
+    assert_eq!(
+        fs::read(quarantine.join("candidcue.sqlite3")).expect("read"),
+        b"the moved database"
+    );
+}

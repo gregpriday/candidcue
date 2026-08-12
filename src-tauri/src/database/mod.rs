@@ -167,6 +167,17 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
      * scripts tree has already moved.
      */
     let paths = crate::scripts::DataPaths::new(app_data_dir.to_path_buf());
+
+    /*
+     * A rebuild that was interrupted between its three renames, finished first.
+     *
+     * It only tidies leftovers into the quarantine directory the rebuild was
+     * already using, and it has to happen before SQLite sees the data folder:
+     * an orphaned `-wal` beside a fresh database is discarded on open, taking
+     * the pages that were only ever in it.
+     */
+    crate::backup::finish_interrupted_rebuild(&paths)?;
+
     crate::backup::apply_pending_restore(&paths).await?;
 
     // Then: is this a database from before the 1.0 schema baseline? See

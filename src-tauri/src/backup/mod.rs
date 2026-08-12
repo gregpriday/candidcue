@@ -468,6 +468,16 @@ struct PendingRestore {
 /// rewritten on every attempt and a crash during that write would truncate the
 /// only record of what is in flight. A rename is atomic within a directory.
 fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError> {
+    write_json_durably(marker, pending)
+}
+
+/// Write one small JSON record so that it survives a power loss.
+///
+/// Sibling temporary file, flush, rename, flush the directory. Shared by the
+/// restore marker and the rebuild marker: both are the only record of an
+/// operation that is part way through, and a stale or torn one is worse than
+/// none.
+fn write_json_durably<T: Serialize>(marker: &Path, value: &T) -> Result<(), AppError> {
     let temporary = marker.with_extension("json.writing");
     /*
      * Flushed to the platter, not just to the page cache.
@@ -480,7 +490,7 @@ fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError>
      */
     {
         let file = std::fs::File::create(&temporary)?;
-        let bytes = serde_json::to_vec_pretty(pending)
+        let bytes = serde_json::to_vec_pretty(value)
             .map_err(|e| AppError::Internal(e.to_string()))?;
         use std::io::Write;
         (&file).write_all(&bytes)?;
@@ -1349,6 +1359,83 @@ fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Resu
 /// history, which this cannot reconstruct.
 ///
 /// Returns where the old database went.
+/// The marker a rebuild leaves while it is moving the database aside.
+const PENDING_REBUILD: &str = "rebuild-pending.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingRebuild {
+    quarantine: String,
+}
+
+/// Finish a rebuild that was interrupted between its renames.
+///
+/// ## The window this closes
+///
+/// A rebuild moves `candidcue.sqlite3`, then `-wal`, then `-shm`. Three
+/// renames, and a crash between the first and the second leaves the WAL live
+/// next to no database. The next launch creates a fresh database at that path,
+/// SQLite finds a WAL whose header belongs to a file that is no longer there,
+/// and discards it — taking with it every page that had been committed to the
+/// WAL and not yet checkpointed. The quarantined copy the rebuild promised to
+/// keep is then missing exactly those pages.
+///
+/// So the intent is written down first, durably, and this runs at the top of
+/// `database::init` — before anything opens the database — to move whatever is
+/// still live into the same quarantine directory the rebuild was using.
+///
+/// Best effort by design: a rebuild that cannot be finished must not stop the
+/// application from opening, because the whole point of a rebuild is that the
+/// user is already having a bad day.
+pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
+    let marker = paths.root().join(PENDING_REBUILD);
+    if !marker.exists() {
+        return Ok(());
+    }
+    let pending: PendingRebuild = match std::fs::read(&marker)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+    {
+        Some(pending) => pending,
+        None => {
+            // Unreadable: nothing can be done with it, and leaving it would
+            // stall every future launch on the same failure.
+            let _ = std::fs::remove_file(&marker);
+            return Ok(());
+        }
+    };
+    let quarantine = PathBuf::from(&pending.quarantine);
+    std::fs::create_dir_all(&quarantine)?;
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("{DATABASE_NAME}{suffix}");
+        let from = paths.root().join(&name);
+        if !from.exists() {
+            continue;
+        }
+        let to = quarantine.join(&name);
+        if to.exists() {
+            /*
+             * The rebuild already moved this one, and what is live now arrived
+             * afterwards — a WAL SQLite recreated, most likely. It cannot be
+             * put on top of the original, and it is not the original, so it
+             * goes beside it under a name that says what it is.
+             */
+            std::fs::rename(&from, quarantine.join(format!("{name}.after-interruption")))?;
+        } else {
+            std::fs::rename(&from, &to)?;
+        }
+    }
+    sync_dir(&quarantine)?;
+    sync_dir(paths.root())?;
+    std::fs::remove_file(&marker)?;
+    sync_dir(paths.root())?;
+    tracing::warn!(
+        quarantine = %quarantine.display(),
+        "finished a rebuild that had been interrupted part way through"
+    );
+    Ok(())
+}
+
 pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
@@ -1358,6 +1445,21 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
     let quarantine_root = paths.quarantine_dir();
     sync_dir(&quarantine_root)?;
     sync_dir(parent_of(&quarantine_root))?;
+
+    /*
+     * The intent, durably, before the first rename.
+     *
+     * Three renames are not one operation, and a crash between them leaves a
+     * WAL with no database — see `finish_interrupted_rebuild`, which is what
+     * reads this.
+     */
+    let marker = paths.root().join(PENDING_REBUILD);
+    write_json_durably(
+        &marker,
+        &PendingRebuild {
+            quarantine: quarantine.to_string_lossy().to_string(),
+        },
+    )?;
 
     /*
      * Rename first and ask questions after, rather than `exists()` then rename.
@@ -1409,6 +1511,10 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
          Nothing deletes this folder automatically.\n",
     )
     .ok();
+
+    // Done: all three are where they belong, so the intent is retired.
+    std::fs::remove_file(&marker)?;
+    sync_dir(paths.root())?;
 
     if !moved {
         tracing::warn!("rebuild requested but there was no database to move aside");
