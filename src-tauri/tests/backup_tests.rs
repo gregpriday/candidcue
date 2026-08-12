@@ -1148,3 +1148,237 @@ fn glob_sources() -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+/// Pin the quarantine generation in the marker so a test can pre-place an
+/// obstruction inside it. The generation is normally minted at runtime.
+fn pin_generation(dir: &Path, generation: &str) -> std::path::PathBuf {
+    let marker = dir.join("restore-pending.json");
+    let mut pending: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker).expect("marker")).expect("parses");
+    pending["quarantineGeneration"] = serde_json::json!(generation);
+    fs::write(&marker, serde_json::to_vec_pretty(&pending).expect("json")).expect("write");
+    dir.join("quarantine").join(generation)
+}
+
+#[tokio::test]
+async fn a_rollback_never_deletes_something_it_did_not_move() {
+    /*
+     * The blocker a verification pass found in the first version of this
+     * rollback, and it destroyed data on a reachable sequence:
+     *
+     *   1. the scripts tree evacuates into quarantine;
+     *   2. the database move FAILS — so the database is still live, untouched
+     *      and correct;
+     *   3. the rollback deleted the live scripts AND the live database
+     *      unconditionally, then restored whatever it found in quarantine;
+     *   4. there was no quarantined database, so it was simply gone.
+     *
+     * The failure is injected by pre-placing a non-empty DIRECTORY at the
+     * quarantine path the database would move to: a rename onto that fails,
+     * and it is not `EXDEV`, so `move_or_copy` propagates rather than copying.
+     * The scripts move fine, so the evacuation is genuinely half-done — the
+     * exact state that used to be unrecoverable.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Precious", "# Precious\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker"))
+        .expect("obstruct the database's quarantine path");
+
+    let live_db = h.dir.path().join("candidcue.sqlite3");
+    /*
+     * IDENTITY, not bytes.
+     *
+     * The first version compared the file's contents before and after, and
+     * failed intermittently: closing the pool can leave SQLite checkpointing,
+     * so the live database's bytes are allowed to settle after the read
+     * without anything being wrong. What must not change is that this is the
+     * same file — a delete-and-copy takes a new inode, which is precisely what
+     * the old rollback did to a database it had never evacuated.
+     */
+    #[cfg(unix)]
+    let before = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(&live_db).expect("the live database exists before the attempt").ino()
+    };
+
+    let outcome = backup::apply_pending_restore(&h.paths).await;
+    assert!(outcome.is_err(), "a half-done evacuation must fail the restore");
+
+    /*
+     * The component that was never moved must still be there. This is the
+     * whole assertion: the old rollback deleted it.
+     */
+    assert!(live_db.is_file(), "the rollback deleted a database it never evacuated");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            fs::metadata(&live_db).expect("read").ino(),
+            before,
+            "and it must be the SAME file, not a copy written over it"
+        );
+    }
+
+    // And the scripts, which WERE evacuated, must have been put back.
+    let restored: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts must exist again")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(
+        restored.iter().any(|body| body.contains("Keep me.")),
+        "the evacuated scripts must be rolled back, found {restored:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_reuses_the_first_attempt_s_quarantine_generation() {
+    /*
+     * A fresh timestamped quarantine directory per ATTEMPT loses the identity
+     * of the original state: after a crash the next attempt would quarantine
+     * the previous attempt's partial output, and the real original would be
+     * two generations back with nothing naming it. The generation is minted
+     * once and recorded in the marker.
+     */
+    let h = harness().await;
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // Fail the same way, twice.
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker")).expect("obstruct");
+
+    let _ = backup::apply_pending_restore(&h.paths).await;
+    let after_first: serde_json::Value = serde_json::from_slice(
+        &fs::read(h.dir.path().join("restore-pending.json"))
+            .expect("the marker survives a failure"),
+    )
+    .expect("parses");
+    assert_eq!(after_first["attempts"], serde_json::json!(1));
+    assert_eq!(after_first["quarantineGeneration"], serde_json::json!("test-generation"));
+
+    let _ = backup::apply_pending_restore(&h.paths).await;
+    let after_second: serde_json::Value = serde_json::from_slice(
+        &fs::read(h.dir.path().join("restore-pending.json")).expect("still there"),
+    )
+    .expect("parses");
+    assert_eq!(
+        after_second["quarantineGeneration"],
+        serde_json::json!("test-generation"),
+        "a retry must evacuate into the SAME generation as the first attempt"
+    );
+    assert_eq!(after_second["attempts"], serde_json::json!(2));
+}
+
+#[tokio::test]
+async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
+    /*
+     * The state a crash actually leaves, and the one the straight-line
+     * evacuation could not survive: the original is ALREADY in quarantine and
+     * the live paths hold however much of the export had been copied before
+     * the process died.
+     *
+     * The retry then tried to move the live scripts onto the quarantined
+     * original — a rename onto a non-empty directory, which is not `EXDEV`, so
+     * `move_or_copy` propagated it — and failed identically on every launch
+     * until the attempt limit retired the restore. The data was never lost (it
+     * is in quarantine), but the restore could never finish and the live tree
+     * stayed half-written.
+     *
+     * The interruption is simulated rather than caused: the test does by hand
+     * exactly what a first attempt does before dying, which is the only way to
+     * reach the state without killing a process mid-syscall.
+     */
+    let h = harness().await;
+    repo::create_script(&h.pool, &h.paths, create_input("Original", "# Original\n\nKeep me."))
+        .await
+        .expect("create");
+
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
+        .await
+        .expect("export");
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("schedule");
+    h.pool.close().await;
+
+    // --- what the interrupted first attempt had already done -----------------
+    let quarantine = pin_generation(h.dir.path(), "test-generation");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+    // 1. the originals, evacuated;
+    fs::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
+    for suffix in ["", "-wal", "-shm"] {
+        let from = h.dir.path().join(format!("candidcue.sqlite3{suffix}"));
+        if from.exists() {
+            fs::rename(&from, quarantine.join(format!("candidcue.sqlite3{suffix}")))
+                .expect("evacuate database");
+        }
+    }
+    // 2. a PARTIAL copy of the export, left live by the crash.
+    let partial = h.paths.scripts_dir().join("half-written");
+    fs::create_dir_all(&partial).expect("partial");
+    fs::write(partial.join("script.md"), "# Truncated").expect("partial body");
+
+    // --- the next launch -----------------------------------------------------
+    let previous = backup::apply_pending_restore(&h.paths)
+        .await
+        .expect("a resumed restore must finish")
+        .expect("a restore ran");
+
+    assert!(
+        !h.dir.path().join("restore-pending.json").exists(),
+        "finishing must retire the marker"
+    );
+    assert!(
+        h.dir.path().join("candidcue.sqlite3").is_file(),
+        "the restored database must be live"
+    );
+
+    let live: Vec<String> = fs::read_dir(h.paths.scripts_dir())
+        .expect("scripts")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| fs::read_to_string(e.path().join("script.md")).ok())
+        .collect();
+    assert!(
+        live.iter().any(|body| body.contains("Keep me.")),
+        "the exported script must be live after the resume, found {live:?}"
+    );
+    assert!(
+        !live.iter().any(|body| body.contains("Truncated")),
+        "and the dead attempt's partial output must not be mixed in with it"
+    );
+
+    // The partial output is set aside, not deleted: nothing in a restore
+    // destroys bytes it did not write.
+    let aside = previous.join("interrupted-attempt-1").join("scripts");
+    assert!(
+        aside.join("half-written").join("script.md").is_file(),
+        "the interrupted attempt's output must be kept at {}",
+        aside.display()
+    );
+    // And the original is still where the first attempt put it.
+    assert!(
+        previous.join("scripts").is_dir(),
+        "the quarantined original must not have been moved or overwritten"
+    );
+}

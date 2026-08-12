@@ -200,10 +200,15 @@ describe('a take reports what was actually saved, not what was configured', () =
      * Retried at the FRONT, so ordering survives. `commitSequence` is unique
      * per session and Rust inserts with `INSERT OR IGNORE`, so retrying an
      * item that did land is a no-op rather than a duplicate row.
+     *
+     * A source scan, and it is only worth what a source scan is worth: it
+     * cannot see WHEN the rejection arrives, which is where the interesting
+     * failures are. `session-live-wiring.test.ts` drives a deferred append
+     * across a take boundary and asserts the behaviour.
      */
     const flush = source.slice(
       source.indexOf('function flushTranscript'),
-      source.indexOf('function flushTranscript') + 2500,
+      source.indexOf('\n}', source.indexOf('function flushTranscript')),
     );
     expect(flush, 'the items must go back in the buffer').toMatch(
       /transcriptBuffer = \[\.\.\.ready, \.\.\.transcriptBuffer\]/,

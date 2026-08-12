@@ -408,10 +408,10 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * Anything startup reconciliation repaired, collected now that there
          * is a window to tell.
          *
-         * Rust emits `diagnostic://warning` for this too, but that emit
-         * happens inside `setup` — before this webview has run any JavaScript
-         * — so it can land on a page with no listeners and vanish. Asking is
-         * the delivery that cannot be raced.
+         * Rust used to emit `diagnostic://warning` for this, from inside
+         * `setup` — before this webview had run any JavaScript — so it landed
+         * on a page with no listeners and vanished. Asking is the delivery that
+         * cannot be raced, and it is now the only one.
          */
         void getStartupFindings()
           .then((findings) => {

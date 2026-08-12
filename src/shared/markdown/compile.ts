@@ -1686,7 +1686,20 @@ function finalize(
     for (const range of grammaticalRanges) {
       let last: TokenDraft | undefined;
       for (const token of draft.tokens) {
-        if (token.textStart >= range.start && token.textStart < range.end) last = token;
+        if (token.textStart < range.start || token.textStart >= range.end) continue;
+        /*
+         * The last token that will actually BE EMITTED, not the last draft.
+         *
+         * The emit loop below drops any token whose `normalizeToken` comes back
+         * empty — a few Unicode letters normalise to a combining mark and are
+         * then stripped — so marking the last draft could put the boundary on a
+         * token that never reaches the engine, and the sentence end would
+         * vanish. Inside a list item that is unrecoverable: the navigation-unit
+         * fallback covers only the end of the whole item, which is the boundary
+         * this field exists to improve on.
+         */
+        if (!normalizeToken(token.surface)) continue;
+        last = token;
       }
       if (last) grammaticalEndOffsets.add(last.textStart);
     }

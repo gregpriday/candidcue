@@ -135,9 +135,10 @@ export function describeBootFailure(status: BootStatusReport): string {
  *
  * Read once and cleared by Rust. Reconciliation runs inside Tauri's setup hook,
  * before the control webview has executed a line of JavaScript, so the
- * `diagnostic://warning` it emits can land on a page with no listeners — the
- * Rust comment called the emit "best effort" and pointed at a diagnostics file
- * as the fallback, which is a file nobody opens.
+ * `diagnostic://warning` it used to emit landed on a page with no listeners —
+ * the Rust comment called the emit "best effort" and pointed at a diagnostics
+ * file as the fallback, which is a file nobody opens. That emit is gone; this
+ * is the delivery.
  *
  * A repair that rewrote somebody's script index is worth telling them about,
  * so the findings wait to be collected rather than being shouted into an empty

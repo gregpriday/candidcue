@@ -27,13 +27,19 @@ pub const IDENTIFY_LABEL_PREFIX: &str = "identify-";
 pub mod events {
     // Rust → control.
     /*
-     * `SCRIPT_EXTERNAL_CHANGE` and `IDENTIFY_DISPLAYS` used to be declared
-     * here. Both were emitted to control and neither had a listener, because
-     * the command each accompanied already returns the fact — `get_script`
-     * carries `externallyChanged`, and `identify_displays` returns its
-     * session. An event nobody consumes is not a feature that is waiting to be
-     * wired: it is a second delivery channel that can arrive before the reply
-     * it belongs to.
+     * `SCRIPT_EXTERNAL_CHANGE`, `IDENTIFY_DISPLAYS` and `DIAGNOSTIC_WARNING`
+     * used to be declared here. All three were emitted to control and none had
+     * a listener, because what each accompanied already returns the fact —
+     * `get_script` carries `externallyChanged`, `identify_displays` returns its
+     * session, and startup findings are collected by `get_startup_findings`.
+     * An event nobody consumes is not a feature waiting to be wired: it is a
+     * second delivery channel that can arrive before the reply it belongs to.
+     *
+     * `IDENTIFY_DISPLAYS` outlived its emitter as an unused constant, which is
+     * how it came to be described as removed on one line and declared on the
+     * next. The reverse half of `stage_event_names_match_ts_contract` now
+     * covers every scheme rather than `stage://` alone, so a constant that
+     * survives its use has one fewer place to hide.
      */
     pub const STAGE_READY: &str = "stage://ready";
     pub const STAGE_CLOSED: &str = "stage://closed";
@@ -64,8 +70,6 @@ pub mod events {
     /// out to every webview's listeners regardless of target, so an event
     /// control emits must not share a name with one control listens for.
     pub const SHUTDOWN_COMPLETE: &str = "app://shutdown-complete";
-    pub const DIAGNOSTIC_WARNING: &str = "diagnostic://warning";
-    pub const IDENTIFY_DISPLAYS: &str = "app://identify-displays";
     /// Rust → control: the same `AlignmentSnapshot` the stage receives, for
     /// progress, recovery affordances and the take summary. A separate name
     /// from the stage's copy because they are different contracts to different
@@ -1406,7 +1410,6 @@ mod tests {
             events::STAGE_CLOSED,
             events::STAGE_ERROR,
             events::DEVICE_OR_DISPLAY_CHANGE,
-            events::DIAGNOSTIC_WARNING,
             events::SHUTDOWN_REQUESTED,
             events::SHUTDOWN_COMPLETE,
             events::STAGE_LOAD_SESSION,
@@ -1438,18 +1441,40 @@ mod tests {
                 "event name {name} is missing from src/shared/contracts/stage.ts"
             );
         }
-        // And every stage:// literal in the TS contract must be a Rust const.
+        /*
+         * And every event literal in the TS contract must be a Rust constant —
+         * whatever its scheme.
+         *
+         * This used to scan `'stage://` alone, so an `app://` or
+         * `diagnostic://` name declared on one side only was invisible: the
+         * orphan `diagnostic://warning` was declared in both files and
+         * consumed in neither, and this test had nothing to say about it.
+         *
+         * `ALIGN_SNAPSHOT` is in this list and not in the one above because
+         * the direction differs: control listens for it, so it must have a
+         * Rust constant, but the forward list is about names Rust emits.
+         */
+        let all_rust_events: Vec<&str> = rust_names
+            .iter()
+            .copied()
+            .chain([events::ALIGN_SNAPSHOT, events::SPEECH_MODEL_PROGRESS])
+            .collect();
         for line in ts.lines() {
-            if let Some(start) = line.find("'stage://") {
-                let rest = &line[start + 1..];
-                if let Some(end) = rest.find('\'') {
-                    let ts_name = &rest[..end];
-                    assert!(
-                        rust_names.contains(&ts_name),
-                        "TS event name {ts_name} has no Rust constant"
-                    );
-                }
+            // Skip comments: a name discussed in prose ("used to be declared
+            // here") is the opposite of a declaration.
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("*") || code.starts_with("/*") {
+                continue;
             }
+            let Some(scheme_at) = code.find("://") else { continue };
+            let Some(open) = code[..scheme_at].rfind('\'') else { continue };
+            let rest = &code[open + 1..];
+            let Some(end) = rest.find('\'') else { continue };
+            let ts_name = &rest[..end];
+            assert!(
+                all_rust_events.contains(&ts_name),
+                "TS event name {ts_name} has no Rust constant"
+            );
         }
     }
 

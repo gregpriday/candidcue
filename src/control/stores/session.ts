@@ -672,6 +672,18 @@ interface PendingTranscriptItem {
 }
 /** Fixed at session start by Rust; false means "never persist a word". */
 let transcriptRetained = false;
+/**
+ * Which take's transcript buffer the module currently holds.
+ *
+ * Bumped when a take starts and again when one is torn down, so an append that
+ * rejects can tell whether the buffer it wants to put items back into is still
+ * the one they came from. The session id is NOT enough: `stopSession` leaves
+ * the id in the state while the take is over, so a late rejection compared
+ * equal and re-queued into a buffer whose flush timer had already been
+ * stopped — items that would never be retried, under a toast promising that
+ * they would be.
+ */
+let transcriptEpoch = 0;
 let transcriptBuffer: PendingTranscriptItem[] = [];
 /**
  * Words the recogniser returned this take (§36 summary).
@@ -795,6 +807,7 @@ export function startLiveSession(input: StartSessionInput): string {
   stageLayoutGeneration = 0;
   transcriptRetained = input.transcriptRetained === true;
   transcriptBuffer = [];
+  transcriptEpoch += 1;
   wordsHeard = 0;
   // §64: both ends of the apply comparison are per-session. `seq` restarts with
   // the engine, so a count carried across takes would read as a huge backlog on
@@ -2065,6 +2078,7 @@ function bufferTranscriptItem(item: {
  */
 let transcriptRetentionDegraded = false;
 
+
 /**
  * Persistence that has been STARTED but not yet acknowledged.
  *
@@ -2115,6 +2129,7 @@ function flushTranscript(sessionId: string, force: boolean): void {
   if (!transcriptRetained || transcriptBuffer.length === 0) return;
   const ready = transcriptBuffer;
   transcriptBuffer = [];
+  const epoch = transcriptEpoch;
 
   void trackPersistence(
     appendSessionTranscript(
@@ -2130,29 +2145,49 @@ function flushTranscript(sessionId: string, force: boolean): void {
     ),
   ).catch(() => {
     /*
-     * The items go BACK in the buffer, they are not dropped.
+     * The items go back in the buffer, they are not dropped — but ONLY if the
+     * buffer still belongs to the session they came from.
      *
-     * They used to be gone: the buffer was cleared before the write was
-     * acknowledged, so a failed append lost exactly those items and nothing
-     * anywhere said so — the app believed retention was on and the transcript
-     * had a hole in it. The readiness review's phrase for this was "the
-     * application can believe retention is enabled while silently losing
-     * retained transcript items".
+     * They used to be gone outright: the buffer was cleared before the write
+     * was acknowledged, so a failed append lost exactly those items and
+     * nothing said so. The first fix re-queued them into the GLOBAL buffer,
+     * which is worse in one specific way: `stopSession` clears that buffer,
+     * and a rejection arriving after the next take had started would insert
+     * one session's transcript into another's — and it would then be written
+     * under the wrong session id.
      *
-     * Re-queued at the FRONT, so ordering survives a failure, and the next
-     * flush retries them. `commitSequence` is unique per session and Rust
-     * inserts with `INSERT OR IGNORE`, so a retry that duplicates an item
-     * already written is a no-op rather than a second row.
+     * The second fix compared `state.sessionId`, and that is not the same
+     * question. `stopSession` leaves the id in place while the take is over
+     * and the flush timer is stopped, so a rejection landing in that window
+     * still looked like "the same take": the items went back into a buffer
+     * nothing would ever drain, the toast promised a retry that could not
+     * happen, and the sticky degraded flag survived into the NEXT take's
+     * summary. `transcriptEpoch` answers the question actually being asked —
+     * is this still the buffer these items came from — and it changes on
+     * teardown as well as on start.
      *
-     * Still never interrupts a take: this is a `catch`, the live loop does
-     * not wait on it, and the degraded state below is reported rather than
-     * raised.
+     * A rejection that arrives too late to retry is REPORTED rather than
+     * silently re-homed: the presenter is told, in words that say the section
+     * is missing rather than that CandidCue is still trying.
+     *
+     * Re-queued at the FRONT, so ordering survives. `commitSequence` is unique
+     * per session and Rust inserts with `INSERT OR IGNORE`, so retrying an
+     * item that did land is a no-op rather than a second row.
      */
-    transcriptBuffer = [...ready, ...transcriptBuffer];
-    transcriptRetentionDegraded = true;
+    const stillTheSameTake = transcriptEpoch === epoch;
+    if (stillTheSameTake) {
+      // Sticky for the take, and ONLY for the take it belongs to: setting it
+      // unconditionally marked the next take's summary "partly saved" for a
+      // write that failed before it started.
+      transcriptRetentionDegraded = true;
+      transcriptBuffer = [...ready, ...transcriptBuffer];
+    }
     showToast(
-      'CandidCue could not save part of the transcript for this take. It will keep ' +
-        'trying, and the take summary will say if any of it is missing.',
+      stillTheSameTake
+        ? 'CandidCue could not save part of the transcript for this take. It will keep ' +
+            'trying, and the take summary will say if any of it is missing.'
+        : 'CandidCue could not save the last part of the transcript for the take that ' +
+            'just ended. That section is missing from the saved transcript.',
       'danger',
     );
   });
@@ -3606,6 +3641,17 @@ export function stopSession(): SessionSummary {
       transcriptRetained && !transcriptRetentionDegraded && transcriptBuffer.length === 0;
     summary.transcriptPartial =
       transcriptRetained && (transcriptRetentionDegraded || transcriptBuffer.length > 0);
+    /*
+     * HONEST LIMIT: the tail append issued two lines up has not settled yet,
+     * so a failure in THAT write cannot reach the two flags above. The
+     * summary reports everything known at this moment; a late failure is
+     * delivered by the toast in `flushTranscript`'s catch, which says
+     * explicitly that the section is missing from the take that just ended.
+     *
+     * Closing this properly means making `stopSession` async, which is a
+     * larger change than it looks: it is called from a navigation guard, a
+     * shortcut and the shutdown sequence, and two of those cannot await.
+     */
     // §36.3: close the take that was running. Before the session row is closed,
     // so a listener reading the history the moment the session ends sees the
     // last take rather than a session with one pass missing.
@@ -3753,6 +3799,9 @@ function stopInternals(): void {
   transcriptRetained = false;
   transcriptRetentionDegraded = false;
   transcriptBuffer = [];
+  // Anything still in flight belongs to the take that just ended, not to this
+  // buffer or to whatever take fills it next.
+  transcriptEpoch += 1;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   stopVoicePill();
