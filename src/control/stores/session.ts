@@ -150,7 +150,17 @@ export interface SessionSummary {
    * so no transcript could be saved under any setting. It now reports what Rust
    * decided at session start.
    */
+  /**
+   * `true` only when retention was on AND every write landed.
+   *
+   * It used to be `transcriptRetained` — the setting, not the outcome — so a
+   * take whose appends failed reported "Saved" over a transcript with a hole
+   * in it. The summary is where somebody finds out; reporting the intention
+   * there makes the failure invisible for good.
+   */
   transcriptSaved: boolean;
+  /** Retention was on and something did not make it. */
+  transcriptPartial: boolean;
   /**
    * Times the operator JUMPED the script — sentence steps and outline moves.
    *
@@ -2046,6 +2056,16 @@ function bufferTranscriptItem(item: {
 }
 
 /**
+ * Has a retained-transcript write failed during this take?
+ *
+ * Sticky for the length of the session. A single failure means the transcript
+ * on disk has a hole in it, and that stays true however many later writes
+ * succeed — so the take summary has to say "partially saved" rather than
+ * reporting retention as a boolean the settings screen set.
+ */
+let transcriptRetentionDegraded = false;
+
+/**
  * Persistence that has been STARTED but not yet acknowledged.
  *
  * Every durable write a take makes — the retained transcript tail, the take
@@ -2095,20 +2115,46 @@ function flushTranscript(sessionId: string, force: boolean): void {
   if (!transcriptRetained || transcriptBuffer.length === 0) return;
   const ready = transcriptBuffer;
   transcriptBuffer = [];
-  void trackPersistence(appendSessionTranscript(
-    sessionId,
-    ready.map((item) => ({
-      commitSequence: item.commitSequence,
-      providerItemId: item.providerItemId,
-      audioStartMs: item.audioStartMs,
-      audioEndMs: item.audioEndMs,
-      transcript: item.transcript,
-      disposition: item.disposition,
-    })),
-  )).catch(() => {
-    // Retention is best-effort: a failed write must never interrupt a take.
-    // `trackPersistence` above is what stops the PROCESS EXITING before it
-    // lands — a different concern from whether the take is interrupted.
+
+  void trackPersistence(
+    appendSessionTranscript(
+      sessionId,
+      ready.map((item) => ({
+        commitSequence: item.commitSequence,
+        providerItemId: item.providerItemId,
+        audioStartMs: item.audioStartMs,
+        audioEndMs: item.audioEndMs,
+        transcript: item.transcript,
+        disposition: item.disposition,
+      })),
+    ),
+  ).catch(() => {
+    /*
+     * The items go BACK in the buffer, they are not dropped.
+     *
+     * They used to be gone: the buffer was cleared before the write was
+     * acknowledged, so a failed append lost exactly those items and nothing
+     * anywhere said so — the app believed retention was on and the transcript
+     * had a hole in it. The readiness review's phrase for this was "the
+     * application can believe retention is enabled while silently losing
+     * retained transcript items".
+     *
+     * Re-queued at the FRONT, so ordering survives a failure, and the next
+     * flush retries them. `commitSequence` is unique per session and Rust
+     * inserts with `INSERT OR IGNORE`, so a retry that duplicates an item
+     * already written is a no-op rather than a second row.
+     *
+     * Still never interrupts a take: this is a `catch`, the live loop does
+     * not wait on it, and the degraded state below is reported rather than
+     * raised.
+     */
+    transcriptBuffer = [...ready, ...transcriptBuffer];
+    transcriptRetentionDegraded = true;
+    showToast(
+      'CandidCue could not save part of the transcript for this take. It will keep ' +
+        'trying, and the take summary will say if any of it is missing.',
+      'danger',
+    );
   });
 }
 
@@ -3513,7 +3559,15 @@ export function stopSession(): SessionSummary {
     retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s),
-    transcriptSaved: transcriptRetained,
+    /*
+     * The OUTCOME, not the setting. A write that failed is re-queued and
+     * retried, so `transcriptBuffer` still holding items at the end of a take
+     * means some of it never landed.
+     */
+    // Filled in after the final flush below — the tail has not been written
+    // yet at this point, so judging it here would report on the wrong moment.
+    transcriptSaved: false,
+    transcriptPartial: false,
     manualJumps: s.counts.jumps,
     followingShare: takeFollowingShare(),
     wordsHeard,
@@ -3535,6 +3589,23 @@ export function stopSession(): SessionSummary {
   // the last few seconds of a take are not silently dropped.
   if (s.sessionId) {
     flushTranscript(s.sessionId, true);
+    /*
+     * The OUTCOME, judged after the final flush has been issued.
+     *
+     * `transcriptSaved` used to be `transcriptRetained` — the SETTING, not
+     * what happened — so a take whose appends failed reported "Saved" over a
+     * transcript with a hole in it, on the one screen where anybody would ever
+     * find out. A failed write is now re-queued rather than dropped, so items
+     * still in the buffer here are items that never landed.
+     *
+     * `transcriptRetentionDegraded` is sticky for the session: one failure
+     * means the transcript is incomplete, and that stays true however many
+     * later writes succeed.
+     */
+    summary.transcriptSaved =
+      transcriptRetained && !transcriptRetentionDegraded && transcriptBuffer.length === 0;
+    summary.transcriptPartial =
+      transcriptRetained && (transcriptRetentionDegraded || transcriptBuffer.length > 0);
     // §36.3: close the take that was running. Before the session row is closed,
     // so a listener reading the history the moment the session ends sees the
     // last take rather than a session with one pass missing.
@@ -3593,6 +3664,7 @@ function emptySummary(s: SessionState): SessionSummary {
     reconnects: 0,
     endingLocation: 'Beginning',
     transcriptSaved: false,
+    transcriptPartial: false,
     manualJumps: 0,
     followingShare: null,
     wordsHeard: 0,
@@ -3679,6 +3751,7 @@ function stopInternals(): void {
   if (transcriptFlushTimer) clearInterval(transcriptFlushTimer);
   transcriptFlushTimer = null;
   transcriptRetained = false;
+  transcriptRetentionDegraded = false;
   transcriptBuffer = [];
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;

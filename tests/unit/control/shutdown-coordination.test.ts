@@ -183,3 +183,57 @@ describe('the shutdown protocol keeps its two event names distinct', () => {
     expect(SHUTDOWN_COMPLETE_EVENT).not.toBe(CONTROL_EVENT.shutdownRequested);
   });
 });
+
+describe('a take reports what was actually saved, not what was configured', () => {
+  const source = readFileSync(
+    new URL('../../../src/control/stores/session.ts', import.meta.url),
+    'utf8',
+  );
+
+  it('re-queues a failed transcript write instead of dropping it', () => {
+    /*
+     * The buffer used to be cleared BEFORE the write was acknowledged, so a
+     * failed append lost exactly those items and nothing anywhere said so —
+     * the readiness review's phrase was "the application can believe retention
+     * is enabled while silently losing retained transcript items".
+     *
+     * Retried at the FRONT, so ordering survives. `commitSequence` is unique
+     * per session and Rust inserts with `INSERT OR IGNORE`, so retrying an
+     * item that did land is a no-op rather than a duplicate row.
+     */
+    const flush = source.slice(
+      source.indexOf('function flushTranscript'),
+      source.indexOf('function flushTranscript') + 2500,
+    );
+    expect(flush, 'the items must go back in the buffer').toMatch(
+      /transcriptBuffer = \[\.\.\.ready, \.\.\.transcriptBuffer\]/,
+    );
+    expect(flush, 'and the take must be told').toMatch(/transcriptRetentionDegraded = true/);
+  });
+
+  it('does not report the retention SETTING as the outcome', () => {
+    /*
+     * `transcriptSaved: transcriptRetained` was the whole defect in one line:
+     * the summary reported the setting the user chose rather than whether the
+     * writes landed, on the one screen where anybody would find out.
+     */
+    expect(source, 'the setting must not be the reported outcome').not.toMatch(
+      /transcriptSaved:\s*transcriptRetained\s*,/,
+    );
+    expect(source, 'the outcome is judged after the final flush').toMatch(
+      /summary\.transcriptSaved =\s*\n?\s*transcriptRetained && !transcriptRetentionDegraded/,
+    );
+    expect(source, 'and a partial save is its own answer').toMatch(
+      /summary\.transcriptPartial =/,
+    );
+  });
+
+  it('offers "partly saved" as a distinct answer on the summary', () => {
+    const summary = readFileSync(
+      new URL('../../../src/control/components/SessionSummary.svelte', import.meta.url),
+      'utf8',
+    );
+    expect(summary).toMatch(/transcriptPartial/);
+    expect(summary).toMatch(/Partly saved/);
+  });
+});

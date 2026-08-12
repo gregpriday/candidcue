@@ -235,7 +235,18 @@
         presenter who had deliberately turned transcript saving ON was still
         told every take that nothing had been kept.
       -->
-      <dd>{summary.transcriptSaved ? 'Saved' : 'Not saved'}</dd>
+      <!--
+        Three answers, not two. "Saved" used to be the RETENTION SETTING, so a
+        take whose appends failed reported it over a transcript with a hole in
+        it — and this screen is where somebody would ever find out.
+      -->
+      <dd>
+        {summary.transcriptPartial
+          ? 'Partly saved — some of it could not be written'
+          : summary.transcriptSaved
+            ? 'Saved'
+            : 'Not saved'}
+      </dd>
     </dl>
   {/if}
 
