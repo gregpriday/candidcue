@@ -118,18 +118,21 @@ describe('the shortcuts reference is grouped by the screen that answers each key
   it('puts each key under the screen that actually answers it', () => {
     open();
     // The only genuinely app-wide command.
-    expect(labelsIn('Everywhere')).toEqual(['Command help']);
+    expect(labelsIn('Everywhere')).toEqual(['Keyboard Shortcuts']);
 
-    expect(labelsIn('Library')).toContain('New script');
-    expect(labelsIn('Library')).toContain('Open quick search');
+    expect(labelsIn('Library')).toContain('New Script');
+    /* The Library's search field is reached with ⌘F through `edit.find`, which
+       is a MENU command and so appears in the Edit table rather than here — the
+       change that freed ⌘K for Insert › Link. */
+    expect(labelsIn('Library')).not.toContain('Open quick search');
     expect(labelsIn('Library')).not.toContain('Save');
 
     expect(labelsIn('Editor')).toContain('Save');
-    expect(labelsIn('Editor')).not.toContain('New script');
+    expect(labelsIn('Editor')).not.toContain('New Script');
 
     // Present has two owners, so it is honestly listed under both.
-    expect(labelsIn('Library')).toContain('Present current script');
-    expect(labelsIn('Editor')).toContain('Present current script');
+    expect(labelsIn('Library')).toContain('Present');
+    expect(labelsIn('Editor')).toContain('Present');
 
     const live = labelsIn('During a take');
     expect(live).toContain('Start / Pause / Resume');
@@ -252,14 +255,21 @@ describe('the shortcuts reference is grouped by the screen that answers each key
 /**
  * The menu half of the page, and the guarantee that it cannot drift.
  *
- * §6.1's rule is that one definition feeds every surface. The native menu and
- * this dialog now both read `COMMANDS`, and these tests are what make that a
- * fact rather than an intention: a command that gains an accelerator appears
- * here without anybody editing this file, and one whose accelerator changes
- * changes here too.
+ * §6.1's rule is that one definition feeds every surface. THIS DIALOG's menu
+ * tables read `COMMANDS`, and these tests are what make that a fact rather than
+ * an intention: a command that gains an accelerator appears here without
+ * anybody editing this file, and one whose accelerator changes changes here
+ * too.
  *
- * The corresponding Rust half — that `menu.rs` binds the same chord the registry
- * advertises — is `menu_accelerators_match_the_typescript_registry`.
+ * The native menu does not read it — it is Rust, and writes the same ids,
+ * labels and accelerators out again. What holds the two together is
+ * `menu_accelerators_match_the_typescript_registry`, which compares the two
+ * accelerator sets in BOTH directions.
+ *
+ * The transport rows below the menu tables are hand-written, from
+ * `SHORTCUT_OWNERSHIP` — those keys have no menu item to be an accelerator for.
+ * The duplicate-chord test covers BOTH halves, which is how the ⌘K collision
+ * between Insert › Link and the Library's quick search was found.
  */
 describe('the shortcuts reference lists the menu commands from the registry', () => {
   function commandRows(): Map<string, string> {
@@ -305,19 +315,62 @@ describe('the shortcuts reference lists the menu commands from the registry', ()
     expect(captions).toContain('View menu');
   });
 
-  it('never advertises one chord for two different things', () => {
+  it('never advertises one chord for two different things, anywhere on the page', () => {
     /*
+     * EVERY row, not just the ones derived from the registry.
+     *
      * The page is the app's promise about its own keyboard, and the one way it
      * can lie without any single row being wrong is by printing the same chord
-     * twice. Menu accelerators are claimed by the OS, so a duplicate is not a
-     * cosmetic clash — one of the two simply never fires.
+     * twice. Menu accelerators are claimed by the OS whether or not the item is
+     * enabled, so a duplicate is not a cosmetic clash — one of the two simply
+     * never fires, and the one that loses is always the non-menu half.
+     *
+     * This used to read `tr[data-command]` only, which is exactly why it was
+     * silent while Insert › Link and the Library's quick search both printed
+     * ⌘K: the conflict lived ACROSS the two halves of the page, so neither half
+     * on its own looked wrong. Reading every row is what makes the assertion
+     * about the app's keyboard rather than about one table.
+     *
+     * A chord may repeat when both rows name the SAME thing — the Editor table
+     * lists Bold and Italic as keys CodeMirror answers locally, and the Insert
+     * menu lists the same two commands. That is one key with one meaning
+     * described twice, which is the opposite of the defect.
      */
     open();
-    const seen = new Map<string, string>();
-    for (const [id, keys] of commandRows()) {
-      const previous = seen.get(keys);
-      expect(previous, `${keys} is on both ${previous} and ${id}`).toBeUndefined();
-      seen.set(keys, id);
+    const seen = new Map<string, { label: string; ids: string[] }>();
+    let chords = 0;
+    for (const row of document.querySelectorAll('tbody tr')) {
+      const label = row.querySelector('.action')?.textContent?.trim() ?? '';
+      const cell = row.querySelector('.keys')?.textContent?.trim() ?? '';
+      /* A row is either a menu command or a screen row that declares which menu
+         commands it is the same key as. Either way, the ids it owns. */
+      const ids = [
+        row.getAttribute('data-command') ?? '',
+        ...(row.getAttribute('data-mirrors') ?? '').split(' '),
+      ].filter(Boolean);
+      /* Pair rows print two chords in one cell ("Alt+← / Alt+→"); each half is
+         its own claim on the keyboard. */
+      for (const keys of cell.split(' / ').map((k) => k.trim())) {
+        if (keys === '') continue;
+        chords += 1;
+        const previous = seen.get(keys);
+        if (previous !== undefined) {
+          /* Case and a trailing ellipsis are menu house style, not a different
+             meaning: the File menu says "New Script", the app's own buttons say
+             "New script", and Find is "Find…" in a menu. */
+          const same = (a: string) => a.toLowerCase().replace(/…$/, '').trim();
+          const sameName = same(previous.label) === same(label);
+          const sameCommand = ids.some((id) => previous.ids.includes(id));
+          expect(
+            sameName || sameCommand,
+            `${keys} is on both "${previous.label}" and "${label}"`,
+          ).toBe(true);
+          continue;
+        }
+        seen.set(keys, { label, ids });
+      }
     }
+    // Anti-vacuity: a page that rendered no tables would pass an empty loop.
+    expect(chords).toBeGreaterThan(30);
   });
 });

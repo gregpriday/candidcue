@@ -30,11 +30,34 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
   await expect(mirror).toHaveAttribute('aria-checked', 'true');
 
   // The write reached the backend in the Rust document shape.
+  /*
+   * Poll for the MIRROR write, not for any write.
+   *
+   * Settings also issues an `optical` migration write on mount, which satisfies
+   * a bare count check the moment the section opens — so this used to race the
+   * toggle and read the migration back as though it were the switch.
+   */
   await expect
-    .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'update_settings').length))
-    .toBeGreaterThan(0);
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.some(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: Record<string, unknown> }).patch?.['stageBehavior'] !== undefined,
+        ),
+      ),
+    )
+    .toBe(true);
 
-  const call = await page.evaluate(() => window.__E2E__.lastCall('update_settings'));
+  const call = await page.evaluate(() =>
+    window.__E2E__.calls
+      .filter(
+        (c) =>
+          c.command === 'update_settings' &&
+          (c.args as { patch?: Record<string, unknown> }).patch?.['stageBehavior'] !== undefined,
+      )
+      .at(-1),
+  );
   const args = call!.args as { expectedRevision: number; patch: Record<string, Record<string, unknown>> };
   expect(args.patch.stageBehavior?.['horizontalMirror']).toBe(true);
   // A real optimistic write carries the revision the UI was editing (get_settings -> 3).

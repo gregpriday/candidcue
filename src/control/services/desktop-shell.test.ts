@@ -9,12 +9,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting, type InvokeFn } from './ipc';
 import {
+  PREFERENCES_COMMANDS,
   composeWindowTitle,
   pushMenuState,
   pushWindowTitle,
   resetMenuStateForTesting,
 } from './desktop-shell';
 import type { CommandContext } from '../lib/commands';
+import { COMMAND_IDS, type CommandId } from '../../shared/contracts/commands';
 
 function context(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -101,6 +103,11 @@ describe('composeWindowTitle', () => {
  * (it is in `PINNED` in `ipc_roundtrip_tests.rs`, because it writes onto
  * `MenuItem<Wry>` handles that no mock runtime has). Both are exercised only by
  * running the packaged app.
+ *
+ * Nor is the ROUTING covered. That a menu command reaches the focused window
+ * rather than control (`menu.rs::focused_command_window`) needs two real
+ * windows and a real menu bar; what is asserted here is the list that decides
+ * what the Settings window answers once one arrives.
  */
 describe('pushing state outside a Tauri runtime', () => {
   let calls: Array<{ command: string }> = [];
@@ -130,5 +137,49 @@ describe('pushing state outside a Tauri runtime', () => {
     ]).then(() => {
       expect(calls).toEqual([]);
     });
+  });
+});
+
+/**
+ * The Settings window's menu state, which is a LIST rather than a context.
+ *
+ * `menu.rs` delivers a menu command to the focused window, so the Settings
+ * window really does receive Save, Present and Insert › Link when it is in
+ * front. What stops those from reaching a hidden editor is this list: every
+ * command absent from it is pushed disabled, and the window answers only what
+ * it has a handler for.
+ *
+ * Asserted against the registry rather than against a copy of the list, so a
+ * command added to `PREFERENCES_COMMANDS` without existing fails here.
+ */
+describe('the Settings window names what it can do', () => {
+  it('lists only real commands', () => {
+    for (const id of PREFERENCES_COMMANDS) {
+      expect(COMMAND_IDS as readonly string[]).toContain(id);
+    }
+  });
+
+  it('claims Close Window, which is the chord it must answer itself', () => {
+    /*
+     * ⌘W is the one that made this necessary. Its accelerator is taken by the
+     * window whether or not the item is enabled, so before menu commands were
+     * routed to the focused window it closed the DOCUMENT window from behind
+     * Settings.
+     */
+    expect(PREFERENCES_COMMANDS).toContain('file.close-script');
+  });
+
+  it('does not claim anything that needs a document, a library or a take', () => {
+    const forbidden: CommandId[] = [
+      'file.save',
+      'file.present',
+      'edit.find',
+      'insert.link',
+      'session.end-take',
+      'view.library',
+    ];
+    for (const id of forbidden) {
+      expect(PREFERENCES_COMMANDS as readonly string[]).not.toContain(id);
+    }
   });
 });

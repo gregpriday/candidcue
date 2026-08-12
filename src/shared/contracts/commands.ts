@@ -127,23 +127,32 @@ export const COMMAND_IDS = [
   'window.main',
   /** The Settings window, listed while it is open (§20.4). */
   'window.settings',
+  /**
+   * The Stage window, listed while one EXISTS (§13.4).
+   *
+   * Production presentation is single-window — the control window becomes the
+   * prompter — so most of the time there is no separate stage to list. A real
+   * `stage` webview does still get created: by the appearance preview in
+   * Settings, and by the calibration wizard. While one of those is up it is a
+   * window of this application that the Window menu was silent about.
+   *
+   * Its enabled state is decided in RUST rather than here, because Rust is the
+   * only place that knows whether the window exists — see `menu.rs::apply_state`.
+   * The registry entry stays available so that choosing it always does what it
+   * says; a menu item the user can reach is one Rust has already decided to
+   * enable.
+   */
+  'window.stage',
   /*
-   * NO `window.reopen-stage`, and no Stage entry.
+   * NO `window.reopen-stage`.
    *
-   * §13.4 asks for both: the Stage window listed in the Window menu while it
-   * exists, and Reopen Stage reachable from there. Neither is built, and adding
-   * the menu items without the machinery behind them would recreate exactly the
-   * enabled-no-op this file's availability rules exist to prevent.
-   *
-   * The first is arguably moot: single-window presentation has no separate
-   * stage window to list — the control window IS the stage — so the entry would
-   * name something that does not exist.
-   *
-   * The second is a genuine gap. Recovering a lost stage today means ending the
-   * take and presenting again, which is what `Live.svelte` tells the operator to
-   * do. A real reopen has to re-enter the presentation state machine mid-take
+   * §13.4 also asks for Reopen Stage, and that is a genuine gap rather than a
+   * moot one. Recovering a lost stage today means ending the take and
+   * presenting again, which is what `Live.svelte` tells the operator to do. A
+   * real reopen has to re-enter the presentation state machine mid-take
    * (`windows/present.rs`), and §29.6 is explicit that it should not be
-   * disturbed casually. It wants its own change, with its own tests.
+   * disturbed casually. It wants its own change, with its own tests — and an
+   * enabled menu item that did nothing would be worse than its absence.
    */
 
   // ---- Help ----

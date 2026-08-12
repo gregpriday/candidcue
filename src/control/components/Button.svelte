@@ -1,6 +1,6 @@
 <!--
   Premium-flat button: darker 1px border "lip", --shadow-card micro-lift,
-  scale(0.98) press. No gradients, no glow. Primary is a solid clay fill
+  darkening press. No gradients, no glow. Primary is a solid clay fill
   with a 15px hero label.
 -->
 <script lang="ts">

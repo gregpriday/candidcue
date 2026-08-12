@@ -131,6 +131,24 @@ describe('availability during a take', () => {
     'view.toggle-diagnostics',
     'window.main',
     /*
+     * Window › Stage names a window that may exist during a take (the
+     * appearance preview, the calibration wizard). Whether it is enabled is
+     * decided in Rust from the live window list, not here — see the entry in
+     * `contracts/commands.ts` — so the registry answers "yes" unconditionally
+     * and Rust greys it when there is nothing to bring forward.
+     */
+    'window.stage',
+    /*
+     * ⌘+ / ⌘− DURING a take, because during a take they mean the STAGE type
+     * size — Live's own transport keys, routed through the same menu items.
+     * Leaving them editor-only did not make them safe, it made them dead: a
+     * menu accelerator is claimed by the window whether or not the item is
+     * enabled, so the disabled Larger Editor Text swallowed ⌘= and the
+     * presenter's type size stopped answering in the packaged app.
+     */
+    'view.zoom-in',
+    'view.zoom-out',
+    /*
      * Settings is reachable mid-take, and that is a change from the route it
      * replaced. As a ROUTE it had to be refused: opening it took the stage off
      * the screen. As a WINDOW it opens beside the take without disturbing it —
@@ -210,13 +228,27 @@ describe('availability by route', () => {
     expect(COMMANDS['file.rename-script'].available(opening)).toBe(false);
   });
 
-  it('confines Find to the editor', () => {
-    expect(COMMANDS['edit.find'].available(context())).toBe(false);
+  it('gives Find to the editor AND the Library, and to nothing else', () => {
+    /*
+     * One Find chord per window rather than one per screen. It opens the
+     * editor's search panel and focuses the Library's filter field, which is
+     * what freed ⌘K for Insert › Link — the two used to collide, invisibly,
+     * because a menu accelerator is taken by the window even when the item is
+     * greyed.
+     */
     expect(
       COMMANDS['edit.find'].available(
         context({ route: { name: 'editor', scriptId: 'a' }, scriptOpen: true }),
       ),
     ).toBe(true);
+    expect(COMMANDS['edit.find'].available(context({ route: { name: 'library', view: 'all' } }))).toBe(
+      true,
+    );
+    expect(COMMANDS['edit.find'].available(context({ route: { name: 'welcome' } }))).toBe(false);
+    // Find NEXT stays editor-only: there is nothing to step through in a list.
+    expect(
+      COMMANDS['edit.find-next'].available(context({ route: { name: 'library', view: 'all' } })),
+    ).toBe(false);
   });
 
   it('confines Diagnostics to Live and the outline to Live and the editor', () => {

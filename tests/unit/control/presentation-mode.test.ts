@@ -90,10 +90,21 @@ describe('the mid-take mode chord', () => {
     );
   });
 
-  it('answers Ctrl+Alt+F elsewhere', () => {
-    expect(resolveShortcut(press({ isMac: false, ctrlKey: true, altKey: true }))).toBe(
-      'toggle-presentation-mode',
-    );
+  it('answers a bare F11 elsewhere', () => {
+    expect(resolveShortcut(press({ isMac: false, key: 'F11' }))).toBe('toggle-presentation-mode');
+  });
+
+  /*
+   * The chord it USED to have off macOS, and why it does not any more.
+   *
+   * Ctrl+Alt+F is `edit.replace` — Mod+Alt+F in the command registry, which is
+   * Ctrl+Alt+F on Windows and Linux. That is a native menu accelerator, and the
+   * menu takes the chord from the window, so this branch would have been
+   * unreachable on the two platforms it existed for while passing every test in
+   * this file.
+   */
+  it('leaves Ctrl+Alt+F to Find and Replace off macOS', () => {
+    expect(resolveShortcut(press({ isMac: false, ctrlKey: true, altKey: true }))).toBeNull();
   });
 
   it('does not fire on the other platform’s chord', () => {
@@ -107,6 +118,10 @@ describe('the mid-take mode chord', () => {
       'toggle-presentation-mode',
     );
     expect(resolveShortcut(press({ isMac: false, ctrlKey: true, metaKey: true }))).not.toBe(
+      'toggle-presentation-mode',
+    );
+    // And F11 is not a macOS gesture — there it is a system Exposé key.
+    expect(resolveShortcut(press({ isMac: true, key: 'F11' }))).not.toBe(
       'toggle-presentation-mode',
     );
   });
@@ -157,7 +172,7 @@ describe('the mid-take mode chord', () => {
     // Derived rather than spelled out at the two places that show it, so a label
     // can never describe a key `resolveShortcut` does not answer to.
     expect(presentationModeShortcutLabel(true)).toBe('⌃⌘F');
-    expect(presentationModeShortcutLabel(false)).toBe('Ctrl+Alt+F');
+    expect(presentationModeShortcutLabel(false)).toBe('F11');
   });
 });
 

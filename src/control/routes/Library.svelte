@@ -17,10 +17,14 @@
                    what makes selection worth having — click-to-open leaves
                    nothing standing for a menu or an inspector to act on.
     KEYBOARD       arrows, Home/End, PageUp/PageDown, Enter to open, Delete to
-                   trash (§10.2). Two honest limits: the store loads one page of
-                   500 (see `library.ts`), so a larger library has rows no input
-                   device can reach until pagination exists; and scroll position
-                   is not restored between visits.
+                   trash (§10.2), ⌘F to the filter field. A library larger than
+                   one 500-row read is reached with Show more, which is a
+                   focusable control rather than a scroll sentinel — so the rows
+                   past the first page are reachable by keyboard as well as by
+                   pointer, and `library.ts` re-reads to the same depth when the
+                   route comes back.
+    SCROLL         restored per view for the length of the session (see the
+                   module block below). Not persisted across launches.
     CONTEXT MENU   right-click selects the row first, then opens (§10.6).
     DROP TARGET    Markdown dropped on the window imports. The paths are handled
                    in Rust — see `windows/drag_drop.rs` for why.
@@ -74,6 +78,7 @@
   import { detectPlatform } from '../lib/platform';
   import { startTake } from '../lib/start-take';
   import * as scriptsService from '../services/scripts';
+  import { onRouteCommand } from '../stores/command-bus';
   import { anchorFor, openContextMenu, type ContextMenuItem } from '../stores/context-menu';
   import { requestConfirm } from '../stores/confirm';
   import {
@@ -173,8 +178,16 @@
 
   $effect(() => {
     void loadLibrary();
+    /*
+     * ⌘F focuses the filter field (§6.1). It arrives as `edit.find` from the
+     * command registry rather than as a hand-written shortcut, which is what
+     * lets the native Find item say "Find in Library…" and be enabled here —
+     * and what stopped the Library and Insert › Link from both claiming ⌘K.
+     */
+    const unsubscribeCommands = onRouteCommand((command) => {
+      if (command === 'edit.find') searchInput?.focus();
+    });
     const unsubscribe = onShortcut((action) => {
-      if (action === 'quick-search') searchInput?.focus();
       if (action === 'new-script') void createAndOpenScript('new');
       if (action === 'present') {
         if (inTrash) {
@@ -191,6 +204,7 @@
     });
     return () => {
       unsubscribe();
+      unsubscribeCommands();
       if (searchDebounce) clearTimeout(searchDebounce);
     };
   });
@@ -616,7 +630,7 @@
           type="search"
           placeholder="Search scripts"
           aria-label="Search scripts"
-          title={`Search scripts (${formatAccelerator('Mod+K', mac)})`}
+          title={`Search scripts (${formatAccelerator('Mod+F', mac)})`}
           value={query}
           bind:this={searchInput}
           oninput={onSearchInput}

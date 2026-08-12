@@ -73,12 +73,28 @@ pub async fn update_settings<R: tauri::Runtime>(
      * value, which is a no-op rather than a loop: `revision` only moves when a
      * write actually lands.
      */
-    if let Err(err) = app.emit(crate::windows::events::SETTINGS_CHANGED, &updated) {
-        // Not a failure of the write, which has already committed. A window that
-        // missed the broadcast re-reads on its next natural load.
+    broadcast_settings(&app, &updated);
+    Ok(updated)
+}
+
+/// Tell every window that the settings document moved.
+///
+/// Extracted so it is reachable from the OTHER command that writes settings.
+/// `select_speech_language` patches the document directly — it has validation
+/// to do that `update_settings` cannot — and without this it committed a new
+/// revision that no window heard about, leaving both of them holding a stale
+/// `expected_revision` and turning the next ordinary save into a concurrency
+/// conflict the user did nothing to cause.
+///
+/// Never fatal: the write has already committed by the time this runs, and a
+/// window that missed the broadcast re-reads on its next natural load.
+pub(crate) fn broadcast_settings<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    updated: &crate::settings::RevisionedSettings,
+) {
+    if let Err(err) = app.emit(crate::windows::events::SETTINGS_CHANGED, updated) {
         tracing::warn!(error = %err, "the settings change could not be broadcast");
     }
-    Ok(updated)
 }
 
 /// Export everything the user made (spec §47.7).

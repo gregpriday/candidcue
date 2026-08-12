@@ -29,9 +29,14 @@
 //! ---------------------------------------------------------------------------
 //! A take turns the control window into the stage. This window is left alone:
 //! it is an ordinary window on another part of the desktop, and closing it out
-//! from under somebody because a take started would be surprising. What DOES
-//! change is that unsafe settings refuse to apply mid-take — that rule lives in
-//! the frontend, next to the controls it governs.
+//! from under somebody because a take started would be surprising.
+//!
+//! What guards a running take is NOT this window — it holds no session state
+//! and cannot see one. It is the individual commands: `select_speech_language`
+//! refuses while the coordinator has a session open, and `SpeechModelManager`
+//! makes the same check before deleting a model. Anything Settings offers that
+//! is not guarded that way can be changed mid-take, and takes effect the way
+//! any other settings write does.
 
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
@@ -91,15 +96,22 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Close it, if it is open. Used by Help › nothing today — reserved for the
-/// shutdown path, which must not leave a window behind when the app exits.
+/// Close it, if it is open — the `close_preferences` command, which the window's
+/// own close control invokes, and the shutdown path, which must not leave a
+/// window behind when the app exits.
 pub fn close<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(PREFERENCES_LABEL) {
         let _ = window.close();
     }
 }
 
-/// Is it open? Read by the native Window menu so its entry can be enabled.
-pub fn is_open<R: Runtime>(app: &AppHandle<R>) -> bool {
-    app.get_webview_window(PREFERENCES_LABEL).is_some()
-}
+/*
+ * NO `is_open`.
+ *
+ * There was one, documented as "read by the native Window menu so its entry can
+ * be enabled". Nothing read it: the Window menu lists Settings unconditionally,
+ * because choosing it OPENS the window when there is none — §20.4's rule that
+ * the entry and ⌘, are the same action. Window › Stage is the entry whose
+ * enabled state really does depend on a window existing, and `menu.rs` asks the
+ * window list directly for that one.
+ */

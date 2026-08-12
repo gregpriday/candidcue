@@ -6,8 +6,15 @@
   ---------------------------------------------------------------------------
   It hosts two surfaces and nothing else: Settings, and the calibration wizard
   Settings launches. There is no library, no editor and no session here — this
-  window cannot present, and every command that would need one is absent from
-  it by construction rather than by being disabled.
+  window cannot present.
+
+  That does NOT make the editor and session commands absent: the menu bar is
+  shared by the whole application, and `menu.rs` delivers each command to the
+  window in front. So this window receives them, and deals with them the only
+  honest way — by greying them while it is focused (`PREFERENCES_COMMANDS`) and
+  ignoring any that arrive anyway. An earlier version of this comment claimed
+  they were absent "by construction"; they were not, and ⌘W closed the document
+  window behind this one.
 
   Calibration comes WITH Settings rather than staying behind in the control
   window, and that is the arrangement the control shell's own comment already
@@ -33,14 +40,26 @@
   import ToastRegion from '../control/components/ToastRegion.svelte';
   import Calibrate from '../control/routes/Calibrate.svelte';
   import Settings from '../control/routes/Settings.svelte';
-  import { closePreferences } from '../control/services/desktop-shell';
+  import {
+    closePreferences,
+    installMenuStateOnFocus,
+    focusControlWindow,
+    installWindowMenuCommands,
+    PREFERENCES_COMMANDS,
+    pushWindowMenuState,
+    revealLogs,
+  } from '../control/services/desktop-shell';
   import { describeError } from '../control/services/errors';
-  import { installSettingsSync } from '../control/services/settings-sync';
-  import { route, setInitialRoute } from '../control/stores/router';
+  import {
+    installOverlaySync,
+    installSettingsSectionSync,
+    installSettingsSync,
+  } from '../control/services/settings-sync';
+  import { navigate, route, setInitialRoute } from '../control/stores/router';
   import { loadSettings } from '../control/stores/settings';
   import { showToast } from '../control/stores/toasts';
   import { isSettingsSection } from '../control/lib/commands';
-  import { workspace } from '../control/stores/workspace';
+  import { reloadWorkspace, workspace, WORKSPACE_STORAGE_KEY } from '../control/stores/workspace';
 
   let ready = $state(false);
   let failure = $state<string | null>(null);
@@ -58,14 +77,79 @@
      */
     const teardownSync = installSettingsSync();
 
+    /*
+     * "Show me Privacy" while this window is ALREADY open.
+     *
+     * The section is read from the workspace store on mount, which covers
+     * opening the window. It does not cover being asked for a section when the
+     * window exists — Rust brings it forward and nothing mounts, so without
+     * this the Welcome screen's privacy link would raise a window still showing
+     * whatever section it was left on.
+     */
+    const teardownSection = installSettingsSectionSync((section) => {
+      navigate({ name: 'settings', section });
+    });
+
+    /*
+     * Overlay settings, which never reach Rust.
+     *
+     * Stage font, stage type size and mirror live in `localStorage` rather than
+     * in the settings document, so `settings://changed` says nothing about
+     * them. `localStorage` raises a `storage` event in the OTHER documents of
+     * the origin, which is precisely this case, and re-reading the workspace
+     * store from it is what keeps the two windows agreeing about the stage.
+     */
+    const teardownOverlay = installOverlaySync([WORKSPACE_STORAGE_KEY], () => {
+      reloadWorkspace();
+    });
+
+    /*
+     * THE MENU BAR, WHILE THIS WINDOW IS IN FRONT.
+     *
+     * `menu.rs` delivers a menu command to the focused window, so this one
+     * really does receive Save, Present and Insert › Link when it is the window
+     * the user is looking at. Answering only what Settings can answer — and
+     * greying the rest — is what stops ⌘W from closing the document window
+     * behind this one and Insert from writing Markdown into a hidden editor.
+     *
+     * The state is pushed again on every focus change because the menu is one
+     * shared object: whichever window last spoke is the one it describes, and
+     * that has to be the window in front rather than the window that most
+     * recently changed its mind.
+     */
+    const pushState = () => void pushWindowMenuState(PREFERENCES_COMMANDS);
+    pushState();
+    const teardownFocus = installMenuStateOnFocus(pushState);
+    const teardownMenu = installWindowMenuCommands({
+      /* ⌘W. Its label reads "Close Window" off the editor, and this is the
+         window it is pressed over. */
+      'file.close-script': close,
+      'window.main': () => void focusControlWindow(),
+      /* ⌘, with Settings already open is "bring Settings forward", and it
+         already is. Answered rather than ignored so the chord is not silently
+         dead in the one window it names. */
+      'view.settings': () => {},
+      'window.settings': () => {},
+      'help.reveal-logs': () => {
+        void revealLogs().catch((err: unknown) => {
+          showToast(`The log folder could not be opened. ${describeError(err)}`, 'danger');
+        });
+      },
+    });
+
     void (async () => {
       try {
         await loadSettings();
         /*
          * Open on the section the user was last in (§14.4). The workspace store
-         * is `localStorage`, which IS shared across webviews of the same origin
-         * — so the section the control window recorded is the section this
-         * window opens at, with no IPC and no coordination.
+         * is `localStorage`, which IS shared across webviews of the same origin.
+         *
+         * `openSettingsWindow` flushes the section synchronously before asking
+         * Rust to open the window — the workspace store's writes are debounced,
+         * and without that flush "Settings › Privacy" from the Welcome screen
+         * opened on whatever section was last read here. Read once, on mount:
+         * a window that is ALREADY open is told which section to show by
+         * `SETTINGS_SECTION_EVENT` instead, because it will not mount again.
          */
         const stored = $workspace.settingsSection;
         setInitialRoute({
@@ -78,7 +162,13 @@
       }
     })();
 
-    return teardownSync;
+    return () => {
+      teardownSync();
+      teardownSection();
+      teardownOverlay();
+      teardownFocus();
+      teardownMenu();
+    };
   });
 
   function close(): void {

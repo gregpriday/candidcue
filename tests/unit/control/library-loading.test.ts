@@ -18,6 +18,7 @@ import { setInvokeForTesting, type InvokeFn } from '../../../src/control/service
 import {
   library,
   loadLibrary,
+  loadMoreScripts,
   setLibraryQuery,
   setLibrarySort,
   setLibraryView,
@@ -228,5 +229,94 @@ describe('changing view', () => {
     await loadLibrary();
     expect(get(library).scripts).toEqual([]);
     expect(get(library).error).not.toBeNull();
+  });
+});
+
+/**
+ * Paging past the first 500, which is where a large library actually lives.
+ *
+ * Two failures hid here, and both looked fine from a list of ten fixtures.
+ */
+describe('paging through a library bigger than one read', () => {
+  /** Serve distinct rows per page, so a repeated request is visible. */
+  function paged(total: number, pageSize = 500): InvokeFn {
+    return async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      requests.push({ command, args });
+      const request = args?.['page'] as { page: number; pageSize: number } | undefined;
+      const page = request?.page ?? 0;
+      const size = request?.pageSize ?? pageSize;
+      const start = page * size;
+      const items: ScriptSummary[] = [];
+      for (let i = start; i < Math.min(total, start + size); i += 1) items.push(summary(`s${i}`));
+      return { items, total } as T;
+    };
+  }
+
+  it('asks for the next page, not the same one again, when a row was deduplicated', async () => {
+    /*
+     * The cursor used to be `Math.floor(scripts.length / PAGE_SIZE)`. The append
+     * de-duplicates by id, so ONE row repeated between two reads — an ordinary
+     * consequence of a script being renamed while the list is open — left 999
+     * rows instead of 1000, and the next request asked for page 1 for ever.
+     */
+    setInvokeForTesting(paged(3000));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+
+    requests = [];
+    await loadMoreScripts();
+    expect((requests[0]?.args?.['page'] as { page: number }).page).toBe(1);
+
+    // Now serve a page whose first row repeats one already held, so the append
+    // drops it and the row count lands one short of a whole page.
+    setInvokeForTesting(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      requests.push({ command, args });
+      const items = [summary('s0'), ...Array.from({ length: 499 }, (_, i) => summary(`x${i}`))];
+      return { items, total: 3000 } as T;
+    });
+    await loadMoreScripts();
+    expect(get(library).scripts.length).toBe(1499);
+
+    requests = [];
+    setInvokeForTesting(paged(3000));
+    await loadMoreScripts();
+    expect((requests[0]?.args?.['page'] as { page: number }).page).toBe(3);
+  });
+
+  it('re-reads as deep as the list was when it reloads', async () => {
+    /*
+     * Returning from the editor calls `loadLibrary()`. It used to read page 0
+     * only, so a list scrolled to row 700 snapped back to 500 rows — taking the
+     * selection with it, because a selected id no longer in the list falls back
+     * to the first row. §10.2 names that journey by hand.
+     */
+    setInvokeForTesting(paged(1400));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+    await loadMoreScripts();
+    expect(get(library).scripts).toHaveLength(1000);
+
+    requests = [];
+    await loadLibrary();
+    expect(requests[0]?.args?.['page']).toEqual({ page: 0, pageSize: 1000 });
+    expect(get(library).scripts).toHaveLength(1000);
+  });
+
+  it('drops back to one page when the query underneath it changes', async () => {
+    setInvokeForTesting(paged(1400));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+    await loadMoreScripts();
+
+    requests = [];
+    setLibraryQuery('interview');
+    await loadLibrary();
+    // A search is a different list: re-reading two pages of it would be both a
+    // larger read than the screen can use and a cursor into pages that the new
+    // result set may not have.
+    expect(requests[0]?.args?.['page']).toEqual({ page: 0, pageSize: 500 });
   });
 });

@@ -74,13 +74,31 @@ and it would rewrite unrelated files.
 
 ## Architecture
 
-### Three entry points, one Vite config
+### Four entry points, one Vite config
 
-`control.html`, `stage.html`, `identify.html` build from one config into
-`dist/`; Tauri window URLs point at them directly. `identify.html` backs the
-short-lived "which physical panel is display 2?" overlays. Only the control
-window is declared in `tauri.conf.json`; the stage and identify windows are
-created at runtime from `src-tauri/src/windows/`.
+`control.html`, `stage.html`, `identify.html`, `preferences.html` build from one
+config into `dist/`; Tauri window URLs point at them directly. `identify.html`
+backs the short-lived "which physical panel is display 2?" overlays;
+`preferences.html` is Settings, which is its own window rather than a route in
+the control window. Only the control window is declared in `tauri.conf.json`;
+the stage, identify and preferences windows are created at runtime from
+`src-tauri/src/windows/`.
+
+### The menu bar belongs to the application, not to a window
+
+`src-tauri/src/menu.rs` owns the native menu. Two properties are easy to break
+and both have bitten:
+
+- a menu command is delivered to the **focused** window
+  (`focused_command_window`), never unconditionally to control — otherwise ⌘W
+  with Settings in front closes the document window behind it;
+- the menu's enabled state is pushed by whichever window is in front, and
+  re-pushed on focus (`installMenuStateOnFocus`), because one menu is shared by
+  two windows and the last push wins.
+
+Commands are declared once in `src/control/lib/commands.ts`; `menu.rs` writes
+the structure out again in Rust and a test compares the two accelerator sets in
+both directions.
 
 ### The trust boundary is the point
 

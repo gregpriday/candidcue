@@ -32,7 +32,17 @@
  */
 import { writable, type Readable } from 'svelte/store';
 
-const STORAGE_KEY = 'candidcue.workspace.v1';
+/**
+ * Exported so another WINDOW can watch it.
+ *
+ * The overlay settings that live in here — stage font, stage type size — never
+ * reach Rust, so `settings://changed` says nothing about them and the Settings
+ * window would go on showing the value it read at mount. `localStorage` raises
+ * a `storage` event in the other documents of the origin when this key moves,
+ * and that is the only signal there is; see `installOverlaySync`.
+ */
+export const WORKSPACE_STORAGE_KEY = 'candidcue.workspace.v1';
+const STORAGE_KEY = WORKSPACE_STORAGE_KEY;
 
 /** Which panes each route can show, and the range each may be dragged to. */
 export const PANE_LIMITS = {
@@ -258,6 +268,27 @@ function load(): WorkspaceState {
 const state = writable<WorkspaceState>(load());
 
 export const workspace: Readable<WorkspaceState> = { subscribe: state.subscribe };
+
+/**
+ * Re-read the workspace from storage, discarding what is held here.
+ *
+ * For the case where ANOTHER WINDOW wrote it: `localStorage` is shared across
+ * webviews of one origin, and the `storage` event says a key moved without
+ * saying what it now holds. Re-reading is the whole update — this store's
+ * source of truth genuinely is storage, unlike the settings document, whose
+ * source of truth is the database and which is therefore broadcast in full.
+ *
+ * Any pending write-behind of OUR OWN is cancelled first, because it would
+ * otherwise land afterwards and put back exactly the value just superseded.
+ */
+export function reloadWorkspace(): void {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  pending = null;
+  state.set(load());
+}
 
 /**
  * Write-behind, so a drag does not put one storage write on the main thread per

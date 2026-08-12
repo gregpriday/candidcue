@@ -45,7 +45,7 @@ function resolveDecodeNamedCharacterReference(): string {
   );
 }
 
-// Three HTML entry points built from one Vite config. Tauri window URLs
+// Four HTML entry points built from one Vite config. Tauri window URLs
 // reference them directly:
 //   dev:  http://localhost:1420/control.html, /stage.html, /identify.html
 //   prod: the same files inside dist/ (frontendDist "../dist")

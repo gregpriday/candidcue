@@ -4,6 +4,7 @@
   transport, §15.3 pause semantics, F.17 end-of-session summary.
 -->
 <script lang="ts">
+  import { openSettingsWindow } from '../lib/open-settings';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
   import FollowControls from '../components/FollowControls.svelte';
@@ -285,7 +286,13 @@ import { onShortcut } from '../lib/shortcuts';
       smoothFollow.requestLayoutRebuild();
       return;
     }
-    void navigate({ name: 'settings', section: 'following' });
+    /*
+     * The Settings WINDOW, not a route. This used to navigate, and since
+     * Settings moved out of the control window (§14.1) that quietly landed the
+     * operator in the Library — mid-take, having asked for the follower
+     * settings.
+     */
+    void openSettingsWindow('following');
   }
 
   function flatten(nodes: OutlineNode[], depth = 0): Array<{ node: OutlineNode; depth: number }> {
@@ -2135,8 +2142,17 @@ import { onShortcut } from '../lib/shortcuts';
      * give way first and stop at a width where their content is still readable.
      */
     flex: 0 1 auto;
+    /*
+     * 140px, and NOT `min-width: 0` after it.
+     *
+     * Both were declared, in that order, so the second won and this rail
+     * collapsed to nothing rather than stopping where its section titles are
+     * still readable. The floor is the point: §12.2 asks the least critical
+     * pane to give way FIRST, not to vanish — a rail that shrinks to zero
+     * without being toggled reads as the bug the media query that used to hide
+     * it read as, which is the thing this layout replaced.
+     */
     min-width: 140px;
-    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-3);
@@ -2195,9 +2211,13 @@ import { onShortcut } from '../lib/shortcuts';
     /*
      * Takes what is left and shrinks LAST (§12.2).
      *
-     * The rails are `flex: 0 1 auto` with their own minimums, so they give way
-     * first; this keeps a floor of its own so the preview can never be reduced
-     * to a sliver even when both rails have reached theirs.
+     * True because of three declarations together, not because of this one:
+     * the rails are `flex: 0 1 auto`, so they are shrinkable while this is
+     * `flex: 1 1 auto`; they carry floors (140px and 200px) so they stop where
+     * their content is still readable; and this carries a floor of its own so
+     * the preview is never reduced to a sliver once both rails have reached
+     * theirs. Below that the window itself scrolls rather than any pane
+     * disappearing.
      */
     flex: 1 1 auto;
     min-width: 260px;

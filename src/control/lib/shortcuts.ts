@@ -10,7 +10,6 @@ import { detectPlatform } from './platform';
 
 export type ShortcutAction =
   | 'new-script'
-  | 'quick-search'
   | 'save'
   | 'present'
   | 'play-pause'
@@ -91,7 +90,6 @@ export const SHORTCUT_OWNERSHIP = {
   'command-help': 'global',
 
   'new-script': ['library'],
-  'quick-search': ['library'],
   /* Both screens that can hold a script to present: the one listing them and
      the one editing one. */
   present: ['library', 'editor'],
@@ -247,7 +245,20 @@ export function isMacPlatform(): boolean {
  * `resolveShortcut` does not answer to.
  */
 export function presentationModeShortcutLabel(isMac = isMacPlatform()): string {
-  return isMac ? '⌃⌘F' : 'Ctrl+Alt+F';
+  /*
+   * F11 off macOS, not Ctrl+Alt+F.
+   *
+   * Two reasons, and the second is the one that forced it. F11 is what Windows
+   * and every Linux desktop mean by "make this window the whole screen", so it
+   * is the key somebody reaches for without being told. And Ctrl+Alt+F was
+   * already taken: `edit.replace` binds Mod+Alt+F, which IS Ctrl+Alt+F off
+   * macOS — a native menu accelerator, so it would have won and this chord
+   * would simply never have fired on the platform it was written for.
+   *
+   * ⌃⌘F stays on macOS because that is the system's own full-screen chord and
+   * nothing in the menu claims it.
+   */
+  return isMac ? '⌃⌘F' : 'F11';
 }
 
 export interface ShortcutQuery {
@@ -312,9 +323,17 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
    * block excludes it. Neither shape fits the blocks after this one, which is
    * why it is tested on its own rather than folded into them.
    */
-  if (key.toLowerCase() === 'f' && !event.shiftKey) {
+  if ((key.toLowerCase() === 'f' || key === 'F11') && !event.shiftKey) {
     const macChord = event.isMac && event.ctrlKey && event.metaKey && !event.altKey;
-    const otherChord = !event.isMac && event.ctrlKey && event.altKey && !event.metaKey;
+    /* Bare F11 off macOS — see `presentationModeShortcutLabel` for why it is not
+       Ctrl+Alt+F any more. No modifier, because F11 is not one of the keys a
+       modifier is needed to tell apart from typing. */
+    const otherChord =
+      !event.isMac &&
+      key === 'F11' &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey;
     /*
      * Held, this would flip the window between shapes at the key-repeat rate —
      * the same objection the `a` transport toggle makes about itself further
@@ -340,8 +359,13 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
     switch (key.toLowerCase()) {
       case 'n':
         return 'new-script';
-      case 'k':
-        return 'quick-search';
+      /*
+       * ⌘K is NOT here. It belongs to Insert › Link now, and the Library's
+       * search field is reached with ⌘F through `edit.find` in the command
+       * registry — one chord per meaning rather than one per screen. Adding a
+       * case back here would give the packaged app two owners for the chord,
+       * and the menu wins.
+       */
       case 's':
         return 'save';
       case 'enter':

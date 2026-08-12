@@ -42,33 +42,77 @@
      * test prove every command is documented somewhere.
      */
     actions: ShortcutAction[];
+    /**
+     * The menu commands this row is the SAME key as (§6.1).
+     *
+     * Some keys are documented twice on this page on purpose: the native menu
+     * half lists "Previous Sentence — ⌥←" because that is what the Session menu
+     * says, and the screen-scoped half lists "Back / forward one sentence"
+     * because that is where the key works. One chord, one meaning, two
+     * sentences about it.
+     *
+     * Naming the commands rather than letting the duplicate pass silently is
+     * what keeps the page's own conflict check sharp: a chord printed twice is
+     * a defect unless the two rows say here that they are the same thing. That
+     * check is what found Insert › Link and the Library's quick search both
+     * claiming ⌘K, and the editor's zoom keys eating the stage type size.
+     */
+    mirrors?: string[];
   }
 
   const rows: ShortcutRow[] = [
-    { label: 'Command help', keys: `${mod}/`, actions: ['command-help'] },
-    { label: 'New script', keys: `${mod}N`, actions: ['new-script'] },
-    { label: 'Open quick search', keys: `${mod}K`, actions: ['quick-search'] },
-    { label: 'Save', keys: `${mod}S`, actions: ['save'] },
-    { label: 'Present current script', keys: `${mod}Enter`, actions: ['present'] },
+    /*
+     * Named exactly as the Help menu names it. The registry half of this page
+     * prints "Keyboard Shortcuts" for the same ⌘/, and calling it "Command
+     * help" here was the vocabulary split §6.1 is about — two names, one key,
+     * and a reader with no way to know they are the same thing.
+     */
+    {
+      label: 'Keyboard Shortcuts',
+      keys: `${mod}/`,
+      actions: ['command-help'],
+      mirrors: ['help.keyboard-shortcuts'],
+    },
+    { label: 'New Script', keys: `${mod}N`, actions: ['new-script'], mirrors: ['file.new-script'] },
+    { label: 'Save', keys: `${mod}S`, actions: ['save'], mirrors: ['file.save'] },
+    /*
+     * Named and spelled exactly as the File menu does — `formatAccelerator`
+     * rather than a hand-typed "Enter", because the menu prints ⏎ on macOS and
+     * two spellings of one key on one page is the same lie as two names for it.
+     */
+    {
+      label: 'Present',
+      keys: formatAccelerator('Mod+Return', isMacPlatform()),
+      actions: ['present'],
+      mirrors: ['file.present'],
+    },
     { label: 'Start / Pause / Resume', keys: 'Space (when not typing)', actions: ['play-pause'] },
     { label: 'Hard pause', keys: `${mod}Shift+Space`, actions: ['hard-pause'] },
     // §115: one verb. This key raises "End the session?" — the help calling the
     // same action "Stop session" is the vocabulary split that issue names.
-    { label: 'End session', keys: `${mod}.`, actions: ['stop-session'] },
+    {
+      label: 'End Session',
+      keys: `${mod}.`,
+      actions: ['stop-session'],
+      mirrors: ['session.end-take'],
+    },
     {
       label: 'Back / forward one sentence',
       keys: 'Alt+← / Alt+→',
       actions: ['back-sentence', 'forward-sentence'],
+      mirrors: ['session.previous-sentence', 'session.next-sentence'],
     },
     {
       label: 'Previous / next chapter',
       keys: 'Alt+↑ / Alt+↓',
       actions: ['prev-chapter', 'next-chapter'],
+      mirrors: ['session.previous-chapter', 'session.next-chapter'],
     },
     {
       label: 'Increase / decrease stage text',
-      keys: `${mod}= / ${mod}-`,
+      keys: `${mod}+ / ${mod}-`,
       actions: ['stage-text-up', 'stage-text-down'],
+      mirrors: ['view.zoom-in', 'view.zoom-out'],
     },
     { label: 'Toggle horizontal mirror', keys: `${mod}Shift+M`, actions: ['toggle-mirror'] },
     // The "(during Live)" these four used to carry is the group caption now.
@@ -226,8 +270,11 @@
         label: row.label,
         keys: row.keys,
         actions: row.actions.join(' '),
+        mirrors: row.mirrors?.join(' ') ?? '',
       })),
-      ...(scope === 'editor' ? editorLocalRows.map((row) => ({ ...row, actions: '' })) : []),
+      ...(scope === 'editor'
+        ? editorLocalRows.map((row) => ({ ...row, actions: '', mirrors: 'insert.bold insert.italic' }))
+        : []),
     ],
   })).filter((group) => group.rows.length > 0);
 </script>
@@ -289,7 +336,7 @@
       </thead>
       <tbody>
         {#each group.rows as row (row.label)}
-          <tr data-actions={row.actions}>
+          <tr data-actions={row.actions} data-mirrors={row.mirrors}>
             <td class="action">{row.label}</td>
             <td class="keys">{row.keys}</td>
           </tr>

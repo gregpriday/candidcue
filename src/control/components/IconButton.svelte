@@ -72,15 +72,30 @@
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out),
-      border-color var(--dur-fast) var(--ease-out),
-      transform var(--dur-press) var(--ease-out);
+      border-color var(--dur-fast) var(--ease-out);
   }
   .icon-button:hover:not(:disabled) {
     background: var(--bg-hover-chrome);
     color: var(--text-primary);
   }
+  /*
+   * A press reads as PUSHED IN; it does not shrink (§23.5, §9.3).
+   *
+   * The same correction `Button.svelte` made, and it matters more here: icon
+   * buttons come in rows of five or six, and a row of shrinking squares is the
+   * single clearest tell that a desktop toolbar was built out of web
+   * components.
+   *
+   * An inset shadow rather than a darker fill, and that is the contrast check
+   * deciding rather than taste: `--bg-hover-chrome` already sits at 4.57:1
+   * against `--text-faint`, so any surface a step further from the text fails
+   * AA — the design-system token test rejected two candidates before this. A
+   * shadow inside the same surface changes the shape of the control without
+   * changing the ground its glyph is read against.
+   */
   .icon-button:active:not(:disabled) {
-    transform: scale(0.98);
+    background: var(--bg-hover-chrome);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
   }
   .icon-button:disabled {
     opacity: 0.45;

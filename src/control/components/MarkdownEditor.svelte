@@ -17,13 +17,11 @@
   writing prose.
 
   So the editor keeps the system menu, and the insertions it would have offered
-  live in the formatting row above the text, where they are visible and
-  tooltipped.
-
-  They are NOT in the native menu. §11.4 asks for a discoverable Insert menu and
-  this pass did not build one — the Edit menu ends after Find and Replace. That
-  is a real remaining gap rather than a decision, and it is written down here so
-  the next person does not read the paragraph above as covering it.
+  live in two places instead: the formatting row above the text, where they are
+  visible and tooltipped, and the native INSERT MENU (§11.4). Both call the same
+  functions in `lib/markdown-insert.ts` — the menu reaches this component
+  through the route command bus, so a menu item and the button beside it cannot
+  drift into meaning different things.
 
 -->
 <script lang="ts">

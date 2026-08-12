@@ -26,6 +26,7 @@
     openExternal,
   } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
+  import { openSettingsWindow } from './lib/open-settings';
   import { startTake, takeStarting } from './lib/start-take';
   import {
     dispatchDroppedImages,
@@ -35,7 +36,9 @@
   import {
     composeWindowTitle,
     installDragDrop,
+    focusStageWindow,
     installMenuCommands,
+    installMenuStateOnFocus,
     openPreferences,
     type DragHoverPayload,
     type DragImportedPayload,
@@ -45,6 +48,7 @@
   } from './services/desktop-shell';
   import {
     stepDocumentScale,
+    flushWorkspace,
     updateWorkspace,
     workspace,
     type EditorLayout,
@@ -68,7 +72,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     type BootStatusReport,
   } from './services/recovery';
   import { installShutdownHandshake } from './services/shutdown';
-  import { installSettingsSync } from './services/settings-sync';
+  import { emitSettingsSection, installSettingsSync } from './services/settings-sync';
   import { listScripts } from './services/scripts';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
@@ -323,6 +327,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
       () => commandContext,
       () => commandActions,
     );
+
+    /*
+     * And re-describe the menu whenever this window comes back to the front.
+     *
+     * The menu bar is one object with two windows writing to it. Settings greys
+     * everything it cannot do while it is focused, so without this the document
+     * window inherited that state on the way back — File all greyed over an
+     * open script — until something else happened to invalidate the command
+     * context and trigger a push.
+     */
+    const teardownMenuFocus = installMenuStateOnFocus(() => void pushMenuState(commandContext));
 
     /*
      * Markdown dropped on the window.
@@ -725,6 +740,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     return () => {
       disposed = true;
       teardownMenu();
+      teardownMenuFocus();
       teardownDrop();
       teardownSettingsSync();
       teardownShortcuts();
@@ -848,7 +864,29 @@ import { rememberReaderFrame } from './lib/reader-frame';
     toggleDiagnostics: () =>
       updateWorkspace({ diagnosticsVisible: !get(workspace).diagnosticsVisible }),
     setEditorLayout: (layout: EditorLayout) => updateWorkspace({ editorLayout: layout }),
-    stepScale: (direction) => stepDocumentScale(direction),
+    /*
+     * ⌘+ / ⌘− / ⌘0 mean "text size HERE" — and here is not always the editor.
+     *
+     * These used to be editor-only, which read as harmless because the stage
+     * type size had its own keys in the shortcut table. It was not harmless:
+     * the keys were the SAME two, and a menu accelerator is claimed by the
+     * window whether or not the item is enabled (see `file.close-script`). So
+     * during a take the disabled Larger Editor Text swallowed ⌘=, and the
+     * presenter's type-size keys did nothing in the packaged app while working
+     * perfectly in the browser.
+     *
+     * Routed through the shortcut bus in Live for the same reason the Session
+     * menu is: Live owns the rig-resolved ceiling on stage type, and reaching
+     * past it from here is how a menu item and a key come to disagree.
+     */
+    stepScale: (direction) => {
+      if (get(route).name !== 'live') {
+        stepDocumentScale(direction);
+        return;
+      }
+      if (direction === 1) void emitShortcut('stage-text-up');
+      else if (direction === -1) void emitShortcut('stage-text-down');
+    },
     stageAppearance: () => dispatchRouteCommand('view.stage-appearance'),
     insert: (what) => dispatchInsert(what),
     /*
@@ -885,6 +923,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
     identifyDisplays: () => void identifyStageDisplays(),
     endTake: () => void emitShortcut('stop-session'),
     showMainWindow: () => void focusMainWindow(),
+    /*
+     * Window › Stage. Enabled by RUST only while a stage webview exists — the
+     * appearance preview and the calibration wizard are what create one — so
+     * reaching this always has a window to bring forward.
+     */
+    showStageWindow: () => void focusStageWindow(),
     keyboardShortcuts: () => (shortcutsOpen = true),
     setupAssistant: () => void navigate({ name: 'welcome' }),
     exportSupportBundle: () => void exportSupportBundleFromMenu(),
@@ -911,24 +955,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     return get(library).scripts.find((s) => s.id === scriptId)?.title ?? 'Script';
   }
 
-  /**
-   * Open Settings, optionally at a named section.
-   *
-   * The section is recorded in the workspace store BEFORE the window opens
-   * rather than passed to it: the store is `localStorage`, which is shared
-   * between webviews of the same origin, and the Preferences window reads it on
-   * mount. That means one mechanism serves both "reopen where I was" and "open
-   * at Privacy", instead of a window-creation argument that only the second
-   * needs.
-   */
-  async function openSettingsWindow(section?: SettingsSection): Promise<void> {
-    if (section) updateWorkspace({ settingsSection: section });
-    try {
-      await openPreferences();
-    } catch (err) {
-      showToast(`Settings could not be opened. ${describeError(err)}`, 'danger');
-    }
-  }
 
   async function confirmMoveToTrash(scriptId: string): Promise<void> {
     const title = titleForScript(scriptId);

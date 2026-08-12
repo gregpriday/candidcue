@@ -383,7 +383,19 @@ pub async fn select_speech_language<R: tauri::Runtime>(
             "transcriptionModel": offer.model.id,
         }
     });
-    settings::update_settings(db.pool(), input.expected_revision, patch).await
+    let updated = settings::update_settings(db.pool(), input.expected_revision, patch).await?;
+    /*
+     * AND TELL THE WINDOWS.
+     *
+     * This is the second place in the app that writes the settings document,
+     * and it used to be the silent one: `update_settings` in `settings_cmds`
+     * broadcasts, this did not. The consequence was not cosmetic — every window
+     * kept the revision it last read, so the next ordinary save from Settings
+     * failed its optimistic-concurrency check because of a language change made
+     * minutes earlier.
+     */
+    crate::commands::settings_cmds::broadcast_settings(&app, &updated);
+    Ok(updated)
 }
 
 /// Whether a take is open, as Rust sees it.

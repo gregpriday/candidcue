@@ -28,6 +28,7 @@
   ("Access allowed", "Connected") rather than a green "Ready".
 -->
 <script lang="ts">
+  import { openSettingsWindow } from '../lib/open-settings';
   import Button from '../components/Button.svelte';
   import Icon from '../components/Icon.svelte';
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
@@ -331,7 +332,9 @@
   }
 
   function openPrivacy(): void {
-    void navigate({ name: 'settings', section: 'privacy' });
+    /* The Settings WINDOW (§14.1). Navigating here reached a route this window
+       no longer renders, which fell through to the Library. */
+    void openSettingsWindow('privacy');
   }
 </script>
 

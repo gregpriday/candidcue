@@ -2,13 +2,29 @@
  * The application command registry (desktop refinement §6.1).
  *
  * ---------------------------------------------------------------------------
- * ONE DEFINITION, FOUR SURFACES
+ * ONE DEFINITION — AND WHAT STILL READS ITS OWN COPY
  * ---------------------------------------------------------------------------
- * A command is defined once here and reaches the user four ways: the native
- * menu, the keyboard, the Shortcuts dialog, and (for some) a toolbar button or
- * context-menu row. Before this file each of those was wired independently,
- * which is exactly the arrangement in which a menu item, a key and a button end
- * up meaning three slightly different things — and only one of them is tested.
+ * A command is defined once here and reaches the user through the native menu,
+ * `runCommand`, the Shortcuts dialog's menu tables, and (for some) a toolbar
+ * button or context-menu row. Before this file each of those was wired
+ * independently, which is exactly the arrangement in which a menu item, a key
+ * and a button end up meaning three slightly different things.
+ *
+ * Two surfaces are NOT generated from this file, and saying otherwise would be
+ * the drift this file exists to prevent:
+ *
+ *   - the native menu STRUCTURE in `menu.rs` — ids, labels and accelerators —
+ *     is written out in Rust, because it crosses a language boundary. What
+ *     keeps it honest is `menu_accelerators_match_the_typescript_registry`,
+ *     which now compares the two sets in BOTH directions: a chord Rust binds
+ *     must be the chord declared here, and a chord declared here must be bound;
+ *   - the transport keys — Space, B, T, `[`, `]` — are resolved by
+ *     `lib/shortcuts.ts`, which is a different mechanism rather than a second
+ *     copy: they are unmodified keys owned by whichever screen is up, and they
+ *     have no menu item to be an accelerator for.
+ *
+ * The Shortcuts dialog prints both halves, and its own test refuses to let one
+ * chord stand for two different things across them.
  *
  * ---------------------------------------------------------------------------
  * AVAILABILITY IS ASKED, NEVER ASSUMED
@@ -21,9 +37,9 @@
  *   2. it is checked again inside `runCommand` before the action fires, because
  *      a menu's enabled state is a snapshot pushed some milliseconds ago and the
  *      session can end in between;
- *   3. it is what a future Shortcuts dialog should read. It does NOT read it
- *      today — that dialog groups its rows from `SHORTCUT_OWNERSHIP` in
- *      `lib/shortcuts.ts`, which is the seam described above.
+ *   3. it is what the Shortcuts dialog reads for its menu tables, through
+ *      `commandsByCategory()`. Its remaining rows — the transport — come from
+ *      `SHORTCUT_OWNERSHIP` in `lib/shortcuts.ts`, for the reason above.
  *
  * ---------------------------------------------------------------------------
  * COMMANDS DO NOT BYPASS GUARDS
@@ -137,6 +153,8 @@ export interface CommandActions {
   identifyDisplays(): void;
   endTake(): void;
   showMainWindow(): void;
+  /** Window › Stage — bring the preview/calibration stage window forward. */
+  showStageWindow(): void;
   keyboardShortcuts(): void;
   setupAssistant(): void;
   exportSupportBundle(): void;
@@ -325,11 +343,27 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   },
 
   // ------------------------------------------------------------------ Edit --
+  /*
+   * ONE Find chord, whatever the window is showing.
+   *
+   * ⌘F opens the search panel in the editor and focuses the Library's filter
+   * field in the Library. That is not a convenience — it is what freed ⌘K,
+   * which the Library used to own as "quick search" while `insert.link` also
+   * claimed it for the universal editor chord.
+   *
+   * Two surfaces cannot share a chord here even when they are never on screen
+   * at the same time: a menu accelerator is taken by the WINDOW, enabled or
+   * not (see the note on `file.close-script`), so the Insert item would have
+   * swallowed the Library's ⌘K in the packaged app while both looked fine in
+   * the browser. Collapsing the Library's search onto Find is the fix that
+   * leaves one chord per meaning rather than one chord per screen.
+   */
   'edit.find': {
     id: 'edit.find',
     label: 'Find…',
     accelerator: 'Mod+F',
-    available: (c) => editing(c),
+    dynamicLabel: (c) => (c.route.name === 'library' ? 'Find in Library…' : 'Find…'),
+    available: (c) => editing(c) || c.route.name === 'library',
     run: (a) => a.find(),
   },
   'edit.find-next': {
@@ -502,15 +536,22 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   'view.zoom-in': {
     id: 'view.zoom-in',
     label: 'Larger Editor Text',
+    dynamicLabel: (c) => (presenting(c) ? 'Larger Stage Text' : 'Larger Editor Text'),
     accelerator: 'Mod+=',
-    available: (c) => editing(c),
+    /*
+     * Editing OR presenting. The stage's type size answers the same two keys —
+     * see the note on `stepScale` in `App.svelte` — and leaving this
+     * editor-only meant the disabled menu item ate ⌘= during a take.
+     */
+    available: (c) => editing(c) || presenting(c),
     run: (a) => a.stepScale(1),
   },
   'view.zoom-out': {
     id: 'view.zoom-out',
     label: 'Smaller Editor Text',
+    dynamicLabel: (c) => (presenting(c) ? 'Smaller Stage Text' : 'Smaller Editor Text'),
     accelerator: 'Mod+-',
-    available: (c) => editing(c),
+    available: (c) => editing(c) || presenting(c),
     run: (a) => a.stepScale(-1),
   },
   'view.actual-size': {
@@ -614,7 +655,12 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   },
   'session.end-take': {
     id: 'session.end-take',
-    label: 'End Take',
+    /*
+     * "End Session", not "End Take" — §115's one verb. This chord raises the
+     * "End the session?" confirmation, and the shortcuts page has always called
+     * it End session; the menu was the third name for it.
+     */
+    label: 'End Session',
     accelerator: 'Mod+.',
     available: (c) => c.sessionActive,
     run: (a) => a.endTake(),
@@ -626,6 +672,22 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'CandidCue',
     available: () => true,
     run: (a) => a.showMainWindow(),
+  },
+  'window.stage': {
+    id: 'window.stage',
+    label: 'Stage',
+    /*
+     * Available here, DISABLED BY RUST when no stage window exists.
+     *
+     * The registry cannot answer this one: whether a `stage` webview is up is a
+     * fact about the process, not about the route or the session, and the
+     * control window does not create it — the appearance preview and the
+     * calibration wizard do, from the Settings window. `menu.rs::apply_state`
+     * overrides the enabled flag from the live window list, which is the only
+     * place that can be right about it.
+     */
+    available: () => true,
+    run: (a) => a.showStageWindow(),
   },
   'window.settings': {
     id: 'window.settings',

@@ -132,15 +132,65 @@ async function trashCount(
  */
 let loadGeneration = 0;
 
+/**
+ * How many pages are loaded — counted, not inferred from the row count.
+ *
+ * `Math.floor(scripts.length / PAGE_SIZE)` looks equivalent and is not, because
+ * the append below DE-DUPLICATES: a script renamed between two reads can shift
+ * the ordering so that page 1 repeats a row from page 0, one row is dropped,
+ * and the length lands at 999 instead of 1000. The derived cursor then asks for
+ * page 1 again — and again, and again, because every answer is dropped as a
+ * duplicate. Show more would spin for ever on a library that had done nothing
+ * more exotic than be edited while it was open.
+ *
+ * Reset wherever the query changes underneath it, which is the same place
+ * `loadGeneration` moves.
+ */
+let loadedPages = 1;
+
+/**
+ * How many pages the NEXT full reload should re-read.
+ *
+ * Returning from the editor calls `loadLibrary()`, which reads page 0 — so a
+ * selection on row 700 was replaced by row 1, and the offset saved for the
+ * scroll position pointed past the end of a list that had just shrunk back to
+ * 500 rows. §10.2 names that journey specifically: selection survives returning
+ * from the editor. Now the reload restores the depth it was left at.
+ */
+function pagesToRestore(): number {
+  return loadedPages;
+}
+
+/**
+ * Back to one page — the list the next read produces is a DIFFERENT list.
+ *
+ * Called wherever the query changes underneath the cursor: a new view, a new
+ * search, a new sort. Without it, typing one letter into the search box would
+ * re-read as deep as the unfiltered list had been scrolled, which is both a
+ * much larger read than the screen can use and a paging cursor pointing into a
+ * result set that no longer has those pages.
+ */
+function resetPaging(): void {
+  loadedPages = 1;
+}
+
 export async function loadLibrary(): Promise<void> {
   const generation = (loadGeneration += 1);
   const current = get(state);
+  /*
+   * Re-read AS DEEP AS THE LIST WAS.
+   *
+   * One request with a bigger ceiling rather than N page requests: this runs on
+   * every return from the editor, and a list scrolled to row 1500 would
+   * otherwise mean three round trips before anything appeared.
+   */
+  const depth = pagesToRestore();
   state.update((s) => ({ ...s, loading: true, error: null }));
   try {
     const page = await scriptsService.listScripts(
       { view: current.view, query: current.query },
       current.sort,
-      { page: 0, pageSize: PAGE_SIZE },
+      { page: 0, pageSize: PAGE_SIZE * depth },
     );
     const trashTotal = await trashCount(current.view, current.query, page);
     if (generation !== loadGeneration) return;
@@ -199,7 +249,7 @@ export async function loadMoreScripts(): Promise<void> {
     const page = await scriptsService.listScripts(
       { view: current.view, query: current.query },
       current.sort,
-      { page: Math.floor(current.scripts.length / PAGE_SIZE), pageSize: PAGE_SIZE },
+      { page: loadedPages, pageSize: PAGE_SIZE },
     );
     if (generation !== loadGeneration) return;
     state.update((s) => {
@@ -208,6 +258,8 @@ export async function loadMoreScripts(): Promise<void> {
       // which for a keyed `{#each}` is a crash rather than a cosmetic fault.
       const seen = new Set(s.scripts.map((script) => script.id));
       const added = page.items.filter((item) => !seen.has(item.id));
+      // The cursor moves per PAGE, not per row kept — see `loadedPages`.
+      loadedPages += 1;
       return {
         ...s,
         loadingMore: false,
@@ -243,6 +295,7 @@ export function setLibraryView(view: LibraryView): void {
   // The rows on screen belong to the view being left. Holding them while the
   // next one loads would render live scripts as Trash rows, under a menu whose
   // entries delete permanently.
+  resetPaging();
   state.update((s) => ({
     ...s,
     view,
@@ -255,11 +308,13 @@ export function setLibraryView(view: LibraryView): void {
 }
 
 export function setLibraryQuery(query: string): void {
+  resetPaging();
   state.update((s) => ({ ...s, query }));
   void loadLibrary();
 }
 
 export function setLibrarySort(sort: ScriptSort): void {
+  resetPaging();
   state.update((s) => ({ ...s, sort }));
   void loadLibrary();
 }

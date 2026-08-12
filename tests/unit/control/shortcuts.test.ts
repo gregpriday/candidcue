@@ -343,9 +343,9 @@ describe('installShortcuts — what actually reaches the focused control', () =>
     expect(press('n', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
       'new-script',
     );
-    expect(press('k', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
-      'quick-search',
-    );
+    /* ⌘K is Insert › Link now; the Library's filter field is ⌘F through
+       `edit.find` in the command registry, which is not a resolver action. */
+    expect(press('k', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBeNull();
     onScreen('editor');
     expect(press('s', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe('save');
     // Present is the one key two screens answer.
@@ -395,7 +395,7 @@ function event(partial: Partial<Parameters<typeof resolveShortcut>[0]> & { key: 
 describe('resolveShortcut (spec §19)', () => {
   it('maps primary-modifier shortcuts on macOS (Cmd)', () => {
     expect(resolveShortcut(event({ key: 'n', metaKey: true }))).toBe('new-script');
-    expect(resolveShortcut(event({ key: 'k', metaKey: true }))).toBe('quick-search');
+    expect(resolveShortcut(event({ key: 'k', metaKey: true }))).toBeNull();
     expect(resolveShortcut(event({ key: 's', metaKey: true }))).toBe('save');
     expect(resolveShortcut(event({ key: 'Enter', metaKey: true }))).toBe('present');
     expect(resolveShortcut(event({ key: '.', metaKey: true }))).toBe('stop-session');

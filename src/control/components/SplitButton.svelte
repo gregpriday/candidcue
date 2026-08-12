@@ -307,9 +307,10 @@
   .caret:hover:not(:disabled) {
     background: var(--bg-hover-surface);
   }
+  /* Darkens rather than shrinks (§23.5, §9.3) — see `Button.svelte`. */
   .main:active:not(:disabled),
   .caret:active:not(:disabled) {
-    transform: scale(0.98);
+    background: var(--bg-secondary);
   }
 
   /* Primary — the same solid clay fill and 15px hero label as Button. */

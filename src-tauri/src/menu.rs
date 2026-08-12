@@ -129,11 +129,43 @@ impl MenuRegistry {
             }
         }
     }
+
+    /// Set one item's enabled flag, for the state RUST decides rather than the
+    /// webview. See `apply_state`.
+    fn set_enabled(&self, id: &str, enabled: bool) {
+        let Ok(items) = self.items.lock() else { return };
+        match items.get(id) {
+            Some(MenuHandle::Item(item)) => {
+                let _ = item.set_enabled(enabled);
+            }
+            Some(MenuHandle::Check(item)) => {
+                let _ = item.set_enabled(enabled);
+            }
+            None => {}
+        }
+    }
 }
 
 /// Push menu state from the frontend onto the live menu.
 pub fn apply_state(app: &AppHandle, states: &[MenuItemState]) {
     app.state::<MenuRegistry>().apply(states);
+    /*
+     * ONE ITEM RUST DECIDES, whatever the webview said.
+     *
+     * Window › Stage names a window, and whether that window exists is a fact
+     * about this process that no renderer can answer: the `stage` webview is
+     * created by the appearance preview and by the calibration wizard, both of
+     * which now live in the SETTINGS window — so the control window would be
+     * guessing, and the Settings window would be reporting on a window it may
+     * have closed a moment ago.
+     *
+     * Applied after the pushed state rather than merged into it, so it wins
+     * regardless of which window pushed and what that window believed.
+     */
+    let stage_exists = app
+        .get_webview_window(crate::windows::STAGE_LABEL)
+        .is_some();
+    app.state::<MenuRegistry>().set_enabled("window.stage", stage_exists);
 }
 
 /// Accelerators, in Tauri's platform-neutral spelling.
@@ -197,17 +229,55 @@ pub fn install(app: &AppHandle) {
     app.on_menu_event(move |_app, event| {
         let id = event.id().0.as_str();
         /*
-         * Emitted to CONTROL specifically, not broadcast.
+         * TO THE FOCUSED WINDOW, not to control.
          *
-         * A menu command is an instruction to the application's one operable
-         * window. The stage holds `core:event:allow-listen` and would receive a
-         * broadcast — it has no handler for these, but "nothing listens today"
-         * is exactly how an event ends up acted on twice a year from now.
+         * ---------------------------------------------------------------------
+         * WHY THIS WAS WRONG THE MOMENT PREFERENCES EXISTED
+         * ---------------------------------------------------------------------
+         * A macOS menu bar belongs to the APPLICATION and acts on whichever
+         * window is in front. This used to emit unconditionally to `control`,
+         * which was harmless while control was the only operable window and
+         * became a real defect with Settings in a window of its own:
+         *
+         *   - ⌘W with Preferences in front closed the CONTROL window, taking
+         *     the open script off the screen;
+         *   - Find opened the search panel in an editor nobody was looking at;
+         *   - Insert wrote Markdown into a hidden document.
+         *
+         * Each of those is a menu doing something to a window the user was not
+         * pointed at, which is worse than a menu that does nothing.
+         *
+         * The stage is EXCLUDED even when it holds focus. It has no command
+         * handler, it holds `core:event:allow-listen` and would receive the
+         * event, and a take is precisely when a stray menu command must not
+         * land. A menu chord pressed while the stage is focused falls back to
+         * control, which is the window that owns the session.
          */
-        if let Err(err) = handle.emit_to(CONTROL_LABEL, MENU_COMMAND_EVENT, serde_json::json!({ "id": id })) {
-            tracing::warn!(error = %err, id = %id, "a menu command could not be delivered");
+        let target = focused_command_window(&handle);
+        if let Err(err) =
+            handle.emit_to(target.as_str(), MENU_COMMAND_EVENT, serde_json::json!({ "id": id }))
+        {
+            tracing::warn!(error = %err, id = %id, target = %target, "a menu command could not be delivered");
         }
     });
+}
+
+/// Which window a menu command should act on.
+///
+/// The focused one, when it is a window that answers commands — today that is
+/// `control` and `preferences`. Anything else (the stage, an identify overlay)
+/// falls back to control: those windows have no command handler, and a menu
+/// chord pressed over them is still an instruction to the application.
+fn focused_command_window(app: &AppHandle) -> String {
+    for window in app.webview_windows().values() {
+        if window.is_focused().unwrap_or(false) {
+            let label = window.label();
+            if label == CONTROL_LABEL || label == crate::windows::preferences::PREFERENCES_LABEL {
+                return label.to_string();
+            }
+        }
+    }
+    CONTROL_LABEL.to_string()
 }
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -469,7 +539,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &sep()?,
             &item("session.identify-displays", "Identify Displays", None)?,
             &sep()?,
-            &item("session.end-take", "End Take", Some(keys::END_TAKE))?,
+            &item("session.end-take", "End Session", Some(keys::END_TAKE))?,
         ],
     )?;
     menu.append(&session)?;
@@ -482,6 +552,19 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // §20.4: the Settings window is listed, and choosing it brings the existing
     // one forward rather than making a second.
     let settings_window = item("window.settings", "CandidCue Settings", None)?;
+    /*
+     * §13.4: the Stage window is listed WHILE IT EXISTS.
+     *
+     * Which is not most of the time — production presentation is single-window,
+     * so the control window is the prompter and there is no second window to
+     * name. A real `stage` webview is still created by the appearance preview
+     * and by the calibration wizard, and while one of those is up it was a
+     * window of this application that the Window menu did not mention.
+     *
+     * Enabled from the live window list in `apply_state`, not from the state a
+     * webview pushed: no renderer knows whether this window exists.
+     */
+    let stage_window = item("window.stage", "Stage", None)?;
     window_items.push(&minimize);
     window_items.push(&maximize);
     #[cfg(target_os = "macos")]
@@ -491,6 +574,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     window_items.push(&separator);
     window_items.push(&main_window);
     window_items.push(&settings_window);
+    window_items.push(&stage_window);
     let window = Submenu::with_items(app, "Window", true, &window_items)?;
     menu.append(&window)?;
 
@@ -708,6 +792,7 @@ mod tests {
             rust_accelerators.len()
         );
 
+        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (id, accelerator) in rust_accelerators {
             // Find this command's block in the TypeScript registry and read its
             // `accelerator:` line, if it has one.
@@ -734,7 +819,50 @@ mod tests {
                 "`{id}`: the menu binds `{accelerator}` and the registry advertises \
                  `{declared}`"
             );
+            bound.insert(id);
         }
+
+        /*
+         * AND THE OTHER DIRECTION.
+         *
+         * The loop above only proves that every chord Rust binds is the chord
+         * TypeScript advertises. On its own that is half a guarantee, and the
+         * missing half is the one that bites: a command given an accelerator in
+         * `commands.ts` and never added to `build()` is printed in the Shortcuts
+         * dialog, described in the registry, and answered by nothing — a key the
+         * app promises and does not have. Nothing above could see it, because
+         * there was no Rust row to start from.
+         */
+        let mut advertised = 0usize;
+        for line in ts.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix("id: '") else {
+                continue;
+            };
+            let Some(quote) = rest.find('\'') else { continue };
+            let id = &rest[..quote];
+            let Some(at) = ts.find(&format!("'{id}': {{")) else {
+                continue;
+            };
+            let block_end = ts[at..].find("\n  },").map(|n| at + n).unwrap_or(ts.len());
+            if !ts[at..block_end]
+                .lines()
+                .any(|l| l.trim_start().starts_with("accelerator:"))
+            {
+                continue;
+            }
+            advertised += 1;
+            assert!(
+                bound.contains(id),
+                "`{id}` advertises an accelerator in `commands.ts` but no menu item binds it \
+                 — the Shortcuts dialog would print a key nothing answers"
+            );
+        }
+        // Anti-vacuity: a parser that matched nothing would satisfy the loop.
+        assert!(
+            advertised > 25,
+            "only {advertised} registry accelerators were read; the parser is broken"
+        );
     }
 
     #[test]
