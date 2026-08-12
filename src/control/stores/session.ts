@@ -2097,20 +2097,49 @@ function currentFollowingSettings(): FollowingSettings {
   }
 }
 
+/**
+ * How far either side of the displayed position a reacquisition searches.
+ *
+ * A screen of prompter text at a readable size is on the order of 60–120
+ * spoken words, so ±150 covers what the presenter can see with room for the
+ * display's own lead and lag. It is a PRIOR, not a bound: the engine ranks
+ * candidates, and a reader who has genuinely jumped further can still be found
+ * — this only says where to look first.
+ */
+const REACQUIRE_WINDOW_TOKENS = 150;
+
 const followActions = {
   nudge(deltaSentences: number): void {
     moveSentences(deltaSentences);
   },
   /**
-   * "Re-find me here" (§48): re-acquire around the position now on screen.
-   * TODO(integration, Agent A): use a dedicated `reacquire` worker message so
-   * the aligner reopens candidate windows instead of being re-seeded with its
-   * own cursor.
+   * "Re-find me here" (§48): reopen the search around what is on screen.
+   *
+   * This used to be `driver.moveToToken(snapshot.confirmedToken)` behind a TODO
+   * asking for exactly what is here now. Two things were wrong with it, and the
+   * second is the one that mattered.
+   *
+   * It seeded the engine with the engine's OWN current answer, so a presenter
+   * pressing "re-find me" asked it to look precisely where it was already
+   * looking — the one place it is demonstrably not finding them.
+   *
+   * And `moveToToken` is "I am here": it asserts a position at high confidence
+   * and returns the engine to `following`, so the display moved off an
+   * assertion the presenter had just disputed, before any evidence arrived to
+   * support it. A reacquisition holds instead, which is the safe direction for
+   * a follower that must never run ahead.
+   *
+   * The window is centred on the DISPLAYED position rather than the confirmed
+   * one — the reader is looking at the glass, not at the engine's conservative
+   * anchor — and spans a screen either side, because "here" means "on this
+   * screen" and not "at this word".
    */
   reAnchor(): void {
-    const token = get(state).snapshot?.confirmedToken;
-    if (token === undefined) return;
-    driver?.moveToToken(token);
+    const snapshot = get(state).snapshot;
+    if (snapshot === null || snapshot === undefined) return;
+    const centre = snapshot.observedToken ?? snapshot.confirmedToken;
+    if (!Number.isFinite(centre)) return;
+    driver?.reacquire(Math.max(0, centre - REACQUIRE_WINDOW_TOKENS), centre + REACQUIRE_WINDOW_TOKENS);
     noteReposition();
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },

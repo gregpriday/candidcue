@@ -140,6 +140,28 @@ export async function setAlignmentPosition(token: number): Promise<void> {
 }
 
 /**
+ * "Re-find me here" — the presenter says the follower is in the wrong place.
+ *
+ * A different act from [`setAlignmentPosition`], and it took a dedicated
+ * command to stop being the same one. "I am here" asserts a position; this
+ * says "I am somewhere on this screen and you are wrong", so the engine
+ * reopens its search over the visible range and HOLDS the display until
+ * evidence arrives, rather than asserting a lock the presenter has just
+ * disputed.
+ *
+ * The window is the visible token range, so the prior covers the screen — the
+ * reader saying "here" means "on this screen", not "at this word".
+ */
+export async function reacquireAlignment(
+  firstToken: number,
+  lastToken: number,
+): Promise<void> {
+  if (!Number.isFinite(firstToken) || !Number.isFinite(lastToken)) return;
+  if (lastToken < firstToken) return;
+  await ipcInvoke<void>('reacquire_alignment', { firstToken, lastToken });
+}
+
+/**
  * Subscribe to the snapshots Rust publishes to this window.
  *
  * Payloads are validated before they reach the handler: they arrive over an

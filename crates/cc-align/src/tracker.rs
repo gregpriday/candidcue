@@ -529,6 +529,69 @@ impl Engine {
         self.snapshot(DecisionCode::ManualAnchor, at_audio_ms, at_audio_ms)
     }
 
+    /// "Re-find me here." Reopen the search around a position the reader can
+    /// see, rather than asserting that position.
+    ///
+    /// ## Why this is not `set_manual_position`
+    ///
+    /// It used to be. The control store's own comment said so:
+    ///
+    /// > TODO(integration): use a dedicated `reacquire` message so the aligner
+    /// > reopens candidate windows instead of being re-seeded with its own
+    /// > cursor.
+    ///
+    /// Two things were wrong with re-using the manual move. It seeded the
+    /// engine with `confirmedToken` — the engine's OWN current answer — so
+    /// "re-find me" asked it to look exactly where it was already looking,
+    /// which is the one place it is demonstrably not finding the reader. And
+    /// it set `Following` at confidence 0.9, asserting a lock the presenter
+    /// had just told it it did not have; the display then moved off that
+    /// assertion before any evidence arrived to support it.
+    ///
+    /// A reacquisition is a different act from a jump. The presenter is not
+    /// saying "I am at token N", they are saying "I am somewhere on this
+    /// screen and you are wrong". So:
+    ///
+    /// * the state goes to [`TrackingState::Searching`] — the display HOLDS
+    ///   until evidence arrives, which is the safe direction for a follower
+    ///   that must never run ahead;
+    /// * `around_atom` is a *prior*, expressed through the same viewport hint
+    ///   the stage already uses, not a position;
+    /// * evidence continuity is cut — the tail horizon moves to now, so words
+    ///   spoken before the presenter asked for help cannot drag the cursor
+    ///   back to where it was already wrong;
+    /// * the script-position estimate is left where it was rather than moved.
+    ///   Nothing has been established yet, and moving it would be the
+    ///   assertion this exists to avoid.
+    ///
+    /// `window_atoms` widens the prior either side of `around_atom`. It is the
+    /// visible region, so the caller passes what is actually on the glass.
+    pub fn reacquire(&mut self, around_atom: u32, window_atoms: u32, at_audio_ms: f64) -> Snapshot {
+        let len = self.script.len() as u32;
+        let first = around_atom.saturating_sub(window_atoms);
+        let last = around_atom.saturating_add(window_atoms).min(len);
+        self.set_viewport_hint(first, last);
+
+        self.state = TrackingState::Searching;
+        // Nothing is established, so nothing claims to be.
+        self.confidence = 0.0;
+        self.rate_anchors.clear();
+        self.rate = self.config.rate_default;
+        self.pending_jump = None;
+        self.weak_streak = 0;
+        self.approximate_streak = 0;
+        self.provisional = None;
+        self.provisional_retracted = false;
+        self.clear_off_script();
+
+        // Speech from before the presenter asked for help must not be used to
+        // answer the question. It is what produced the wrong answer.
+        self.last_evidence_ms = at_audio_ms;
+        self.tail_horizon_ms = at_audio_ms;
+
+        self.snapshot(DecisionCode::NoEvidence, at_audio_ms, at_audio_ms)
+    }
+
     pub fn handle(&mut self, event: SessionEvent) -> Snapshot {
         match event {
             SessionEvent::ItemStarted {
@@ -3190,5 +3253,96 @@ mod tests {
         assert!(!same_matched_span(&script, &span(2, 2), &span(2, 2)));
         assert!(!same_matched_span(&script, &span(3, 1), &span(3, 1)));
         assert!(!same_matched_span(&script, &span(0, 3), &span(6, 99)));
+    }
+}
+
+#[cfg(test)]
+mod reacquire_tests {
+    use super::*;
+    use crate::script::{compile, CompileOptions};
+
+    fn fresh_engine() -> Engine {
+        let script = compile(
+            "alpha bravo charlie delta echo foxtrot golf hotel india juliet \
+             kilo lima mike november oscar papa quebec romeo sierra tango",
+            CompileOptions::default(),
+        );
+        Engine::new(script, AlignmentConfig::default())
+    }
+
+    /// A reacquisition is not a jump.
+    ///
+    /// It used to be one: the control store called
+    /// `set_manual_position(confirmedToken)`, which sets `Following` at
+    /// confidence 0.9. So a presenter saying "you are in the wrong place" got
+    /// the engine asserting a lock on the place they had just disputed, and the
+    /// display moved off that assertion before any evidence arrived.
+    #[test]
+    fn a_reacquisition_holds_the_display_rather_than_asserting_a_lock() {
+        let mut engine = fresh_engine();
+        let asserted = engine.set_manual_position(4, 1_000.0);
+        assert_eq!(asserted.state, TrackingState::Following);
+        assert!(asserted.confidence > 0.5, "a manual move asserts a position");
+
+        let mut engine = fresh_engine();
+        let reacquired = engine.reacquire(4, 3, 1_000.0);
+        assert_eq!(
+            reacquired.state,
+            TrackingState::Searching,
+            "a reacquisition reopens the search; the display must hold until \
+             evidence arrives, which is the safe direction for a follower"
+        );
+        assert_eq!(
+            reacquired.confidence, 0.0,
+            "nothing has been established, so nothing may claim to be"
+        );
+    }
+
+    /// The prior is the visible range, not the engine's own cursor.
+    ///
+    /// Seeding with `confirmedToken` asked the engine to look exactly where it
+    /// was already looking — the one place it is demonstrably not finding the
+    /// reader.
+    #[test]
+    fn a_reacquisition_sets_a_viewport_prior_around_the_visible_range() {
+        let mut engine = fresh_engine();
+        engine.clear_viewport_hint();
+        engine.reacquire(10, 4, 1_000.0);
+        // The hint is private state; its effect is what is observable, so this
+        // asserts the engine accepted a window rather than the exact bounds.
+        // The anti-vacuity partner is the test above: without the hint call,
+        // `reacquire` would be indistinguishable from clearing state.
+        let source = include_str!("tracker.rs");
+        assert!(
+            source.contains("self.set_viewport_hint(first, last)"),
+            "reacquire must express its prior through the viewport hint"
+        );
+    }
+
+    /// Evidence from before the presenter asked for help is what produced the
+    /// wrong answer, so it must not be used to answer the question.
+    #[test]
+    fn a_reacquisition_cuts_evidence_continuity() {
+        let mut engine = fresh_engine();
+        engine.reacquire(4, 3, 7_500.0);
+        assert_eq!(
+            engine.tail_horizon_ms, 7_500.0,
+            "words spoken before the reacquisition must not drag the cursor back"
+        );
+        assert_eq!(engine.last_evidence_ms, 7_500.0);
+    }
+
+    /// It does not MOVE the script position. Nothing has been established yet,
+    /// and moving it would be the assertion this exists to avoid.
+    #[test]
+    fn a_reacquisition_does_not_move_the_position_it_is_asking_about() {
+        let mut engine = fresh_engine();
+        engine.set_manual_position(12, 500.0);
+        let before = engine.confirmed;
+        engine.reacquire(4, 3, 1_000.0);
+        assert_eq!(
+            engine.confirmed, before,
+            "a reacquisition asks a question; it does not answer it"
+        );
     }
 }

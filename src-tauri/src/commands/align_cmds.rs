@@ -90,6 +90,22 @@ pub async fn stop_alignment(state: tauri::State<'_, AlignmentState>) -> Result<(
 
 /// Manual navigation: the presenter said where they are.
 #[tauri::command]
+pub async fn reacquire_alignment<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AlignmentState>,
+    first_token: f64,
+    last_token: f64,
+) -> Result<(), AppError> {
+    if !first_token.is_finite() || !last_token.is_finite() || last_token < first_token {
+        return Err(AppError::invalid_input(
+            "a reacquisition window must be a finite, ordered token range",
+        ));
+    }
+    state.reacquire_and_publish(&app, first_token, last_token);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_alignment_position<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: tauri::State<'_, AlignmentState>,

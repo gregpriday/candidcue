@@ -113,6 +113,7 @@ pub fn run() {
             commands::start_alignment,
             commands::stop_alignment,
             commands::set_alignment_position,
+            commands::reacquire_alignment,
             // Stage / windows (spec §46.6)
             commands::list_displays,
             commands::identify_displays,

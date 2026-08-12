@@ -19,6 +19,7 @@
  */
 import type { AlignmentSnapshot, CompiledScript, SentenceUnit } from '../../shared/contracts';
 import {
+  reacquireAlignment,
   setAlignmentPosition,
   startAlignment,
   stopAlignment,
@@ -54,6 +55,16 @@ export interface TrackingDriver {
   dispose(): void;
   /** Explicit "I am here", in fractional token space. */
   moveToToken(tokenIndex: number): void;
+  /**
+   * "Re-find me here" — the follower is wrong and the reader is somewhere in
+   * the visible range.
+   *
+   * Deliberately NOT `moveToToken(confirmedToken)`, which is what this used to
+   * be: that asks the engine to look exactly where it is already looking, which
+   * is the one place it is demonstrably not finding the reader. See
+   * `Engine::reacquire`.
+   */
+  reacquire(firstToken: number, lastToken: number): void;
 }
 
 export function newSessionId(): string {
@@ -154,6 +165,14 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
     },
     moveToToken(tokenIndex: number) {
       moveTo(tokenIndex);
+    },
+    reacquire(firstToken: number, lastToken: number) {
+      void reacquireAlignment(firstToken, lastToken).catch(() => {
+        // A reacquisition that cannot reach Rust leaves the engine exactly as
+        // it was, which is the state the presenter was complaining about —
+        // but it is not worth a dialog mid-take, and the toast has already
+        // said "re-finding your place".
+      });
     },
     dispose() {
       disposed = true;
@@ -287,6 +306,22 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
       });
       sentenceIndex = best;
       emit('following', 'manualAnchor', 0.95);
+    },
+    reacquire(firstToken: number, lastToken: number) {
+      /*
+       * The mock mirrors the REAL behaviour, which is the point of it being a
+       * separate method at all: a reacquisition goes to `searching` and holds,
+       * it does not assert a lock. A mock that emitted `following` at 0.95
+       * here would be stronger than production, and a mock being stronger than
+       * production is exactly what hid the conflict branch in the editor.
+       */
+      let best = 0;
+      const centre = (firstToken + lastToken) / 2;
+      sentences.forEach((s, i) => {
+        if (s.startTokenIndex <= centre) best = i;
+      });
+      sentenceIndex = best;
+      emit('searching', 'noEvidence', 0);
     },
     dispose() {
       if (timer) clearInterval(timer);
