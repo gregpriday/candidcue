@@ -767,3 +767,80 @@ describe('CI is defined by the release plan, not a hand-copied subset', () => {
     expect(gatesJob).toContain('legal gate');
   });
 });
+
+/* ------------------------------------------------ the release workflow */
+
+describe('the release workflow cannot publish an unverified build', () => {
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+  const uncommented = workflow
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+
+  it('does not suppress the legal gate', () => {
+    /*
+     * `ci.yml` passes `--allow-legal-failure` so day-to-day pushes are not
+     * blocked by placeholders only the business can fill in. A RELEASE must
+     * not: a build shipping an `@@LEGAL_*@@` in its licence agreement is the
+     * one outcome nobody can undo after the fact.
+     */
+    expect(uncommented, 'a release may not tolerate unresolved placeholders').not.toContain(
+      '--allow-legal-failure',
+    );
+    expect(uncommented, 'and it must run the gate at all').toContain('release-verify.mjs');
+  });
+
+  it('inspects the artifact rather than trusting the build', () => {
+    /*
+     * The review's point: a Tauri app can pass every test in the repository
+     * and still fail after signing — entitlements, nested binaries,
+     * quarantine, a missing resource, an architecture mismatch. None of that
+     * is visible from source.
+     */
+    expect(uncommented).toContain('verify-signed-bundle.mjs');
+    expect(uncommented, 'and without the unsigned escape hatch').not.toMatch(
+      /verify-signed-bundle\.mjs[^\n]*--unsigned/,
+    );
+  });
+
+  it('publishes only after everything else has run', () => {
+    /*
+     * Ordering is the guarantee. A publish step that ran before the
+     * inspection would put an unverified artifact on a download page, and no
+     * later failure could take it back.
+     */
+    const inspect = uncommented.indexOf('verify-signed-bundle.mjs');
+    const checksums = uncommented.indexOf('shasum -a 256');
+    const publish = uncommented.indexOf('gh release create');
+
+    expect(inspect, 'the inspection step must exist').toBeGreaterThan(-1);
+    expect(publish, 'the publish step must exist').toBeGreaterThan(-1);
+    expect(inspect).toBeLessThan(publish);
+    expect(checksums).toBeLessThan(publish);
+  });
+
+  it('records the provenance a release has to carry', () => {
+    for (const evidence of ['provenance/toolchain.txt', 'SHA256SUMS', 'verify-supply-chain.mjs']) {
+      expect(uncommented, `${evidence} must be produced`).toContain(evidence);
+    }
+    // rustc and node versions, not just "we built it".
+    expect(uncommented).toContain('rustc --version');
+    expect(uncommented).toContain('node --version');
+  });
+
+  it('builds for both architectures', () => {
+    /*
+     * An arm64-only release does not open on an Intel Mac, and what the user
+     * sees is "the application cannot be opened" with no reason given.
+     */
+    expect(uncommented).toContain('universal-apple-darwin');
+  });
+
+  it('fails rather than producing an unsigned build', () => {
+    expect(uncommented).toMatch(/APPLE_CERTIFICATE/);
+    expect(
+      uncommented,
+      'a missing certificate must stop the release, not silently produce an unsigned one',
+    ).toMatch(/An unsigned build is not a release/);
+  });
+});

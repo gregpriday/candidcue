@@ -58,3 +58,6 @@ bench/traces/
 .claude/
 # Throwaway probe tests written during code review to demonstrate a bug.
 tests/unit/probe/
+sbom/
+dist-release/
+provenance/

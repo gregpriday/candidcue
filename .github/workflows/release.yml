@@ -1,0 +1,191 @@
+name: Release
+
+# Build a signed, notarised, inspectable macOS release from a tag.
+#
+# The 1.0 readiness review's verdict was that the project had no verifiable
+# release: no CI, no signing, no notarisation, no artifact inspection, no
+# checksums, no SBOM, no provenance. This is the answer to all of that, and its
+# shape follows one rule — **nothing is published until every gate has passed.**
+#
+# ## What you must supply before this can run
+#
+# Four repository secrets, from your Apple Developer account:
+#
+#   APPLE_CERTIFICATE          Developer ID Application .p12, base64-encoded
+#   APPLE_CERTIFICATE_PASSWORD the .p12 export password
+#   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_API_KEY              App Store Connect API key .p8, base64-encoded
+#   APPLE_API_ISSUER           the key's issuer UUID
+#   APPLE_API_KEY_ID           the key id
+#
+# Until they exist this workflow fails at the signing step, which is the
+# correct behaviour: an unsigned build is not a release, and a workflow that
+# quietly produced one would be worse than no workflow.
+#
+# ## The legal gate is NOT suppressed here
+#
+# `ci.yml` passes `--allow-legal-failure` so day-to-day pushes are not blocked
+# by placeholders only the business can fill in. This does not. A build with an
+# unresolved `@@LEGAL_*@@` in its licence agreement is the one outcome nobody
+# can undo after the fact, so the release fails until the values are supplied.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and inspect, but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  release:
+    name: Signed macOS release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are built from a clean checkout with the full corpus. The
+          # benchmark fixtures are Git LFS and `read_events_jsonl` now refuses
+          # a pointer file outright — but fetching them is cheaper than
+          # discovering that.
+          lfs: true
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install with the committed lockfile
+        run: pnpm install --frozen-lockfile
+
+      # ------------------------------------------------------------------
+      # Everything that can refuse, before anything is built.
+      # ------------------------------------------------------------------
+      - name: Verify the code is releasable
+        # No `--allow-legal-failure`. See the header.
+        run: node scripts/release-verify.mjs
+
+      - name: Record the exact toolchain used
+        run: |
+          mkdir -p provenance
+          {
+            echo "tag: ${GITHUB_REF_NAME}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "version: $(node scripts/version.mjs print)"
+            echo "node: $(node --version)"
+            echo "pnpm: $(pnpm --version)"
+            echo "rustc: $(rustc --version)"
+            echo "cargo: $(cargo --version)"
+            echo "macos: $(sw_vers -productVersion)"
+            echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
+          } | tee provenance/toolchain.txt
+
+      # ------------------------------------------------------------------
+      # Sign, build, notarise.
+      # ------------------------------------------------------------------
+      - name: Import the signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE is not set. An unsigned build is not a release."
+            exit 1
+          fi
+          # A throwaway keychain, unlocked only for this job.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Build, sign and notarise
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/apple-api-key.p8
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.APPLE_API_KEY }}" | base64 --decode > "$APPLE_API_KEY_PATH"
+          # Both architectures. A release that is arm64-only will not open on
+          # an Intel Mac, and what the user sees is "the application cannot be
+          # opened" with no reason.
+          pnpm tauri build --target universal-apple-darwin
+          rm -f "$APPLE_API_KEY_PATH"
+
+      # ------------------------------------------------------------------
+      # Ask the artifact, not the source.
+      # ------------------------------------------------------------------
+      - name: Inspect the signed bundle
+        run: |
+          node scripts/verify-signed-bundle.mjs \
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+
+      - name: Record what the release is made of
+        run: node scripts/verify-supply-chain.mjs all
+
+      - name: Checksum every artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release
+          find src-tauri/target/universal-apple-darwin/release/bundle \
+            -name '*.dmg' -o -name '*.app.tar.gz' | while read -r file; do
+            cp "$file" dist-release/
+          done
+          cd dist-release
+          shasum -a 256 * | tee SHA256SUMS
+          # An empty checksum file would publish silently. A release with no
+          # artifacts is a failure, not an empty success.
+          test -s SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidcue-release
+          path: |
+            dist-release/
+            sbom/
+            provenance/
+          retention-days: 90
+
+      # ------------------------------------------------------------------
+      # Only now.
+      # ------------------------------------------------------------------
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "CandidCue ${GITHUB_REF_NAME}" \
+            --notes "Signed and notarised. Checksums, SBOMs and build provenance are attached." \
+            dist-release/* sbom/* provenance/*
