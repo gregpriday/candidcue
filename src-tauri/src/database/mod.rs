@@ -352,19 +352,18 @@ async fn quarantine_pre_baseline_database(
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let target = quarantine.join(format!("pre-1.0-baseline-{stamp}.sqlite3"));
 
-    // The WAL and SHM go with it. Leaving them beside a renamed database would
-    // hand the next open a write-ahead log belonging to a file that is no
-    // longer there.
-    for suffix in ["", "-wal", "-shm"] {
-        let from = db_path.with_file_name(format!("{DB_FILE_NAME}{suffix}"));
-        if from.exists() {
-            let to = target.with_file_name(format!(
-                "{}{suffix}",
-                target.file_name().unwrap_or_default().to_string_lossy()
-            ));
-            std::fs::rename(&from, &to)?;
-        }
-    }
+    /*
+     * The WAL and SHM go with it, through the shared journalled mover.
+     *
+     * Leaving them beside a renamed database would hand the next open a
+     * write-ahead log belonging to a file that is no longer there — and doing
+     * the three renames here, unjournalled, had the same defect one crash
+     * deeper: a failure between the database and its WAL leaves exactly that
+     * state behind, and the next launch discards the WAL along with everything
+     * committed to it. `finish_interrupted_rebuild` completes this at the top
+     * of `init`, before anything opens the folder.
+     */
+    crate::backup::quarantine_database_files(app_data_dir, &quarantine, &target)?;
 
     std::fs::write(
         target.with_extension("json"),

@@ -1366,6 +1366,11 @@ const PENDING_REBUILD: &str = "rebuild-pending.json";
 #[serde(rename_all = "camelCase")]
 struct PendingRebuild {
     quarantine: String,
+    /// Where the database itself was going, when it is not simply the
+    /// quarantine directory's own `candidcue.sqlite3`. The pre-1.0 quarantine
+    /// names the file after the baseline it predates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stem: Option<String>,
 }
 
 /// Finish a rebuild that was interrupted between its renames.
@@ -1406,13 +1411,21 @@ pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
     };
     let quarantine = PathBuf::from(&pending.quarantine);
     std::fs::create_dir_all(&quarantine)?;
+    // The rebuild moves into `<generation>/candidcue.sqlite3`; the pre-1.0
+    // quarantine names the file after the baseline it predates. The marker
+    // records which, so the leftovers join the set they belong to.
+    let stem = pending
+        .stem
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| quarantine.join(DATABASE_NAME));
     for suffix in ["", "-wal", "-shm"] {
         let name = format!("{DATABASE_NAME}{suffix}");
         let from = paths.root().join(&name);
         if !from.exists() {
             continue;
         }
-        let to = quarantine.join(&name);
+        let to = sidecar_of(&stem, suffix);
         if to.exists() {
             /*
              * The rebuild already moved this one, and what is live now arrived
@@ -1420,7 +1433,10 @@ pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
              * put on top of the original, and it is not the original, so it
              * goes beside it under a name that says what it is.
              */
-            std::fs::rename(&from, quarantine.join(format!("{name}.after-interruption")))?;
+            std::fs::rename(
+                &from,
+                sidecar_of(&stem, &format!("{suffix}.after-interruption")),
+            )?;
         } else {
             std::fs::rename(&from, &to)?;
         }
@@ -1436,68 +1452,84 @@ pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
-    std::fs::create_dir_all(&quarantine)?;
-    // The directory entry itself, before the only copy of the database is
-    // renamed into it. Same reason as the restore's generation directory.
-    let quarantine_root = paths.quarantine_dir();
-    sync_dir(&quarantine_root)?;
-    sync_dir(parent_of(&quarantine_root))?;
+/// Move the database and its sidecars aside, recoverably.
+///
+/// `to_stem` names the destination: the database lands there and the WAL and
+/// SHM beside it with their suffixes, so the three stay recognisable as one
+/// set. Shared by the rebuild and by the pre-1.0-baseline quarantine, which had
+/// the same defect independently — three unjournalled renames, and a crash
+/// between the first and the second leaves a WAL with no database for the next
+/// open to discard.
+///
+/// Returns whether anything was actually moved.
+pub fn quarantine_database_files(
+    root: &Path,
+    quarantine_dir: &Path,
+    to_stem: &Path,
+) -> Result<bool, AppError> {
+    std::fs::create_dir_all(quarantine_dir)?;
+    sync_dir(quarantine_dir)?;
+    sync_dir(parent_of(quarantine_dir))?;
 
-    /*
-     * The intent, durably, before the first rename.
-     *
-     * Three renames are not one operation, and a crash between them leaves a
-     * WAL with no database — see `finish_interrupted_rebuild`, which is what
-     * reads this.
-     */
-    let marker = paths.root().join(PENDING_REBUILD);
+    let marker = root.join(PENDING_REBUILD);
     write_json_durably(
         &marker,
         &PendingRebuild {
-            quarantine: quarantine.to_string_lossy().to_string(),
+            quarantine: quarantine_dir.to_string_lossy().to_string(),
+            stem: Some(to_stem.to_string_lossy().to_string()),
         },
     )?;
 
-    /*
-     * Rename first and ask questions after, rather than `exists()` then rename.
-     *
-     * The pre-check was a race, and it fired: SQLite removes `-wal` and `-shm`
-     * when the last connection closes, and that can land AFTER `close()` has
-     * returned. The check saw the sidecar, the rename did not find it, and the
-     * whole rebuild failed with "No such file or directory" — having already
-     * moved the main database, so the user was left with no live database and
-     * an operation that reported failure. A file that is not there is not a
-     * failure to move it.
-     */
     let mut moved = false;
     for suffix in ["", "-wal", "-shm"] {
-        let from = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
-        match std::fs::rename(&from, quarantine.join(format!("{DATABASE_NAME}{suffix}"))) {
+        let from = root.join(format!("{DATABASE_NAME}{suffix}"));
+        let to = sidecar_of(to_stem, suffix);
+        match std::fs::rename(&from, &to) {
             Ok(()) => {
-                /*
-                 * Both directories, before the live name is reused.
-                 *
-                 * A rename is atomic but not durable. This one is the only copy
-                 * of the database moving to the only place that will hold it,
-                 * and the next thing to happen at the live path is a fresh
-                 * database being created there — so a power loss with the
-                 * rename unflushed could leave the old file with no durable
-                 * name at all.
-                 */
-                sync_dir(&quarantine)?;
-                sync_dir(paths.root())?;
+                sync_dir(parent_of(&to))?;
+                sync_dir(root)?;
                 moved = true;
             }
-            // `!from.exists()` as well as the error kind: a `NotFound` from
-            // `rename` can also mean the DESTINATION directory has gone, and
-            // swallowing that would skip a move that really was needed.
+            // Not there is not a failure to move it: SQLite removes `-wal` and
+            // `-shm` when the last connection closes, which can land after
+            // `close()` returns.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !from.exists() => {}
             Err(e) => return Err(e.into()),
         }
     }
+
+    std::fs::remove_file(&marker)?;
+    sync_dir(root)?;
+    Ok(moved)
+}
+
+/// `foo.sqlite3` + `-wal` → `foo.sqlite3-wal`, without losing the extension.
+fn sidecar_of(stem: &Path, suffix: &str) -> PathBuf {
+    if suffix.is_empty() {
+        return stem.to_path_buf();
+    }
+    let name = stem.file_name().unwrap_or_default().to_string_lossy().to_string();
+    stem.with_file_name(format!("{name}{suffix}"))
+}
+
+pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
+
+    /*
+     * Through the shared, journalled mover.
+     *
+     * Three renames are not one operation: a crash between the database and its
+     * WAL leaves a write-ahead log with no database, which the next open
+     * discards along with everything committed to it. `quarantine_database_files`
+     * writes the intent down first and `finish_interrupted_rebuild` completes it
+     * at the top of `database::init`.
+     */
+    let moved = quarantine_database_files(
+        paths.root(),
+        &quarantine,
+        &quarantine.join(DATABASE_NAME),
+    )?;
 
     std::fs::write(
         quarantine.join("README.txt"),
@@ -1511,10 +1543,6 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
          Nothing deletes this folder automatically.\n",
     )
     .ok();
-
-    // Done: all three are where they belong, so the intent is retired.
-    std::fs::remove_file(&marker)?;
-    sync_dir(paths.root())?;
 
     if !moved {
         tracing::warn!("rebuild requested but there was no database to move aside");

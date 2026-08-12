@@ -1840,3 +1840,43 @@ async fn a_rebuild_interrupted_between_its_renames_is_finished_before_sqlite_ope
         b"the moved database"
     );
 }
+
+#[tokio::test]
+async fn a_pre_baseline_quarantine_interrupted_between_its_renames_is_finished_too() {
+    /*
+     * The same three-rename defect existed twice, independently: once in the
+     * rebuild and once in the pre-1.0-baseline quarantine. Both go through the
+     * journalled mover now, and the finisher honours the destination the marker
+     * records — the pre-1.0 path names the file after the baseline it predates
+     * rather than using the plain database name, so a finisher that assumed the
+     * rebuild's layout would strand the WAL under a name nothing reads.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    let quarantine = dir.path().join("quarantine");
+    fs::create_dir_all(&quarantine).expect("quarantine");
+
+    let stem = quarantine.join("pre-1.0-baseline-20260812T000000Z.sqlite3");
+    fs::write(&stem, b"the moved legacy database").expect("moved");
+    fs::write(dir.path().join("candidcue.sqlite3-wal"), b"orphaned wal").expect("orphan wal");
+    fs::write(
+        dir.path().join("rebuild-pending.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "quarantine": quarantine.to_string_lossy(),
+            "stem": stem.to_string_lossy(),
+        }))
+        .expect("json"),
+    )
+    .expect("marker");
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
+    pool.close().await;
+
+    let wal = quarantine.join("pre-1.0-baseline-20260812T000000Z.sqlite3-wal");
+    assert!(
+        wal.is_file(),
+        "the orphaned WAL must join the database it belongs to, at {}",
+        wal.display()
+    );
+    assert_eq!(fs::read(&wal).expect("read"), b"orphaned wal");
+    assert!(!dir.path().join("rebuild-pending.json").exists());
+}
