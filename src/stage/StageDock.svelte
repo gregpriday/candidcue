@@ -2,7 +2,12 @@
   The session dock — one quiet control location, bottom left.
 
   ---------------------------------------------------------------------------
-  THE DESKTOP REFINEMENT'S §13.2 AUDIT: NOTHING CHANGED HERE, ON PURPOSE
+  THE DESKTOP REFINEMENT'S §13.2 CODE REVIEW: NOTHING CHANGED HERE, ON PURPOSE
+
+  Read "review", not "audit". What happened was a reading of this file against
+  §13.2's checklist; what §13.2 actually asks for is verification on a real
+  panel at a real viewing distance, and that has not happened. The verdicts
+  below are therefore reasoned, not measured.
   ---------------------------------------------------------------------------
   The desktop-structure pass reduced radii, control heights and shadow use
   across the whole control window. It stopped at this file, and the reason is
@@ -10,7 +15,7 @@
   where real-device testing demonstrates a problem, and §31.5 lists weakening
   the stage architecture among the changes that would make the product worse.
 
-  What the audit found, and why each item stands:
+  What the review found, and why each item stands:
 
     40px buttons        §13.2 asks whether they remain usable viewed directly
                         at the rig. They are sized for exactly that — see the
@@ -30,7 +35,7 @@
                         dock floats over moving text on glass, which is the
                         clearest case for one in the product.
 
-  So the honest state is: audited, unchanged, and waiting on the one kind of
+  So the honest state is: reviewed, unchanged, and waiting on the one kind of
   evidence that could justify changing it. The control window's tokens no
   longer reach in here — `--stage-chrome-*` are the stage's own — so a future
   density pass cannot alter this surface by accident.

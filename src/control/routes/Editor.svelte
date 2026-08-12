@@ -256,22 +256,27 @@ import type { PresentationMode } from '../services/settings-types';
     onRouteCommand((command) => {
       if (opening) return;
       switch (command) {
+        /*
+         * ALL FOUR go through `ensureEditingSurface`, and that matters.
+         *
+         * It switches out of Preview and LEAVES A SPLIT ALONE, because the
+         * editor is already on screen there. Find and Replace used to force
+         * `editorLayout: 'edit'` outright, which destroyed a split somebody had
+         * arranged — and Find Next / Find Previous did not switch at all, so
+         * from Preview they stepped a search through a hidden editor and
+         * appeared to do nothing whatsoever.
+         */
         case 'edit.find':
-          // Preview mode has no editor to search. Switching to Edit first is
-          // what somebody pressing Find meant, rather than a key that appears
-          // to be broken in one of the two modes.
-          updateWorkspace({ editorLayout: 'edit' });
-          void tick().then(() => editorRef?.openFind());
+          void ensureEditingSurface().then(() => editorRef?.openFind());
           break;
         case 'edit.find-next':
-          editorRef?.findNextMatch();
+          void ensureEditingSurface().then(() => editorRef?.findNextMatch());
           break;
         case 'edit.find-previous':
-          editorRef?.findPreviousMatch();
+          void ensureEditingSurface().then(() => editorRef?.findPreviousMatch());
           break;
         case 'edit.replace':
-          updateWorkspace({ editorLayout: 'edit' });
-          void tick().then(() => editorRef?.openReplace());
+          void ensureEditingSurface().then(() => editorRef?.openReplace());
           break;
         case 'file.rename-script':
           void tick().then(() => {
@@ -1004,7 +1009,7 @@ import type { PresentationMode } from '../services/settings-types';
             onkeydown={onToolbarKeydown}
             onfocusin={onToolbarFocusIn}
           >
-            <button type="button" class="glyph" aria-label="Cycle heading level" title={`Cycle heading level (${accel('Mod+Alt+1')})`} onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
+            <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
             <span class="toolbar-rule" aria-hidden="true"></span>
             <button type="button" class="glyph" aria-label="Bold" title={`Bold (${accel('Mod+B')})`} onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
             <button type="button" class="glyph" aria-label="Italic" title={`Italic (${accel('Mod+I')})`} onclick={() => withView(inserts.insertItalic)}><em>I</em></button>

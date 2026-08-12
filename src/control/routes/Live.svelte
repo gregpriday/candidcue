@@ -1387,8 +1387,20 @@ import { onShortcut } from '../lib/shortcuts';
             this. It leaked an implementation detail into the one line here
             addressed to the presenter, and said nothing they could use.
           -->
+          <!--
+            "Where you are", not "the stage".
+
+            This said "the scaled stage view appears here", which is a claim
+            this panel does not honour: what it renders is a handful of
+            normalised sentences in workspace type, with none of the stage's
+            optics, geometry, mirroring or line breaking. §12.5 asks for it to
+            be EXPLICIT whether a preview is optically exact or only
+            representative, and the honest answer here is that it is neither —
+            it is a position readout.
+          -->
           <p class="ph-note">
-            The scaled stage view appears here once the compiled script is available.
+            The lines around your place appear here once the script has compiled. This is a
+            position readout, not an optical preview of the glass.
           </p>
         </div>
       {/if}
@@ -2032,9 +2044,21 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   .outline {
-    /* The width is an inline style from the persisted pane size; the divider
-       beside it is what changes it. No border — the divider draws the line. */
-    flex: 0 0 auto;
+    /*
+     * The width is an inline style from the persisted pane size; the divider
+     * beside it is what changes it. No border — the divider draws the line.
+     *
+     * `flex-shrink: 1` with a `min-width`, NOT `0 0 auto`.
+     *
+     * The first version was `flex: 0 0 auto` on both rails, which made the
+     * PREVIEW the only shrinkable item — so a narrow window crushed the stage
+     * preview to nothing while the rails kept their full width. The comment
+     * beside it claimed the opposite. §12.2's rule is to collapse the least
+     * critical pane before shrinking the preview below usefulness, so the rails
+     * give way first and stop at a width where their content is still readable.
+     */
+    flex: 0 1 auto;
+    min-width: 140px;
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
@@ -2091,10 +2115,15 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* --- stage preview --- */
   .preview {
-    /* Takes what is left, shrinks last — §12.2: collapse the least critical
-       pane before the stage preview stops being useful. */
+    /*
+     * Takes what is left and shrinks LAST (§12.2).
+     *
+     * The rails are `flex: 0 1 auto` with their own minimums, so they give way
+     * first; this keeps a floor of its own so the preview can never be reduced
+     * to a sliver even when both rails have reached theirs.
+     */
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 260px;
     min-height: 0;
     overflow: hidden;
     display: flex;
@@ -2156,8 +2185,9 @@ import { onShortcut } from '../lib/shortcuts';
 
   /* --- diagnostics --- */
   .diagnostics {
-    flex: 0 0 auto;
-    min-width: 0;
+    /* Shrinks before the preview does — see the note on `.outline`. */
+    flex: 0 1 auto;
+    min-width: 200px;
     min-height: 0;
     overflow-y: auto;
     display: flex;

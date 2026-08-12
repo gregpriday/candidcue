@@ -141,9 +141,11 @@
   /**
    * The sections, each with the words somebody might search for.
    *
-   * `keywords` is the whole of §14.2's "search labels, descriptions, section
-   * names, and common synonyms" that can be honoured without indexing every
-   * control in a 3000-line route. It is deliberately written in the user's
+   * `keywords` is a SECTION-level index, and §14.2 asks for more than that: it
+   * wants labels, descriptions and synonyms searched, matching rows highlighted,
+   * and keyboard navigation through the results. This narrows the section list
+   * and no further. It is the useful half — "where do I change the microphone"
+   * is the question people actually ask — and the row-level half is not done. It is deliberately written in the user's
    * vocabulary rather than the code's — somebody looking for the microphone
    * types "mic", and somebody looking for the teleprompter's mirror types
    * "mirror", not "teleprompter".
@@ -1586,6 +1588,7 @@
       {#if section === 'general'}
         <Section title="General">
           <Select
+          layout="row"
             label="On launch"
             value={$settings.general.launchBehavior}
             options={[
@@ -1772,6 +1775,7 @@
             </div>
           {:else}
             <Select
+          layout="row"
               label="Input device"
               value={micSelectValue}
               options={micOptions}
@@ -2233,6 +2237,7 @@
             />
 
             <Select
+          layout="row"
               label="How you are framed"
               value={rig.framing}
               options={[
@@ -2511,6 +2516,7 @@
             through glass, shipped, tested, and impossible to select.
           -->
           <Select
+          layout="row"
             label="Default font family"
             value={$settings.teleprompter.fontFamilyId}
             options={[
@@ -2700,6 +2706,7 @@
             never through the middle of a name. Turn it off to wrap the way a browser does.
           </p>
           <Select
+          layout="row"
             label="When a session ends"
             value={$settings.teleprompter.stageEndBehavior}
             options={[

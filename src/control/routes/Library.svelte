@@ -17,18 +17,28 @@
                    what makes selection worth having — click-to-open leaves
                    nothing standing for a menu or an inspector to act on.
     KEYBOARD       arrows, Home/End, PageUp/PageDown, Enter to open, Delete to
-                   trash. The whole route is operable without a pointer (§10.2).
+                   trash (§10.2). Two honest limits: the store loads one page of
+                   500 (see `library.ts`), so a larger library has rows no input
+                   device can reach until pagination exists; and scroll position
+                   is not restored between visits.
     CONTEXT MENU   right-click selects the row first, then opens (§10.6).
     DROP TARGET    Markdown dropped on the window imports. The paths are handled
                    in Rust — see `windows/drag_drop.rs` for why.
     STATUS BAR     the count lives at the bottom, not under a heading (§10.8).
 
   ---------------------------------------------------------------------------
-  THE LIST IS ONE TAB STOP
+  THE ROWS ARE ONE TAB STOP; THE SELECTED ROW'S ACTIONS ARE TWO MORE
   ---------------------------------------------------------------------------
-  `role="listbox"` with roving tabindex: Tab reaches the list, arrows move
-  within it, Tab leaves. Fifty tab stops for fifty scripts would mean the
-  keyboard could not get past the Library.
+  `role="listbox"` with roving tabindex: exactly one ROW is tabbable, so fifty
+  scripts do not mean fifty tab stops and the keyboard can get past the Library.
+
+  The selected row's Present and overflow buttons are also tabbable, and that is
+  deliberate rather than an oversight — they are `visibility: hidden` on every
+  other row, and a hidden element is not focusable, so the count is three stops
+  in total regardless of how long the list is. It does mean this is not a pure
+  listbox: ARIA expects `option` descendants to be presentational, and some
+  screen readers flatten them. The alternative — actions reachable only through
+  the context menu — was judged worse for the far more common case.
 -->
 <script lang="ts">
   import { tick } from 'svelte';

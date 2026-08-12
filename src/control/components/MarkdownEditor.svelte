@@ -17,8 +17,13 @@
   writing prose.
 
   So the editor keeps the system menu, and the insertions it would have offered
-  live where they are discoverable anyway: the formatting row above the text,
-  and the native Edit menu with their keys beside them.
+  live in the formatting row above the text, where they are visible and
+  tooltipped.
+
+  They are NOT in the native menu. §11.4 asks for a discoverable Insert menu and
+  this pass did not build one — the Edit menu ends after Find and Replace. That
+  is a real remaining gap rather than a decision, and it is written down here so
+  the next person does not read the paragraph above as covering it.
 
 -->
 <script lang="ts">
@@ -163,13 +168,14 @@
             ...searchKeymap,
           ]),
           /*
-           * The search extension itself, not only its keymap.
+           * The search extension declared EAGERLY, and configured.
            *
-           * `searchKeymap` was installed on its own, which binds the keys but
-           * leaves the panel and the match highlighting to the extension —
-           * absent here, so ⌘F opened a panel with no highlighted matches and
-           * `findNext` had no query state to step through. Adding `search()`
-           * is what makes the Edit menu's Find family work at all.
+           * `openSearchPanel` will append the search extensions itself if they
+           * are missing, so ⌘F worked before this line existed — the honest
+           * difference is that the state now exists from the start, the panel is
+           * pinned to the top rather than the bottom, and match highlighting is
+           * on. Without `highlightSelectionMatches` a search told you where the
+           * caret went and nothing about the other hits.
            */
           search({ top: true }),
           highlightSelectionMatches(),

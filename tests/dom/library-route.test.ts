@@ -527,13 +527,37 @@ describe('keyboard navigation through the collection', () => {
     expect(confirm.requestConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it('is a single tab stop: only the selected row is tabbable', async () => {
+  /**
+   * The tab model, counted HONESTLY.
+   *
+   * The first version of this asserted "a single tab stop" and counted only
+   * `role="option"` elements — so it could never have seen the row action
+   * buttons, which are the whole question. What is actually true, and what
+   * matters, is that the number of stops does not grow with the list: exactly
+   * one row is tabbable, and the selected row's two actions are reachable
+   * because they are the only ones visible.
+   */
+  it('keeps its tab stops constant however long the list is', async () => {
     const container = await threeRows();
     const rows = [...container.querySelectorAll<HTMLElement>('[role="option"]')];
     expect(rows).toHaveLength(3);
-    const tabbable = rows.filter((r) => r.getAttribute('tabindex') === '0');
-    expect(tabbable).toHaveLength(1);
-    expect(tabbable[0]?.getAttribute('aria-selected')).toBe('true');
+
+    const tabbableRows = rows.filter((r) => r.getAttribute('tabindex') === '0');
+    expect(tabbableRows).toHaveLength(1);
+    expect(tabbableRows[0]?.getAttribute('aria-selected')).toBe('true');
+
+    /*
+     * Every row's buttons are in the DOM, but only the SELECTED row's are
+     * visible — `visibility: hidden` is not focusable, so the others are not
+     * tab stops. jsdom resolves no stylesheets, so the rule cannot be read here;
+     * what is asserted instead is the structural fact it depends on, that the
+     * actions live inside the row and are governed by its selected state.
+     */
+    const selectedRow = tabbableRows[0]!;
+    expect(selectedRow.querySelectorAll('button').length).toBeGreaterThan(0);
+    expect(selectedRow.classList.contains('selected')).toBe(true);
+    const unselected = rows.find((r) => r.getAttribute('aria-selected') !== 'true')!;
+    expect(unselected.classList.contains('selected')).toBe(false);
   });
 
   it('marks selection and focus as separate things', async () => {

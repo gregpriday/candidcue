@@ -111,6 +111,24 @@ export const COMMAND_IDS = [
 
   // ---- Window ----
   'window.main',
+  /*
+   * NO `window.reopen-stage`, and no Stage entry.
+   *
+   * §13.4 asks for both: the Stage window listed in the Window menu while it
+   * exists, and Reopen Stage reachable from there. Neither is built, and adding
+   * the menu items without the machinery behind them would recreate exactly the
+   * enabled-no-op this file's availability rules exist to prevent.
+   *
+   * The first is arguably moot: single-window presentation has no separate
+   * stage window to list — the control window IS the stage — so the entry would
+   * name something that does not exist.
+   *
+   * The second is a genuine gap. Recovering a lost stage today means ending the
+   * take and presenting again, which is what `Live.svelte` tells the operator to
+   * do. A real reopen has to re-enter the presentation state machine mid-take
+   * (`windows/present.rs`), and §29.6 is explicit that it should not be
+   * disturbed casually. It wants its own change, with its own tests.
+   */
 
   // ---- Help ----
   'help.keyboard-shortcuts',

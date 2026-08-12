@@ -590,6 +590,111 @@ mod tests {
         }
     }
 
+    /// Every accelerator this menu binds must be the one TypeScript advertises.
+    ///
+    /// The two sides spell the same chord differently — Tauri wants
+    /// `CmdOrCtrl+N`, `lib/commands.ts` wants `Mod+N` — so the check normalises
+    /// both to a canonical form and compares the sets.
+    ///
+    /// This test was CLAIMED by a comment in `keys` before it existed, which is
+    /// the failure mode worth guarding hardest against: an accelerator that the
+    /// menu binds and the Shortcuts dialog does not name is a key nobody can
+    /// discover, and one the dialog names and the menu does not bind is a
+    /// promise the app breaks.
+    #[test]
+    fn menu_accelerators_match_the_typescript_registry() {
+        let ts = include_str!("../../src/control/lib/commands.ts");
+        let rs = include_str!("menu.rs");
+
+        /// `CmdOrCtrl+Shift+G` / `Mod+Shift+G` → `mod+shift+g`.
+        fn canonical(spec: &str) -> String {
+            let mut parts: Vec<String> = spec
+                .split('+')
+                .map(|part| match part.to_ascii_lowercase().as_str() {
+                    "cmdorctrl" | "mod" => "mod".to_string(),
+                    "plus" | "=" => "+".to_string(),
+                    "return" | "enter" => "return".to_string(),
+                    other => other.to_string(),
+                })
+                .collect();
+            // The key is last; the modifiers are a SET, so their order must not
+            // decide equality.
+            let key = parts.pop().unwrap_or_default();
+            parts.sort();
+            parts.push(key);
+            parts.join("+")
+        }
+
+        // Rust: the `keys` module's constants, paired with where they are used.
+        let mut rust_accelerators: Vec<(String, String)> = Vec::new();
+        for line in rs.lines() {
+            let trimmed = line.trim_start();
+            for prefix in ["&item(\"", "&check(\"", "item(\"", "check(\""] {
+                let Some(rest) = trimmed.strip_prefix(prefix) else {
+                    continue;
+                };
+                let Some(quote) = rest.find('"') else { continue };
+                let id = rest[..quote].to_string();
+                // `Some(keys::NAME)` or `Some("Literal")`, else `None`.
+                if let Some(start) = rest.find("Some(keys::") {
+                    let name = rest[start + "Some(keys::".len()..]
+                        .split(')')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    // Resolve the constant from the `keys` module above.
+                    let needle = format!("pub const {name}: &str = \"");
+                    if let Some(at) = rs.find(&needle) {
+                        let value = rs[at + needle.len()..].split('"').next().unwrap_or("");
+                        rust_accelerators.push((id, canonical(value)));
+                    }
+                } else if let Some(start) = rest.find("Some(\"") {
+                    let value = rs_literal(&rest[start + "Some(\"".len()..]);
+                    rust_accelerators.push((id, canonical(&value)));
+                }
+                break;
+            }
+        }
+
+        fn rs_literal(rest: &str) -> String {
+            rest.split('"').next().unwrap_or("").to_string()
+        }
+
+        assert!(
+            rust_accelerators.len() > 10,
+            "found only {} accelerators; the parser is broken",
+            rust_accelerators.len()
+        );
+
+        for (id, accelerator) in rust_accelerators {
+            // Find this command's block in the TypeScript registry and read its
+            // `accelerator:` line, if it has one.
+            let needle = format!("'{id}': {{");
+            let Some(at) = ts.find(&needle) else {
+                panic!("`{id}` has a menu accelerator but no registry entry");
+            };
+            let block_end = ts[at..].find("\n  },").map(|n| at + n).unwrap_or(ts.len());
+            let block = &ts[at..block_end];
+            let Some(line) = block.lines().find(|l| l.trim_start().starts_with("accelerator:"))
+            else {
+                panic!(
+                    "menu item `{id}` binds `{accelerator}` but the registry declares no \
+                     accelerator — the Shortcuts dialog cannot name a key the menu owns"
+                );
+            };
+            let declared = line
+                .split('\'')
+                .nth(1)
+                .unwrap_or_else(|| panic!("could not read the accelerator for `{id}`"));
+            assert_eq!(
+                canonical(declared),
+                accelerator,
+                "`{id}`: the menu binds `{accelerator}` and the registry advertises \
+                 `{declared}`"
+            );
+        }
+    }
+
     #[test]
     fn menu_command_event_name_matches_typescript() {
         let ts = include_str!("../../src/shared/contracts/commands.ts");

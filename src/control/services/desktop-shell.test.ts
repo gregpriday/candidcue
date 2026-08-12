@@ -94,8 +94,13 @@ describe('composeWindowTitle', () => {
  *
  * `setInvokeForTesting` does not make `isTauriRuntime()` true, so these tests
  * assert the no-op contract rather than the payload. The payload's SHAPE is
- * covered by `menuStateFor` in `commands.test.ts`, and its delivery by the Rust
- * ACL and roundtrip tests.
+ * covered by `menuStateFor` in `commands.test.ts`.
+ *
+ * DELIVERY IS NOT COVERED. No test invokes `set_window_title` over IPC, and
+ * `set_menu_state` is excluded from the MockRuntime roundtrip suite altogether
+ * (it is in `PINNED` in `ipc_roundtrip_tests.rs`, because it writes onto
+ * `MenuItem<Wry>` handles that no mock runtime has). Both are exercised only by
+ * running the packaged app.
  */
 describe('pushing state outside a Tauri runtime', () => {
   let calls: Array<{ command: string }> = [];

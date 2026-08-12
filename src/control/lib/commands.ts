@@ -21,7 +21,9 @@
  *   2. it is checked again inside `runCommand` before the action fires, because
  *      a menu's enabled state is a snapshot pushed some milliseconds ago and the
  *      session can end in between;
- *   3. it is what the Shortcuts dialog reads to say where a key works.
+ *   3. it is what a future Shortcuts dialog should read. It does NOT read it
+ *      today — that dialog groups its rows from `SHORTCUT_OWNERSHIP` in
+ *      `lib/shortcuts.ts`, which is the seam described above.
  *
  * ---------------------------------------------------------------------------
  * COMMANDS DO NOT BYPASS GUARDS
@@ -430,9 +432,22 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   'view.stage-appearance': {
     id: 'view.stage-appearance',
     label: 'Stage Appearance…',
-    // Available DURING a take as well: adjusting brightness or type size mid-
-    // take is a normal thing to need, and the sheet opens on the operator plane.
-    available: (c) => c.route.name === 'live' || c.route.name === 'editor',
+    /*
+     * LIVE ONLY, and that is a correction rather than a restriction.
+     *
+     * It was `live || editor`, on the reasoning that the appearance sheet is
+     * useful from either. But the sheet BELONGS TO LIVE — it is the take's own
+     * appearance, seeded from what the stage is prompting at right now — and the
+     * editor has no such sheet to open. So the menu item was enabled on the
+     * editor and did nothing at all when chosen: `dispatchRouteCommand` drops a
+     * command with no listener, silently.
+     *
+     * §6.3's rule is to disable rather than let an impossible action fail after
+     * it is invoked, and an item that fails INVISIBLY is the worst version of
+     * that. The saved defaults live in Settings › Teleprompter, which is where
+     * an editor-time adjustment belongs.
+     */
+    available: (c) => c.route.name === 'live',
     run: (a) => a.stageAppearance(),
   },
 
