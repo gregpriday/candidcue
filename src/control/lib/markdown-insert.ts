@@ -120,6 +120,20 @@ export function insertImage(view: EditorView, markdownPath: string, altText = 'I
   insertBlock(view, `![${alt}](${markdownPath})`);
 }
 
+/**
+ * Insert Markdown that is already written, one block per entry.
+ *
+ * For dropped images (§20.2): Rust imports each file and hands back the finished
+ * `![alt](assets/…)` string, so there is nothing left to compose — and composing
+ * it again here would mean two places that know how an asset reference is
+ * spelled. Goes through the same `insertBlock` every toolbar insertion uses, so
+ * the blank-line handling and the resulting selection are identical.
+ */
+export function insertMarkdownBlocks(view: EditorView, blocks: readonly string[]): void {
+  if (blocks.length === 0) return;
+  insertBlock(view, blocks.join('\n\n'));
+}
+
 export function insertDiagram(view: EditorView): void {
   insertBlock(view, '```mermaid\nflowchart LR\n  A --> B\n```');
 }

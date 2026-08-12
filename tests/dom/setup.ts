@@ -50,6 +50,32 @@ if (typeof Range.prototype.getBoundingClientRect !== 'function') {
 }
 
 /**
+ * `ResizeObserver`, which jsdom does not implement at all.
+ *
+ * Svelte 5 compiles `bind:clientWidth` into a `ResizeObserver`, so a component
+ * that measures its own box — the editor's split pane does, to turn a pointer
+ * drag into a fraction of the work area — threw `ResizeObserver is not defined`
+ * out of its mount. That surfaced as an *unhandled error* rather than a test
+ * failure: the route silently rendered nothing and six unrelated assertions
+ * failed with "expected undefined to be truthy".
+ *
+ * The stub NEVER FIRES a callback, and that is the honest behaviour here: jsdom
+ * performs no layout, so there are no size changes to report and any dimension
+ * it invented would be a fiction. Bound sizes therefore stay 0 in this project,
+ * exactly as `Range.getClientRects` above returns an empty list — tests here
+ * assert that measurement paths run and terminate, never what they measured.
+ * Real geometry belongs to the browser E2E layer.
+ */
+class NoLayoutResizeObserver implements ResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = NoLayoutResizeObserver;
+}
+
+/**
  * Guard on the environment itself. If jsdom is ever swapped for `node` (or a
  * DOM shim that does not implement focus), these component tests would not
  * fail — `document.activeElement` would simply be undefined and every

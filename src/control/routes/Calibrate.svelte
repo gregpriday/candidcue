@@ -36,7 +36,7 @@
   import { onMount } from 'svelte';
   import Button from '../components/Button.svelte';
   import Icon from '../components/Icon.svelte';
-  import PageHeader from '../components/PageHeader.svelte';
+  import Toolbar from '../components/Toolbar.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import Select from '../components/Select.svelte';
   import Slider from '../components/Slider.svelte';
@@ -1121,22 +1121,37 @@
 </script>
 
 <div class="page">
-  <PageHeader
+  <Toolbar
     title="Calibrate this display"
-    meta={display?.name ?? 'Display'}
+    detail={display?.name ?? 'Display'}
     backLabel="Stage display"
     onback={() => void navigate({ name: 'settings', section: 'stage' })}
   >
     {#snippet status()}
-      {#if stageLive}
-        <StatusPill tone="success" label="Showing on the prompter" />
-      {:else if stageError}
-        <StatusPill tone="warning" label="No prompt window" />
-      {:else}
-        <StatusPill tone="neutral" label="Opening the prompter…" />
-      {/if}
+      <!--
+        A status LIGHT plus text, not a pill (§9.4, §12.3).
+        This is a continuous health state — is the prompter showing? — which is
+        exactly the category §9.4 says to draw as a light and a word. It also
+        keeps its place and its width as the state changes, so the toolbar does
+        not shuffle while the stage is coming up.
+      -->
+      <span
+        class="stage-state"
+        class:good={stageLive}
+        class:bad={stageError !== null}
+        aria-live="polite"
+      >
+        <span class="state-dot" aria-hidden="true"></span>
+        {#if stageLive}
+          Showing on the prompter
+        {:else if stageError}
+          No prompt window
+        {:else}
+          Opening the prompter…
+        {/if}
+      </span>
     {/snippet}
-  </PageHeader>
+  </Toolbar>
 
   <div class="body">
     <!-- The whole sequence, always visible. A wizard that hides its own length
@@ -1161,6 +1176,7 @@
       {/each}
     </nav>
 
+    <div class="workspace">
     <div class="content">
       {#if loadError}
         <p class="inline-alert" role="alert">{loadError}</p>
@@ -1466,15 +1482,28 @@
         {/each}
       {/if}
 
-      <div class="footer-actions">
-        <Button disabled={stepIndex === 0} onclick={() => goBack()}>Back</Button>
-        <Button variant="ghost" disabled={finishing} onclick={() => goSkip()}>
-          {isLastStep ? 'Finish without this' : 'Skip'}
-        </Button>
-        <Button variant="primary" disabled={finishing} onclick={() => goNext()}>
-          {isLastStep ? 'Apply this rig' : 'Next'}
-        </Button>
-      </div>
+    </div>
+
+    <!--
+      PINNED, and the positions never move (§15.1).
+
+      These used to sit at the bottom of the scrolling content, so on a long step
+      they were below the fold and on a short one they floated mid-screen — and
+      Back/Skip/Next changed x-position with the width of their own labels. §15.1
+      asks for a workflow footer whose controls are in the same place on every
+      step: Back on the left, the primary on the right, and the escape hatch
+      beside it without competing.
+    -->
+    <div class="step-actions">
+      <Button disabled={stepIndex === 0} onclick={() => goBack()}>Back</Button>
+      <span class="step-actions-spacer"></span>
+      <Button variant="ghost" disabled={finishing} onclick={() => goSkip()}>
+        {isLastStep ? 'Finish without this' : 'Skip'}
+      </Button>
+      <Button variant="primary" disabled={finishing} onclick={() => goNext()}>
+        {isLastStep ? 'Apply this rig' : 'Next'}
+      </Button>
+    </div>
     </div>
   </div>
 </div>
@@ -1495,12 +1524,43 @@
     display: flex;
   }
 
+  /*
+   * The prompter's state: a light and a word (§9.4, §12.3).
+   *
+   * A fixed-width dot beside text that changes, so the toolbar's geometry is
+   * the same whichever of the three states is showing — and the state is never
+   * carried by colour alone, because the words say it too.
+   */
+  .stage-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .state-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--text-faint);
+  }
+  .stage-state.good .state-dot {
+    background: var(--success);
+  }
+  .stage-state.bad .state-dot {
+    background: var(--warning);
+  }
+
   .steps {
-    flex: 0 0 248px;
+    /* 200px, from 248: the rail carries a number and a short label, and the
+       extra 48px was buying nothing but distance from the work (§15.2). */
+    flex: 0 0 200px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: var(--space-5) var(--space-4);
+    gap: 1px;
+    padding: var(--space-3) var(--space-2);
     overflow-y: auto;
   }
   .step-item {
@@ -1527,11 +1587,12 @@
     background: var(--bg-hover-chrome);
     color: var(--text-primary);
   }
+  /* Flat, per §15.2 — a tonal fill, no elevation, no raised card. */
   .step-item.active,
   .step-item.active:hover {
-    background: var(--bg-panel);
-    border-color: var(--border);
-    box-shadow: var(--shadow-card);
+    background: var(--bg-row-selected);
+    border-color: transparent;
+    box-shadow: none;
     color: var(--text-primary);
   }
   .step-num {
@@ -1557,8 +1618,11 @@
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-6) var(--page-x) var(--space-8);
-    max-width: 640px;
+    padding: var(--space-5) var(--page-x) var(--space-6);
+    /* A comfortable reading measure for the instructions, kept as a MAX rather
+       than a width so the remaining space stays available to the readouts
+       (§15.3) instead of being padded out into nothing. */
+    max-width: 680px;
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
@@ -1711,11 +1775,32 @@
     color: var(--text-faint);
   }
 
-  .footer-actions {
+  /*
+   * The workspace column: scrolling content above, pinned actions below.
+   * `min-height: 0` on both so the content is what scrolls rather than the
+   * column growing and pushing the action bar off the bottom of the window.
+   */
+  .workspace {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .step-actions {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding-top: var(--space-2);
+    padding: var(--space-3) var(--page-x);
+    border-top: var(--divider-w) solid var(--divider);
+    background: var(--bg-toolbar);
+  }
+  /* Back on the left, everything else on the right — a fixed geometry, so the
+     primary action is in the same place on every step (§15.1). */
+  .step-actions-spacer {
+    flex: 1 1 auto;
   }
 
   @media (max-width: 760px) {
@@ -1724,3 +1809,4 @@
     }
   }
 </style>
+

@@ -84,21 +84,42 @@ test('the count line is already there on a blank script, and typing does not mov
   await expect(editorSurface).toBeVisible();
 
   // Present, and reporting zero rather than staying silent.
-  const meta = page.locator('.header .meta');
-  await expect(meta).toHaveText('0 words · — · 0 cues');
+  /*
+   * The document's metadata moved from a header row into the STATUS BAR
+   * (§11.7): the word count, duration and cue count are facts that are always
+   * true of the open script, which is exactly what a status bar is for — and
+   * keeping them out of the toolbar is what lets the toolbar hold its height
+   * while they change on every keystroke.
+   */
+  const meta = page.locator('footer');
+  // Each fact is its own status item now rather than one formatted sentence, so
+  // this asserts the counts rather than the separators between them. A cue
+  // count of zero is omitted entirely — §10.1's rule that an indicator earns its
+  // place by being actionable, applied to the status bar.
+  await expect(meta).toContainText('0 words');
 
   // Measured, not merely absent: two null boxes would compare equal below and
   // the height assertion would prove nothing at all.
-  const before = await page.locator('.header').boundingBox();
+  //
+  // The TOOLBAR is what must not move. That is the whole subject of this test
+  // and it survived the redesign intact — the counts moved to the status bar
+  // precisely so a toolbar carrying the document's name cannot be resized by
+  // them.
+  const before = await page.locator('header.toolbar').boundingBox();
   expect(before?.height).toBeGreaterThan(0);
+  const barBefore = await meta.boundingBox();
+  expect(barBefore?.height).toBeGreaterThan(0);
 
   await editorSurface.click();
   await page.keyboard.type('Hello');
-  await expect(meta).toHaveText('1 word · — · 0 cues');
+  await expect(meta).toContainText('1 word');
 
-  // The row was already reserved, so counting up cost the header no height.
-  const after = await page.locator('.header').boundingBox();
+  // Neither band moved: the toolbar because the counts are not in it, and the
+  // status bar because its height is fixed by token rather than by content.
+  const after = await page.locator('header.toolbar').boundingBox();
   expect(after?.height).toBe(before?.height);
+  const barAfter = await meta.boundingBox();
+  expect(barAfter?.height).toBe(barBefore?.height);
 });
 
 test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution sheet', async ({ page }) => {
@@ -191,7 +212,10 @@ test('the undo history survives an Edit/Preview round trip', async ({ page }) =>
 
   // Two modes, and only two: Split was removed (issue #141).
   const modes = page.getByRole('radiogroup', { name: 'Editor mode' });
-  await expect(modes.getByRole('radio')).toHaveText(['Edit', 'Preview']);
+  // Three arrangements now: §11.3's optional split, which the desktop pass
+  // added because a writer checking rendered output against the source should
+  // not have to toggle between two full-window modes to do it.
+  await expect(modes.getByRole('radio')).toHaveText(['Edit', 'Preview', 'Both']);
 
   // The document before the edit, so "undo" can be proved to have restored it
   // rather than merely to have removed something.
@@ -280,7 +304,7 @@ test('covers the whole editor while a script opens, then reveals it complete', a
               toolbar: !!document.querySelector('[role="toolbar"][aria-label="Insert"]'),
               editor: !!document.querySelector('.cm-content'),
               outline: !!document.querySelector('aside[aria-label="Outline"]'),
-              meta: document.querySelector('.meta')?.textContent ?? '',
+              meta: document.querySelector('footer')?.textContent ?? '',
             });
             return true;
           };
@@ -317,7 +341,7 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
 
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
-  await expect(page.locator('.meta')).toContainText('words');
+  await expect(page.locator('footer')).toContainText('words');
 
   // Mark the live CodeMirror node so a remount is detectable as such: a
   // rebuilt editor is a fresh node and does not carry the mark.
@@ -329,14 +353,14 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
   await expect(toolbar).toBeVisible();
   const before = await toolbar.boundingBox();
   expect(before).not.toBeNull();
-  const metaBefore = await page.locator('.meta').textContent();
+  const metaBefore = await page.locator('footer').textContent();
 
   await editorSurface.click();
   await page.keyboard.press('End');
   await page.keyboard.type(' Several more spoken words for the counter to find.');
 
   // The word count moved, so a compile really did run and land.
-  await expect.poll(() => page.locator('.meta').textContent()).not.toBe(metaBefore);
+  await expect.poll(() => page.locator('footer').textContent()).not.toBe(metaBefore);
 
   // The panel never came back, and the editor is the SAME instance.
   await expect(page.getByRole('status').filter({ hasText: 'Opening script…' })).toHaveCount(0);
@@ -366,7 +390,7 @@ test('emptying the script reports zero without moving the toolbar', async ({ pag
 
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
-  await expect(page.locator('.meta')).toContainText('words');
+  await expect(page.locator('footer')).toContainText('words');
 
   const toolbar = page.getByRole('toolbar', { name: 'Insert' });
   await expect(toolbar).toBeVisible();
@@ -379,7 +403,9 @@ test('emptying the script reports zero without moving the toolbar', async ({ pag
 
   // No spoken words left, so the metadata reports zero — in the same row, at
   // the same height, exactly where it was.
-  await expect.poll(() => page.locator('.meta').textContent()).toBe('0 words · — · 0 cues');
+  // The status bar states each fact as its own item rather than as one
+  // formatted sentence, so this asserts the numbers rather than the punctuation.
+  await expect.poll(() => page.locator('footer').textContent()).toContain('0 words');
   const after = await toolbar.boundingBox();
   expect(after).not.toBeNull();
   expect(after?.y).toBe(before?.y);
@@ -423,6 +449,8 @@ test('reveals the editor anyway when the compile worker never answers', async ({
   // Nothing compile-derived can be there, so the row says so with the em dash
   // it keeps for "no compile to report" rather than stating a count nobody has
   // worked out — and it is on the glass, holding its height, either way.
-  await expect(page.locator('.meta')).toHaveText('—');
-  await expect(page.locator('.meta')).toHaveCount(1);
+  // One status bar, and it says something — the compile never answered here, so
+  // what it says is the compile state rather than a word count.
+  await expect(page.locator('footer')).toHaveCount(1);
+  await expect(page.locator('footer')).not.toHaveText('');
 });

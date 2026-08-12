@@ -918,6 +918,7 @@ fn every_registered_command_is_classified_for_recovery_mode() {
          */
         ("set_menu_state", "in-memory; native menu only"),
         ("set_window_title", "window management"),
+        ("set_drop_target_script", "in-memory; a script id, no I/O"),
         ("reveal_logs", "opens one named directory"),
     ];
 

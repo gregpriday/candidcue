@@ -29,7 +29,7 @@
   } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
   import { startTake, takeStarting } from './lib/start-take';
-  import { dispatchRouteCommand } from './stores/command-bus';
+  import { dispatchDroppedImages, dispatchRouteCommand } from './stores/command-bus';
   import {
     composeWindowTitle,
     installDragDrop,
@@ -926,6 +926,28 @@ import { rememberReaderFrame } from './lib/reader-frame';
   async function handleDroppedImport(payload: DragImportedPayload): Promise<void> {
     for (const warning of payload.warnings) showToast(warning, 'info');
 
+    /*
+     * Images first, and they short-circuit.
+     *
+     * A drop of images into the open script is a different gesture from a drop
+     * of scripts into the library: nothing to reload, nothing to navigate to,
+     * and the text has already gone where it belongs. Reporting it with a toast
+     * as well would be announcing something the user is looking straight at.
+     */
+    if (payload.images.length > 0 && payload.imageScriptId !== null) {
+      const inserted = await dispatchDroppedImages(payload.imageScriptId, payload.images);
+      if (!inserted) {
+        // Imported, but the editor was not in a state to place it. Say so
+        // rather than leaving an asset in the script with no reference to it.
+        showToast(
+          payload.images.length === 1
+            ? 'The image was added to the script, but the editor had moved on before it could be placed.'
+            : 'The images were added to the script, but the editor had moved on before they could be placed.',
+          'info',
+        );
+      }
+    }
+
     if (payload.rejected.length > 0) {
       // Named, and capped. §10.5 asks for a concise rejection; a toast listing
       // forty file names is not concise, and the first two are enough to make
@@ -1163,14 +1185,32 @@ import { rememberReaderFrame } from './lib/reader-frame';
   <div class="drop-target" class:rejecting={dragHover.accepted === 0} aria-hidden="true">
     <div class="drop-card">
       <p class="drop-title">
-        {dragHover.accepted === 0 ? 'CandidCue cannot import this' : 'Drop to import'}
+        {dragHover.accepted === 0
+          ? 'CandidCue cannot import this'
+          : dragHover.acceptsImages
+            ? 'Drop to add'
+            : 'Drop to import'}
       </p>
       <p class="drop-body">
-        {dragHover.accepted === 0
-          ? 'Markdown (.md) and plain text (.txt) files can be imported.'
-          : dragHover.accepted === 1
-            ? 'The file will be added to your library and opened.'
-            : `${dragHover.accepted} files will be added to your library.`}
+        <!--
+          The copy follows what Rust would ACTUALLY do with this set, which
+          depends on where the drop lands: an image over the editor is an
+          insertion, and over the Library it is a rejection. Saying "cannot
+          import this" over an editor that was about to import it happily is the
+          overlay lying about the next half-second.
+        -->
+        {#if dragHover.accepted === 0}
+          Markdown (.md) and plain text (.txt) can be imported. Open a script to
+          add images to it.
+        {:else if dragHover.acceptsImages}
+          {dragHover.accepted === 1
+            ? 'The image will be added to this script.'
+            : `${dragHover.accepted} files will be added to this script.`}
+        {:else if dragHover.accepted === 1}
+          The file will be added to your library and opened.
+        {:else}
+          {dragHover.accepted} files will be added to your library.
+        {/if}
       </p>
     </div>
   </div>

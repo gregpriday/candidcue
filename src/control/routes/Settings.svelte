@@ -18,7 +18,8 @@
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import Icon from '../components/Icon.svelte';
   import MicMeter from '../components/MicMeter.svelte';
-  import PageHeader from '../components/PageHeader.svelte';
+  import Toolbar from '../components/Toolbar.svelte';
+  import { updateWorkspace } from '../stores/workspace';
   import Section from '../components/Section.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import Select from '../components/Select.svelte';
@@ -137,15 +138,76 @@
   }
   let { section }: Props = $props();
 
-  const sections: Array<{ id: SettingsSection; label: string }> = [
-    { id: 'general', label: 'General' },
-    { id: 'speech', label: 'Speech' },
-    { id: 'audio', label: 'Audio' },
-    { id: 'stage', label: 'Stage display' },
-    { id: 'teleprompter', label: 'Teleprompter' },
-    { id: 'following', label: 'Following' },
-    { id: 'privacy', label: 'Data, privacy & updates' },
+  /**
+   * The sections, each with the words somebody might search for.
+   *
+   * `keywords` is the whole of §14.2's "search labels, descriptions, section
+   * names, and common synonyms" that can be honoured without indexing every
+   * control in a 3000-line route. It is deliberately written in the user's
+   * vocabulary rather than the code's — somebody looking for the microphone
+   * types "mic", and somebody looking for the teleprompter's mirror types
+   * "mirror", not "teleprompter".
+   */
+  const sections: Array<{ id: SettingsSection; label: string; keywords: string }> = [
+    {
+      id: 'general',
+      label: 'General',
+      keywords: 'launch startup open recent window restore confirm headings session mode',
+    },
+    {
+      id: 'speech',
+      label: 'Speech',
+      keywords: 'model download language recogniser recognizer transcription voice offline licence',
+    },
+    { id: 'audio', label: 'Audio', keywords: 'microphone mic input level meter device permission' },
+    {
+      id: 'stage',
+      label: 'Stage display',
+      keywords: 'display monitor screen panel presentation prompter reader window identify',
+    },
+    {
+      id: 'teleprompter',
+      label: 'Teleprompter',
+      keywords: 'font size text mirror flip safe area column line height reading band optics rig calibration',
+    },
+    {
+      id: 'following',
+      label: 'Following',
+      keywords: 'follow scroll smoothing responsiveness alignment pace speed profile',
+    },
+    {
+      id: 'privacy',
+      label: 'Data, privacy & updates',
+      keywords: 'privacy data location reveal backup restore export support bundle logs updates version about transcript retention',
+    },
   ];
+
+  /** The settings search box (§14.2). Filters the index, never the rows. */
+  let sectionQuery = $state('');
+
+  const matchingSections = $derived(
+    (() => {
+      const query = sectionQuery.trim().toLowerCase();
+      if (query === '') return sections;
+      return sections.filter(
+        (entry) =>
+          entry.label.toLowerCase().includes(query) || entry.keywords.includes(query),
+      );
+    })(),
+  );
+
+  /*
+   * Reopen where they were (§14.4).
+   *
+   * The section is recorded as the user moves through Settings, and `⌘,` reads
+   * it back — see `settingsSectionFromWorkspace` in `App.svelte`. Somebody
+   * returning to Settings almost always wants the row they were last looking
+   * at, and starting at General every time makes a seven-section screen feel
+   * longer than it is.
+   */
+  $effect(() => {
+    if ($route.name === 'settings') updateWorkspace({ settingsSection: section });
+  });
 
   let engineStatus = $state<SpeechEngineStatus | null>(null);
   /** The update policy sentence, filled in once the running version is known. */
@@ -1468,11 +1530,43 @@
 </script>
 
 <div class="page">
-  <PageHeader title="Settings" backLabel="Library" onback={() => navigate({ name: 'library', view: 'all' })} />
+  <Toolbar
+    title="Settings"
+    backLabel="Library"
+    onback={() => navigate({ name: 'library', view: 'all' })}
+  >
+    {#snippet actions()}
+      <!--
+        Settings search (§14.2), in the toolbar where it is stable across every
+        section. It filters the INDEX rather than the rows: a section list that
+        narrows to the two sections holding a match keeps the structure intact,
+        which §14.2 asks for explicitly, and avoids the far harder problem of
+        hiding individual controls out of a form whose rows explain each other.
+      -->
+      <div class="settings-search">
+        <span class="search-icon"><Icon name="search" size={14} /></span>
+        <input
+          class="search-input"
+          type="search"
+          placeholder="Search settings"
+          aria-label="Search settings"
+          bind:value={sectionQuery}
+          onkeydown={(event) => {
+            // Escape clears before it closes anything — §23.1's layered rule.
+            if (event.key === 'Escape' && sectionQuery !== '') {
+              event.preventDefault();
+              event.stopPropagation();
+              sectionQuery = '';
+            }
+          }}
+        />
+      </div>
+    {/snippet}
+  </Toolbar>
 
   <div class="body">
     <nav class="section-nav" aria-label="Settings sections">
-      {#each sections as entry (entry.id)}
+      {#each matchingSections as entry (entry.id)}
         <button
           type="button"
           class="section-item"
@@ -1483,6 +1577,9 @@
           {entry.label}
         </button>
       {/each}
+      {#if matchingSections.length === 0}
+        <p class="section-empty">No settings matched.</p>
+      {/if}
     </nav>
 
     <div class="content">
@@ -2792,31 +2889,38 @@
     display: flex;
   }
 
+  /*
+   * A compact source list, matching the sidebar's (§14.4, §7.1).
+   *
+   * It was a 208px rail of 34px rows whose selected item was a raised white
+   * pill — the same SaaS-nav treatment the sidebar carried, and wrong for the
+   * same reason. The rows are source-list height now and the selected one is a
+   * tonal fill with no border and no elevation.
+   */
   .section-nav {
-    flex: 0 0 208px;
+    flex: 0 0 180px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: var(--space-5) var(--space-4);
+    gap: 1px;
+    padding: var(--space-3) var(--space-2);
     overflow-y: auto;
   }
   .section-item {
-    display: block;
+    display: flex;
+    align-items: center;
     width: 100%;
     text-align: left;
-    min-height: 34px;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    min-height: var(--source-row-h);
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: 5px;
     background: transparent;
     color: var(--text-secondary);
     font-size: var(--text-sm);
-    font-weight: 600;
+    font-weight: 550;
     transition:
       background var(--dur-fast) var(--ease-out),
-      color var(--dur-fast) var(--ease-out),
-      border-color var(--dur-fast) var(--ease-out),
-      box-shadow var(--dur-fast) var(--ease-out);
+      color var(--dur-fast) var(--ease-out);
   }
   .section-item:hover {
     background: var(--bg-hover-chrome);
@@ -2824,10 +2928,53 @@
   }
   .section-item.active,
   .section-item.active:hover {
-    background: var(--bg-panel);
-    border-color: var(--border);
-    box-shadow: var(--shadow-card);
+    background: var(--bg-row-selected);
     color: var(--text-primary);
+    font-weight: 650;
+  }
+  .section-empty {
+    margin: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+
+  /* The toolbar's search field — same shape as the Library's. */
+  .settings-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 200px;
+  }
+  .settings-search .search-icon {
+    position: absolute;
+    left: var(--space-2);
+    display: inline-flex;
+    color: var(--text-muted);
+    pointer-events: none;
+  }
+  .settings-search .search-input {
+    width: 100%;
+    height: var(--toolbar-control-h);
+    padding: 0 var(--space-2) 0 26px;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+    transition:
+      border-color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+  }
+  .settings-search .search-input::placeholder {
+    color: var(--text-faint);
+  }
+  /* Quiet focus on a surface — never an accent ring (the house rule). */
+  .settings-search .search-input:focus,
+  .settings-search .search-input:focus-visible {
+    outline: none;
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
   }
 
   .content {

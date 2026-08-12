@@ -96,6 +96,9 @@ commands.allow = [
   # widened the ACL for something no caller wanted.
   "set_menu_state",
   "set_window_title",
+  # A SCRIPT ID, not a path — the repository resolves it itself, so this is the
+  # same contract `import_image` has always had.
+  "set_drop_target_script",
   "reveal_logs",
   # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
   # (docs/updates.md). Both were permitted here while always returning

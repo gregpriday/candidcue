@@ -12,8 +12,16 @@ const themeSpec = {
   '&': {
     color: 'var(--prose-text-warm, var(--text-primary))',
     backgroundColor: 'transparent',
-    fontSize: '15px',
-    height: '100%',
+    /*
+     * Sized from the PANE, so View › Larger Editor Text works.
+     *
+     * It was a hard 15px, which meant the document-scale control had nothing to
+     * act on: the pane's font-size changed and CodeMirror ignored it. `1em`
+     * inherits the pane's computed size — 15px at scale 1, because
+     * `--text-base` is 15px — so the default is unchanged and the control has a
+     * lever.
+     */
+    fontSize: '1em',
   },
   '&.cm-focused': {
     outline: 'none',
@@ -21,7 +29,8 @@ const themeSpec = {
   '.cm-content': {
     caretColor: 'var(--accent)',
     fontFamily: 'var(--font-prose)',
-    lineHeight: '26px',
+    // Unitless, so it tracks the font size rather than crushing scaled text.
+    lineHeight: '1.73',
     letterSpacing: 'var(--ls-prose, 0.01em)',
     maxWidth: 'var(--prose-measure, 70ch)',
     padding: 'var(--space-6) 0',

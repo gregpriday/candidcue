@@ -144,6 +144,7 @@ pub fn run() {
             // Desktop shell (refinement §5, §6)
             commands::set_menu_state,
             commands::set_window_title,
+            commands::set_drop_target_script,
             commands::reveal_logs,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates
             // manually (docs/updates.md); both used to be registered here and
@@ -429,6 +430,7 @@ pub fn run() {
              * filesystem path chosen outside the app, and §50.7's rule is that
              * no such path is ever named by, or passed through, the renderer.
              */
+            handle.manage(crate::windows::drag_drop::DropTargetScript::default());
             crate::windows::drag_drop::install(&handle);
             crate::commands::shell_cmds::restore_window_frame(&handle);
             install_window_frame_recorder(&handle);

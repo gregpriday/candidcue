@@ -3,6 +3,23 @@
   numbers, restrained syntax styling, full-bleed on its panel (no
   border-inside-border). The instance is exposed via `getView()` for the
   toolbar insert controls.
+
+  ---------------------------------------------------------------------------
+  THERE IS DELIBERATELY NO CUSTOM CONTEXT MENU HERE
+  ---------------------------------------------------------------------------
+  Desktop refinement §11.9 asks for editor context actions — and then says, in
+  the same line, "without replacing standard text editing commands". In a
+  webview those two cannot both be had: the only way to show a custom menu on
+  right-click is to `preventDefault()` the platform's, and the platform's is
+  carrying spelling suggestions, Look Up, Share, text substitutions and
+  Services. A hand-rolled menu offering "Insert cue" in exchange for all of that
+  is a straight downgrade for the one surface in the app where somebody is
+  writing prose.
+
+  So the editor keeps the system menu, and the insertions it would have offered
+  live where they are discoverable anyway: the formatting row above the text,
+  and the native Edit menu with their keys beside them.
+
 -->
 <script lang="ts">
   import { onMount } from 'svelte';

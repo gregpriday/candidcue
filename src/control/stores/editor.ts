@@ -21,7 +21,18 @@ export interface EditorState {
   saveState: SaveState;
   dirty: boolean;
   loading: boolean;
-  mode: 'edit' | 'preview';
+  /**
+   * The editor's layout is NOT here.
+   *
+   * It used to be a `mode: 'edit' | 'preview'` field on this store, which made
+   * it a property of the open DOCUMENT: closing a script reset it, so the
+   * arrangement somebody chose was forgotten on every open. §11.3 asks for the
+   * opposite — the last mode persists — and it also asks for a third, split
+   * arrangement this two-value union could not express.
+   *
+   * It lives in `stores/workspace.ts` now, with the pane widths, where it is
+   * persisted per machine and survives a relaunch. See `editorLayout` there.
+   */
   lastError: string | null;
 }
 
@@ -34,7 +45,6 @@ const initial: EditorState = {
   saveState: 'idle',
   dirty: false,
   loading: false,
-  mode: 'edit',
   lastError: null,
 };
 
@@ -42,6 +52,15 @@ const state = writable<EditorState>({ ...initial });
 export const editor = { subscribe: state.subscribe };
 
 export const AUTOSAVE_DEBOUNCE_MS = 500;
+
+/**
+ * How long "Saved" stays on the status bar after a save that worked.
+ *
+ * Long enough to be read by somebody who pressed ⌘S and looked down; short
+ * enough that it is plainly a report of an event rather than a standing claim
+ * about the document.
+ */
+export const SAVED_BADGE_MS = 2400;
 
 /**
  * Caller-side compile debounce (spec §45.3). The worker coalescer already
@@ -101,7 +120,18 @@ function adoptDocument(doc: ScriptDocument): void {
     source: doc.source,
     scriptRevision: doc.scriptRevision,
     loading: false,
-    saveState: 'saved',
+    /*
+     * `idle`, not `saved`.
+     *
+     * A freshly opened document has not been saved — it has been READ, and
+     * nothing has happened to it since. It used to open as `saved`, which was
+     * harmless while the label lived in a header nobody read closely and became
+     * wrong the moment the status bar adopted §11.7's rule: "Saved" is
+     * TRANSIENT, and a permanent one from the instant of opening is a claim the
+     * user learns to ignore — so the real one, after a real save, says nothing
+     * either.
+     */
+    saveState: 'idle',
   });
   void requestCompile(doc.id, doc.source, 0);
 }
@@ -113,10 +143,6 @@ export function closeScript(): void {
   openGeneration += 1;
   state.set({ ...initial });
   resetCompiled();
-}
-
-export function setEditorMode(mode: EditorState['mode']): void {
-  state.update((s) => ({ ...s, mode }));
 }
 
 /** Called on every editor change; schedules the debounced autosave. */
@@ -184,7 +210,26 @@ export async function saveNow(): Promise<void> {
       saveState: 'saved',
       lastError: null,
     }));
+    /*
+     * "Saved" is TRANSIENT (§11.7), and this is what makes it so.
+     *
+     * `savedBadgeTimer` existed and was only ever CLEARED — nothing armed it —
+     * so the label, once shown, stayed for the life of the document. A status
+     * that is permanently on is a status nobody reads, which is exactly what
+     * makes the next one that matters invisible.
+     *
+     * Back to `idle` rather than to a second state: `idle` already means "there
+     * is nothing to report", which is the truth a couple of seconds after a save
+     * that worked. `error` and `conflict` are untouched by this — they persist
+     * until acted on, because they need acting on.
+     */
     if (savedBadgeTimer) clearTimeout(savedBadgeTimer);
+    savedBadgeTimer = setTimeout(() => {
+      savedBadgeTimer = null;
+      // Only if nothing has happened since. A save that started, or a failure,
+      // owns the state now and must not be overwritten with "nothing to say".
+      state.update((prev) => (prev.saveState === 'saved' ? { ...prev, saveState: 'idle' } : prev));
+    }, SAVED_BADGE_MS);
   } catch (err) {
     /*
      * F.8 external-change conflict.

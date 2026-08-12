@@ -256,7 +256,10 @@ describe('resolving an external conflict never drops the editor text', () => {
     const state = get(editor);
     expect(state.source).toBe(diskDocument.source);
     expect(state.scriptRevision).toBe(9);
-    expect(state.saveState).toBe('saved');
+    // The disk version arrives through `openScript`, so the editor is quiet
+    // rather than reporting a save it did not perform — see the note on
+    // `saveState: 'idle'` there.
+    expect(state.saveState).toBe('idle');
     expect(state.dirty).toBe(false);
   });
 

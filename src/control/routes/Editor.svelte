@@ -15,22 +15,34 @@
   import MarkdownEditor from '../components/MarkdownEditor.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
 import SplitButton from '../components/SplitButton.svelte';
-  import PageHeader from '../components/PageHeader.svelte';
+  import PaneDivider from '../components/PaneDivider.svelte';
+  import StatusBar from '../components/StatusBar.svelte';
+  import Toolbar from '../components/Toolbar.svelte';
+  import type { StatusBarItem } from '../components/status-bar-item';
+  import { formatAccelerator } from '../lib/commands';
+  import { setDropTargetScript } from '../services/desktop-shell';
+  import { detectPlatform } from '../lib/platform';
+  import {
+    PANE_LIMITS,
+    setPaneWidth,
+    updateWorkspace,
+    workspace,
+    type EditorLayout,
+  } from '../stores/workspace';
   import RenderBlocks from '../components/RenderBlocks.svelte';
   import RevisionHistory from '../components/RevisionHistory.svelte';
   import ScriptLintPanel from '../components/ScriptLintPanel.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
-  import StatusPill from '../components/StatusPill.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
-  import { estimateDurationSeconds, formatScriptMeta, formatSpeakingDuration } from '../lib/format';
+  import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
-  import { onRouteCommand } from '../stores/command-bus';
+  import { onDroppedImages, onRouteCommand } from '../stores/command-bus';
   import * as assetsService from '../services/assets';
   import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
@@ -43,7 +55,6 @@ import type { PresentationMode } from '../services/settings-types';
     keepEditorVersion,
     openScript,
     saveNow,
-    setEditorMode,
     setSource,
     setTitle,
     useDiskVersion,
@@ -62,7 +73,22 @@ import type { PresentationMode } from '../services/settings-types';
   let editorRef: MarkdownEditor | null = $state(null);
   /** The document-title field, so File › Rename can put the caret in it. */
   let titleInput: HTMLInputElement | null = $state(null);
-  let panelOpen = $state(true);
+  /**
+   * The layout, from the workspace store rather than from local state.
+   *
+   * It was `let panelOpen = $state(true)` plus `$editor.mode`, both of which
+   * were forgotten the moment the route unmounted. §11.5 and §11.3 ask for both
+   * to persist, and the View menu has to be able to toggle them from outside
+   * this component — which only works if the state lives somewhere the shell can
+   * reach.
+   */
+  const layout = $derived($workspace.editorLayout);
+
+  const mac = detectPlatform() === 'macos';
+  /** A key hint for a tooltip, in this platform's spelling. */
+  function accel(spec: string): string {
+    return formatAccelerator(spec, mac);
+  }
   let saveIssueOpen = $state(false);
   let conflictOpen = $state(false);
   let conflictResolving = $state(false);
@@ -118,6 +144,55 @@ import type { PresentationMode } from '../services/settings-types';
     void beginOpen(scriptId);
     return clearSettleTimer;
   });
+
+  /*
+   * An image dropped on the window belongs to THIS script (§11.9, §20.2).
+   *
+   * Registered while the editor holds a document and cleared on the way out, so
+   * a drop on the Library has no target and is refused — rather than being filed
+   * into whichever script happened to be open last. Rust does the import; see
+   * `windows/drag_drop.rs` for why the paths never come here.
+   */
+  $effect(() => {
+    void setDropTargetScript(scriptId);
+    return () => void setDropTargetScript(null);
+  });
+
+  /*
+   * …and when it lands, put the Markdown where the caret is.
+   *
+   * Subscribed here rather than in the shell because "at the caret" is a fact
+   * only the mounted editor holds. The shell's own listener reloads the library
+   * and reports; this one does the insertion.
+   */
+  $effect(() =>
+    onDroppedImages(async (targetScriptId, markdown) => {
+      if (opening || markdown.length === 0) return false;
+      /*
+       * Only into the script the images were imported INTO.
+       *
+       * Rust reads the drop target at the instant of the gesture, but the import
+       * decodes every file and writes to SQLite — long enough for the route to
+       * change. Inserting `assets/<hash>` into a different script writes a
+       * reference to an asset that script does not own, and autosave then
+       * commits a broken image to a document nobody dropped anything on.
+       */
+      if (targetScriptId !== scriptId) return false;
+      // Force the editing surface first: dropping an image while reading the
+      // preview plainly means "put it in the document", and inserting into a
+      // hidden editor would look like nothing happened.
+      await ensureEditingSurface();
+      let inserted = false;
+      withView((view) => {
+        inserts.insertMarkdownBlocks(view, markdown);
+        inserted = true;
+      });
+      // Awaited and reported HONESTLY: the shell decides whether to say
+      // anything from this answer, so claiming success before the dispatch
+      // landed is how an asset ends up in a script with nothing referencing it.
+      return inserted;
+    }),
+  );
 
   // A latch, never a live reading: a later compile must not raise the panel
   // back over a working editor. Order against the open effect above does not
@@ -185,7 +260,7 @@ import type { PresentationMode } from '../services/settings-types';
           // Preview mode has no editor to search. Switching to Edit first is
           // what somebody pressing Find meant, rather than a key that appears
           // to be broken in one of the two modes.
-          setEditorMode('edit');
+          updateWorkspace({ editorLayout: 'edit' });
           void tick().then(() => editorRef?.openFind());
           break;
         case 'edit.find-next':
@@ -195,7 +270,7 @@ import type { PresentationMode } from '../services/settings-types';
           editorRef?.findPreviousMatch();
           break;
         case 'edit.replace':
-          setEditorMode('edit');
+          updateWorkspace({ editorLayout: 'edit' });
           void tick().then(() => editorRef?.openReplace());
           break;
         case 'file.rename-script':
@@ -258,8 +333,80 @@ import type { PresentationMode } from '../services/settings-types';
    * window, and a failed compile — which nulls the result — would go on saying
    * it underneath the banner explaining that the compile failed.
    */
-  const meta = $derived(
-    formatScriptMeta(result ? { wordCount, durationSeconds, cueCount } : null),
+  /**
+   * The document's state, as a status bar (§11.7).
+   *
+   * The rules this follows, and each is a line from §11.7:
+   *
+   *   - "Saved" is TRANSIENT and lives here, not in the toolbar. A permanent
+   *     "Saved" is a claim the user stops reading; an error is not, and errors
+   *     keep their place beside the title.
+   *   - errors and warnings carry an icon as well as a colour (§9.4).
+   *   - the layout does not move as counts change — every item is present or
+   *     absent for a reason, and the numbers are tabular (set on the bar).
+   *   - an item is a button only when clicking it opens something.
+   */
+  const statusItems = $derived<StatusBarItem[]>(
+    (() => {
+      const items: StatusBarItem[] = [];
+      if (compileFailed) {
+        items.push({
+          key: 'compile',
+          label: 'Could not render',
+          icon: 'alert',
+          tone: 'danger',
+          title: compileErrorDetail ?? undefined,
+        });
+      } else if ($compiled.status === 'compiling') {
+        items.push({ key: 'compile', label: 'Reading the script…' });
+      } else if ($compiled.status === 'ready') {
+        items.push({
+          key: 'words',
+          label: `${wordCount.toLocaleString()} ${wordCount === 1 ? 'word' : 'words'}`,
+        });
+        items.push({ key: 'duration', label: formatSpeakingDuration(durationSeconds) });
+        if (cueCount > 0) {
+          items.push({ key: 'cues', label: `${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}` });
+        }
+      }
+      if (diagnostics.length > 0) {
+        const errors = diagnostics.filter((d) => d.severity === 'error').length;
+        items.push({
+          key: 'issues',
+          label:
+            errors > 0
+              ? `${errors} ${errors === 1 ? 'issue' : 'issues'}`
+              : `${diagnostics.length} ${diagnostics.length === 1 ? 'note' : 'notes'}`,
+          icon: errors > 0 ? 'alert' : 'info',
+          tone: errors > 0 ? 'danger' : 'warning',
+          // Clicking opens the panel that lists them, which is a meaningful
+          // destination — so, and only so, this one is a button (§11.7).
+          onclick: () => updateWorkspace({ outlineVisible: true }),
+        });
+      }
+      return items;
+    })(),
+  );
+
+  const trailingStatus = $derived<StatusBarItem[]>(
+    (() => {
+      const items: StatusBarItem[] = [];
+      if ($workspace.documentScale !== 1) {
+        items.push({
+          key: 'scale',
+          label: `${Math.round($workspace.documentScale * 100)}%`,
+          title: 'Editor text size',
+        });
+      }
+      /*
+       * Only the NORMAL save states appear here; `error` and `conflict` are in
+       * the toolbar beside the title, because they need acting on and the
+       * status bar is not where somebody looks for something to do.
+       */
+      if ($editor.saveState === 'saving') items.push({ key: 'save', label: 'Saving…' });
+      else if ($editor.saveState === 'saved') items.push({ key: 'save', label: 'Saved' });
+      return items;
+    })(),
   );
 
   /*
@@ -417,8 +564,8 @@ import type { PresentationMode } from '../services/settings-types';
    * user just asked for.
    */
   async function ensureEditingSurface(): Promise<void> {
-    if ($editor.mode !== 'preview') return;
-    setEditorMode('edit');
+    if (layout !== 'preview') return;
+    updateWorkspace({ editorLayout: 'edit' });
     await tick();
     withView((view) => {
       view.requestMeasure();
@@ -439,12 +586,81 @@ import type { PresentationMode } from '../services/settings-types';
    * Focus belongs to the actions that ask for the editor by name — a preview
    * block, a lint finding.
    */
-  async function changeMode(mode: 'edit' | 'preview'): Promise<void> {
-    const editorWasHidden = $editor.mode === 'preview';
-    setEditorMode(mode);
-    await tick();
-    if (!editorWasHidden || mode === 'preview') return;
-    withView((view) => view.requestMeasure());
+  function changeMode(mode: EditorLayout): void {
+    updateWorkspace({ editorLayout: mode });
+  }
+
+  /*
+   * ONE place that reacts to the layout and the text scale.
+   *
+   * CodeMirror measures itself against a box it can see, and caches the result.
+   * Coming back from Preview it was `hidden` — so the cache is a zero-height one
+   * and the first click lands in the wrong place. Changing the split ratio moves
+   * its width. Changing the document scale changes its line height. All three
+   * need a `requestMeasure`, and there are FIVE ways to reach them: the
+   * segmented control, the View menu, ⌘1/⌘2/⌘3, the Find commands, and a
+   * restored workspace on mount.
+   *
+   * Reacting to the state rather than fixing it up at each call site is what
+   * makes them all correct — the View menu writes the workspace store directly
+   * and would otherwise have skipped the remeasure entirely.
+   */
+  $effect(() => {
+    const currentLayout = layout;
+    const scale = $workspace.documentScale;
+    const ratio = $workspace.editorSplitRatio;
+    void scale;
+    void ratio;
+    if (currentLayout === 'preview') return;
+    void tick().then(() => withView((view) => view.requestMeasure()));
+  });
+
+  /**
+   * The split divider is driven in PIXELS and stored as a RATIO.
+   *
+   * `PaneDivider` moves its value by one unit per pixel of pointer travel —
+   * that is the whole of its contract, and it is the right one for a rail whose
+   * width is a number of pixels. A ratio handed to it directly would move by 1.0
+   * per pixel, so the first twitch would slam the divider to its limit.
+   *
+   * So the divider is given the editor pane's real width, and the answer is
+   * converted back on the way in. The stored value stays a fraction because that
+   * is what survives a window resize: a split remembered as "620px" becomes a
+   * different split on a laptop, whereas "half" is half everywhere.
+   */
+  let workWidth = $state(0);
+
+  /**
+   * Neither half of a split may be squeezed below this.
+   *
+   * The ratio limits alone are not enough at a small window. At the declared
+   * 980×680 minimum, with the sidebar and the outline both dragged wide, the
+   * work area can fall to a couple of hundred pixels — and a 25% share of that
+   * is a fifty-pixel pane, which for the preview is less than its own padding.
+   * An absolute floor bounds the ratio dynamically, so the split degrades to
+   * "half and half" rather than to "one pane and a sliver".
+   */
+  const SPLIT_MIN_PANE_PX = 220;
+
+  const splitPixels = $derived(Math.round($workspace.editorSplitRatio * workWidth));
+  const splitMinPixels = $derived(
+    Math.round(Math.max(PANE_LIMITS.editorSplit.min * workWidth, Math.min(SPLIT_MIN_PANE_PX, workWidth / 2))),
+  );
+  const splitMaxPixels = $derived(
+    Math.round(
+      Math.min(
+        PANE_LIMITS.editorSplit.max * workWidth,
+        Math.max(workWidth - SPLIT_MIN_PANE_PX, workWidth / 2),
+      ),
+    ),
+  );
+
+  function setSplitFromPixels(pixels: number): void {
+    if (workWidth <= 0) return;
+    // Bounded by the same pixel floor the divider is given, so a drag and a
+    // keyboard resize cannot reach a geometry the other one refuses.
+    const bounded = Math.min(splitMaxPixels, Math.max(splitMinPixels, pixels));
+    updateWorkspace({ editorSplitRatio: bounded / workWidth });
   }
 
   /**
@@ -653,8 +869,8 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   $effect(() => {
-    // Re-read on mode changes: the toolbar is not rendered in Preview.
-    void $editor.mode;
+    // Re-read on layout changes: the toolbar is not rendered in Preview.
+    void layout;
     const buttons = toolbarButtons();
     if (buttons.length === 0) return;
     const active = Math.min(toolbarIndex, buttons.length - 1);
@@ -706,27 +922,33 @@ import type { PresentationMode } from '../services/settings-types';
       <p class="opening-message">Opening script…</p>
     </div>
   {:else}
-    <PageHeader
+    <Toolbar
       title={$editor.title || 'Untitled script'}
-      {meta}
-      reserveMetaSpace
       backLabel="Library"
       onback={() => goBack()}
       editableTitle
       bind:titleElement={titleInput}
       ontitlechange={(t) => void setTitle(t)}
+      showSecondary={layout !== 'preview'}
     >
       {#snippet status()}
+        <!--
+          Only EXCEPTIONAL save state is in the toolbar now.
+          §11.2 and §11.7: "Saved" is transient and belongs in the status bar,
+          where it can appear and go without moving anything; a failed save and a
+          conflict are things the operator has to act on, so they stay here, next
+          to the document's name, with an icon as well as a colour (§9.4).
+        -->
         {#if $editor.saveState === 'error'}
-          <button type="button" class="save-issue" onclick={() => (saveIssueOpen = true)}>
-            <StatusPill tone="danger" label={saveLabel} />
+          <button type="button" class="save-issue danger" onclick={() => (saveIssueOpen = true)}>
+            <Icon name="alert" size={14} />
+            <span>{saveLabel}</span>
           </button>
         {:else if $editor.saveState === 'conflict'}
-          <button type="button" class="save-issue" onclick={() => (conflictOpen = true)}>
-            <StatusPill tone="warning" label={saveLabel} />
+          <button type="button" class="save-issue warning" onclick={() => (conflictOpen = true)}>
+            <Icon name="alert" size={14} />
+            <span>{saveLabel}</span>
           </button>
-        {:else if saveLabel}
-          <span class="save-state" aria-live="polite">{saveLabel}</span>
         {/if}
       {/snippet}
       {#snippet actions()}
@@ -735,15 +957,16 @@ import type { PresentationMode } from '../services/settings-types';
           options={[
             { value: 'edit', label: 'Edit' },
             { value: 'preview', label: 'Preview' },
+            { value: 'split', label: 'Both' },
           ]}
-          value={$editor.mode}
-          onchange={(mode) => void changeMode(mode as 'edit' | 'preview')}
+          value={layout}
+          onchange={(mode) => void changeMode(mode as EditorLayout)}
         />
         <IconButton
           icon="doc"
-          label={panelOpen ? 'Hide outline panel' : 'Show outline panel'}
-          active={panelOpen}
-          onclick={() => (panelOpen = !panelOpen)}
+          label={$workspace.outlineVisible ? 'Hide outline' : 'Show outline'}
+          active={$workspace.outlineVisible}
+          onclick={() => updateWorkspace({ outlineVisible: !$workspace.outlineVisible })}
         />
         <OverflowMenu items={overflowItems} label="Script actions" />
         <SplitButton
@@ -755,39 +978,47 @@ import type { PresentationMode } from '../services/settings-types';
           onclick={() => void present()}
         />
       {/snippet}
-    </PageHeader>
+      {#snippet secondary()}
+        {#if layout !== 'preview'}
+          <!--
+            GROUPED, per §11.4: text structure, then inline formatting, then
+            media, then the teleprompter's own semantics. They used to be one
+            undifferentiated run of nine controls, so "insert a cue" sat beside
+            "bold" with nothing to say they are different kinds of thing.
 
-    {#if $editor.mode !== 'preview'}
-      <!--
-        Heading is a typographic glyph rather than an icon, like Bold and Italic
-        beside it: the icon set has no heading mark, and it is owned by another
-        change. It wore a chevron, which means "go forward" everywhere else in
-        the product.
+            Heading is a typographic glyph rather than an icon, like Bold and
+            Italic beside it: the icon set has no heading mark. It wore a
+            chevron, which means "go forward" everywhere else in the product.
 
-        "Insert cue" gives up `flag` to the take marker, which was wearing the
-        undo arrow. The compiler models take markers as navigation targets — a
-        flag is exactly that — and a cue is an aside to the presenter.
-      -->
-      <div
-        class="toolbar"
-        role="toolbar"
-        aria-label="Insert"
-        aria-orientation="horizontal"
-        bind:this={toolbarEl}
-        onkeydown={onToolbarKeydown}
-        onfocusin={onToolbarFocusIn}
-      >
-        <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
-        <button type="button" class="glyph" aria-label="Bold" title="Bold" onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
-        <button type="button" class="glyph" aria-label="Italic" title="Italic" onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
-        <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
-        <span class="toolbar-rule" aria-hidden="true"></span>
-        <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
-        <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
-        <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
-        <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
-      </div>
-    {/if}
+            "Insert cue" gives up `flag` to the take marker. The compiler models
+            take markers as navigation targets — a flag is exactly that — and a
+            cue is an aside to the presenter.
+          -->
+          <div
+            class="insert-toolbar"
+            role="toolbar"
+            tabindex="-1"
+            aria-label="Insert"
+            aria-orientation="horizontal"
+            bind:this={toolbarEl}
+            onkeydown={onToolbarKeydown}
+            onfocusin={onToolbarFocusIn}
+          >
+            <button type="button" class="glyph" aria-label="Cycle heading level" title={`Cycle heading level (${accel('Mod+Alt+1')})`} onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
+            <span class="toolbar-rule" aria-hidden="true"></span>
+            <button type="button" class="glyph" aria-label="Bold" title={`Bold (${accel('Mod+B')})`} onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
+            <button type="button" class="glyph" aria-label="Italic" title={`Italic (${accel('Mod+I')})`} onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
+            <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
+            <span class="toolbar-rule" aria-hidden="true"></span>
+            <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
+            <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
+            <span class="toolbar-rule" aria-hidden="true"></span>
+            <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
+            <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
+          </div>
+        {/if}
+      {/snippet}
+    </Toolbar>
 
     <div class="body">
       <div class="work">
@@ -797,8 +1028,17 @@ import type { PresentationMode } from '../services/settings-types';
           destroyed the CodeMirror instance — and the undo history with it — on
           every Edit/Preview switch.
         -->
-        <div class="panes">
-          <div class="editor-pane" hidden={$editor.mode === 'preview'}>
+        <div
+          class="panes"
+          class:split={layout === 'split'}
+          style="--doc-scale: {$workspace.documentScale}"
+          bind:clientWidth={workWidth}
+        >
+          <div
+            class="editor-pane"
+            hidden={layout === 'preview'}
+            style={layout === 'split' ? `flex: 0 0 ${$workspace.editorSplitRatio * 100}%` : undefined}
+          >
             <MarkdownEditor
               bind:this={editorRef}
               value={$editor.source}
@@ -806,7 +1046,25 @@ import type { PresentationMode } from '../services/settings-types';
               onchange={setSource}
             />
           </div>
-          <div class="preview" hidden={$editor.mode === 'edit'} bind:this={previewScroller}>
+          {#if layout === 'split'}
+            <!--
+              The split divider works in FRACTIONS, not pixels, so the ratio
+              survives a window resize. Its min/max come from `PANE_LIMITS`,
+              which stops either half being dragged to nothing — a zero-width
+              editor is a mode with no way back out of it.
+            -->
+            <PaneDivider
+              orientation="vertical"
+              side="leading"
+              label="Editor and preview split"
+              value={splitPixels}
+              min={splitMinPixels}
+              max={splitMaxPixels}
+              defaultValue={Math.round(PANE_LIMITS.editorSplit.default * workWidth)}
+              onresize={setSplitFromPixels}
+            />
+          {/if}
+          <div class="preview" hidden={layout === 'edit'} bind:this={previewScroller}>
             {#if compileFailed}
               <div class="preview-failed" role="status">
                 <p class="preview-failed-title">This script could not be rendered.</p>
@@ -827,8 +1085,24 @@ import type { PresentationMode } from '../services/settings-types';
         </div>
       </div>
 
-      {#if panelOpen}
-        <aside class="panel" aria-label="Outline">
+      {#if $workspace.outlineVisible}
+        <!--
+          A real divider, and a width that is remembered.
+          The rail was `flex: 0 0 264px` with no way to change it — §11.5 asks
+          for a draggable 220-420px range that persists, because how wide an
+          outline wants to be depends entirely on the script in it.
+        -->
+        <PaneDivider
+          orientation="vertical"
+          side="trailing"
+          label="Outline width"
+          value={$workspace.outlineWidth}
+          min={PANE_LIMITS.editorOutline.min}
+          max={PANE_LIMITS.editorOutline.max}
+          defaultValue={PANE_LIMITS.editorOutline.default}
+          onresize={(w) => setPaneWidth('editorOutline', w)}
+        />
+        <aside class="panel" aria-label="Outline" style="width: {$workspace.outlineWidth}px">
           <div class="panel-head">
             <p class="panel-title">Outline</p>
           </div>
@@ -903,6 +1177,15 @@ import type { PresentationMode } from '../services/settings-types';
         </aside>
       {/if}
     </div>
+
+    <!--
+      The document's state, always visible, even with the outline closed (§11.7).
+      That is the point of a status bar: the compile state and the issue count
+      used to live only in the rail's footer, so closing the rail — which is what
+      somebody does to concentrate — also silenced the one place that said
+      whether the script would render.
+    -->
+    <StatusBar items={statusItems} trailing={trailingStatus} />
   {/if}
 </div>
 
@@ -996,38 +1279,71 @@ import type { PresentationMode } from '../services/settings-types';
     flex-direction: column;
   }
 
-  .save-state {
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
+  /*
+   * The save issue, beside the title.
+   *
+   * A quiet inline control with an icon and a word — not a `StatusPill`.
+   * §9.4: pills are for short categorical states where the shape helps
+   * scanning, and a single always-in-the-same-place status is not that. It also
+   * has to keep the toolbar's height stable, which a pill's padding does not.
+   */
   .save-issue {
-    border: none;
-    background: transparent;
-    padding: 0;
     display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: var(--toolbar-control-h);
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .save-issue.danger {
+    color: var(--danger);
+  }
+  .save-issue.danger:hover {
+    background: var(--danger-soft);
+  }
+  .save-issue.warning {
+    color: var(--warning);
+  }
+  .save-issue.warning:hover {
+    background: var(--warning-soft);
   }
 
-  .toolbar {
+  /*
+   * The insert toolbar lives in the `Toolbar`'s secondary row now, so it brings
+   * no band of its own — no background, no border, no page inset. Those belong
+   * to the row that hosts it, which is what keeps the two rows reading as one
+   * piece of chrome rather than two stacked strips.
+   */
+  .insert-toolbar {
     display: flex;
     align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--page-x);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-canvas);
+    gap: 2px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .insert-toolbar:focus {
+    outline: none;
   }
   .toolbar-rule {
     width: 1px;
-    height: 18px;
-    background: var(--border);
+    height: 16px;
+    flex: 0 0 auto;
+    background: var(--divider);
     margin: 0 var(--space-2);
   }
   .glyph {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: var(--icon-control-h);
-    height: var(--icon-control-h);
+    width: var(--toolbar-control-h);
+    height: var(--toolbar-control-h);
+    flex: 0 0 auto;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -1096,10 +1412,27 @@ import type { PresentationMode } from '../services/settings-types';
   .editor-pane {
     display: flex;
     flex-direction: column;
+    /* Not `0`: in split the flex basis is a percentage, and with no floor a
+       narrow window let the preview take the editor down to nothing. */
     min-width: 0;
     min-height: 0;
     flex-grow: 1;
     flex-shrink: 0;
+    /*
+     * View › Larger/Smaller Editor Text (§11.3).
+     *
+     * A `font-size` on the pane rather than a `zoom` or a `transform`: those
+     * scale the whole box, including CodeMirror's own measurement of it, and
+     * the caret ends up in the wrong place. `--doc-scale` is set on `.panes` and
+     * `cm-theme.ts` sizes the content in `em`, so the type grows and the layout
+     * stays honest.
+     *
+     * DELIBERATELY NOT the stage's font size. The View menu says "Editor Text"
+     * for exactly this reason — the glass is sized from a measured viewing
+     * distance, and a menu item that quietly changed it would undo a
+     * calibration somebody took with a tape measure.
+     */
+    font-size: calc(1em * var(--doc-scale, 1));
   }
 
   /* Only ever on screen in Preview, where it is the sole pane — so the
@@ -1109,7 +1442,10 @@ import type { PresentationMode } from '../services/settings-types';
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--space-6) var(--page-x);
+    /* The reading inset, not the dense one: rendered script is the one surface
+       on this route that is genuinely reading material (§9.1). */
+    padding: var(--space-6) var(--page-x-wide);
+    font-size: calc(1em * var(--doc-scale, 1));
     background: var(--bg-panel);
     display: flex;
     flex-direction: column;
@@ -1153,7 +1489,10 @@ import type { PresentationMode } from '../services/settings-types';
   /* Outline / vocabulary rail — warm chrome, seam on the left via border on
      the container (a straight panel edge, not a rounded box). */
   .panel {
-    flex: 0 0 264px;
+    /* The width is an inline style now, from the persisted pane size — the
+       divider beside it is what changes it (§11.5). `flex: 0 0 auto` so the
+       inline width is what decides, rather than being a basis flex can override. */
+    flex: 0 0 auto;
     /* A flex item's automatic minimum is its CONTENT's minimum, and a heading
        row is `white-space: nowrap` — so one long headline made the rail's
        min-content width the width of that headline and the basis above stopped
@@ -1164,7 +1503,8 @@ import type { PresentationMode } from '../services/settings-types';
     display: flex;
     flex-direction: column;
     background: var(--bg-chrome);
-    border-left: 1px solid var(--border);
+    /* No border: the `PaneDivider` beside it draws the line, and two would be a
+       two-pixel rule with a seam down the middle. */
   }
   .panel-head {
     padding: var(--space-3) var(--space-4) var(--space-2);

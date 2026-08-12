@@ -96,11 +96,23 @@ afterEach(async () => {
 });
 
 describe('editor autosave', () => {
-  it('opens a script into a clean saved state', () => {
+  /*
+   * `idle`, not `saved`.
+   *
+   * A freshly opened document has not been saved — it has been READ. Opening as
+   * `saved` was harmless while the label lived in a header nobody read closely,
+   * and became wrong when the status bar adopted §11.7's rule that "Saved" is
+   * transient: a permanent one from the instant of opening is a claim the user
+   * learns to ignore, which is what makes the real one invisible.
+   */
+  it('opens a script into a clean state with nothing to report', () => {
     const state = get(editor);
     expect(state.scriptId).toBe(scriptId);
-    expect(state.saveState).toBe('saved');
+    expect(state.saveState).toBe('idle');
     expect(state.dirty).toBe(false);
+    // And nothing is outstanding — "idle" here means saved-and-quiet, never
+    // "there is unflushed work".
+    expect(editorHasUnsavedWork()).toBe(false);
   });
 
   /*
@@ -121,8 +133,12 @@ describe('editor autosave', () => {
     expect(get(editor).saveState).toBe('saving');
     expect(editorHasUnsavedWork()).toBe(true);
     await pending;
-    await vi.runAllTimersAsync();
+    // Immediately after the write: "Saved", which is the report of an event.
     expect(get(editor).saveState).toBe('saved');
+    expect(editorHasUnsavedWork()).toBe(false);
+    // …and then it goes quiet. `runAllTimersAsync` runs the badge timer too.
+    await vi.runAllTimersAsync();
+    expect(get(editor).saveState).toBe('idle');
     expect(editorHasUnsavedWork()).toBe(false);
     vi.useRealTimers();
   });
@@ -139,7 +155,8 @@ describe('editor autosave', () => {
 
     await vi.advanceTimersByTimeAsync(200);
     await vi.runAllTimersAsync();
-    expect(get(editor).saveState).toBe('saved');
+    // Past the badge interval as well, so the state has settled back to quiet.
+    expect(get(editor).saveState).toBe('idle');
     expect(get(editor).dirty).toBe(false);
     vi.useRealTimers();
 

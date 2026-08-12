@@ -142,6 +142,29 @@ mod macos_document_edited {
     }
 }
 
+/// Tell Rust which script a dropped image belongs to (§11.9, §20.2).
+///
+/// Pushed by the editor when it opens a script and cleared when it leaves. See
+/// `windows::drag_drop::DropTargetScript` for why Rust has to be told, and why
+/// a script id — a UUID the repository resolves to a path itself — does not
+/// reopen the "no path from JavaScript" hole this app closed.
+///
+/// The id is NOT validated here. It is validated at the moment it is used, by
+/// `ScriptId::parse` inside the drop handler, which is the only place it can
+/// matter — and validating a stale id at registration time would reject a script
+/// that has since been deleted with an error nobody asked for.
+#[tauri::command]
+pub fn set_drop_target_script<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    script_id: Option<String>,
+) -> Result<(), AppError> {
+    use tauri::Manager;
+    if let Some(state) = app.try_state::<crate::windows::drag_drop::DropTargetScript>() {
+        state.set(script_id);
+    }
+    Ok(())
+}
+
 /// Open the log directory in the platform file browser (Help › Reveal Logs).
 ///
 /// Points at the logs directory specifically rather than the data root, which

@@ -59,6 +59,17 @@
     actions?: Snippet;
     /** A second, thinner row under the toolbar (the editor's formatting strip). */
     secondary?: Snippet;
+    /**
+     * Whether the secondary row is shown at all.
+     *
+     * Separate from `secondary` being supplied, because a snippet is a FUNCTION
+     * and is therefore always truthy — even when its own body renders nothing.
+     * The editor passes a snippet that is empty in Preview, so `{#if secondary}`
+     * left Preview with a blank 36px band and a border under the toolbar.
+     * Defaults to "show it if it was given", which is right for a caller whose
+     * row is unconditional.
+     */
+    showSecondary?: boolean;
   }
 
   let {
@@ -73,6 +84,7 @@
     status,
     actions,
     secondary,
+    showSecondary = true,
   }: Props = $props();
 
   /*
@@ -164,7 +176,7 @@
     {#if actions}<div class="actions">{@render actions()}</div>{/if}
   </header>
 
-  {#if secondary}
+  {#if secondary && showSecondary}
     <div class="secondary">{@render secondary()}</div>
   {/if}
 </div>
