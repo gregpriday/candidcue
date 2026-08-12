@@ -331,7 +331,13 @@
         Open the sample script
       </Button>
       <Button onclick={() => createAndOpenScript('new')}>Create your first script</Button>
-      <Button onclick={() => importMarkdown()}>Import Markdown</Button>
+      <!--
+        Import is TERTIARY (§16.1): three equally weighted buttons is a screen
+        asking a question rather than offering a way in. It is also the one of
+        the three that a returning user reaches for, and they have File › Import
+        Markdown and ⇧⌘I — so it costs nothing to make it the quietest here.
+      -->
+      <Button variant="ghost" onclick={() => importMarkdown()}>Import Markdown</Button>
     </div>
 
     <ul class="readiness">
@@ -454,11 +460,21 @@
     color: var(--accent-strong);
   }
 
+  /*
+   * 32px, from 40 (§16.1).
+   *
+   * The serif hero stays — this is the one screen where a little editorial
+   * storytelling is right, and §3.3 keeps the display face as a brand accent
+   * for exactly this moment. What comes down is the SCALE: 40px is a landing
+   * page's opening line, and this is a setup assistant that has three actions
+   * and a checklist under it. It should read as the top of a window, not as the
+   * top of a marketing site.
+   */
   .heading {
     margin: 0;
     font-family: var(--font-serif);
-    font-size: 40px;
-    line-height: 1.18;
+    font-size: 32px;
+    line-height: 1.2;
     font-weight: 600;
     letter-spacing: var(--ls-title);
     color: var(--text-primary);

@@ -19,7 +19,9 @@
 -->
 <script lang="ts">
   import Button from '../components/Button.svelte';
+  import Icon from '../components/Icon.svelte';
   import * as recovery from '../services/recovery';
+  import { exportSupportBundle } from '../services/diagnostics';
   import { describeError } from '../services/errors';
 
   const { status }: { status: recovery.BootStatusReport } = $props();
@@ -71,14 +73,34 @@
 </script>
 
 <section class="recovery" role="alert" aria-labelledby="recovery-title">
-  <h1 id="recovery-title">CandidCue could not open its database</h1>
-  <p class="lede">{headline}</p>
-
-  <div class="actions">
+  <header class="head">
+    <h1 id="recovery-title">CandidCue could not open its database</h1>
+    <p class="lede">{headline}</p>
     <!--
-      First, and a `default` rather than a ghost button: this is the action
-      that gets the writing out, and it cannot make anything worse.
+      SAY WHAT IS SAFE, FIRST (§17.1).
+
+      The lede above states the condition. This states the consequence, which is
+      the thing somebody standing in front of this screen actually needs: their
+      writing is Markdown on disk and is not what broke. Without it the screen
+      reads as "your scripts may be gone", and the first action offered is a
+      button that says "save my scripts somewhere else" — which sounds like
+      salvage rather than a precaution.
     -->
+    <p class="safety">
+      <Icon name="check" size={15} />
+      <span>
+        Your scripts are Markdown files on this machine and are not affected. What did not
+        open is the index CandidCue keeps beside them.
+      </span>
+    </p>
+  </header>
+
+  <!--
+    The safe actions, ruled off from the ones that replace something (§17.1).
+    Neither of these changes anything: one copies the scripts out, one opens a
+    folder.
+  -->
+  <div class="actions">
     <Button
       variant="default"
       disabled={busy !== null}
@@ -103,7 +125,36 @@
     >
       Show CandidCue’s data folder
     </Button>
+
+    <!--
+      §17.1: offer the support bundle from the same surface. A boot that failed
+      here is exactly the report worth sending, and the screen it otherwise
+      points at — Settings › Diagnostics — is on the other side of an
+      application that will not start.
+    -->
+    <Button
+      variant="ghost"
+      disabled={busy !== null}
+      onclick={() =>
+        void run('bundle', async () => {
+          const result = await exportSupportBundle();
+          if (result.cancelled) return null;
+          return result.path === undefined
+            ? 'Support bundle saved.'
+            : `Support bundle saved to ${result.path}.`;
+        })}
+    >
+      {busy === 'bundle' ? 'Exporting…' : 'Export support bundle'}
+    </Button>
   </div>
+
+  {#if status.dataDirectory}
+    <!-- Where it all is, in plain sight beside the button that opens it. -->
+    <p class="path">
+      <span class="path-label">Data folder</span>
+      <code class="path-value">{status.dataDirectory}</code>
+    </p>
+  {/if}
 
   <h2>Restore a backup</h2>
   {#if !backupsLoaded}
@@ -118,12 +169,22 @@
     <ul class="backups">
       {#each backups as backup (backup.name)}
         <li class="backup" class:damaged={!backup.verified}>
+          <!--
+            Verified state as an ICON AND WORDS, never opacity alone (§17.1,
+            §9.4). A dimmed row says "this is less important"; it does not say
+            "this backup failed its integrity check and cannot be restored",
+            which is the one thing somebody choosing between backups has to
+            know.
+          -->
+          <span class="backup-mark" class:bad={!backup.verified} aria-hidden="true">
+            <Icon name={backup.verified ? 'check' : 'alert'} size={14} />
+          </span>
           <div class="backup-facts">
             <span class="backup-when">{backup.takenAt?.slice(0, 16).replace('T', ' ') ?? backup.name}</span>
             <span class="muted">
-              {megabytes(backup.bytes)}
+              {backup.verified ? 'Verified' : 'Failed its integrity check'}
+              · {megabytes(backup.bytes)}
               {#if backup.appVersion}· CandidCue {backup.appVersion}{/if}
-              {#if !backup.verified}· failed its integrity check{/if}
             </span>
           </div>
           <Button
@@ -167,83 +228,177 @@
 </section>
 
 <style>
+  /*
+   * A SYSTEM UTILITY, not an editorial page (§17.1).
+   *
+   * This was rem-based and hand-sized, and two of its colours — `--border-subtle`
+   * and `--surface-raised` — DO NOT EXIST in `tokens.css`, so the backup rows
+   * had been rendering with no border and no background at all since they were
+   * written. Everything here now goes through the token scale, which is also
+   * what makes the invented names impossible: a token that is not in the file
+   * is one nobody can spell by accident twice.
+   */
   .recovery {
-    max-width: 46rem;
+    max-width: 720px;
     margin: 0 auto;
-    padding: 3rem 2rem;
+    padding: var(--space-9) var(--page-x-wide) var(--space-10);
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--space-3);
+    overflow-y: auto;
+  }
+
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-bottom: var(--space-2);
   }
 
   h1 {
-    font-size: 1.5rem;
+    font-size: var(--text-2xl);
+    font-weight: 650;
+    letter-spacing: var(--ls-title);
     margin: 0;
   }
 
   h2 {
-    font-size: 1rem;
-    margin: 1.5rem 0 0;
+    font-size: var(--text-sm);
+    font-weight: 650;
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: var(--space-6) 0 0;
   }
 
   .lede {
-    margin: 0 0 0.5rem;
-    line-height: 1.5;
+    margin: 0;
+    line-height: var(--lh-body);
+    color: var(--text-primary);
+  }
+
+  /* What is safe, stated where it is read first. */
+  .safety {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 0;
+    padding: var(--space-3);
+    border: 1px solid var(--success);
+    border-radius: var(--radius-sm);
+    background: var(--success-soft);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-primary);
+  }
+  .safety :global(svg) {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--success);
   }
 
   .muted {
     color: var(--text-muted);
-    line-height: 1.5;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
     margin: 0;
   }
 
   .actions {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
 
+  /* The data folder, named beside the button that opens it (§17.1). */
+  .path {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: 0;
+    min-width: 0;
+  }
+  .path-label {
+    flex: 0 0 auto;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+  .path-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    /* Selectable: the one thing somebody does with a path is copy it. */
+    user-select: text;
+  }
+
+  /* Dense rows on one continuous surface, like every other list in the app. */
   .backups {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    border: 1px solid var(--border-faint);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    overflow: hidden;
   }
 
   .backup {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+  }
+  .backup + .backup {
+    border-top: 1px solid var(--border-faint);
+  }
+
+  .backup-mark {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--success);
+  }
+  .backup-mark.bad {
+    color: var(--warning);
   }
 
   .backup-facts {
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 1px;
     min-width: 0;
+    flex: 1 1 auto;
   }
 
   .backup-when {
+    font-size: var(--text-sm);
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
 
-  .damaged {
-    opacity: 0.6;
+  /* No opacity dimming — the icon and the words carry the state (§9.4). */
+  .damaged .backup-when {
+    color: var(--text-secondary);
   }
 
   .note {
-    margin: 0.5rem 0 0;
-    line-height: 1.5;
+    margin: var(--space-3) 0 0;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
   }
 
-  .bad {
-    color: var(--danger-strong, crimson);
+  .note.bad {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+    color: var(--text-primary);
   }
 </style>
