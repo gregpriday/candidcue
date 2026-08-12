@@ -460,6 +460,7 @@ dependencies = [
  "chrono",
  "hex",
  "image",
+ "libc",
  "percent-encoding",
  "reqwest 0.12.28",
  "serde",

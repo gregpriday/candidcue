@@ -763,6 +763,122 @@ fn verify_staged(
 /// everywhere EXCEPT the remove-then-rename that installs the staged directory:
 /// that window is the one place where stopping halfway could leave the model
 /// directory missing with nothing to replace it, so it is allowed to finish.
+/// Refuse an install the disk cannot hold, BEFORE anything is transferred.
+///
+/// ## What has to fit at once
+///
+/// An install is not "the size of the model". At its peak the volume holds:
+///
+/// * the **archive**, downloaded whole before it is verified;
+/// * the **staging** tree, every file extracted and checked while the archive
+///   is still there;
+/// * the **current install**, which is not removed until the new one commits;
+/// * the **backup** of that install, which is how an interrupted commit is
+///   recoverable at all.
+///
+/// So the requirement is archive + 2 × installed + a margin — and for the
+/// shipped model that is roughly 380 MB, not the 161 MB a user would guess
+/// from the model's size, or the ~57 MB they see downloading.
+///
+/// ## Why it is worth refusing rather than discovering
+///
+/// Without this, running out of space is found somewhere in the middle: after
+/// a 57 MB download on a hotel connection, or — worse — during the commit,
+/// where the recovery path exists precisely because that is survivable but
+/// unpleasant. The failure message then blamed the disk *after* the fact, and
+/// the readiness review noted that installation errors "advise the user to
+/// check disk space only after failure".
+///
+/// The numbers are stated in the error because "not enough space" without them
+/// is not actionable: the user has to know how much to clear.
+fn check_free_space(root: &Path, model: &ModelEntry) -> Result<(), AppError> {
+    /// Headroom over the arithmetic. Space is not ours alone — Spotlight,
+    /// Time Machine snapshots and the user's own work move underneath us —
+    /// and a commit that fails on the last megabyte is the expensive failure.
+    const MARGIN_BYTES: u64 = 256 * 1024 * 1024;
+
+    let installed = model.installed_bytes();
+    let required = model
+        .archive
+        .bytes
+        .saturating_add(installed.saturating_mul(2))
+        .saturating_add(MARGIN_BYTES);
+
+    let Some(available) = available_bytes(root) else {
+        // A volume that will not report its free space is not grounds to
+        // refuse. The install will fail honestly if it runs out; refusing on a
+        // failed syscall would make an unusual filesystem into a broken app.
+        tracing::warn!(path = %root.display(), "could not read free space; skipping the preflight");
+        return Ok(());
+    };
+
+    if available >= required {
+        return Ok(());
+    }
+
+    let gb = |bytes: u64| format!("{:.1} GB", bytes as f64 / 1_000_000_000.0);
+    Err(AppError::structured(
+        "STT_MODEL_INSUFFICIENT_SPACE",
+        crate::errors::ErrorCategory::Storage,
+        format!(
+            "There is not enough free space to install this language. It needs about {} \
+             while it installs — the download, the files it unpacks into, and a backup of \
+             any version already here — and {} is free. Nothing was downloaded.",
+            gb(required),
+            gb(available)
+        ),
+        true,
+    )
+    .with_action(crate::errors::RecoveryAction::RevealFolder)
+    .with_detail("requiredBytes", required.to_string())
+    .with_detail("availableBytes", available.to_string()))
+}
+
+/// Free bytes on the volume containing `path`, or `None` if it cannot be read.
+///
+/// `statvfs` reports the value for the FILESYSTEM the path is on, which is why
+/// the model root is passed rather than the home directory: on a machine where
+/// the app data directory is a symlink onto another volume — an ordinary way
+/// to keep large data off a small boot disk — those are different answers.
+#[cfg(unix)]
+fn available_bytes(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    // The directory must exist for `statvfs` to answer about it; walk up until
+    // one does. A path whose parents are all missing is a bigger problem than
+    // free space and is reported by the caller that tried to create it.
+    let mut probe = path;
+    loop {
+        if probe.exists() {
+            break;
+        }
+        probe = probe.parent()?;
+    }
+
+    let c_path = CString::new(probe.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c_path` is a valid NUL-terminated path and `stat` is only read
+    // after `statvfs` reports success.
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+            return None;
+        }
+        // `f_bavail` is blocks available to an UNPRIVILEGED process, which is
+        // the number that matters — `f_bfree` includes the reserve only root
+        // can spend.
+        Some((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+    }
+}
+
+#[cfg(not(unix))]
+fn available_bytes(_path: &Path) -> Option<u64> {
+    // Windows would use GetDiskFreeSpaceExW. 1.0 ships macOS only (§P2-05),
+    // and the caller treats `None` as "cannot say", which skips the preflight
+    // rather than refusing — the same behaviour as an unreadable volume.
+    None
+}
+
 pub async fn install(
     app_data_dir: &Path,
     catalogue: &Catalogue,
@@ -775,6 +891,9 @@ pub async fn install(
     let downloads = root.join(store::DOWNLOADS_DIR);
     std::fs::create_dir_all(&downloads)
         .map_err(|e| install_failed(format!("could not create the models directory: {e}")))?;
+
+    // Before a byte moves. See `check_free_space`.
+    check_free_space(&root, model)?;
     // A model left in its backup by an interrupted commit goes back FIRST: if
     // this attempt also fails, the machine still has the model it had before.
     let _ = store::recover_backup(&root, model);

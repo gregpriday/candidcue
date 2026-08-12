@@ -39,6 +39,7 @@
   import Select from './Select.svelte';
   import StatusPill from './StatusPill.svelte';
   import { describeError } from '../services/errors';
+  import { openModelLicence } from '../services/speech-models';
   import {
     canRemove,
     cancelSpeechModelDownload,
@@ -582,9 +583,22 @@
       -->
       <p class="attribution">
         {shown.attribution.title} by {shown.attribution.author} —
-        <a href={shown.attribution.license.url} target="_blank" rel="noreferrer noopener">
+        <!--
+          A button, not an anchor.
+          
+          An `<a target="_blank">` asks the WEBVIEW to navigate, which is a
+          thing this window must never do — and it needed `opener:default` on
+          the control capability to work at all, which is standing permission
+          to open any url. `openModelLicence` goes to Rust, which checks the
+          url against the licence urls the model catalogue itself declares.
+        -->
+        <button
+          type="button"
+          class="licence-link"
+          onclick={() => void openModelLicence(shown.attribution.license.url)}
+        >
           {shown.attribution.license.name}
-        </a>.
+        </button>.
         {#if shown.attribution.licenseNote}
           {shown.attribution.licenseNote}
         {/if}
@@ -729,9 +743,6 @@
     color: var(--text-muted);
     line-height: 1.5;
   }
-  .attribution a {
-    color: var(--accent-strong);
-  }
 
   .inventory {
     display: flex;
@@ -770,5 +781,16 @@
   .inventory-actions {
     display: inline-flex;
     gap: var(--space-2);
+  }
+
+  /* Reads as a link, because it is one; it simply does not navigate this window. */
+  .licence-link {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-strong);
+    text-decoration: underline;
+    cursor: pointer;
   }
 </style>

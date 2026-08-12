@@ -170,24 +170,35 @@ const ERROR_COPY: Record<string, string> = {
    * nothing the presenter did. The store now swallows it when the session is
    * genuinely gone; this is the backstop for every path that does not.
    */
-  SESSION_STOPPED:
-    'The session ended before voice following could start. Start it again when you are ready.',
 
   /* -- transcription transport -------------------------------------------- */
-  REALTIME_CONNECT_FAILED:
-    'CandidCue could not open the transcription connection. Try again; if it keeps failing, check whether a firewall or VPN is blocking it.',
+  //
+  // `REALTIME_CONNECT_FAILED`, `REALTIME_PROVIDER_ERROR` and
+  // `REALTIME_CONFIG_REJECTED` used to be here. They described a hosted
+  // recogniser reached over a websocket — a firewall to check, a provider to
+  // be down, a session to configure. Transcription is on-device: there is no
+  // connection to open and no provider to report anything, so copy telling a
+  // presenter to check their VPN describes a failure that cannot occur.
+  //
+  // The three that remain keep their codes — the session store still raises
+  // them — but their copy now describes the recogniser that actually exists.
+  // A presenter told to check their internet connection about an ONNX graph
+  // failing to start goes and looks at their router.
   REALTIME_NEGOTIATION_FAILED:
-    'CandidCue could not open the transcription connection. Try again; if it keeps failing, check whether a firewall or VPN is blocking it.',
+    'CandidCue could not start the speech recogniser for this take. Try starting the take again; if it keeps failing, reinstall the language in Settings › Speech.',
   REALTIME_CONNECTION_LOST:
-    'The transcription connection dropped. Check your internet connection, then start voice following again.',
-  REALTIME_PROVIDER_ERROR:
-    'The speech recogniser reported an error and transcription stopped. Start the take again; if it keeps happening, restart CandidCue.',
-  REALTIME_CONFIG_REJECTED:
-    'The speech recogniser could not be configured for this take, so retrying would fail the same way. Restart CandidCue, and reinstall it if this keeps happening.',
+    'The speech recogniser stopped during the take. Start voice following again; if it keeps stopping, restart CandidCue.',
   REALTIME_NO_TRANSCRIPTS:
-    'Audio is being sent but no transcript is coming back, so following is on hold. Stop and start the take to open a fresh connection.',
+    'Your microphone is being read but no words are coming back, so following is on hold. Check that the right input is selected in Settings › Audio, then start the take again.',
 
   /* -- scripts ------------------------------------------------------------ */
+  //
+  // Not a user error in any ordinary sense: a script id is minted by Rust and
+  // only ever handed back, so a malformed one means the frontend built a
+  // request wrongly. Named rather than hidden — a silent generic failure on
+  // this is how a broken link in the library looks like a broken script.
+  INVALID_SCRIPT_ID:
+    'CandidCue could not identify that script. Go back to the library and open it again.',
   SCRIPT_CONFLICT:
     'This script’s file changed outside CandidCue since it was opened. Reload it before saving, or the newer version will be overwritten.',
   SCRIPT_SAVE_FAILED:
@@ -231,15 +242,56 @@ const ERROR_COPY: Record<string, string> = {
     'The stage could not lay out this script. Stop and start the take to rebuild it.',
   // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
   // post-show check (§52.7).
-  STAGE_DISPLAY_MISMATCH:
-    'The stage opened on a different display than the one selected. Use “Identify displays” to see which panel is which.',
 
 
   /* -- updates ------------------------------------------------------------ */
-  UPDATE_SIGNATURE_INVALID:
-    'That update could not be verified, so it was not installed. Download CandidCue again from the official site.',
-  UPDATE_INSTALL_FAILED:
-    'The update could not be installed. Try again, or download CandidCue again from the official site.',
+
+  /* -- the database ------------------------------------------------------- */
+  //
+  // These reach the recovery screen rather than a toast, because the
+  // application does not open when they fire. Each one names what is safe:
+  // scripts are Markdown files and a database failure does not touch them,
+  // which is the single most useful thing to say here.
+  DATABASE_CORRUPT:
+    'CandidCue’s database failed its integrity check and was not changed. Your scripts are separate Markdown files and are unaffected.',
+  DATABASE_BACKUP_REQUIRED:
+    'CandidCue needs to upgrade its database but could not first save a backup of it, so it made no changes. This is usually a full disk or a permissions problem in its data folder.',
+  DATABASE_UNAVAILABLE:
+    'CandidCue is in recovery mode because its database did not open, so this action is unavailable. Recover the database and reopen CandidCue.',
+  RESTORE_FAILED:
+    'The restore did not finish, and CandidCue put your previous data back. A copy of it was also kept.',
+
+  /* -- installing a language ---------------------------------------------- */
+  //
+  // A download and install has more ways to fail than most things in this app,
+  // and the remedies genuinely differ — which is why these are separate codes
+  // rather than one "install failed".
+  STT_MODEL_INSUFFICIENT_SPACE:
+    'There is not enough free space to install this language. Nothing was downloaded — free some space and try again.',
+  STT_MODEL_DOWNLOAD_FAILED:
+    'The language could not be downloaded. Check your connection and try again; anything already transferred is kept and will resume.',
+  STT_MODEL_CORRUPT:
+    'The downloaded language files did not match their published checksums, so they were discarded rather than installed. Try again.',
+  STT_MODEL_INSTALL_FAILED:
+    'The language downloaded but could not be installed. Any version already on this machine was left in place.',
+  STT_MODEL_CANCELLED:
+    'The language download was cancelled. What was transferred is kept, so starting again resumes rather than restarts.',
+  STT_MODEL_BUSY:
+    'CandidCue is already installing or removing a language. Wait for that to finish and try again.',
+  STT_MODEL_UNKNOWN:
+    'CandidCue does not recognise that language. Reinstall CandidCue if this keeps happening.',
+  STT_MODEL_UNSUPPORTED:
+    'That language is not available in this version of CandidCue.',
+  STT_MODEL_URL_INSECURE:
+    'The download address for that language is not secure, so CandidCue refused it. This is a problem with the release rather than with your machine.',
+  STT_MODEL_URL_BLOCKED:
+    'The download address for that language does not point at a public server, so CandidCue refused it. This is a problem with the release rather than with your machine.',
+
+  /* -- choosing a language ------------------------------------------------ */
+  STT_LANGUAGE_CHANGE_BLOCKED:
+    'The speech language cannot be changed during a take. End the take first.',
+  STT_LANGUAGE_UNAVAILABLE:
+    'That language is not installed on this machine. Install it in Settings › Speech first.',
 
   /* -- generic backend ---------------------------------------------------- */
   INTERNAL_UNEXPECTED:

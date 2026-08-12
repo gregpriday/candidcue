@@ -385,3 +385,16 @@ export function languageDisplayName(tag: string): string {
     return tag;
   }
 }
+
+/**
+ * Open a speech model's licence page.
+ *
+ * Rust checks the url against the licence urls the model catalogue itself
+ * declares, which is why the control capability no longer grants
+ * `opener:default`. §153 makes attribution an obligation the app carries
+ * rather than a decision to put in front of the user, so this is not gated on
+ * anything — it is the same link, opened safely.
+ */
+export async function openModelLicence(url: string): Promise<void> {
+  await invokeOrMock<void>('open_model_licence', { url }, () => undefined);
+}

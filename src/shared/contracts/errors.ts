@@ -100,13 +100,53 @@ export const APP_ERROR_CODES = [
    * window this path never opens and a picker it never consults.
    */
   'PRESENTATION_FAILED',
-  'UPDATE_SIGNATURE_INVALID',
-  'UPDATE_INSTALL_FAILED',
+  /*
+   * No `UPDATE_SIGNATURE_INVALID` / `UPDATE_INSTALL_FAILED`. CandidCue 1.0
+   * updates manually (docs/updates.md); planned error codes for a feature that
+   * does not exist are part of what made the half-updater look wired.
+   */
   'INTERNAL_UNEXPECTED',
   // Structured codes minted by src-tauri/src/errors.rs constructors.
   'NOT_IMPLEMENTED',
   'NOT_FOUND',
   'VALIDATION_FAILED',
+
+  /*
+   * ---------------------------------------------------------------------
+   * Codes Rust mints that this list used not to contain
+   * ---------------------------------------------------------------------
+   * The 1.0 readiness review found the two sides had drifted: Rust produced
+   * structured codes for database, language-selection and model-manager
+   * failures that appeared nowhere here, so the frontend's copy registry had
+   * no entry for them and the user got the raw code or a generic fallback on
+   * exactly the failures that most need an explanation.
+   *
+   * `tests/unit/control/error-code-parity.test.ts` now reads the Rust sources
+   * and fails when a code crosses the boundary without an entry here AND
+   * authored copy — so this list cannot fall behind again without something
+   * saying so.
+   */
+  'DATABASE_CORRUPT',
+  'INVALID_SCRIPT_ID',
+  'DATABASE_BACKUP_REQUIRED',
+  'DATABASE_UNAVAILABLE',
+  'RESTORE_FAILED',
+  // `STT_ENGINE_ERROR`, `STT_WORKER_FAILED`, `STT_MODEL_LOAD_FAILED`,
+  // `STT_MODEL_MISSING` and `STT_MODEL_NOT_INSTALLED` are already declared
+  // above with the rest of the recogniser codes; the drift was in the OTHER
+  // direction for those.
+  'STT_LANGUAGE_CHANGE_BLOCKED',
+  'STT_LANGUAGE_UNAVAILABLE',
+  'STT_MODEL_BUSY',
+  'STT_MODEL_CANCELLED',
+  'STT_MODEL_CORRUPT',
+  'STT_MODEL_DOWNLOAD_FAILED',
+  'STT_MODEL_INSTALL_FAILED',
+  'STT_MODEL_INSUFFICIENT_SPACE',
+  'STT_MODEL_UNKNOWN',
+  'STT_MODEL_UNSUPPORTED',
+  'STT_MODEL_URL_BLOCKED',
+  'STT_MODEL_URL_INSECURE',
 ] as const;
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];

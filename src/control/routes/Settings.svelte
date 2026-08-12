@@ -28,7 +28,6 @@
   import StatusPill from '../components/StatusPill.svelte';
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
-  import { openExternal } from '../lib/app-actions';
   import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
   import {
     ADVANCED_FONT_SIZE_CEILING_PX,

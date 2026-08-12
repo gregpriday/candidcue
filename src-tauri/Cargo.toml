@@ -13,6 +13,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# URL-based image import. Off for 1.0: the command has no UI caller, so
+# registering it was standing permission for a network path nobody uses. See
+# `commands::assets_cmds::import_remote_image`.
+remote-images = []
+
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
@@ -82,6 +88,7 @@ cc-align = { path = "../crates/cc-align" }
 cc-stt = { path = "../crates/cc-stt" }
 base64 = "0.23.0"
 tauri-plugin-single-instance = "2.4.3"
+libc = "0.2.189"
 
 [dev-dependencies]
 tempfile = "3"

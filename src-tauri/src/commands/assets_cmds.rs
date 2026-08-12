@@ -52,6 +52,22 @@ pub async fn import_image<R: Runtime>(
     Ok(Some(imported))
 }
 
+/*
+ * Compiled out for 1.0.
+ *
+ * The URL-based image import has no UI caller: the editor imports local files
+ * and the compiler rejects remote images. The 1.0 readiness review named it as
+ * dormant authority — the Rust implementation is strongly hardened (scheme,
+ * public-address, redirect, content-type, dimension and decode limits), so
+ * this is not a claim that it is unsafe. It is that a registered command with
+ * a live network path and no caller is standing permission nobody is watching.
+ *
+ * Gated rather than deleted, because the hardening is real work and the
+ * feature is a plausible thing to want back. Turning the feature on is
+ * therefore a deliberate act that also has to add the command to the registry
+ * in `app.rs`, to `permissions/app-commands.toml`, and to a UI.
+ */
+#[cfg(feature = "remote-images")]
 #[tauri::command]
 pub async fn import_remote_image<R: Runtime>(
     boot: State<'_, crate::database::BootStatus>,
@@ -101,4 +117,38 @@ pub async fn remove_asset_reference(
     // Basic GC after unreferencing (spec §24.8).
     let _ = assets::collect_garbage(db.pool(), &paths).await;
     Ok(())
+}
+
+/// Open a model's licence page in the user's browser.
+///
+/// ## Why this exists instead of `opener:default`
+///
+/// The control capability used to grant `opener:default`, which lets the
+/// webview open ANY url, and the one place the app actually needs it is a
+/// licence link in the speech-model picker. The 1.0 readiness review called
+/// that out as authority minimisation: a capability that broad is not
+/// dangerous today because the CSP blocks remote hosts and nothing else calls
+/// it — it is dangerous because it is standing permission for a thing nobody
+/// is watching.
+///
+/// So the grant is gone and this took its place. The url is checked against
+/// the licence urls the **catalogue itself** declares, which is the same file
+/// the downloader takes its pinned digests from. That is stricter than a host
+/// allow-list and it cannot drift: adding a model with a new licence adds its
+/// url here automatically, and nothing else can ever be opened.
+///
+/// §153 is explicit that attribution is an obligation the app carries rather
+/// than a decision to put in front of the user, so this is not gated on
+/// anything — it is the same link, opened safely.
+#[tauri::command]
+pub async fn open_model_licence(url: String) -> Result<(), AppError> {
+    let permitted = crate::speech::catalogue::licence_urls();
+    if !permitted.iter().any(|allowed| allowed == &url) {
+        return Err(AppError::unsafe_path(
+            "CandidCue only opens the licence pages the speech-model catalogue names.",
+        )
+        .with_detail("url", url));
+    }
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| AppError::Internal(format!("could not open the licence page: {e}")))
 }

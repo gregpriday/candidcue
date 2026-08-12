@@ -38,7 +38,7 @@ commands.allow = [
   "export_script",
   "reveal_script_folder",
   "import_image",
-  "import_remote_image",
+  "open_model_licence",
   "resolve_asset_urls",
   "remove_asset_reference",
   "get_speech_engine_status",

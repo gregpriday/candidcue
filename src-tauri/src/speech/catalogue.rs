@@ -121,6 +121,24 @@ pub fn catalogue() -> &'static Catalogue {
     &CATALOGUE
 }
 
+/// Every licence url the catalogue declares.
+///
+/// The allow-list for `open_model_licence`, derived from the catalogue rather
+/// than restated beside it. That is what makes it impossible to drift: adding
+/// a model with a new licence adds its url here automatically, and a url this
+/// file does not name cannot be opened at all.
+///
+/// Stricter than a host allow-list on purpose. `https://www.apache.org/...`
+/// as a HOST would also permit every other page on apache.org; as an exact url
+/// it permits the licence and nothing else.
+pub fn licence_urls() -> Vec<String> {
+    CATALOGUE
+        .models
+        .iter()
+        .map(|model| model.attribution.license.url.clone())
+        .collect()
+}
+
 impl Catalogue {
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
         self.models.iter().find(|m| m.id == id)

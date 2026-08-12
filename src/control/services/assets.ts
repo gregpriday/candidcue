@@ -40,15 +40,14 @@ export async function importImage(scriptId: string): Promise<ImportedAsset | nul
   );
 }
 
-/** Fetch a remote image into the script (hardened, redirect-disabled in Rust). */
-export async function importRemoteImage(
-  scriptId: string,
-  url: string,
-): Promise<ImportedAsset> {
-  return invokeOrMock<ImportedAsset>('import_remote_image', { scriptId, url }, () =>
-    mockImportedAsset(),
-  );
-}
+/*
+ * `importRemoteImage` used to live here.
+ *
+ * It had no caller — the editor imports local files and the compiler rejects
+ * remote images — and the command behind it is compiled out for 1.0 behind the
+ * `remote-images` feature. A service function for a command that does not
+ * exist is worse than no function: it reads as a capability the app has.
+ */
 
 function mockImportedAsset(): ImportedAsset {
   return {
