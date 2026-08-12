@@ -27,6 +27,32 @@
 //! - [`restore_all_data`] validates the manifest and every checksum BEFORE it
 //!   touches live data, then moves the current state aside, commits, and rolls
 //!   back if the commit fails part way.
+//! ## What is durable, and what is not
+//!
+//! Everything that can lose a user's only copy is flushed before anything else
+//! is told it happened: the restore journal and both markers (temp file, fsync,
+//! rename, directory fsync), every move in `move_or_copy`, every file
+//! `copy_tree` writes, the restored database before it is verified, and the
+//! directory entries all of those depend on. The database itself commits with
+//! `synchronous = FULL`, because settings, session history and retained
+//! transcripts exist nowhere else.
+//!
+//! Deliberately NOT flushed, and the reason in each case is that the source
+//! still exists afterwards:
+//!
+//! - the `README.txt` and `.json` sidecars beside a quarantined or exported
+//!   artefact — they describe it, and a description that does not survive
+//!   costs an explanation rather than data;
+//! - the rescue copy `rescue_scripts` writes to a folder the user chose, and
+//!   the asset copies inside a Markdown export — the managed originals are
+//!   untouched, so the answer to losing one is to run it again;
+//! - the moves that a permanent delete and its rollback make between the live
+//!   tree and quarantine — an interruption leaves the row and the folder
+//!   disagreeing about where a script is, which the startup reconciliation
+//!   repairs and reports, and neither side overwrites the other;
+//! - caches, logs, diagnostics and downloaded model files, all of which are
+//!   regenerable by definition.
+//!
 //! - [`rebuild_database_index`] throws the database away on purpose. The
 //!   canonical Markdown files are the authority for script content (§48.1), so
 //!   an index can always be regenerated from them; this is the recovery of last
@@ -207,7 +233,18 @@ pub async fn export_all_data(
         format!("CandidCue-export-{stamp}-INCOMPLETE")
     };
     let final_path = dest_root.join(final_name);
+    /*
+     * Published durably.
+     *
+     * An export is what a restore reads, and the manifest inside it is what
+     * vouches for every byte — so an export whose directory entry never reached
+     * the platter is a backup the user believes they have. The contents were
+     * fsynced as they were copied (`copy_tree`); this is the entry that names
+     * them.
+     */
+    sync_dir(&staging)?;
     std::fs::rename(&staging, &final_path)?;
+    sync_dir(dest_root)?;
 
     Ok(DataExportResult {
         path: final_path.to_string_lossy().to_string(),
@@ -548,9 +585,12 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
         .canonicalize()
         .map_err(|e| AppError::invalid_input(format!("That export folder is unreadable: {e}")))?;
 
-    std::fs::write(
-        paths.root().join(PENDING_RESTORE),
-        serde_json::to_vec_pretty(&PendingRestore {
+    // Durably, like every other write to this marker: a scheduled restore that
+    // a crash forgets is a restore the user asked for and did not get, with
+    // nothing on screen to say so.
+    write_json_durably(
+        &paths.root().join(PENDING_RESTORE),
+        &PendingRestore {
             export_path: export_path.to_string_lossy().to_string(),
             requested_at: crate::util::now_iso(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -559,8 +599,7 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
             evacuated: Vec::new(),
             absent: Vec::new(),
             completed: false,
-        })
-        .map_err(|e| AppError::Internal(e.to_string()))?,
+        },
     )?;
 
     Ok(RestoreResult {
