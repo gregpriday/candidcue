@@ -447,7 +447,7 @@ pub fn resolve_for<R: tauri::Runtime>(
     // shape-checks whatever it is handed.
     let resource = app
         .path()
-        .resolve(&entry.resource_dir(), tauri::path::BaseDirectory::Resource)
+        .resolve(entry.resource_dir(), tauri::path::BaseDirectory::Resource)
         .ok();
     store::resolve(&data_dir, resource.as_deref(), entry)
 }

@@ -250,6 +250,12 @@ pub(crate) fn smoothstep(u: f64) -> f64 {
 /// `ease <= 0` returns the exact hard minimum, so every limit in this file can
 /// be restored to its previous behaviour by zeroing one config value.
 /// `a.min(cap)`, with the corner rounded off over a knee of width `ease`.
+/*
+ * `!(x > 0.0)` rather than `x <= 0.0` in both guards below, deliberately: the
+ * two differ on NaN, and NaN is exactly what these are defending against. A
+ * NaN knee width would propagate into every limit in this file.
+ */
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn soft_min(a: f64, cap: f64, ease: f64) -> f64 {
     if !(ease > 0.0) || !cap.is_finite() || !a.is_finite() {
         return a.min(cap);
@@ -3018,11 +3024,12 @@ mod tests {
             };
             let mut engine = Engine::new(jump_script(), config);
             engine.set_manual_position(0, 0.0);
-            let mut out = Vec::new();
-            out.push(final_item(&mut engine, 1, "region 0 holds ordinary", 600.0));
-            out.push(final_item(&mut engine, 2, "material here region 1", 1_200.0));
-            out.push(final_item(&mut engine, 3, DISTANT, 1_900.0));
-            out.push(final_item(&mut engine, 4, "region 3 holds ordinary", 2_600.0));
+            let out = vec![
+                final_item(&mut engine, 1, "region 0 holds ordinary", 600.0),
+                final_item(&mut engine, 2, "material here region 1", 1_200.0),
+                final_item(&mut engine, 3, DISTANT, 1_900.0),
+                final_item(&mut engine, 4, "region 3 holds ordinary", 2_600.0),
+            ];
             serde_json::to_string(&out).unwrap()
         };
 
@@ -3280,6 +3287,53 @@ mod reacquire_tests {
         Engine::new(script, AlignmentConfig::default())
     }
 
+    /// A long script where one phrase appears TWICE, far apart.
+    ///
+    /// The whole point: with duplicated evidence, which copy wins is decided by
+    /// the viewport prior and by nothing else. A script where the phrase is
+    /// unique would select the right place whether or not the prior survived,
+    /// which is what made the first version of the test below vacuous.
+    ///
+    /// It has to be LONG. The candidate search works in regions about
+    /// `global_region` atoms wide and keeps one winner per region, so in a
+    /// twenty-word script both copies fall inside a single merged region and
+    /// the viewport cannot separate them however strong the prior is. The two
+    /// copies here are ~300 atoms apart, which is several regions.
+    fn duplicated_engine() -> Engine {
+        let letters: Vec<char> = ('a'..='z').collect();
+        let mut words: Vec<String> = Vec::new();
+        for i in 0..400usize {
+            if i == 40 || i == 340 {
+                words.push("sierra".into());
+                words.push("tango".into());
+                continue;
+            }
+            /*
+             * Distinct all-LETTER filler, so nothing but the planted phrase
+             * matches — and so one word is one atom. A `word12`-style filler
+             * compiles to two atoms (the engine speaks digits separately),
+             * which silently doubles every index and puts a viewport computed
+             * from the word positions nowhere near either copy.
+             */
+            words.push(
+                [
+                    letters[(i / 676) % 26],
+                    letters[(i / 26) % 26],
+                    letters[i % 26],
+                ]
+                .iter()
+                .collect(),
+            );
+        }
+        let script = compile(&words.join(" "), CompileOptions::default());
+        Engine::new(script, AlignmentConfig::default())
+    }
+
+    /// Where in the script the engine ended up, as an atom index.
+    fn duplicated_copy(observed: f64) -> &'static str {
+        if observed < 200.0 { "near" } else { "far" }
+    }
+
     /// A reacquisition is not a jump.
     ///
     /// It used to be one: the control store called
@@ -3320,34 +3374,62 @@ mod reacquire_tests {
     /// position is exactly what the presenter is disputing.
     #[test]
     fn a_reacquisition_leaves_the_stage_viewport_prior_alone() {
-        let mut engine = fresh_engine();
+        /*
+         * The evidence is DUPLICATED — "sierra tango" opens the script and
+         * closes it — so which copy wins is decided by the viewport prior and
+         * by nothing else.
+         *
+         * The first version of this test used a script where the phrase was
+         * unique at the far end, which would be selected whether the prior
+         * survived, was cleared, or was replaced. It proved nothing. Before
+         * that it was worse still: it read this very file looking for the
+         * string `self.set_viewport_hint(first, last)`.
+         */
+        let mut engine = duplicated_engine();
 
         // The stage says the reader can see the END of the script.
-        engine.set_viewport_hint(14, 19);
-        let before = engine.snapshot(DecisionCode::NoEvidence, 0.0, 0.0);
-        let _ = before;
-
-        // A reacquisition while the engine believes it is at the START.
-        engine.set_manual_position(1, 500.0);
+        engine.set_viewport_hint(330, 355);
+        // And the engine believes it is near the FIRST copy — the position the
+        // presenter is disputing by pressing "re-find me here".
+        engine.set_manual_position(30, 500.0);
         engine.reacquire(1_000.0);
 
-        /*
-         * Evidence matching the far end of the script must win, because that
-         * is where the stage says the reader is looking. If `reacquire` had
-         * replaced the hint with a window around the engine's own position,
-         * the near duplicate would.
-         */
-        let snapshot = engine.handle(SessionEvent::Final {
+        let far = engine.handle(SessionEvent::Final {
             item_id: "i1".into(),
             text: "sierra tango".into(),
             audio_end_ms: 2_000.0,
             acoustic_end_ms: None,
             word_times: None,
         });
-        assert!(
-            snapshot.observed > 12.0,
-            "the stage's viewport must still be steering the search, got {}",
-            snapshot.observed
+        assert_eq!(
+            duplicated_copy(far.observed),
+            "far",
+            "the stage's viewport must decide which copy wins, got {}",
+            far.observed
+        );
+
+        /*
+         * The control. Same script, same disputed position, same evidence —
+         * but the stage says the reader is looking at the BEGINNING. The other
+         * copy must win, or the assertion above is measuring something else.
+         */
+        let mut engine = duplicated_engine();
+        engine.set_viewport_hint(30, 55);
+        engine.set_manual_position(30, 500.0);
+        engine.reacquire(1_000.0);
+
+        let near = engine.handle(SessionEvent::Final {
+            item_id: "i1".into(),
+            text: "sierra tango".into(),
+            audio_end_ms: 2_000.0,
+            acoustic_end_ms: None,
+            word_times: None,
+        });
+        assert_eq!(
+            duplicated_copy(near.observed),
+            "near",
+            "a viewport at the first copy must select the first copy, got {}",
+            near.observed
         );
     }
 

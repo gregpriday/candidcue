@@ -53,6 +53,7 @@ fn entry(name: &str, value: f64, unit: &str, better: &str) -> BenchEntry {
 const HEADLINE_LAYOUT: &str = "60hz";
 
 /// Score one replayed run through the stage model at every layout.
+#[allow(clippy::too_many_arguments)]
 fn score_run(
     name: &str,
     scenario: &str,
@@ -260,15 +261,13 @@ fn finish(
     headline: PerceptualSamples,
     _all: PerceptualSamples,
 ) -> TierCResult {
-    let mut t = Vec::new();
-
     // ---- SAFETY GATES (§16.1). Not weighted; gated. ----
-    t.push(entry(
+    let mut t = vec![entry(
         "gate.unread_never_spoken",
         macro_avg(&runs, |r| r.unread_never_spoken),
         "word·s",
         "lower",
-    ));
+    )];
     t.push(entry(
         "gate.fce_10_pct",
         macro_avg(&runs, |r| r.fce_10_pct),

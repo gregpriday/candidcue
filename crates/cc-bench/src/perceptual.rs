@@ -1574,7 +1574,14 @@ fn honesty_and_holistic(
         // bad moment is not counted six times and two different failures in the
         // same second are not merged into one.
         let mut log: Vec<Disruption> = Vec::new();
-        let kinds: [(DisruptionKind, &dyn Fn(&FrameView, &crate::stage::Frame) -> bool); 7] = [
+        // Named, because the tuple is unreadable inline and clippy is right
+        // about that: a disruption kind paired with the predicate that detects
+        // it, over one rendered frame.
+        type DisruptionTest<'a> = (
+            DisruptionKind,
+            &'a dyn Fn(&FrameView, &crate::stage::Frame) -> bool,
+        );
+        let kinds: [DisruptionTest; 7] = [
             (DisruptionKind::UnreadInk, &|v, _| v.uie_tokens > 0 && v.uie_worst > 0.3),
             // Text the presenter is about to read, materially darkened.
             (DisruptionKind::UnreadInk, &|v, _| {

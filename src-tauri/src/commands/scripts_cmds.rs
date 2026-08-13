@@ -70,6 +70,12 @@ pub async fn get_script(
     Ok(document)
 }
 
+/*
+ * The argument list IS the IPC signature: four injected `State`s and the four
+ * fields the caller sends. Collapsing the payload into one struct would change
+ * the wire shape that `contracts.test.ts` and the ACL tests pin.
+ */
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn save_script(
     boot: State<'_, crate::database::BootStatus>,

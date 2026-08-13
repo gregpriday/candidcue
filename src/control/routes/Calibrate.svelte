@@ -1067,10 +1067,13 @@
    * there is no rig to be mirrored for, and a global flip written against a
    * profile that failed to save is the orphaned state this change is about.
    *
-   * They are sequential rather than concurrent for ordering, not for the
-   * revision race — `toRustPatch` has no optical branch, so only the mirror
-   * write reaches the backend and the two cannot collide over a revision. Two
-   * overlapping FINISHES still could, which is what `finishing` is for.
+   * They are sequential rather than concurrent, and now it IS about the
+   * revision race as well as ordering: since calibrated rigs moved into the
+   * settings document both writes reach the backend, and `patchSettings` reads
+   * the store revision when it is CALLED. Fired together they would start from
+   * the same revision and the backend would reject the loser. Awaited in turn,
+   * the second reads the revision the first produced. Two overlapping FINISHES
+   * would collide the same way, which is what `finishing` is for.
    */
   async function finish(): Promise<void> {
     if (finishing) return;

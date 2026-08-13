@@ -245,8 +245,9 @@ fn remove_older_than(dir: &std::path::Path, age: Duration) -> std::io::Result<()
 /// nobody opens.
 ///
 /// The findings are held here instead and read once the frontend is up. The
-/// event survives as a nudge for a window that is already listening; it is no
-/// longer the only way to hear about a repair that touched somebody's scripts.
+/// emit is gone entirely rather than kept as a nudge — nothing ever listened
+/// for it, and a declared event with no listener reads to the next person as a
+/// delivery path that works.
 #[derive(Debug)]
 pub struct StartupFindings {
     report: std::sync::Mutex<Option<RecoveryReport>>,

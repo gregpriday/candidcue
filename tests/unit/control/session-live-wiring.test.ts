@@ -127,7 +127,7 @@ const {
   startPrompting,
   stopSession,
 } = await import('../../../src/control/stores/session');
-const { toasts } = await import('../../../src/control/stores/toasts');
+const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
 function compiledStub(): CompiledScript {
@@ -181,6 +181,10 @@ const emitted: Array<{ target: string; event: string; payload: unknown }> = [];
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Toasts are module state shared by every test in this file, and several
+  // here count them. A test that raises one must not be able to change what
+  // the next one sees.
+  clearToasts();
   invoked.length = 0;
   setInvokeForTesting(async (command, args) => {
     invoked.push({ command, args });
@@ -313,6 +317,121 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
     expect(summary.transcriptSaved).toBe(false);
     // Not "an empty array was sent" — no call, and no text buffered to send.
     expect(records.appendSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  /*
+   * The late rejection, which is the only interesting one.
+   *
+   * `flushTranscript` clears the buffer before the write is acknowledged, so a
+   * rejection has to put the items back — but the last flush of a take is
+   * issued by `stopSession` itself, and its promise settles AFTER the take has
+   * been torn down. Two versions of the guard got this wrong:
+   *
+   *   1. re-queue unconditionally — one take's transcript ended up in the next
+   *      take's buffer, to be written under the wrong session id;
+   *   2. re-queue when `state.sessionId` still matches — `stopSession` leaves
+   *      the id in place, so the items went back into a buffer whose flush
+   *      timer had been stopped (never retried) under a toast promising a
+   *      retry, and the sticky degraded flag then marked the NEXT take's
+   *      summary "partly saved".
+   *
+   * Both are behaviour a source scan cannot see, so they are driven here.
+   */
+  it('tells the truth when the last append fails after the take has ended', async () => {
+    // A property rather than a `let`: TypeScript narrows a variable assigned
+    // only inside the executor to `never`, and the call below stops compiling.
+    const deferred: { reject?: (err: Error) => void } = {};
+    records.appendSessionTranscript.mockImplementationOnce(
+      () =>
+        new Promise<number>((_resolve, reject) => {
+          deferred.reject = (err: Error) => reject(err);
+        }),
+    );
+
+    start({ transcriptRetained: true });
+    startPrompting();
+    finalizeSpeech();
+    /*
+     * The take ends. This issues the final append, which has not settled.
+     *
+     * Deliberately NOT followed by `clearSession()`: that nulls the session
+     * id, and the whole point is that `stopSession` on its own leaves the id
+     * in place while the take is over and the flush timer is stopped.
+     */
+    stopSession();
+
+    // ...and now the write fails, with nothing left that could retry it.
+    deferred.reject?.(new Error('disk full'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const raised = get(toasts);
+    expect(raised, 'the presenter must be told').toHaveLength(1);
+    expect(raised[0]!.tone).toBe('danger');
+    /*
+     * The wording is the assertion. Comparing `state.sessionId` treated this
+     * as "the same take", so the items went back into a buffer whose flush
+     * timer had already been stopped and the toast promised a retry that could
+     * not happen. Nothing would ever have contradicted it.
+     */
+    expect(raised[0]!.message, 'a retry that cannot happen must not be promised').not.toMatch(
+      /keep trying/i,
+    );
+    expect(raised[0]!.message).toMatch(/missing from the saved transcript/i);
+
+    /*
+     * And the SUMMARY the presenter is looking at is corrected, not just
+     * shouted over. `stopSession` computes the flags synchronously, so the last
+     * write of every take settles after the answer about it has been given: the
+     * dialog said "Saved" a moment ago and would have gone on saying it.
+     */
+    const ended = get(session).summary;
+    expect(ended, 'the take dialog is still showing this summary').not.toBeNull();
+    expect(ended!.transcriptSaved).toBe(false);
+    expect(ended!.transcriptPartial).toBe(true);
+
+    // A second take, whose writes all succeed, is unaffected.
+    records.appendSessionTranscript.mockClear();
+    start({ transcriptRetained: true });
+    startPrompting();
+    finalizeSpeech();
+    const second = stopSession();
+    expect(second.transcriptSaved).toBe(true);
+    expect(second.transcriptPartial).toBe(false);
+    expect(records.appendSessionTranscript).toHaveBeenCalledTimes(1);
+    const [, items] = records.appendSessionTranscript.mock.calls[0] as unknown as [
+      string,
+      Array<{ commitSequence: number }>,
+    ];
+    expect(items, 'the dead take’s items must not be written under the new take').toHaveLength(2);
+  });
+
+  it('reports a mid-take append failure on the take that owns it', async () => {
+    /*
+     * The other side of the same guard: while the take is still running, the
+     * items DO go back in the buffer and the summary says the transcript is
+     * only partly saved.
+     */
+    records.appendSessionTranscript.mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+
+    start({ transcriptRetained: true });
+    startPrompting();
+    finalizeSpeech();
+    // The periodic flush, mid-take — not the one `stopSession` issues.
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const summary = stopSession();
+    expect(summary.transcriptPartial, 'the take that lost items must say so').toBe(true);
+    expect(summary.transcriptSaved).toBe(false);
+    // And the items were retried rather than dropped: the second call carries
+    // the same two commit sequences.
+    expect(records.appendSessionTranscript.mock.calls.length).toBeGreaterThan(1);
+    const retried = records.appendSessionTranscript.mock.calls.at(-1) as unknown as [
+      string,
+      Array<{ commitSequence: number }>,
+    ];
+    expect(retried[1].map((i) => i.commitSequence)).toEqual([1, 2]);
   });
 
   it('closes the session record on stop, with the §36.1 aggregate metrics', () => {

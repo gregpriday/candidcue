@@ -113,8 +113,7 @@ impl BootStatus {
 /// which is the correct outcome for input the user was never meant to be able
 /// to give.
 pub async fn in_memory_recovery_pool() -> Result<SqlitePool, AppError> {
-    let options = SqliteConnectOptions::from_str("sqlite::memory:")
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")?
         .foreign_keys(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -154,7 +153,10 @@ pub fn corrupt_database_error(detail: &str) -> AppError {
 /// Create the app data directory if needed, open the pool, verify integrity,
 /// take a pre-migration backup, then run migrations.
 pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
-    std::fs::create_dir_all(app_data_dir)?;
+    // Durable: on a first run this creates the data root itself, and an entry
+    // that never reached the platter takes the database and every script under
+    // it with it.
+    crate::util::create_dir_all_durable(app_data_dir)?;
     let db_path = app_data_dir.join(DB_FILE_NAME);
 
     /*
@@ -168,6 +170,17 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
      * scripts tree has already moved.
      */
     let paths = crate::scripts::DataPaths::new(app_data_dir.to_path_buf());
+
+    /*
+     * A rebuild that was interrupted between its three renames, finished first.
+     *
+     * It only tidies leftovers into the quarantine directory the rebuild was
+     * already using, and it has to happen before SQLite sees the data folder:
+     * an orphaned `-wal` beside a fresh database is discarded on open, taking
+     * the pages that were only ever in it.
+     */
+    crate::backup::finish_interrupted_rebuild(&paths)?;
+
     crate::backup::apply_pending_restore(&paths).await?;
 
     // Then: is this a database from before the 1.0 schema baseline? See
@@ -176,11 +189,27 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
 
     let pre_existing = db_path.exists() && std::fs::metadata(&db_path).map(|m| m.len() > 0).unwrap_or(false);
 
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        /*
+         * FULL, not NORMAL.
+         *
+         * In WAL mode `NORMAL` does not fsync on commit: a transaction that
+         * returned success can be lost to a power cut, and the database is
+         * still consistent afterwards — just missing it. That is the standard
+         * trade and it is the wrong one here, because several things live ONLY
+         * in this file. Settings, session and take history, and a retained
+         * transcript have no canonical copy on disk to rebuild from, unlike a
+         * script, whose Markdown file is the authority. "Saved" has to mean
+         * saved for them.
+         *
+         * The cost is one fsync per commit on a workload of a few writes a
+         * minute: a debounced script save, a transcript append every fifteen
+         * seconds, the odd settings patch. That is not a hot path, and it is
+         * measured by nothing this application does in a take.
+         */
+        .synchronous(SqliteSynchronous::Full)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
 
@@ -343,19 +372,18 @@ async fn quarantine_pre_baseline_database(
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let target = quarantine.join(format!("pre-1.0-baseline-{stamp}.sqlite3"));
 
-    // The WAL and SHM go with it. Leaving them beside a renamed database would
-    // hand the next open a write-ahead log belonging to a file that is no
-    // longer there.
-    for suffix in ["", "-wal", "-shm"] {
-        let from = db_path.with_file_name(format!("{DB_FILE_NAME}{suffix}"));
-        if from.exists() {
-            let to = target.with_file_name(format!(
-                "{}{suffix}",
-                target.file_name().unwrap_or_default().to_string_lossy()
-            ));
-            std::fs::rename(&from, &to)?;
-        }
-    }
+    /*
+     * The WAL and SHM go with it, through the shared journalled mover.
+     *
+     * Leaving them beside a renamed database would hand the next open a
+     * write-ahead log belonging to a file that is no longer there — and doing
+     * the three renames here, unjournalled, had the same defect one crash
+     * deeper: a failure between the database and its WAL leaves exactly that
+     * state behind, and the next launch discards the WAL along with everything
+     * committed to it. `finish_interrupted_rebuild` completes this at the top
+     * of `init`, before anything opens the folder.
+     */
+    crate::backup::quarantine_database_files(app_data_dir, &quarantine, &target)?;
 
     std::fs::write(
         target.with_extension("json"),
@@ -437,7 +465,9 @@ async fn write_pre_migration_backup(
     pending: &[i64],
 ) -> Result<std::path::PathBuf, AppError> {
     let backups = app_data_dir.join("backups");
-    std::fs::create_dir_all(&backups)?;
+    // Durable: this snapshot is about to be the only copy of the pre-migration
+    // state, and a directory entry that never landed takes it with it.
+    crate::util::create_dir_all_durable(&backups)?;
 
     let applied_high: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM _sqlx_migrations")
         .fetch_one(pool)
@@ -458,6 +488,17 @@ async fn write_pre_migration_backup(
             .execute(pool)
             .await?;
     }
+
+    /*
+     * On the platter before the migrations that make it matter.
+     *
+     * `VACUUM INTO` returning success means the bytes reached the page cache,
+     * and the very next thing this launch does is run destructive schema
+     * changes against the live database. A power loss in between would take
+     * the only pre-migration state with it.
+     */
+    crate::util::sync_file(&target)?;
+    crate::util::sync_dir(&backups)?;
 
     verify_backup(&target).await?;
 
@@ -489,8 +530,7 @@ async fn write_pre_migration_backup(
 /// truncated copy behind. This is cheap relative to a migration and it is the
 /// difference between "a backup exists" and "a backup works".
 async fn verify_backup(path: &Path) -> Result<(), AppError> {
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(false)
         .read_only(true);
 

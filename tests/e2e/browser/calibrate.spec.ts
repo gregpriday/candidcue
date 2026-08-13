@@ -152,6 +152,21 @@ async function settingsWrites(page: Page): Promise<Array<Record<string, unknown>
   );
 }
 
+/**
+ * The writes that touch one section.
+ *
+ * Finishing the wizard now issues TWO writes, and both are the point: the rig
+ * goes to Rust (`optical`) because a calibration measured with a tape measure
+ * must survive a cleared browser store, and the mirror goes with it
+ * (`stageBehavior`). Before that move the rig lived only in localStorage and
+ * these tests could count total writes; counting them now would conflate "the
+ * mirror was written once" with "how many sections finishing touches", and the
+ * first is what they are about.
+ */
+async function writesTouching(page: Page, section: string): Promise<Array<Record<string, unknown>>> {
+  return (await settingsWrites(page)).filter((patch) => patch[section] !== undefined);
+}
+
 test('a mirror tried out in the wizard reaches the glass but not the settings, and Discard drops it', async ({
   page,
 }) => {
@@ -267,9 +282,11 @@ test('Apply cannot clear a mirror set in Settings when the orientation step was 
    * if the write had gone out as `false` and the store had somehow not caught
    * up yet.
    */
-  const writes = await settingsWrites(page);
+  const writes = await writesTouching(page, 'stageBehavior');
   expect(writes).toHaveLength(1);
   expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
+  // And the rig itself reached Rust, which is why there are two writes now.
+  expect(await writesTouching(page, 'optical')).toHaveLength(1);
 });
 
 /*
@@ -301,8 +318,14 @@ test('a second Apply cannot start while the first is still saving', async ({ pag
   await page.evaluate(() => window.__E2E__.setDelay('update_settings', null));
   await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
 
-  // Still exactly one write, despite Apply having been pressed during a save.
-  expect(await settingsWrites(page)).toHaveLength(1);
+  /*
+   * Still exactly ONE finish, despite Apply having been pressed during a save:
+   * one write per section, not two. Counted per section because finishing
+   * writes the rig and the mirror in sequence — a second finish would show up
+   * as a second write to each.
+   */
+  expect(await writesTouching(page, 'optical')).toHaveLength(1);
+  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(1);
 });
 
 test('finishing the wizard is what applies the mirror, both axes at once', async ({ page }) => {
@@ -331,37 +354,46 @@ test('finishing the wizard is what applies the mirror, both axes at once', async
   await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'true');
 
   /*
-   * Exactly ONE write reached Rust, and it turned the mirror on.
+   * Exactly ONE mirror write reached Rust, and it turned the mirror on.
    *
    * The count is the real assertion. Two calls would mean the per-axis writes
    * were back: `patchSettings` reads the store revision when it is called, so a
    * pair fired before either lands both start from the same one and the backend
    * rejects the loser — which is how an axis used to disappear.
    *
+   * Scoped to `stageBehavior` because finishing also writes the rig itself to
+   * `optical` now (calibrations are Rust-owned; they used to live only in
+   * localStorage). The two are sequential, so they cannot collide over a
+   * revision, and each section is written once.
+   *
    * The patch carries the whole mapped section (`patchSettings` sends the
    * merged section, not just the changed keys), so this reads the one field it
    * is about rather than pinning the section's entire shape.
    */
-  const writes = await settingsWrites(page);
+  const writes = await writesTouching(page, 'stageBehavior');
   expect(writes).toHaveLength(1);
   expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
+  expect(await writesTouching(page, 'optical')).toHaveLength(1);
 });
 
 /*
- * Only the mirror write reaches Rust — `optical` is overlay-backed — so failing
- * `update_settings` fails precisely the step that puts a flip in force. What
- * must not happen is the wizard claiming success it did not have.
+ * Finishing writes twice — the rig to `optical`, then the mirror to
+ * `stageBehavior` — so a failing `update_settings` fails the FIRST of the two
+ * and the mirror write never runs at all. What must not happen either way is
+ * the wizard claiming success it did not have.
  *
- * SCOPE OF THIS TEST, precisely. It proves the in-session outcome: one write
- * was attempted, it carried the mirror, the wizard neither announced success
- * nor left, the switches read unchanged afterwards, and the operator can try
- * again. It does NOT prove durability across a reload, and must not be read as
- * if it did: `updateSettings` writes the section into the localStorage overlay
- * BEFORE calling Rust, and the store's rollback restores only its in-memory
- * snapshot — so a rejected write leaves the overlay holding the mirror, and a
- * later cold read merges it back over Rust. That gap is in the settings
- * service rather than this wizard, it predates this change, and it is reported
- * separately; asserting a cold read here would only re-fail on that defect.
+ * (The comment here used to say `optical` was overlay-backed and only the
+ * mirror reached Rust. That was true before calibrated rigs moved into the
+ * settings document, which is the change that made a measured viewing distance
+ * survive a cleared browser store.)
+ *
+ * SCOPE OF THIS TEST, precisely. It proves the in-session outcome: a write was
+ * attempted, the wizard neither announced success nor left, the switches read
+ * unchanged afterwards, and the operator can try again. It does NOT prove
+ * durability across a reload, and must not be read as if it did: `updateSettings`
+ * writes the section into the localStorage overlay BEFORE calling Rust for the
+ * sections that are still overlay-backed, and the store's rollback restores only
+ * its in-memory snapshot.
  */
 test('a mirror write that fails is reported, not silently half-applied', async ({
   page,
@@ -402,13 +434,15 @@ test('a mirror write that fails is reported, not silently half-applied', async (
   await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
 
   /*
-   * One write, and it was the mirror. The count alone would not say that:
-   * `patchSettings` sends the whole merged section, so a call carrying only
-   * `fixedSpeedWpm` would satisfy a bare length check.
+   * One write was attempted and it was the rig — the first of the two — and
+   * because it was rejected the mirror write never ran. Both halves are
+   * asserted: a failure that let the sequence carry on would put a flip in
+   * force for a rig the document does not have.
    */
   const writes = await settingsWrites(page);
   expect(writes).toHaveLength(1);
-  expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
+  expect(writes[0]?.['optical']).toBeDefined();
+  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(0);
 
   // The guard released: a failed save must leave the wizard retryable, not
   // permanently disabled with the work stranded behind it.

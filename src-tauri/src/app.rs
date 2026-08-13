@@ -168,7 +168,12 @@ pub fn run() {
             // Data directory layout (spec §47.1).
             let data_dir = handle.path().app_data_dir()?;
             let paths = DataPaths::new(data_dir.clone());
-            std::fs::create_dir_all(paths.scripts_dir())?;
+            /*
+             * `scripts/` durably, because it is where user data lives and on a
+             * first run its entry — and the data root's — are both new. Cache
+             * and logs are regenerable, so they take the cheap version.
+             */
+            crate::util::create_dir_all_durable(&paths.scripts_dir())?;
             std::fs::create_dir_all(paths.cache_dir())?;
             std::fs::create_dir_all(paths.logs_dir())?;
 
@@ -373,33 +378,27 @@ pub fn run() {
                     if report.has_findings() {
                         tracing::warn!(?report, "startup reconciliation had findings");
                         /*
-                         * STORED, then announced — not announced and hoped for.
+                         * STORED, and collected — not announced and hoped for.
                          *
-                         * This used to be an emit alone, with a comment
-                         * admitting the race: reconciliation finishes inside
-                         * `setup`, which is before the control webview has
-                         * executed a line of JavaScript, so the event lands on
-                         * a page with no listeners and is gone. A Tauri event
-                         * is delivered by evaluating JS in the target webview
-                         * and is never queued.
+                         * This used to be an emit (`diagnostic://warning`)
+                         * alone, with a comment admitting the race:
+                         * reconciliation finishes inside `setup`, which is
+                         * before the control webview has executed a line of
+                         * JavaScript, so the event landed on a page with no
+                         * listeners and was gone. A Tauri event is delivered by
+                         * evaluating JS in the target webview and is never
+                         * queued.
                          *
-                         * The findings now sit in managed state that the
-                         * frontend QUERIES once it is up
-                         * (`get_startup_findings`). The event stays as a nudge
-                         * for a window that is already listening; it is no
-                         * longer the only delivery.
+                         * The findings sit in managed state that the frontend
+                         * QUERIES once it is up (`get_startup_findings`). The
+                         * emit is gone rather than kept as a nudge: nothing
+                         * listened for it, and a declared event with no
+                         * listener reads to the next person as a delivery path
+                         * that works.
                          */
                         handle.manage(crate::scripts::reconcile::StartupFindings::new(
                             report.clone(),
                         ));
-                        let _ = handle.emit_to(
-                            CONTROL_LABEL,
-                            events::DIAGNOSTIC_WARNING,
-                            serde_json::json!({
-                                "kind": "startup_reconciliation",
-                                "report": report,
-                            }),
-                        );
                     }
                 }
                 Err(err) => {

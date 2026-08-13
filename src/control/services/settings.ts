@@ -299,6 +299,25 @@ function overlayStatedAMode(stored: unknown): boolean {
 }
 
 /**
+ * Does the legacy overlay actually hold a calibration to move?
+ *
+ * The same question `overlayStatedAMode` asks for the presentation mode, and it
+ * was missing here — so a fresh install with nothing to migrate still flagged an
+ * adoption, wrote an empty `optical` section on its first launch purely to plant
+ * the marker, and could raise "CandidCue could not move your saved teleprompter
+ * calibrations into permanent storage" at somebody who has never calibrated
+ * anything.
+ *
+ * Nothing is lost by not writing: `updateSettings` stamps `migrated: true` on
+ * every optical write, so the first REAL calibration plants the marker itself.
+ */
+function overlayHoldsRigs(stored: unknown): boolean {
+  if (!isPlainObject(stored)) return false;
+  const profiles = stored['profiles'];
+  return isPlainObject(profiles) && Object.keys(profiles).length > 0;
+}
+
+/**
  * The mode that is still only in localStorage, waiting to be written to Rust.
  *
  * ---------------------------------------------------------------------------
@@ -517,7 +536,21 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   const resolvedOptical = rustOwnsOptical
     ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
     : opticalFromStored(defaults.optical, overlay.optical);
-  opticalAwaitingAdoption = opticalMigrated ? null : resolvedOptical;
+  /*
+   * BOTH guards, and they answer different questions.
+   *
+   * `overlayHoldsRigs` is main's: an overlay with no rigs in it has nothing to
+   * migrate, so claiming a pending adoption would write an empty calibration
+   * over whatever Rust holds.
+   *
+   * `opticalMigrated` is the monotonic latch (see the mode above): once ANY
+   * parsed document has shown Rust owning the calibration, this never reports
+   * pending again — because documents do not arrive in the order they were
+   * produced, and a stale read landing after another window's migration would
+   * otherwise revive it. It subsumes `rustOwnsOptical`, which sets it.
+   */
+  opticalAwaitingAdoption =
+    opticalMigrated || !overlayHoldsRigs(overlay.optical) ? null : resolvedOptical;
 
   return {
     ...mapped,

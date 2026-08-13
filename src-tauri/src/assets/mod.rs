@@ -183,6 +183,12 @@ pub fn asset_url(path: &Path) -> String {
     }
 }
 
+/*
+ * Nine arguments because the row has nine columns. Grouping them into a struct
+ * would move the same fields one indirection away from the `INSERT` that has
+ * to list them in order, which is where a mismatch would actually be caught.
+ */
+#[allow(clippy::too_many_arguments)]
 async fn register_asset(
     pool: &SqlitePool,
     script_id: &ScriptId,

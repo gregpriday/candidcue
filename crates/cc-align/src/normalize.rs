@@ -822,7 +822,7 @@ fn parse_number_phrase(words: &[String]) -> (u64, usize, bool) {
     // [20] [26]. Detect a 10..=99 head immediately followed by another number
     // phrase worth 0..=99 that standard grammar refused to merge.
     let mut year = false;
-    if value >= 10 && value <= 99 && consumed < words.len() {
+    if (10..=99).contains(&value) && consumed < words.len() {
         // `nineteen oh five`. The zero is spoken as a letter, so no number
         // parser sees it and the year fell apart into `19 oh 5` — three atoms
         // where the script has one.

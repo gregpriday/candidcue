@@ -1044,18 +1044,23 @@ fn the_stage_payload_commands_have_typed_arguments() {
     )
     .expect("stage_cmds.rs");
 
-    for (command, argument) in [
-        ("publish_stage_document", "document_envelope: StageDocumentEnvelope"),
-    ] {
+    // One entry each today; written as lists because both are registers that
+    // grow, and a `for` over them is what makes adding the next one a one-line
+    // change rather than a copied assertion.
+    let typed: &[(&str, &str)] = &[(
+        "publish_stage_document",
+        "document_envelope: StageDocumentEnvelope",
+    )];
+    for (command, argument) in typed {
         assert!(
             stage_cmds.contains(argument),
             "`{command}` went back to an untyped payload. It needs `{argument}`, \
              or nothing at this boundary can catch a renamed field."
         );
     }
-    for (command, argument) in [
-        ("publish_stage_command", "action: serde_json::Value"),
-    ] {
+    let deliberately_untyped: &[(&str, &str)] =
+        &[("publish_stage_command", "action: serde_json::Value")];
+    for (command, argument) in deliberately_untyped {
         assert!(
             stage_cmds.contains(argument),
             "`{command}` gained a typed `{argument}` replacement. Read the note \

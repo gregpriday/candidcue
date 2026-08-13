@@ -185,13 +185,18 @@ export const CONTROL_EVENT = {
    */
   alignmentSnapshot: 'align://snapshot',
   /*
-   * `identifyDisplays` and `scriptExternalChange` used to be declared here.
-   * Rust emitted both to this window and nothing listened, because the command
-   * each accompanied already returns the fact: `get_script` carries
-   * `externallyChanged`, and `identify_displays` returns its session.
+   * `identifyDisplays`, `scriptExternalChange` and `diagnosticWarning` used to
+   * be declared here. Rust emitted all three to this window and nothing
+   * listened, because the command each accompanied already returns the fact:
+   * `get_script` carries `externallyChanged`, `identify_displays` returns its
+   * session, and startup findings are collected by `get_startup_findings`.
+   *
+   * The last of those could not have worked as an event in any case: it was
+   * emitted from Tauri's `setup`, before this webview had run a line of
+   * JavaScript, and a Tauri event is delivered by evaluating JS in the target
+   * window rather than being queued for it.
    */
   deviceOrDisplayChange: 'app://device-or-display-change',
-  diagnosticWarning: 'diagnostic://warning',
   /**
    * Rust → control: the window is closing, or the application is quitting.
    *

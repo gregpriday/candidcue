@@ -195,3 +195,31 @@ describe('the spoken-token contract with the alignment engine', () => {
     ]);
   });
 });
+
+describe('grammatical sentence ends survive tokens that normalise away', () => {
+  /*
+   * A few Unicode letters pass the tokenizer's `\p{L}` test and then normalise
+   * to nothing — U+037A GREEK YPOGEGRAMMENI decomposes to a combining mark,
+   * which `normalize.ts` strips. The emit loop drops such a token, so marking
+   * the last DRAFT of a grammatical range could put the boundary on a token
+   * that never reaches the engine.
+   *
+   * Inside a list item that loss is unrecoverable: the navigation-unit fallback
+   * only covers the end of the whole item, which is exactly the boundary this
+   * field exists to improve on.
+   */
+  it('puts the boundary on the last token that is actually emitted', () => {
+    const compiled = compile('- Alpha ͺ. Beta gamma.', { scriptId: 'dropped' });
+    const tokens = alignTokensFor(compiled);
+
+    // The dropped token is not in the stream at all.
+    expect(tokens.map((t) => t.surface)).toEqual(['Alpha', 'Beta', 'gamma']);
+
+    // And the sentence end inside the bullet is still reported, on the last
+    // token that survived rather than on the one that did not.
+    expect(tokens.filter((t) => t.sentenceEnd).map((t) => t.surface)).toEqual([
+      'Alpha',
+      'gamma',
+    ]);
+  });
+});

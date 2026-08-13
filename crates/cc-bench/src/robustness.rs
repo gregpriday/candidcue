@@ -552,6 +552,7 @@ const DISCONTINUITY_GRACE_MS: f64 = 5_000.0;
 /// at three because a three-operator corruption already describes a recogniser
 /// having a bad second, and beyond that the perturbation is more implausible
 /// than any behaviour it could provoke.
+#[allow(clippy::too_many_arguments)]
 pub fn adversarial_search(
     script_name: &str,
     scenario: &str,

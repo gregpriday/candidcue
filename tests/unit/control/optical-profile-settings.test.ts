@@ -65,10 +65,22 @@ const ipc = vi.hoisted(() => {
     document,
     /** Make `update_settings` reject, to test the write ORDER. */
     failUpdate: false,
+    /**
+     * Make `update_settings` actually APPLY the patch, so a test can round-trip
+     * through the document the way the app does. Off by default: most tests
+     * here want to inspect the outgoing call, and a fake that mutated the
+     * shared document would leak one test's sections into the next.
+     */
+    applyPatch: false,
     invoke: async (command: string, args?: unknown) => {
       calls.push({ command, args });
       if (command === 'update_settings' && ipc.failUpdate) {
         throw new Error('revision conflict');
+      }
+      if (command === 'update_settings' && ipc.applyPatch) {
+        const patch = (args as { patch?: Record<string, unknown> })?.patch ?? {};
+        Object.assign(document.value as Record<string, unknown>, patch);
+        document.revision += 1;
       }
       return document;
     },
@@ -128,6 +140,7 @@ const rustSettings = {
 
 beforeEach(() => {
   ipc.calls.length = 0;
+  ipc.applyPatch = false;
   store.clear();
   rustSettings.optical = undefined;
   /* The "Rust already owns this" latch is module state and only moves one way,
@@ -530,6 +543,40 @@ describe('Rust is the authority for calibrated rigs', () => {
     const loaded = await settings.getSettings();
     expect(loaded.optical).toEqual({ profiles: {}, activeRig: {} });
   });
+
+  it('does not migrate an empty overlay, or write to plant a marker nobody needs', async () => {
+    /*
+     * A fresh install has nothing to move. Flagging an adoption anyway made the
+     * first launch write an empty `optical` section purely to plant the
+     * authority marker — and put "CandidCue could not move your saved
+     * teleprompter calibrations into permanent storage" in front of somebody
+     * who has never calibrated anything if that write failed.
+     *
+     * Nothing is lost: `updateSettings` stamps `migrated: true` on every
+     * optical write, so the first real calibration plants the marker itself.
+     * `overlayStatedAMode` already gated the presentation-mode migration this
+     * way; this is the same gate, which the comment claimed and the code did
+     * not.
+     */
+    rustSettings.optical = undefined;
+    store.set(OVERLAY_KEY, JSON.stringify({ optical: { profiles: {}, activeRig: {} } }));
+
+    await settings.getSettings();
+    expect(settings.pendingOpticalAdoption()).toBeNull();
+
+    // And an overlay that DOES hold a rig is still migrated.
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: {
+          profiles: { [opticalRigKey('dsp-1', 'Desk hood')]: rig() },
+          activeRig: { 'dsp-1': 'Desk hood' },
+        },
+      }),
+    );
+    await settings.getSettings();
+    expect(settings.pendingOpticalAdoption()).not.toBeNull();
+  });
 });
 
 describe('the properties the 1.0 readiness review asked for', () => {
@@ -576,5 +623,57 @@ describe('the properties the 1.0 readiness review asked for', () => {
     } finally {
       ipc.failUpdate = false;
     }
+  });
+});
+
+describe('the whole migration lifecycle, through the real store', () => {
+  /*
+   * The tests above exercise the service against a fake document, and the
+   * cleanup one calls `forgetOverlayOptical` by hand. That is enough to pin the
+   * service's behaviour and not enough to pin the SEQUENCE, which is where the
+   * resurrection defect lived: adoption, cleanup and the authority marker are
+   * three separate steps in `stores/settings.ts`, and the bug was an ordering
+   * between them, not a wrong value in any one of them.
+   *
+   * So this runs the real store: load (which adopts), delete through
+   * `patchSettings`, reload. Nothing is hand-constructed and nothing internal is
+   * called directly — `update_settings` really applies the patch here, so the
+   * document the second load reads is the one the deletion produced.
+   */
+  it('adopts an overlay rig, and a rig deleted afterwards stays deleted across a reload', async () => {
+    ipc.applyPatch = true;
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        optical: { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' } },
+      }),
+    );
+
+    const settingsStore = await import('../../../src/control/stores/settings');
+    let loaded = await settingsStore.loadSettings(true);
+
+    // 1. The legacy rig survived the upgrade...
+    expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toEqual(rig());
+    // 2. ...Rust took ownership, marker and all...
+    expect((rustSettings.optical as { migrated?: boolean })?.migrated).toBe(true);
+    // 3. ...and the overlay copy is gone, so nothing can contradict it later.
+    const afterAdoption = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
+    expect(afterAdoption['optical'], 'the adopted copy must not be left behind').toBeUndefined();
+
+    // The user then deletes their last calibration, through the same path the
+    // rig picker uses.
+    await settingsStore.patchSettings(
+      'optical',
+      withoutOpticalProfile(loaded.optical, 'dsp-1', 'Desk hood'),
+    );
+
+    // And a fresh launch reads an EMPTY document as a real answer, rather than
+    // treating it as "not migrated yet" and re-adopting the measurement of a
+    // room the presenter has left.
+    loaded = await settingsStore.loadSettings(true);
+    expect(loaded.optical.profiles, 'a deleted rig must stay deleted').toEqual({});
+    expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toBeNull();
+    expect(settings.pendingOpticalAdoption()).toBeNull();
   });
 });

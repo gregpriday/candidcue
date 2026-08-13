@@ -1344,7 +1344,7 @@ mod canonicalization_contract_tests {
         assert!(!legacy.sentence_end);
 
         // And it reaches the compiled script rather than stopping at the struct.
-        let tokens = vec![
+        let tokens = [
             AlignToken {
                 surface: "alpha".into(),
                 line: 0,

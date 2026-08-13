@@ -132,10 +132,10 @@ fn main() {
             samples = samples[first..=last].to_vec();
         }
         if i == 0 && lead_ms > 0 {
-            all.extend(std::iter::repeat(0.0).take(sr as usize * lead_ms / 1000));
+            all.extend(std::iter::repeat_n(0.0, sr as usize * lead_ms / 1000));
         }
         if i > 0 {
-            all.extend(std::iter::repeat(0.0).take(sr as usize * gap_ms / 1000));
+            all.extend(std::iter::repeat_n(0.0, sr as usize * gap_ms / 1000));
         }
         let start_ms = (all.len() as f64) * 1000.0 / sr as f64;
         all.extend_from_slice(&samples);

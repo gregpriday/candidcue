@@ -132,6 +132,14 @@ pub fn project_to_tokens(
      * TIME as well keeps the endpoint and the pace honest together.
      */
     let project_rate = |rate_atoms: f64| -> f64 {
+        /*
+         * `!(x > 0.0)`, not `x <= 0.0`, and clippy's suggestion to swap them is
+         * wrong here: the two differ on NaN, which is the value this guard
+         * exists for. A NaN rate reaching the projection would make every
+         * downstream position NaN, and the display would stop moving with no
+         * error anywhere.
+         */
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(rate_atoms > 0.0) || !(horizon_seconds > 0.0) {
             // Already zeroed by the engine whenever extrapolating would be a
             // guess.

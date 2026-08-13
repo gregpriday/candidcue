@@ -55,31 +55,40 @@ export async function getBootStatus(): Promise<BootStatusReport> {
   if (!isTauriRuntime()) {
     return { databaseReady: true, dataDirectory: '' };
   }
-  const report = await ipcInvoke<BootStatusReport | null>('get_boot_status');
+  const answer = await ipcInvoke<unknown>('get_boot_status');
   /*
-   * A REPLY THAT IS NOT A REPORT IS NOT A BOOT FAILURE.
+   * Validated, not dereferenced.
    *
-   * The shell reads `boot.databaseReady` the moment this resolves, so a `null`
-   * here threw a TypeError inside the boot sequence — which `App.svelte` catches
-   * as `bootFailure` and renders as "CandidCue could not finish starting:
-   * Cannot read properties of null". That is the WRONG SCREEN for the condition,
-   * and it is unrecoverable: the only action offered is a support bundle.
+   * `boot.databaseReady` on whatever came back is one malformed reply away
+   * from a `TypeError` thrown out of the shell's startup path — which is
+   * exactly what happened: a backend that answered `null` produced "Cannot
+   * read properties of null (reading 'databaseReady')" on the generic
+   * could-not-start screen, telling the user nothing and pointing the reader
+   * at the wrong file.
    *
-   * It is reachable from any runtime that answers the command with nothing: the
-   * Playwright shim does exactly that for commands it has not modelled, which is
-   * why the entire browser journey suite booted into the failure screen. A real
-   * Rust build always answers with a report, so treating a non-report as "the
-   * database is fine, carry on" costs nothing there and turns a hard stop into a
-   * working application everywhere else.
-   *
-   * NOT the same trade as the `catch` in `App.svelte`, which fails CLOSED on a
-   * REJECTION — a command that exists and went wrong is a real signal. This is a
-   * command that answered, with a shape nobody has ever sent on purpose.
+   * An unusable answer fails CLOSED, for the same reason a rejection does
+   * (see the caller in `App.svelte`): the command exists, it was asked, and
+   * what came back cannot be read. Assuming the database is fine on the
+   * strength of an answer nobody can parse is the situation this whole gate
+   * was added for.
    */
-  if (report === null || typeof report !== 'object' || typeof report.databaseReady !== 'boolean') {
-    return { databaseReady: true, dataDirectory: '' };
+  if (typeof answer !== 'object' || answer === null) {
+    return {
+      databaseReady: false,
+      code: 'DATABASE_UNAVAILABLE',
+      message:
+        'CandidCue could not determine whether its database opened: it asked, and the ' +
+        'answer could not be read.',
+      dataDirectory: '',
+    };
   }
-  return report;
+  const report = answer as Partial<BootStatusReport>;
+  return {
+    ...report,
+    // A missing flag is not a `true` flag.
+    databaseReady: report.databaseReady === true,
+    dataDirectory: typeof report.dataDirectory === 'string' ? report.dataDirectory : '',
+  };
 }
 
 export async function listDatabaseBackups(): Promise<DatabaseBackup[]> {
@@ -159,9 +168,10 @@ export function describeBootFailure(status: BootStatusReport): string {
  *
  * Read once and cleared by Rust. Reconciliation runs inside Tauri's setup hook,
  * before the control webview has executed a line of JavaScript, so the
- * `diagnostic://warning` it emits can land on a page with no listeners — the
- * Rust comment called the emit "best effort" and pointed at a diagnostics file
- * as the fallback, which is a file nobody opens.
+ * `diagnostic://warning` it used to emit landed on a page with no listeners —
+ * the Rust comment called the emit "best effort" and pointed at a diagnostics
+ * file as the fallback, which is a file nobody opens. That emit is gone; this
+ * is the delivery.
  *
  * A repair that rewrote somebody's script index is worth telling them about,
  * so the findings wait to be collected rather than being shouted into an empty

@@ -169,6 +169,7 @@ fn is_clean_family(scenario: &str) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_table(
     runs: &[RunMetrics],
     config: &AlignmentConfig,

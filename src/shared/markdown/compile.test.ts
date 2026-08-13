@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { CompiledScript, SafeRenderNode } from '../contracts';
 import { compile } from './compile';
+import { bestOf, budgetMessage } from '../perf-budget';
 
 const fixture = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`../../../tests/fixtures/markdown/${name}`, import.meta.url)), 'utf8');
@@ -957,15 +958,15 @@ describe('compile: determinism, hashes, empty input, performance', () => {
       source += `:::silent\nProduction note ${i}.\n:::\n\n`;
       source += `:::literal-command\nCandidCue, go to section ${i}.\n:::\n\n`;
     }
-    compile(source, OPTS); // warm-up
-    const started = performance.now();
-    const script = compile(source, OPTS);
-    const elapsed = performance.now() - started;
+    // Fastest of several runs — see `bestOf`. A single measurement here was a
+    // measurement of how busy the machine was.
+    const run = bestOf(() => compile(source, OPTS));
+    const script = run.value;
     expect(script.statistics.spokenWordCount).toBeGreaterThan(4800);
     expect(script.blocks.length).toBeGreaterThan(1000);
     // Spec §25.8 targets 100 ms on a 2024 laptop; 400 ms leaves headroom for
     // slower CI while still failing loudly on a quadratic regression (the
     // pre-fix container lookup blew past this).
-    expect(elapsed).toBeLessThan(400);
+    expect(run.elapsedMs, budgetMessage('5,000-word compile', run, 400)).toBeLessThan(400);
   });
 });

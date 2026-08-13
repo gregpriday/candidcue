@@ -166,7 +166,31 @@ pub async fn restore_database_backup(
     })?;
 
     let quarantine = backup::rebuild_database_index(&paths)?;
-    std::fs::copy(&source, paths.root().join("candidcue.sqlite3"))?;
+
+    /*
+     * Staged, flushed, checked, then renamed into place.
+     *
+     * A direct `fs::copy` onto the live path is a partial database the moment
+     * it is interrupted, and the previous one has already been moved aside — so
+     * the next launch opens whatever landed. Copying to a sibling first means
+     * the live name only ever refers to a file that is complete: the copy is
+     * fsynced, verified with the same integrity check the backup itself had to
+     * pass, and only then does the rename publish it.
+     */
+    let live = paths.root().join("candidcue.sqlite3");
+    let staging = paths.root().join("candidcue.sqlite3.restoring");
+    let _ = std::fs::remove_file(&staging);
+    std::fs::copy(&source, &staging)?;
+    crate::util::sync_file(&staging)?;
+    if let Err(err) = backup::verify_database_file(&staging).await {
+        let _ = std::fs::remove_file(&staging);
+        return Err(AppError::invalid_input(format!(
+            "The backup did not survive being copied into place, so nothing was published.              Your previous database is at {}: {err}",
+            quarantine.display()
+        )));
+    }
+    std::fs::rename(&staging, &live)?;
+    crate::util::sync_dir(paths.root())?;
 
     Ok(RecoveryOutcome {
         previous_state_at: quarantine.to_string_lossy().to_string(),
@@ -269,13 +293,25 @@ pub async fn write_unsaved_recovery(
     let script_id = crate::scripts::ScriptId::parse(&script_id)?;
 
     let dir = paths.quarantine_dir().join("unsaved");
-    std::fs::create_dir_all(&dir)?;
+    // Durably, ancestors included: `quarantine/` and `quarantine/unsaved` can
+    // both be new here, and the file about to be written into them is the only
+    // copy of text the user has been told was parked.
+    crate::util::create_dir_all_durable(&dir)?;
     let target = dir.join(format!(
         "{}-{}.md",
         script_id.as_str(),
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     ));
-    std::fs::write(&target, source.as_bytes())?;
+    /*
+     * `atomic_write`, not `fs::write`: this is the ONLY copy.
+     *
+     * The text is here because saving it failed, the window is closing, and the
+     * user has been told it was parked. `fs::write` returns as soon as the
+     * bytes reach the page cache, and the process is about to exit — so a power
+     * loss, or a machine that goes down during the shutdown this runs in, left
+     * an acknowledged rescue file empty or absent.
+     */
+    crate::util::atomic_write(&target, source.as_bytes())?;
 
     std::fs::write(
         dir.join("README.txt"),
@@ -302,9 +338,10 @@ pub async fn write_unsaved_recovery(
 ///
 /// Read once and cleared. Reconciliation finishes inside Tauri's `setup` hook,
 /// which is before the control webview has run any JavaScript, so the
-/// `diagnostic://warning` it emits can land on a page with no listeners — the
-/// code's own comment called the emit "best effort" and pointed at a
-/// diagnostics file as the fallback, which is a file nobody opens.
+/// `diagnostic://warning` it used to emit landed on a page with no listeners —
+/// the code's own comment called the emit "best effort" and pointed at a
+/// diagnostics file as the fallback, which is a file nobody opens. That emit is
+/// gone; this is the delivery.
 ///
 /// A repair that rewrote somebody's script index is worth telling them about,
 /// so the findings wait here to be collected rather than being shouted into an

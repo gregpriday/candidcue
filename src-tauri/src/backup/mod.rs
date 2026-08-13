@@ -27,6 +27,35 @@
 //! - [`restore_all_data`] validates the manifest and every checksum BEFORE it
 //!   touches live data, then moves the current state aside, commits, and rolls
 //!   back if the commit fails part way.
+//! ## What is durable, and what is not
+//!
+//! Everything that can lose a user's only copy is flushed before anything else
+//! is told it happened: the restore journal and both markers (temp file, fsync,
+//! rename, directory fsync), every move in `move_or_copy`, every file
+//! `copy_tree` writes, the restored database before it is verified, and the
+//! directory entries all of those depend on. The database itself commits with
+//! `synchronous = FULL`, because settings, session history and retained
+//! transcripts exist nowhere else.
+//!
+//! Deliberately NOT flushed, and the reason in each case is that the source
+//! still exists afterwards:
+//!
+//! - the `README.txt` and `.json` sidecars beside a quarantined or exported
+//!   artefact — they describe it, and a description that does not survive
+//!   costs an explanation rather than data;
+//! - the rescue copy `rescue_scripts` writes to a folder the user chose — the
+//!   managed originals are untouched, so the answer to losing it is to run it
+//!   again. (A Markdown export's `assets/` used to be listed here too. It is
+//!   not: `export_script` creates that folder through `create_dir_all_durable`
+//!   and writes each image with `atomic_write`, because an export reports
+//!   success and a folder left in the page cache takes every image with it.)
+//! - the moves that a permanent delete and its rollback make between the live
+//!   tree and quarantine — an interruption leaves the row and the folder
+//!   disagreeing about where a script is, which the startup reconciliation
+//!   repairs and reports, and neither side overwrites the other;
+//! - caches, logs, diagnostics and downloaded model files, all of which are
+//!   regenerable by definition.
+//!
 //! - [`rebuild_database_index`] throws the database away on purpose. The
 //!   canonical Markdown files are the authority for script content (§48.1), so
 //!   an index can always be regenerated from them; this is the recovery of last
@@ -195,9 +224,18 @@ pub async fn export_all_data(
         ],
         complete,
     };
-    std::fs::write(
-        staging.join(MANIFEST_NAME),
-        serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?,
+    /*
+     * The manifest, flushed.
+     *
+     * It is what vouches for every other byte in the export, and a directory
+     * fsync commits the ENTRY, not the file's contents — so an export could be
+     * published with a manifest that reads as empty or truncated, which
+     * `restore_all_data` would then refuse. The thing it refuses would be an
+     * export the user was told was ready.
+     */
+    crate::util::atomic_write(
+        &staging.join(MANIFEST_NAME),
+        &serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?,
     )?;
 
     // 5. Give it its real name, which encodes the answer.
@@ -207,7 +245,18 @@ pub async fn export_all_data(
         format!("CandidCue-export-{stamp}-INCOMPLETE")
     };
     let final_path = dest_root.join(final_name);
+    /*
+     * Published durably.
+     *
+     * An export is what a restore reads, and the manifest inside it is what
+     * vouches for every byte — so an export whose directory entry never reached
+     * the platter is a backup the user believes they have. The contents were
+     * fsynced as they were copied (`copy_tree`); this is the entry that names
+     * them.
+     */
+    sync_dir(&staging)?;
     std::fs::rename(&staging, &final_path)?;
+    sync_dir(dest_root)?;
 
     Ok(DataExportResult {
         path: final_path.to_string_lossy().to_string(),
@@ -348,9 +397,16 @@ async fn write_settings_document(
                 "displayProfiles": profiles,
             });
             let target = staging.join(SETTINGS_NAME);
+            // `atomic_write`, so the bytes are on the platter: a directory
+            // fsync commits the entry, not the file's contents, and this
+            // section carries settings that exist nowhere else on disk.
             match serde_json::to_vec_pretty(&document)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| std::fs::write(&target, &bytes).map(|_| bytes.len()).map_err(|e| e.to_string()))
+                .and_then(|bytes| {
+                    crate::util::atomic_write(&target, &bytes)
+                        .map(|()| bytes.len())
+                        .map_err(|e| e.to_string())
+                })
             {
                 Ok(bytes) => sections.push(ExportSection {
                     name: "settings".into(),
@@ -422,6 +478,86 @@ struct PendingRestore {
     /// interrupted restore resumes; an impossible one stops and says so.
     #[serde(default)]
     attempts: u32,
+    /// The quarantine directory this restore evacuates into.
+    ///
+    /// Minted once, on the first attempt, and reused by every retry. A fresh
+    /// timestamped directory per attempt loses the identity of the original
+    /// state: after a crash the next attempt would quarantine the previous
+    /// attempt's partial output, and the real original would be two
+    /// generations back with nothing pointing at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quarantine_generation: Option<String>,
+    /// The components whose ORIGINAL is known to be complete in quarantine.
+    ///
+    /// Written after each successful move, so it is provenance rather than
+    /// intent. A resumed attempt trusts a quarantine entry only if it is named
+    /// here — "the generation exists" proves a name was minted, not that
+    /// anything reached it, and an occupied path with no journal entry could
+    /// equally be a half-finished cross-filesystem copy (which leaves the live
+    /// original whole) or somebody else's directory.
+    #[serde(default)]
+    evacuated: Vec<String>,
+    /// The components that were NOT THERE when this restore started.
+    ///
+    /// Persisted for the same reason `evacuated` is. The commit creates the
+    /// scripts directory and the database whether or not they existed, so after
+    /// a crash the live path holds this restore's own output — and a resume
+    /// with no record of the absence would evacuate that output into quarantine
+    /// and journal it as the user's original. A rollback would then "restore" a
+    /// half-copied export over the top of nothing.
+    #[serde(default)]
+    absent: Vec<String>,
+    /// The restore finished; only the marker itself is left to remove.
+    ///
+    /// Set when the success path cannot delete the marker. Without it, a
+    /// removal that fails — a locked file, a read-only moment — means the next
+    /// launch REPLAYS a restore over data that has already been restored,
+    /// quarantining the result. The next launch sees this, removes the marker
+    /// and does nothing else.
+    #[serde(default)]
+    completed: bool,
+}
+
+/// Write the marker, replacing it whole.
+///
+/// Through a sibling temporary file and a rename, because the marker is
+/// rewritten on every attempt and a crash during that write would truncate the
+/// only record of what is in flight. A rename is atomic within a directory.
+fn write_marker(marker: &Path, pending: &PendingRestore) -> Result<(), AppError> {
+    write_json_durably(marker, pending)
+}
+
+/// Write one small JSON record so that it survives a power loss.
+///
+/// Sibling temporary file, flush, rename, flush the directory. Shared by the
+/// restore marker and the rebuild marker: both are the only record of an
+/// operation that is part way through, and a stale or torn one is worse than
+/// none.
+fn write_json_durably<T: Serialize>(marker: &Path, value: &T) -> Result<(), AppError> {
+    let temporary = marker.with_extension("json.writing");
+    /*
+     * Flushed to the platter, not just to the page cache.
+     *
+     * The rename is atomic, which is what stops a torn marker — but atomic is
+     * not durable: after a power loss the rename can be visible with the file's
+     * contents missing, or neither can be. This marker is the only record of
+     * which components are already in quarantine, and a stale one is exactly
+     * the state the journal exists to prevent, so it is worth the two syncs.
+     */
+    {
+        let file = std::fs::File::create(&temporary)?;
+        let bytes = serde_json::to_vec_pretty(value)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        use std::io::Write;
+        (&file).write_all(&bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temporary, marker)?;
+    // And the directory entry itself. Without this the rename can be lost even
+    // though the file's own bytes survived — and a discarded error here would
+    // mean reporting a durable write that is not one.
+    sync_dir(parent_of(marker))?;
+    Ok(())
 }
 
 /// Validate an export and SCHEDULE it. Nothing live is touched here.
@@ -468,15 +604,21 @@ pub async fn restore_all_data(paths: &DataPaths, export_root: &Path) -> Result<R
         .canonicalize()
         .map_err(|e| AppError::invalid_input(format!("That export folder is unreadable: {e}")))?;
 
-    std::fs::write(
-        paths.root().join(PENDING_RESTORE),
-        serde_json::to_vec_pretty(&PendingRestore {
+    // Durably, like every other write to this marker: a scheduled restore that
+    // a crash forgets is a restore the user asked for and did not get, with
+    // nothing on screen to say so.
+    write_json_durably(
+        &paths.root().join(PENDING_RESTORE),
+        &PendingRestore {
             export_path: export_path.to_string_lossy().to_string(),
             requested_at: crate::util::now_iso(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             attempts: 0,
-        })
-        .map_err(|e| AppError::Internal(e.to_string()))?,
+            quarantine_generation: None,
+            evacuated: Vec::new(),
+            absent: Vec::new(),
+            completed: false,
+        },
     )?;
 
     Ok(RestoreResult {
@@ -530,6 +672,18 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
             AppError::invalid_input(format!("The pending restore was unreadable: {e}"))
         })?;
 
+    /*
+     * A restore that finished but could not delete its own marker — or crashed
+     * in the window between recording that it finished and removing it. There
+     * is nothing left to do but remove it: replaying would set the restored
+     * data aside and copy the export over it a second time.
+     */
+    if pending.completed {
+        let _ = std::fs::remove_file(&marker);
+        tracing::info!("cleared the marker of a restore that had already finished");
+        return Ok(None);
+    }
+
     pending.attempts += 1;
     if pending.attempts > MAX_RESTORE_ATTEMPTS {
         let _ = std::fs::remove_file(&marker);
@@ -546,10 +700,7 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         .with_action(crate::errors::RecoveryAction::RevealFolder));
     }
     // Record the attempt before making it, so a hard crash still counts.
-    std::fs::write(
-        &marker,
-        serde_json::to_vec_pretty(&pending).unwrap_or_default(),
-    )?;
+    write_marker(&marker, &pending)?;
 
     let export_root = PathBuf::from(&pending.export_path);
 
@@ -561,30 +712,87 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
     }
     verify_export_contents(&export_root, &manifest)?;
 
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let previous = paths.quarantine_dir().join(format!("pre-restore-{stamp}"));
+    /*
+     * ONE quarantine generation per restore, named in the marker.
+     *
+     * A fresh timestamped directory per ATTEMPT loses the identity of the
+     * original state: after a crash, the next attempt would quarantine the
+     * previous attempt's partial output and the real original would be two
+     * generations back with nothing pointing at it. The name is minted once,
+     * on the first attempt, and every retry reuses it.
+     */
+    let generation = pending
+        .quarantine_generation
+        .clone()
+        .unwrap_or_else(|| format!("pre-restore-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
+    if pending.quarantine_generation.is_none() {
+        pending.quarantine_generation = Some(generation.clone());
+        write_marker(&marker, &pending)?;
+    }
+    let previous = paths.quarantine_dir().join(&generation);
     std::fs::create_dir_all(&previous)?;
+    /*
+     * The generation's own directory ENTRY, durably.
+     *
+     * Everything below fsyncs what it moves into this directory and records it
+     * in the marker — but a directory whose entry never reached the platter
+     * takes its contents with it, and the marker would survive naming
+     * originals that are no longer anywhere. Both levels, because
+     * `create_dir_all` may have created `quarantine/` itself on the first
+     * export or restore this installation has ever done.
+     */
+    let quarantine_root = paths.quarantine_dir();
+    sync_dir(&quarantine_root)?;
+    sync_dir(parent_of(&quarantine_root))?;
 
     let live_scripts = paths.scripts_dir();
     let live_database = paths.root().join(DATABASE_NAME);
 
     /*
-     * Evacuate, then commit, and treat a failure in EITHER as needing the
-     * rollback.
+     * Evacuate, then commit, recording WHAT WAS ACTUALLY MOVED.
      *
-     * The evacuation used to sit outside the fallible block, so a rename that
-     * failed half way — scripts moved, database not — left the tree in the one
-     * state nothing put right.
+     * The rollback used to delete the live scripts and database
+     * unconditionally and then restore whatever it found in quarantine. That
+     * destroys data on a specific and entirely reachable sequence: scripts
+     * evacuate, the database move FAILS — so the database is still live and
+     * untouched — and the rollback then deletes it with nothing in quarantine
+     * to put back.
+     *
+     * So the rollback only ever touches components this list says were moved.
+     * Anything that never left is, by definition, still correct where it is.
      */
+    let pending_attempt = pending.attempts;
+    let mut evacuated: Vec<Evacuated> = Vec::new();
+
     let outcome = (|| -> Result<(), AppError> {
-        if live_scripts.exists() {
-            move_or_copy(&live_scripts, &previous.join(SCRIPTS_DIR))?;
-        }
+        let mut components: Vec<(PathBuf, PathBuf, ComponentKind)> = vec![(
+            live_scripts.clone(),
+            previous.join(SCRIPTS_DIR),
+            ComponentKind::Tree,
+        )];
         for suffix in ["", "-wal", "-shm"] {
-            let from = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
-            if from.exists() {
-                move_or_copy(&from, &previous.join(format!("{DATABASE_NAME}{suffix}")))?;
-            }
+            components.push((
+                paths.root().join(format!("{DATABASE_NAME}{suffix}")),
+                previous.join(format!("{DATABASE_NAME}{suffix}")),
+                ComponentKind::File,
+            ));
+        }
+        for (from, to, kind) in components {
+            let name = to
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
+            evacuate_component(
+                &from,
+                to,
+                &name,
+                kind,
+                &mut pending,
+                &marker,
+                pending_attempt,
+                &previous,
+                &mut evacuated,
+            )?;
         }
 
         let exported_scripts = export_root.join(SCRIPTS_DIR);
@@ -593,7 +801,18 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
         } else {
             std::fs::create_dir_all(&live_scripts)?;
         }
+        sync_dir(parent_of(&live_scripts))?;
         std::fs::copy(export_root.join(DATABASE_NAME), &live_database)?;
+        /*
+         * Durable before it is called a success.
+         *
+         * `verify_database_file` below reads it straight back, and a read
+         * satisfied from the page cache proves nothing about what is on disk.
+         * The marker is then flagged `completed` — durably — so a crash here
+         * would retire a restore whose database never landed.
+         */
+        sync_file(&live_database)?;
+        sync_dir(parent_of(&live_database))?;
 
         // The restored database has to open and pass its own integrity check
         // before this is called a success. A copy that arrived truncated would
@@ -609,9 +828,48 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
 
     match outcome {
         Ok(()) => {
-            // Only now. An interrupted restore leaves the marker behind and
-            // the next launch resumes it; a finished one retires it.
-            let _ = std::fs::remove_file(&marker);
+            /*
+             * Only now. An interrupted restore leaves the marker behind and the
+             * next launch resumes it; a finished one retires it.
+             *
+             * And if it cannot be removed, SAY SO IN THE MARKER. A silently
+             * ignored failure here means the next launch replays a restore over
+             * data that has already been restored — quarantining the result and
+             * re-copying an export that may no longer exist. `completed` makes
+             * the next launch remove the marker and do nothing else.
+             */
+            pending.completed = true;
+            /*
+             * Recorded BEFORE the delete, not after it fails.
+             *
+             * Between "the restore succeeded" and "the marker is gone" there is
+             * a window, and a crash inside it used to mean the next launch
+             * replayed the whole restore over data that had already been
+             * restored. Writing the flag first — durably, see `write_marker` —
+             * turns that window into a launch that reads `completed`, removes
+             * the marker and does nothing else.
+             *
+             * HONEST LIMIT: if the flag cannot be written AND the marker cannot
+             * be removed, there is nowhere left to record that this finished,
+             * and the next launch will resume. It is not destructive — the
+             * originals are still in quarantine, and a resume sets the restored
+             * state aside rather than deleting it — but it is work nobody
+             * asked for, and both failures are logged.
+             */
+            if let Err(e) = write_marker(&marker, &pending) {
+                tracing::error!(error = %e, "could not record that the restore finished");
+            }
+            match std::fs::remove_file(&marker) {
+                Ok(()) => {
+                    // The removal, durably: otherwise the marker can come back.
+                    let _ = sync_dir(parent_of(&marker));
+                }
+                Err(err) => tracing::warn!(
+                    error = %err,
+                    "could not remove the restore marker after a successful restore; \
+                     it is flagged completed, so the next launch will retire it"
+                ),
+            }
             tracing::info!(
                 from = %export_root.display(),
                 previous = %previous.display(),
@@ -634,35 +892,132 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
              */
             let mut rollback_failures: Vec<String> = Vec::new();
 
-            let _ = std::fs::remove_dir_all(&live_scripts);
-            let _ = std::fs::remove_file(&live_database);
-
-            let quarantined_scripts = previous.join(SCRIPTS_DIR);
-            if quarantined_scripts.exists() {
-                if let Err(e) = move_or_copy(&quarantined_scripts, &live_scripts) {
-                    rollback_failures.push(format!("scripts: {e}"));
-                }
-            }
-            for suffix in ["", "-wal", "-shm"] {
-                let from = previous.join(format!("{DATABASE_NAME}{suffix}"));
-                if from.exists() {
-                    let to = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
-                    if let Err(e) = move_or_copy(&from, &to) {
-                        rollback_failures.push(format!("{DATABASE_NAME}{suffix}: {e}"));
+            /*
+             * ONLY what was actually evacuated.
+             *
+             * Deleting the live scripts and database unconditionally, as this
+             * used to, destroys data on a reachable sequence: scripts
+             * evacuate, the database move fails — leaving the database still
+             * live and correct — and the rollback then deletes it with nothing
+             * in quarantine to restore. A component that never left is still
+             * where it should be, and the right thing to do with it is
+             * nothing.
+             */
+            for entry in evacuated.iter().rev() {
+                match entry {
+                    Evacuated::Moved { quarantined, live } => {
+                        /*
+                         * Un-journal BEFORE the move, not after.
+                         *
+                         * The journal's claim is "the complete original is in
+                         * quarantine". The moment this move starts that stops
+                         * being true — a cross-filesystem move copies and then
+                         * removes, so an interruption part way through leaves a
+                         * PARTIAL tree behind — and a later attempt finding that
+                         * partial tree named in the journal would restore it as
+                         * if it were the user's data.
+                         *
+                         * Clearing first fails the other way: if the move then
+                         * fails, quarantine still holds the complete original
+                         * with nothing naming it, so later attempts refuse and
+                         * the error names the folder. Stuck and honest beats
+                         * proceeding from something that might be half a copy.
+                         */
+                        let mut journal_cleared = true;
+                        if let Some(name) =
+                            quarantined.file_name().map(|n| n.to_string_lossy().to_string())
+                        {
+                            if pending.evacuated.iter().any(|n| n == &name) {
+                                pending.evacuated.retain(|n| n != &name);
+                                if let Err(e) = write_marker(&marker, &pending) {
+                                    /*
+                                     * And STOP. Moving on with the journal
+                                     * still claiming a complete original is in
+                                     * quarantine is the state this ordering
+                                     * exists to avoid: interrupt the move and
+                                     * a later attempt trusts half a copy.
+                                     * Leaving the original where it is costs
+                                     * the user a manual step and the message
+                                     * below names the folder.
+                                     */
+                                    pending.evacuated.push(name.clone());
+                                    journal_cleared = false;
+                                    rollback_failures
+                                        .push(format!("{}: journal not updated: {e}", live.display()));
+                                }
+                            }
+                        }
+                        if !journal_cleared {
+                            continue;
+                        }
+                        // Remove whatever the commit put there, then move the
+                        // original back over it.
+                        if live.is_dir() {
+                            let _ = std::fs::remove_dir_all(live);
+                        } else {
+                            let _ = std::fs::remove_file(live);
+                        }
+                        if let Err(e) = move_or_copy(quarantined, live) {
+                            rollback_failures.push(format!("{}: {e}", live.display()));
+                        }
+                    }
+                    Evacuated::Absent { live } => {
+                        /*
+                         * It was not there before, so it must not be there
+                         * after. The commit creates the scripts directory and
+                         * the database unconditionally, and SQLite can leave a
+                         * `-wal` beside a database that had none — all of which
+                         * used to survive a rollback, because a journal of
+                         * moves alone had nothing to say about them.
+                         */
+                        let removed = if live.is_dir() {
+                            std::fs::remove_dir_all(live)
+                        } else if live.exists() {
+                            std::fs::remove_file(live)
+                        } else {
+                            Ok(())
+                        };
+                        // The removal has to be durable before the marker
+                        // stops recording the absence: an entry that comes back
+                        // after a power loss would be read as the original.
+                        let removed = removed.and_then(|()| sync_dir(parent_of(live)));
+                        if let Err(e) = removed {
+                            rollback_failures.push(format!("{}: {e}", live.display()));
+                        } else if let Some(name) =
+                            live.file_name().map(|n| n.to_string_lossy().to_string())
+                        {
+                            // The absence is back, so the marker must stop
+                            // claiming this component was missing at the start:
+                            // the next attempt asks the same question again.
+                            if pending.absent.iter().any(|n| n == &name) {
+                                pending.absent.retain(|n| n != &name);
+                                if let Err(e) = write_marker(&marker, &pending) {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "could not update the restore journal after a rollback"
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             let message = if rollback_failures.is_empty() {
-                format!(
-                    "The restore did not finish and CandidCue put your previous data back. \
-                     A copy of it is also at {}.",
-                    previous.display()
-                )
+                /*
+                 * No "a copy is also in quarantine" here, which is what this
+                 * used to say. A successful rollback MOVES the originals back;
+                 * there is no copy left behind, and telling the user to look
+                 * for one sends them to an empty folder.
+                 */
+                "The restore did not finish, so CandidCue put your previous data back \
+                 where it was. Nothing was lost."
+                    .to_string()
             } else {
                 format!(
                     "The restore did not finish, and CandidCue could not fully put your \
-                     previous data back either. All of it is at {} — nothing was deleted.",
+                     previous data back either. What it could not move is still at {} — \
+                     nothing was deleted.",
                     previous.display()
                 )
             };
@@ -685,18 +1040,260 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
 /// normally works — but "normally" is doing real work there. A symlinked or
 /// mounted data directory puts the two on different filesystems, and `rename`
 /// answers `EXDEV` rather than doing anything.
+/// What a quarantined component is supposed to be, so an occupied path can be
+/// told apart from an unrelated obstruction sitting at the same name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComponentKind {
+    Tree,
+    File,
+}
+
+/// One entry in the rollback journal.
+///
+/// `Absent` is not an omission — it is the fact that a component did NOT exist
+/// before this restore ran. Recording only moves meant a component the commit
+/// CREATED (a database where there had been none, a `-wal` a failed attempt
+/// left behind) survived the rollback, because the rollback only ever touches
+/// what the journal names. "Put your previous data back" has to include
+/// putting back the absence.
+enum Evacuated {
+    Moved { quarantined: PathBuf, live: PathBuf },
+    Absent { live: PathBuf },
+}
+
+/// Move one live component into the restore's quarantine generation, in a way
+/// that a second launch can pick up where the first stopped.
+///
+/// ## The state this exists for
+///
+/// A restore that is interrupted after the evacuation but during the commit
+/// leaves BOTH sides populated: the original is in quarantine, and the live
+/// path holds however much of the export had been copied before the process
+/// died. The straight-line version moved live → quarantine unconditionally, so
+/// the retry tried to rename a directory onto a non-empty directory, failed
+/// with something that is not `EXDEV`, and failed the same way on every launch
+/// after that until the attempt limit retired the restore.
+///
+/// ## What decides whether an occupied path is "the original"
+///
+/// The marker's `evacuated` journal, and nothing else. It is appended after a
+/// move succeeds, so a name in it means the complete original is in quarantine.
+///
+/// The first version used "this restore has a quarantine generation" as the
+/// test, which is weaker than it looks in two directions. A generation is
+/// minted before anything moves, so it proves only that a name was chosen; and
+/// a cross-filesystem evacuation copies before it removes, so an interruption
+/// there leaves a PARTIAL copy in quarantine while the live original is still
+/// whole. Trusting the path would then have set the intact original aside and
+/// registered the partial copy as the thing to roll back to.
+///
+/// So:
+///
+/// * journal names the component — the original is safe in quarantine. The
+///   live copy is the dead attempt's partial output; it is moved aside under
+///   `interrupted-attempt-N/` rather than deleted, and the component is
+///   recorded so a rollback still restores the original.
+/// * quarantine path occupied and NOT in the journal — refuse. It is either an
+///   interrupted copy or something that was never ours, and neither is a thing
+///   to restore a user's data from.
+/// * otherwise — move it (or record its absence) and journal it.
+///
+/// HONEST LIMIT: a crash in the window between a successful move and the
+/// journal write leaves the complete original in quarantine with nothing
+/// naming it, and every later attempt refuses. Nothing is lost — the error
+/// names the quarantine folder and the recovery screen can reveal it — but the
+/// restore does not finish by itself. Closing that window means a two-phase
+/// journal (intent, then confirmation), and an intent record cannot be
+/// distinguished from a completed move without verifying the copy, which is
+/// what makes it the wrong trade here.
+#[allow(clippy::too_many_arguments)]
+fn evacuate_component(
+    from: &Path,
+    to: PathBuf,
+    name: &str,
+    kind: ComponentKind,
+    pending: &mut PendingRestore,
+    marker: &Path,
+    attempt: u32,
+    previous: &Path,
+    evacuated: &mut Vec<Evacuated>,
+) -> Result<(), AppError> {
+    /*
+     * KNOWN ABSENT, from a previous attempt.
+     *
+     * Anything at the live path now is this restore's own output — the commit
+     * creates the scripts directory and the database whether or not they were
+     * there — so it must not be evacuated, and above all must not be journalled
+     * as the original. Set it aside and carry the absence forward, so a
+     * rollback still puts the absence back.
+     */
+    if pending.absent.iter().any(|n| n == name) {
+        if from.exists() {
+            set_aside(from, previous, attempt)?;
+        }
+        evacuated.push(Evacuated::Absent {
+            live: from.to_path_buf(),
+        });
+        return Ok(());
+    }
+    let journalled = pending.evacuated.iter().any(|n| n == name);
+    if to.exists() {
+        let right_kind = match kind {
+            ComponentKind::Tree => to.is_dir(),
+            ComponentKind::File => to.is_file(),
+        };
+        if !(journalled && right_kind) {
+            return Err(AppError::structured(
+                "RESTORE_FAILED",
+                crate::errors::ErrorCategory::Storage,
+                format!(
+                    "CandidCue could not set your previous data aside: something it does not \
+                     recognise is already at {}. Nothing was changed.",
+                    to.display()
+                ),
+                true,
+            )
+            .with_action(crate::errors::RecoveryAction::RevealFolder));
+        }
+        if from.exists() {
+            set_aside(from, previous, attempt)?;
+        }
+        evacuated.push(Evacuated::Moved {
+            quarantined: to,
+            live: from.to_path_buf(),
+        });
+        return Ok(());
+    }
+    if from.exists() {
+        match move_or_copy(from, &to) {
+            Ok(()) => {
+                evacuated.push(Evacuated::Moved {
+                    quarantined: to,
+                    live: from.to_path_buf(),
+                });
+                // Journalled only once the bytes are there. See above: this is
+                // provenance, not intent.
+                pending.evacuated.push(name.to_string());
+                write_marker(marker, pending)?;
+            }
+            /*
+             * Gone between the check and the move. A `-wal` or `-shm` can
+             * disappear on its own — SQLite removes them when the last
+             * connection closes, which can land after `close()` returns — and
+             * "it was not there" is the same answer as the branch below, not a
+             * reason to fail a restore.
+             */
+            Err(AppError::Storage(e))
+                if e.kind() == std::io::ErrorKind::NotFound && !from.exists() =>
+            {
+                evacuated.push(Evacuated::Absent {
+                    live: from.to_path_buf(),
+                });
+                // Journalled, exactly like the branch below. This one was
+                // missed at first, and the miss is the whole defect the
+                // persisted absence exists to prevent: a component recorded
+                // only in memory looks like the user's original to the next
+                // launch once the commit has created something at that path.
+                pending.absent.push(name.to_string());
+                write_marker(marker, pending)?;
+            }
+            Err(e) => return Err(e),
+        }
+    } else {
+        evacuated.push(Evacuated::Absent {
+            live: from.to_path_buf(),
+        });
+        // Journalled like a move, and for the same reason: after a crash the
+        // next attempt has to know that what is now at the live path is this
+        // restore's output rather than the user's data.
+        pending.absent.push(name.to_string());
+        write_marker(marker, pending)?;
+    }
+    Ok(())
+}
+
+/// Move an interrupted attempt's output out of the way, keeping every byte.
+///
+/// Nothing in a restore deletes what it did not write, so the dead attempt's
+/// partial output goes under `interrupted-attempt-N/` rather than being removed
+/// — if it turns out to have been the only copy of something, it is still on
+/// disk and the folder says what it is.
+fn set_aside(from: &Path, previous: &Path, attempt: u32) -> Result<(), AppError> {
+    let aside = previous.join(format!("interrupted-attempt-{attempt}"));
+    std::fs::create_dir_all(&aside)?;
+    // Its entry in the generation directory, before anything is moved into it.
+    sync_dir(previous)?;
+    let file_name = from
+        .file_name()
+        .ok_or_else(|| AppError::Internal("component has no file name".into()))?;
+    move_or_copy(from, &aside.join(file_name))
+}
+
+/// fsync a directory, so an entry created or removed inside it is durable.
+///
+/// A rename is atomic and a copy returns success long before either reaches the
+/// platter. The restore journal writes down "this component is now safely in
+/// quarantine" immediately afterwards, and that record IS durable — so without
+/// this, a power loss can leave a marker naming bytes that never landed, which
+/// is the one way a rollback could restore an incomplete original over live
+/// data.
+///
+/// No-op off Unix: Windows has no directory handle to flush, and its rename is
+/// journalled by the filesystem instead.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// fsync one file by path.
+fn sync_file(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+/// The directory an entry lives in, for the two syncs a move needs.
+fn parent_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(Path::new("."))
+}
+
 fn move_or_copy(from: &Path, to: &Path) -> Result<(), AppError> {
     match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // Both ends: the entry appeared in one directory and vanished from
+            // another, and either half can be lost on its own.
+            sync_dir(parent_of(to))?;
+            let from_parent = parent_of(from);
+            if from_parent != parent_of(to) {
+                sync_dir(from_parent)?;
+            }
+            Ok(())
+        }
         Err(err) if err.raw_os_error() == Some(18) => {
-            // EXDEV. Copy, verify it landed, and only then remove the source.
+            /*
+             * EXDEV. Copy, get it onto the platter, and only then remove the
+             * source.
+             *
+             * The order is the whole point: `fs::copy` reaching the page cache
+             * is not the original being safe somewhere else, and the source is
+             * about to be deleted on the strength of it.
+             */
             if from.is_dir() {
                 copy_tree(from, to)?;
+                sync_dir(parent_of(to))?;
                 std::fs::remove_dir_all(from)?;
             } else {
                 std::fs::copy(from, to)?;
+                sync_file(to)?;
+                sync_dir(parent_of(to))?;
                 std::fs::remove_file(from)?;
             }
+            sync_dir(parent_of(from))?;
             Ok(())
         }
         Err(err) => Err(err.into()),
@@ -820,19 +1417,177 @@ fn verify_export_contents(export_root: &Path, manifest: &ExportManifest) -> Resu
 /// history, which this cannot reconstruct.
 ///
 /// Returns where the old database went.
-pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
+/// The marker a rebuild leaves while it is moving the database aside.
+const PENDING_REBUILD: &str = "rebuild-pending.json";
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingRebuild {
+    quarantine: String,
+    /// Where the database itself was going, when it is not simply the
+    /// quarantine directory's own `candidcue.sqlite3`. The pre-1.0 quarantine
+    /// names the file after the baseline it predates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stem: Option<String>,
+}
+
+/// Finish a rebuild that was interrupted between its renames.
+///
+/// ## The window this closes
+///
+/// A rebuild moves `candidcue.sqlite3`, then `-wal`, then `-shm`. Three
+/// renames, and a crash between the first and the second leaves the WAL live
+/// next to no database. The next launch creates a fresh database at that path,
+/// SQLite finds a WAL whose header belongs to a file that is no longer there,
+/// and discards it — taking with it every page that had been committed to the
+/// WAL and not yet checkpointed. The quarantined copy the rebuild promised to
+/// keep is then missing exactly those pages.
+///
+/// So the intent is written down first, durably, and this runs at the top of
+/// `database::init` — before anything opens the database — to move whatever is
+/// still live into the same quarantine directory the rebuild was using.
+///
+/// Best effort by design: a rebuild that cannot be finished must not stop the
+/// application from opening, because the whole point of a rebuild is that the
+/// user is already having a bad day.
+pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
+    let marker = paths.root().join(PENDING_REBUILD);
+    if !marker.exists() {
+        return Ok(());
+    }
+    let pending: PendingRebuild = match std::fs::read(&marker)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+    {
+        Some(pending) => pending,
+        None => {
+            // Unreadable: nothing can be done with it, and leaving it would
+            // stall every future launch on the same failure.
+            let _ = std::fs::remove_file(&marker);
+            return Ok(());
+        }
+    };
+    let quarantine = PathBuf::from(&pending.quarantine);
     std::fs::create_dir_all(&quarantine)?;
+    // The rebuild moves into `<generation>/candidcue.sqlite3`; the pre-1.0
+    // quarantine names the file after the baseline it predates. The marker
+    // records which, so the leftovers join the set they belong to.
+    let stem = pending
+        .stem
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| quarantine.join(DATABASE_NAME));
+    for suffix in ["", "-wal", "-shm"] {
+        let name = format!("{DATABASE_NAME}{suffix}");
+        let from = paths.root().join(&name);
+        if !from.exists() {
+            continue;
+        }
+        let to = sidecar_of(&stem, suffix);
+        if to.exists() {
+            /*
+             * The rebuild already moved this one, and what is live now arrived
+             * afterwards — a WAL SQLite recreated, most likely. It cannot be
+             * put on top of the original, and it is not the original, so it
+             * goes beside it under a name that says what it is.
+             */
+            std::fs::rename(
+                &from,
+                sidecar_of(&stem, &format!("{suffix}.after-interruption")),
+            )?;
+        } else {
+            std::fs::rename(&from, &to)?;
+        }
+    }
+    sync_dir(&quarantine)?;
+    sync_dir(paths.root())?;
+    std::fs::remove_file(&marker)?;
+    sync_dir(paths.root())?;
+    tracing::warn!(
+        quarantine = %quarantine.display(),
+        "finished a rebuild that had been interrupted part way through"
+    );
+    Ok(())
+}
+
+/// Move the database and its sidecars aside, recoverably.
+///
+/// `to_stem` names the destination: the database lands there and the WAL and
+/// SHM beside it with their suffixes, so the three stay recognisable as one
+/// set. Shared by the rebuild and by the pre-1.0-baseline quarantine, which had
+/// the same defect independently — three unjournalled renames, and a crash
+/// between the first and the second leaves a WAL with no database for the next
+/// open to discard.
+///
+/// Returns whether anything was actually moved.
+pub fn quarantine_database_files(
+    root: &Path,
+    quarantine_dir: &Path,
+    to_stem: &Path,
+) -> Result<bool, AppError> {
+    std::fs::create_dir_all(quarantine_dir)?;
+    sync_dir(quarantine_dir)?;
+    sync_dir(parent_of(quarantine_dir))?;
+
+    let marker = root.join(PENDING_REBUILD);
+    write_json_durably(
+        &marker,
+        &PendingRebuild {
+            quarantine: quarantine_dir.to_string_lossy().to_string(),
+            stem: Some(to_stem.to_string_lossy().to_string()),
+        },
+    )?;
 
     let mut moved = false;
     for suffix in ["", "-wal", "-shm"] {
-        let from = paths.root().join(format!("{DATABASE_NAME}{suffix}"));
-        if from.exists() {
-            std::fs::rename(&from, quarantine.join(format!("{DATABASE_NAME}{suffix}")))?;
-            moved = true;
+        let from = root.join(format!("{DATABASE_NAME}{suffix}"));
+        let to = sidecar_of(to_stem, suffix);
+        match std::fs::rename(&from, &to) {
+            Ok(()) => {
+                sync_dir(parent_of(&to))?;
+                sync_dir(root)?;
+                moved = true;
+            }
+            // Not there is not a failure to move it: SQLite removes `-wal` and
+            // `-shm` when the last connection closes, which can land after
+            // `close()` returns.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !from.exists() => {}
+            Err(e) => return Err(e.into()),
         }
     }
+
+    std::fs::remove_file(&marker)?;
+    sync_dir(root)?;
+    Ok(moved)
+}
+
+/// `foo.sqlite3` + `-wal` → `foo.sqlite3-wal`, without losing the extension.
+fn sidecar_of(stem: &Path, suffix: &str) -> PathBuf {
+    if suffix.is_empty() {
+        return stem.to_path_buf();
+    }
+    let name = stem.file_name().unwrap_or_default().to_string_lossy().to_string();
+    stem.with_file_name(format!("{name}{suffix}"))
+}
+
+pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
+
+    /*
+     * Through the shared, journalled mover.
+     *
+     * Three renames are not one operation: a crash between the database and its
+     * WAL leaves a write-ahead log with no database, which the next open
+     * discards along with everything committed to it. `quarantine_database_files`
+     * writes the intent down first and `finish_interrupted_rebuild` completes it
+     * at the top of `database::init`.
+     */
+    let moved = quarantine_database_files(
+        paths.root(),
+        &quarantine,
+        &quarantine.join(DATABASE_NAME),
+    )?;
 
     std::fs::write(
         quarantine.join("README.txt"),
@@ -864,8 +1619,7 @@ pub async fn verify_database_file(path: &Path) -> Result<(), AppError> {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .map_err(sqlx::Error::from)?
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(false)
         .read_only(true);
 
@@ -933,8 +1687,24 @@ pub fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
             copy_tree(&entry.path(), &target)?;
         } else if file_type.is_file() {
             std::fs::copy(entry.path(), &target)?;
+            /*
+             * Flushed, because a caller writes down that this copy is COMPLETE.
+             *
+             * `move_or_copy` falls back to copy-then-remove across filesystems,
+             * and the restore journal then records the component as safely in
+             * quarantine. `fs::copy` only reaches the page cache, so a power
+             * loss could leave the journal naming bytes that are not there —
+             * and a later rollback would restore an incomplete original over
+             * live data. The cost is one fsync per file on a path that runs
+             * once per export or restore.
+             */
+            sync_file(&target)?;
         }
     }
+    // The directory entry itself, for the same reason. The PARENT is synced by
+    // the caller, which is the one that knows whether this tree appearing is
+    // the fact being recorded.
+    sync_dir(to)?;
     Ok(())
 }
 
