@@ -323,11 +323,12 @@ function renderAttribution(model) {
     '',
     '## Licence text',
     '',
-    `The full text of the ${a.license.name} is at <${a.license.url}>.`,
+    `The full text of the ${a.license.name} is in \`LICENSE-${a.license.id}.txt\`, in this`,
+    'directory, beside the weights it governs. It is written out at install time rather',
+    'than linked, because a URL is not a copy: a machine holding the model offline would',
+    'otherwise have the thing the licence covers and not the licence.',
     '',
-    'A distributed build must include that text. If CandidCue grows a general',
-    'third-party licence screen, this entry belongs in it; until then this file is',
-    'the record, and it is bundled with the application.',
+    `The canonical text is also published at <${a.license.url}>.`,
     '',
   );
   return lines.join('\n');
@@ -356,9 +357,25 @@ switch (command) {
   case 'attribution':
     process.stdout.write(renderAttribution(select(catalogue, parseArgs(rest))));
     break;
+  /*
+   * The SPDX id alone, so the fetch script can name the licence file to copy
+   * without parsing the catalogue itself. Validated on the way out for the
+   * same reason every other emitted field is: it becomes a PATH in the caller,
+   * and a catalogue that could put a slash or a `..` in it would choose which
+   * file the script reads.
+   */
+  case 'license-id': {
+    const id = select(catalogue, parseArgs(rest)).attribution.license.id;
+    if (!/^[A-Za-z0-9.-]+$/.test(id)) fail(`licence id is not a bare SPDX id: ${id}`);
+    process.stdout.write(`${id}\n`);
+    break;
+  }
   case 'validate':
     process.stdout.write(`catalogue ok: ${catalogue.models.length} models\n`);
     break;
   default:
-    fail(`usage: model-catalogue.mjs fields|attribution|validate [--model ID | --language LANG]`);
+    fail(
+      `usage: model-catalogue.mjs fields|attribution|license-id|validate ` +
+        `[--model ID | --language LANG]`,
+    );
 }

@@ -2066,7 +2066,7 @@ mod tests {
                 candidate.display()
             );
         }
-        // Only the catalogue's files, the notice and the seal.
+        // Only the catalogue's files, the notice, the licence text and the seal.
         let mut found: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -2078,6 +2078,7 @@ mod tests {
             vec![
                 ".candidcue-model.json",
                 "ATTRIBUTION.md",
+                "LICENSE-Apache-2.0.txt",
                 "decoder.onnx",
                 "encoder.int8.onnx",
                 "joiner.int8.onnx",

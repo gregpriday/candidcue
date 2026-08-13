@@ -103,11 +103,82 @@ const PAYLOAD_DECLARATIONS = [
   { path: ['bundle', 'macOS', 'frameworks'], why: 'frameworks copied into Contents/Frameworks' },
 ];
 
+/**
+ * The only things allowed into the bundle, by DESTINATION name, each with the
+ * reason it is there.
+ *
+ * This list is the ONLY prose about why `bundle.resources` is not empty.
+ * `tauri.conf.json` cannot carry it: Tauri's bundle schema rejects unknown
+ * keys, so a `_comment` beside the entries fails the build rather than
+ * explaining it. (The `assetProtocol.scope` block does carry one, which is why
+ * that looks like an option here and is not.)
+ *
+ * This is the allow-list the message below has always told people to add to.
+ * It is deliberately a list of exact names rather than a pattern: the failure
+ * this gate exists to catch is one entry added to `bundle.resources`, and a
+ * pattern is how "one entry" becomes "a glob that also matched the models
+ * directory". Both entries here are text.
+ *
+ * Anything not on this list is a failure, whether or not it looks like a model
+ * — the gate is "the bundle contains what we decided it contains", and model
+ * weights are the consequence, not the rule.
+ */
+const ALLOWED_BUNDLE_RESOURCES = new Map([
+  [
+    'THIRD_PARTY_NOTICES.md',
+    'the licence disclosure, which has to be answerable from the app rather than the repository',
+  ],
+  [
+    'LICENSE-fonts.txt',
+    'the SIL OFL, whose text must travel with the font binaries that are in the bundle',
+  ],
+]);
+
+/** Bytes a text notice cannot plausibly exceed. A model is not 2 MB of prose. */
+const NOTICE_CEILING_BYTES = 2 * 1024 * 1024;
+
 for (const { path, why } of PAYLOAD_DECLARATIONS) {
   const declared = path.reduce((node, key) => (node == null ? node : node[key]), conf);
   if (declared == null) continue;
   const count = Array.isArray(declared) ? declared.length : Object.keys(declared).length;
   if (count === 0) continue;
+
+  /*
+   * Only `bundle.resources` may be non-empty, and only in the MAP form.
+   * The array form gives Tauri the destination name, which means an entry
+   * could land under an allowed name by accident of its source path; the map
+   * states both halves, so the allow-list is checked against what actually
+   * appears in `Contents/Resources`.
+   */
+  const isResources = path.join('.') === 'bundle.resources';
+  if (isResources && !Array.isArray(declared)) {
+    for (const [source, destination] of Object.entries(declared)) {
+      if (!ALLOWED_BUNDLE_RESOURCES.has(destination)) {
+        problems.push(
+          `tauri.conf.json copies ${JSON.stringify(source)} into the bundle as ` +
+            `${JSON.stringify(destination)}, which is not allow-listed in this script. ` +
+            `A stock build ships zero model bytes (§152) and only the notices it was ` +
+            `decided to ship. Add it here with a reason, or take it out of the bundle.`,
+        );
+        continue;
+      }
+      // The name being right does not make the bytes right.
+      const from = join(ROOT, 'src-tauri', source);
+      if (!existsSync(from)) {
+        problems.push(`tauri.conf.json copies ${source} into the bundle, and it does not exist.`);
+        continue;
+      }
+      const bytes = statSync(from).size;
+      if (bytes > NOTICE_CEILING_BYTES) {
+        problems.push(
+          `${source} is ${bytes} bytes, copied into the bundle as ${destination}. An allow-listed ` +
+            `notice is text; something this large is not the file that was allow-listed.`,
+        );
+      }
+    }
+    continue;
+  }
+
   problems.push(
     `tauri.conf.json declares ${path.join('.')} (${why}): ${JSON.stringify(declared)}. ` +
       `Every payload declaration is empty by design — a stock build ships zero model ` +

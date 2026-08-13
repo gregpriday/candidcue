@@ -149,6 +149,14 @@ const STEPS = [
   },
   {
     tier: 'full',
+    name: 'third-party notices',
+    command: ['node', ['scripts/generate-notices.mjs', '--check']],
+    proves: 'the licence disclosure in the bundle still matches the dependency graph',
+    // Committed generated output, so it goes stale silently — and a stale
+    // licence disclosure is a wrong one, shipped inside the artifact.
+  },
+  {
+    tier: 'full',
     name: 'no model weights',
     command: ['node', ['scripts/verify-no-model-weights.mjs']],
     proves: 'the bundle configuration declares no speech-model payload',

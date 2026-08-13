@@ -400,15 +400,37 @@ pub fn resume_name(model: &ModelEntry) -> String {
     format!("{}.resume.json", model.id)
 }
 
-/// Write the licence notice beside the weights.
+/// Write the licence notice AND the licence text beside the weights.
 ///
 /// Into staging, before the install rename, so a model directory is never
 /// visible without the notice its licence requires to travel with it.
+///
+/// ## Why the full text, and not only the URL
+///
+/// `ATTRIBUTION.md` has always said "a distributed build must include that
+/// text" and then linked to apache.org — a notice that states its own
+/// obligation and does not meet it. Apache-2.0 §4(a) requires a COPY of the
+/// licence to travel with the work, and a URL is not a copy: the user who has
+/// the weights on a machine with no network has the thing the licence governs
+/// and not the licence.
+///
+/// So the text is committed under `legal/licenses/` and written out here.
+/// `licence_text` returning `None` is a refusal rather than a silent skip —
+/// see `every_catalogued_licence_has_committed_text`, which makes adding a
+/// model under a licence nobody committed a failing test rather than a
+/// distribution nobody can defend.
 pub fn write_attribution(dir: &Path, model: &ModelEntry) -> std::io::Result<()> {
     std::fs::write(
         dir.join(ATTRIBUTION_FILE),
         super::catalogue::render_attribution(model),
-    )
+    )?;
+    let id = &model.attribution.license.id;
+    let Some(text) = super::catalogue::licence_text(id) else {
+        return Err(std::io::Error::other(format!(
+            "no committed licence text for {id}; add legal/licenses/{id}.txt"
+        )));
+    };
+    std::fs::write(dir.join(super::catalogue::licence_file_name(id)), text)
 }
 
 #[cfg(test)]

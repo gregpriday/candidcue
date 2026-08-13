@@ -120,6 +120,19 @@ write_attribution() {
   mkdir -p "${DEST}"
   node "${HELPER}" attribution --model "${MODEL_ID}" > "${DEST}/.ATTRIBUTION.md.part"
   mv "${DEST}/.ATTRIBUTION.md.part" "${DEST}/ATTRIBUTION.md"
+
+  # And the licence itself, beside the weights it governs — the same file the
+  # in-app installer writes (`model_store::write_attribution`), so a model
+  # fetched into the source tree and one downloaded by a user look alike.
+  local license_id license_src
+  license_id="$(node "${HELPER}" license-id --model "${MODEL_ID}")"
+  license_src="${REPO_ROOT}/legal/licenses/${license_id}.txt"
+  if [[ ! -f "${license_src}" ]]; then
+    echo "No committed licence text at ${license_src}." >&2
+    echo "A model must not be installable under a licence its own directory cannot show." >&2
+    exit 1
+  fi
+  cp "${license_src}" "${DEST}/LICENSE-${license_id}.txt"
 }
 
 # Present AND hashing correctly. The old script trusted file existence, which

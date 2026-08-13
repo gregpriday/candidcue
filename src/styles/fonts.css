@@ -42,8 +42,12 @@
    ----------
    Atkinson Hyperlegible Next v7 (Braille Institute / Google Fonts), the woff2
    subsets published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,
-   unmodified. Licensed OFL-1.1; the licence and its copyright notice travel
-   with the binaries in `assets/fonts/LICENSE.txt`.
+   unmodified. Licensed OFL-1.1; the licence and its copyright notice live
+   beside the binaries in `assets/fonts/LICENSE.txt`, and — because the OFL
+   wants its text to travel with the font and the fonts are in the app —
+   `tauri.conf.json` copies that file into the bundle as
+   `Contents/Resources/LICENSE-fonts.txt`. It used to be in the repository
+   only, which is not what a customer receives.
 
    The family is declared under its own name rather than fontsource's
    `... Next Variable`, so the name here is character-for-character the one

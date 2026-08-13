@@ -17,3 +17,10 @@ bpe.model
 # regenerated on fetch and would be untracked noise.
 */ATTRIBUTION.md
 !x-asr-480ms/ATTRIBUTION.md
+
+# The licence text copied beside the weights, for the same reason and on the
+# same terms: the canonical copies are in legal/licenses/, and these are the
+# ones a model directory needs to be complete on its own. Untracked — a second
+# copy of an 11 KB legal text per model is noise in a diff, and the fetch
+# script and `model_store::write_attribution` both write it.
+*/LICENSE-*.txt

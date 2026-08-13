@@ -42,8 +42,9 @@ embeds **ONNX Runtime** (MIT).
 
 ## Licence text
 
-The full text of the Apache License 2.0 is at <https://www.apache.org/licenses/LICENSE-2.0>.
+The full text of the Apache License 2.0 is in `LICENSE-Apache-2.0.txt`, in this
+directory, beside the weights it governs. It is written out at install time rather
+than linked, because a URL is not a copy: a machine holding the model offline would
+otherwise have the thing the licence covers and not the licence.
 
-A distributed build must include that text. If CandidCue grows a general
-third-party licence screen, this entry belongs in it; until then this file is
-the record, and it is bundled with the application.
+The canonical text is also published at <https://www.apache.org/licenses/LICENSE-2.0>.

@@ -478,14 +478,31 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json"))
                 .expect("tauri.conf.json must be valid JSON");
-        let resources = config["bundle"]["resources"]
-            .as_array()
-            .expect("bundle.resources must be a list");
-        let bundled: Vec<&str> = resources
-            .iter()
-            .filter_map(|entry| entry.as_str())
-            .map(|entry| entry.trim_end_matches('/'))
-            .collect();
+        /*
+         * BOTH shapes. Tauri accepts `resources` as a list of paths or as a
+         * source→destination map, and the config uses the map form now (the
+         * licence notices, which state their own destination names). Reading
+         * only the array form turned that into a panic, and a panic here is
+         * still a red build — but the day someone "fixes" it by unwrapping to
+         * an empty list, the check stops looking at anything.
+         *
+         * The SOURCE side is what matters: a map entry copying a model
+         * directory to an innocuous name is still a model in the bundle.
+         */
+        let resources = &config["bundle"]["resources"];
+        let bundled: Vec<&str> = match resources {
+            serde_json::Value::Array(list) => list
+                .iter()
+                .filter_map(|entry| entry.as_str())
+                .map(|entry| entry.trim_end_matches('/'))
+                .collect(),
+            serde_json::Value::Object(map) => map
+                .keys()
+                .map(|entry| entry.trim_start_matches("../").trim_end_matches('/'))
+                .collect(),
+            serde_json::Value::Null => Vec::new(),
+            other => panic!("bundle.resources must be a list or a map, got {other:?}"),
+        };
         // Containment, not equality. An exact-string check passes on `models`,
         // `models/`, or a glob like `models/*` — every one of which puts the
         // whole payload back while the test stays green. What is being

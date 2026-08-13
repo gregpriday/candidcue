@@ -158,10 +158,17 @@ function catalogueFor(
           author: 'Nobody At All',
           sourceUrl: 'https://example.invalid/test-model',
           distributedVia: null,
+          /*
+           * A real SPDX id, because the fetch script now copies
+           * `legal/licenses/<id>.txt` beside the weights and refuses when
+           * there is none. `CC-BY-SA` (no version) was never a licence
+           * anybody could ship under, so the fixture was quietly asserting
+           * that an unshippable model installs fine.
+           */
           license: {
-            id: 'CC-BY-SA',
-            name: 'Creative Commons Attribution-ShareAlike',
-            url: 'https://example.invalid/licence',
+            id: 'CC-BY-SA-4.0',
+            name: 'Creative Commons Attribution-ShareAlike 4.0 International',
+            url: 'https://creativecommons.org/licenses/by-sa/4.0/legalcode',
           },
           licenseNote: null,
           modified: false,
@@ -377,6 +384,37 @@ describe('fetch-stt-model.sh', () => {
     entry(relicensed).attribution.author = 'Somebody Else';
     expect(runFetch(relicensed, dir).ok).toBe(true);
     expect(readFileSync(notice, 'utf8')).toContain('Somebody Else');
+  });
+
+  /*
+   * CC-BY-SA-4.0 §3(a)(1) and Apache-2.0 §4(a) both want a COPY of the licence
+   * to travel with the work. ATTRIBUTION.md said so and then linked to it,
+   * which leaves a user holding the weights offline with the thing the licence
+   * covers and not the licence. The text is written beside the weights now, by
+   * this script and by the in-app installer alike.
+   */
+  it('writes the licence text beside the weights, not only a link to it', () => {
+    const dir = freshModelsDir();
+    expect(runFetch(catalogueFor(), dir).ok).toBe(true);
+
+    const licence = join(dir, 'test-model', 'LICENSE-CC-BY-SA-4.0.txt');
+    const text = readFileSync(licence, 'utf8');
+    expect(text).toContain('Attribution-ShareAlike 4.0 International');
+    expect(text.length, 'the committed licence text, not a stub').toBeGreaterThan(2000);
+
+    // And the notice points at the file that is actually there.
+    expect(readFileSync(join(dir, 'test-model', 'ATTRIBUTION.md'), 'utf8')).toContain(
+      'LICENSE-CC-BY-SA-4.0.txt',
+    );
+  });
+
+  it('refuses to install a model under a licence it cannot show', () => {
+    const dir = freshModelsDir();
+    const unshippable = catalogueFor();
+    entry(unshippable).attribution.license.id = 'Nobody-Committed-This-1.0';
+    const result = runFetch(unshippable, dir);
+    expect(result.ok, 'an uncommitted licence must stop the fetch').toBe(false);
+    expect(result.output).toContain('No committed licence text');
   });
 
   it('rejects a catalogue whose field count does not match its file count', () => {

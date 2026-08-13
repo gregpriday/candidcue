@@ -213,6 +213,45 @@ pub fn default_model() -> &'static ModelEntry {
 /// The name the notice is written under, inside the model directory.
 pub const ATTRIBUTION_FILE: &str = "ATTRIBUTION.md";
 
+/// The licence texts a distributed model may need, compiled in.
+///
+/// `include_str!` rather than a runtime read, and that is the point: the text
+/// has to be present in a signed `.app` on a machine with no network and no
+/// repository. A path lookup would work in `cargo test` and fail on the one
+/// installation where the obligation actually applies.
+///
+/// Keyed by SPDX id, which is what `catalogue.json` records. Adding a model
+/// under a licence that is not here is caught by
+/// `every_catalogued_licence_has_committed_text` — before the build, rather
+/// than by whoever reads the installed directory afterwards.
+const LICENCE_TEXTS: &[(&str, &str)] = &[
+    (
+        "Apache-2.0",
+        include_str!("../../../legal/licenses/Apache-2.0.txt"),
+    ),
+    (
+        "CC-BY-SA-4.0",
+        include_str!("../../../legal/licenses/CC-BY-SA-4.0.txt"),
+    ),
+];
+
+/// The full text of a licence by SPDX id, or `None` if none was committed.
+pub fn licence_text(id: &str) -> Option<&'static str> {
+    LICENCE_TEXTS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, text)| *text)
+}
+
+/// What the licence text is called inside the model directory.
+///
+/// The SPDX id is in the name so a directory holding a model under one licence
+/// cannot be mistaken for one holding another — and so a support request that
+/// lists the directory says which licence applies without opening anything.
+pub fn licence_file_name(id: &str) -> String {
+    format!("LICENSE-{id}.txt")
+}
+
 /// Render the licence notice that travels with an installed model.
 ///
 /// A second renderer, beside `scripts/model-catalogue.mjs`, and deliberately.
@@ -282,14 +321,17 @@ pub fn render_attribution(model: &ModelEntry) -> String {
          ## Licence text\n\n",
     );
     out.push_str(&format!(
-        "The full text of the {} is at <{}>.\n\n",
-        a.license.name, a.license.url
+        "The full text of the {} is in `{}`, in this directory, beside the weights it\n\
+         governs. It is written out at install time rather than linked, because a URL is\n\
+         not a copy: a machine holding the model offline would otherwise have the thing\n\
+         the licence covers and not the licence.\n\n",
+        a.license.name,
+        super::catalogue::licence_file_name(&a.license.id),
     ));
-    out.push_str(
-        "A distributed build must include that text. If CandidCue grows a general\n\
-         third-party licence screen, this entry belongs in it; until then this file is\n\
-         the record, and it travels with the model.\n",
-    );
+    out.push_str(&format!(
+        "The canonical text is also published at <{}>.\n",
+        a.license.url
+    ));
     out
 }
 
@@ -685,6 +727,63 @@ mod tests {
             assert_eq!(
                 a.license.url, COMMUNITY_LICENSE_URL,
                 "{}: the licence URL must reach the licence text",
+                model.id
+            );
+        }
+    }
+
+    /// Every licence the catalogue can distribute under has its text committed.
+    ///
+    /// The obligation this closes: `ATTRIBUTION.md` said "a distributed build
+    /// must include that text" and then linked to it, which is a notice that
+    /// states its own obligation and does not meet it. Apache-2.0 §4(a) and
+    /// CC-BY-SA-4.0 §3(a)(1) both want a COPY to travel with the work, and a
+    /// user holding the weights offline has the work and not the licence.
+    ///
+    /// Checked over the WHOLE catalogue rather than the default model, because
+    /// `start_speech_model_download` takes any catalogue id: a model no picker
+    /// offers can still be installed, and it would install under a licence
+    /// whose text was never written out.
+    #[test]
+    fn every_catalogued_licence_has_committed_text() {
+        for model in &catalogue().models {
+            let id = &model.attribution.license.id;
+            let text = licence_text(id).unwrap_or_else(|| {
+                panic!(
+                    "{}: no committed text for {id}. Add legal/licenses/{id}.txt and \
+                     include_str! it in LICENCE_TEXTS — a model must not be installable \
+                     under a licence its own directory cannot show.",
+                    model.id
+                )
+            });
+            // Present is not enough; it has to be the licence it claims to be.
+            assert!(
+                text.len() > 2000,
+                "{}: the committed {id} text is {} bytes — too short to be a licence",
+                model.id,
+                text.len()
+            );
+            assert!(
+                text.contains(match id.as_str() {
+                    "Apache-2.0" => "Apache License",
+                    "CC-BY-SA-4.0" => "Attribution-ShareAlike 4.0 International",
+                    other => panic!("no identifying phrase known for {other}"),
+                }),
+                "{}: legal/licenses/{id}.txt does not read like {id}",
+                model.id
+            );
+        }
+    }
+
+    /// And the notice points at the file, rather than only at a URL.
+    #[test]
+    fn the_notice_names_the_licence_file_beside_it() {
+        for model in &catalogue().models {
+            let rendered = render_attribution(model);
+            let name = licence_file_name(&model.attribution.license.id);
+            assert!(
+                rendered.contains(&name),
+                "{}: the notice must name {name}, the copy in the same directory",
                 model.id
             );
         }
