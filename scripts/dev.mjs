@@ -54,16 +54,70 @@ if (port !== DEFAULT_PORT) {
   console.log(`[dev] port ${DEFAULT_PORT} is busy — using ${port} instead`);
 }
 
+/*
+ * A dev run is a tree — pnpm → the Tauri CLI → Vite (with its own esbuild
+ * service) and cargo → the app binary — and killing the root leaves the rest
+ * of it alive. An orphaned Vite goes on holding the port, so the next run
+ * drifts to a higher one and the ports march upward; worse, when its esbuild
+ * helper is eventually killed, Vite dies on an unhandled `write EPIPE` and
+ * sprays a stack trace over a terminal whose prompt came back minutes ago.
+ *
+ * So the child gets its own process group and the whole group is signalled as
+ * a unit. `detached: true` means the terminal's Ctrl-C reaches this launcher
+ * and not the group, which is why SIGINT is forwarded explicitly rather than
+ * relied upon.
+ */
 const overlay = JSON.stringify({ build: { devUrl: `http://localhost:${port}` } });
 const child = spawn(
   'pnpm',
   ['tauri', 'dev', '--config', overlay, ...process.argv.slice(2)],
   {
-    stdio: 'inherit',
+    // stdin is deliberately NOT inherited. In its own process group the tree is
+    // a background job as far as the terminal is concerned, and a background
+    // process that reads the TTY takes SIGTTIN and stops — which Vite would do,
+    // since it binds stdin for its keyboard shortcuts whenever stdin is a TTY.
+    // Nothing in a dev run needs typed input; output still goes to the terminal.
+    stdio: ['ignore', 'inherit', 'inherit'],
+    detached: true,
     env: { ...process.env, CANDIDCUE_DEV_PORT: String(port) },
   },
 );
 
+let exiting = false;
+
+/** Signal the child's entire process group, ignoring an already-dead group. */
+function signalGroup(signal) {
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // ESRCH: the group is already gone, which is the outcome we wanted.
+  }
+}
+
+function shutdown(signal) {
+  if (exiting) return;
+  exiting = true;
+  signalGroup(signal === 'SIGINT' ? 'SIGINT' : 'SIGTERM');
+  // The Tauri CLI gets a moment to stop cargo and close the app cleanly;
+  // anything still standing after that is not going to leave on its own.
+  const sweep = setTimeout(() => signalGroup('SIGKILL'), 5000);
+  sweep.unref();
+}
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => shutdown(signal));
+}
+
 child.on('exit', (code, signal) => {
-  process.exit(signal ? 1 : (code ?? 0));
+  // The root died — reap whatever it left behind before going quiet, or the
+  // survivors keep the port and the terminal keeps receiving their output.
+  exiting = true;
+  signalGroup('SIGTERM');
+  // Deliberately not unref'd: this timer is the only thing left holding the
+  // event loop open, and without it node exits immediately and the sweep never
+  // runs.
+  setTimeout(() => {
+    signalGroup('SIGKILL');
+    process.exit(signal ? 1 : (code ?? 0));
+  }, 500);
 });
