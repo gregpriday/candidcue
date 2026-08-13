@@ -7,10 +7,17 @@
 # window could invoke every command in `generate_handler!`, including secret
 # storage and permanent deletion (C2).
 #
-# This permission is granted to the `control` capability ONLY. The stage
-# window (spec §43.2, §50.2) is minimally privileged and must have no custom
-# commands at all; it communicates exclusively over the event channels listed
-# in capabilities/stage.json.
+# This permission is granted to the `control` capability and, deliberately, to
+# `preferences` — Settings is where the model is downloaded, displays are
+# identified, rigs are calibrated and backups are written, and narrowing it
+# would mean a second list that fails as a broken screen every time a setting
+# gains a backing command. capabilities/preferences.json states the tradeoff in
+# full: the grant really is as wide as control's, script deletion and session
+# commands included, and it is accepted as such.
+#
+# What it is NOT granted to is the stage. That window (spec §43.2, §50.2) is
+# minimally privileged and must have no custom commands at all; it communicates
+# exclusively over the event channels listed in capabilities/stage.json.
 #
 # Adding a command to `generate_handler!` without adding it here fails closed:
 # control gets "not allowed by ACL" rather than the stage silently gaining
@@ -19,7 +26,7 @@
 
 [[permission]]
 identifier = "allow-control-commands"
-description = "Every CandidCue application command. Granted to the control window only."
+description = "Every CandidCue application command. Granted to the control and preferences windows; withheld from the stage."
 commands.allow = [
   "app_version",
   "list_scripts",

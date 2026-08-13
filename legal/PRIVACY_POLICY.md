@@ -81,11 +81,13 @@ text is used to follow your script and then discarded rather than written to the
 database.
 
 The setting supports keeping transcripts for 1 day, 7 days, 30 days, or
-indefinitely. Turning it off removes transcripts that were already kept.
+indefinitely. It is **Save session transcripts**, under **Data, privacy &
+updates** in Settings.
 
-This setting is not currently exposed in the application's settings screens. In
-this version it is effectively always off unless it has been changed outside the
-application.
+Retention is decided when a take starts, so switching it on does not recover a
+transcript from a take that has already run. Choosing a shorter period removes
+transcripts older than the new period as soon as you change it, and turning it
+off removes every transcript that was already kept.
 
 Session and take records — the timings, counts and measurements listed above —
 are stored separately and are kept regardless of this setting. They do not

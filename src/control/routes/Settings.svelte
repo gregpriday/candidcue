@@ -84,6 +84,12 @@
     withOpticalProfile,
     withoutOpticalProfile,
   } from '../services/settings-types';
+  import type { TranscriptRetention } from '../services/settings-types';
+  import {
+    TRANSCRIPT_RETENTION_OPTIONS,
+    retentionChangeDeletes,
+    retentionConfirmCopy,
+  } from '../lib/transcript-retention';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
   import {
     OPTICAL_HARDWARE,
@@ -194,7 +200,8 @@
     {
       id: 'privacy',
       label: 'Data, privacy & updates',
-      keywords: 'privacy data location reveal backup restore export support bundle logs updates version about transcript retention',
+      keywords:
+        'privacy data location reveal backup restore export support bundle logs updates version about transcript retention save session transcripts',
     },
   ];
 
@@ -1520,6 +1527,22 @@
   }
 
   /**
+   * §36.2: ask first when the new window keeps LESS than the current one,
+   * because Rust deletes on write rather than on expiry — see
+   * `lib/transcript-retention.ts` for why that is not obvious from the label.
+   * Lengthening the window destroys nothing and is applied straight away.
+   */
+  async function chooseTranscriptRetention(next: TranscriptRetention): Promise<void> {
+    const current = $settings.privacy.saveTranscript;
+    if (next === current) return;
+    if (retentionChangeDeletes(current, next)) {
+      const accepted = await requestConfirm({ ...retentionConfirmCopy(next), danger: true });
+      if (!accepted) return;
+    }
+    await patchSettings('privacy', { saveTranscript: next });
+  }
+
+  /**
    * C6: this used to invoke the Rust `all` cache kind, which empties the
    * compiled/vocabulary/thumbnail/download caches and never touches a log
    * file — then reported "Logs cleared." It now calls the real `logs` arm.
@@ -1866,8 +1889,9 @@
           <p class="hint-line">
             Once the language is downloaded, everything happens on this computer. Your voice is
             never sent anywhere, and nothing is recorded or saved. The words are used only to work
-            out where in the script you are, and they are kept only if you turn on transcript
-            saving under Data &amp; privacy.
+            out where in the script you are, and they are kept only if you set <strong
+              >Save session transcripts</strong
+            > under Data, privacy &amp; updates.
           </p>
         </Section>
       {:else if section === 'audio'}
@@ -2878,6 +2902,30 @@
               neither your script nor your audio.
             </p>
           </div>
+
+          <!--
+            §36.2, and the control the rest of the app had been promising.
+            Speech settings told the user their recognised words "are kept only
+            if you turn on transcript saving under Data & privacy", the search
+            index listed "transcript retention", and the privacy policy
+            describes the setting as theirs to choose — while this section
+            exposed nothing. The plumbing was complete in both directions the
+            whole time; only the row was missing.
+          -->
+          <h3 class="privacy-head">Session transcripts</h3>
+          <Select
+            layout="row"
+            label="Save session transcripts"
+            description="Off keeps nothing. Any other choice writes the words CandidCue recognised during a take to this device and deletes them once they reach that age."
+            value={$settings.privacy.saveTranscript}
+            options={[...TRANSCRIPT_RETENTION_OPTIONS]}
+            onchange={(value) => void chooseTranscriptRetention(value as TranscriptRetention)}
+          />
+          <p class="hint-line">
+            Retention is decided when a take starts, so turning this on does not bring back a
+            transcript from a take that already ran. Your audio is never saved either way, and
+            retained transcripts travel with <strong>Export all data</strong>.
+          </p>
 
           <div class="row-actions">
             <!--

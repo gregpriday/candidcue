@@ -226,8 +226,11 @@ impl Default for StageBehaviorSettings {
 pub struct AudioSettings {
     /// Which recogniser is doing the listening.
     ///
-    /// No longer a choice — the model is bundled and there is exactly one — but
-    /// still persisted and still reported, because "what heard this take?" is a
+    /// No longer a choice — this build is tuned to decode with exactly one
+    /// recogniser, which the user installs from Settings › Speech rather than
+    /// receiving in the app bundle (`model_store::resolve`; stock builds ship
+    /// no model bytes at all). Still persisted and still reported, though,
+    /// because "what heard this take?" is a
     /// question a diagnostics bundle has to be able to answer about a session
     /// recorded months ago on a build that may have shipped a different model.
     pub transcription_model: String,

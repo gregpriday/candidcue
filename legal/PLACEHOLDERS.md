@@ -302,9 +302,15 @@ playback.
 rg -n 'save_transcript' src-tauri/src/settings/mod.rs
 ```
 
-Default `"off"`; permitted values `off`, `1d`, `7d`, `30d`, `forever`. Also
-confirm whether a settings control has since been added — the policy currently
-states the setting is not exposed in the interface.
+Default `"off"`; permitted values `off`, `1d`, `7d`, `30d`, `forever`. The
+policy now states that the setting IS exposed, as **Save session transcripts**
+under **Data, privacy & updates**; confirm the control is still there and still
+offers exactly those windows:
+
+```bash
+rg -n 'saveTranscript' src/control/routes/Settings.svelte
+rg -n 'TRANSCRIPT_RETENTION_OPTIONS' src/control/lib/transcript-retention.ts
+```
 
 **The local data inventory still matches the schema**
 

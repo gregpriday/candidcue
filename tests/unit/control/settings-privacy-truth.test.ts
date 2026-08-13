@@ -192,12 +192,39 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(withoutComments).not.toMatch(/label="Update channel"/);
     /*
      * Structural, not spelling. The bans above only catch the exact attributes
-     * that used to be here; this catches a renamed or re-spelled revival, and
-     * says the real rule: this section offers no interactive setting at all
-     * now, only maintenance buttons.
+     * that used to be here; this catches a renamed or re-spelled revival.
+     *
+     * The rule is not "no controls" — §36.2 transcript retention is a real
+     * setting that reaches Rust and decides whether spoken words are written to
+     * disk, and it belongs here. The rule is that a control in this section
+     * must DECIDE something, which is exactly what the two removed ones did
+     * not. So: no toggles at all, and precisely one Select, the retention one.
      */
     expect(privacySection, 'no Toggle may return to this section').not.toMatch(/<Toggle\b/);
-    expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
+    const selects = privacySection.match(/<Select\b/g) ?? [];
+    expect(selects, 'only the §36.2 retention Select belongs here').toHaveLength(1);
+    expect(privacySection, 'and it must be the retention one').toMatch(
+      /value=\{\$settings\.privacy\.saveTranscript\}/,
+    );
+  });
+
+  /*
+   * The contradiction this section shipped with: Speech settings told the user
+   * to turn transcript saving on "under Data & privacy", the settings search
+   * index listed "transcript retention", and this section exposed no such
+   * control. Both halves are asserted, because fixing one alone recreates the
+   * mismatch in the other direction.
+   */
+  it('offers the transcript retention the rest of Settings points at', () => {
+    expect(privacySection).toMatch(/Save session transcripts/);
+    expect(flatSource, 'Speech settings must point at a control that exists').toMatch(
+      /Save session transcripts[\s\S]{0,120}Data, privacy/,
+    );
+    const privacyKeywords = flatSource.match(
+      /id: 'privacy',[\s\S]*?keywords:\s*((?:'[^']*'\s*\+?\s*)+)/,
+    );
+    expect(privacyKeywords, 'the privacy section keywords could not be located').not.toBeNull();
+    expect(privacyKeywords?.[1]).toMatch(/transcript/i);
   });
 
   it('offers no update action, because CandidCue 1.0 has no updater', () => {

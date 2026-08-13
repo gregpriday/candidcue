@@ -13,15 +13,20 @@
 //!   * `cc_stt::models::BUNDLED` — everything this build can DECODE with,
 //!     because tuning is measured rather than discovered. One model today.
 //!   * `cc_align::AlignmentLanguage::ALL` — everything the engine can
-//!     NORMALISE. One language today, and `language.rs` is emphatic that a
-//!     silent fallback to English here is how you ship a French model that
-//!     passes every test and does not follow.
+//!     NORMALISE. Four today: English, French, German and Spanish. A
+//!     normalisation profile is a CAPABILITY of the engine and nothing more —
+//!     it is not a claim that the product follows that language, because
+//!     following also needs a model this build is tuned to decode with.
+//!     `language.rs` is emphatic that a silent fallback to English here is how
+//!     you ship a French model that passes every test and does not follow.
 //!
 //! A language is offerable only where all three agree, and the conjunction is
 //! computed HERE so that no screen has to restate it. Today it selects exactly
-//! one pair — `x-asr-480ms` × `en`. Chinese fails the third list even though
-//! the recogniser transcribes it; the three Kroko models fail the second even
-//! though the catalogue can fetch them.
+//! one pair — `x-asr-480ms` × `en`, so CandidCue 1.0 follows English and
+//! nothing else. Chinese fails the third list even though the recogniser
+//! transcribes it; the three Kroko models pass it — French, German and Spanish
+//! all have profiles — and fail the second, because no measurement says this
+//! build can decode with them.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY UNOFFERABLE LANGUAGES ARE NOT RETURNED AT ALL
