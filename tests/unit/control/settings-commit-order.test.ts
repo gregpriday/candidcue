@@ -41,6 +41,8 @@ import type { AppSettings } from '../../../src/control/services/settings-types';
  * their own, and this file is about ordering rather than about upgrades.
  */
 const reads: Array<{ resolve: (value: AppSettings) => void; reject: (err: unknown) => void }> = [];
+const updates: Array<{ resolve: (value: AppSettings) => void; reject: (err: unknown) => void }> =
+  [];
 
 vi.mock('../../../src/control/services/settings', async () => {
   const actual = await vi.importActual<typeof import('../../../src/control/services/settings')>(
@@ -52,12 +54,17 @@ vi.mock('../../../src/control/services/settings', async () => {
       new Promise<AppSettings>((resolve, reject) => {
         reads.push({ resolve, reject });
       }),
+    updateSettings: () =>
+      new Promise<AppSettings>((resolve, reject) => {
+        updates.push({ resolve, reject });
+      }),
+    overlayStorageFailure: () => null,
     pendingStageModeAdoption: () => null,
     pendingOpticalAdoption: () => null,
   };
 });
 
-const { adoptSettings, loadSettings, settings } = await import(
+const { adoptSettings, loadSettings, patchSettings, settings } = await import(
   '../../../src/control/stores/settings'
 );
 
@@ -125,6 +132,7 @@ const RUST_DOCUMENT = {
 
 beforeEach(() => {
   reads.length = 0;
+  updates.length = 0;
 });
 
 afterEach(() => {
@@ -191,5 +199,27 @@ describe('the settings document commits in the right order', () => {
     await next;
     expect(get(settings).revision).toBe(5);
     expect(get(settings).general.launchBehavior).toBe('recent');
+  });
+
+  it('does not roll a failed save back over a document that arrived meanwhile', async () => {
+    /*
+     * `patchSettings` shows its change immediately and undoes it if the write
+     * is refused. "Undo" means "put back what was there" — and what was there
+     * may have been replaced while the write was in flight, which is exactly
+     * what the other window saving does. Restoring unconditionally discarded
+     * the newer document and left this window holding a revision that no
+     * longer existed, so its next save failed too.
+     */
+    const first = loadSettings(true);
+    reads[0]!.resolve(loaded(4, 'library'));
+    await first;
+
+    const save = patchSettings('general', { launchBehavior: 'recent' }).catch(() => undefined);
+    // The other window's save lands while ours is still in flight.
+    expect(adoptSettings(broadcast(11, 'last_script'))).toBe(true);
+    updates[0]!.reject(new Error('refused'));
+    await save;
+
+    expect(get(settings).revision).toBe(11);
   });
 });

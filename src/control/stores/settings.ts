@@ -120,14 +120,56 @@ export async function loadSettings(force = false): Promise<AppSettings> {
  * the next launch tries again. A danger toast during startup for a settings
  * write nobody requested would be noise about a problem that fixes itself.
  */
+/**
+ * ONCE PER SESSION, each of these.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE PENDING FLAG IS NOT ENOUGH ON ITS OWN
+ * ---------------------------------------------------------------------------
+ * `pendingStageModeAdoption` reports what the last read of the OVERLAY found,
+ * and every read sets it — including one whose result was superseded by a
+ * broadcast that already carried the migrated value. The migration would then
+ * run again: not destructive, because it writes what is already there, but a
+ * settings revision nobody asked for, broadcast to the other window, for work
+ * that had already been done.
+ *
+ * The obvious guard — compare against the document — does not work, and that
+ * is worth writing down because it looks like it should. `fromRust` composes
+ * the overlay OVER Rust's document as the upgrade fallback, so the composed
+ * value always equals the pending one; comparing them skips the write every
+ * time and the migration never happens at all. (It was written that way first,
+ * and three tests said so.)
+ *
+ * A latch is the honest version: the write happens once per session, and if it
+ * fails the next launch tries again — which is exactly what the failure notes
+ * on both functions already promise.
+ */
+let stageModeAdopted = false;
+let opticalAdopted = false;
+
+/**
+ * Forget that this session's one-shot migrations ran.
+ *
+ * A test seam, and it has to exist because the latches are module state: a
+ * suite that exercises the migration more than once is one module instance, so
+ * the second case would be skipped and pass for the wrong reason. Named for
+ * what it is rather than dressed up as production API.
+ */
+export function resetMigrationLatchesForTesting(): void {
+  stageModeAdopted = false;
+  opticalAdopted = false;
+}
+
 async function adoptStageModeFromOverlay(): Promise<void> {
   const pending = settingsService.pendingStageModeAdoption();
   if (pending === null) return;
   const before = get(state);
+  if (stageModeAdopted) return;
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       stage: { ...before.stage, presentationMode: pending },
     });
+    stageModeAdopted = true;
     /* A commit, like any other — see `commitCount`. */
     commitSettings(saved);
   } catch {
@@ -161,10 +203,12 @@ async function adoptOpticalFromOverlay(): Promise<void> {
   const pending = settingsService.pendingOpticalAdoption();
   if (pending === null) return;
   const before = get(state);
+  if (opticalAdopted) return;
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: pending,
     });
+    opticalAdopted = true;
     /* A commit, like any other — see `commitCount`. */
     commitSettings(saved);
     /*
@@ -210,6 +254,7 @@ export async function patchSettings<K extends keyof AppSettings>(
    * `commitSettings(saved)` a few lines down, once Rust has agreed.
    */
   state.set(optimistic);
+  const committedAt = commitCount;
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       [section]: optimistic[section],
@@ -241,7 +286,21 @@ export async function patchSettings<K extends keyof AppSettings>(
       );
     }
   } catch (err) {
-    state.set(before);
+    /*
+     * Roll back ONLY IF nothing else committed meanwhile.
+     *
+     * The optimistic value is this window's guess and the rollback undoes it —
+     * but "undo" means "put back what was there", and what was there may have
+     * been replaced while the write was in flight. The other window saving, and
+     * this window adopting the broadcast, is exactly that: restoring `before`
+     * unconditionally would discard a document that is newer than the one this
+     * save started from, and leave the store holding a revision that no longer
+     * exists.
+     *
+     * When something did commit, the newer document stands. This save failed
+     * and changed nothing, which is what the toast says either way.
+     */
+    if (commitCount === committedAt) state.set(before);
     showToast('Could not save settings. Nothing was changed.', 'danger');
     throw err;
   }

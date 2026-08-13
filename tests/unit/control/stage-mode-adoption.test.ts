@@ -111,6 +111,10 @@ const settingsStore = await import('../../../src/control/stores/settings');
 beforeEach(() => {
   ipc.reset();
   store.clear();
+  /* The migration runs once per session and the store is one module for the
+     whole file — without this, every case after the first would be skipped and
+     pass having asserted nothing. */
+  settingsStore.resetMigrationLatchesForTesting();
 });
 
 describe('the mode is carried into Rust, not merely read out of the overlay', () => {
