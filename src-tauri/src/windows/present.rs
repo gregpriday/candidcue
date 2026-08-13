@@ -902,6 +902,81 @@ fn apply_windowed<R: Runtime>(
 /// while it still has it. That is the only honest moment: the setters below are
 /// delivered asynchronously (see [`logical_size`]), so a caller that asked the
 /// window afterwards could be told about the monitor it has not left yet.
+/// How long to wait for AppKit to finish leaving native fullscreen.
+///
+/// The exit is an animation across Spaces and takes roughly three quarters of
+/// a second; this is generous enough to cover a loaded machine and short
+/// enough that a presenter pressing Present does not think the app has hung.
+#[cfg(target_os = "macos")]
+const FULLSCREEN_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// Leave native fullscreen, and WAIT until the window agrees that it has.
+///
+/// ---------------------------------------------------------------------------
+/// WHY THE WAIT IS THE WHOLE POINT
+/// ---------------------------------------------------------------------------
+/// This used to be `set_fullscreen(false)` and straight on to the geometry.
+/// Every setter here is delivered asynchronously, so AppKit could finish its
+/// exit animation AFTER the position and size below had been queued — and
+/// restore the pre-fullscreen frame over the top of them. What the presenter
+/// gets is a window somewhere this function did not put it, with the titlebar
+/// AppKit restored, on the glass, mid-take. It was documented as a known edge
+/// and left, which is fine right up until the first person upgrades from a
+/// build that used native fullscreen and presses Present with the control
+/// window still in it.
+///
+/// Polling rather than a `windowDidExitFullScreen` delegate: the delegate is
+/// the tidier mechanism and it means owning one on a window tao already has a
+/// delegate for, which is a bigger change than this edge is worth. What
+/// matters is that the wait is BOUNDED and confirmed by reading the state
+/// back, so it cannot spin forever on a window that never leaves.
+///
+/// Blocking is safe here. `set_control_presenting` is a synchronous Tauri
+/// command, so this runs on the blocking pool rather than on an async runtime
+/// worker — the same reason the recogniser owns its own thread.
+///
+/// A timeout does NOT refuse the presentation. Presenting with the documented
+/// race is worse than presenting cleanly and better than a Present button that
+/// does nothing; the caller gets a warning in the log and the geometry is
+/// applied anyway.
+#[cfg(target_os = "macos")]
+fn leave_native_fullscreen<R: Runtime>(window: &WebviewWindow<R>) {
+    if !window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let _ = window.set_fullscreen(false);
+
+    let deadline = std::time::Instant::now() + FULLSCREEN_EXIT_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        /*
+         * An error reading the state ends the wait rather than continuing it.
+         * `is_fullscreen` failing means the window is going away, and spinning
+         * for another second and a half on a window that cannot answer would
+         * turn a lost window into a hung Present.
+         */
+        match window.is_fullscreen() {
+            Ok(false) => return,
+            Ok(true) => continue,
+            Err(_) => return,
+        }
+    }
+    tracing::warn!(
+        "the window did not leave native fullscreen within {}ms; presenting anyway, and the \
+         frame AppKit restores may land over the presentation geometry",
+        FULLSCREEN_EXIT_TIMEOUT.as_millis()
+    );
+}
+
+/// Nothing to leave. No other platform has AppKit's cross-Space exit animation,
+/// and `set_fullscreen(false)` where it applies is not raced by one.
+#[cfg(not(target_os = "macos"))]
+fn leave_native_fullscreen<R: Runtime>(window: &WebviewWindow<R>) {
+    if window.is_fullscreen().unwrap_or(false) {
+        let _ = window.set_fullscreen(false);
+    }
+}
+
 fn apply_presentation<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
@@ -943,9 +1018,7 @@ fn apply_presentation<R: Runtime>(
      * repositioned at all, so `set_position` below would be swallowed and the
      * take would open in a Space with a titlebar.
      */
-    if window.is_fullscreen().unwrap_or(false) {
-        let _ = window.set_fullscreen(false);
-    }
+    leave_native_fullscreen(window);
 
     let monitor = window
         .current_monitor()
@@ -966,17 +1039,20 @@ fn apply_presentation<R: Runtime>(
      * display.
      *
      * That is the guarantee worth having, because it is the one that survives
-     * the case above it. A window left in NATIVE fullscreen has just been asked
-     * to leave it, and `set_fullscreen(false)` is delivered asynchronously like
-     * everything else here: AppKit can finish its exit animation after the
-     * geometry below has been queued, and restore the pre-fullscreen frame over
-     * the top of it. If that happens the window ends up somewhere this function
-     * did not put it — but the size it reports is derived from this same
-     * monitor, so the report and the geometry are wrong together rather than
-     * separately, and the renderer is never calibrated for one panel while laid
-     * out for another. Untestable here (no WebDriver for WKWebView) and reached
-     * only by a window the PREVIOUS implementation left in fullscreen, so it is
-     * recorded rather than worked around.
+     * the case above it. A window left in NATIVE fullscreen has been asked to
+     * leave it AND waited for — `leave_native_fullscreen` blocks until the
+     * window reads back as not fullscreen — so the exit animation can no longer
+     * finish after the geometry below is queued and restore the pre-fullscreen
+     * frame over the top of it.
+     *
+     * The wait is bounded, so the race is closed rather than eliminated: a
+     * window that has not left within the timeout is presented anyway, with a
+     * warning. In that residual case the size reported here is still derived
+     * from the SAME monitor whose bounds are applied below, so the report and
+     * the geometry are wrong together rather than separately, and the renderer
+     * is never calibrated for one panel while laid out for another. Untestable
+     * here — Apple ships no WebDriver for WKWebView — and reachable only by a
+     * window the PREVIOUS implementation left in fullscreen.
      */
     let display = super::monitor_fingerprint(app, &monitor);
     /*

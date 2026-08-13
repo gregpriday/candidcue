@@ -274,7 +274,13 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
        * state-model change, and today it would buy nothing — the only producer
        * of a `freeze` directive in the tree is the preview driver
        * (`src/stage/preview.ts`), a dev tool with no control window to lose.
-       * Control never sends one. If control ever does, split the flags here
+       * Control never sends one.
+       *
+       * That last sentence is the load-bearing one, so it is CHECKED rather
+       * than remembered: `tests/unit/stage/freeze-reason-invariant.test.ts`
+       * scans the control window for a `kind: 'freeze'` and fails if one
+       * appears, and demonstrates the swallowing below so the failure has a
+       * consequence attached. If control ever needs one, split the flags here
        * rather than widening `frozenReason`.
        */
       if (state.phase === 'handshake' || state.frozen) return state;
