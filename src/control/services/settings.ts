@@ -384,6 +384,25 @@ function readerFrameFromRust(stored: unknown): ReaderFrame | null {
  * the webview, and a malformed one must leave the store alone rather than
  * replace a working document with `undefined`s.
  */
+/**
+ * Rust has been seen holding the migrated value at least once this session.
+ *
+ * Separate from `stageModeAwaitingAdoption` / `opticalAwaitingAdoption`, which
+ * describe the LAST document parsed and are therefore as out of order as the
+ * reads that produce them. These only ever move one way. See the note where
+ * they are set.
+ */
+let stageModeMigrated = false;
+let opticalMigrated = false;
+
+/** Test seam: forget that a migrated document was ever seen. */
+export function resetMigrationStateForTesting(): void {
+  stageModeMigrated = false;
+  opticalMigrated = false;
+  stageModeAwaitingAdoption = null;
+  opticalAwaitingAdoption = null;
+}
+
 export function adaptRevisionedSettings(payload: unknown): AppSettings | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const candidate = payload as Partial<RustRevisioned>;
@@ -444,8 +463,29 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   const modeIsPersisted =
     rust.stageBehavior.presentationMode === 'prompter' ||
     rust.stageBehavior.presentationMode === 'reader';
+  /*
+   * MONOTONIC: once Rust has been seen to hold it, never pending again.
+   *
+   * Every parsed document writes this flag, and documents do not arrive in the
+   * order they were produced — a read that began before the other window's
+   * migration can resolve after it, parse a document from before the write,
+   * and put the flag back to "pending". The migration then runs a second time
+   * and mints a settings revision nobody asked for, broadcast to both windows,
+   * for work that was already done.
+   *
+   * Latching on the RAW AUTHORITY CHECK rather than on this window having
+   * performed the write is what makes it hold across windows: `modeIsPersisted`
+   * reads Rust's own field, so a document adopted from the other window's
+   * broadcast closes it just as a local write does.
+   *
+   * Not the composed value — `presentationMode` on the composed document falls
+   * back to the overlay precisely so an upgrading reader keeps working, so it
+   * always equals the pending value and would report the migration as done
+   * before it had happened.
+   */
+  if (modeIsPersisted) stageModeMigrated = true;
   stageModeAwaitingAdoption =
-    !modeIsPersisted && overlayStatedAMode(overlay.stage) ? resolvedMode : null;
+    !stageModeMigrated && overlayStatedAMode(overlay.stage) ? resolvedMode : null;
 
   /*
    * Calibrated rigs: Rust the moment it has any, the overlay until then.
@@ -472,10 +512,12 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
    * offers a measurement of a room the presenter has left.
    */
   const rustOwnsOptical = rust.optical?.migrated === true;
+  /* Monotonic, for the same reason as the mode above. */
+  if (rustOwnsOptical) opticalMigrated = true;
   const resolvedOptical = rustOwnsOptical
     ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
     : opticalFromStored(defaults.optical, overlay.optical);
-  opticalAwaitingAdoption = rustOwnsOptical ? null : resolvedOptical;
+  opticalAwaitingAdoption = opticalMigrated ? null : resolvedOptical;
 
   return {
     ...mapped,

@@ -130,6 +130,10 @@ beforeEach(() => {
   ipc.calls.length = 0;
   store.clear();
   rustSettings.optical = undefined;
+  /* The "Rust already owns this" latch is module state and only moves one way,
+     so a case that saw a migrated document would silently disable the migration
+     for every case after it. */
+  settings.resetMigrationStateForTesting();
 });
 
 describe('one panel, several mounting arrangements', () => {

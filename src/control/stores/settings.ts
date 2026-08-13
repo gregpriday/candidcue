@@ -121,55 +121,25 @@ export async function loadSettings(force = false): Promise<AppSettings> {
  * write nobody requested would be noise about a problem that fixes itself.
  */
 /**
- * ONCE PER SESSION, each of these.
+ * Forget that a migrated document was ever seen.
  *
- * ---------------------------------------------------------------------------
- * WHY THE PENDING FLAG IS NOT ENOUGH ON ITS OWN
- * ---------------------------------------------------------------------------
- * `pendingStageModeAdoption` reports what the last read of the OVERLAY found,
- * and every read sets it — including one whose result was superseded by a
- * broadcast that already carried the migrated value. The migration would then
- * run again: not destructive, because it writes what is already there, but a
- * settings revision nobody asked for, broadcast to the other window, for work
- * that had already been done.
- *
- * The obvious guard — compare against the document — does not work, and that
- * is worth writing down because it looks like it should. `fromRust` composes
- * the overlay OVER Rust's document as the upgrade fallback, so the composed
- * value always equals the pending one; comparing them skips the write every
- * time and the migration never happens at all. (It was written that way first,
- * and three tests said so.)
- *
- * A latch is the honest version: the write happens once per session, and if it
- * fails the next launch tries again — which is exactly what the failure notes
- * on both functions already promise.
- */
-let stageModeAdopted = false;
-let opticalAdopted = false;
-
-/**
- * Forget that this session's one-shot migrations ran.
- *
- * A test seam, and it has to exist because the latches are module state: a
- * suite that exercises the migration more than once is one module instance, so
- * the second case would be skipped and pass for the wrong reason. Named for
- * what it is rather than dressed up as production API.
+ * A test seam. The latch that stops these one-shot migrations running twice
+ * lives in the SERVICE, next to the raw Rust field it reads — see
+ * `resetMigrationStateForTesting` there for why it cannot live here. This is
+ * re-exported so a suite that drives the store does not have to know that.
  */
 export function resetMigrationLatchesForTesting(): void {
-  stageModeAdopted = false;
-  opticalAdopted = false;
+  settingsService.resetMigrationStateForTesting();
 }
 
 async function adoptStageModeFromOverlay(): Promise<void> {
   const pending = settingsService.pendingStageModeAdoption();
   if (pending === null) return;
   const before = get(state);
-  if (stageModeAdopted) return;
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       stage: { ...before.stage, presentationMode: pending },
     });
-    stageModeAdopted = true;
     /* A commit, like any other — see `commitCount`. */
     commitSettings(saved);
   } catch {
@@ -203,12 +173,10 @@ async function adoptOpticalFromOverlay(): Promise<void> {
   const pending = settingsService.pendingOpticalAdoption();
   if (pending === null) return;
   const before = get(state);
-  if (opticalAdopted) return;
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: pending,
     });
-    opticalAdopted = true;
     /* A commit, like any other — see `commitCount`. */
     commitSettings(saved);
     /*
