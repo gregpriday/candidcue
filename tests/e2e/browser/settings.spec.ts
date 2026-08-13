@@ -517,7 +517,7 @@ test('searching settings hides the rows that do not match, and says how many did
   await expect(page.locator('p[role="status"]')).toContainText('matched in this section');
 
   const visible = page.locator(
-    '.content .field:not([data-search-miss]), .content .toggle-row:not([data-search-miss])',
+    '.content .field:not([data-settings-search-miss]), .content .toggle-row:not([data-settings-search-miss])',
   );
   const visibleCount = await visible.count();
   expect(visibleCount).toBeGreaterThan(0);
@@ -527,5 +527,5 @@ test('searching settings hides the rows that do not match, and says how many did
   // And "Show all" puts the section back rather than leaving the user to clear
   // a field they may not remember typing in.
   await page.getByRole('button', { name: 'Show all' }).click();
-  await expect(page.locator('.content [data-search-miss]')).toHaveCount(0);
+  await expect(page.locator('.content [data-settings-search-miss]')).toHaveCount(0);
 });

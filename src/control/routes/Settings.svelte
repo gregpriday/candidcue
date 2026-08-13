@@ -248,24 +248,36 @@
   $effect(() => {
     const query = sectionQuery.trim().toLowerCase();
     const root = contentElement;
-    // Read `section` so switching sections re-runs this against the new rows.
+    /*
+     * Re-run when the ROWS may have changed, not only when the query did.
+     *
+     * `section` covers switching sections. `$settings` covers the rows that
+     * appear and disappear inside one — the model list once a language is
+     * chosen, the advanced following controls behind a toggle, the calibration
+     * rows that depend on a resolved rig. A row created after this last ran
+     * would otherwise carry no mark and stay visible through a filter.
+     *
+     * Under-filtering is the safe direction to fail, but it still reads as a
+     * search that missed something, and these two reads cost nothing.
+     */
     void section;
+    void $settings;
     if (!root) return;
     let matched = 0;
     for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
       if (query === '') {
-        row.removeAttribute('data-search-miss');
-        row.removeAttribute('data-search-hit');
+        row.removeAttribute('data-settings-search-miss');
+        row.removeAttribute('data-settings-search-hit');
         continue;
       }
       const hit = (row.textContent ?? '').toLowerCase().includes(query);
       if (hit) {
         matched += 1;
-        row.setAttribute('data-search-hit', '');
-        row.removeAttribute('data-search-miss');
+        row.setAttribute('data-settings-search-hit', '');
+        row.removeAttribute('data-settings-search-miss');
       } else {
-        row.setAttribute('data-search-miss', '');
-        row.removeAttribute('data-search-hit');
+        row.setAttribute('data-settings-search-miss', '');
+        row.removeAttribute('data-settings-search-hit');
       }
     }
     rowMatches = query === '' ? null : matched;
@@ -3054,8 +3066,14 @@
    * `:global`, because these attributes are set on the ROOT elements of shared
    * field components — `Select`, `Toggle`, `SettingReadout` — and Svelte's
    * scoped styles do not reach into a child component's markup.
+   *
+   * Scoped by an attribute NOBODY ELSE WRITES rather than by a `.content`
+   * ancestor: `.content` is also the app shell's main region and Calibrate's
+   * body, so a rule hung off it would be global in the way that matters and
+   * specific only by accident. These two attributes are set in exactly one
+   * `$effect`, in this file.
    */
-  :global(.content [data-search-miss]) {
+  :global([data-settings-search-miss]) {
     display: none;
   }
   /*
@@ -3064,7 +3082,7 @@
    * every `for`/`aria-describedby` relationship in the row; marking the ROW
    * says the same thing and leaves the control intact.
    */
-  :global(.content [data-search-hit]) {
+  :global([data-settings-search-hit]) {
     background: var(--accent-wash);
     border-radius: var(--radius-sm);
   }
