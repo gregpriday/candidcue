@@ -137,9 +137,15 @@ interface RustRestoreResult {
 /**
  * Exported so another WINDOW can watch it.
  *
- * The overlaid fields — stage font, stage type size, the presentation-mode
- * toggles — never reach Rust, so `settings://changed` says nothing about them
- * and a second window would go on showing the value it read at launch.
+ * The overlaid fields — stage font and stage type size — never reach Rust, so
+ * `settings://changed` says nothing about them and a second window would go on
+ * showing the value it read at launch.
+ *
+ * The presentation mode is NOT one of them any more, and this comment used to
+ * say it was: `toRustPatch` maps it and `adoptStageModeFromOverlay` writes an
+ * old overlay value through to the document precisely so it stops being local.
+ * What remains in the overlay for that field is a fallback for an upgrading
+ * reader, not the source of truth.
  * `localStorage` raises a `storage` event in the OTHER documents of the origin
  * when this key moves, and that is the only signal there is. See
  * `installOverlaySync` in `services/settings-sync.ts`.

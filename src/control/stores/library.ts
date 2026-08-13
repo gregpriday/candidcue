@@ -170,14 +170,26 @@ function pagesToRestore(): number {
  * much larger read than the screen can use and a paging cursor pointing into a
  * result set that no longer has those pages.
  */
+/**
+ * Ask the NEXT read to start from one page.
+ *
+ * A flag rather than an immediate reset, because a reset that lands before the
+ * read is a lie for as long as the read takes — and if the read fails, it is a
+ * permanent one: the rows on screen are still the two pages the old query
+ * loaded, while the cursor says there is one, so the next Show more re-reads a
+ * page that is already there. `loadLibrary` applies it once the new page has
+ * actually committed.
+ */
 function resetPaging(): void {
-  loadedPages = 1;
+  pagingReset = true;
 }
+
+let pagingReset = false;
 
 export async function loadLibrary(): Promise<void> {
   const generation = (loadGeneration += 1);
   const current = get(state);
-  const depth = pagesToRestore();
+  const depth = pagingReset ? 1 : pagesToRestore();
   state.update((s) => ({ ...s, loading: true, error: null }));
   try {
     const page = await scriptsService.listScripts(
@@ -196,14 +208,24 @@ export async function loadLibrary(): Promise<void> {
         scripts: page.items,
         total: page.total,
         trashTotal,
-        // A choice survives a reload as long as the script is still in the
-        // list; otherwise the fallback picks up the top of whatever is there
-        // now, so the collection always has a selection to act on. Applies in
-        // Trash too — see the note on `selectedId`.
-        selectedId: kept ? s.selectedId : page.items[0]?.id ?? null,
+        /*
+         * A choice survives a reload as long as the script is still in the
+         * list; otherwise the fallback picks up the top of whatever is there
+         * now, so the collection always has a selection to act on. Applies in
+         * Trash too — see the note on `selectedId`.
+         *
+         * DEFERRED while deeper pages are still to come. Judging it here on
+         * page zero alone is what §10.2's journey trips over: the script you
+         * were editing is on row 700, page zero cannot contain it, and the
+         * fallback replaced the selection with row 1 before the page holding it
+         * had been read. The restore loop below makes the same decision once
+         * the list is whole.
+         */
+        selectedId: depth > 1 ? s.selectedId : kept ? s.selectedId : page.items[0]?.id ?? null,
       };
     });
     loadedPages = 1;
+    pagingReset = false;
     /*
      * RE-READ AS DEEP AS THE LIST WAS, one page at a time.
      *
@@ -220,7 +242,31 @@ export async function loadLibrary(): Promise<void> {
      */
     for (let page = 1; page < depth; page += 1) {
       if (generation !== loadGeneration) return;
-      await loadMoreScripts();
+      /*
+       * STOP on the first page that did not arrive.
+       *
+       * `loadMoreScripts` reports its own failure into the store and resolves,
+       * which is right for a button press and wrong for a loop: carrying on
+       * would leave `loadedPages` counting pages that are not in the list, and
+       * the next Show more would skip whatever the failed page held.
+       */
+      if (!(await loadMoreScripts())) break;
+    }
+    /*
+     * And NOW settle the selection, against the whole list.
+     *
+     * Deferred above so a selection deeper than page zero survives the trip
+     * back from the editor. If the script really is gone — trashed from
+     * another window, or the search narrowed past it — this is where the
+     * fallback to the first row happens, on the same rule as before.
+     */
+    if (depth > 1 && generation === loadGeneration) {
+      state.update((s) => ({
+        ...s,
+        selectedId: s.scripts.some((script) => script.id === s.selectedId)
+          ? s.selectedId
+          : s.scripts[0]?.id ?? null,
+      }));
     }
   } catch (err) {
     if (generation !== loadGeneration) return;
@@ -250,12 +296,13 @@ export async function loadLibrary(): Promise<void> {
  * would append Trash rows under live ones, beneath a menu whose entries delete
  * permanently.
  */
-export async function loadMoreScripts(): Promise<void> {
+export async function loadMoreScripts(): Promise<boolean> {
   const current = get(state);
-  if (current.loadingMore || current.loading) return;
-  if (current.scripts.length >= current.total) return;
+  if (current.loadingMore || current.loading) return false;
+  if (current.scripts.length >= current.total) return false;
 
   const generation = loadGeneration;
+  let landed = false;
   state.update((s) => ({ ...s, loadingMore: true }));
   try {
     const page = await scriptsService.listScripts(
@@ -263,15 +310,14 @@ export async function loadMoreScripts(): Promise<void> {
       current.sort,
       { page: loadedPages, pageSize: PAGE_SIZE },
     );
-    if (generation !== loadGeneration) return;
+    if (generation !== loadGeneration) return false;
+    landed = true;
     state.update((s) => {
       // De-duplicated by id: a script created or renamed between the two reads
       // can shift the ordering, and appending blindly would show it twice —
       // which for a keyed `{#each}` is a crash rather than a cosmetic fault.
       const seen = new Set(s.scripts.map((script) => script.id));
       const added = page.items.filter((item) => !seen.has(item.id));
-      // The cursor moves per PAGE, not per row kept — see `loadedPages`.
-      loadedPages += 1;
       /*
        * A page that answered with nothing is the END, whatever `total` says.
        *
@@ -281,7 +327,21 @@ export async function loadMoreScripts(): Promise<void> {
        * a button that does nothing. Trusting the rows over the count is the
        * right way round: the rows are what the list can actually display.
        */
-      const exhausted = page.items.length === 0;
+      /*
+       * A SHORT page is the last one, whatever `total` says — and an empty one
+       * does not move the cursor at all.
+       *
+       * `total` comes from a separate count query and can disagree with the
+       * rows after a concurrent delete. While it says there are more, the guard
+       * at the top of this function goes on offering Show more, which reads as
+       * a button that does nothing. Trusting the rows over the count is the
+       * right way round: the rows are what the list can display.
+       */
+      const exhausted = page.items.length < PAGE_SIZE;
+      if (page.items.length > 0) {
+        // The cursor moves per PAGE, not per row kept — see `loadedPages`.
+        loadedPages += 1;
+      }
       const scripts = [...s.scripts, ...added];
       return {
         ...s,
@@ -291,13 +351,15 @@ export async function loadMoreScripts(): Promise<void> {
       };
     });
   } catch (err) {
-    if (generation !== loadGeneration) return;
+    landed = false;
+    if (generation !== loadGeneration) return false;
     state.update((s) => ({ ...s, loadingMore: false, error: describeError(err) }));
   } finally {
     if (generation === loadGeneration) {
       state.update((s) => (s.loadingMore ? { ...s, loadingMore: false } : s));
     }
   }
+  return landed;
 }
 
 export function setLibraryView(view: LibraryView): void {

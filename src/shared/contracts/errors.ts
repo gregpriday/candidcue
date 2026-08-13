@@ -91,6 +91,15 @@ export const APP_ERROR_CODES = [
   'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
   /*
+   * Window › CandidCue / Stage could not bring a window forward (§13.4).
+   *
+   * Raised rather than swallowed because the window IS there — the menu item is
+   * only enabled when it is — so a focus that fails is a real fault the window
+   * manager reported, and the menu item somebody just chose is the only place
+   * they could learn that nothing happened.
+   */
+  'WINDOW_FOCUS_FAILED',
+  /*
    * Single-window presentation could not reshape THIS window (§52.7).
    *
    * Distinct from `STAGE_OPEN_FAILED` because they are different failures with

@@ -343,9 +343,17 @@ describe('installShortcuts — what actually reaches the focused control', () =>
     expect(press('n', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
       'new-script',
     );
-    /* ⌘K is Insert › Link now; the Library's filter field is ⌘F through
-       `edit.find` in the command registry, which is not a resolver action. */
+    /* ⌘K is Insert › Link now, and it is not a resolver action at all. */
     expect(press('k', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBeNull();
+    /*
+     * ⌘F reaches the Library's filter field. In the packaged app the native
+     * menu takes this chord before any webview sees it (`edit.find`); this
+     * branch is what makes it work where there is no menu bar — browser dev,
+     * and the Playwright suite.
+     */
+    expect(press('f', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
+      'find-in-list',
+    );
     onScreen('editor');
     expect(press('s', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe('save');
     // Present is the one key two screens answer.

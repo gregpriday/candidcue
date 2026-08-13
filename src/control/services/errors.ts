@@ -240,6 +240,10 @@ const ERROR_COPY: Record<string, string> = {
     'That stage window belongs to a different session, so the change was not applied.',
   STAGE_LAYOUT_FAILED:
     'The stage could not lay out this script. Stop and start the take to rebuild it.',
+  // Window › CandidCue / Stage. Names what to do instead, because the window is
+  // still there — it simply would not come forward.
+  WINDOW_FOCUS_FAILED:
+    'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
   // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
   // post-show check (§52.7).
 

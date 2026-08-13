@@ -89,9 +89,11 @@ the stage, identify and preferences windows are created at runtime from
 `src-tauri/src/menu.rs` owns the native menu. Two properties are easy to break
 and both have bitten:
 
-- a menu command is delivered to the **focused** window
-  (`focused_command_window`), never unconditionally to control — otherwise ⌘W
-  with Settings in front closes the document window behind it;
+- a menu command is delivered to the **focused** window (`command_target`),
+  never unconditionally to control — otherwise ⌘W with Settings in front closes
+  the document window behind it. Over a window that answers no commands (the
+  stage), only the handful in `CONTEXT_FREE_COMMANDS` are forwarded and the
+  rest are dropped;
 - the menu's enabled state is pushed by whichever window is in front, and
   re-pushed on focus (`installMenuStateOnFocus`), because one menu is shared by
   two windows and the last push wins.

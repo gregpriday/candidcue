@@ -107,7 +107,9 @@
      * under the user's hands.
      */
     const teardownOverlay = installOverlaySync([SETTINGS_OVERLAY_KEY], () => {
-      void loadSettings(true);
+      void loadSettings(true).catch((err: unknown) => {
+        console.debug('settings could not be re-read after an overlay change', err);
+      });
     });
 
     /*
@@ -132,6 +134,7 @@
          window it is pressed over. */
       'file.close-script': close,
       'window.main': () => void focusAppWindow('control'),
+      'window.stage': () => void focusAppWindow('stage'),
       /* ⌘F — the toolbar's Search settings field. The registry calls this
          `edit.find` in every window; what it finds differs. */
       'edit.find': () => {

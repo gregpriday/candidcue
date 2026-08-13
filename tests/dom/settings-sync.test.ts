@@ -10,13 +10,20 @@
  *     (and now after `select_speech_language` too). Needs a Tauri runtime.
  *   - `settings://show-section`, for a window that is already open. Same.
  *   - `installOverlaySync`, below — a `storage` listener, because the OVERLAID
- *     fields (stage font, stage type size, the presentation-mode toggles) never
- *     reach Rust at all and so have no command to hook a broadcast onto.
+ *     fields (stage font and stage type size) never reach Rust at all and so
+ *     have no command to hook a broadcast onto.
  *
  * The overlay is the one that had no coverage and the one most likely to be
  * got wrong, because `storage` has two behaviours worth pinning: it fires only
  * for OTHER documents of the origin, and a `clear()` reports `key === null`
  * rather than naming every key it removed.
+ *
+ * WHAT THIS DOES NOT COVER: that the two CALLERS pass the right key. Both name
+ * `SETTINGS_OVERLAY_KEY`, which is exported from the module that owns the
+ * overlay — and the defect this feature shipped with was exactly a caller
+ * naming the wrong key (the workspace store's). A test that mounted both
+ * windows would catch that; this one asserts the listener's own contract, and
+ * the shared constant is what stops the callers drifting.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installOverlaySync } from '../../src/control/services/settings-sync';

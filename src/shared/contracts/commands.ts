@@ -130,10 +130,19 @@ export const COMMAND_IDS = [
 
   // ---- Window ----
   'window.main',
-  /** The Settings window, listed while it is open (§20.4). */
+  /**
+   * The Settings window (§20.4).
+   *
+   * Always LISTED, and always enabled, because choosing it opens the window
+   * when there is none — the menu entry and ⌘, are the same action.
+   */
   'window.settings',
   /**
-   * The Stage window, listed while one EXISTS (§13.4).
+   * The Stage window, ENABLED while one exists (§13.4).
+   *
+   * Listed always — a menu whose items appear and disappear is harder to learn
+   * than one whose items grey out — and enabled only when there is a window to
+   * bring forward.
    *
    * Production presentation is single-window — the control window becomes the
    * prompter — so most of the time there is no separate stage to list. A real

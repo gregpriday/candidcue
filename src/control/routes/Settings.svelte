@@ -238,10 +238,12 @@
    * the most faithful index available, and it stays correct when a row is
    * added without anybody remembering an index.
    *
-   * The selectors are the three shared field wrappers plus `Section`'s own
-   * heading. A row with none of them is simply never hidden, which is the safe
-   * direction to fail: a control that stays visible during a search is a
-   * search that under-filters, not a setting somebody cannot find.
+   * The selectors are the three shared field wrappers — `Select`/`TextField`'s
+   * `.field`, `Toggle`'s `.toggle-row`, and `SettingReadout`'s `.readout`. Not
+   * section headings, and not the hand-written sub-forms: a row with none of
+   * these is simply never hidden, which is the safe direction to fail. A
+   * control that stays visible during a search is a search that under-filters,
+   * not a setting somebody cannot find.
    */
   const ROW_SELECTOR = '.field, .toggle-row, .readout';
 

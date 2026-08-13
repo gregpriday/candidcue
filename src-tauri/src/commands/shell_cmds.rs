@@ -208,6 +208,10 @@ pub enum FocusTarget {
 ///
 /// Unminimise first, then focus: a minimised window accepts focus without
 /// coming back on screen, which looks exactly like the menu doing nothing.
+///
+/// A failure to focus is REPORTED rather than swallowed. A window that is there
+/// and will not come forward is a real fault, and the menu item that asked for
+/// it is the only place the user could learn about it.
 #[tauri::command]
 pub fn focus_app_window<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -220,9 +224,29 @@ pub fn focus_app_window<R: tauri::Runtime>(
     // A window that is not there is not an error. The Window menu greys Stage
     // when there is none, and a menu can be clicked faster than a window closes.
     if let Some(window) = app.get_webview_window(label) {
+        /*
+         * NO `show()`.
+         *
+         * The stage is deliberately built HIDDEN and shown by the presentation
+         * path once it has hydrated and been laid out (`windows/mod.rs`).
+         * Showing it from here would put an unpainted window on the presenter's
+         * display — the white flash that borderless presentation exists to
+         * avoid — and Window › Stage is enabled the moment the window is
+         * created, which is exactly that interval.
+         *
+         * Unminimising is safe: a window that was never shown is not minimised,
+         * so this is a no-op for the hidden case and the fix for the real one.
+         */
         let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        window.set_focus().map_err(|err| {
+            AppError::structured(
+                "WINDOW_FOCUS_FAILED",
+                crate::errors::ErrorCategory::Internal,
+                "That window could not be brought forward.",
+                true,
+            )
+            .with_log(format!("set_focus on {label}: {err}"))
+        })?;
     }
     Ok(())
 }

@@ -375,7 +375,13 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * Settings showed the new one.
      */
     const teardownOverlaySync = installOverlaySync([SETTINGS_OVERLAY_KEY], () => {
-      void loadSettings(true);
+      /* Caught, because this runs from a `storage` event with nobody above it:
+         an unhandled rejection here is a window-level error report about a
+         re-read the user did not ask for and cannot act on. The overlay stays
+         as it was and the next change tries again. */
+      void loadSettings(true).catch((err: unknown) => {
+        console.debug('settings could not be re-read after an overlay change', err);
+      });
     });
 
     const teardownDrop = installDragDrop({

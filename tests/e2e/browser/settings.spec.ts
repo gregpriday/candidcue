@@ -101,11 +101,27 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
 
   await slider.fill('80');
 
-  await expect
-    .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'update_settings').length))
-    .toBeGreaterThan(0);
+  /*
+   * Poll for the SLIDER's write, not for any write.
+   *
+   * Settings also issues an `optical` migration write, and a bare count check
+   * is satisfied by that one the moment the section opens — so this read
+   * whichever write happened to be last and passed or failed on the order of
+   * two unrelated things.
+   */
+  const audioWrite = () =>
+    page.evaluate(() =>
+      window.__E2E__.calls
+        .filter(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: Record<string, unknown> }).patch?.['audio'] !== undefined,
+        )
+        .at(-1),
+    );
+  await expect.poll(async () => (await audioWrite()) !== undefined).toBe(true);
 
-  const call = await page.evaluate(() => window.__E2E__.lastCall('update_settings'));
+  const call = await audioWrite();
   const args = call!.args as { patch: Record<string, Record<string, unknown>> };
   expect(args.patch.audio?.['vadSensitivity']).toBe(0.8);
   // The per-machine capture state stays in the overlay and must not be sent.
@@ -391,9 +407,29 @@ test('a changed slider offers its way back to the default', async ({ page }) => 
   await expect(fontSize).toHaveValue('64');
   await expect(page.getByText('Default · 64 px')).toBeVisible();
 
-  // And the reset is a real write, not a local rollback.
-  const call = await page.evaluate(() => window.__E2E__.lastCall('update_settings'));
-  expect(call).not.toBeNull();
+  /*
+   * And the reset PERSISTS — to the overlay, which is where this field lives.
+   *
+   * This used to assert `lastCall('update_settings') !== null`, described as
+   * "a real write, not a local rollback". That assertion was vacuous: the stage
+   * font size has no Rust mapping in `toRustPatch`, so `updateSettings` finds
+   * an empty patch and never reaches IPC at all. What the check was actually
+   * seeing was the unrelated `optical` migration write that Settings issues on
+   * mount — so it passed while proving nothing about the reset, and would have
+   * gone on passing if the reset had persisted nothing.
+   *
+   * The overlay IS the document for this field, so that is what to read.
+   */
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const raw = localStorage.getItem('candidcue.settings-overlay.v1');
+        if (raw === null) return null;
+        const overlay = JSON.parse(raw) as { teleprompter?: Record<string, unknown> };
+        return overlay.teleprompter?.['fontSizePx'] ?? null;
+      }),
+    )
+    .toBe(64);
 });
 
 test('a rig with every step answered but no measured scale does not read as done', async ({ page }) => {

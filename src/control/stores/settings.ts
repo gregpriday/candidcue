@@ -33,14 +33,41 @@ let loaded = false;
 export function adoptSettings(payload: unknown): boolean {
   const adapted = settingsService.adaptRevisionedSettings(payload);
   if (adapted === null) return false;
+  /* A commit — so any read still in flight is stale. See `loadGeneration`. */
+  loadGeneration += 1;
   state.set(adapted);
   loaded = true;
   return true;
 }
 
+/**
+ * Which read is allowed to commit.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS APPEARED WITH THE SECOND WINDOW
+ * ---------------------------------------------------------------------------
+ * `loadSettings` used to run at most once per window, from the shell, so there
+ * was nothing to race. Two mechanisms now force a re-read at arbitrary moments:
+ * the `storage` event that carries an overlay change between windows, and any
+ * future caller that decides its copy is stale. Two of those in flight resolve
+ * in whatever order the IPC layer answers, and the later `state.set` wins — so
+ * the newest document could be overwritten by an older one that started first.
+ *
+ * The same guard also protects an ADOPTED document. `settings://changed` hands
+ * this window the whole revisioned document synchronously; a read that was
+ * already in flight would otherwise land afterwards holding the revision before
+ * it, and the next save would fail its optimistic-concurrency check.
+ *
+ * `adoptSettings` bumps the generation for that reason: adopting is a commit,
+ * and every read older than it is stale by definition.
+ */
+let loadGeneration = 0;
+
 export async function loadSettings(force = false): Promise<AppSettings> {
   if (loaded && !force) return get(state);
+  const generation = (loadGeneration += 1);
   const value = await settingsService.getSettings();
+  if (generation !== loadGeneration) return get(state);
   state.set(value);
   loaded = true;
   await adoptStageModeFromOverlay();

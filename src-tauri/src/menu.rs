@@ -312,24 +312,45 @@ fn command_target(app: &AppHandle, id: &str) -> Option<String> {
             Some(label.to_string())
         }
         /*
-         * Nothing focused is not the same as the stage being focused: it is
-         * what `is_focused` reports when the application itself is in the
-         * background and the menu was reached another way. Control owns the
-         * application in that case, which is the pre-existing behaviour.
+         * NOTHING FOCUSED is treated exactly like the stage being focused.
+         *
+         * `None` is not "the application is in the background and control is
+         * still in charge". It is also every window minimised, a focus change
+         * in flight, and `is_focused()` having returned an error that this code
+         * flattened to `false`. In every one of those there is no window the
+         * user is looking at — which is the same situation the arm below is
+         * about, and forwarding Save or Insert into a document nobody can see
+         * is the same mistake either way.
          */
-        None => Some(CONTROL_LABEL.to_string()),
-        Some(_) => is_window_command(id).then(|| CONTROL_LABEL.to_string()),
+        _ => is_context_free(id).then(|| CONTROL_LABEL.to_string()),
     }
 }
 
-/// Commands that name a WINDOW rather than acting on what is in front.
+/// Commands that act on the APPLICATION rather than on what is in front.
 ///
-/// Safe to answer from anywhere, which is what makes them the exception above.
-/// Kept as a prefix test rather than a list so a new `window.*` or `help.*`
-/// item does not have to be remembered here — both categories are, by
-/// construction, about the application rather than about a document.
-fn is_window_command(id: &str) -> bool {
-    id.starts_with("window.") || id.starts_with("help.")
+/// Safe to answer when no window is looking at a document, which is what makes
+/// them the exception above.
+///
+/// An explicit list, not a `window.`/`help.` prefix test. The prefix looked
+/// self-maintaining and was wrong: `help.setup-assistant` NAVIGATES the control
+/// window, `help.keyboard-shortcuts` opens a dialog in it, `help.privacy` opens
+/// Settings, and `help.export-support-bundle` starts a file-picker flow. Those
+/// act on a window as much as Save does. Only these five name a window or a
+/// directory and nothing else.
+///
+/// A new command is therefore excluded by default, which is the safe direction:
+/// it is dropped when pressed over the stage rather than delivered somewhere it
+/// was not meant for.
+const CONTEXT_FREE_COMMANDS: &[&str] = &[
+    "window.main",
+    "window.settings",
+    "window.stage",
+    "help.reveal-logs",
+    "help.privacy",
+];
+
+fn is_context_free(id: &str) -> bool {
+    CONTEXT_FREE_COMMANDS.contains(&id)
 }
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -915,6 +936,25 @@ mod tests {
             advertised > 25,
             "only {advertised} registry accelerators were read; the parser is broken"
         );
+    }
+
+    /// Every id in the context-free allow-list is a real command.
+    ///
+    /// The list decides what survives being pressed over a window that answers
+    /// nothing, so an id misspelt here fails open in the quiet direction: the
+    /// command is simply dropped, and nothing says so.
+    #[test]
+    fn context_free_commands_are_real_commands() {
+        let ts = include_str!("../../src/shared/contracts/commands.ts");
+        for id in super::CONTEXT_FREE_COMMANDS {
+            assert!(
+                ts.contains(&format!("'{id}'")),
+                "`{id}` is treated as context-free but is not a declared command"
+            );
+        }
+        // Anti-vacuity, and a nudge to think when the list grows: these are the
+        // commands that act on no document, and there are not many of them.
+        assert_eq!(super::CONTEXT_FREE_COMMANDS.len(), 5);
     }
 
     #[test]

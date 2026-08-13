@@ -19,6 +19,7 @@ import {
   library,
   loadLibrary,
   loadMoreScripts,
+  selectScript,
   setLibraryQuery,
   setLibrarySort,
   setLibraryView,
@@ -338,5 +339,87 @@ describe('paging through a library bigger than one read', () => {
     // larger read than the screen can use and a cursor into pages that the new
     // result set may not have.
     expect(requests[0]?.args?.['page']).toEqual({ page: 0, pageSize: 500 });
+  });
+});
+
+/**
+ * The journey §10.2 names by hand: open a script from deep in the list, come
+ * back, and still be on it.
+ */
+describe('returning from the editor with a selection past the first page', () => {
+  function paged(total: number): InvokeFn {
+    return async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      requests.push({ command, args });
+      const request = args?.['page'] as { page: number; pageSize: number } | undefined;
+      const page = request?.page ?? 0;
+      const size = Math.min(request?.pageSize ?? 500, 500);
+      const start = page * size;
+      const items: ScriptSummary[] = [];
+      for (let i = start; i < Math.min(total, start + size); i += 1) items.push(summary(`s${i}`));
+      return { items, total } as T;
+    };
+  }
+
+  it('keeps a row on page two rather than snapping back to the first row', async () => {
+    setInvokeForTesting(paged(1400));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+    await loadMoreScripts();
+
+    // A script only page one can contain.
+    selectScript('s700');
+    expect(get(library).selectedId).toBe('s700');
+
+    /*
+     * The reload that returning from the editor performs. It used to settle the
+     * selection against page zero alone — which cannot contain row 700 — so the
+     * fallback replaced it with row 1 before page one had even been requested.
+     */
+    await loadLibrary();
+    expect(get(library).scripts).toHaveLength(1000);
+    expect(get(library).selectedId).toBe('s700');
+  });
+
+  it('falls back to the first row when the selected script really is gone', async () => {
+    setInvokeForTesting(paged(1400));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+    await loadMoreScripts();
+    selectScript('s700');
+
+    // The list comes back without it — trashed from another window, say.
+    setInvokeForTesting(paged(400));
+    await loadLibrary();
+    expect(get(library).selectedId).toBe('s0');
+  });
+
+  it('stops restoring at the first page that fails, rather than skipping it', async () => {
+    setInvokeForTesting(paged(1400));
+    setLibraryView('trash');
+    setLibraryView('all');
+    await loadLibrary();
+    await loadMoreScripts();
+    await loadMoreScripts();
+
+    /*
+     * Page one fails on the way back. Counting it as restored anyway would
+     * leave the cursor at 3 with two pages in hand, and the next Show more
+     * would skip five hundred scripts.
+     */
+    let call = 0;
+    setInvokeForTesting(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      requests.push({ command, args });
+      call += 1;
+      if (call === 1) return { items: [summary('s0')], total: 1400 } as T;
+      throw unreadable;
+    });
+    await loadLibrary();
+
+    requests = [];
+    setInvokeForTesting(paged(1400));
+    await loadMoreScripts();
+    expect((requests[0]?.args?.['page'] as { page: number }).page).toBe(1);
   });
 });

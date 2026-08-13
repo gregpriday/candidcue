@@ -39,7 +39,15 @@ import { ipcInvoke, isTauriRuntime } from './ipc';
  * It is also a CORRECTNESS guard. These calls are fire-and-forget, so two in
  * flight can complete out of order and leave the menu showing the older of two
  * states. Sending only on change makes that vanishingly rare, and the serialised
- * queue below makes it impossible.
+ * queue below makes it impossible WITHIN ONE WINDOW.
+ *
+ * Across windows it cannot: each webview is its own JavaScript realm with its
+ * own queue, and Rust accepts a state push without being told which window sent
+ * it. What keeps the two from fighting is `windowHasFocus` — only the window in
+ * front describes the menu — and that is a policy rather than a proof. A push
+ * admitted while focused is re-checked before each IPC call below, so a window
+ * that loses focus mid-queue stops rather than finishing a description of a
+ * window nobody is looking at.
  */
 let lastMenuJson: string | null = null;
 /**
@@ -60,6 +68,14 @@ let lastMenuJson: string | null = null;
  * never installed the listener — recovery, browser dev, a webview whose focus
  * events are unavailable — must go on pushing rather than fall silent, because
  * a menu that is never described is entirely grey.
+ *
+ * The consequences of that default, said plainly. A window that never receives
+ * a focus event keeps pushing while it is in the background — the pre-existing
+ * behaviour, and the one that fails safe. A window that observes a blur and
+ * then misses the matching focus stops pushing until the next focus arrives;
+ * the menu it leaves behind is the other window's, which is the window the user
+ * is looking at. Neither is a deadlock, and the second is the failure worth
+ * having.
  */
 let windowHasFocus = true;
 /** One push at a time; the newest pending state wins. */
@@ -100,6 +116,12 @@ async function drainMenuPush(first: string): Promise<void> {
     while (payload !== null) {
       const items = JSON.parse(payload) as MenuItemState[];
       payload = null;
+      /* Focus can move while a queue drains, and a state that was true when it
+         was admitted describes the wrong window by the time it is sent. */
+      if (!windowHasFocus) {
+        menuPushQueued = null;
+        return;
+      }
       try {
         await ipcInvoke('set_menu_state', { items });
       } catch (err) {
@@ -195,6 +217,15 @@ function labelForWindow(id: CommandId): string {
  */
 export const PREFERENCES_COMMANDS = [
   'file.close-script',
+  /*
+   * Window › Stage, because RUST enables it whatever this list says.
+   *
+   * `menu.rs::apply_state` overrides this item from the live window list — no
+   * renderer knows whether a stage window exists — so leaving it out of here
+   * did not disable it, it made it an enabled item with no handler in the
+   * window that was in front. Listing it is what gives it one.
+   */
+  'window.stage',
   /* ⌘F is the Search settings field in the toolbar — the same "find in what
      this window is showing" the Library and the editor answer. */
   'edit.find',
