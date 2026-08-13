@@ -201,31 +201,6 @@ describe('the settings document commits in the right order', () => {
     expect(get(settings).general.launchBehavior).toBe('recent');
   });
 
-  it('does not re-run a migration the OTHER window already performed', async () => {
-    /*
-     * The migration flags describe the last document PARSED, and documents do
-     * not arrive in the order they were produced: a read that began before the
-     * other window migrated can resolve after it, parse a document from before
-     * the write, and set the flag back to "pending". The migration then runs a
-     * second time and mints a settings revision nobody asked for.
-     *
-     * The latch is on the raw Rust field rather than on this window having
-     * done the write, which is what makes a broadcast from the other window
-     * close it — this test is that distinction. It drives the real service, so
-     * it is in `optical-profile-settings` and `stage-mode-adoption` that the
-     * migration itself is proved; here it is the ORDER that matters.
-     */
-    const first = loadSettings(true);
-    reads[0]!.resolve(loaded(2, 'library'));
-    await first;
-
-    // The other window migrates; its document says Rust holds the value.
-    expect(adoptSettings(broadcast(3, 'library'))).toBe(true);
-
-    // No write was issued from here, before or after.
-    expect(updates).toHaveLength(0);
-  });
-
   it('does not roll a failed save back over a document that arrived meanwhile', async () => {
     /*
      * `patchSettings` shows its change immediately and undoes it if the write

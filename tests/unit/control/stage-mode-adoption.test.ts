@@ -73,6 +73,8 @@ const ipc = vi.hoisted(() => {
       document = emptyDocument();
     },
     stageBehavior: () => document.value['stageBehavior'] as Record<string, unknown>,
+    /** A fresh copy of the un-migrated document, for ordering tests. */
+    documentValue: () => JSON.parse(JSON.stringify(emptyDocument().value)) as Record<string, unknown>,
     invoke: async (command: string, args?: unknown) => {
       if (command === 'update_settings') {
         const { expectedRevision, patch } = args as {
@@ -107,6 +109,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
 const settingsStore = await import('../../../src/control/stores/settings');
+const settingsService = await import('../../../src/control/services/settings');
 
 beforeEach(() => {
   ipc.reset();
@@ -189,5 +192,80 @@ describe('the mode is carried into Rust, not merely read out of the overlay', ()
     expect(overlay.stage).not.toHaveProperty('fullscreen');
     expect(overlay.stage).not.toHaveProperty('readerFrame');
     expect(overlay.stage?.['displayFingerprint']).toBe('panel-1');
+  });
+});
+
+/**
+ * The migration must not run TWICE because two windows disagreed about when.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ORDERING THAT MAKES THIS POSSIBLE
+ * ---------------------------------------------------------------------------
+ * `pendingStageModeAdoption` reports what the LAST PARSED document showed, and
+ * documents do not arrive in the order they were produced. Settings is its own
+ * window now, so the other one can perform this migration while a read started
+ * here is still in flight — and that read then parses a document from before
+ * the write and puts the flag back to "pending". The migration runs a second
+ * time: not destructive, because it writes what is already there, but a
+ * settings revision nobody asked for, broadcast to both windows, for work that
+ * was already done.
+ *
+ * What closes it is that the latch reads RUST'S OWN FIELD rather than this
+ * window having performed the write — so a document adopted from the other
+ * window's broadcast closes it exactly as a local write does — and that it only
+ * ever moves one way, which is what makes it immune to the order.
+ *
+ * Asserted through `adaptRevisionedSettings`, which is the function
+ * `adoptSettings` parses a broadcast with and the same one every read goes
+ * through. That is the seam where the flag is written, so it is the seam where
+ * the ordering can be stated.
+ */
+describe('a migration another window already performed', () => {
+  /** A document in which Rust does NOT hold the mode — the pre-migration one. */
+  function unmigrated(): unknown {
+    return { revision: 3, value: ipc.documentValue() };
+  }
+
+  /** The same document after somebody migrated it. */
+  function migrated(): unknown {
+    const value = ipc.documentValue() as Record<string, unknown>;
+    return {
+      revision: 4,
+      value: {
+        ...value,
+        stageBehavior: {
+          ...(value['stageBehavior'] as Record<string, unknown>),
+          presentationMode: 'reader',
+        },
+      },
+    };
+  }
+
+  it('is not run again when a stale read arrives after it', () => {
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { presentationMode: 'reader' } }));
+
+    // Before anything: the overlay states a mode Rust does not hold, so the
+    // migration is genuinely pending. Without this the test proves nothing.
+    settingsService.adaptRevisionedSettings(unmigrated());
+    expect(settingsService.pendingStageModeAdoption()).toBe('reader');
+
+    // The other window migrates; Rust broadcasts; this window adopts.
+    settingsService.adaptRevisionedSettings(migrated());
+    expect(settingsService.pendingStageModeAdoption()).toBeNull();
+
+    /*
+     * And NOW the read that began before all of that finally answers, holding
+     * the document as it was. It must not revive the migration.
+     */
+    settingsService.adaptRevisionedSettings(unmigrated());
+    expect(settingsService.pendingStageModeAdoption()).toBeNull();
+  });
+
+  it('still runs when no document has ever shown Rust holding it', () => {
+    // Anti-vacuity for the latch: it must not simply refuse for ever.
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { presentationMode: 'reader' } }));
+    settingsService.adaptRevisionedSettings(unmigrated());
+    settingsService.adaptRevisionedSettings(unmigrated());
+    expect(settingsService.pendingStageModeAdoption()).toBe('reader');
   });
 });
