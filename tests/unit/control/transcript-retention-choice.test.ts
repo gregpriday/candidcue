@@ -53,21 +53,26 @@ describe('a narrowing change deletes and a widening one does not', () => {
   });
 
   /*
-   * A document written by a later build can hold a window this one does not
-   * know. Refusing to call that a deletion is the safe direction: the worst
-   * outcome is a confirmation that was not shown, rather than a confirmation
-   * whose copy describes the wrong loss.
+   * A document written by a later build can hold a window this one has never
+   * heard of. Between two windows we cannot order, saying nothing beats a
+   * dialog describing the wrong loss — but 'off' is not one of those cases.
+   * Rust answers it with an unconditional DELETE whatever the previous value
+   * was, so it must ask no matter what it is leaving.
    */
-  it('does not claim a deletion it cannot rank', () => {
-    expect(retentionChangeDeletes('90d' as TranscriptRetention, 'off')).toBe(false);
+  it('always asks before off, including from a window it cannot rank', () => {
+    expect(retentionChangeDeletes('90d' as TranscriptRetention, 'off')).toBe(true);
+  });
+
+  it('claims nothing about a change between windows it cannot rank', () => {
     expect(retentionChangeDeletes('off', '90d' as TranscriptRetention)).toBe(false);
+    expect(retentionChangeDeletes('90d' as TranscriptRetention, '7d')).toBe(false);
   });
 });
 
 describe('the confirmation says which loss is about to happen', () => {
   it('warns that off takes everything, not only the old items', () => {
     const copy = retentionConfirmCopy('off');
-    expect(copy.body).toContain('already kept');
+    expect(copy.body).toContain('any transcripts CandidCue has already kept');
     expect(copy.body).not.toContain('older than');
     expect(copy.confirmLabel.toLowerCase()).toContain('delete');
   });
@@ -80,9 +85,16 @@ describe('the confirmation says which loss is about to happen', () => {
     }
   });
 
-  it('tells the user where the only other copy would be', () => {
+  /*
+   * The copy must not claim this is the last copy. An export carries retained
+   * transcripts and so does a pre-upgrade backup, and neither is touched.
+   */
+  it('names the copies the deletion does not reach', () => {
     for (const value of ALL) {
-      expect(retentionConfirmCopy(value).body).toContain('exported your data');
+      const body = retentionConfirmCopy(value).body;
+      expect(body).toContain('export');
+      expect(body).toContain('backup');
+      expect(body).not.toContain('no other copy');
     }
   });
 });

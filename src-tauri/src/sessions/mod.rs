@@ -507,10 +507,56 @@ pub async fn close_orphaned_sessions(pool: &SqlitePool) -> Result<u64, AppError>
     Ok(result.rows_affected())
 }
 
+/// Does this retention value CONSENT to writing recognised words down?
+///
+/// An allowlist, not `!= "off"`, and the difference is the direction it fails
+/// in. `update_settings` validates the value on the way in, but a settings
+/// document written by a later build and then opened by this one is not
+/// validated on the way out — and under `!= "off"` an unrecognised window read
+/// as consent, so a downgraded install would start retaining transcripts while
+/// the frontend (which projects anything unknown to 'off') showed the setting
+/// as off. Consent is the one question that must fail closed.
+pub fn retention_permits_collection(retention: &str) -> bool {
+    matches!(retention, "1d" | "7d" | "30d" | "forever")
+}
+
 /// Delete transcripts past their retention window (spec §36.2 automatic
-/// retention choices). Called at startup.
+/// retention choices), and revoke consent when there is none.
+///
+/// Called at startup, when a take ends, and inside the transaction that writes
+/// the setting. There is no timer: a window is enforced at those boundaries, so
+/// an app left open for a week does not delete a 1-day transcript at the moment
+/// it turns a day old. Every user-facing description of this setting has to say
+/// so rather than promise an expiry clock.
+///
+/// ## Why this also writes to `sessions`
+///
+/// Retention is latched onto the session row at start (`start_session`) and
+/// `append_transcript_items` consults that latch, not the setting — deliberately,
+/// so a take cannot be silently switched INTO retaining halfway through. The
+/// same latch made the reverse true as well: turning retention off mid-take
+/// deleted the rows collected so far and then went straight on collecting more,
+/// because the running session's latch still said yes. Clearing the latch is
+/// what makes "off" mean off for a take that is already under way.
+///
+/// Only 'off' revokes. Shortening a window expires old items; it does not
+/// withdraw consent for the take in progress.
 pub async fn enforce_transcript_retention(
     pool: &SqlitePool,
+    retention: &str,
+) -> Result<u64, AppError> {
+    let mut conn = pool.acquire().await?;
+    enforce_transcript_retention_on(&mut conn, retention).await
+}
+
+/// The same rule, run on a connection the caller already holds.
+///
+/// `update_settings` needs this so the document write and the deletion share
+/// one transaction; taking a pool there would open a second connection and put
+/// the two statements back in separate units of work, which is the bug the
+/// transaction exists to close.
+pub async fn enforce_transcript_retention_on(
+    conn: &mut sqlx::SqliteConnection,
     retention: &str,
 ) -> Result<u64, AppError> {
     let days = match retention {
@@ -518,19 +564,26 @@ pub async fn enforce_transcript_retention(
         "7d" => 7,
         "30d" => 30,
         "forever" => return Ok(0),
-        // 'off': remove everything that may remain from earlier settings.
+        // 'off', and anything this build does not recognise: remove everything
+        // that may remain from earlier settings. Unknown fails closed here for
+        // the same reason it fails closed in `retention_permits_collection`.
         _ => 0,
     };
     let result = if days == 0 {
+        // Consent first. If the delete below succeeded and this did not, a take
+        // in progress would refill the table it had just emptied.
+        sqlx::query("UPDATE sessions SET transcript_retained = 0 WHERE transcript_retained != 0")
+            .execute(&mut *conn)
+            .await?;
         sqlx::query("DELETE FROM session_transcript_items")
-            .execute(pool)
+            .execute(&mut *conn)
             .await?
     } else {
         let cutoff = (chrono::Utc::now() - chrono::Duration::days(days))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         sqlx::query("DELETE FROM session_transcript_items WHERE created_at < ?")
             .bind(cutoff)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?
     };
     Ok(result.rows_affected())

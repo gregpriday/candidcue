@@ -1527,6 +1527,26 @@
   }
 
   /**
+   * What the retention `<select>` is SHOWING, which is not always the setting.
+   *
+   * A native select has already repainted by the time its change handler runs,
+   * so a confirmation that gets declined would otherwise leave the row reading
+   * "Off" over a setting still saving for 30 days — the one place in this app
+   * where a stale-looking control is a privacy claim. Binding the element to
+   * state this component owns is what makes the decline able to put it back;
+   * passing `$settings…` straight in cannot, because a decline changes nothing
+   * for the prop to react to.
+   *
+   * The effect is the other direction: the store stays authoritative, so an
+   * adopted broadcast from the Settings window, a rolled-back failed write and
+   * the initial load all reach the element without this function's help.
+   */
+  let transcriptRetention = $state<TranscriptRetention>('off');
+  $effect(() => {
+    transcriptRetention = $settings.privacy.saveTranscript;
+  });
+
+  /**
    * §36.2: ask first when the new window keeps LESS than the current one,
    * because Rust deletes on write rather than on expiry — see
    * `lib/transcript-retention.ts` for why that is not obvious from the label.
@@ -1537,7 +1557,13 @@
     if (next === current) return;
     if (retentionChangeDeletes(current, next)) {
       const accepted = await requestConfirm({ ...retentionConfirmCopy(next), danger: true });
-      if (!accepted) return;
+      if (!accepted) {
+        // The value the store holds NOW, not the one captured before the
+        // dialog: the Settings window and this one share a document, and a
+        // commit adopted while the dialog was open is the newer truth.
+        transcriptRetention = $settings.privacy.saveTranscript;
+        return;
+      }
     }
     await patchSettings('privacy', { saveTranscript: next });
   }
@@ -1888,8 +1914,8 @@
 
           <p class="hint-line">
             Once the language is downloaded, everything happens on this computer. Your voice is
-            never sent anywhere, and nothing is recorded or saved. The words are used only to work
-            out where in the script you are, and they are kept only if you set <strong
+            never sent anywhere, and your audio is never recorded or saved. The words are used only
+            to work out where in the script you are, and they are kept only if you set <strong
               >Save session transcripts</strong
             > under Data, privacy &amp; updates.
           </p>
@@ -2916,15 +2942,18 @@
           <Select
             layout="row"
             label="Save session transcripts"
-            description="Off keeps nothing. Any other choice writes the words CandidCue recognised during a take to this device and deletes them once they reach that age."
-            value={$settings.privacy.saveTranscript}
+            description="Off keeps nothing. Any other choice writes the words CandidCue recognised during a take to this device and removes them once they are older than that."
+            bind:value={transcriptRetention}
             options={[...TRANSCRIPT_RETENTION_OPTIONS]}
             onchange={(value) => void chooseTranscriptRetention(value as TranscriptRetention)}
           />
           <p class="hint-line">
             Retention is decided when a take starts, so turning this on does not bring back a
-            transcript from a take that already ran. Your audio is never saved either way, and
-            retained transcripts travel with <strong>Export all data</strong>.
+            transcript from a take that already ran. Expiry is checked when CandidCue starts, when a
+            take ends, and when you change this — not on a clock, so something may outlive its
+            period while the app is left open. Your audio is never saved either way, and retained
+            transcripts travel with <strong>Export all data</strong> and with the automatic backups
+            taken before a database upgrade.
           </p>
 
           <div class="row-actions">

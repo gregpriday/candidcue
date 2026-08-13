@@ -129,8 +129,10 @@ mod macos_document_edited {
             // the duration of this closure. `setDocumentEdited:` is a plain BOOL
             // setter declared on NSWindow.
             unsafe {
+                // No cast: `ns_window()` already returns `*mut c_void`, and
+                // spelling it out again is what clippy 1.97 started flagging.
                 msg_with_bool(
-                    ns_window as *mut c_void,
+                    ns_window,
                     sel_registerName(c"setDocumentEdited:".as_ptr()),
                     i8::from(edited),
                 );

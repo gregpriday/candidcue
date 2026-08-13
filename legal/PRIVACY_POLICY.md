@@ -87,7 +87,16 @@ updates** in Settings.
 Retention is decided when a take starts, so switching it on does not recover a
 transcript from a take that has already run. Choosing a shorter period removes
 transcripts older than the new period as soon as you change it, and turning it
-off removes every transcript that was already kept.
+off removes the transcripts already kept and stops a take that is running from
+keeping any more.
+
+Expiry is applied when CandidCue starts, when a take ends, and when you change
+the setting — not on a timer. A transcript can therefore outlive its period
+while the application is left open, until the next of those moments.
+
+Removal applies to CandidCue's database. It does not reach copies you made
+yourself with **Export all data**, the automatic backups taken before a database
+upgrade, or anything your own backup software has already copied.
 
 Session and take records — the timings, counts and measurements listed above —
 are stored separately and are kept regardless of this setting. They do not

@@ -36,15 +36,25 @@ function rank(value: TranscriptRetention): number {
  * already on disk.
  *
  * Lengthening the window deletes nothing — the items simply live longer — so
- * only a narrowing change needs to ask. An unrecognised value ranks as -1,
- * which is deliberately treated as "no worse than anything": a stored value
- * this build does not know about must not be used as grounds for deleting.
+ * only a narrowing change needs to ask.
+ *
+ * 'off' is answered before the ranks are consulted, because Rust does not
+ * treat it as the shortest window: it is an unconditional
+ * `DELETE FROM session_transcript_items`, whatever the previous value was.
+ * That matters for the one case the ranks cannot judge — a document written by
+ * a later build holding a window this one has never heard of. Ranking that as
+ * -1 would say "harmless" about the single most destructive change there is.
+ *
+ * Every other unrankable pair does return false. Between two windows we cannot
+ * order, a confirmation whose copy describes the wrong loss is worse than
+ * none: the items age out either way, and only 'off' takes them all at once.
  */
 export function retentionChangeDeletes(
   current: TranscriptRetention,
   next: TranscriptRetention,
 ): boolean {
   if (next === current) return false;
+  if (next === 'off') return true;
   const from = rank(current);
   const to = rank(next);
   if (from < 0 || to < 0) return false;
@@ -63,12 +73,20 @@ export interface RetentionConfirmCopy {
  * reads "older than the new period" would not expect that.
  */
 export function retentionConfirmCopy(next: TranscriptRetention): RetentionConfirmCopy {
+  /*
+   * "There is no other copy" was the obvious sentence and it was false. A full
+   * export carries retained transcripts, and so do the automatic snapshots
+   * taken before a database upgrade — neither of which this deletion touches.
+   * Naming them is the difference between a warning and a promise that a
+   * support request would later contradict.
+   */
   const noOtherCopy =
-    'There is no other copy unless you have exported your data.';
+    'This removes them from CandidCue’s database. Copies in an export you made, ' +
+    'or in an automatic pre-upgrade backup, are not touched.';
   if (next === 'off') {
     return {
       title: 'Delete every saved transcript?',
-      body: `Turning transcript saving off removes the transcripts CandidCue has already kept. ${noOtherCopy}`,
+      body: `Turning transcript saving off removes any transcripts CandidCue has already kept. ${noOtherCopy}`,
       confirmLabel: 'Turn off and delete',
     };
   }

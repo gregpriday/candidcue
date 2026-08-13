@@ -204,7 +204,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     const selects = privacySection.match(/<Select\b/g) ?? [];
     expect(selects, 'only the §36.2 retention Select belongs here').toHaveLength(1);
     expect(privacySection, 'and it must be the retention one').toMatch(
-      /value=\{\$settings\.privacy\.saveTranscript\}/,
+      /label="Save session transcripts"/,
     );
   });
 
@@ -225,6 +225,30 @@ describe('#180 the privacy section describes what the app actually does', () => 
     );
     expect(privacyKeywords, 'the privacy section keywords could not be located').not.toBeNull();
     expect(privacyKeywords?.[1]).toMatch(/transcript/i);
+  });
+
+  /*
+   * A source-level assertion, and deliberately so: what is being pinned is how
+   * the value is PASSED, which no mounted test of this route could distinguish
+   * from the alternative without reproducing the whole settings store.
+   *
+   * A native `<select>` has repainted before its change handler runs. Passing
+   * `value={$settings…}` one-way means a declined confirmation changes nothing
+   * for the prop to react to, so the row would keep showing the user's pick —
+   * reading "Off" over a setting that is still saving for 30 days. On this row
+   * that is not cosmetic staleness; it is a false privacy claim on screen. The
+   * binding is what gives the decline something to write back.
+   */
+  it('binds the retention control so a declined confirmation can put it back', () => {
+    expect(withoutComments).toMatch(/bind:value=\{transcriptRetention\}/);
+    expect(
+      withoutComments,
+      'the retention value must not be handed to the Select one-way',
+    ).not.toMatch(/\bvalue=\{\$settings\.privacy\.saveTranscript\}/);
+    expect(
+      withoutComments,
+      'declining must restore the setting the store still holds',
+    ).toMatch(/if \(!accepted\) \{\s*transcriptRetention = \$settings\.privacy\.saveTranscript;/);
   });
 
   it('offers no update action, because CandidCue 1.0 has no updater', () => {

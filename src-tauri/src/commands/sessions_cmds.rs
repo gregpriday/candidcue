@@ -26,9 +26,12 @@ pub async fn start_session(
     let script_id = ScriptId::parse(&input.script_id)?;
 
     // Transcript retention is gated by settings (spec §36.2) and fixed at
-    // session start — never silently enabled mid-session.
+    // session start — never silently enabled mid-session. An allowlist rather
+    // than `!= "off"`, so an unrecognised window reads as no consent; see
+    // `sessions::retention_permits_collection`.
     let settings = crate::settings::get_settings(db.pool()).await?;
-    let retention_enabled = settings.value.general.save_transcript != "off";
+    let retention_enabled =
+        sessions::retention_permits_collection(&settings.value.general.save_transcript);
 
     // Spec §21.4: capture the script as it is about to be performed BEFORE
     // the session exists, so the performed text stays recoverable. Owned by
@@ -58,6 +61,31 @@ pub async fn end_session(
     let record =
         sessions::end_session(db.pool(), &session_id, summary.unwrap_or_default()).await?;
     coordinator.end_session(&session_id);
+
+    /*
+     * §36.2: a retention window has no timer behind it. It used to be applied
+     * only at startup and when the setting was written, so an app left open for
+     * a week kept a "1 day" transcript for a week. The end of a take is the
+     * natural durable boundary — it is when the table has just grown, and the
+     * user is between takes rather than on stage.
+     *
+     * Not fatal. The take DID end, its record is already written, and refusing
+     * to return it because a housekeeping delete failed would turn a tidy-up
+     * problem into a lost session summary. The next boundary tries again.
+     */
+    let retention = match crate::settings::get_settings(db.pool()).await {
+        Ok(settings) => Some(settings.value.general.save_transcript),
+        Err(err) => {
+            tracing::warn!(error = %err, "could not read retention after a take");
+            None
+        }
+    };
+    if let Some(retention) = retention {
+        if let Err(err) = sessions::enforce_transcript_retention(db.pool(), &retention).await {
+            tracing::warn!(error = %err, "transcript retention not applied after a take");
+        }
+    }
+
     Ok(record)
 }
 

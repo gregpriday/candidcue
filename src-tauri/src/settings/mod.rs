@@ -227,12 +227,15 @@ pub struct AudioSettings {
     /// Which recogniser is doing the listening.
     ///
     /// No longer a choice — this build is tuned to decode with exactly one
-    /// recogniser, which the user installs from Settings › Speech rather than
-    /// receiving in the app bundle (`model_store::resolve`; stock builds ship
-    /// no model bytes at all). Still persisted and still reported, though,
-    /// because "what heard this take?" is a
-    /// question a diagnostics bundle has to be able to answer about a session
-    /// recorded months ago on a build that may have shipped a different model.
+    /// recogniser, which the user installs from Welcome or from Settings ›
+    /// Speech rather than receiving in the app bundle (`model_store::resolve`;
+    /// stock builds ship no model bytes at all).
+    ///
+    /// Still persisted and still reported, so a diagnostics bundle can name the
+    /// recogniser this installation is CONFIGURED with. Note what that is not:
+    /// nothing stamps the model onto a session row, so it cannot answer "what
+    /// heard this take?" about a take recorded months ago. Answering that would
+    /// take per-session provenance, which does not exist yet.
     pub transcription_model: String,
     /// BCP-47 tag, e.g. `en-US`.
     ///
@@ -671,20 +674,6 @@ pub async fn update_settings(
     let json = serde_json::to_string(&merged)
         .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
     let next_revision = current.revision + 1;
-    let updated = sqlx::query(
-        "UPDATE settings SET value_json = ?, revision = ?, updated_at = ?
-         WHERE key = ? AND revision = ?",
-    )
-    .bind(&json)
-    .bind(next_revision)
-    .bind(now_iso())
-    .bind(SETTINGS_KEY)
-    .bind(expected_revision)
-    .execute(pool)
-    .await?;
-    if updated.rows_affected() == 0 {
-        return Err(AppError::stale_revision(expected_revision, next_revision));
-    }
 
     /*
      * §32.2 / §36.2. A retention toggle that is off must remove what earlier
@@ -696,13 +685,33 @@ pub async fn update_settings(
      * rows were still there, for as long as the app stayed open. Enforcing it
      * on write closes that window.
      *
-     * It runs after the document is committed, so a failed write can never
-     * delete anything, and its outcome is deliberately not folded into this
-     * function's error: the settings change genuinely did persist. The count is
-     * dropped rather than reported because nothing displays it; a failure is
-     * logged by the caller's error path if the query itself fails.
+     * ONE TRANSACTION, and this is the part that was wrong. The two statements
+     * used to be separate: the document committed first and the deletion ran
+     * after it with `?`, so a deletion that failed left the new value durable
+     * and still returned an error. The caller rolls the UI back and reports
+     * "nothing was changed", the new revision is never broadcast, and every
+     * window goes on holding a revision that no longer exists — while the
+     * setting on disk says transcripts are not kept and the rows are still
+     * there. Committing both together means the pair is either true or absent.
      */
-    crate::sessions::enforce_transcript_retention(pool, &merged.general.save_transcript).await?;
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE settings SET value_json = ?, revision = ?, updated_at = ?
+         WHERE key = ? AND revision = ?",
+    )
+    .bind(&json)
+    .bind(next_revision)
+    .bind(now_iso())
+    .bind(SETTINGS_KEY)
+    .bind(expected_revision)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::stale_revision(expected_revision, next_revision));
+    }
+    crate::sessions::enforce_transcript_retention_on(&mut tx, &merged.general.save_transcript)
+        .await?;
+    tx.commit().await?;
 
     Ok(RevisionedSettings {
         revision: next_revision,

@@ -258,6 +258,72 @@ async fn transcripts_are_persisted_only_when_retention_was_enabled_at_start() {
     assert_eq!(stored_off, 0, "not one word may reach disk");
 }
 
+/// §36.2, the other direction: turning retention OFF has to reach a take that
+/// is already running.
+///
+/// The latch that makes retention un-enableable mid-session made it
+/// un-DISABLEABLE too. `append_transcript_items` consults the session row, not
+/// the setting, so switching to off deleted the rows collected so far and then
+/// went straight on collecting more — Settings is deliberately usable during a
+/// take, so this is a sequence a presenter can actually perform. "Off" that
+/// only empties the table and lets it refill is not off.
+#[tokio::test]
+async fn turning_retention_off_stops_a_take_that_is_already_retaining() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let input = start_input(&f, &script_id);
+    let items: Vec<TranscriptItemInput> =
+        serde_json::from_value(f["append_session_transcript"]["items"].clone())
+            .expect("transcript items deserialize");
+
+    let live = sessions::start_session(&h.pool, &input, true)
+        .await
+        .expect("session with retention");
+    sessions::append_transcript_items(&h.pool, &live.id, items.clone())
+        .await
+        .expect("items accepted while retention is on");
+
+    sessions::enforce_transcript_retention(&h.pool, "off")
+        .await
+        .expect("retention enforcement");
+
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM session_transcript_items")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0, "what was already written must go");
+
+    let refused = sessions::append_transcript_items(&h.pool, &live.id, items.clone()).await;
+    assert!(
+        refused.is_err(),
+        "and the running take must stop being allowed to write more"
+    );
+}
+
+/// Consent fails CLOSED on a value this build does not recognise.
+///
+/// `!= "off"` read an unknown window as permission, which is the wrong
+/// direction for the one setting that decides whether speech reaches disk: a
+/// document written by a later build and opened by this one would retain
+/// transcripts while the frontend, which projects anything unknown to 'off',
+/// showed the setting as off.
+#[test]
+fn an_unrecognised_retention_window_is_not_consent() {
+    for allowed in ["1d", "7d", "30d", "forever"] {
+        assert!(
+            sessions::retention_permits_collection(allowed),
+            "{allowed} is a real window and must permit collection"
+        );
+    }
+    for refused in ["off", "90d", "", "FOREVER", "true", "1"] {
+        assert!(
+            !sessions::retention_permits_collection(refused),
+            "{refused:?} must not be read as consent"
+        );
+    }
+}
+
 /// §21.4: the pre-session snapshot is taken by Rust inside `start_session`
 /// precisely so a frontend cannot skip it. Now that the frontend calls the
 /// command, this is the assertion that the snapshot is actually produced.
