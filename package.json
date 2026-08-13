@@ -9,7 +9,8 @@
     "node": ">=26.4.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite",
     "models:fetch": "./scripts/fetch-stt-model.sh",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",

@@ -3,7 +3,12 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const devPort = Number(process.env['CANDIDCUE_E2E_PORT'] ?? 1420);
+// `CANDIDCUE_E2E_PORT` is the Playwright harness's choice; `CANDIDCUE_DEV_PORT`
+// is the free port `scripts/dev.mjs` found before it started the Tauri CLI with
+// a matching `devUrl`. `strictPort` stays on: by the time either variable is
+// set the port has already been chosen deliberately, and silently drifting to
+// another one would leave the webviews pointed at nothing.
+const devPort = Number(process.env['CANDIDCUE_E2E_PORT'] ?? process.env['CANDIDCUE_DEV_PORT'] ?? 1420);
 
 /**
  * Absolute path to `decode-named-character-reference`'s non-DOM build.

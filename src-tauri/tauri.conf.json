@@ -4,7 +4,7 @@
   "version": "1.0.0-rc.1",
   "identifier": "com.candidcue.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm dev:vite",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"

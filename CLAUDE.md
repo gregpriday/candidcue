@@ -18,8 +18,10 @@ Tauri 2 + Svelte 5 (runes) + TypeScript frontend, Rust core, SQLite.
 
 ```bash
 pnpm install
-pnpm tauri dev          # the real app: control + stage windows
-pnpm dev                # frontend only in a browser (uses the mock backend)
+pnpm dev                # the real app: control + stage windows, on the first
+                        # free port from 1420 up (scripts/dev.mjs)
+pnpm tauri dev          # the same app, but pinned to 1420 — fails if it is taken
+pnpm dev:vite           # frontend only in a browser (uses the mock backend)
 
 pnpm check              # svelte-check — the authoritative typecheck
 pnpm test               # node vitest (~2000 tests): src/**/*.test.ts + tests/{unit,integration,e2e}
