@@ -85,6 +85,20 @@ pnpm version:check   # package.json / Cargo.toml / tauri.conf.json / version.ts 
 pnpm version:set 1.0.0   # change all four at once
 ```
 
+Two gates belong to a tag rather than to a commit, so they run in the release
+workflow instead of in `release:verify` — but both are runnable by hand:
+
+```bash
+pnpm version:tag v1.0.0     # the tag must name the version the artifact reports
+pnpm notes:check v1.0.0 --check   # CHANGELOG.md must describe this release
+```
+
+Release notes live in [`CHANGELOG.md`](CHANGELOG.md) and the workflow publishes
+the section matching the tag, so a release nobody described does not ship. A
+release candidate reads the section for the release it is a candidate for —
+`v1.0.0-rc.2` takes `## v1.0.0` — because the notes an RC ships under are the
+ones being proofread.
+
 `pnpm legal:check` is **expected to fail** until the business fills in the
 `@@LEGAL_*@@` placeholders — that failure is the commercial release gate. Pass
 `--allow-legal-failure` for a development build; the run then says loudly that

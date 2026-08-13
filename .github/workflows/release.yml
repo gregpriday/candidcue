@@ -9,7 +9,8 @@ name: Release
 #
 # ## What you must supply before this can run
 #
-# Four repository secrets, from your Apple Developer account:
+# Six repository secrets, from your Apple Developer account — three for the
+# signing identity and three for the notarisation API key:
 #
 #   APPLE_CERTIFICATE          Developer ID Application .p12, base64-encoded
 #   APPLE_CERTIFICATE_PASSWORD the .p12 export password
@@ -81,6 +82,26 @@ jobs:
       # ------------------------------------------------------------------
       # Everything that can refuse, before anything is built.
       # ------------------------------------------------------------------
+
+      # First, because it is the cheapest gate and the most expensive failure.
+      # `v1.0.0` building source version `1.0.0-rc.2` produces a signed,
+      # notarised artifact whose About box disagrees with its own download page,
+      # and by the time anyone reads the version it is published. Twenty seconds
+      # here beats a notarisation round trip and a withdrawal.
+      #
+      # Skipped on a manual dispatch, which has no tag to check — those runs
+      # cannot publish (see the Publish step's `startsWith(github.ref, …)`).
+      - name: The tag must name the version being built
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/version.mjs tag "${GITHUB_REF_NAME}"
+
+      # Also before the build, for the same reason: a release whose notes were
+      # never written is discovered at the publish step otherwise, with a signed
+      # artifact already made and nothing to say about it.
+      - name: The release must be described
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}" --check
+
       - name: Verify the code is releasable
         # No `--allow-legal-failure`. See the header.
         run: node scripts/release-verify.mjs
@@ -136,12 +157,17 @@ jobs:
           APPLE_API_KEY_PATH: ${{ runner.temp }}/apple-api-key.p8
         run: |
           set -euo pipefail
+          # The trap, not a trailing `rm`. Under `set -e` a failed build exits
+          # the step immediately, so the decoded App Store Connect private key
+          # was left on the runner's disk for every failure — the case where
+          # somebody then goes digging through the workspace. It is removed on
+          # every exit path now, including the ones nobody planned.
+          trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
           echo "${{ secrets.APPLE_API_KEY }}" | base64 --decode > "$APPLE_API_KEY_PATH"
           # Both architectures. A release that is arm64-only will not open on
           # an Intel Mac, and what the user sees is "the application cannot be
           # opened" with no reason.
           pnpm tauri build --target universal-apple-darwin
-          rm -f "$APPLE_API_KEY_PATH"
 
       # ------------------------------------------------------------------
       # Ask the artifact, not the source.
@@ -185,7 +211,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          # The notes come from CHANGELOG.md, reviewed with the code they
+          # describe, rather than from a sentence in this file that said the
+          # same true and useless thing about every release.
+          node scripts/release-notes.mjs "${GITHUB_REF_NAME}" > "$RUNNER_TEMP/notes.md"
+          {
+            echo
+            echo '---'
+            echo
+            echo 'Signed and notarised. Checksums (`SHA256SUMS`), SBOMs and build provenance are attached.'
+          } >> "$RUNNER_TEMP/notes.md"
           gh release create "${GITHUB_REF_NAME}" \
             --title "CandidCue ${GITHUB_REF_NAME}" \
-            --notes "Signed and notarised. Checksums, SBOMs and build provenance are attached." \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             dist-release/* sbom/* provenance/*

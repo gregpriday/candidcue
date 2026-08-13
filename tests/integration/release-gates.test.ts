@@ -843,4 +843,130 @@ describe('the release workflow cannot publish an unverified build', () => {
       'a missing certificate must stop the release, not silently produce an unsigned one',
     ).toMatch(/An unsigned build is not a release/);
   });
+
+  /*
+   * The tag and the source version are two independent declarations of the
+   * same fact, and nothing forced them to agree. `v1.0.0` building
+   * `1.0.0-rc.2` produces a signed, notarised artifact whose About box, its
+   * download page and its checksum record each name a different thing — and it
+   * is published before anyone reads the version.
+   */
+  it('refuses a tag that does not name the version being built', () => {
+    expect(uncommented, 'the tag gate must run').toContain('version.mjs tag');
+    const gate = uncommented.indexOf('version.mjs tag');
+    const build = uncommented.indexOf('tauri build');
+    expect(build, 'the build step must exist').toBeGreaterThan(-1);
+    expect(gate, 'checking after the build wastes a notarisation round trip').toBeLessThan(build);
+  });
+
+  /*
+   * The published notes used to be one sentence in this file, identical for
+   * every release: true, and no help at all to somebody deciding whether to
+   * install it. Reading them from the repository puts them under review with
+   * the code, and CHECKING them before the build makes an undescribed release
+   * a fast failure rather than a published one.
+   */
+  it('publishes notes written in the repository', () => {
+    expect(uncommented).toContain('release-notes.mjs');
+    expect(uncommented, 'the notes must come from a file, not a literal').toContain('--notes-file');
+    expect(uncommented, 'and not from the old fixed sentence').not.toContain(
+      '--notes "Signed and notarised',
+    );
+    const check = uncommented.indexOf('release-notes.mjs');
+    expect(check).toBeLessThan(uncommented.indexOf('tauri build'));
+  });
+
+  /*
+   * `set -e` exits the step the moment the build fails, so a trailing `rm`
+   * never ran on exactly the runs where somebody afterwards goes digging
+   * through the workspace. The decoded App Store Connect private key has to be
+   * removed on every exit path, not only the happy one.
+   */
+  it('removes the decoded notarisation key even when the build fails', () => {
+    expect(uncommented).toMatch(/trap\s+'rm -f "\$APPLE_API_KEY_PATH"'\s+EXIT/);
+  });
+
+  it('counts its own Apple secrets correctly', () => {
+    /*
+     * The header said "Four repository secrets" and then listed six. A release
+     * operator provisioning from that comment stops two short and discovers it
+     * at the signing step of a real release.
+     */
+    const named = new Set(workflow.match(/\bAPPLE_[A-Z_]+\b/g) ?? []);
+    // APPLE_API_KEY_PATH is a local path, not a secret.
+    named.delete('APPLE_API_KEY_PATH');
+    expect(named.size, 'six Apple secrets are referenced').toBe(6);
+    expect(workflow).toMatch(/Six repository secrets/);
+    expect(workflow).not.toMatch(/Four repository secrets/);
+  });
+});
+
+/* ------------------------------------------------ the release notes */
+
+describe('the release notes gate', () => {
+  const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+
+  it('describes the version this tree currently declares', () => {
+    const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
+    /*
+     * Not "some section exists" — the section for THIS version. The notes and
+     * the version move together or the release describes the wrong build.
+     *
+     * A release candidate reads the release it is a candidate for, which is
+     * what `release-notes.mjs` does: rewriting the same notes for every rc.N
+     * is churn, and the notes an RC ships under are the ones being proofread.
+     */
+    const release = `v${version.replace(/-.*$/, '')}`;
+    expect(
+      changelog.includes(`\n## v${version}\n`) || changelog.includes(`\n## ${release}\n`),
+      `CHANGELOG.md must have a "## v${version}" or "## ${release}" section`,
+    ).toBe(true);
+  });
+
+  /*
+   * The 1.0 contract, as a test. Each of these is a fact a buyer needs before
+   * downloading, and each is one the readiness review named as a claim that
+   * must appear — or, in the last case, must not.
+   */
+  it('states the 1.0 contract a buyer needs before downloading', () => {
+    for (const fact of [
+      /macOS 12/,
+      /Apple Silicon and Intel/i,
+      /English only/i,
+      /separate download|not in the installer/i,
+      /manual|manually/i,
+      /no cloud/i,
+      /probabilistic/i,
+    ]) {
+      expect(changelog, `the notes must state: ${fact}`).toMatch(fact);
+    }
+  });
+
+  it('claims nothing the repository cannot support', () => {
+    /*
+     * Banning the WORDS would be wrong — the notes have to mention Windows,
+     * Linux, telemetry and automatic updates in order to rule them out, and a
+     * test that forbade the words would push the disclosure out of the notes
+     * rather than the overclaim. What is banned is the affirmative form.
+     */
+    for (const overclaim of [
+      /\bsupports? (Windows|Linux)/i,
+      /\b(Windows|Linux) (build|version|support) is\b(?! not)/i,
+      /\bautomatic(ally)? (updates?|checks? for updates)/i,
+      /\bwe collect\b/i,
+      /\bcloud (sync|backup) is\b(?! not)/i,
+    ]) {
+      expect(changelog, `the notes must not claim: ${overclaim}`).not.toMatch(overclaim);
+    }
+
+    // And the exclusions themselves have to be stated, not merely unclaimed.
+    expect(changelog, 'macOS-only must be explicit').toMatch(/no Windows or Linux build/i);
+    expect(changelog, 'the absence of an updater must be explicit').toMatch(/contains no updater/i);
+    expect(changelog, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
+
+    // The two documented degraded analyses must be listed as limitations,
+    // never implied to work.
+    expect(changelog).toMatch(/choppy/i);
+    expect(changelog).toMatch(/variety score/i);
+  });
 });

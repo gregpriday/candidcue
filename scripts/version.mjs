@@ -19,6 +19,7 @@
  *   node scripts/version.mjs check      — exit 1 on any disagreement
  *   node scripts/version.mjs set 1.2.3  — rewrite every consumer
  *   node scripts/version.mjs print      — print the canonical version
+ *   node scripts/version.mjs tag v1.2.3 — exit 1 unless the tag names this version
  *
  * The internal crates under `crates/` are DELIBERATELY not synced: cc-align,
  * cc-stt and cc-bench are libraries with no public version surface. The check
@@ -310,6 +311,66 @@ function check() {
   console.log(`Version sync OK — every consumer reports ${canonical}.`);
 }
 
+/**
+ * The tag names the version the artifact will actually report.
+ *
+ * `v1.0.0` building source version `1.0.0-rc.2` is the release defect that
+ * cannot be undone after the fact: the download page, the checksum record, the
+ * support request and the About box would each name a different thing, and the
+ * artifact is already signed and notarised by the time anybody notices. The
+ * workflow runs this BEFORE the build, so the run fails in twenty seconds
+ * rather than after a notarisation round trip.
+ *
+ * Deliberately strict about the shape as well as the value. A `v*` tag is what
+ * triggers the release workflow, so `v1.0` and `vfinal` reach here too — and a
+ * gate that only compared the tail would let `release-v1.0.0` through as a
+ * release of 1.0.0. The tag must be exactly `v` followed by the version.
+ */
+function tag(name) {
+  const problems = [];
+  const canonical = canonicalVersion(problems);
+  if (problems.length > 0 || !canonical) {
+    for (const problem of problems) console.error(problem);
+    process.exit(1);
+  }
+
+  if (name !== `v${canonical}`) {
+    console.error(`Tag/version mismatch — nothing may be released from this pair.\n`);
+    console.error(`  tag:            ${name}`);
+    console.error(`  source version: ${canonical}`);
+    console.error(`  expected tag:   v${canonical}\n`);
+    /*
+     * The advice has to be worth following. "Run version:set <tag>" is only
+     * sensible when the tag actually names a version — suggesting
+     * `version:set release-v1.0.0` for a misnamed tag sends the operator to a
+     * second failure with the first one still unexplained.
+     */
+    const named = name.startsWith('v') ? name.slice(1) : null;
+    if (named === null) {
+      console.error('A release tag is `v` followed by the version, with nothing else around it.');
+    } else if (SEMVER.test(named)) {
+      console.error(
+        `Either tag the commit v${canonical}, or run \`pnpm version:set ${named}\` and commit ` +
+          `that before tagging.`,
+      );
+    } else {
+      console.error(
+        `"${named}" is not a bundle-safe semver, so no source version could ever match this ` +
+          `tag. Tag the commit v${canonical}.`,
+      );
+    }
+    process.exit(1);
+  }
+
+  /*
+   * Every consumer, not only package.json. The tag agreeing with the canonical
+   * file while tauri.conf.json lags is the same defect one file further down —
+   * and tauri.conf.json is the one the bundle actually reports.
+   */
+  check();
+  console.log(`Tag ${name} matches the source version.`);
+}
+
 function set(next) {
   if (!SEMVER.test(next)) {
     console.error(
@@ -420,7 +481,14 @@ switch (command) {
     console.log(version);
     break;
   }
+  case 'tag':
+    if (!argument) {
+      console.error('Usage: node scripts/version.mjs tag <tag-name>');
+      process.exit(1);
+    }
+    tag(argument);
+    break;
   default:
-    console.error('Usage: node scripts/version.mjs <check|set <version>|print>');
+    console.error('Usage: node scripts/version.mjs <check|set <version>|print|tag <tag-name>>');
     process.exit(1);
 }

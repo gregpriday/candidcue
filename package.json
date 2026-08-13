@@ -24,6 +24,8 @@
     "version:check": "node scripts/version.mjs check",
     "version:set": "node scripts/version.mjs set",
     "version:print": "node scripts/version.mjs print",
+    "version:tag": "node scripts/version.mjs tag",
+    "notes:check": "node scripts/release-notes.mjs",
     "cargo:test": "cargo test --locked --manifest-path src-tauri/Cargo.toml && cargo test --locked --manifest-path crates/Cargo.toml",
     "cargo:clippy": "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo clippy --locked --manifest-path crates/Cargo.toml --all-targets -- -D warnings",
     "verify": "pnpm verify:repo && pnpm version:check && pnpm check && pnpm test:all && pnpm cargo:test",
