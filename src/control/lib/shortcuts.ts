@@ -10,6 +10,7 @@ import { detectPlatform } from './platform';
 
 export type ShortcutAction =
   | 'new-script'
+  | 'find-in-list'
   | 'save'
   | 'present'
   | 'play-pause'
@@ -90,6 +91,20 @@ export const SHORTCUT_OWNERSHIP = {
   'command-help': 'global',
 
   'new-script': ['library'],
+  /*
+   * ⌘F in the LIBRARY, and only there.
+   *
+   * The command registry owns this chord as `edit.find`, and in the packaged
+   * app the native menu takes the key before any webview sees it — so this
+   * branch never fires there. It exists for the two places that have no menu
+   * bar: `pnpm dev` in a browser, and the Playwright suite, which is the only
+   * automated thing that can drive this app at all.
+   *
+   * Scoped to the library rather than global because the EDITOR's ⌘F is
+   * CodeMirror's own search keymap, bound inside the editing surface. A window
+   * listener claiming the chord there would take it before CodeMirror could.
+   */
+  'find-in-list': ['library'],
   /* Both screens that can hold a script to present: the one listing them and
      the one editing one. */
   present: ['library', 'editor'],
@@ -319,9 +334,9 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
    * On macOS the platform chord is Control+Command+F, so BOTH `ctrlKey` and
    * `metaKey` are down — and `primary` is `metaKey` there, which means the block
    * below would happily read it as a plain Cmd+F and fall through to `null`.
-   * Elsewhere the convention is Ctrl+Alt+F, where `altKey` is down and the same
-   * block excludes it. Neither shape fits the blocks after this one, which is
-   * why it is tested on its own rather than folded into them.
+   * Elsewhere it is a bare F11, which no block after this one looks at. Neither
+   * shape fits them, which is why this is tested on its own rather than folded
+   * in.
    */
   if ((key.toLowerCase() === 'f' || key === 'F11') && !event.shiftKey) {
     const macChord = event.isMac && event.ctrlKey && event.metaKey && !event.altKey;
@@ -341,9 +356,10 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
      * full document relayout rather than a flag.
      *
      * Deliberately NOT gated on `typing`, unlike the plain-key block at the
-     * bottom: every other modified chord in this function ignores it, because a
-     * modifier already says "this is an app command, not text". Cmd+S saves from
-     * inside the editor and this is the same kind of key.
+     * bottom. ⌃⌘F is a modified chord, and a modifier already says "this is an
+     * app command, not text" — Cmd+S saves from inside the editor. Bare F11 is
+     * not modified, but it is a function key: it types nothing, so a text field
+     * has no claim on it either.
      */
     if (macChord || otherChord) {
       return event.repeat === true ? null : 'toggle-presentation-mode';
@@ -359,6 +375,10 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
     switch (key.toLowerCase()) {
       case 'n':
         return 'new-script';
+      case 'f':
+        /* Library only — see `find-in-list` in the ownership table. In the
+           packaged app the menu has already taken this key. */
+        return 'find-in-list';
       /*
        * ⌘K is NOT here. It belongs to Insert › Link now, and the Library's
        * search field is reached with ⌘F through `edit.find` in the command

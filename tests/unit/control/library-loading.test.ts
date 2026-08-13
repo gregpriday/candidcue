@@ -244,7 +244,15 @@ describe('paging through a library bigger than one read', () => {
       requests.push({ command, args });
       const request = args?.['page'] as { page: number; pageSize: number } | undefined;
       const page = request?.page ?? 0;
-      const size = request?.pageSize ?? pageSize;
+      /*
+       * CLAMPED, exactly as Rust clamps it (`scripts/repo.rs`:
+       * `page.page_size.clamp(1, 500)`).
+       *
+       * The mock used to honour whatever size it was asked for, which let a
+       * reload ask for 1000 rows and get them — so a bug that returned half the
+       * list against the real backend passed here.
+       */
+      const size = Math.min(request?.pageSize ?? pageSize, 500);
       const start = page * size;
       const items: ScriptSummary[] = [];
       for (let i = start; i < Math.min(total, start + size); i += 1) items.push(summary(`s${i}`));
@@ -300,7 +308,19 @@ describe('paging through a library bigger than one read', () => {
 
     requests = [];
     await loadLibrary();
-    expect(requests[0]?.args?.['page']).toEqual({ page: 0, pageSize: 1000 });
+    /*
+     * TWO requests, page by page. Not one read with a bigger ceiling: Rust
+     * clamps `pageSize` to 500 (`scripts/repo.rs`), so asking for 1000 returns
+     * 500 while the store believes it holds two pages — and the next Show more
+     * then asks for page 2 and skips five hundred scripts.
+     */
+    const pages = requests
+      .filter((r) => r.command === 'list_scripts')
+      .map((r) => r.args?.['page']);
+    expect(pages).toEqual([
+      { page: 0, pageSize: 500 },
+      { page: 1, pageSize: 500 },
+    ]);
     expect(get(library).scripts).toHaveLength(1000);
   });
 

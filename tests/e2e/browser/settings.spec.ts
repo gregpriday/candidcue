@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
-import { openPreferences } from './fixtures/preferences';
+import { gotoSection, openPreferences } from './fixtures/preferences';
 
 /**
  * Settings round-trip journey, SHIM-BACKED.
@@ -486,4 +486,46 @@ test('Following drops the dead Script fidelity control', async ({ page }) => {
   // motion-profile description mentions follow feel too, and a loose match
   // would pass on the sentence about the control rather than the control.
   await expect(page.getByText('Follow feel', { exact: true })).toBeVisible();
+});
+
+/**
+ * §14.2 — the search narrows the ROWS, not only the section list.
+ *
+ * The section index alone answers "which section holds the microphone". It does
+ * not answer "which of these fourteen controls is the one", which is the
+ * question somebody has once they are looking at a section — and that half is
+ * what makes a settings search worth having on a screen this long.
+ */
+test('searching settings hides the rows that do not match, and says how many did', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Stage display');
+
+  // Wait for the section to render before counting — the window shows
+  // "Loading settings…" until `get_settings` answers.
+  await expect(page.getByRole('switch', { name: 'Horizontal mirror' })).toBeVisible();
+  const rows = page.locator('.content .field, .content .toggle-row');
+  const rowsBefore = await rows.count();
+  expect(rowsBefore).toBeGreaterThan(1);
+
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('mirror');
+
+  // The count is stated rather than left to be inferred from a short form.
+  // The toast region is also `role="status"`, so this names the note itself.
+  await expect(page.locator('p[role="status"]')).toContainText('matched in this section');
+
+  const visible = page.locator(
+    '.content .field:not([data-search-miss]), .content .toggle-row:not([data-search-miss])',
+  );
+  const visibleCount = await visible.count();
+  expect(visibleCount).toBeGreaterThan(0);
+  expect(visibleCount).toBeLessThan(rowsBefore);
+  await expect(visible.first()).toContainText(/mirror/i);
+
+  // And "Show all" puts the section back rather than leaving the user to clear
+  // a field they may not remember typing in.
+  await page.getByRole('button', { name: 'Show all' }).click();
+  await expect(page.locator('.content [data-search-miss]')).toHaveCount(0);
 });

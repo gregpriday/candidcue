@@ -103,6 +103,7 @@ commands.allow = [
   # window neither reads nor writes anything the caller could not already see.
   "open_preferences",
   "close_preferences",
+  "focus_app_window",
   "reveal_logs",
   # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
   # (docs/updates.md). Both were permitted here while always returning

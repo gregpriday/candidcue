@@ -174,6 +174,59 @@ pub fn open_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(
     crate::windows::preferences::open(&app)
 }
 
+/// Which window the Window menu is asking for.
+///
+/// An enum rather than a label string, so the renderer cannot name a window
+/// that is not one of these. It is the same discipline as everywhere else on
+/// this boundary: the webview says WHAT it wants, never which object.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FocusTarget {
+    /// The document window.
+    Control,
+    /// The stage window — the appearance preview and the calibration wizard.
+    Stage,
+}
+
+/// Bring one of the application's windows forward (the Window menu).
+///
+/// ---------------------------------------------------------------------------
+/// WHY THIS IS A COMMAND AND NOT `getCurrentWindow().setFocus()`
+/// ---------------------------------------------------------------------------
+/// Because that does not work, and did not work before this: `core:window:default`
+/// grants the READ half of the window plugin — sizes, positions, `is_focused` —
+/// and neither `allow-set-focus` nor `allow-unminimize`. Window › CandidCue has
+/// therefore been a silent no-op since it was added; the renderer's call was
+/// rejected by the ACL inside a `try` that treated the rejection as "browser
+/// dev".
+///
+/// The fix is not to widen the capability. Focusing a window is a window
+/// operation, and this application deliberately keeps window operations in
+/// Rust — the same argument `close_preferences` makes about closing. Widening
+/// it would also hand the renderer `set_focus` on the STAGE mid-take, which is
+/// the one window whose focus the presentation code owns.
+///
+/// Unminimise first, then focus: a minimised window accepts focus without
+/// coming back on screen, which looks exactly like the menu doing nothing.
+#[tauri::command]
+pub fn focus_app_window<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    target: FocusTarget,
+) -> Result<(), AppError> {
+    let label = match target {
+        FocusTarget::Control => crate::windows::CONTROL_LABEL,
+        FocusTarget::Stage => crate::windows::STAGE_LABEL,
+    };
+    // A window that is not there is not an error. The Window menu greys Stage
+    // when there is none, and a menu can be clicked faster than a window closes.
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
 /// Close the Preferences window from inside it (its own Done control).
 ///
 /// A command rather than `window.close()` in the renderer, for the same reason

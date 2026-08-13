@@ -22,6 +22,7 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
     route: { name: 'library', view: 'all' },
     sessionActive: false,
+    stageRigResolved: false,
     sessionPaused: false,
     stageBlanked: false,
     stageMirrored: false,
@@ -159,6 +160,13 @@ describe('the Settings window names what it can do', () => {
     }
   });
 
+  it('claims Find, because this window has something to find in', () => {
+    /* ⌘F means "find in what this window is showing" — the editor's search
+       panel, the Library's filter field, and here the Settings search box. One
+       chord, one meaning, which is the whole point of §6.1. */
+    expect(PREFERENCES_COMMANDS).toContain('edit.find');
+  });
+
   it('claims Close Window, which is the chord it must answer itself', () => {
     /*
      * ⌘W is the one that made this necessary. Its accelerator is taken by the
@@ -173,7 +181,6 @@ describe('the Settings window names what it can do', () => {
     const forbidden: CommandId[] = [
       'file.save',
       'file.present',
-      'edit.find',
       'insert.link',
       'session.end-take',
       'view.library',

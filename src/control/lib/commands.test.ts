@@ -25,6 +25,7 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
     route: { name: 'library', view: 'all' },
     sessionActive: false,
+    stageRigResolved: false,
     sessionPaused: false,
     stageBlanked: false,
     stageMirrored: false,
@@ -421,5 +422,34 @@ describe('commandsByCategory', () => {
     ]);
     const total = groups.reduce((sum, group) => sum + group.commands.length, 0);
     expect(total).toBe(COMMAND_IDS.length);
+  });
+});
+
+describe('stage type size on a calibrated rig (§17.2)', () => {
+  /*
+   * The take that sizes its own type. Live already declined this and explained
+   * in a toast, which is right for a key press and wrong for a menu item: §6.3
+   * asks for an impossible action to be visibly impossible, and somebody who
+   * opened the View menu read "Larger Stage Text" as available on the way to
+   * choosing it.
+   */
+  const LIVE_RIG = context({
+    route: { name: 'live', sessionId: 's', scriptId: 'a' },
+    sessionActive: true,
+    stageRigResolved: true,
+  });
+  const LIVE_FREE = context({
+    route: { name: 'live', sessionId: 's', scriptId: 'a' },
+    sessionActive: true,
+  });
+
+  it('greys Larger and Smaller Stage Text when the rig decides the size', () => {
+    expect(COMMANDS['view.zoom-in'].available(LIVE_RIG)).toBe(false);
+    expect(COMMANDS['view.zoom-out'].available(LIVE_RIG)).toBe(false);
+  });
+
+  it('offers them on a take that is not rig-resolved', () => {
+    expect(COMMANDS['view.zoom-in'].available(LIVE_FREE)).toBe(true);
+    expect(COMMANDS['view.zoom-out'].available(LIVE_FREE)).toBe(true);
   });
 });

@@ -93,6 +93,17 @@ export interface CommandContext {
   route: Route;
   /** A take is running. Not the same as being on the Live route. */
   sessionActive: boolean;
+  /**
+   * The running take sizes its type from a measured viewing distance (§17.2).
+   *
+   * In the context because it decides an AVAILABILITY, and §6.3's rule is that
+   * an impossible action is greyed rather than refused after it is chosen.
+   * Larger/Smaller Stage Text has nothing to move on a calibrated rig — Live
+   * already declined and explained in a toast, which is the right answer for a
+   * key press and the wrong one for a menu item somebody had to open a menu to
+   * reach and read as available on the way.
+   */
+  stageRigResolved: boolean;
   /** The take is paused (so Pause reads Resume). */
   sessionPaused: boolean;
   /** The stage is blanked (so Blank reads Unblank). */
@@ -542,8 +553,11 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
      * Editing OR presenting. The stage's type size answers the same two keys —
      * see the note on `stepScale` in `App.svelte` — and leaving this
      * editor-only meant the disabled menu item ate ⌘= during a take.
+     *
+     * Except on a CALIBRATED rig, which sizes its type from a measured viewing
+     * distance and has nothing for this to move (§17.2, §6.3).
      */
-    available: (c) => editing(c) || presenting(c),
+    available: (c) => editing(c) || (presenting(c) && !c.stageRigResolved),
     run: (a) => a.stepScale(1),
   },
   'view.zoom-out': {
@@ -551,7 +565,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Smaller Editor Text',
     dynamicLabel: (c) => (presenting(c) ? 'Smaller Stage Text' : 'Smaller Editor Text'),
     accelerator: 'Mod+-',
-    available: (c) => editing(c) || presenting(c),
+    available: (c) => editing(c) || (presenting(c) && !c.stageRigResolved),
     run: (a) => a.stepScale(-1),
   },
   'view.actual-size': {

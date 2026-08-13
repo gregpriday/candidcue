@@ -43,7 +43,7 @@
   import {
     closePreferences,
     installMenuStateOnFocus,
-    focusControlWindow,
+    focusAppWindow,
     installWindowMenuCommands,
     PREFERENCES_COMMANDS,
     pushWindowMenuState,
@@ -131,7 +131,14 @@
       /* ⌘W. Its label reads "Close Window" off the editor, and this is the
          window it is pressed over. */
       'file.close-script': close,
-      'window.main': () => void focusControlWindow(),
+      'window.main': () => void focusAppWindow('control'),
+      /* ⌘F — the toolbar's Search settings field. The registry calls this
+         `edit.find` in every window; what it finds differs. */
+      'edit.find': () => {
+        document
+          .querySelector<HTMLInputElement>('input[type="search"][aria-label="Search settings"]')
+          ?.focus();
+      },
       /* ⌘, with Settings already open is "bring Settings forward", and it
          already is. Answered rather than ignored so the chord is not silently
          dead in the one window it names. */

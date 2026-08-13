@@ -188,6 +188,7 @@
       if (command === 'edit.find') searchInput?.focus();
     });
     const unsubscribe = onShortcut((action) => {
+      if (action === 'find-in-list') searchInput?.focus();
       if (action === 'new-script') void createAndOpenScript('new');
       if (action === 'present') {
         if (inTrash) {

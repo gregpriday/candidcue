@@ -13,11 +13,16 @@
  * A native menu changes that, because a menu is a PUBLISHED list of what the
  * application can do, with the key beside each entry. It cannot be allowed to
  * drift from what the keys and buttons actually do. So the ids below are the one
- * name for each action, and three surfaces derive from them:
+ * name for each action, and three surfaces are keyed to them:
  *
- *   - `src-tauri/src/menu.rs`  builds the native menu from these ids
+ *   - `src-tauri/src/menu.rs`  spells these ids again in Rust, with a label and
+ *     an accelerator for each. It does NOT read this file at build time — it
+ *     cannot, it is a different language — so what holds the two together is a
+ *     pair of tests that `include_str!` this file and `commands.ts` and compare
+ *     the id sets and the accelerator sets IN BOTH DIRECTIONS
  *   - `src/control/lib/commands.ts`  binds each id to its execution + availability
- *   - `src/control/components/ShortcutsDialog.svelte`  lists them
+ *   - `src/control/components/ShortcutsDialog.svelte`  derives its menu tables
+ *     from that registry
  *
  * The ids are string literals rather than a generated enum because Rust has to
  * spell them too, and a Rust test `include_str!`s THIS FILE to assert the two

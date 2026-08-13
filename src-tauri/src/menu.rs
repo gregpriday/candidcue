@@ -13,7 +13,7 @@
 //! ---------------------------------------------------------------------------
 //! WHAT THIS FILE DELIBERATELY DOES NOT DO
 //! ---------------------------------------------------------------------------
-//! It does not decide anything. Every item here is a name, a key, and an id;
+//! It decides only which window a command reaches, and whether the Stage item is enabled — everything else it is told. Every item here is a name, a key, and an id;
 //! choosing whether the item can fire, and what it does, belongs to the frontend
 //! (`src/control/lib/commands.ts`) because that is where the route, the session,
 //! the editor's save state and the navigation guards already live. Rust asking
@@ -162,10 +162,29 @@ pub fn apply_state(app: &AppHandle, states: &[MenuItemState]) {
      * Applied after the pushed state rather than merged into it, so it wins
      * regardless of which window pushed and what that window believed.
      */
-    let stage_exists = app
+    refresh_stage_item(app);
+}
+
+/// Re-read whether the stage window exists, and grey Window › Stage to match.
+///
+/// Called from `apply_state` — so any menu push carries it — AND from the
+/// stage window's own lifecycle in `windows/mod.rs`. Both are needed: a push is
+/// driven by a renderer's command context, and neither renderer is told when
+/// the stage window is created or destroyed. Without the lifecycle calls the
+/// item could stay greyed while a stage was up, or offer to bring forward a
+/// window that had closed, until something unrelated happened to push state.
+///
+/// Generic over the runtime and tolerant of a missing registry, because it is
+/// called from `open_stage`, which is generic and also runs under the mock
+/// runtime in tests where no menu was ever built.
+pub fn refresh_stage_item<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(registry) = app.try_state::<MenuRegistry>() else {
+        return;
+    };
+    let exists = app
         .get_webview_window(crate::windows::STAGE_LABEL)
         .is_some();
-    app.state::<MenuRegistry>().set_enabled("window.stage", stage_exists);
+    registry.set_enabled("window.stage", exists);
 }
 
 /// Accelerators, in Tauri's platform-neutral spelling.
@@ -247,13 +266,25 @@ pub fn install(app: &AppHandle) {
          * Each of those is a menu doing something to a window the user was not
          * pointed at, which is worse than a menu that does nothing.
          *
-         * The stage is EXCLUDED even when it holds focus. It has no command
-         * handler, it holds `core:event:allow-listen` and would receive the
-         * event, and a take is precisely when a stray menu command must not
-         * land. A menu chord pressed while the stage is focused falls back to
-         * control, which is the window that owns the session.
+         * With the STAGE in front, only WINDOW-LEVEL commands are forwarded to
+         * control; everything else is dropped.
+         *
+         * The stage has no command handler of its own, so something has to
+         * happen. Forwarding everything was wrong for the same reason targeting
+         * control unconditionally was: ⌘W over the stage would close the
+         * document window, and Insert would write into an editor two windows
+         * away. Dropping everything is wrong too — Window › CandidCue pressed
+         * over the stage is exactly the gesture "get me back to the other
+         * window", and it has to work from there most of all.
+         *
+         * So the split is by what the command ACTS ON. A window command names a
+         * window and is safe from anywhere; a document, edit or session command
+         * acts on whatever is in front, and there is no document in front.
          */
-        let target = focused_command_window(&handle);
+        let Some(target) = command_target(&handle, id) else {
+            tracing::debug!(id = %id, "a menu command was pressed over a window that cannot answer it");
+            return;
+        };
         if let Err(err) =
             handle.emit_to(target.as_str(), MENU_COMMAND_EVENT, serde_json::json!({ "id": id }))
         {
@@ -262,22 +293,43 @@ pub fn install(app: &AppHandle) {
     });
 }
 
-/// Which window a menu command should act on.
+/// Which window a menu command should be delivered to, if any.
 ///
-/// The focused one, when it is a window that answers commands — today that is
-/// `control` and `preferences`. Anything else (the stage, an identify overlay)
-/// falls back to control: those windows have no command handler, and a menu
-/// chord pressed over them is still an instruction to the application.
-fn focused_command_window(app: &AppHandle) -> String {
-    for window in app.webview_windows().values() {
-        if window.is_focused().unwrap_or(false) {
-            let label = window.label();
-            if label == CONTROL_LABEL || label == crate::windows::preferences::PREFERENCES_LABEL {
-                return label.to_string();
-            }
+/// The focused one when it answers commands — `control` and `preferences`.
+/// Over any other window (the stage, an identify overlay) only window-level
+/// commands are forwarded, to control; the rest are dropped. See the note at
+/// the emit site for why that split rather than all-or-nothing.
+fn command_target(app: &AppHandle, id: &str) -> Option<String> {
+    let focused = app
+        .webview_windows()
+        .values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .map(|window| window.label().to_string());
+
+    match focused.as_deref() {
+        Some(CONTROL_LABEL) => Some(CONTROL_LABEL.to_string()),
+        Some(label) if label == crate::windows::preferences::PREFERENCES_LABEL => {
+            Some(label.to_string())
         }
+        /*
+         * Nothing focused is not the same as the stage being focused: it is
+         * what `is_focused` reports when the application itself is in the
+         * background and the menu was reached another way. Control owns the
+         * application in that case, which is the pre-existing behaviour.
+         */
+        None => Some(CONTROL_LABEL.to_string()),
+        Some(_) => is_window_command(id).then(|| CONTROL_LABEL.to_string()),
     }
-    CONTROL_LABEL.to_string()
+}
+
+/// Commands that name a WINDOW rather than acting on what is in front.
+///
+/// Safe to answer from anywhere, which is what makes them the exception above.
+/// Kept as a prefix test rather than a list so a new `window.*` or `help.*`
+/// item does not have to be remembered here — both categories are, by
+/// construction, about the application rather than about a document.
+fn is_window_command(id: &str) -> bool {
+    id.starts_with("window.") || id.starts_with("help.")
 }
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {

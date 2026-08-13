@@ -36,7 +36,7 @@
   import {
     composeWindowTitle,
     installDragDrop,
-    focusStageWindow,
+    focusAppWindow,
     installMenuCommands,
     installMenuStateOnFocus,
     openPreferences,
@@ -273,6 +273,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   const recoveryCommandContext: CommandContext = {
     route: { name: 'library', view: 'all' },
     sessionActive: false,
+    stageRigResolved: false,
     sessionPaused: false,
     stageBlanked: false,
     stageMirrored: false,
@@ -817,6 +818,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
   const commandContext = $derived<CommandContext>({
     route: $route,
     sessionActive: $session.active,
+    /* §17.2: a calibrated rig sizes its own type, so Larger/Smaller Stage Text
+       is greyed rather than refused after it is chosen. */
+    stageRigResolved: $session.stageRigResolved === true,
     sessionPaused: $session.paused !== 'none',
     stageBlanked: $session.stageBlanked,
     // Read through a function rather than from `SessionState`, because the
@@ -949,7 +953,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * appearance preview and the calibration wizard are what create one — so
      * reaching this always has a window to bring forward.
      */
-    showStageWindow: () => void focusStageWindow(),
+    showStageWindow: () => void focusAppWindow('stage'),
     keyboardShortcuts: () => (shortcutsOpen = true),
     setupAssistant: () => void navigate({ name: 'welcome' }),
     exportSupportBundle: () => void exportSupportBundleFromMenu(),
@@ -1111,16 +1115,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
     }
   }
 
-  /** Window › CandidCue — bring the one window forward. */
+  /**
+   * Window › CandidCue — bring the document window forward.
+   *
+   * Through Rust. This used to call `getCurrentWindow().setFocus()` directly,
+   * which the capability does not permit — see `focusAppWindow`.
+   */
   async function focusMainWindow(): Promise<void> {
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      await win.unminimize();
-      await win.setFocus();
-    } catch {
-      /* browser dev */
-    }
+    await focusAppWindow('control');
   }
 
   /**

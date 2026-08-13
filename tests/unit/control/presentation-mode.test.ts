@@ -158,10 +158,14 @@ describe('the mid-take mode chord', () => {
     ).toBeNull();
   });
 
-  it('does not swallow the plain and shifted F chords next to it', () => {
-    // Cmd+F and Cmd+Shift+F are not app shortcuts, and the new branch must not
-    // start claiming them on its way past.
-    expect(resolveShortcut(press({ metaKey: true }))).toBeNull();
+  it('does not swallow the F chords next to it', () => {
+    /*
+     * Cmd+F is `find-in-list` — the Library's filter field, for the two places
+     * with no menu bar to take the chord first. What matters here is that the
+     * presentation branch does not claim it on its way past, and that
+     * Cmd+Shift+F is still nobody's.
+     */
+    expect(resolveShortcut(press({ metaKey: true }))).toBe('find-in-list');
     expect(resolveShortcut(press({ metaKey: true, shiftKey: true }))).toBeNull();
     expect(resolveShortcut(press({ ctrlKey: true, metaKey: true, shiftKey: true }))).not.toBe(
       'toggle-presentation-mode',

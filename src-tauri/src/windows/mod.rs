@@ -654,6 +654,10 @@ pub fn open_stage<R: Runtime>(
 
     coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
 
+    // Window › Stage is enabled from here on — see `menu::refresh_stage_item`
+    // for why the menu cannot learn this from a renderer.
+    crate::menu::refresh_stage_item(app);
+
     // Notify control of window destruction (crash or close) so it can offer
     // "Reopen stage" (spec §43.5).
     let app_handle = app.clone();
@@ -661,6 +665,9 @@ pub fn open_stage<R: Runtime>(
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let coordinator = app_handle.state::<AppCoordinator>();
             coordinator.stage_closed(generation);
+            // And grey Window › Stage again. This covers the crash and the
+            // user-closed cases as well as the orderly one below.
+            crate::menu::refresh_stage_item(&app_handle);
             // The display-sleep assertion is created when the stage presents;
             // release it here so a crash or an unexpected close can never leak
             // it (spec §52.7).

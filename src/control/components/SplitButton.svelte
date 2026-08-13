@@ -270,7 +270,7 @@
     font: inherit;
     transition:
       background var(--dur-fast) var(--ease-out),
-      transform var(--dur-press) var(--ease-out);
+      border-color var(--dur-fast) var(--ease-out);
   }
 
   .main {

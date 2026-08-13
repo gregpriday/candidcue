@@ -27,6 +27,7 @@
  * copy it already knows is wrong. Carrying the document closes it: the store is
  * correct the instant the event lands, with no round trip and nothing to race.
  */
+import { isSettingsSection } from '../lib/commands';
 import type { SettingsSection } from '../stores/router';
 import { adoptSettings } from '../stores/settings';
 import { isTauriRuntime } from './ipc';
@@ -91,9 +92,13 @@ export function installSettingsSync(): () => void {
 /**
  * Broadcast which Settings section to show.
  *
- * A webview emit is fanned out to every webview, so this reaches the Settings
- * window whether or not it existed when the emit was made — and reaches this
- * one too, which ignores it because nothing here listens.
+ * For a window that is ALREADY OPEN. Tauri events are not durable — a window
+ * created after this emit never sees it — which is exactly why the section is
+ * also written to the shared workspace store and flushed before the window is
+ * asked to open. The two cover the two cases between them; neither covers both.
+ *
+ * The emit is fanned out to every webview, including this one, which ignores it
+ * because nothing here listens for it.
  */
 export async function emitSettingsSection(section: SettingsSection): Promise<void> {
   if (!isTauriRuntime()) return;
@@ -118,7 +123,13 @@ export function installSettingsSectionSync(show: (section: SettingsSection) => v
       const { listen } = await import('@tauri-apps/api/event');
       const stop = await listen<{ section?: string }>(SETTINGS_SECTION_EVENT, (event) => {
         const section = event.payload?.section;
-        if (typeof section === 'string') show(section as SettingsSection);
+        /*
+         * VALIDATED, not cast. A webview emit is fanned out to every webview by
+         * Tauri, so this listener will accept whatever any window sends under
+         * this name — and an unrecognised section would navigate the router to
+         * a route that renders nothing.
+         */
+        if (typeof section === 'string' && isSettingsSection(section)) show(section);
       });
       if (disposed) stop();
       else unlisten = stop;

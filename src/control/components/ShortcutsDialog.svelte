@@ -74,6 +74,12 @@
       mirrors: ['help.keyboard-shortcuts'],
     },
     { label: 'New Script', keys: `${mod}N`, actions: ['new-script'], mirrors: ['file.new-script'] },
+    {
+      label: 'Find in Library',
+      keys: `${mod}F`,
+      actions: ['find-in-list'],
+      mirrors: ['edit.find'],
+    },
     { label: 'Save', keys: `${mod}S`, actions: ['save'], mirrors: ['file.save'] },
     /*
      * Named and spelled exactly as the File menu does — `formatAccelerator`
@@ -223,10 +229,15 @@
    * the OS dispatches them. None of them could appear here, so the page called
    * "every key the app answers" was missing most of them.
    *
-   * So the menu's half is DERIVED, from the same `COMMANDS` the menu is built
-   * from and the same `formatAccelerator` that spells them for this platform. A
-   * command cannot gain a key without appearing here, and cannot appear here
-   * with a key it does not have.
+   * So the menu's half is DERIVED — from `COMMANDS`, and through the same
+   * `formatAccelerator` that spells a chord for this platform. A command cannot
+   * gain a key without appearing here, and cannot appear here with a key it does
+   * not have.
+   *
+   * The native menu itself is NOT built from `COMMANDS`: `menu.rs` is Rust and
+   * writes the ids, labels and accelerators out again. What stops the two from
+   * drifting is `menu_accelerators_match_the_typescript_registry`, which
+   * compares the accelerator sets in both directions.
    *
    * The transport table below is still hand-written, and still necessary: Space,
    * B, T, A and the bracket keys have no menu item and no command id — they are

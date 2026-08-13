@@ -42,6 +42,26 @@ import { ipcInvoke, isTauriRuntime } from './ipc';
  * queue below makes it impossible.
  */
 let lastMenuJson: string | null = null;
+/**
+ * Whether THIS window is the one in front.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A PUSH HAS TO ASK
+ * ---------------------------------------------------------------------------
+ * The menu bar is one object and two windows describe it. The control window
+ * pushes whenever its command context changes — which during a take is about
+ * ten times a second — and none of that is an instruction to the menu while
+ * Settings is the window in front. Without this gate a background take
+ * repeatedly overwrote the Settings window's menu with the take's, so File
+ * flickered between "Close Window" and a set of items about a document nobody
+ * could see.
+ *
+ * Starts `true` and is only ever corrected by a real focus event: a window that
+ * never installed the listener — recovery, browser dev, a webview whose focus
+ * events are unavailable — must go on pushing rather than fall silent, because
+ * a menu that is never described is entirely grey.
+ */
+let windowHasFocus = true;
 /** One push at a time; the newest pending state wins. */
 let menuPushInFlight: Promise<void> | null = null;
 let menuPushQueued: string | null = null;
@@ -58,6 +78,8 @@ let menuFailureLogged = false;
  */
 export async function pushMenuState(context: CommandContext): Promise<void> {
   if (!isTauriRuntime()) return;
+  /* Not while another window is in front — see `windowHasFocus`. */
+  if (!windowHasFocus) return;
   const items: MenuItemState[] = menuStateFor(context);
   const json = JSON.stringify(items);
   if (json === lastMenuJson) return;
@@ -121,12 +143,22 @@ async function drainMenuPush(first: string): Promise<void> {
  */
 export async function pushWindowMenuState(enabled: readonly CommandId[]): Promise<void> {
   if (!isTauriRuntime()) return;
+  /* Not while another window is in front — see `windowHasFocus`. */
+  if (!windowHasFocus) return;
   const wanted = new Set<string>(enabled);
   const items: MenuItemState[] = COMMAND_IDS.map((id) => ({
     id,
     enabled: wanted.has(id),
     checked: false,
-    label: COMMANDS[id].label,
+    /*
+     * The label this window would give it, not the base one.
+     *
+     * `file.close-script` reads "Close Script" in an editor and "Close Window"
+     * everywhere else, and everywhere else includes here — there is no script
+     * in this window to close. Sending the base label put "Close Script" in the
+     * menu over a window that has never had one.
+     */
+    label: labelForWindow(id),
   }));
   const json = JSON.stringify(items);
   if (json === lastMenuJson) return;
@@ -140,6 +172,20 @@ export async function pushWindowMenuState(enabled: readonly CommandId[]): Promis
 }
 
 /**
+ * What a command is CALLED in a window that has no route.
+ *
+ * `dynamicLabel` takes a `CommandContext` — a route, a library, a session —
+ * none of which exist here. Rather than fabricate one, the two labels that
+ * actually vary are answered directly: Close Script is Close Window without a
+ * document, and Find is Find in Settings.
+ */
+function labelForWindow(id: CommandId): string {
+  if (id === 'file.close-script') return 'Close Window';
+  if (id === 'edit.find') return 'Find in Settings…';
+  return COMMANDS[id].label;
+}
+
+/**
  * The commands the Settings window answers.
  *
  * Deliberately tiny, and deliberately not "everything Settings might one day
@@ -149,9 +195,12 @@ export async function pushWindowMenuState(enabled: readonly CommandId[]): Promis
  */
 export const PREFERENCES_COMMANDS = [
   'file.close-script',
+  /* ⌘F is the Search settings field in the toolbar — the same "find in what
+     this window is showing" the Library and the editor answer. */
+  'edit.find',
   'window.main',
+  'window.settings',
   'view.settings',
-  'help.keyboard-shortcuts',
   'help.reveal-logs',
 ] as const satisfies readonly CommandId[];
 
@@ -217,6 +266,7 @@ export function installMenuStateOnFocus(push: () => void): () => void {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const stop = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+        windowHasFocus = focused;
         if (!focused) return;
         lastMenuJson = null;
         push();
@@ -237,6 +287,7 @@ export function installMenuStateOnFocus(push: () => void): () => void {
 /** Test seam: forget what was last sent, so the next push is unconditional. */
 export function resetMenuStateForTesting(): void {
   lastMenuJson = null;
+  windowHasFocus = true;
   menuPushQueued = null;
   menuPushInFlight = null;
   menuFailureLogged = false;
@@ -331,44 +382,26 @@ export async function closePreferences(): Promise<void> {
   await ipcInvoke('close_preferences');
 }
 
-/**
- * Bring the document window forward, from another window.
- *
- * `getCurrentWindow()` is the wrong tool here for the obvious reason: called
- * from Settings it focuses Settings. This asks for the control window BY LABEL,
- * which is what Window › CandidCue means from anywhere in the app.
- */
-export async function focusControlWindow(): Promise<void> {
-  if (!isTauriRuntime()) return;
-  try {
-    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-    const win = await WebviewWindow.getByLabel('control');
-    if (!win) return;
-    await win.unminimize();
-    await win.setFocus();
-  } catch (err) {
-    console.debug('the main window could not be focused', err);
-  }
-}
+
 
 /**
- * Bring the stage window forward (Window › Stage).
+ * Bring one of the application's windows forward (the Window menu).
  *
- * Returns quietly when there is no such window. The menu item is disabled in
- * that case — `menu.rs::apply_state` decides it from the live window list — so
- * this is the belt to that braces: a menu can be opened and clicked faster than
- * a window can close.
+ * RUST does it. `getCurrentWindow().setFocus()` is the obvious call and it does
+ * not work: `core:window:default` grants the window plugin's read half and
+ * neither `allow-set-focus` nor `allow-unminimize`, so the call is rejected by
+ * the ACL — inside a `try` that had been reading the rejection as "this is
+ * browser dev". Window › CandidCue was a silent no-op for exactly that reason.
+ *
+ * See `focus_app_window` in `shell_cmds.rs` for why the capability is not
+ * simply widened instead.
  */
-export async function focusStageWindow(): Promise<void> {
+export async function focusAppWindow(target: 'control' | 'stage'): Promise<void> {
   if (!isTauriRuntime()) return;
   try {
-    const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-    const win = await WebviewWindow.getByLabel('stage');
-    if (!win) return;
-    await win.unminimize();
-    await win.setFocus();
+    await ipcInvoke('focus_app_window', { target });
   } catch (err) {
-    console.debug('the stage window could not be focused', err);
+    console.debug('a window could not be focused', err);
   }
 }
 

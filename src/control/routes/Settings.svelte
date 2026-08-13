@@ -150,14 +150,19 @@
   /**
    * The sections, each with the words somebody might search for.
    *
-   * `keywords` is a SECTION-level index, and §14.2 asks for more than that: it
-   * wants labels, descriptions and synonyms searched, matching rows highlighted,
-   * and keyboard navigation through the results. This narrows the section list
-   * and no further. It is the useful half — "where do I change the microphone"
-   * is the question people actually ask — and the row-level half is not done. It is deliberately written in the user's
-   * vocabulary rather than the code's — somebody looking for the microphone
-   * types "mic", and somebody looking for the teleprompter's mirror types
-   * "mirror", not "teleprompter".
+   * `keywords` is the SECTION-level half of §14.2: it narrows the section list
+   * to the sections that hold a match. The ROW-level half is `applyRowFilter`
+   * below, which narrows the rows inside the section on screen and marks the
+   * ones that matched.
+   *
+   * Both halves are needed and neither is sufficient. Section keywords answer
+   * "where do I change the microphone" for somebody who does not know the word
+   * the app uses; the row filter answers "which of these fourteen controls is
+   * the one" once they are looking at the section.
+   *
+   * Deliberately written in the user's vocabulary rather than the code's —
+   * somebody looking for the microphone types "mic", and somebody looking for
+   * the teleprompter's mirror types "mirror", not "teleprompter".
    */
   const sections: Array<{ id: SettingsSection; label: string; keywords: string }> = [
     {
@@ -207,11 +212,72 @@
     })(),
   );
 
+  /**
+   * The section's own scroll container, for the row filter below.
+   */
+  let contentElement: HTMLElement | null = $state(null);
+  /** How many rows the query matched, or `null` when there is no query. */
+  let rowMatches = $state<number | null>(null);
+
+  /**
+   * The row-level half of the settings search (§14.2).
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THIS READS THE DOM RATHER THAN FILTERING A MODEL
+   * ---------------------------------------------------------------------------
+   * The obvious implementation is a searchable model — every row an entry with
+   * a label, a description and synonyms, rendered from a list. This section is
+   * not built that way and should not be rebuilt that way to get a search box:
+   * the rows are hand-written because they explain each other, several are
+   * conditional on hardware or on a downloaded model, and a few are whole
+   * sub-forms. Reducing them to index entries would cost the thing §14 is
+   * actually about.
+   *
+   * So the search reads what is rendered. That is exactly the text the user is
+   * looking at — labels, descriptions, option names and units — which makes it
+   * the most faithful index available, and it stays correct when a row is
+   * added without anybody remembering an index.
+   *
+   * The selectors are the three shared field wrappers plus `Section`'s own
+   * heading. A row with none of them is simply never hidden, which is the safe
+   * direction to fail: a control that stays visible during a search is a
+   * search that under-filters, not a setting somebody cannot find.
+   */
+  const ROW_SELECTOR = '.field, .toggle-row, .readout';
+
+  $effect(() => {
+    const query = sectionQuery.trim().toLowerCase();
+    const root = contentElement;
+    // Read `section` so switching sections re-runs this against the new rows.
+    void section;
+    if (!root) return;
+    let matched = 0;
+    for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+      if (query === '') {
+        row.removeAttribute('data-search-miss');
+        row.removeAttribute('data-search-hit');
+        continue;
+      }
+      const hit = (row.textContent ?? '').toLowerCase().includes(query);
+      if (hit) {
+        matched += 1;
+        row.setAttribute('data-search-hit', '');
+        row.removeAttribute('data-search-miss');
+      } else {
+        row.setAttribute('data-search-miss', '');
+        row.removeAttribute('data-search-hit');
+      }
+    }
+    rowMatches = query === '' ? null : matched;
+  });
+
   /*
    * Reopen where they were (§14.4).
    *
-   * The section is recorded as the user moves through Settings, and `⌘,` reads
-   * it back — see `settingsSectionFromWorkspace` in `App.svelte`. Somebody
+   * The section is recorded as the user moves through Settings, and the window
+   * reads it back on mount — see `openSettingsWindow` in `lib/open-settings.ts`,
+   * which flushes it before Rust is asked to open the window, and broadcasts it
+   * for a window that is already up. Somebody
    * returning to Settings almost always wants the row they were last looking
    * at, and starting at General every time makes a seven-section screen feel
    * longer than it is.
@@ -1559,10 +1625,11 @@
       {/if}
       <!--
         Settings search (§14.2), in the toolbar where it is stable across every
-        section. It filters the INDEX rather than the rows: a section list that
-        narrows to the two sections holding a match keeps the structure intact,
-        which §14.2 asks for explicitly, and avoids the far harder problem of
-        hiding individual controls out of a form whose rows explain each other.
+        section. It filters BOTH: the section list narrows to the sections whose
+        keywords match, and the rows of the section on screen narrow to the ones
+        whose rendered text matches, with the matches washed. The structure is
+        kept — sections stay in their order and the count says how much was
+        hidden — which is what §14.2 asks for.
       -->
       <div class="settings-search">
         <span class="search-icon"><Icon name="search" size={14} /></span>
@@ -1603,7 +1670,24 @@
       {/if}
     </nav>
 
-    <div class="content">
+    <div class="content" bind:this={contentElement}>
+      <!--
+        What the search did, said out loud (§14.2, §18.1).
+
+        A form that quietly loses eleven of its fourteen rows is a form that
+        looks broken. Naming the count — and offering the way back — is what
+        turns a filtered section into an obviously filtered section.
+      -->
+      {#if rowMatches !== null}
+        <p class="row-filter-note" role="status">
+          {rowMatches === 0
+            ? 'No settings in this section matched.'
+            : `${rowMatches} setting${rowMatches === 1 ? '' : 's'} matched in this section.`}
+          <button type="button" class="row-filter-clear" onclick={() => (sectionQuery = '')}>
+            Show all
+          </button>
+        </p>
+      {/if}
       {#if section === 'general'}
         <Section title="General">
           <Select
@@ -2962,6 +3046,45 @@
     margin: var(--space-2);
     font-size: var(--text-xs);
     color: var(--text-muted);
+  }
+
+  /*
+   * The row filter's marks (§14.2).
+   *
+   * `:global`, because these attributes are set on the ROOT elements of shared
+   * field components — `Select`, `Toggle`, `SettingReadout` — and Svelte's
+   * scoped styles do not reach into a child component's markup.
+   */
+  :global(.content [data-search-miss]) {
+    display: none;
+  }
+  /*
+   * A wash rather than a highlighted substring. Marking the matched words
+   * inside a label would mean rewriting the label's text nodes, which breaks
+   * every `for`/`aria-describedby` relationship in the row; marking the ROW
+   * says the same thing and leaves the control intact.
+   */
+  :global(.content [data-search-hit]) {
+    background: var(--accent-wash);
+    border-radius: var(--radius-sm);
+  }
+
+  .row-filter-note {
+    margin: 0 0 var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+  .row-filter-clear {
+    border: 0;
+    background: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-strong);
+    cursor: pointer;
+    text-decoration: underline;
   }
 
   /* The toolbar's search field — same shape as the Library's. */

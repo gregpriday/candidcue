@@ -177,20 +177,13 @@ function resetPaging(): void {
 export async function loadLibrary(): Promise<void> {
   const generation = (loadGeneration += 1);
   const current = get(state);
-  /*
-   * Re-read AS DEEP AS THE LIST WAS.
-   *
-   * One request with a bigger ceiling rather than N page requests: this runs on
-   * every return from the editor, and a list scrolled to row 1500 would
-   * otherwise mean three round trips before anything appeared.
-   */
   const depth = pagesToRestore();
   state.update((s) => ({ ...s, loading: true, error: null }));
   try {
     const page = await scriptsService.listScripts(
       { view: current.view, query: current.query },
       current.sort,
-      { page: 0, pageSize: PAGE_SIZE * depth },
+      { page: 0, pageSize: PAGE_SIZE },
     );
     const trashTotal = await trashCount(current.view, current.query, page);
     if (generation !== loadGeneration) return;
@@ -210,6 +203,25 @@ export async function loadLibrary(): Promise<void> {
         selectedId: kept ? s.selectedId : page.items[0]?.id ?? null,
       };
     });
+    loadedPages = 1;
+    /*
+     * RE-READ AS DEEP AS THE LIST WAS, one page at a time.
+     *
+     * Not one request with a bigger ceiling: `list_scripts` clamps `pageSize`
+     * to 500 in Rust (`scripts/repo.rs`), so asking for 1000 quietly returned
+     * 500 while this store believed it held two pages — and the next Show more
+     * then asked for page 2 and skipped five hundred scripts. The clamp is not
+     * visible from here, and the unit test's mock honoured whatever size it was
+     * given, which is exactly how that passed.
+     *
+     * Sequential rather than parallel: each page is appended to the one before
+     * it, and the de-duplication that makes appending safe reads the rows
+     * already held.
+     */
+    for (let page = 1; page < depth; page += 1) {
+      if (generation !== loadGeneration) return;
+      await loadMoreScripts();
+    }
   } catch (err) {
     if (generation !== loadGeneration) return;
     // The rows already on screen stay. A failed re-query is a failure to
@@ -260,11 +272,22 @@ export async function loadMoreScripts(): Promise<void> {
       const added = page.items.filter((item) => !seen.has(item.id));
       // The cursor moves per PAGE, not per row kept — see `loadedPages`.
       loadedPages += 1;
+      /*
+       * A page that answered with nothing is the END, whatever `total` says.
+       *
+       * `total` is counted by a separate query and can disagree with the rows
+       * after a concurrent delete — and while it says there are more, the guard
+       * at the top of this function goes on offering Show more, which reads as
+       * a button that does nothing. Trusting the rows over the count is the
+       * right way round: the rows are what the list can actually display.
+       */
+      const exhausted = page.items.length === 0;
+      const scripts = [...s.scripts, ...added];
       return {
         ...s,
         loadingMore: false,
-        scripts: [...s.scripts, ...added],
-        total: page.total,
+        scripts,
+        total: exhausted ? scripts.length : page.total,
       };
     });
   } catch (err) {

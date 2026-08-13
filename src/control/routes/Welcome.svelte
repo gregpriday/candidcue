@@ -302,16 +302,17 @@
    * back. Now the window opens beside the checklist and closing it leaves them
    * where they were, with the row they came to fix visibly answered.
    *
-   * The section is recorded in the workspace store first — `localStorage`, and
-   * therefore shared between webviews — which is how the window knows where to
-   * open without a creation argument. See `openSettingsWindow` in `App.svelte`,
-   * which does the same thing for the Privacy command.
+   * Through the shared `openSettingsWindow` rather than doing it here.
+   *
+   * This used to write the section and call `openPreferences` itself, which
+   * looked equivalent and was missing both halves that make the handoff work:
+   * the workspace store's writes are debounced by 250 ms and the window mounts
+   * faster than that, so the section arrived too late to be read — and a window
+   * that was already open never re-read it at all, so choosing Microphone
+   * brought Settings forward on whatever section it was last left on.
    */
   function openSettingsAt(section: SettingsSection): void {
-    updateWorkspace({ settingsSection: section });
-    void openPreferences().catch((err: unknown) => {
-      showToast(`Settings could not be opened. ${describeError(err)}`, 'danger');
-    });
+    void openSettingsWindow(section);
   }
 
   function openMicrophoneSettings(): void {
