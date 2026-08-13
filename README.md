@@ -33,8 +33,9 @@ written to be read out loud and tells you what to watch for while you read it.
 
 Voice following needs nothing configured — no key, no account. It does need the
 recogniser, which ships in neither git nor the installer: open **Settings ›
-Speech** and install it from there (~161 MB, checked against a pinned digest).
-Everything else — writing, importing, the stage — works without it.
+Speech** and install it from there (~128 MB to fetch, ~162 MB unpacked, checked
+against a pinned digest). Everything else — writing, importing, the stage —
+works without it.
 
 Contributors can skip that download by fetching into the source tree and
 pointing the app at it:

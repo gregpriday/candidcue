@@ -89,8 +89,12 @@ jobs:
       # and by the time anyone reads the version it is published. Twenty seconds
       # here beats a notarisation round trip and a withdrawal.
       #
-      # Skipped on a manual dispatch, which has no tag to check — those runs
-      # cannot publish (see the Publish step's `startsWith(github.ref, …)`).
+      # The condition is on the REF, not on the event, and deliberately: a
+      # manual dispatch can be pointed at a tag (`gh workflow run --ref v1.0.0`)
+      # and with `dry_run` unticked such a run does publish. Gating on
+      # `github.event_name == 'push'` would let exactly that run skip the check.
+      # A dispatch against a branch has no tag to check and cannot publish,
+      # because the Publish step tests the same `refs/tags/v` predicate.
       - name: The tag must name the version being built
         if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/version.mjs tag "${GITHUB_REF_NAME}"
@@ -140,14 +144,23 @@ jobs:
           security create-keychain -p "$PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 900 "$KEYCHAIN"
           security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          # Removed on every exit path, not only the successful one: a failed
+          # `security import` used to leave the decoded .p12 sitting in the
+          # workspace. INT/TERM are trapped as well as EXIT, because a
+          # cancelled workflow signals the process rather than letting it
+          # return, and an EXIT-only trap does not run for a signal.
+          cleanup() { rm -f "$RUNNER_TEMP/certificate.p12"; }
+          trap cleanup EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
+          # Nobody but this job, for as long as it exists.
+          (umask 077; printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12")
           security import "$RUNNER_TEMP/certificate.p12" \
             -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$PASSWORD" "$KEYCHAIN"
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
-          rm -f "$RUNNER_TEMP/certificate.p12"
 
       - name: Build, sign and notarise
         env:
@@ -155,19 +168,40 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ${{ runner.temp }}/apple-api-key.p8
+          # Through `env:`, like the certificate, rather than interpolated into
+          # the `run:` body — a `${{ secrets.… }}` inside the script embeds the
+          # secret in the temporary shell file GitHub generates for the step.
+          # Named for what it holds so it cannot be confused with
+          # APPLE_API_KEY, which Tauri expects to be the key ID.
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY }}
         run: |
           set -euo pipefail
-          # The trap, not a trailing `rm`. Under `set -e` a failed build exits
-          # the step immediately, so the decoded App Store Connect private key
-          # was left on the runner's disk for every failure — the case where
-          # somebody then goes digging through the workspace. It is removed on
-          # every exit path now, including the ones nobody planned.
-          trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
-          echo "${{ secrets.APPLE_API_KEY }}" | base64 --decode > "$APPLE_API_KEY_PATH"
+          # A trap, not a trailing `rm`. Under `set -e` a failed build exits the
+          # step immediately, so the decoded App Store Connect private key was
+          # left on the runner's disk for every failure — the case where
+          # somebody then goes digging through the workspace. INT and TERM are
+          # trapped too: a cancelled workflow signals the process, and an
+          # EXIT-only trap does not run for a signal. SIGKILL and runner loss
+          # remain covered only by the runner being destroyed afterwards.
+          cleanup() { rm -f "$APPLE_API_KEY_PATH"; }
+          trap cleanup EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
+          (umask 077; printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$APPLE_API_KEY_PATH")
+          # Not inherited by the build. Tauri needs the FILE, not the base64,
+          # and a secret in the environment of a tree of build processes is a
+          # secret in more places than it needs to be.
+          unset APPLE_API_KEY_BASE64
           # Both architectures. A release that is arm64-only will not open on
           # an Intel Mac, and what the user sees is "the application cannot be
           # opened" with no reason.
           pnpm tauri build --target universal-apple-darwin
+
+      # Defence in depth: the traps above cover the step, and this covers the
+      # step never finishing. `always()` runs it on failure and on cancellation.
+      - name: Make sure no decoded credential survives the job
+        if: always()
+        run: rm -f "${{ runner.temp }}/apple-api-key.p8" "${{ runner.temp }}/certificate.p12"
 
       # ------------------------------------------------------------------
       # Ask the artifact, not the source.
@@ -222,7 +256,24 @@ jobs:
             echo
             echo 'Signed and notarised. Checksums (`SHA256SUMS`), SBOMs and build provenance are attached.'
           } >> "$RUNNER_TEMP/notes.md"
+
+          # A prerelease tag must be MARKED as one. `gh release create` defaults
+          # to a full release, so `v1.0.0-rc.1` would have published as the
+          # Latest release of CandidCue — offered to every visitor of the
+          # releases page as the thing to download.
+          flags=()
+          case "${GITHUB_REF_NAME}" in
+            *-*) flags+=(--prerelease --latest=false) ;;
+            *)   flags+=(--latest) ;;
+          esac
+
+          # `--verify-tag`, because `gh release create` otherwise CREATES a
+          # missing tag from the default branch. A tag deleted or moved while
+          # this run was building would be silently recreated at a different
+          # commit, with artifacts built from the original one attached to it.
           gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
             --title "CandidCue ${GITHUB_REF_NAME}" \
             --notes-file "$RUNNER_TEMP/notes.md" \
+            "${flags[@]}" \
             dist-release/* sbom/* provenance/*

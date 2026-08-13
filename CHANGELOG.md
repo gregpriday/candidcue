@@ -31,10 +31,11 @@ engine decides where in the script you are.
   follow, and unmeasured languages are absent rather than offered.
 - **On-device.** No account, no API key, no audio upload. Your voice and your
   script never leave the machine.
-- **The model is a separate download.** It is not in the installer. Open
-  Settings › Speech and install it — about 161 MB, verified against a pinned
-  digest. Everything else works without it, and once it is installed CandidCue
-  needs no network at all.
+- **The model is a separate download.** It is not in the installer. Install it
+  from the Welcome screen or from Settings › Speech — about 128 MB to download
+  and 162 MB on disk once unpacked, verified against a pinned digest.
+  Everything else works without it, and once it is installed CandidCue needs no
+  network at all.
 - **Recognition is probabilistic.** It makes mistakes, and the prompter is
   built to trail you rather than guess ahead when it is unsure.
 
@@ -49,7 +50,11 @@ engine decides where in the script you are.
   **Save session transcripts** if you want them kept for 1, 7 or 30 days, or
   indefinitely.
 - **Back up your own work.** **Export all data** writes a checked, restorable
-  archive of everything. It is the supported backup, and it is worth testing
+  archive of your durable data: scripts, their revisions and images, settings
+  and calibrations, session history, and any retained transcripts. It leaves
+  out what is regenerable — caches, logs, diagnostics, and the speech model,
+  which is third-party ONNX under its own licence rather than your data, and is
+  reinstalled in a click. It is the supported backup, and it is worth testing
   rather than merely creating.
 
 ### Updates
@@ -81,6 +86,14 @@ regular use is obliged to register. There is no activation, key, or account.
 
 ### Reporting problems
 
-Support and defect reports: see the support page. Security issues: follow
-`.github/SECURITY.md`, which uses GitHub's private advisory reporting — please
-do not open a public issue for a vulnerability.
+**Security issues** go to a private channel, not a public issue: open a
+[private advisory](https://github.com/gregpriday/candidcue/security/advisories/new)
+or email [greg@siteorigin.com](mailto:greg@siteorigin.com). The full policy,
+including scope and safe harbour, is in
+[SECURITY.md](https://github.com/gregpriday/candidcue/blob/main/.github/SECURITY.md).
+
+**Everything else** — a defect, a question, a refund — goes to the support
+address on the CandidCue website. When reporting a problem it helps to include
+the version from Settings › Data, privacy & updates, your macOS version and
+whether the Mac is Apple Silicon or Intel, your microphone and display setup,
+and what the prompter actually did.

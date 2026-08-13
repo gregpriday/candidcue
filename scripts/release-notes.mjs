@@ -36,6 +36,22 @@ if (!tag) {
 }
 const checkOnly = flags.includes('--check');
 
+/*
+ * The tag shape is checked HERE as well as by `version.mjs tag`.
+ *
+ * The workflow runs them in that order, so relying on it would be safe today
+ * and only today — and the prerelease fallback below splits on the first
+ * hyphen, which is correct for semver and nonsense for anything else:
+ * `v-company-1.0.0` would fall back to looking for a section called `v`. A
+ * gate that depends on another gate having run first is one workflow edit away
+ * from not being a gate.
+ */
+const SEMVER =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/;
+if (!tag.startsWith('v') || !SEMVER.test(tag.slice(1))) {
+  fail(`"${tag}" is not a release tag. A release tag is \`v\` followed by a semver version.`);
+}
+
 let source;
 try {
   source = readFileSync(CHANGELOG, 'utf8');
@@ -44,24 +60,76 @@ try {
 }
 
 /*
- * Split on `## ` headings at the start of a line. Not a regex over the whole
- * file: a `## ` inside a fenced code block would be a heading to a naive
- * pattern, and release notes are exactly the kind of document that quotes
- * shell commands.
+ * Split on `## ` headings at the start of a line.
+ *
+ * Not a regex over the whole file. Release notes are exactly the kind of
+ * document that quotes shell commands and HTML, and both can contain a line
+ * that looks like a heading:
+ *
+ *   - inside a fenced code block. Fences are ``` or ~~~, at least three
+ *     characters, and a fence closes only on the SAME character at at least
+ *     the opening length — so a ``` inside a ~~~~ block does not end it. A
+ *     naive `startsWith('```')` toggle got both of those wrong, and getting
+ *     them wrong in the accepting direction publishes a code sample as
+ *     release notes.
+ *   - inside an HTML comment, which is how a draft section gets parked.
+ *
+ * A heading with trailing text (`## v1.0.0 — First release`) is a real heading
+ * and takes the first token as its title. Ignoring it, as the first version
+ * did, was worse than not finding it: it did not TERMINATE the section above
+ * either, so one version's notes silently absorbed the next one's.
  */
 const lines = source.split('\n');
 const sections = [];
 let current = null;
-let inFence = false;
+let fence = null; // { char, length } while inside a fenced block
+let inComment = false;
+
 for (const line of lines) {
-  if (/^\s*```/.test(line)) inFence = !inFence;
-  const heading = inFence ? null : line.match(/^## +(\S+)\s*$/);
+  if (inComment) {
+    if (line.includes('-->')) inComment = false;
+    if (current) current.body.push(line);
+    continue;
+  }
+
+  if (fence) {
+    const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+    if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+    if (current) current.body.push(line);
+    continue;
+  }
+
+  // An indented four spaces or more is a code block, not a fence.
+  const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (open) {
+    fence = { char: open[1][0], length: open[1].length };
+    if (current) current.body.push(line);
+    continue;
+  }
+
+  if (/<!--/.test(line) && !/-->/.test(line)) {
+    inComment = true;
+    if (current) current.body.push(line);
+    continue;
+  }
+
+  const heading = line.match(/^## +(\S+)/);
   if (heading) {
     current = { title: heading[1], body: [] };
     sections.push(current);
   } else if (current) {
     current.body.push(line);
   }
+}
+
+const duplicate = sections.find(
+  (section, index) => sections.findIndex((other) => other.title === section.title) !== index,
+);
+if (duplicate) {
+  fail(
+    `CHANGELOG.md has more than one "## ${duplicate.title}" section. Which one a release ` +
+      `publishes would be an accident of ordering.`,
+  );
 }
 
 /*
@@ -96,13 +164,32 @@ const body = wanted.body.join('\n').trim();
  * Anti-vacuity. An empty section, or a stub someone left to fill in later,
  * satisfies "the section exists" while publishing nothing — which is the
  * failure this gate was written to prevent, arriving through the front door.
+ *
+ * Measured on the PROSE, not the raw text. A section that is one long HTML
+ * comment, or nothing but a code fence, clears a raw character count while
+ * rendering as an empty release page — so comments, fenced blocks and Markdown
+ * punctuation come out before the length is taken.
  */
-if (body.length < 80) {
-  fail(`the "## ${tag}" section is empty or too short to be release notes.`);
+const prose = body
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1.*$/gm, '')
+  .replace(/^[#>\s*_-]+$/gm, '')
+  .trim();
+if (prose.length < 120) {
+  fail(
+    `the "## ${wanted.title}" section renders as ${prose.length} characters of prose — ` +
+      `that is not release notes.`,
+  );
 }
-const stub = body.match(/\b(TODO|TBD|FIXME|XXX|coming soon)\b/i);
+
+/*
+ * A tripwire, and honest about being one. A determined stub can be written in
+ * words this does not list; what it catches is the ordinary case — a section
+ * copied forward with its placeholders still in it.
+ */
+const stub = prose.match(/\b(TODO|T\.?B\.?D\.?|FIXME|XXX|coming soon|placeholder|draft)\b/i);
 if (stub) {
-  fail(`the "## ${tag}" section still contains "${stub[0]}".`);
+  fail(`the "## ${wanted.title}" section still contains "${stub[0]}".`);
 }
 
 if (checkOnly) {

@@ -882,51 +882,255 @@ describe('the release workflow cannot publish an unverified build', () => {
    * through the workspace. The decoded App Store Connect private key has to be
    * removed on every exit path, not only the happy one.
    */
-  it('removes the decoded notarisation key even when the build fails', () => {
-    expect(uncommented).toMatch(/trap\s+'rm -f "\$APPLE_API_KEY_PATH"'\s+EXIT/);
+  /*
+   * `set -e` exits the step the moment the build fails, so a trailing `rm`
+   * never ran on exactly the runs where somebody afterwards goes digging
+   * through the workspace. And an EXIT trap alone does not run for a SIGNAL,
+   * which is how a cancelled workflow ends — so the decoded App Store Connect
+   * private key and the decoded .p12 both need INT/TERM as well.
+   */
+  it('removes every decoded credential on failure and on cancellation', () => {
+    for (const signal of ['EXIT', 'INT', 'TERM']) {
+      const traps = uncommented.match(new RegExp(`trap [^\\n]*\\b${signal}\\s*$`, 'gm')) ?? [];
+      expect(traps.length, `both credential steps must trap ${signal}`).toBe(2);
+    }
+    // And a last sweep that runs even if a step never returns at all.
+    expect(uncommented).toMatch(/if: always\(\)/);
+    expect(uncommented).toMatch(/rm -f[^\n]*apple-api-key\.p8[^\n]*certificate\.p12/);
   });
 
-  it('counts its own Apple secrets correctly', () => {
-    /*
-     * The header said "Four repository secrets" and then listed six. A release
-     * operator provisioning from that comment stops two short and discovers it
-     * at the signing step of a real release.
-     */
-    const named = new Set(workflow.match(/\bAPPLE_[A-Z_]+\b/g) ?? []);
-    // APPLE_API_KEY_PATH is a local path, not a secret.
-    named.delete('APPLE_API_KEY_PATH');
-    expect(named.size, 'six Apple secrets are referenced').toBe(6);
+  /*
+   * The header said "Four repository secrets" and then listed six. A release
+   * operator provisioning from that comment stops two short and discovers it
+   * at the signing step of a real release.
+   *
+   * Compared as two SETS, not as a count. A count stays green when a real
+   * `secrets.APPLE_*` reference is deleted but the header still lists it —
+   * which is the same defect pointing the other way, and the more dangerous
+   * one: the release then builds unsigned-adjacent with a secret nobody knows
+   * stopped being used.
+   */
+  it('documents exactly the Apple secrets it uses', () => {
+    // Up to the first line that IS `on:`, not the first occurrence of those
+    // two characters — the header prose contains several.
+    const header = workflow.slice(0, workflow.search(/^on:$/m));
+    const documented = new Set(header.match(/\bAPPLE_[A-Z_0-9]+\b/g) ?? []);
+    const used = new Set(
+      [...workflow.matchAll(/secrets\.(APPLE_[A-Z_0-9]+)/g)].map((match) => match[1]),
+    );
+    expect([...used].sort(), 'every secret used must be documented').toEqual([...documented].sort());
+    expect(used.size, 'six, as the header now says').toBe(6);
     expect(workflow).toMatch(/Six repository secrets/);
     expect(workflow).not.toMatch(/Four repository secrets/);
+  });
+
+  /*
+   * `gh release create` defaults to a full release, so `v1.0.0-rc.1` would
+   * have published as the Latest release of CandidCue — offered on the
+   * releases page as the thing to download.
+   */
+  it('marks a prerelease tag as a prerelease', () => {
+    expect(uncommented).toContain('--prerelease');
+    expect(uncommented, 'and must not be able to become Latest').toContain('--latest=false');
+  });
+
+  /*
+   * `gh release create` CREATES a missing tag from the default branch. A tag
+   * deleted or moved while the run was building would be silently recreated at
+   * a different commit, with artifacts built from the original one attached.
+   */
+  it('publishes only against a tag that already exists', () => {
+    expect(uncommented).toContain('--verify-tag');
   });
 });
 
 /* ------------------------------------------------ the release notes */
 
-describe('the release notes gate', () => {
-  const changelog = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+/**
+ * The two tag-scoped gates, RUN rather than grepped for.
+ *
+ * The workflow assertions above can only prove that a step invoking these
+ * scripts sits before the build. That is worth pinning — ordering is the whole
+ * point of a pre-build gate — but it would stay green if either script became
+ * `process.exit(0)`. These drive the scripts against scratch trees and break
+ * the thing each one is for.
+ */
+describe('the tag gate refuses what it exists to refuse', () => {
+  const NEEDS = [...VERSION_FILES, 'scripts/version.mjs'];
 
-  it('describes the version this tree currently declares', () => {
+  function tagCheck(tag: string, version?: string) {
+    const dir = scratchRepo(NEEDS);
+    if (version !== undefined) {
+      const manifest = join(dir, 'package.json');
+      const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
+      parsed.version = version;
+      writeFileSync(manifest, `${JSON.stringify(parsed, null, 2)}\n`);
+    }
+    return run(join(dir, 'scripts/version.mjs'), ['tag', tag], dir);
+  }
+
+  it('accepts the tag that names the version', () => {
     const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
+    expect(tagCheck(`v${version}`).status).toBe(0);
+  });
+
+  /*
+   * The defect in one line: `v1.0.0` building `1.0.0-rc.2` produces a signed,
+   * notarised artifact whose About box disagrees with its own download page.
+   */
+  it('refuses a tag that names a different version', () => {
+    const refused = tagCheck('v1.0.0', '1.0.0-rc.2');
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('Tag/version mismatch');
+  });
+
+  it('refuses a tag that is not exactly `v` plus the version', () => {
+    const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
+    for (const tag of [`release-v${version}`, version, `v${version}-final`]) {
+      expect(tagCheck(tag).status, `${tag} must be refused`).toBe(1);
+    }
+  });
+
+  /*
+   * The tag agreeing with package.json while tauri.conf.json lags is the same
+   * defect one file further down — and tauri.conf.json is the one the bundle
+   * reports as CFBundleShortVersionString.
+   */
+  it('refuses a matching tag when a consumer manifest has drifted', () => {
+    const dir = scratchRepo(NEEDS);
+    const version = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version;
+    const conf = join(dir, 'src-tauri/tauri.conf.json');
+    writeFileSync(conf, readFileSync(conf, 'utf8').replace(version, '0.9.9'));
+    const refused = run(join(dir, 'scripts/version.mjs'), ['tag', `v${version}`], dir);
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('tauri.conf.json');
+  });
+});
+
+describe('the release notes gate refuses what it exists to refuse', () => {
+  const NEEDS = ['scripts/release-notes.mjs', 'CHANGELOG.md'];
+
+  function notesFor(changelog: string, tag = 'v1.0.0') {
+    const dir = scratchRepo(NEEDS);
+    writeFileSync(join(dir, 'CHANGELOG.md'), changelog);
+    return run(join(dir, 'scripts/release-notes.mjs'), [tag, '--check'], dir);
+  }
+
+  const REAL = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+  const WRITTEN =
+    'CandidCue 1.0 is a voice-following teleprompter for macOS 12 and later, on ' +
+    'Apple Silicon and Intel. Voice following is English only and the speech model ' +
+    'is a separate download you start yourself.';
+
+  it('accepts the notes this repository actually ships', () => {
+    expect(notesFor(REAL).status).toBe(0);
+  });
+
+  it('refuses a tag with no section', () => {
+    const refused = notesFor(REAL, 'v9.9.9');
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('no "## v9.9.9" section');
+  });
+
+  it('lets a candidate read the release it is a candidate for', () => {
+    expect(notesFor(REAL, 'v1.0.0-rc.7').status).toBe(0);
+  });
+
+  it('refuses a section that is empty or a stub', () => {
+    expect(notesFor('# Changelog\n\n## v1.0.0\n').status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTODO: ${WRITTEN}\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\nTBD. ${WRITTEN}\n`).status).toBe(1);
+  });
+
+  /*
+   * A section whose bulk is an HTML comment or a code fence clears a raw
+   * character count and renders as an empty release page. That is the same
+   * "described nowhere" outcome the gate exists to prevent, arriving through
+   * the front door.
+   */
+  it('refuses a section that renders as nothing', () => {
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n<!--\n${WRITTEN}\n-->\n`).status).toBe(1);
+    expect(notesFor(`# Changelog\n\n## v1.0.0\n\n\`\`\`\n${WRITTEN}\n\`\`\`\n`).status).toBe(1);
+  });
+
+  /*
+   * The parser must not find a heading inside a code block. Release notes are
+   * exactly the kind of document that quotes shell and Markdown, and treating
+   * a quoted `## v…` as a section would publish a code sample.
+   */
+  it('does not mistake a heading inside a fence for a section', () => {
+    for (const fence of ['```', '~~~', '````']) {
+      const inside = `# Changelog\n\n${fence}\n## v1.0.0\n\n${WRITTEN}\n${fence}\n`;
+      expect(notesFor(inside).status, `a heading inside ${fence} is not a section`).toBe(1);
+    }
+  });
+
+  it('does not mistake a heading inside an HTML comment for a section', () => {
+    expect(notesFor(`# Changelog\n\n<!--\n## v1.0.0\n\n${WRITTEN}\n-->\n`).status).toBe(1);
+  });
+
+  /*
+   * `## v1.0.0 — First release` is a real heading. The first version ignored
+   * it, which was worse than not finding it: it did not terminate the section
+   * above either, so one version's notes silently absorbed the next one's.
+   */
+  it('reads a heading that carries trailing text, and lets it end the section above', () => {
+    const trailing = `# Changelog\n\n## v1.0.0 — First release\n\n${WRITTEN}\n`;
+    expect(notesFor(trailing).status).toBe(0);
+
+    const bleeding =
+      `# Changelog\n\n## v2.0.0\n\nThe second release. ${WRITTEN}\n\n` +
+      `## v1.0.0 — First release\n\n${WRITTEN}\n`;
+    const dir = scratchRepo(NEEDS);
+    writeFileSync(join(dir, 'CHANGELOG.md'), bleeding);
+    const printed = run(join(dir, 'scripts/release-notes.mjs'), ['v2.0.0'], dir);
+    expect(printed.status).toBe(0);
+    expect(printed.output, 'v2.0.0 must not absorb the section below it').not.toContain(
+      'First release',
+    );
+  });
+
+  it('refuses two sections for the same version', () => {
+    const twice = `# Changelog\n\n## v1.0.0\n\n${WRITTEN}\n\n## v1.0.0\n\nSomething else. ${WRITTEN}\n`;
+    const refused = notesFor(twice);
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('more than one');
+  });
+
+  it('refuses a tag that is not a release tag at all', () => {
+    for (const tag of ['v-company-1.0.0', 'vfinal', '1.0.0', 'latest']) {
+      expect(notesFor(REAL, tag).status, `${tag} must be refused`).toBe(1);
+    }
+  });
+});
+
+describe('the notes this tree would actually publish', () => {
+  const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version;
+
+  /*
+   * The SECTION, extracted the way the workflow extracts it — not the whole
+   * CHANGELOG.
+   *
+   * Searching the file would let every assertion below be satisfied by an old
+   * release's section, or by a code fence, or by an HTML comment, while the
+   * section this tree would publish said none of it. What a release page shows
+   * is one section, so that is what gets asserted on.
+   */
+  const dir = scratchRepo(['scripts/release-notes.mjs', 'CHANGELOG.md']);
+  const extracted = run(join(dir, 'scripts/release-notes.mjs'), [`v${version}`], dir);
+
+  it('has a section for the version this tree declares', () => {
     /*
-     * Not "some section exists" — the section for THIS version. The notes and
-     * the version move together or the release describes the wrong build.
-     *
      * A release candidate reads the release it is a candidate for, which is
      * what `release-notes.mjs` does: rewriting the same notes for every rc.N
      * is churn, and the notes an RC ships under are the ones being proofread.
      */
-    const release = `v${version.replace(/-.*$/, '')}`;
-    expect(
-      changelog.includes(`\n## v${version}\n`) || changelog.includes(`\n## ${release}\n`),
-      `CHANGELOG.md must have a "## v${version}" or "## ${release}" section`,
-    ).toBe(true);
+    expect(extracted.status, extracted.output).toBe(0);
   });
 
   /*
    * The 1.0 contract, as a test. Each of these is a fact a buyer needs before
-   * downloading, and each is one the readiness review named as a claim that
-   * must appear — or, in the last case, must not.
+   * downloading, and each is one the readiness review named as required.
    */
   it('states the 1.0 contract a buyer needs before downloading', () => {
     for (const fact of [
@@ -938,35 +1142,63 @@ describe('the release notes gate', () => {
       /no cloud/i,
       /probabilistic/i,
     ]) {
-      expect(changelog, `the notes must state: ${fact}`).toMatch(fact);
+      expect(extracted.output, `the notes must state: ${fact}`).toMatch(fact);
     }
   });
 
-  it('claims nothing the repository cannot support', () => {
-    /*
-     * Banning the WORDS would be wrong — the notes have to mention Windows,
-     * Linux, telemetry and automatic updates in order to rule them out, and a
-     * test that forbade the words would push the disclosure out of the notes
-     * rather than the overclaim. What is banned is the affirmative form.
-     */
-    for (const overclaim of [
-      /\bsupports? (Windows|Linux)/i,
-      /\b(Windows|Linux) (build|version|support) is\b(?! not)/i,
-      /\bautomatic(ally)? (updates?|checks? for updates)/i,
-      /\bwe collect\b/i,
-      /\bcloud (sync|backup) is\b(?! not)/i,
-    ]) {
-      expect(changelog, `the notes must not claim: ${overclaim}`).not.toMatch(overclaim);
-    }
-
-    // And the exclusions themselves have to be stated, not merely unclaimed.
-    expect(changelog, 'macOS-only must be explicit').toMatch(/no Windows or Linux build/i);
-    expect(changelog, 'the absence of an updater must be explicit').toMatch(/contains no updater/i);
-    expect(changelog, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
+  /*
+   * The exclusions, stated rather than merely unclaimed.
+   *
+   * Note what this deliberately does NOT try to be: a blacklist of overclaims.
+   * "No telemetry opt-out; CandidCue collects analytics" evades any phrase ban
+   * anyone can write, so a blacklist here would buy confidence it cannot
+   * deliver. What a test CAN check is that each exclusion the review named is
+   * present and specific — which is the thing that goes missing when notes are
+   * rewritten in a hurry.
+   */
+  it('states each exclusion the 1.0 contract depends on', () => {
+    expect(extracted.output, 'macOS-only must be explicit').toMatch(/no Windows or Linux build/i);
+    expect(extracted.output, 'the absence of an updater must be explicit').toMatch(
+      /contains no updater/i,
+    );
+    expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
 
     // The two documented degraded analyses must be listed as limitations,
     // never implied to work.
-    expect(changelog).toMatch(/choppy/i);
-    expect(changelog).toMatch(/variety score/i);
+    expect(extracted.output).toMatch(/choppy/i);
+    expect(extracted.output).toMatch(/variety score/i);
+  });
+
+  /*
+   * The model size is the one number here that drifts silently: the catalogue
+   * changes and prose does not. Both figures are checked against the catalogue
+   * that the installer actually reads, in the MiB-as-MB the app displays.
+   */
+  it('quotes the model size the catalogue actually declares', () => {
+    const catalogue = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'src-tauri/models/catalogue.json'), 'utf8'),
+    );
+    const model = catalogue.models.find(
+      (entry: { id: string }) => entry.id === catalogue.defaultModelId,
+    );
+    const mib = (bytes: number) => Math.round(bytes / 1024 / 1024);
+    const download = mib(model.archive.bytes);
+    const installed = mib(
+      model.files.reduce((total: number, file: { bytes: number }) => total + file.bytes, 0),
+    );
+    expect(extracted.output, `the download size must read ${download} MB`).toContain(
+      `${download} MB`,
+    );
+    expect(extracted.output, `the installed size must read ${installed} MB`).toContain(
+      `${installed} MB`,
+    );
+  });
+
+  it('quotes the minimum macOS version the bundle actually sets', () => {
+    const conf = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'src-tauri/tauri.conf.json'), 'utf8'),
+    );
+    const minimum = String(conf.bundle.macOS.minimumSystemVersion).split('.')[0];
+    expect(extracted.output).toContain(`macOS ${minimum}`);
   });
 });
