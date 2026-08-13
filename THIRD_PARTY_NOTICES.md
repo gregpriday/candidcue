@@ -43,6 +43,7 @@ the release provenance (`sbom/native-inputs.json`), from `sherpa-onnx-v1.13.4-os
 | piper-phonemize | MIT † | <https://github.com/rhasspy/piper-phonemize> |
 | sherpa-onnx | Apache-2.0 | <https://github.com/k2-fsa/sherpa-onnx> |
 | ssentencepiece | Apache-2.0 † | <https://github.com/pkufool/ssentencepiece> |
+| ucd-tools | GPL-3.0-or-later † | <https://github.com/rhdunn/ucd-tools> |
 
 † Recorded from the upstream project, and **not yet confirmed against the
 exact build in this archive**. The archive carries no licence metadata of its
@@ -56,13 +57,15 @@ in the binary.
 
 - **PortAudio** — CandidCue captures audio in the renderer and does not call PortAudio, but the archive is on the link line. Confirm whether it is reachable in the shipped binary.
 
-- **eSpeak NG** — UNRESOLVED, AND THE ONE THAT MATTERS. sherpa-onnx-sys puts -lespeak-ng on the link line for every build (SHERPA_ONNX_STATIC_LIBS in its build.rs), and eSpeak NG is copyleft. CandidCue is proprietary, speech-to-text only, and calls no TTS path, so nothing should reference an eSpeak symbol and a selective static link should pull no object files from this archive — but the shipping binary is stripped, so `nm` cannot settle it. Before release: build unstripped and confirm no eSpeak object is present, or link only the archives that are actually needed. This needs a legal answer as well as a technical one; do not mark it reviewed on the strength of the argument above.
+- **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is: nothing references an eSpeak symbol, a selective static link extracts no object file, and no GPL code is in the binary — which is an argument until `verify-no-copyleft-objects.mjs` turns it into a linker-map fact.
 
 - **kaldi-decoder / kaldi-native-fbank** — Feature extraction and decoding. Confirm against the upstream repositories at the pinned sherpa-onnx release.
 
-- **piper-phonemize** — Text-to-speech phonemisation. CandidCue does no TTS and never calls it; it is on the link line because sherpa-onnx-sys links its whole static set. See the espeak-ng entry — this is the component that pulls it in.
+- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, about 416 bytes) and NO eSpeak code does. So piper's own MIT terms are the operative ones, and MIT is satisfied by the attribution in THIRD_PARTY_NOTICES.md. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
 
 - **ssentencepiece** — Tokenisation. Confirm against upstream.
+
+- **ucd-tools** — The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way.
 
 The model weights are **not** part of this application. They are downloaded
 after installation, at your request, and each carries its own attribution and

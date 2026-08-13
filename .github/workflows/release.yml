@@ -206,6 +206,30 @@ jobs:
       # ------------------------------------------------------------------
       # Ask the artifact, not the source.
       # ------------------------------------------------------------------
+
+      # sherpa-onnx-sys links libespeak-ng.a and libucd.a — both
+      # GPL-3.0-or-later — into a proprietary binary, and no feature or
+      # environment variable removes them from the link line. The comfortable
+      # argument was that a static link takes only what it needs and CandidCue
+      # never calls TTS; that argument is false, because libsherpa-onnx-c-api.a
+      # references OfflineTts and drags the whole chain in. What saves it is
+      # dead-stripping, and "the linker threw it away" is a claim about a
+      # specific binary. So the release links each slice with a map and checks
+      # it. One map per architecture: lipo cannot make a clean arm64 slice
+      # vouch for an x86_64 one.
+      - name: No copyleft code may reach the binary
+        run: |
+          set -euo pipefail
+          for arch in aarch64 x86_64; do
+            RUSTFLAGS="-C link-arg=-Wl,-map,$RUNNER_TEMP/link-$arch.map" \
+              cargo build --release --locked \
+              --manifest-path src-tauri/Cargo.toml \
+              --target "$arch-apple-darwin"
+          done
+          node scripts/verify-no-copyleft-objects.mjs \
+            src-tauri/target/sherpa-onnx-prebuilt/*/lib \
+            "$RUNNER_TEMP/link-aarch64.map" "$RUNNER_TEMP/link-x86_64.map"
+
       - name: Inspect the signed bundle
         run: |
           node scripts/verify-signed-bundle.mjs \

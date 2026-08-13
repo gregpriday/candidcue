@@ -28,6 +28,7 @@
     "notes:check": "node scripts/release-notes.mjs",
     "notices": "node scripts/generate-notices.mjs",
     "notices:check": "node scripts/generate-notices.mjs --check",
+    "copyleft:check": "node scripts/verify-no-copyleft-objects.mjs",
     "cargo:test": "cargo test --locked --manifest-path src-tauri/Cargo.toml && cargo test --locked --manifest-path crates/Cargo.toml",
     "cargo:clippy": "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo clippy --locked --manifest-path crates/Cargo.toml --all-targets -- -D warnings",
     "verify": "pnpm verify:repo && pnpm version:check && pnpm check && pnpm test:all && pnpm cargo:test",

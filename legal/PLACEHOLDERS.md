@@ -126,23 +126,49 @@ Not placeholders, but on the same gate:
   report any of them. Each is recorded with a `reviewed` flag, and the gate
   refuses while any is false, exactly as it refuses an unresolved placeholder.
 
-  One is not a paperwork item. **eSpeak NG is GPL-3.0-or-later**, and
-  `SHERPA_ONNX_STATIC_LIBS` in the sys crate's `build.rs` puts `-lespeak-ng` on
-  the link line of every build. CandidCue is proprietary and does speech-to-TEXT
-  only: it calls no phonemisation or TTS path, so a selective static link should
-  pull no object file out of that archive. Should. The shipping binary is
-  stripped, so `nm` cannot settle it:
+  Two of them — **eSpeak NG** and **ucd-tools** — are GPL-3.0-or-later, and
+  `SHERPA_ONNX_STATIC_LIBS` in the sys crate's `build.rs` puts them on the link
+  line of every build. Nothing removes them: the crate has no TTS feature,
+  upstream's `-DSHERPA_ONNX_ENABLE_TTS=OFF` is a source-build option we cannot
+  reach through a prebuilt archive, and the `shared` alternative is worse
+  because the dylib genuinely contains the code.
+
+  **The comfortable argument was wrong, and the measured answer is fine.** The
+  argument went: a static link takes only what resolves an undefined symbol,
+  CandidCue does speech-to-TEXT and calls no TTS entry point, so nothing comes
+  out. In fact `libsherpa-onnx-c-api.a` is one broad object with undefined
+  references to `OfflineTts`, so the linker traverses the whole chain and
+  **loads 23 of eSpeak NG's 27 objects**. Dead-stripping then removes all of
+  it. Measured 2026-08-13 against a real arm64 linker map:
+
+  | Component | In the shipped binary |
+  |---|---|
+  | eSpeak NG (GPL-3.0-or-later) | no code or data; 28 coalesced literals (`"UTF-8"`, `"%s"`) |
+  | ucd-tools (GPL-3.0-or-later) | nothing at all |
+  | piper-phonemize (MIT) | 2 of its own symbols, ~416 bytes |
+
+  So no GPL code ships, and piper-phonemize's own MIT terms govern its two
+  symbols — the "piper is effectively GPL" reading applies to a binary holding
+  both piper and eSpeak code, and ours holds one of those. MIT is satisfied by
+  the attribution in `THIRD_PARTY_NOTICES.md`.
+
+  None of that is a thing to remember. It is a gate, run on the release build,
+  because it is a fact about a particular binary and the next linker or the
+  next sherpa-onnx bump can change it:
 
   ```bash
-  # Build with symbols and ask the artifact rather than the argument.
-  RUSTFLAGS="-C strip=none" cargo build --release --manifest-path src-tauri/Cargo.toml
-  nm -a src-tauri/target/release/candidcue | grep -ci espeak   # must be 0
+  RUSTFLAGS="-C link-arg=-Wl,-map,$PWD/link-arm64.map" \
+    cargo build --release --target aarch64-apple-darwin --manifest-path src-tauri/Cargo.toml
+  pnpm copyleft:check src-tauri/target/sherpa-onnx-prebuilt/*/lib link-arm64.map
   ```
 
-  If anything from eSpeak NG is in there, the options are to link only the
-  archives sherpa-onnx actually needs, or to take advice on what a copyleft
-  component makes CandidCue. Either way this is a decision, not a note — settle
-  it before the first paid build.
+  What remains for a person: confirm the SPDX ids in `evidence` against
+  upstream and set `reviewed: true`, and decide whether to accept the reasoning
+  above or remove the archives outright. Removing them means a patched
+  `sherpa-onnx-sys` (a Cargo build-script override is viable — it declares
+  `links = "sherpa-onnx"`) or waiting for the k2-fsa 2.0 that drops eSpeak NG
+  and piper-phonemize. Neither is required by the measurement; both would make
+  the question go away.
 
 - **Legal review.** These documents were drafted against the product's actual
   behaviour, not by a lawyer. An adversarial review raised the following, which
