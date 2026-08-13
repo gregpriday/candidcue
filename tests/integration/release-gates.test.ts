@@ -618,6 +618,89 @@ function scratchApp(extra: Array<{ path: string; bytes?: number }> = []): string
   return app;
 }
 
+/*
+ * The CONFIGURATION half, which is the half that got weaker.
+ *
+ * `bundle.resources` was `[]` and asserted empty, which is trivially safe.
+ * Shipping the licence notices opened it, and an allow-list of destination
+ * names is only as good as what it says about the SOURCE: Tauri resolves a map
+ * source three ways — a plain file, a glob whose every match lands under the
+ * destination, and a DIRECTORY, which it walks and copies wholesale. The last
+ * one is the dangerous shape and the one a size ceiling cannot see, because
+ * `statSync` on a directory reports an inode of a couple of hundred bytes.
+ */
+describe('opening bundle.resources for notices did not open it for models', () => {
+  const NEEDS = [
+    'scripts/verify-no-model-weights.mjs',
+    'src-tauri/tauri.conf.json',
+    'THIRD_PARTY_NOTICES.md',
+    'assets/fonts/LICENSE.txt',
+  ];
+
+  function withResources(resources: unknown, extra?: (dir: string) => void) {
+    const dir = scratchRepo(NEEDS);
+    const conf = join(dir, 'src-tauri/tauri.conf.json');
+    const parsed = JSON.parse(readFileSync(conf, 'utf8'));
+    parsed.bundle.resources = resources;
+    writeFileSync(conf, `${JSON.stringify(parsed, null, 2)}\n`);
+    extra?.(dir);
+    return run(join(dir, 'scripts/verify-no-model-weights.mjs'), [], dir);
+  }
+
+  it('accepts the two notices this repository actually ships', () => {
+    const conf = JSON.parse(readFileSync(join(REPO_ROOT, 'src-tauri/tauri.conf.json'), 'utf8'));
+    expect(withResources(conf.bundle.resources).status).toBe(0);
+  });
+
+  it('refuses a destination nobody allow-listed', () => {
+    const refused = withResources({ '../THIRD_PARTY_NOTICES.md': 'models/weights.onnx' });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('not allow-listed');
+  });
+
+  /* The leak: an allow-listed NAME over a source Tauri walks. */
+  it('refuses a directory source, however innocent its destination', () => {
+    const refused = withResources({ models: 'THIRD_PARTY_NOTICES.md' }, (dir) => {
+      mkdirSync(join(dir, 'src-tauri/models/x-asr-480ms'), { recursive: true });
+      writeFileSync(join(dir, 'src-tauri/models/x-asr-480ms/encoder.onnx'), Buffer.alloc(1024));
+    });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('not a regular file');
+  });
+
+  it('refuses a glob source, which copies every match under one name', () => {
+    const refused = withResources({ 'models/*/*.onnx': 'THIRD_PARTY_NOTICES.md' });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('glob');
+  });
+
+  it('refuses an allow-listed name over something far too large to be a notice', () => {
+    const refused = withResources({ '../big.bin': 'THIRD_PARTY_NOTICES.md' }, (dir) => {
+      writeFileSync(join(dir, 'big.bin'), Buffer.alloc(3 * 1024 * 1024));
+    });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('not the file that was');
+  });
+
+  it('refuses an allow-listed name over a file that is not there', () => {
+    const refused = withResources({ '../GONE.md': 'THIRD_PARTY_NOTICES.md' });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('does not exist');
+  });
+
+  /* Every other payload mechanism stays empty, allow-list or no allow-list. */
+  it('still refuses every other way of putting files in a bundle', () => {
+    const dir = scratchRepo(NEEDS);
+    const conf = join(dir, 'src-tauri/tauri.conf.json');
+    const parsed = JSON.parse(readFileSync(conf, 'utf8'));
+    parsed.bundle.externalBin = ['binaries/whatever'];
+    writeFileSync(conf, `${JSON.stringify(parsed, null, 2)}\n`);
+    const refused = run(join(dir, 'scripts/verify-no-model-weights.mjs'), [], dir);
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain('externalBin');
+  });
+});
+
 describe('the installer is proven to carry no speech-model weights', () => {
   it('passes on a plain valid bundle', () => {
     const result = run(MODEL_SCRIPT, [scratchApp()], REPO_ROOT);

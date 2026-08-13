@@ -25,15 +25,44 @@ Licensed under the SIL Open Font License 1.1. The woff2 subsets are the ones
 published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,
 unmodified. Full text: `LICENSE-fonts.txt`, beside this file.
 
-## Speech recognition
+## Statically linked native components
 
-Inference runs through **sherpa-onnx** (Apache-2.0,
-<https://github.com/k2-fsa/sherpa-onnx>), linked statically, which embeds
-**ONNX Runtime** (MIT).
+Speech recognition runs through **sherpa-onnx**, linked statically. Its
+prebuilt release archive is fetched at build time and is in neither lockfile,
+so no dependency scanner sees what is inside it — and it is not one project.
+Each component below is a separate work under its own terms. Digests are in
+the release provenance (`sbom/native-inputs.json`), from `sherpa-onnx-v1.13.4-osx-arm64-static-lib`.
 
-The prebuilt native libraries are fetched at build time and are in neither
-lockfile, so their digests are recorded in the release provenance
-(`sbom/native-inputs.json`): 15 libraries from `sherpa-onnx-v1.13.4-osx-arm64-static-lib`.
+| Component | Licence | Upstream |
+|---|---|---|
+| KISS FFT | BSD-3-Clause † | <https://github.com/mborgerding/kissfft> |
+| ONNX Runtime | MIT † | <https://github.com/microsoft/onnxruntime> |
+| PortAudio | MIT † | <https://github.com/PortAudio/portaudio> |
+| eSpeak NG | GPL-3.0-or-later † | <https://github.com/espeak-ng/espeak-ng> |
+| kaldi-decoder / kaldi-native-fbank | Apache-2.0 † | <https://github.com/k2-fsa/kaldi-decoder> |
+| piper-phonemize | MIT † | <https://github.com/rhasspy/piper-phonemize> |
+| sherpa-onnx | Apache-2.0 | <https://github.com/k2-fsa/sherpa-onnx> |
+| ssentencepiece | Apache-2.0 † | <https://github.com/pkufool/ssentencepiece> |
+
+† Recorded from the upstream project, and **not yet confirmed against the
+exact build in this archive**. The archive carries no licence metadata of its
+own, so each of these has to be verified before CandidCue is sold. They are
+listed rather than omitted because a component nobody has classified is still
+in the binary.
+
+- **KISS FFT** — Confirm; kissfft has shipped under more than one licence over its history.
+
+- **ONNX Runtime** — Vendored inside the sherpa-onnx release archive, which carries no version or licence metadata of its own. The exact build must be identified and its MIT claim confirmed against that build before release.
+
+- **PortAudio** — CandidCue captures audio in the renderer and does not call PortAudio, but the archive is on the link line. Confirm whether it is reachable in the shipped binary.
+
+- **eSpeak NG** — UNRESOLVED, AND THE ONE THAT MATTERS. sherpa-onnx-sys puts -lespeak-ng on the link line for every build (SHERPA_ONNX_STATIC_LIBS in its build.rs), and eSpeak NG is copyleft. CandidCue is proprietary, speech-to-text only, and calls no TTS path, so nothing should reference an eSpeak symbol and a selective static link should pull no object files from this archive — but the shipping binary is stripped, so `nm` cannot settle it. Before release: build unstripped and confirm no eSpeak object is present, or link only the archives that are actually needed. This needs a legal answer as well as a technical one; do not mark it reviewed on the strength of the argument above.
+
+- **kaldi-decoder / kaldi-native-fbank** — Feature extraction and decoding. Confirm against the upstream repositories at the pinned sherpa-onnx release.
+
+- **piper-phonemize** — Text-to-speech phonemisation. CandidCue does no TTS and never calls it; it is on the link line because sherpa-onnx-sys links its whole static set. See the espeak-ng entry — this is the component that pulls it in.
+
+- **ssentencepiece** — Tokenisation. Confirm against upstream.
 
 The model weights are **not** part of this application. They are downloaded
 after installation, at your request, and each carries its own attribution and
@@ -73,7 +102,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-349 crates across both workspaces, with the SPDX expression each
+322 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -87,7 +116,6 @@ declares in its own manifest.
 | async-trait | 0.1.91 | MIT OR Apache-2.0 |
 | atoi | 2.0.0 | MIT |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
-| autocfg | 1.5.1 | Apache-2.0 OR MIT |
 | base64 | 0.21.7 | MIT OR Apache-2.0 |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | base64 | 0.23.0 | MIT OR Apache-2.0 |
@@ -104,15 +132,10 @@ declares in its own manifest.
 | byteorder | 1.5.0 | Unlicense OR MIT |
 | byteorder-lite | 0.1.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
-| bzip2 | 0.4.4 | MIT/Apache-2.0 |
 | bzip2 | 0.6.1 | MIT OR Apache-2.0 |
-| bzip2-sys | 0.1.13+1.0.8 | MIT/Apache-2.0 |
 | camino | 1.2.4 | MIT OR Apache-2.0 |
-| cargo_metadata | 0.19.2 | MIT |
-| cargo_toml | 0.22.3 | Apache-2.0 OR MIT |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 |
-| cc | 1.3.0 | MIT OR Apache-2.0 |
-| cc | 1.4.0 | MIT OR Apache-2.0 |
+| cargo_metadata | 0.19.2 | MIT |
 | cfb | 0.7.3 | MIT |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
@@ -155,15 +178,12 @@ declares in its own manifest.
 | dyn-clone | 1.0.20 | MIT OR Apache-2.0 |
 | either | 1.16.0 | MIT OR Apache-2.0 |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 |
-| embed-resource | 3.0.11 | MIT |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 |
-| errno | 0.3.14 | MIT OR Apache-2.0 |
 | event-listener | 5.4.1 | Apache-2.0 OR MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | filetime | 0.2.29 | MIT/Apache-2.0 |
-| find-msvc-tools | 0.1.9 | MIT OR Apache-2.0 |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 |
 | flume | 0.11.1 | Apache-2.0/MIT |
 | fnv | 1.0.7 | Apache-2.0 / MIT |
@@ -260,12 +280,10 @@ declares in its own manifest.
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
 | phf | 0.13.1 | MIT |
-| phf_codegen | 0.13.1 | MIT |
 | phf_generator | 0.13.1 | MIT |
 | phf_macros | 0.13.1 | MIT |
 | phf_shared | 0.13.1 | MIT |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
-| pkg-config | 0.3.33 | MIT OR Apache-2.0 |
 | plist | 1.10.0 | MIT |
 | png | 0.17.16 | MIT OR Apache-2.0 |
 | png | 0.18.1 | MIT OR Apache-2.0 |
@@ -284,9 +302,7 @@ declares in its own manifest.
 | reqwest | 0.12.28 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
-| rustc_version | 0.4.1 | MIT OR Apache-2.0 |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
-| rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.42 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.13 | ISC |
@@ -298,6 +314,7 @@ declares in its own manifest.
 | selectors | 0.36.1 | MPL-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
+| serde-untagged | 0.1.9 | MIT OR Apache-2.0 |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 |
 | serde_derive_internals | 0.29.1 | MIT OR Apache-2.0 |
@@ -307,7 +324,6 @@ declares in its own manifest.
 | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 |
 | serde_with | 3.21.0 | MIT OR Apache-2.0 |
 | serde_with_macros | 3.21.0 | MIT OR Apache-2.0 |
-| serde-untagged | 0.1.9 | MIT OR Apache-2.0 |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 |
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 |
 | servo_arc | 0.4.3 | MIT OR Apache-2.0 |
@@ -315,7 +331,6 @@ declares in its own manifest.
 | sharded-slab | 0.1.7 | MIT |
 | sherpa-onnx | 1.13.4 | Apache-2.0 |
 | sherpa-onnx-sys | 1.13.4 | Apache-2.0 |
-| shlex | 2.0.1 | MIT OR Apache-2.0 |
 | simd-adler32 | 0.3.10 | MIT |
 | siphasher | 1.0.3 | MIT/Apache-2.0 |
 | slab | 0.4.12 | MIT |
@@ -329,7 +344,6 @@ declares in its own manifest.
 | sqlx-sqlite | 0.8.6 | MIT OR Apache-2.0 |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 |
 | string_cache | 0.9.0 | MIT OR Apache-2.0 |
-| string_cache_codegen | 0.6.1 | MIT OR Apache-2.0 |
 | strsim | 0.11.1 | MIT |
 | subtle | 2.6.1 | BSD-3-Clause |
 | swift-rs | 1.0.7 | MIT OR Apache-2.0 |
@@ -341,10 +355,8 @@ declares in its own manifest.
 | tao | 0.35.3 | Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.11.5 | Apache-2.0 OR MIT |
-| tauri-build | 2.6.3 | Apache-2.0 OR MIT |
 | tauri-codegen | 2.6.3 | Apache-2.0 OR MIT |
 | tauri-macros | 2.6.3 | Apache-2.0 OR MIT |
-| tauri-plugin | 2.6.3 | Apache-2.0 OR MIT |
 | tauri-plugin-dialog | 2.7.2 | Apache-2.0 OR MIT |
 | tauri-plugin-fs | 2.5.1 | Apache-2.0 OR MIT |
 | tauri-plugin-opener | 2.5.4 | Apache-2.0 OR MIT |
@@ -352,8 +364,6 @@ declares in its own manifest.
 | tauri-runtime | 2.11.3 | Apache-2.0 OR MIT |
 | tauri-runtime-wry | 2.11.4 | Apache-2.0 OR MIT |
 | tauri-utils | 2.9.3 | Apache-2.0 OR MIT |
-| tauri-winres | 0.3.6 | MIT |
-| tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tendril | 0.5.1 | MIT OR Apache-2.0 |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 |
 | thiserror | 2.0.19 | MIT OR Apache-2.0 |
@@ -368,9 +378,7 @@ declares in its own manifest.
 | tokio-macros | 2.7.1 | MIT |
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 |
 | tokio-stream | 0.1.19 | MIT |
-| toml | 0.9.12+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
-| toml_datetime | 0.7.5+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -395,25 +403,19 @@ declares in its own manifest.
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
 | untrusted | 0.9.0 | ISC |
-| ureq | 2.12.1 | MIT OR Apache-2.0 |
 | url | 2.5.8 | MIT OR Apache-2.0 |
 | urlpattern | 0.3.0 | MIT |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT |
 | uuid | 1.24.0 | Apache-2.0 OR MIT |
-| vcpkg | 0.2.15 | MIT/Apache-2.0 |
-| version_check | 0.9.5 | MIT/Apache-2.0 |
 | walkdir | 2.5.0 | Unlicense/MIT |
 | want | 0.3.1 | MIT |
 | web_atoms | 0.2.5 | MIT OR Apache-2.0 |
-| webpki-roots | 0.26.11 | CDLA-Permissive-2.0 |
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 |
 | weezl | 0.1.12 | MIT OR Apache-2.0 |
 | window-vibrancy | 0.6.0 | Apache-2.0 OR MIT |
-| winnow | 0.7.15 | MIT |
 | winnow | 1.0.4 | MIT |
 | writeable | 0.6.3 | Unicode-3.0 |
 | wry | 0.55.1 | Apache-2.0 OR MIT |
-| xattr | 1.6.1 | MIT OR Apache-2.0 |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
 | zerofrom | 0.1.8 | Unicode-3.0 |

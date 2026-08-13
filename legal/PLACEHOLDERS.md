@@ -118,6 +118,32 @@ site.**
 
 Not placeholders, but on the same gate:
 
+- **The statically linked native components** (`sbom/native-components.json`).
+  `sherpa-onnx-sys` links a prebuilt archive that is not one project. Inside it
+  are ONNX Runtime, kaldi, KISS FFT, ssentencepiece, PortAudio, piper-phonemize
+  and **eSpeak NG**, on at least four different licences, and the archive
+  carries no licence metadata of its own — so no dependency scanner will ever
+  report any of them. Each is recorded with a `reviewed` flag, and the gate
+  refuses while any is false, exactly as it refuses an unresolved placeholder.
+
+  One is not a paperwork item. **eSpeak NG is GPL-3.0-or-later**, and
+  `SHERPA_ONNX_STATIC_LIBS` in the sys crate's `build.rs` puts `-lespeak-ng` on
+  the link line of every build. CandidCue is proprietary and does speech-to-TEXT
+  only: it calls no phonemisation or TTS path, so a selective static link should
+  pull no object file out of that archive. Should. The shipping binary is
+  stripped, so `nm` cannot settle it:
+
+  ```bash
+  # Build with symbols and ask the artifact rather than the argument.
+  RUSTFLAGS="-C strip=none" cargo build --release --manifest-path src-tauri/Cargo.toml
+  nm -a src-tauri/target/release/candidcue | grep -ci espeak   # must be 0
+  ```
+
+  If anything from eSpeak NG is in there, the options are to link only the
+  archives sherpa-onnx actually needs, or to take advice on what a copyleft
+  component makes CandidCue. Either way this is a decision, not a note — settle
+  it before the first paid build.
+
 - **Legal review.** These documents were drafted against the product's actual
   behaviour, not by a lawyer. An adversarial review raised the following, which
   were left as drafting decisions and need a qualified opinion once the

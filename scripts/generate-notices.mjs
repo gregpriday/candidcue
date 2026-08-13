@@ -71,7 +71,22 @@ function javascriptPackages() {
       });
     }
   }
-  return packages.sort((a, b) => a.name.localeCompare(b.name));
+  /*
+   * Sorted on the whole row, not on the name.
+   *
+   * `pnpm licenses list` groups BY LICENCE, so one package name can appear
+   * under two of them, and a name-only sort leaves those two rows in whatever
+   * order `Object.entries` happened to yield. That is stable enough on one
+   * machine to look fine and is exactly the shape of thing that makes
+   * `--check` fail in CI and pass locally — which is how a gate gets deleted.
+   */
+  const before = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return packages.sort(
+    (a, b) =>
+      before(a.name, b.name) ||
+      before(a.licence, b.licence) ||
+      before(a.versions.join(','), b.versions.join(',')),
+  );
 }
 
 /* ------------------------------------------------------------------- Rust */
@@ -93,11 +108,28 @@ function crateLicence(name, version, registries) {
     const manifest = join(registry, `${name}-${version}`, 'Cargo.toml');
     if (!existsSync(manifest)) continue;
     const source = readFileSync(manifest, 'utf8');
-    const packageTable = source.match(/^\[package\]([\s\S]*?)(?=^\[)/m)?.[1] ?? source;
-    const spdx = packageTable.match(/^license\s*=\s*["']([^"']+)["']/m)?.[1];
+    /*
+     * The `[package]` table, ending at the next table header OR at the end of
+     * the file. The obvious lazy match needs a following `[` to stop at, so a
+     * manifest whose `[package]` table is last matched nothing and fell back
+     * to scanning the WHOLE file — where a `license` key under
+     * `[package.metadata.…]` would be read as the crate's own.
+     */
+    const packageTable =
+      source.match(/^\[package\]\s*$([\s\S]*?)(?=^\s*\[|$(?![\s\S]))/m)?.[1] ?? '';
+    const spdx = packageTable.match(/^\s*license\s*=\s*["']([^"']+)["']/m)?.[1];
     if (spdx) return spdx;
-    const file = packageTable.match(/^license-file\s*=\s*["']([^"']+)["']/m)?.[1];
+    const file = packageTable.match(/^\s*license-file\s*=\s*["']([^"']+)["']/m)?.[1];
     if (file) return `see ${file}`;
+    /*
+     * `license.workspace = true` should not reach here — cargo resolves
+     * workspace inheritance when it publishes, so a registry manifest carries
+     * the concrete value. If one ever does, saying so beats reporting it as
+     * having no licence at all.
+     */
+    if (/^\s*license\s*\.\s*workspace\s*=\s*true/m.test(packageTable)) {
+      return 'inherited from its workspace (unresolved)';
+    }
     return null;
   }
   return undefined; // not unpacked here, which is different from having none
@@ -107,7 +139,12 @@ function rustCrates() {
   const registryRoot = join(homedir(), '.cargo', 'registry', 'src');
   let registries = [];
   try {
-    registries = readdirSync(registryRoot).map((entry) => join(registryRoot, entry));
+    // Sorted: `readdirSync` order is the filesystem's, and a machine with two
+    // registry directories would otherwise resolve them in an order that is
+    // stable per-machine and not across them.
+    registries = readdirSync(registryRoot)
+      .sort()
+      .map((entry) => join(registryRoot, entry));
   } catch {
     problems.push(
       `no unpacked cargo registry at ${registryRoot} — run \`cargo fetch\` before generating notices.`,
@@ -115,8 +152,24 @@ function rustCrates() {
     return [];
   }
 
+  /*
+   * Pinned to the RELEASE targets, and to normal dependencies.
+   *
+   * `cargo tree` with no `--target` resolves for the host, so this Mac
+   * selected `objc2-web-kit` where a Linux runner would select `gtk` and
+   * `webkit2gtk` — two machines generating two different committed files, and
+   * `--check` failing in CI for a reason nobody could reproduce locally. The
+   * artifact is a universal macOS build, so both macOS triples are unioned and
+   * nothing else is asked about.
+   *
+   * `-e normal` because a test runner is not in the artifact; the default
+   * includes dev and build dependencies, which made this describe the machine
+   * that built CandidCue rather than the application anyone received.
+   */
+  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
   const seen = new Map();
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {
+    for (const target of RELEASE_TARGETS) {
     let tree;
     try {
       tree = run('cargo', [
@@ -124,12 +177,18 @@ function rustCrates() {
         '--locked',
         '--manifest-path',
         manifest,
+        '--target',
+        target,
+        '--edges',
+        'normal',
         '--prefix',
         'none',
         '--no-dedupe',
       ]);
     } catch (error) {
-      problems.push(`could not read the crate tree for ${manifest} — ${error.message}`);
+      problems.push(
+        `could not read the crate tree for ${manifest} on ${target} — ${error.message}`,
+      );
       continue;
     }
     for (const line of tree.split('\n')) {
@@ -140,10 +199,17 @@ function rustCrates() {
       if (['candidcue', 'cc-align', 'cc-stt', 'cc-bench'].includes(name)) continue;
       seen.set(`${name} ${version}`, { name, version });
     }
+    }
   }
 
+  /*
+   * A plain comparator, not `localeCompare`: collation is locale-dependent, so
+   * a runner with a different ICU locale would order `_`-prefixed and
+   * hyphenated crate names differently and fail `--check` for no real reason.
+   */
+  const before = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   const crates = [...seen.values()].sort(
-    (a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version),
+    (a, b) => before(a.name, b.name) || before(a.version, b.version),
   );
   const unknown = [];
   for (const crate of crates) {
@@ -167,16 +233,78 @@ function rustCrates() {
 
 /* ----------------------------------------------------------------- native */
 
-function nativeLibraries() {
-  const path = join(ROOT, 'sbom', 'native-inputs.json');
+/**
+ * The static libraries linked into the binary, named individually.
+ *
+ * This listed a COUNT and a release name — "15 libraries from
+ * sherpa-onnx-v1.13.4-…" — which reads as disclosure and is not. That archive
+ * is not one project: it carries ONNX Runtime, kaldi, KISS FFT,
+ * sentencepiece, PortAudio, piper-phonemize and eSpeak NG, on at least four
+ * different licences, and sherpa-onnx's Apache-2.0 cannot speak for any of
+ * them. These are also the components no dependency scanner will ever find,
+ * because they are in neither lockfile — which is exactly why the readiness
+ * review asked for them by name.
+ *
+ * `sbom/native-inputs.json` says which files there are and what they hash to;
+ * `sbom/native-components.json` says what they ARE. A file claimed by no
+ * component is a refusal, not an omission.
+ */
+function nativeComponents() {
+  let recorded;
+  let reviewed;
   try {
-    const recorded = JSON.parse(readFileSync(path, 'utf8'));
-    const releases = [...new Set((recorded.libraries ?? []).map((lib) => lib.release))].sort();
-    return { releases, count: (recorded.libraries ?? []).length };
+    recorded = JSON.parse(readFileSync(join(ROOT, 'sbom', 'native-inputs.json'), 'utf8'));
   } catch (error) {
     problems.push(`could not read sbom/native-inputs.json — ${error.message}`);
-    return { releases: [], count: 0 };
+    return { components: [], releases: [] };
   }
+  try {
+    reviewed = JSON.parse(readFileSync(join(ROOT, 'sbom', 'native-components.json'), 'utf8'));
+  } catch (error) {
+    problems.push(`could not read sbom/native-components.json — ${error.message}`);
+    return { components: [], releases: [] };
+  }
+
+  const files = (recorded.libraries ?? []).map((lib) => lib.path.split('/').pop());
+  const claimed = new Map();
+  for (const component of reviewed.components ?? []) {
+    for (const library of component.libraries ?? []) {
+      if (claimed.has(library)) {
+        problems.push(
+          `${library} is claimed by both ${claimed.get(library).component} and ` +
+            `${component.component} in sbom/native-components.json.`,
+        );
+      }
+      claimed.set(library, component);
+    }
+  }
+
+  const unclaimed = files.filter((file) => !claimed.has(file));
+  if (unclaimed.length > 0) {
+    problems.push(
+      `${unclaimed.length} native librar(y/ies) recorded in sbom/native-inputs.json are ` +
+        `classified nowhere: ${unclaimed.join(', ')}. Add each to ` +
+        `sbom/native-components.json with its upstream and licence — a static library in ` +
+        `the binary that nobody classified is the component no dependency scan can find.`,
+    );
+  }
+  const missing = [...claimed.keys()].filter((library) => !files.includes(library));
+  if (missing.length > 0) {
+    problems.push(
+      `sbom/native-components.json classifies ${missing.join(', ')}, which the recorded ` +
+        `build does not link. Re-run \`node scripts/verify-supply-chain.mjs native\` after a ` +
+        `sherpa-onnx bump, then reconcile — a notice for a component that is not there is as ` +
+        `wrong as a missing one.`,
+    );
+  }
+
+  const present = (reviewed.components ?? []).filter((component) =>
+    (component.libraries ?? []).some((library) => files.includes(library)),
+  );
+  return {
+    components: present.sort((a, b) => (a.component < b.component ? -1 : 1)),
+    releases: [...new Set((recorded.libraries ?? []).map((lib) => lib.release))].sort(),
+  };
 }
 
 /* ------------------------------------------------------------------ model */
@@ -204,7 +332,7 @@ function speechModels() {
 function render() {
   const js = javascriptPackages();
   const crates = rustCrates();
-  const native = nativeLibraries();
+  const native = nativeComponents();
   const models = speechModels();
 
   const out = [];
@@ -238,17 +366,36 @@ function render() {
     'published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,',
     'unmodified. Full text: `LICENSE-fonts.txt`, beside this file.',
     '',
-    '## Speech recognition',
+    '## Statically linked native components',
     '',
-    'Inference runs through **sherpa-onnx** (Apache-2.0,',
-    '<https://github.com/k2-fsa/sherpa-onnx>), linked statically, which embeds',
-    '**ONNX Runtime** (MIT).',
-    '',
-    `The prebuilt native libraries are fetched at build time and are in neither`,
-    `lockfile, so their digests are recorded in the release provenance`,
-    `(\`sbom/native-inputs.json\`): ${native.count} libraries from ` +
+    'Speech recognition runs through **sherpa-onnx**, linked statically. Its',
+    'prebuilt release archive is fetched at build time and is in neither lockfile,',
+    'so no dependency scanner sees what is inside it — and it is not one project.',
+    'Each component below is a separate work under its own terms. Digests are in',
+    `the release provenance (\`sbom/native-inputs.json\`), from ` +
       `${native.releases.map((r) => `\`${r}\``).join(', ') || '(none recorded)'}.`,
     '',
+    '| Component | Licence | Upstream |',
+    '|---|---|---|',
+    ...native.components.map(
+      (component) =>
+        `| ${component.component} | ${component.spdx}${component.reviewed ? '' : ' †'} ` +
+        `| <${component.upstream}> |`,
+    ),
+    '',
+    ...(native.components.some((component) => !component.reviewed)
+      ? [
+          '† Recorded from the upstream project, and **not yet confirmed against the',
+          'exact build in this archive**. The archive carries no licence metadata of its',
+          'own, so each of these has to be verified before CandidCue is sold. They are',
+          'listed rather than omitted because a component nobody has classified is still',
+          'in the binary.',
+          '',
+          ...native.components
+            .filter((component) => !component.reviewed && component.note)
+            .flatMap((component) => [`- **${component.component}** — ${component.note}`, '']),
+        ]
+      : []),
     'The model weights are **not** part of this application. They are downloaded',
     'after installation, at your request, and each carries its own attribution and',
     'the full text of its licence in its own directory.',

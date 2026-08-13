@@ -150,6 +150,53 @@ for (const line of checked) console.log(`  ok   ${line}`);
 console.log(`  scanned ${TOKEN_SCANNED.length} files for @@LEGAL_*@@ tokens`);
 console.log(`  scanned ${LEGAL_DOCS.length} published documents for TODO/TBD/FIXME/example.com`);
 
+/*
+ * The native components, whose licences nobody has confirmed yet.
+ *
+ * `sherpa-onnx-sys` links a prebuilt archive that is not one project: it
+ * carries ONNX Runtime, kaldi, KISS FFT, sentencepiece, PortAudio,
+ * piper-phonemize and eSpeak NG, on at least four licences, and the archive
+ * ships no licence metadata of its own. One of them — eSpeak NG — is copyleft,
+ * which is a question about what CandidCue legally IS rather than a notices
+ * chore. `sbom/native-components.json` records each with a `reviewed` flag.
+ *
+ * It belongs in THIS gate rather than in `notices:check` because it is the
+ * same shape as an unresolved placeholder: a fact only a person can settle, on
+ * a schedule that should not redden every push. `notices:check` stays a
+ * staleness check and stays green.
+ */
+const NATIVE_COMPONENTS = 'sbom/native-components.json';
+const nativeSource = readOrNull(NATIVE_COMPONENTS);
+if (nativeSource === null) {
+  failures.push(`${NATIVE_COMPONENTS}: could not be read — the native licence review cannot run.`);
+} else {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(nativeSource);
+  } catch (error) {
+    failures.push(`${NATIVE_COMPONENTS}: is not valid JSON — ${error.message}`);
+  }
+  const components = parsed?.components;
+  if (!Array.isArray(components) || components.length === 0) {
+    if (parsed !== null) {
+      failures.push(`${NATIVE_COMPONENTS}: declares no components — the review scanned nothing.`);
+    }
+  } else {
+    const unreviewed = components.filter((component) => component.reviewed !== true);
+    for (const component of unreviewed) {
+      failures.push(
+        `${NATIVE_COMPONENTS}: ${component.component} (${component.spdx}) is an unresolved ` +
+          `placeholder — its licence is recorded from upstream and not confirmed against the ` +
+          `build that ships. Set "reviewed": true once somebody has checked it.`,
+      );
+    }
+    console.log(
+      `  reviewed ${components.length - unreviewed.length} of ${components.length} statically ` +
+        `linked native components`,
+    );
+  }
+}
+
 // Two different kinds of failure, with two different exit codes.
 //
 // `release-verify.mjs --allow-legal-failure` lets a DEVELOPMENT build past the

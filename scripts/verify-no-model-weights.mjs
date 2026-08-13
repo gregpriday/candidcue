@@ -162,17 +162,44 @@ for (const { path, why } of PAYLOAD_DECLARATIONS) {
         );
         continue;
       }
-      // The name being right does not make the bytes right.
+      /*
+       * An allow-listed DESTINATION does not make the SOURCE safe, and this is
+       * where the whole allow-list would have leaked.
+       *
+       * Tauri resolves a map source three ways (tauri-utils `resources.rs`):
+       * a plain file copies to the destination; a GLOB copies every match into
+       * it; and a DIRECTORY is walked, preserving its structure underneath.
+       * So `{"models": "THIRD_PARTY_NOTICES.md"}` puts the entire models tree
+       * in the bundle under an allow-listed name — and a size ceiling never
+       * fires, because `statSync` on a directory reports the inode, a couple
+       * of hundred bytes. Only a single regular file may be allow-listed.
+       */
+      if (/[*?[\]]/.test(source)) {
+        problems.push(
+          `tauri.conf.json copies ${JSON.stringify(source)} into the bundle as ${destination}. ` +
+            `A glob copies every match under one name — an allow-listed notice is one named file.`,
+        );
+        continue;
+      }
       const from = join(ROOT, 'src-tauri', source);
       if (!existsSync(from)) {
         problems.push(`tauri.conf.json copies ${source} into the bundle, and it does not exist.`);
         continue;
       }
-      const bytes = statSync(from).size;
-      if (bytes > NOTICE_CEILING_BYTES) {
+      const stats = statSync(from);
+      if (!stats.isFile()) {
         problems.push(
-          `${source} is ${bytes} bytes, copied into the bundle as ${destination}. An allow-listed ` +
-            `notice is text; something this large is not the file that was allow-listed.`,
+          `tauri.conf.json copies ${JSON.stringify(source)} into the bundle as ${destination}, ` +
+            `and it is not a regular file. Tauri WALKS a directory source, so this would copy ` +
+            `everything beneath it under an allow-listed name.`,
+        );
+        continue;
+      }
+      if (stats.size > NOTICE_CEILING_BYTES) {
+        problems.push(
+          `${source} is ${stats.size} bytes, copied into the bundle as ${destination}. An ` +
+            `allow-listed notice is text; something this large is not the file that was ` +
+            `allow-listed.`,
         );
       }
     }
