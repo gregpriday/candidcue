@@ -33,43 +33,66 @@ let loaded = false;
 export function adoptSettings(payload: unknown): boolean {
   const adapted = settingsService.adaptRevisionedSettings(payload);
   if (adapted === null) return false;
-  /* A commit — so any read still in flight is stale. See `loadGeneration`. */
-  loadGeneration += 1;
-  state.set(adapted);
-  loaded = true;
+  /* A commit — so any read still in flight is stale. See `commitCount`. */
+  commitSettings(adapted);
   return true;
 }
 
 /**
- * Which read is allowed to commit.
+ * How many times the document has been COMMITTED.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS APPEARED WITH THE SECOND WINDOW
  * ---------------------------------------------------------------------------
  * `loadSettings` used to run at most once per window, from the shell, so there
- * was nothing to race. Two mechanisms now force a re-read at arbitrary moments:
- * the `storage` event that carries an overlay change between windows, and any
- * future caller that decides its copy is stale. Two of those in flight resolve
- * in whatever order the IPC layer answers, and the later `state.set` wins — so
- * the newest document could be overwritten by an older one that started first.
+ * was nothing to race. Three things now write the document at arbitrary
+ * moments: a re-read forced by the `storage` event that carries an overlay
+ * change between windows, a `settings://changed` broadcast adopted from the
+ * other window, and this window's own save. Two of those in flight resolve in
+ * whatever order the IPC layer answers, and the later `state.set` wins — so the
+ * newest document could be overwritten by an older one that started first, and
+ * the next save would fail its optimistic-concurrency check for reasons nobody
+ * could see.
  *
- * The same guard also protects an ADOPTED document. `settings://changed` hands
- * this window the whole revisioned document synchronously; a read that was
- * already in flight would otherwise land afterwards holding the revision before
- * it, and the next save would fail its optimistic-concurrency check.
+ * ---------------------------------------------------------------------------
+ * COUNTED ON COMMIT, NOT ON START
+ * ---------------------------------------------------------------------------
+ * The obvious version of this counts reads as they BEGIN and lets only the
+ * newest commit. That is wrong in two ways, and both were real:
  *
- * `adoptSettings` bumps the generation for that reason: adopting is a commit,
- * and every read older than it is stale by definition.
+ *   - a read that begins and then FAILS still invalidated an older read that
+ *     had succeeded, so two reads racing at launch could leave the store never
+ *     loaded at all;
+ *   - it says nothing about a local save, which is a commit like any other —
+ *     so a read that started before a save could still land after it and put
+ *     the old value back.
+ *
+ * Counting commits answers all of it with one rule: a read commits only if
+ * nothing else committed while it was in flight. A failed read commits
+ * nothing and therefore invalidates nothing.
  */
-let loadGeneration = 0;
+let commitCount = 0;
+
+/** Every write to the document goes through here, so nothing is missed. */
+function commitSettings(value: AppSettings): void {
+  commitCount += 1;
+  state.set(value);
+  loaded = true;
+}
 
 export async function loadSettings(force = false): Promise<AppSettings> {
   if (loaded && !force) return get(state);
-  const generation = (loadGeneration += 1);
+  const committedAt = commitCount;
   const value = await settingsService.getSettings();
-  if (generation !== loadGeneration) return get(state);
-  state.set(value);
-  loaded = true;
+  if (commitCount === committedAt) commitSettings(value);
+  /*
+   * The migrations run WHETHER OR NOT this read committed.
+   *
+   * They are one-shot upgrades of a stored document, not a consequence of this
+   * particular read winning — and when a broadcast arrives mid-read they would
+   * otherwise be skipped, permanently: adopting sets `loaded`, so no later
+   * unforced `loadSettings` would ever reach them again.
+   */
   await adoptStageModeFromOverlay();
   await adoptOpticalFromOverlay();
   return get(state);
@@ -105,7 +128,8 @@ async function adoptStageModeFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       stage: { ...before.stage, presentationMode: pending },
     });
-    state.set(saved);
+    /* A commit, like any other — see `commitCount`. */
+    commitSettings(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }
@@ -141,7 +165,8 @@ async function adoptOpticalFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: pending,
     });
-    state.set(saved);
+    /* A commit, like any other — see `commitCount`. */
+    commitSettings(saved);
     /*
      * Only now, and this ordering is the fix.
      *
@@ -176,12 +201,22 @@ export async function patchSettings<K extends keyof AppSettings>(
         ? { ...(sectionValue as object), ...(patch as object) }
         : patch,
   };
+  /*
+   * Deliberately NOT a commit.
+   *
+   * This is the optimistic half — shown immediately, and rolled back below if
+   * the write is refused. Counting it would make a value that may never exist
+   * invalidate a read that is about to deliver a real one. The commit is the
+   * `commitSettings(saved)` a few lines down, once Rust has agreed.
+   */
   state.set(optimistic);
   try {
     const saved = await settingsService.updateSettings(before.revision, {
       [section]: optimistic[section],
     } as Partial<AppSettings>);
-    state.set(saved);
+    /* A commit, so a read that started before this one cannot land after it
+       and put the old value back. See `commitCount`. */
+    commitSettings(saved);
 
     /*
      * A local-storage failure is reported, not swallowed.
