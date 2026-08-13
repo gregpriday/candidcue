@@ -408,18 +408,36 @@ describe('returning from the editor with a selection past the first page', () =>
      * leave the cursor at 3 with two pages in hand, and the next Show more
      * would skip five hundred scripts.
      */
+    /*
+     * Page one fails and page two would have succeeded. That combination is the
+     * point: stopping matters only when the pages after the failure are still
+     * answerable, because carrying on is what moves the cursor past a page
+     * whose rows are not in the list.
+     */
+    const serve = paged(1400);
     let call = 0;
     setInvokeForTesting(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
-      requests.push({ command, args });
       call += 1;
-      if (call === 1) return { items: [summary('s0')], total: 1400 } as T;
-      throw unreadable;
+      if (call === 2) {
+        requests.push({ command, args });
+        throw unreadable;
+      }
+      return serve<T>(command, args);
     });
     await loadLibrary();
+
+    // Only page zero is in, so the cursor must still be at one.
+    expect(get(library).scripts).toHaveLength(500);
 
     requests = [];
     setInvokeForTesting(paged(1400));
     await loadMoreScripts();
+    /*
+     * Without the stop, the loop would have gone on to page two, succeeded,
+     * and left the cursor at two — so this next request would ask for page two
+     * and the five hundred rows of page one would be unreachable.
+     */
     expect((requests[0]?.args?.['page'] as { page: number }).page).toBe(1);
+    expect(get(library).scripts).toHaveLength(1000);
   });
 });
