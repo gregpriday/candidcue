@@ -111,6 +111,14 @@ ones being proofread.
 `--allow-legal-failure` for a development build; the run then says loudly that
 it is not releasable.
 
+A green verification says the source is releasable. It says nothing about the
+artifact, the machine it lands on, or the glass it is read through.
+[`docs/release-runbook.md`](docs/release-runbook.md) is what to do with a
+build — the clean-clone drill, the credential dry run, interrogating the signed
+DMG, installing it on a machine that has never seen it, and withdrawing one that
+turns out to be bad. The product half is
+[`docs/real-rig-test-protocol.md`](docs/real-rig-test-protocol.md).
+
 Toolchains are pinned exactly: `.nvmrc` for Node, `rust-toolchain.toml` for the
 Rust compiler. The latter names a specific release rather than `stable`, so two
 machines a month apart build the same tag with the same compiler.

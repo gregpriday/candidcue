@@ -1,0 +1,351 @@
+# Release runbook
+
+**What to do, in order, to put a build in somebody else's hands — and what to
+do when one of them turns out to be bad.**
+
+This is the release-engineering half. The product half is
+`docs/real-rig-test-protocol.md`, which is the only thing that can say whether a
+build actually follows a voice on real glass, and no amount of green CI stands
+in for it.
+
+Three gates, and they are not the same gate. Do not collapse them into one
+"ready to launch" feeling:
+
+| Gate | Who gets it | What it needs |
+|---|---|---|
+| **A — signed tester build** | A small invited group | Everything in §1–§5 below |
+| **B — public beta** | Anyone who finds the download page | A, plus a download page, a guide, known issues, published checksums, and a hardware matrix with more than one row |
+| **C — paid 1.0** | Customers | B, plus `pnpm legal:check` exiting 0, a Merchant of Record, and a tested purchase, receipt and refund |
+
+Nothing in this repository can clear the business half of C. `pnpm legal:check`
+exits non-zero on purpose until it can — see `legal/PLACEHOLDERS.md`.
+
+---
+
+## 1. Prepare the repository
+
+Stop feature work first. A release candidate is a thing you are measuring, and
+a moving one cannot be measured.
+
+```bash
+# From a fresh clone, not from the tree you have been working in.
+git clone https://github.com/gregpriday/candidcue candidcue-release-check
+cd candidcue-release-check
+
+git lfs install && git lfs pull
+git lfs ls-files          # the bench corpora must be real files, not pointers
+
+corepack enable
+pnpm install --frozen-lockfile
+
+node scripts/release-verify.mjs
+git status --short         # must be empty: no gate may depend on an untracked file
+```
+
+The clean-clone drill is not ceremony. `scripts/verify-repository.mjs` exists
+because the readiness review could not certify a release whose inputs nobody
+could prove were committed, and it is the first step of `release-verify.mjs` for
+that reason. Run it somewhere that has never built this project.
+
+Then, from the same checkout:
+
+```bash
+cargo test  --locked --manifest-path src-tauri/Cargo.toml
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test  --locked --manifest-path crates/Cargo.toml
+cargo clippy --locked --manifest-path crates/Cargo.toml --all-targets -- -D warnings
+```
+
+Before going further, confirm by reading rather than by memory:
+
+- [ ] CI is green on the commit you intend to tag.
+- [ ] No model weights are bundled — `pnpm exec node scripts/verify-no-model-weights.mjs <path to .app>` after a local `pnpm tauri build --bundles app`.
+- [ ] The speech catalogue names the model and digests you meant to ship.
+- [ ] `docs/network-inventory.md` still describes this build, and the surfaces it lists still agree with it.
+- [ ] `CHANGELOG.md` has a section for the version, written for somebody deciding whether to install it.
+- [ ] Known issues are written down somewhere the tester will actually see.
+
+## 2. Set the version
+
+One command. Never edit the manifests by hand — there are five of them and they
+have disagreed before.
+
+```bash
+pnpm version:set 1.0.0-rc.2
+pnpm version:check
+```
+
+`version:check` reads `package.json`, `src-tauri/Cargo.toml`,
+`src-tauri/tauri.conf.json` and `src/shared/version.ts` and refuses if they
+disagree. The tag is checked against the same value in CI, before anything is
+built, because a `v1.0.0` tag on a `1.0.0-rc.2` source tree produces a signed,
+notarised artifact whose About box contradicts its own download page.
+
+**Release identity is frozen.** `com.candidcue.app` is the permanent bundle
+identifier. Changing it after a tester has installed an RC makes the next build
+a different application to macOS: new microphone permission, new data
+directory, no continuity. If it ever has to change, that is a migration with a
+plan, not a config edit.
+
+## 3. Write the release notes before you build
+
+The workflow refuses a tag with no `## v<version>` section in `CHANGELOG.md`,
+and it checks that *before* the build rather than at the publish step — a
+notarisation round trip is an expensive way to discover an undescribed release.
+
+A tester's notes need, at minimum: what changed, what to focus on, known
+limitations, that the app is English-only, the OS and hardware claim, that
+updates are manual and how to do one, whether data from the previous RC
+survives, the privacy and network note, and how to report a problem.
+
+## 4. Prove the credentials without publishing anything
+
+Dispatch the workflow manually against the branch with `dry_run` ticked. It
+builds, signs, notarises and inspects, and the `publish` job does not run.
+
+```bash
+gh workflow run Release --ref develop -f dry_run=true
+gh run watch
+```
+
+Read the log for: the keychain import, the universal build, notarisation, the
+step that compares each link map against the slice lipo packaged, the copyleft
+check for both architectures, `verify-signed-bundle.mjs`, the SBOM, the
+checksums, and the credential cleanup step reporting that it ran.
+
+## 5. Publish the tag deliberately
+
+```bash
+pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
+pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
+git tag -s v1.0.0-rc.2 -m "CandidCue 1.0.0-rc.2"
+git show v1.0.0-rc.2        # right commit? signed?
+git push origin v1.0.0-rc.2
+```
+
+A hyphen in the version is what makes it a prerelease: the workflow passes
+`--prerelease --latest=false` for `v1.0.0-rc.2` and `--latest` for `v1.0.0`.
+Check which one you are about to become before pushing.
+
+A stable tag routes its publication through the `release-stable` GitHub
+Environment. Give that environment a required reviewer in Settings →
+Environments and every stable release then waits for a person to press a
+button; prereleases go through `release-prerelease` and flow.
+
+---
+
+## 6. Ask the artifact, not the workflow
+
+"The run was green" is not an inspection. Download the DMG the workflow
+produced — the same file a user would get — and interrogate it.
+
+```bash
+APP="/Volumes/CandidCue/CandidCue.app"      # or /Applications/CandidCue.app
+DMG="CandidCue_1.0.0-rc.2_universal.dmg"
+# `candidcue`, lowercase — the Cargo bin name. `CandidCue` is the product name
+# and is not what lives in MacOS/. Read it rather than typing it:
+BIN="$APP/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+```
+
+**Signature, notarisation, Gatekeeper**
+
+```bash
+codesign --verify --deep --strict --verbose=4 "$APP"
+codesign -dv --verbose=4 "$APP" 2>&1        # identity, Team ID, bundle id, runtime flags
+spctl --assess --type execute --verbose=4 "$APP"
+xcrun stapler validate "$APP"
+xcrun stapler validate "$DMG"
+```
+
+Expect a Developer ID Application identity, the right Team ID,
+`com.candidcue.app`, the hardened runtime, a valid ticket, no ad-hoc signature
+and no unsigned nested code.
+
+**Entitlements** — compare the signed output against
+`src-tauri/entitlements/entitlements.macos.plist`, not against your memory of
+it:
+
+```bash
+codesign -d --entitlements :- "$APP"
+```
+
+Audio input where it is needed. No `get-task-allow`, no debug entitlement, no
+broad file access, no JIT, no camera, contacts, automation or accessibility.
+
+**Architectures** — a universal header is not proof both slices run:
+
+```bash
+lipo -archs "$BIN"      # arm64 x86_64
+file "$BIN"
+```
+
+Then launch it on both. `verify-signed-bundle.mjs` now fails a build that has
+only one slice, but nothing automated can tell you the Intel slice actually
+works.
+
+**Bundle metadata**
+
+```bash
+plutil -p "$APP/Contents/Info.plist"
+```
+
+Product name, bundle id, short version, build version, minimum macOS,
+copyright, the microphone usage description. No dev URL, no placeholder, no
+absolute path from the build machine.
+
+**Contents** — walk the payload and confirm what is *not* there: no `.onnx`
+weights, no model archive, no `.env`, no signing material, no source control
+metadata, no test corpus, no localhost or dev-server reference, no
+remote-image command, no updater resources. The notices and font licences the
+bundle is supposed to carry must be present.
+
+**The DMG itself**
+
+```bash
+hdiutil verify "$DMG"
+```
+
+Open it: sensible layout, obvious drag-to-Applications, correct icon at every
+size, no stale volume name. Copying to `/Applications` must preserve the
+signature, and the user must never be told to use "Open Anyway".
+
+## 7. Prove it installs on a machine that has never seen it
+
+The most important installation test is not on the development Mac. Use a clean
+macOS user account — ideally a different machine — with no developer tools, no
+environment variables, and no cached speech model.
+
+- [ ] Download from the actual hosted URL in a browser, so the file is quarantined.
+- [ ] Verify the filename and the published SHA-256.
+- [ ] Open the DMG, drag to Applications, eject, launch from Applications.
+- [ ] No Gatekeeper bypass is required at any point.
+- [ ] Complete the microphone permission flow. Deny it once, then recover.
+- [ ] Download the speech model. Cancel midway. Resume. Confirm a cancelled install left the previous state intact.
+- [ ] Create or open a script and complete a voice-followed take.
+- [ ] Quit and reopen: scripts, settings and calibration survive.
+- [ ] Install the next RC over the top: data, model, calibration and permissions all survive.
+- [ ] Export a support bundle, reveal it, and read it before deciding to send it.
+
+No terminal command may be required for any of this. If one is, that is a
+release defect, not a documentation gap.
+
+## 8. Long sessions, before a build goes wide
+
+Short takes prove the happy path and nothing about the third hour. Run these on
+the packaged app and record numbers, not impressions:
+
+| Run | Duration | What it is for |
+|---|---:|---|
+| Repeated short takes | 30–50 takes | Lifecycle leaks, stale generations, start/stop races |
+| A normal creator session | 30 min | Thermals, memory, audio and stage behaviour together |
+| One long presentation | 60 min | Sustained recogniser and renderer stability |
+| Idle with preflight open | 30 min | Device and display changes before a take |
+| A pause-heavy take | 20 min | Prediction settling |
+| A large script | 10,000+ words | Compile, layout and navigation cost |
+| An image-heavy script | Realistic maximum | Asset decode and memory |
+| RC N → RC N+1 | — | Update continuity |
+
+Track CPU, memory at rest after the session, thermal pressure, audio dropouts,
+first-lock time, and database and log growth. Establish the baseline on the
+slowest machine you support and treat a material regression as a release
+failure — but do not invent a performance promise before you have measured one.
+
+---
+
+## 9. Withdrawing a bad release
+
+Assume it will happen once. The point of writing this down now is that the
+decision gets made calmly and the steps are not improvised while a download
+page is serving something broken.
+
+**Stop distribution immediately** for any of: an invalid signature or
+notarisation, data loss, script corruption, a support bundle disclosing content
+it should not, a model-integrity failure, the microphone activating outside an
+explicit user action, a repeatable launch failure on an advertised system,
+licence-compliance doubt about the exact artifact, a stable build identifying
+itself as prerelease or the reverse, or a download button pointing at the wrong
+file.
+
+The procedure:
+
+1. **Take the download away first, explain second.** Point the download page at
+   the previous good version, or take it down. A page that serves a bad build
+   while you write an announcement keeps making the problem bigger.
+2. **Mark the release.** Do not delete it — a deleted release breaks every link
+   anyone has shared and destroys the evidence.
+   ```bash
+   gh release edit v1.0.0-rc.2 --prerelease --latest=false
+   gh release edit v1.0.0-rc.2 --notes-file withdrawn.md   # lead with WITHDRAWN and why
+   ```
+   Delete the *assets* only if leaving them installable is itself the harm:
+   ```bash
+   gh release delete-asset v1.0.0-rc.2 CandidCue_1.0.0-rc.2_universal.dmg
+   ```
+3. **Leave the tag.** The tag is what ties the artifact to a commit; removing it
+   destroys the provenance of a build people are already running.
+4. **Tell the people who have it.** Every tester, by the channel you gave them,
+   naming: what is wrong, what it can do to their data, whether to stop using
+   it, and what to do instead. If there is a release-announcement list, this is
+   what it exists for — the app does not check for updates, so nothing else
+   will tell them.
+5. **Fix forward.** Never re-cut a tag that has been published. The replacement
+   is a new version — `1.0.0-rc.3` — even if the fix is one line.
+6. **Write it down.** Add the withdrawal to `CHANGELOG.md` under the withdrawn
+   version, so the record survives the incident.
+7. **If it was a security or signing problem**, revoke the signing certificate
+   as well, re-sign the replacement with a new one, and say so in the notes.
+   Apple's revocation is what stops an already-distributed copy from launching.
+
+## 10. Hardware qualification
+
+`docs/real-rig-test-protocol.md` is the per-rig sheet: copy it to
+`docs/rig-runs/<version>-<date>.md`, fill in the hardware, run the sections the
+change touches, and — the part that makes it honest — list what you skipped.
+
+One sheet is one rig. A release claim covers a matrix, so keep a table of which
+cells actually passed for each version, and **do not advertise a cell that has
+no sheet behind it**:
+
+| Dimension | Cells a 1.0 claim would need |
+|---|---|
+| CPU | Apple Silicon; Intel, if Intel is advertised |
+| macOS | The oldest supported version; one in between; the current one |
+| Display | Laptop only; one external; two displays |
+| Resolution | Retina; a 4K/5K external |
+| Connection | Direct HDMI or USB-C; a dock, if the audience uses one |
+| Microphone | Built-in; USB; an interface; Bluetooth |
+| Teleprompter | A second screen alone; real beamsplitter glass |
+| Room | Quiet; some noise; a speaker near the microphone |
+| Input | Pointer; keyboard only |
+| Accessibility | VoiceOver; reduced motion; large display scaling |
+
+`minimumSystemVersion` in `tauri.conf.json` is a configuration value, not
+evidence. It becomes a claim when a Mac running that version has completed the
+core journey.
+
+---
+
+## 11. Support, for the first cohort
+
+Ask for: the CandidCue version, the macOS version, the Mac model, the
+microphone, the display arrangement, the rig, what they expected, what
+happened, how to reproduce it, how often, whether a restart helps, and a
+support bundle **only with explicit consent**.
+
+Severity, and what each one does to the release:
+
+| | Definition | Treatment |
+|---|---|---|
+| **P0** | Data loss, a privacy or security breach, the app cannot launch, the artifact is invalid | Stop distribution (§9) |
+| **P1** | A take cannot complete, microphone or display failure, unread text advancing on its own, an unrecoverable presentation state | Fix before the next cohort |
+| **P2** | A recoverable workflow defect, repeated confusion, a significant visual problem | Fix before stable where practical |
+| **P3** | Cosmetic, with a workaround | Backlog |
+| Feedback | A preference or a feature request | Not a defect |
+
+Ask the reporter to reproduce once and export the bundle immediately
+afterwards, remind them they can reveal and read it first, and never ask for a
+private script when a synthetic one reproduces the problem. Delete bundles you
+receive on whatever schedule you told them you would.
+
+Two testers confused by the same thing is a P1 documentation or interface
+issue, not a coincidence.

@@ -15,6 +15,12 @@ stage layout or live controls must produce a filled-in copy of the relevant
 section below, naming the hardware and the result — including the parts that
 were not tested.
 
+This sheet covers one rig taking one build through a take. The rest of getting
+a release out — the clean-clone drill, signing, interrogating the artifact,
+installing on a machine that has never seen it, the coverage matrix these
+sheets add up to, and withdrawing a build that turns out to be
+bad — is `docs/release-runbook.md`.
+
 ## How to use it
 
 1. Copy this file to `docs/rig-runs/<version>-<date>.md`.

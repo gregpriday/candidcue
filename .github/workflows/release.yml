@@ -23,6 +23,34 @@ name: Release
 # correct behaviour: an unsigned build is not a release, and a workflow that
 # quietly produced one would be worse than no workflow.
 #
+# ## Two jobs, and why
+#
+# `build` has **read-only** repository permissions. It is the job that runs the
+# most code — the whole test suite, a cargo build, the bundler, and every
+# verification script — and none of that needs the ability to write to the
+# repository. `publish` gets `contents: write` and does nothing but attach
+# already-verified files to a release. A compromised dependency in the build
+# job therefore cannot create a release, move a tag, or push a commit.
+#
+# ## Stable releases can be made to wait for a human
+#
+# `publish` names a GitHub Environment, and which one depends on the tag: a
+# version containing a hyphen (`v1.0.0-rc.2`) uses `release-prerelease`, and a
+# stable one (`v1.0.0`) uses `release-stable`. Configure `release-stable` in
+# Settings → Environments with a required reviewer and every stable publication
+# then waits for a deliberate human approval, while RC tags keep flowing.
+#
+# Neither environment has to exist for this to run — GitHub creates an
+# unprotected one on demand — so the protection is opt-in and its absence is
+# not a silent failure, it is simply the unprotected behaviour you started with.
+#
+# ## Third-party actions are pinned to commit SHAs
+#
+# A tag is a moving pointer: `actions/checkout@v4` is whatever the owner last
+# pushed to that tag, which is the supply-chain shape that has actually been
+# exploited in the wild. Each `uses:` below names an immutable commit with the
+# version it corresponded to in a comment. Update them deliberately.
+#
 # ## The legal gate is NOT suppressed here
 #
 # `ci.yml` passes `--allow-legal-failure` so day-to-day pushes are not blocked
@@ -41,18 +69,20 @@ on:
         default: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  release:
-    name: Signed macOS release
+  build:
+    name: Build, sign and verify
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Tags are built from a clean checkout with the full corpus. The
           # benchmark fixtures are Git LFS and `read_events_jsonl` now refuses
@@ -61,18 +91,24 @@ jobs:
           lfs: true
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           run_install: false
 
       - name: Install the pinned toolchain
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Both architectures must be installable
+        # The universal build needs each slice's target, and a missing one
+        # fails inside the bundler with a message about a path rather than
+        # about a toolchain.
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -94,7 +130,7 @@ jobs:
       # and with `dry_run` unticked such a run does publish. Gating on
       # `github.event_name == 'push'` would let exactly that run skip the check.
       # A dispatch against a branch has no tag to check and cannot publish,
-      # because the Publish step tests the same `refs/tags/v` predicate.
+      # because the publish job tests the same `refs/tags/v` predicate.
       - name: The tag must name the version being built
         if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/version.mjs tag "${GITHUB_REF_NAME}"
@@ -126,7 +162,7 @@ jobs:
           } | tee provenance/toolchain.txt
 
       # ------------------------------------------------------------------
-      # Sign, build, notarise.
+      # Sign, build, notarise — with a link map per slice.
       # ------------------------------------------------------------------
       - name: Import the signing certificate
         env:
@@ -174,8 +210,39 @@ jobs:
           # Named for what it holds so it cannot be confused with
           # APPLE_API_KEY, which Tauri expects to be the key ID.
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY }}
+          # ------------------------------------------------------------
+          # A link map per slice, written by the links that ship.
+          # ------------------------------------------------------------
+          #
+          # sherpa-onnx-sys links libespeak-ng.a and libucd.a — both
+          # GPL-3.0-or-later — into a proprietary binary, and no feature or
+          # environment variable removes them from the link line. The
+          # comfortable argument was that a static link takes only what it
+          # needs and CandidCue never calls TTS; that argument is false,
+          # because libsherpa-onnx-c-api.a references OfflineTts and drags the
+          # whole chain in. What saves it is dead-stripping, and "the linker
+          # threw it away" is a claim about a SPECIFIC BINARY.
+          #
+          # These used to be separate `cargo build` runs. They are gone. The
+          # first attempt ran them afterwards, which described a rebuild rather
+          # than the packaged slices; the second ran them first and hoped the
+          # bundler would get a cache hit, which it would not — the Tauri CLI
+          # adds `--bins`, `--features tauri/custom-protocol` and a deployment
+          # target of its own, so the hand-written command compiles something
+          # else and the maps go with it.
+          #
+          # `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` removes the problem instead of
+          # working around it: cargo applies each to its own target, so the
+          # bundler's OWN two links write the two maps. There is no second
+          # build to reconcile, and the maps describe the slices lipo combines
+          # by construction rather than by argument.
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: -C link-arg=-Wl,-map,${{ runner.temp }}/link-aarch64.map
+          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: -C link-arg=-Wl,-map,${{ runner.temp }}/link-x86_64.map
         run: |
           set -euo pipefail
+          # A map left over from an earlier run of this job would be accepted
+          # by every check below it. Start from nothing.
+          rm -f "$RUNNER_TEMP"/link-*.map
           # A trap, not a trailing `rm`. Under `set -e` a failed build exits the
           # step immediately, so the decoded App Store Connect private key was
           # left on the runner's disk for every failure — the case where
@@ -207,28 +274,125 @@ jobs:
       # Ask the artifact, not the source.
       # ------------------------------------------------------------------
 
-      # sherpa-onnx-sys links libespeak-ng.a and libucd.a — both
-      # GPL-3.0-or-later — into a proprietary binary, and no feature or
-      # environment variable removes them from the link line. The comfortable
-      # argument was that a static link takes only what it needs and CandidCue
-      # never calls TTS; that argument is false, because libsherpa-onnx-c-api.a
-      # references OfflineTts and drags the whole chain in. What saves it is
-      # dead-stripping, and "the linker threw it away" is a claim about a
-      # specific binary. So the release links each slice with a map and checks
-      # it. One map per architecture: lipo cannot make a clean arm64 slice
-      # vouch for an x86_64 one.
+      # Every claim the copyleft check makes is a claim about a map. This is
+      # where the maps are tied to the bytes that ship.
+      #
+      # Three things, per architecture: the map exists and says which slice it
+      # describes; the thin binary the linker wrote is still there; and it is
+      # BYTE-IDENTICAL to the slice lipo put in the universal binary. Together
+      # they close the "which binary is this evidence about" question that the
+      # first two attempts at this step left open.
+      #
+      # The universal binary is taken before signing, deliberately. Tauri lipos
+      # these two thin binaries into it and then copies and SIGNS that copy, so
+      # the executable inside the .app differs in its signature bytes while the
+      # code is the same. The chain proved here is map → linked slice → lipo
+      # input → the executable the bundler copied.
+      - name: The maps must describe the slices that were packaged
+        run: |
+          set -euo pipefail
+          UNIVERSAL=src-tauri/target/universal-apple-darwin/release/candidcue
+          test -f "$UNIVERSAL" || { echo "::error::no universal binary at $UNIVERSAL"; exit 1; }
+          for pair in aarch64:arm64 x86_64:x86_64; do
+            arch="${pair%%:*}"; slice="${pair##*:}"
+            map="$RUNNER_TEMP/link-$arch.map"
+            if [ ! -s "$map" ]; then
+              echo "::error::no link map for $arch. The build did not link that slice, or"
+              echo "::error::CARGO_TARGET_${arch}_APPLE_DARWIN_RUSTFLAGS did not reach cargo."
+              exit 1
+            fi
+            # ld64 records the slice it linked. A map copied from, or left over
+            # by, the other architecture is not evidence about this one.
+            if ! grep -qE "^# Arch: +$slice\$" "$map"; then
+              echo "::error::$map does not declare '# Arch: $slice'"
+              exit 1
+            fi
+            thin="src-tauri/target/$arch-apple-darwin/release/candidcue"
+            test -f "$thin" || { echo "::error::no linked binary at $thin"; exit 1; }
+            # ld64 also records what it was linking. Cargo links into
+            # `release/deps/candidcue-<hash>` and then puts the same bytes at
+            # the name above, so this binds the map to THIS program rather than
+            # to another one of the same architecture. It is a weaker claim
+            # than the byte comparison below and it is here because it closes a
+            # different hole: a substituted map for a plausible neighbour.
+            linked="$(sed -n 's/^# Path: *//p' "$map" | head -1)"
+            case "$(basename "${linked:-}")" in
+              candidcue*) ;;
+              *)
+                echo "::error::$map was written linking '${linked:-nothing}', which is not CandidCue"
+                exit 1
+                ;;
+            esac
+            if [ -f "$linked" ] && ! cmp -s "$linked" "$thin"; then
+              echo "::error::$map describes $linked, which differs from $thin"
+              exit 1
+            fi
+            lipo "$UNIVERSAL" -thin "$slice" -output "$RUNNER_TEMP/packaged-$arch"
+            if ! cmp -s "$thin" "$RUNNER_TEMP/packaged-$arch"; then
+              echo "::error::the packaged $slice slice is not the binary its link map describes"
+              exit 1
+            fi
+            echo "$slice: mapped, and the packaged slice is byte-identical to the linked one"
+          done
+
+      # One invocation per architecture, each with ITS OWN prebuilt archives.
+      # `sherpa-onnx-prebuilt/*/lib` looked tidier and was wrong: after a
+      # universal build that glob matches both the arm64 and the x64 extraction
+      # directories, and the second one would be handed to the script as a map
+      # file. Membership has to be resolved against the archives that were
+      # actually linked into the slice being checked, which is the per-arch
+      # directory and not either one of them.
       - name: No copyleft code may reach the binary
         run: |
           set -euo pipefail
-          for arch in aarch64 x86_64; do
-            RUSTFLAGS="-C link-arg=-Wl,-map,$RUNNER_TEMP/link-$arch.map" \
-              cargo build --release --locked \
-              --manifest-path src-tauri/Cargo.toml \
-              --target "$arch-apple-darwin"
-          done
-          node scripts/verify-no-copyleft-objects.mjs \
-            src-tauri/target/sherpa-onnx-prebuilt/*/lib \
-            "$RUNNER_TEMP/link-aarch64.map" "$RUNNER_TEMP/link-x86_64.map"
+          # A loop rather than an array: macOS runners still ship bash 3.2, and
+          # `${#a[@]}` on an empty array is an unbound-variable error there
+          # under `set -u`. Counting directories is the version that behaves the
+          # same everywhere, and it treats an unmatched glob — which bash leaves
+          # as the literal pattern — as zero rather than as one.
+          check() {
+            local pattern="$1" map="$2" dir count=0 found=
+            for dir in $pattern; do
+              [ -d "$dir" ] || continue
+              count=$((count + 1))
+              found="$dir"
+            done
+            if [ "$count" -ne 1 ]; then
+              echo "::error::expected exactly one prebuilt directory matching $pattern, found $count"
+              exit 1
+            fi
+            node scripts/verify-no-copyleft-objects.mjs "$found" "$map"
+          }
+          check 'src-tauri/target/sherpa-onnx-prebuilt/*-osx-arm64-static-lib/lib' \
+                "$RUNNER_TEMP/link-aarch64.map"
+          check 'src-tauri/target/sherpa-onnx-prebuilt/*-osx-x64-static-lib/lib' \
+                "$RUNNER_TEMP/link-x86_64.map"
+
+      # And a narrow last word from the artifact itself.
+      #
+      # This proves one thing: the packaged executable has no DYNAMIC
+      # dependency whose name is on the speech-synthesis list below. It is not
+      # a general audit of what is linked. It exists because a dylib is
+      # invisible to the map check — a dynamically linked library contributes
+      # no object files — so a shared sherpa-onnx or eSpeak would pass
+      # everything above. The release links sherpa statically on purpose, for
+      # exactly this reason: the shared library genuinely contains the GPL code.
+      #
+      # The executable is `candidcue`, lowercase — the Cargo bin name. Read it
+      # from the bundle rather than assuming: `CandidCue` is the product name,
+      # and hard-coding that spelling is a step that fails on every release.
+      - name: The packaged executable dynamically links no speech synthesis
+        run: |
+          set -euo pipefail
+          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+          EXE="$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+          otool -L "$APP/Contents/MacOS/$EXE" | tee "$RUNNER_TEMP/otool.txt"
+          if grep -Eiq 'espeak|piper|sherpa|libttspico|festival' "$RUNNER_TEMP/otool.txt"; then
+            echo "::error::the packaged executable dynamically links a speech-synthesis library"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/otool.txt" provenance/linked-libraries.txt
+          cp "$RUNNER_TEMP/link-aarch64.map" "$RUNNER_TEMP/link-x86_64.map" provenance/
 
       - name: Inspect the signed bundle
         run: |
@@ -237,6 +401,27 @@ jobs:
 
       - name: Record what the release is made of
         run: node scripts/verify-supply-chain.mjs all
+
+      # Advisories are NOT a gate, and that is a decision rather than an
+      # oversight. `scripts/verify-supply-chain.mjs` says why: they query a
+      # database that changes without the repository changing, so making them
+      # blocking means a tag that built yesterday refuses to build today for a
+      # reason nobody in this repository introduced. They run here so a new
+      # advisory is news attached to the release, and the run records what it
+      # found in the provenance either way.
+      - name: Dependency advisories (reported, not enforced)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          {
+            echo "# cargo audit"
+            cargo install cargo-audit --locked --quiet 2>/dev/null || true
+            cargo audit --file src-tauri/Cargo.lock 2>&1 || true
+            cargo audit --file crates/Cargo.lock 2>&1 || true
+            echo
+            echo "# pnpm audit"
+            pnpm audit --prod 2>&1 || true
+          } | tee provenance/advisories.txt
 
       - name: Checksum every artifact
         run: |
@@ -252,7 +437,7 @@ jobs:
           # artifacts is a failure, not an empty success.
           test -s SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidcue-release
           path: |
@@ -261,11 +446,75 @@ jobs:
             provenance/
           retention-days: 90
 
-      # ------------------------------------------------------------------
-      # Only now.
-      # ------------------------------------------------------------------
+  # ------------------------------------------------------------------
+  # Only now, and in a job that can write.
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
+    permissions:
+      contents: write
+    # A stable tag can be made to wait for a human; a prerelease flows. See the
+    # header — neither environment has to exist for this to run.
+    environment:
+      name: ${{ contains(github.ref_name, '-') && 'release-prerelease' || 'release-stable' }}
+    steps:
+      # For CHANGELOG.md and scripts/release-notes.mjs. Nothing is built here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidcue-release
+          path: verified
+
+      - name: The artifacts must have survived the handover
+        # A publish job that found nothing would otherwise create an empty
+        # release, which is worse than no release: the download page exists and
+        # the button does nothing.
+        run: |
+          set -euo pipefail
+          test -s verified/dist-release/SHA256SUMS
+          cd verified/dist-release
+          shasum -a 256 -c SHA256SUMS
+
+      # The tag must still be the commit these artifacts were built from.
+      #
+      # `gh release create --verify-tag` checks only that the tag EXISTS. A tag
+      # deleted and recreated at a different commit while this ran would satisfy
+      # it, and the artifacts attached would be from the original. That window
+      # is longer now, not shorter: a stable release waits in an environment for
+      # a human to approve it, and a person is slower than a build.
+      - name: The tag must still be the commit that was built
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Peeled, because an annotated tag's ref points at the tag object.
+          now="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" \
+                  "refs/tags/${GITHUB_REF_NAME}^{}" | cut -f1)"
+          # A lightweight tag has no peeled ref; fall back to the ref itself.
+          if [ -z "$now" ]; then
+            now="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" \
+                    "refs/tags/${GITHUB_REF_NAME}" | cut -f1)"
+          fi
+          if [ -z "$now" ]; then
+            echo "::error::${GITHUB_REF_NAME} no longer exists on the remote"
+            exit 1
+          fi
+          if [ "$now" != "${GITHUB_SHA}" ]; then
+            echo "::error::${GITHUB_REF_NAME} now points at $now, not the ${GITHUB_SHA} these"
+            echo "::error::artifacts were built from. Publishing would attach one commit's build"
+            echo "::error::to another commit's tag."
+            exit 1
+          fi
+
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -292,12 +541,15 @@ jobs:
           esac
 
           # `--verify-tag`, because `gh release create` otherwise CREATES a
-          # missing tag from the default branch. A tag deleted or moved while
-          # this run was building would be silently recreated at a different
-          # commit, with artifacts built from the original one attached to it.
+          # missing tag from the default branch — a tag deleted while this run
+          # was building would come back at whatever the default branch is now,
+          # carrying artifacts built from a different commit. Movement is a
+          # separate problem and the step above is what sees it; between that
+          # check and this line the tag can still change, and nothing available
+          # here closes that window entirely.
           gh release create "${GITHUB_REF_NAME}" \
             --verify-tag \
             --title "CandidCue ${GITHUB_REF_NAME}" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             "${flags[@]}" \
-            dist-release/* sbom/* provenance/*
+            verified/dist-release/* verified/sbom/* verified/provenance/*

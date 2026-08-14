@@ -100,20 +100,61 @@ if (!existsSync(plist)) {
 
 // Architectures. A release that is arm64-only will not open on an Intel Mac,
 // and the failure a user sees is "the application cannot be opened".
-const executable = join(bundle, 'Contents/MacOS/CandidCue');
-if (existsSync(executable)) {
+/*
+ * The executable is named by Info.plist, not by the product.
+ *
+ * This used to be `Contents/MacOS/CandidCue`, and there is no such file: the
+ * Mach-O carries the CARGO BIN name, which is `candidcue`, while `CandidCue` is
+ * only the bundle's display name. Every release would have reported "the bundle
+ * has no executable" and stopped — a gate failing on its own spelling. Reading
+ * CFBundleExecutable is also the only version that survives a rename of either.
+ */
+const executableLookup = tool('plutil', [
+  '-extract',
+  'CFBundleExecutable',
+  'raw',
+  join(bundle, 'Contents/Info.plist'),
+]);
+const bundleExecutableName = executableLookup.ok ? executableLookup.output.trim() : '';
+if (!bundleExecutableName) {
+  // `plutil`'s own words. "No CFBundleExecutable" and "no Info.plist" and
+  // "that is not a property list" are three different problems, and a report
+  // that flattens them sends the reader to the wrong one.
+  problems.push(
+    'Info.plist does not yield a CFBundleExecutable, so the bundle does not say which ' +
+      `file to run: ${executableLookup.output.trim() || 'the key is absent or empty'}`,
+  );
+}
+const executable = join(bundle, 'Contents/MacOS', bundleExecutableName || 'CandidCue');
+if (bundleExecutableName && existsSync(executable)) {
+  passed.push(`executable: Contents/MacOS/${bundleExecutableName}`);
   const { ok, output } = tool('lipo', ['-archs', executable]);
   if (ok) {
     const archs = output.trim().split(/\s+/);
     passed.push(`architectures: ${archs.join(', ')}`);
-    if (!archs.includes('arm64')) {
-      problems.push(`the executable has no arm64 slice (found ${archs.join(', ')})`);
+    // BOTH, not just arm64. This script runs on the universal build and
+    // nowhere else, and the release promises an app that opens on an Intel
+    // Mac. Accepting an arm64-only slice here would let a bundler that
+    // silently dropped the x86_64 target ship as "universal" — a claim a user
+    // only discovers is false when the app will not open, with no reason
+    // given. `lipo -archs` says `arm64` for the arm slice and `x86_64` for
+    // the Intel one.
+    for (const required of ['arm64', 'x86_64']) {
+      if (!archs.includes(required)) {
+        problems.push(
+          `the executable has no ${required} slice (found ${archs.join(', ')}). The release ` +
+            `is advertised as universal; either build both targets or stop advertising it.`,
+        );
+      }
     }
   } else {
     problems.push(`could not read the executable's architectures: ${output.trim()}`);
   }
-} else {
-  problems.push(`Contents/MacOS/CandidCue is missing — the bundle has no executable`);
+} else if (bundleExecutableName) {
+  problems.push(
+    `Contents/MacOS/${bundleExecutableName} is missing — Info.plist names an executable ` +
+      `the bundle does not contain`,
+  );
 }
 
 // No model weights. Delegated, because that check has its own tests.

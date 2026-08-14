@@ -1285,3 +1285,162 @@ describe('the notes this tree would actually publish', () => {
     expect(extracted.output).toContain(`macOS ${minimum}`);
   });
 });
+
+/* -------------------------------------------- the release pipeline's authority */
+
+describe('the release pipeline holds no more authority than it needs', () => {
+  const RELEASE = '.github/workflows/release.yml';
+  const workflow = readFileSync(join(REPO_ROOT, RELEASE), 'utf8');
+  const uncommented = workflow
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+
+  /** A job's body: from its key to the next key at the same indentation. */
+  const job = (name: string): string => {
+    const start = uncommented.indexOf(`\n  ${name}:`);
+    expect(start, `${RELEASE} has no ${name} job`).toBeGreaterThan(-1);
+    const rest = uncommented.slice(start + 1);
+    const next = rest.search(/\n {2}[a-z][\w-]*:\n/);
+    return next === -1 ? rest : rest.slice(0, next);
+  };
+
+  /*
+   * The readiness review's point, and it is about blast radius rather than
+   * about trust. The build job runs the whole test suite, a cargo build, the
+   * bundler and every verification script — thousands of packages' worth of
+   * code — and none of it needs to be able to write to the repository. A
+   * compromised dependency in that job must not be able to create a release,
+   * move a tag, or push a commit.
+   */
+  it('builds with read-only permissions and publishes from a separate job', () => {
+    expect(uncommented, 'the workflow default must be read-only').toMatch(
+      /^permissions:\n\s+contents: read/m,
+    );
+
+    const build = job('build');
+    expect(build, 'the build job must state its permissions rather than inherit them').toContain(
+      'permissions:',
+    );
+    expect(
+      build.includes('contents: write'),
+      'the build job can write to the repository. It runs the most third-party ' +
+        'code in the pipeline and needs none of that authority — move whatever ' +
+        'needs it into the publish job.',
+    ).toBe(false);
+
+    const publish = job('publish');
+    expect(publish, 'publishing needs write, and is the only step that does').toContain(
+      'contents: write',
+    );
+    expect(publish, 'and it must consume the build job rather than rebuild').toContain(
+      'needs: build',
+    );
+    expect(
+      publish.includes('tauri build'),
+      'the publish job builds. Then a write-capable job is running the bundler ' +
+        'and the whole point of the split is gone.',
+    ).toBe(false);
+  });
+
+  /*
+   * A GitHub Environment is the only mechanism that can make a publication
+   * wait for a person. Naming one costs nothing when it is unconfigured —
+   * GitHub creates an unprotected environment on demand — and the moment
+   * somebody adds a required reviewer to `release-stable`, every stable
+   * release needs a deliberate human action.
+   */
+  it('routes stable and prerelease publications through separate environments', () => {
+    const publish = job('publish');
+    expect(publish, 'the publish job must name an environment').toContain('environment:');
+    expect(publish).toContain('release-stable');
+    expect(publish).toContain('release-prerelease');
+  });
+
+  /*
+   * The copyleft evidence has to be about the bytes that ship.
+   *
+   * Two earlier shapes of this step did not establish that. Rebuilding each
+   * architecture AFTER the signed app existed described a rebuild; building
+   * them BEFORE and hoping for a cache hit does not work either, because the
+   * Tauri CLI adds `--bins`, `tauri/custom-protocol` and its own deployment
+   * target, so a hand-written cargo command compiles something else.
+   *
+   * The shape that holds is a per-target rustflag: cargo applies it to its own
+   * target, so the BUNDLER'S OWN links write the maps. What this asserts is
+   * that arrangement — one map variable per triple, and a byte comparison
+   * against the slices lipo actually combined.
+   */
+  it('takes its copyleft maps from the links that ship', () => {
+    expect(uncommented, 'the map check must still run').toContain(
+      'verify-no-copyleft-objects.mjs',
+    );
+
+    for (const triple of ['AARCH64_APPLE_DARWIN', 'X86_64_APPLE_DARWIN']) {
+      expect(
+        uncommented,
+        `CARGO_TARGET_${triple}_RUSTFLAGS must carry the link map for that slice. A ` +
+          `plain RUSTFLAGS cannot: both targets would write to one path and the ` +
+          `second link would overwrite the first one's evidence.`,
+      ).toContain(`CARGO_TARGET_${triple}_RUSTFLAGS`);
+    }
+
+    expect(
+      uncommented,
+      'a separate `cargo build` for the maps is the shape that does not work — the ' +
+        'bundler passes flags of its own, so the hand-written command compiles ' +
+        'something else and the maps describe it',
+    ).not.toMatch(/cargo build[^\n]*--target "\$arch/);
+
+    expect(
+      uncommented,
+      'the packaged slices must be compared against the linked ones, byte for byte',
+    ).toMatch(/lipo[^\n]*-thin/);
+    expect(uncommented, 'and compared, not merely extracted').toMatch(/\bcmp -s\b/);
+  });
+});
+
+describe('third-party actions are pinned to immutable commits', () => {
+  /*
+   * A tag is a moving pointer. `actions/checkout@v4` is whatever the owner
+   * last pushed to that tag, and repointing a popular tag at a malicious
+   * commit is a supply-chain attack that has happened rather than one that
+   * might. A full commit SHA cannot be repointed.
+   *
+   * First-party `actions/*` are not exempt. The compromise that made this a
+   * standard practice was of a widely-used action, and "we trust the owner" is
+   * the assumption it broke.
+   */
+  const WORKFLOWS = ['.github/workflows/ci.yml', '.github/workflows/release.yml'];
+
+  it('has workflows to check', () => {
+    expect(WORKFLOWS.length).toBeGreaterThan(1);
+  });
+
+  it.each(WORKFLOWS)('%s pins every action it uses', (relPath) => {
+    const source = readFileSync(join(REPO_ROOT, relPath), 'utf8');
+    const uses = [...source.matchAll(/^\s*-?\s*uses:\s*(\S+)/gm)].map((match) => match[1]!);
+    expect(uses.length, `${relPath} declares no actions — the scan has rotted`).toBeGreaterThan(3);
+
+    const unpinned = uses.filter((ref) => !/@[0-9a-f]{40}$/.test(ref));
+    expect(
+      unpinned,
+      `${relPath} uses actions by a mutable reference:\n` +
+        unpinned.map((ref) => `  ${ref}`).join('\n') +
+        `\n\nPin each to a full commit SHA with the version in a trailing ` +
+        `comment:\n  gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha\n` +
+        `(dereference the result with git/tags/<sha> if it is an annotated tag).`,
+    ).toEqual([]);
+
+    // A bare SHA is unreadable. Every pin carries the version it was.
+    const undocumented = [...source.matchAll(/^\s*-?\s*uses:\s*(\S+@[0-9a-f]{40})(.*)$/gm)]
+      .filter((match) => !/#\s*v?\d/.test(match[2]!))
+      .map((match) => match[1]!);
+    expect(
+      undocumented,
+      `${relPath} pins these without saying which version they are:\n` +
+        undocumented.map((ref) => `  ${ref}`).join('\n') +
+        `\n\nAdd a trailing comment — nobody can review or update a bare hash.`,
+    ).toEqual([]);
+  });
+});
