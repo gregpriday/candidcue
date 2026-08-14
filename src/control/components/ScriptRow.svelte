@@ -20,13 +20,27 @@
   §10.2 and §23.3 both insist on this and it is the property most easily lost.
   Three states have to be told apart:
 
-    selected, list focused    accent tonal fill — this is the row commands act on
-    selected, list NOT focused  neutral fill — still the target, but the keyboard
-                              is somewhere else
-    focused, not selected     the quiet inset edge from the central focus policy
+    selected, list focused      accent marker + accent tint
+    selected, list NOT focused  the same marker, dimmed, over the faintest tint
+    focused, not selected       the quiet inset edge from the central focus policy
 
   A list that draws all three the same way tells a keyboard user nothing about
   where their next keystroke lands, which is the entire content of §23.3.
+
+  WHAT CHANGED, AND WHY THE OLD PAIR WAS WRONG
+  --------------------------------------------
+  Selection used to be a FILL, and the unfocused half of it was a flat warm grey
+  (#e8e3db). Two things went wrong with that. Spread across a full-width row on a
+  white list it read as dirt rather than as a state — this project's own design
+  rules name that failure and forbid it. And the pair was incoherent:
+  neutral-grey and terracotta are not two steps of one idea, so the two states
+  looked like two unrelated things rather than "selected" and "selected, and the
+  keyboard is here".
+
+  So selection is carried by a MARKER — the inset accent bar used everywhere
+  else in this codebase for exactly this — and focus is carried by the strength
+  of that marker and its tint. One idea, two intensities. The row stays white,
+  so a run of them still reads as a table, and nothing is grey-on-white.
 
   ---------------------------------------------------------------------------
   ACTIONS APPEAR ON HOVER, FOCUS OR SELECTION
@@ -84,6 +98,15 @@
   }: Props = $props();
 
   const interactive = $derived(Boolean(onopen ?? onselect));
+
+  /**
+   * Whether the duration column holds a measurement or a placeholder.
+   *
+   * Tested for a digit rather than compared against "—", so it stays correct if
+   * `formatSpeakingDuration` ever picks a different placeholder, and so this
+   * component needs no knowledge of which string that is.
+   */
+  const hasDuration = $derived(/\d/.test(duration));
 
   /**
    * Controls that own their own events. Anything inside one of these is not the
@@ -206,7 +229,7 @@
     that the eye can run down it; a duration that starts at a different x on
     every row is not a column, it is trailing text.
   -->
-  <span class="col duration">{duration}</span>
+  <span class="col duration" class:empty={!hasDuration}>{duration}</span>
   <span class="col modified">{modified}</span>
   <span class="col status">{@render status?.()}</span>
 
@@ -226,6 +249,8 @@
     /* No radius, no border, no shadow. The rows sit on one continuous surface
        and are separated by the list's own hairlines (§10.1). */
     background: transparent;
+    /* The selection marker below is positioned against this. */
+    position: relative;
     transition: background var(--dur-fast) var(--ease-out);
   }
   .compact {
@@ -241,19 +266,50 @@
   }
 
   /*
-   * Selected-but-unfocused is a NEUTRAL fill; selected-and-focused is the accent
-   * one. See the note at the top: this pair is the whole of §23.3's requirement,
-   * and collapsing them into one colour is the easy mistake.
+   * SELECTION IS A MARKER, NOT A WASH.
+   *
+   * The bar is the state; the tint only ties the row to it. That ordering is
+   * what keeps a selected row from looking soiled — the strongest thing on the
+   * row is 3px of brand colour rather than a full-width block of grey.
+   *
+   * Inset, never a one-sided border: the list has a radius and clips its rows,
+   * so a border-left would cut a straight edge through the rounded corner on
+   * the first and last row.
    */
+  .selected::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    /*
+     * Dimmed while the keyboard is elsewhere. Opacity rather than a second
+     * colour, so the two states are visibly the same mark at two strengths —
+     * which is the distinction §23.3 actually wants drawn.
+     */
+    opacity: 0.45;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
   .selected {
-    background: var(--bg-row-selected-inactive);
+    background: var(--accent-wash);
+  }
+  .selected.list-focused::before {
+    opacity: 1;
   }
   .selected.list-focused,
   .selected.list-focused:hover {
     background: var(--bg-row-selected);
   }
+  /*
+   * Hover over an already-selected row DEEPENS rather than resets. The old rule
+   * repainted it with the resting selection colour, so passing the pointer over
+   * the selected row was the one place in the list where hover did nothing.
+   */
   .selected:hover {
-    background: var(--bg-row-selected-inactive);
+    background: var(--bg-row-selected-hover);
   }
 
   .main {
@@ -296,6 +352,14 @@
   }
   .duration {
     width: 68px;
+  }
+  /*
+   * A script with nothing in it has no duration, and a column of em dashes at
+   * full metadata weight competes with the durations that mean something. The
+   * placeholder recedes; the real values stay where they were.
+   */
+  .col.empty {
+    color: var(--text-faint);
   }
   .modified {
     width: 104px;

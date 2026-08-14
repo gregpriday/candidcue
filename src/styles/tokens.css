@@ -245,6 +245,10 @@
   --bg-toolbar: #14171d;
   --bg-statusbar: #12151a;
   --bg-row-selected: rgba(224, 138, 99, 0.18);
+  /* Hover over an ALREADY-selected row: one step between the resting tint
+     (--accent-wash) and the focused one above, so passing the pointer over the
+     selection still does something without pretending the keyboard moved. */
+  --bg-row-selected-hover: rgba(224, 138, 99, 0.12);
   /*
    * #252a32, not the #262b33 this started as.
    *
@@ -367,9 +371,18 @@
   --bg-toolbar: #f1ede7;
   --bg-statusbar: #ece8e1;
   --bg-row-selected: rgba(183, 94, 59, 0.14);
-  /* Lightened from #e4dfd7 for the same reason the studio value was darkened:
-     --text-faint sat at 4.40:1 on it. Still clearly a step down from the white
-     panel a Library row sits on, and from the #f7f4ef hover. */
+  /* See the studio value: the step between resting and focused selection. */
+  --bg-row-selected-hover: rgba(183, 94, 59, 0.09);
+  /*
+   * RETIRED, and kept only so a stale reference fails visibly rather than
+   * silently falling back to transparent.
+   *
+   * This was the unfocused half of Library selection, and spread across a
+   * full-width row on a white list it read as dirt rather than as a state.
+   * Selection is now a marker plus a tint from the accent family — see
+   * `ScriptRow.svelte`, which explains why grey-and-terracotta were never two
+   * steps of one idea. Do not reach for this for a new surface.
+   */
   --bg-row-selected-inactive: #e8e3db;
   --divider: #e2ded6;
   --divider-hover: #c7c1b6;

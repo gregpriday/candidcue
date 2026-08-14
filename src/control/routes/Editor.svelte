@@ -1328,11 +1328,43 @@ import type { PresentationMode } from '../services/settings-types';
           monitor THIS window is on. Both are correct and they are not the same
           panel, so a user could calibrate one, press Present from the other and
           get behaviour that follows the architecture while contradicting the
-          interface. This is the sentence that closes that gap, and it is here
-          rather than in a dialog because the whole point is that pressing
-          Present on a healthy setup must stay one click.
+          interface.
+
+          IN A ROW, NOT A STACK. It was a two-line column, and a column inside a
+          fixed-height toolbar does three ugly things at once: `align-items:
+          stretch` widened the button to the caption's width, the button rose to
+          the top of the row, and the caption hung off the bottom. One line to
+          the left of the button keeps the toolbar a toolbar and lets Present be
+          the size of its own label.
+
+          The one line is a GLANCE. The explanation and the remedy live in the
+          readiness sheet, which lists a destination mismatch as a finding with
+          a way to act on it — a toolbar is the wrong place to argue a case.
         -->
         <div class="present-group">
+          {#if $takeDestination}
+            {@const destination = $takeDestination}
+            <p
+              class="present-destination"
+              class:mismatch={destination.mismatch !== null}
+              title={destination.mismatch?.detail ?? destination.summary}
+            >
+              <!--
+                One live region for the pair, so a screen reader is told the
+                destination and its caveat as one fact rather than two, and gets
+                the WHOLE mismatch — what is different and what to do. A sighted
+                user is invited to hover by the colour change; nobody else is.
+                `polite`, because this changes when a window is dragged and must
+                never interrupt.
+              -->
+              <span class="sr-only" role="status" aria-live="polite">
+                {destinationAnnouncement(destination)}
+              </span>
+              <span class="present-destination-text" aria-hidden="true">
+                {destination.summary}
+              </span>
+            </p>
+          {/if}
           <SplitButton
             variant="primary"
             label={$takeStarting ? 'Opening stage…' : 'Present'}
@@ -1341,39 +1373,6 @@ import type { PresentationMode } from '../services/settings-types';
             items={presentModeItems}
             onclick={() => void checkThenPresent()}
           />
-          {#if $takeDestination}
-            {@const destination = $takeDestination}
-            <p
-              class="present-destination"
-              class:mismatch={destination.mismatch !== null}
-              title={destination.mismatch?.detail ?? undefined}
-            >
-              <!--
-                ONE live region for the pair, so a screen reader is told the
-                destination and its caveat as one fact rather than two.
-
-                It carries the WHOLE mismatch — what is different, and what to
-                do — because the visual treatment can afford a tooltip (the
-                colour change invites a hover) and a screen-reader user gets no
-                such invitation. `polite`, because this changes when a window is
-                dragged and must never interrupt.
-              -->
-              <span class="sr-only" role="status" aria-live="polite">
-                {destinationAnnouncement(destination)}
-              </span>
-              <span aria-hidden="true">{destination.summary}</span>
-            </p>
-            {#if destination.mismatch}
-              <!--
-                Visible, not hover-only. A colour change alone says "something
-                is different" and never says what, and it is invisible to
-                anybody not using a mouse. The full explanation and the remedy
-                are in the live region above and the tooltip; this is the half
-                that has to be readable at a glance.
-              -->
-              <p class="present-mismatch">{destination.mismatch.title}</p>
-            {/if}
-          {/if}
         </div>
       {/snippet}
       {#snippet secondary()}
@@ -2125,18 +2124,31 @@ import type { PresentationMode } from '../services/settings-types';
    */
   .present-group {
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
+    align-items: center;
+    gap: var(--space-2);
     min-width: 0;
   }
+  /*
+   * One quiet line, right-aligned into the button.
+   *
+   * `--text-2xs` and muted, because it is there to be CHECKED rather than read
+   * on every glance — the moment it matters is the moment before somebody
+   * presses Present, and at that moment they look for it.
+   */
   .present-destination {
     margin: 0;
     font-size: var(--text-2xs);
     line-height: 1.3;
     color: var(--text-muted);
-    text-align: center;
-    max-width: 22ch;
+    text-align: right;
+    /* Wide enough for "Teleprompter · Built-in Retina Display" without an
+       ellipsis on a normal window; the media query below drops it entirely
+       rather than letting it shrink to a stub. */
+    max-width: 34ch;
+    min-width: 0;
+  }
+  .present-destination-text {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2163,13 +2175,17 @@ import type { PresentationMode } from '../services/settings-types';
     border: 0;
   }
 
-  .present-mismatch {
-    margin: 0;
-    font-size: var(--text-2xs);
-    line-height: 1.3;
-    /* Small terracotta text needs the strong token to clear AA in light. */
-    color: var(--accent-strong);
-    text-align: center;
-    max-width: 26ch;
+  /*
+   * The destination is the first thing to go when the toolbar runs out of room.
+   *
+   * §21.3: collapse optional things before compressing the core. Present is the
+   * core; a line naming the panel is a convenience, and a squeezed one that
+   * shows "Telepr…" is worse than none — it looks like a fault rather than a
+   * readout. The readiness sheet still carries it at any width.
+   */
+  @media (max-width: 1100px) {
+    .present-destination {
+      display: none;
+    }
   }
 </style>
