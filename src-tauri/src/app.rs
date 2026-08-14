@@ -536,6 +536,8 @@ fn install_window_frame_recorder(app: &tauri::AppHandle) {
     let (tx, rx) = mpsc::channel::<()>();
 
     let handle = app.clone();
+    // A second handle for the move emit below; the worker takes the first.
+    let app_for_move = app.clone();
     let worker_generation = generation.clone();
     std::thread::spawn(move || {
         // Ends when the sender is dropped, which happens when the window's
@@ -589,6 +591,24 @@ fn install_window_frame_recorder(app: &tauri::AppHandle) {
         }
         if crate::windows::present::is_presenting() {
             return;
+        }
+        /*
+         * A move can change which PANEL the window is on, and that is the panel
+         * a take will open on (CCUX-004).
+         *
+         * The control window's destination readout had no way to notice this.
+         * Display-topology polling does not fire — both monitors were already
+         * there — and window focus does not either, because dragging a window
+         * you are already using focuses nothing. So the editor could name one
+         * monitor and Present on another, which is the exact confusion the
+         * readout exists to remove.
+         *
+         * Reuses the display-change event rather than adding one: the frontend
+         * handler re-reads everything it needs, and "something about displays
+         * may have changed" is precisely what has happened.
+         */
+        if matches!(event, tauri::WindowEvent::Moved(_)) {
+            let _ = app_for_move.emit(crate::windows::events::DEVICE_OR_DISPLAY_CHANGE, ());
         }
         generation.fetch_add(1, Ordering::SeqCst);
         // A closed channel means the worker is gone (shutdown). Nothing to do.

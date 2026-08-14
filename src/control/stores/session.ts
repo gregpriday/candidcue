@@ -259,6 +259,21 @@ export interface SessionSummary {
    * ask is "should there have been telemetry", not "which window was it".
    */
   stageTelemetryExpected: boolean;
+  /**
+   * Where this take stopped, and the start of the section it stopped in
+   * (CCUX-008, CCUX-016).
+   *
+   * Both carried on the summary rather than re-read from the session row,
+   * because the summary is what "Present again from here" is offered on and a
+   * round trip to SQLite to answer a question the store just computed would be
+   * a second source of truth for the same number.
+   *
+   * `sectionStartTokenIndex` is null when the take ended before any heading —
+   * "retry this section" then means the same thing as "from the beginning", and
+   * the action is hidden rather than offered twice.
+   */
+  endTokenIndex: number;
+  sectionStartTokenIndex: number | null;
 }
 
 export interface SessionState {
@@ -770,6 +785,15 @@ export interface StartSessionInput {
   outline: OutlineNode[];
   sentences: SentenceUnit[];
   totalTokens: number;
+  /**
+   * Where this take begins, already snapped to a readable unit (CCUX-014).
+   *
+   * Absent means the beginning, which is what every take got before start
+   * points existed. The SNAPPING is the caller's job and must already have
+   * happened: `lib/take-start-point.ts` owns it, so an arbitrary caret offset
+   * can never reach the aligner as an anchor inside half a clause.
+   */
+  startTokenIndex?: number;
   /** Integration inputs — optional so the store degrades in browser dev. */
   sessionId?: string;
   compiled?: CompiledScript | null;
@@ -883,9 +907,20 @@ export function startLiveSession(input: StartSessionInput): string {
   // §60: evidence never crosses a take boundary. A fresh watcher is cheaper and
   // more obviously correct than resetting one, and it is the same lifetime as
   // every other take-scoped detector in this store.
+  /*
+   * Where this take begins (CCUX-014). Clamped, because a caller handing an
+   * index past the end of the script would anchor the aligner outside the
+   * token array it was given.
+   */
+  const startTokenIndex = Math.max(
+    0,
+    Math.min(Math.round(input.startTokenIndex ?? 0), Math.max(0, input.totalTokens - 1)),
+  );
+
+  evidenceEpoch += 1;
   // §36.3: the session's first take opens with it, on a fresh history.
   sessionTakes = [];
-  beginTake(sessionId, 1, 0);
+  beginTake(sessionId, 1, startTokenIndex);
 
   // Smooth-following store (§50.1): user-visible following state + §48 actions.
   const following = input.following ?? currentFollowingSettings();
@@ -966,6 +1001,23 @@ export function startLiveSession(input: StartSessionInput): string {
    */
   startPrompting();
 
+  /*
+   * ANCHOR THE ALIGNER WHERE THE TAKE ACTUALLY BEGINS (CCUX-014).
+   *
+   * Without this the engine opens its search at token 0 while the glass shows
+   * a section six minutes down, so the first sentence the presenter reads is
+   * matched against the top of the script — and the most likely outcome is a
+   * confident relocation BACKWARDS to a similar-sounding opening.
+   *
+   * `moveToToken` is "I am here", which is the correct assertion: the presenter
+   * chose this line and is about to read it. It resets evidence continuity in
+   * the engine, so nothing from before the anchor can drag the cursor back.
+   *
+   * Guarded, so a take from the beginning issues no command at all and its
+   * behaviour is bit-identical to what it was before start points existed.
+   */
+  if (startTokenIndex > 0) driver?.moveToToken(startTokenIndex);
+
   // Voice pipeline: realtime transcription + command routing (§29, §33).
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
     // Before the pipeline, so the first level frame it produces has somewhere
@@ -1042,7 +1094,10 @@ export function startLiveSession(input: StartSessionInput): string {
          * the worst possible direction for this flag to be wrong in.
          */
         if (pillEpoch === voicePillEpoch && text.trim() !== '') {
-          state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
+          const at = evidenceEpoch;
+          state.update((st) =>
+            st.heardAnything || at !== evidenceEpoch ? st : { ...st, heardAnything: true },
+          );
         }
         /*
          * The open utterance counts too — as an ESTIMATE, separately.
@@ -1363,14 +1418,33 @@ export function startLiveSession(input: StartSessionInput): string {
    * starting point would be a guess dressed as a fact.
    */
   if (stageDisplay !== null) {
-    const openedOn = stageDisplay.fingerprint;
+    const watchedSession = sessionId;
     displayWatchTimer = setInterval(() => {
+      /*
+       * The baseline is read EACH TICK, not captured.
+       *
+       * `stageDisplay` is rewritten when the take switches presentation mode
+       * mid-take (`adoptPresentationMode` recomposes the geometry against the
+       * panel it landed on). A captured fingerprint would keep comparing
+       * against the panel the take OPENED on, so a deliberate ⌃⌘F onto the
+       * prompter would raise "this window moved" and tell the presenter to end
+       * a take that had just correctly re-measured itself.
+       */
+      const baseline = stageDisplay?.fingerprint ?? null;
+      if (baseline === null) return;
       void stageService.currentWindowDisplay()
         .then((now) => {
           if (now === null) return;
           state.update((st) => {
-            if (!st.active) return st;
-            const changed = now.fingerprint === openedOn ? null : (now.name ?? '').trim() || 'another display';
+            /*
+             * Identity, not just liveness. `clearInterval` cannot cancel a
+             * probe that is already in flight, and the next take can begin
+             * before it resolves — so without this an old take's answer could
+             * write a display-change notice onto a new one.
+             */
+            if (!st.active || st.sessionId !== watchedSession) return st;
+            const changed =
+              now.fingerprint === baseline ? null : (now.name ?? '').trim() || 'another display';
             return st.displayChangedTo === changed ? st : { ...st, displayChangedTo: changed };
           });
         })
@@ -1857,6 +1931,18 @@ let voicePillDeviceLost = false;
  */
 let voicePillEpoch = 0;
 
+/**
+ * Bumped at every point where a pass starts proving itself again.
+ *
+ * Separate from `voicePillEpoch` because the two have different boundaries: the
+ * pill's epoch tracks the PIPELINE, and only a full take teardown replaces one,
+ * whereas `restartParagraph` is a take boundary with the same pipeline still
+ * open. Clearing the latch there without moving an epoch left the pre-restart
+ * utterance's late partial free to certify the new pass immediately — the flag
+ * went false and true again inside a frame.
+ */
+let evidenceEpoch = 0;
+
 /** Begin a take's pill. Torn down by `stopInternals` on every path out. */
 function startVoicePill(): number {
   voicePillEpoch += 1;
@@ -2122,6 +2208,17 @@ function pushTranscriptLine(line: string): void {
   state.update((s) => ({
     ...s,
     transcriptTail: [...s.transcriptTail, line].slice(-4),
+    /*
+     * Also latched here, for the mock driver.
+     *
+     * The real pipeline latches in `onTranscriptText`, which sees partials and
+     * is epoch-guarded — the better signal, and the one that matters on a
+     * packaged build. But browser dev and the mock voice driver never construct
+     * that pipeline and reach the store only through this function, so without
+     * this line the follow panel would sit at "nothing heard yet" for every
+     * take anybody runs in a browser.
+     */
+    heardAnything: s.heardAnything || line.trim() !== '',
   }));
 }
 
@@ -2781,7 +2878,7 @@ function handleStageClosed(): void {
   if (!s.stageAlive) return;
   state.update((prev) => ({ ...prev, stageAlive: false }));
   if (s.active) {
-    showToast('The stage window closed. End the session and present again to reopen it.', 'danger');
+    showToast('The stage window closed. End this take and present again to reopen it.', 'danger');
   }
 }
 
@@ -3159,6 +3256,7 @@ export function restartParagraph(): void {
    * pill and this flag answer the same question on two surfaces and must not
    * disagree about it.
    */
+  evidenceEpoch += 1;
   state.update((s) => (s.heardAnything ? { ...s, heardAnything: false } : s));
   noteCheckpoint('paragraph_start');
   finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
@@ -3731,6 +3829,8 @@ export function stopSession(): SessionSummary {
     retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s),
+    endTokenIndex: roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed(),
+    sectionStartTokenIndex: sectionStartFor(s, roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed()),
     /*
      * The OUTCOME, not the setting. A write that failed is re-queued and
      * retried, so `transcriptBuffer` still holding items at the end of a take
@@ -3842,6 +3942,8 @@ export function clearSession(): void {
 /** Shape-complete zero summary for a stop that had no session to stop. */
 function emptySummary(s: SessionState): SessionSummary {
   return {
+    endTokenIndex: 0,
+    sectionStartTokenIndex: null,
     durationSeconds: 0,
     mode: s.mode,
     sectionsReached: 0,
@@ -3865,6 +3967,28 @@ function emptySummary(s: SessionState): SessionSummary {
     transcriptTapFault: null,
     stageTelemetryExpected: false,
   };
+}
+
+/**
+ * The first token of the section containing `token`, or null when it is above
+ * the first heading.
+ *
+ * Null rather than zero on purpose: zero would make "Retry last section"
+ * indistinguishable from "Present again", so the caller can hide the action
+ * instead of offering the same thing twice.
+ */
+function sectionStartFor(s: SessionState, token: number): number | null {
+  const flat: OutlineNode[] = [];
+  const walk = (nodes: OutlineNode[]): void => {
+    for (const n of nodes) {
+      flat.push(n);
+      walk(n.children);
+    }
+  };
+  walk(s.outline);
+  const section = [...flat].reverse().find((n) => n.startTokenIndex <= token);
+  if (!section || section.startTokenIndex <= 0) return null;
+  return section.startTokenIndex;
 }
 
 function locateEnding(s: SessionState): string {

@@ -69,11 +69,25 @@
    * toasts them and returns false without changing the route, which is now
    * exactly right: the summary is gone and the editor is already underneath.
    */
-  async function presentAgain(): Promise<void> {
+  async function presentAgain(startTokenIndex?: number): Promise<void> {
     const scriptId = $session.scriptId;
     clearSession();
-    if (scriptId !== null) await startTake(scriptId);
+    if (scriptId === null) return;
+    await startTake(scriptId, startTokenIndex === undefined ? {} : { startTokenIndex });
   }
+
+  /**
+   * The section this take ended in, when there is one to go back to
+   * (CCUX-008).
+   *
+   * The whole point of the retake loop: a creator who fumbled a line six
+   * minutes in should not have to read the first six minutes again, and the
+   * moment they most want that is the moment they are looking at this dialog.
+   * Null above the first heading, where it would mean the same as Present
+   * again — a second button doing the first button's job is worse than no
+   * second button.
+   */
+  const retrySection = $derived($session.summary?.sectionStartTokenIndex ?? null);
 
   /**
    * The conclusion, drawn once (CCUX-006).
@@ -341,8 +355,15 @@
       so it did nothing visible and read as the safe default — the worst
       combination available for the button most people were going to press.
     -->
+    <!--
+      Ordered by likely intent (CCUX-006): another go, another go at the part
+      that went wrong, back to the words, and the quiet way out.
+    -->
     <Button variant="ghost" onclick={() => void returnToLibrary()}>Return to library</Button>
     <Button onclick={dismiss}>Back to the script</Button>
+    {#if retrySection !== null}
+      <Button onclick={() => void presentAgain(retrySection)}>Retry last section</Button>
+    {/if}
     <Button variant="primary" onclick={() => void presentAgain()}>Present again</Button>
   {/snippet}
 </Dialog>

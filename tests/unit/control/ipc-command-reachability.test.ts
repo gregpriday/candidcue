@@ -38,15 +38,20 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
   // a note explaining why it is fine to leave registered. CandidCue 1.0 updates
   // manually (docs/updates.md), so the command is gone rather than excused.
   /*
-   * `save_display_profile` and `list_display_profiles` LEFT this list.
+   * Still dormant, and the destination readout is NOT their reader.
    *
-   * Their reason — "single-window presentation uses Settings directly; legacy
-   * stage-display rows are dormant" — stopped being true when the Present
-   * button began naming its destination (CCUX-004). Resolving whether a take is
-   * opening away from its calibrated rig needs the rig's NAME, which is what a
-   * display profile stores, so `stores/destination.ts` reads them and the
-   * module is in the import graph again.
+   * These briefly left this list when `stores/destination.ts` read display
+   * profiles for a rig name. That was the wrong source: a display-profile row
+   * is a display-NAMED record, and whether a panel is calibrated lives in
+   * `optical.activeRig` / `activeOpticalProfile`. Reading the profile rows made
+   * the Present button warn people who had calibrated nothing at all, so the
+   * store reads the optical settings instead and these two went back to having
+   * no caller.
    */
+  save_display_profile:
+    'Single-window presentation has no independently selected stage display to persist.',
+  list_display_profiles:
+    'Single-window presentation uses Settings directly; legacy stage-display rows are dormant.',
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */

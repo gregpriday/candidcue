@@ -81,9 +81,23 @@
     /** Accessible name for the editing surface (spec §20). */
     ariaLabel?: string;
     onchange?: (value: string) => void;
+    /**
+     * The caret's UTF-16 offset, whenever it moves.
+     *
+     * Reported rather than polled because "Present from here" needs it at the
+     * moment the menu opens, and reaching into the view from the route would
+     * put CodeMirror's API in a second file.
+     */
+    onselectionchange?: (offset: number) => void;
   }
 
-  let { value, placeholder = '', ariaLabel = 'Script Markdown', onchange }: Props = $props();
+  let {
+    value,
+    placeholder = '',
+    ariaLabel = 'Script Markdown',
+    onchange,
+    onselectionchange,
+  }: Props = $props();
 
   let host: HTMLElement;
   let view: EditorView | null = null;
@@ -188,6 +202,14 @@
             if (update.docChanged) {
               internalValue = update.state.doc.toString();
               onchange?.(internalValue);
+            }
+            /*
+             * `docChanged` too, not only `selectionSet`: typing moves the caret
+             * without always reporting a selection change, and a stale offset
+             * would aim "Present from here" at wherever the caret used to be.
+             */
+            if (update.selectionSet || update.docChanged) {
+              onselectionchange?.(update.state.selection.main.head);
             }
           }),
         ],

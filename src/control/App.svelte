@@ -423,7 +423,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * fourth way out of a take and would have kept the old word alive.
          */
         const accepted = await requestConfirm({
-          title: 'End the session?',
+          title: 'End this take?',
           body: STOP_SESSION_CONFIRM_BODY,
           confirmLabel: 'End take',
           danger: true,

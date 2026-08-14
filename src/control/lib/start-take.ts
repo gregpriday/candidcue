@@ -33,6 +33,7 @@ import {
 } from '../services/control-window';
 import * as scriptsService from '../services/scripts';
 import { endSessionRecord, startSessionRecord } from '../services/session-records';
+import { snapToStart } from './take-start-point';
 import * as stageService from '../services/stage';
 import {
   buildStageEnvelope,
@@ -313,6 +314,20 @@ export interface StartTakeOptions {
    * did before this existed.
    */
   presentationMode?: PresentationMode;
+  /**
+   * Where to begin, as a raw token index (CCUX-014, CCUX-015, CCUX-016).
+   *
+   * Absent means the beginning, which is what every take got before this
+   * existed — `startTake` wrote `startTokenIndex: 0` onto every session row
+   * while the field had been on the record since it was written.
+   *
+   * SNAPPED HERE rather than by the caller, and that is deliberate: the caret
+   * position, an outline node and a previous take's ending are three different
+   * kinds of number, and every one of them can land mid-sentence. Doing it once
+   * on the way in means no entry point can forget, and the aligner can never be
+   * handed an anchor inside half a clause.
+   */
+  startTokenIndex?: number;
 }
 
 /**
@@ -428,11 +443,25 @@ export async function startTake(
      * the whole stage stream and no session could start at all in a packaged
      * build. Rust assigns, control adopts.
      */
+    /*
+     * The start point, snapped to something a presenter can be handed.
+     *
+     * Done after the compile because it needs the sentences and the outline —
+     * and it must be the SAME compile the stage is built from, or the token
+     * index would be resolved against a document the take is not going to
+     * show.
+     */
+    const startPoint = snapToStart(options.startTokenIndex ?? 0, {
+      sentences: compiled.sentences,
+      outline: compiled.outline,
+      totalTokens: compiled.spokenWordCount,
+    });
+
     const record = await startSessionRecord({
       scriptId,
       scriptSourceHash: compiled.script.sourceHash,
       mode: s.general.defaultSessionMode,
-      startTokenIndex: 0,
+      startTokenIndex: startPoint.tokenIndex,
       compileHash: compiled.script.sourceHash,
     });
     sessionId = record.id;
@@ -531,6 +560,9 @@ export async function startTake(
       stageSettings,
       assets,
       following: s.following,
+      // The glass opens HERE. `initialTokenIndex` has been on this contract
+      // since it was written; until CCUX-014 nothing on the stage read it.
+      initialTokenIndex: startPoint.tokenIndex,
     });
 
     // There is no stage window. Alignment, transcription and rendering all
@@ -544,6 +576,7 @@ export async function startTake(
       outline: compiled.outline,
       sentences: compiled.sentences,
       totalTokens: Math.max(compiled.spokenWordCount, 1),
+      startTokenIndex: startPoint.tokenIndex,
       sessionId,
       compiled: compiled.script,
       scriptRevision: doc.scriptRevision,
@@ -588,7 +621,7 @@ export async function startTake(
       // screen — tear it down rather than leave the microphone, the worker and
       // the billing meter running under whatever page is still showing.
       await abandonTake(sessionId);
-      showToast('Could not open the Live screen, so the session was stopped.', 'danger');
+      showToast('Could not open the Live screen, so the take was stopped.', 'danger');
       return false;
     }
 
@@ -610,7 +643,7 @@ export async function startTake(
     return true;
   } catch (err) {
     await abandonTake(sessionId);
-    showToast(`Could not start the session. ${describeError(err)}`, 'danger');
+    showToast(`Could not start the take. ${describeError(err)}`, 'danger');
     return false;
   } finally {
     startingStore.set(false);

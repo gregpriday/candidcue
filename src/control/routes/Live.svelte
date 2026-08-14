@@ -346,14 +346,14 @@ import { onShortcut } from '../lib/shortcuts';
        *
        * The stage answers Escape on its own window listener, and a confirm
        * sheet's Escape means "no, don't". Without standing the stage down for
-       * the length of the question, backing out of "End the session?" ended
+       * the length of the question, backing out of "End this take?" ended
        * the session — the one answer the dialog exists to make avoidable.
        */
       confirmingStop = true;
       let accepted = false;
       try {
         accepted = await requestConfirm({
-          title: 'End the session?',
+          title: 'End this take?',
           /*
            * The SHARED body, not one written out here.
            *
@@ -543,7 +543,7 @@ import { onShortcut } from '../lib/shortcuts';
       /*
        * `stopSession()` first, so the guard App registers for leaving a live
        * session sees an inactive one and waves this through without raising its
-       * own "End the session?" confirmation over a take that has already ended.
+       * own "End this take?" confirmation over a take that has already ended.
        */
       await leavePresentation(() => navigate({ name: 'editor', scriptId }));
     } finally {
@@ -1490,7 +1490,7 @@ import { onShortcut } from '../lib/shortcuts';
 
         heldByUser={$session.followPausedByUser}
 
-        rollingAtPace={$session.autoScroll.running}
+        rollingAtPace={$autoScrollLive.running}
         onnoticeaction={handleNoticeAction}
       />
 
@@ -1559,7 +1559,7 @@ import { onShortcut } from '../lib/shortcuts';
       </div>
       {#if !stageAlive}
         <p class="region-empty" role="status">
-          The stage window closed. End the session and present again to reopen it — until then
+          The stage window closed. End this take and present again to reopen it — until then
           these controls have nothing to talk to.
         </p>
       {/if}
@@ -1790,7 +1790,7 @@ import { onShortcut } from '../lib/shortcuts';
 
       heldByUser={$session.followPausedByUser}
 
-      rollingAtPace={$session.autoScroll.running}
+      rollingAtPace={$autoScrollLive.running}
       onnoticeaction={handleNoticeAction}
     />
 

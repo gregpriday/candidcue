@@ -206,7 +206,34 @@ export interface FollowStatus {
 export function followStatus(input: FollowStatusInput): FollowStatus {
   const { voiceInput } = input;
 
-  // 1. The text is moving. Nothing below may claim otherwise.
+  /*
+   * 1. An input fault, which outranks everything — including a roll.
+   *
+   * Rolling used to be checked first, on the reasoning that the text must never
+   * be described as stationary while it moves. True, but it made a dead
+   * microphone invisible on this panel for as long as the roll was armed, and
+   * the fault is the thing the operator has to act on. Both facts fit in one
+   * status: the fault is the line, and the roll is named in the detail, so
+   * nothing here ever claims the text is still.
+   */
+  if (voiceInput && input.micState === 'disconnected') {
+    const stillMoving = input.rollingAtPace
+      ? 'The text is still rolling at your set pace. '
+      : 'The text is holding where you left it. ';
+    return input.inputDeviceLost
+      ? {
+          line: 'Microphone disconnected',
+          detail: `${stillMoving}Choose another input, or carry on and move the text yourself.`,
+          tone: 'warning',
+        }
+      : {
+          line: 'Speech recognition stopped',
+          detail: `${stillMoving}This is not the microphone — carry on, or end the take and start again.`,
+          tone: 'warning',
+        };
+  }
+
+  // 2. The text is moving. Nothing below may claim otherwise.
   if (input.rollingAtPace) {
     return {
       line: 'Rolling at pace',
@@ -232,26 +259,6 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
       detail: 'Nothing is listening on this take. The transport moves the script.',
       tone: 'neutral',
     };
-  }
-
-  /*
-   * 3. The input has failed, and the two kinds of failure get different
-   * instructions. Only a lost DEVICE can be cured by picking another one.
-   */
-  if (input.micState === 'disconnected') {
-    return input.inputDeviceLost
-      ? {
-          line: 'Microphone disconnected',
-          detail:
-            'The text is holding where you left it. Choose another input, or carry on and move the text yourself.',
-          tone: 'warning',
-        }
-      : {
-          line: 'Speech recognition stopped',
-          detail:
-            'The text is holding where you left it. This is not the microphone — carry on and move the text yourself, or end the take and start again.',
-          tone: 'warning',
-        };
   }
 
   if (input.micState === 'muted') {
@@ -287,11 +294,18 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
     };
   }
 
-  // 6. Words are arriving. Anything below here is about MATCHING them.
+  /*
+   * Words are arriving and no position has been reported yet.
+   *
+   * "Ready to follow — start speaking" belongs to the take that has not begun.
+   * Said to somebody who IS speaking — transcript and alignment travel on
+   * separate paths, so a partial can land before the first snapshot — it reads
+   * as the app not hearing them, which is the opposite of what is happening.
+   */
   if (!input.receivingFrames) {
     return {
-      line: 'Ready to follow',
-      detail: 'Start speaking and the stage picks up your place.',
+      line: 'Heard you — finding your place',
+      detail: 'CandidCue is matching what you said against the script.',
       tone: 'accent',
     };
   }

@@ -39,10 +39,31 @@ export interface TakeDestinationInput {
    * remove, and it would do it while looking more confident than before.
    */
   currentDisplay: DisplayDescriptor | null;
-  /** The panel pinned in Settings for calibration, preview and display tests. */
-  calibratedDisplay: DisplayDescriptor | null;
-  /** The name of the rig profile attached to `calibratedDisplay`, if any. */
-  rigName: string | null;
+  /**
+   * Connected panels that have a rig IN FORCE, with its name.
+   *
+   * ---------------------------------------------------------------------------
+   * NOT `settings.stage.displayFingerprint`
+   * ---------------------------------------------------------------------------
+   * That fingerprint is the panel chosen for previews, display tests and
+   * calibration — which is the third of the three ideas this module separates,
+   * and says nothing about whether anything was ever measured on it. Reading it
+   * as "the calibrated rig" meant somebody who had merely SELECTED a panel, and
+   * calibrated nothing anywhere, was warned that their non-existent rig was set
+   * up for a different display.
+   *
+   * A rig exists when `optical.activeRig` names one for the panel and the
+   * profile resolves — `activeOpticalProfile` is the authority, and it is
+   * deliberately not "the only profile if there is exactly one", because a rig
+   * has to be chosen before it is used.
+   */
+  calibratedRigs: CalibratedRig[];
+}
+
+export interface CalibratedRig {
+  display: DisplayDescriptor;
+  /** The rig's own name, off the profile, where it is authoritative. */
+  rigName: string;
 }
 
 export type DestinationConfidence =
@@ -89,7 +110,7 @@ export function displayName(display: DisplayDescriptor | null): string {
  * would be warning about the thing they just did on purpose.
  */
 export function resolveTakeDestination(input: TakeDestinationInput): TakeDestination {
-  const { mode, currentDisplay, calibratedDisplay, rigName } = input;
+  const { mode, currentDisplay, calibratedRigs } = input;
 
   if (mode === 'reader') {
     return {
@@ -107,7 +128,7 @@ export function resolveTakeDestination(input: TakeDestinationInput): TakeDestina
   return {
     summary,
     confidence: currentDisplay === null ? 'unknown' : 'known',
-    mismatch: resolveMismatch(currentDisplay, calibratedDisplay, rigName),
+    mismatch: resolveMismatch(currentDisplay, calibratedRigs),
   };
 }
 
@@ -125,17 +146,21 @@ export function resolveTakeDestination(input: TakeDestinationInput): TakeDestina
  */
 function resolveMismatch(
   current: DisplayDescriptor | null,
-  calibrated: DisplayDescriptor | null,
-  rigName: string | null,
+  rigs: CalibratedRig[],
 ): DestinationMismatch | null {
-  if (current === null || calibrated === null) return null;
-  if (current.fingerprint === calibrated.fingerprint) return null;
+  if (current === null) return null;
+  if (rigs.length === 0) return null;
+  // The panel this take is opening on has its own rig. Nothing to say.
+  if (rigs.some((r) => r.display.fingerprint === current.fingerprint)) return null;
 
-  const rig = rigName === null || rigName.trim() === '' ? 'Your calibrated rig' : `“${rigName.trim()}”`;
+  const elsewhere = rigs[0]!;
+  const rig = elsewhere.rigName.trim() === '' ? 'A rig' : `“${elsewhere.rigName.trim()}”`;
+  const others =
+    rigs.length > 1 ? ` (and ${rigs.length - 1} other calibrated ${rigs.length === 2 ? 'display' : 'displays'})` : '';
   return {
-    title: `This take will open on ${displayName(current)}.`,
-    detail: `${rig} is calibrated for ${displayName(calibrated)}, so this take uses display-based defaults instead of the measured optics.`,
-    suggestion: `Drag the CandidCue window to ${displayName(calibrated)} and present again, or carry on — text sizing will be worked out from the panel it lands on.`,
+    title: `This take will open on ${displayName(current)}, which has no calibrated rig.`,
+    detail: `${rig} is calibrated for ${displayName(elsewhere.display)}${others}, so this take will size its text from the panel it lands on rather than from measured optics.`,
+    suggestion: `Drag the CandidCue window to ${displayName(elsewhere.display)} and present again, or carry on with display-based defaults.`,
   };
 }
 
@@ -147,5 +172,16 @@ function resolveMismatch(
  */
 export function destinationAnnouncement(destination: TakeDestination): string {
   const base = destination.summary.replace(/\s·\s/g, ', ');
-  return destination.mismatch === null ? base : `${base}. ${destination.mismatch.title}`;
+  if (destination.mismatch === null) return base;
+  /*
+   * The WHOLE mismatch, not just its title.
+   *
+   * The visual treatment can afford to put the explanation in a tooltip because
+   * the colour change invites a hover. A screen-reader user gets no such
+   * invitation, and a title that only repeats the destination would tell them
+   * something is different without ever saying what or what to do — which is
+   * worse than silence.
+   */
+  const { title, detail, suggestion } = destination.mismatch;
+  return `${base}. ${title} ${detail} ${suggestion}`;
 }

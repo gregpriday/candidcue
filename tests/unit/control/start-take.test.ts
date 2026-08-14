@@ -635,6 +635,87 @@ describe('single-window Present', () => {
 
 /* ------------------------------------------ the panel the take is measured on */
 
+/**
+ * Where a take begins (CCUX-014, CCUX-015, CCUX-016).
+ *
+ * `startTake` wrote `startTokenIndex: 0` onto every session row while the field
+ * had been on the record since it was written, so a creator who fumbled a line
+ * six minutes in had to read the first six minutes again.
+ *
+ * The snapping itself is unit-tested in `take-start-point.test.ts`. What is
+ * asserted here is the WIRING — that one number reaches all three of the places
+ * that have to agree about it, because a start point recorded on the session
+ * but not given to the aligner is worse than none: the glass would show one
+ * place and the engine would be searching from another.
+ */
+describe('starting somewhere other than the top', () => {
+  /** A script with three sentences and a heading, so a start point can exist. */
+  function multiSentence() {
+    const base = compiled();
+    const sentences = [
+      { id: 's1', blockId: 'b1', startTokenIndex: 0, endTokenIndex: 9, normalizedText: 'welcome to the update' },
+      { id: 's2', blockId: 'b2', startTokenIndex: 20, endTokenIndex: 29, normalizedText: 'our pricing changed' },
+      { id: 's3', blockId: 'b3', startTokenIndex: 30, endTokenIndex: 39, normalizedText: 'the standard plan is thirty' },
+    ];
+    return {
+      ...base,
+      sentences: sentences as never,
+      spokenWordCount: 40,
+      script: { ...(base.script as unknown as Record<string, unknown>), sentences } as never,
+    };
+  }
+
+  beforeEach(() => {
+    calls.compileScript.mockResolvedValue(multiSentence());
+  });
+
+  it('records the start point on the session row', async () => {
+    await expect(startTake(SCRIPT.id, { startTokenIndex: 34 })).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      // Snapped back to the start of the sentence containing token 34.
+      expect.objectContaining({ startTokenIndex: 30 }),
+    );
+  });
+
+  it('opens the glass at the same token it recorded', async () => {
+    await expect(startTake(SCRIPT.id, { startTokenIndex: 34 })).resolves.toBe(true);
+    const input = calls.startLiveSession.mock.calls[0]![0] as {
+      startTokenIndex: number;
+      stageEnvelope: { initialTokenIndex: number };
+    };
+    /*
+     * Both, and they must match. `initialTokenIndex` has been on the envelope
+     * since it was written and nothing on the stage read it, so a take asked to
+     * start at a section opened at the top and then CRAWLED there — a
+     * jerk-limited travel through the whole script before a word was said.
+     */
+    expect(input.startTokenIndex).toBe(30);
+    expect(input.stageEnvelope.initialTokenIndex).toBe(30);
+  });
+
+  it('still starts at the beginning when nothing asks otherwise', async () => {
+    // The default path must be bit-identical to what it was before start
+    // points existed.
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ startTokenIndex: 0 }),
+    );
+    const input = calls.startLiveSession.mock.calls[0]![0] as {
+      stageEnvelope: { initialTokenIndex: number };
+    };
+    expect(input.stageEnvelope.initialTokenIndex).toBe(0);
+  });
+
+  it('refuses to start past the end of the script', async () => {
+    // An index from a stale outline or a previous, longer revision must not
+    // anchor the aligner outside the token array it was handed.
+    await expect(startTake(SCRIPT.id, { startTokenIndex: 9999 })).resolves.toBe(true);
+    const recorded = calls.startSessionRecord.mock.calls[0]![0] as { startTokenIndex: number };
+    expect(recorded.startTokenIndex).toBeLessThan(40);
+    expect(recorded.startTokenIndex).toBe(30);
+  });
+});
+
 describe('the display a take is calibrated against', () => {
   /*
    * The defect: Present fills whichever monitor this window is already on and

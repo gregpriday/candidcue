@@ -25,12 +25,11 @@
 import { get, writable, type Readable } from 'svelte/store';
 import {
   resolveTakeDestination,
+  type CalibratedRig,
   type TakeDestination,
 } from '../lib/take-destination';
-import { listDisplayProfiles, profileForDisplay } from '../services/display-profiles';
 import { currentWindowDisplay, listDisplays, onDisplayTopologyChange } from '../services/stage';
-import type { PresentationMode } from '../services/settings-types';
-import type { DisplayDescriptor } from '../services/stage-types';
+import { activeOpticalProfile, type OpticalSettings, type PresentationMode } from '../services/settings-types';
 
 /**
  * Null until the first resolution completes.
@@ -46,11 +45,20 @@ export const takeDestination: Readable<TakeDestination | null> = { subscribe: st
 /** The settings this depends on, passed in so the store imports no settings module. */
 export interface DestinationContext {
   mode: PresentationMode;
-  /** `settings.stage.displayFingerprint` — the panel pinned for calibration. */
-  calibratedFingerprint: string | null;
+  /**
+   * The optical settings, which is where a CALIBRATION actually lives.
+   *
+   * Deliberately not `settings.stage.displayFingerprint`: that names the panel
+   * used for previews, tests and calibration, and says nothing about whether
+   * anything was ever measured. Reading it as "the calibrated rig" warned
+   * people who had calibrated nothing at all.
+   */
+  optical: OpticalSettings;
 }
 
-let context: DestinationContext = { mode: 'prompter', calibratedFingerprint: null };
+const NO_OPTICAL: OpticalSettings = { profiles: {}, activeRig: {} };
+
+let context: DestinationContext = { mode: 'prompter', optical: NO_OPTICAL };
 /** Guards against overlapping refreshes landing out of order. */
 let inFlight = 0;
 
@@ -66,25 +74,25 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
   const ticket = ++inFlight;
 
   try {
-    const [current, displays, profiles] = await Promise.all([
-      currentWindowDisplay(),
-      listDisplays(),
-      listDisplayProfiles().catch(() => []),
-    ]);
+    const [current, displays] = await Promise.all([currentWindowDisplay(), listDisplays()]);
     // A slower earlier request must not overwrite a newer answer.
     if (ticket !== inFlight) return;
 
-    const calibrated: DisplayDescriptor | null =
-      context.calibratedFingerprint === null
-        ? null
-        : displays.find((d) => d.fingerprint === context.calibratedFingerprint) ?? null;
+    /*
+     * Only CONNECTED panels, and only ones with a rig in force. A profile for a
+     * monitor that is not plugged in is not a mismatch with anything.
+     */
+    const calibratedRigs: CalibratedRig[] = [];
+    for (const display of displays) {
+      const profile = activeOpticalProfile(context.optical, display.fingerprint);
+      if (profile !== null) calibratedRigs.push({ display, rigName: profile.rigName });
+    }
 
     store.set(
       resolveTakeDestination({
         mode: context.mode,
         currentDisplay: current,
-        calibratedDisplay: calibrated,
-        rigName: profileForDisplay(profiles, context.calibratedFingerprint)?.name ?? null,
+        calibratedRigs,
       }),
     );
   } catch {

@@ -127,6 +127,7 @@
     scriptCompileHash = '',
     followProfile = undefined,
     bottomInsetPx = 0,
+    openingTokenIndex = 0,
     cueHollow = false,
     autoScroll = null,
     onautoscrollend = undefined,
@@ -140,6 +141,18 @@
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
+    /**
+     * The token this take OPENS at (CCUX-014). Zero for a take from the top,
+     * which is every take that does not ask otherwise.
+     *
+     * The envelope has carried `initialTokenIndex` since it was written and
+     * nothing here read it, so a take asked to start at a section opened at the
+     * top of the script and then travelled — a jerk-limited crawl through six
+     * minutes of text before the presenter could say a word. The opening
+     * placement is deliberately `instant`, so honouring this costs no motion:
+     * it changes WHICH row is put on the mark, not how it gets there.
+     */
+    openingTokenIndex?: number;
     alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
     /**
@@ -1857,7 +1870,11 @@
     }
     if (layoutChanged) onlayoutgeneration?.(layoutGeneration);
 
-    placeOpeningPosition(next, now, firstSpokenRowCentre(measurement.tokens));
+    placeOpeningPosition(
+      next,
+      now,
+      firstSpokenRowCentre(measurement.tokens, openingTokenIndex),
+    );
 
     // §62: an unusable measurement is recoverable — layout may simply not have
     // settled yet. Rebuild ONCE, then stop retrying and report it. The stage
@@ -2197,10 +2214,23 @@
    * a test made of the thing being grouped, so it cannot be widened by a
    * statistic about the rest of the document.
    */
-  function firstSpokenRowCentre(tokens: readonly MeasuredTokenRect[]): number | null {
+  function firstSpokenRowCentre(
+    tokens: readonly MeasuredTokenRect[],
+    fromToken = 0,
+  ): number | null {
+    /*
+     * The first measured token AT OR AFTER the opening token, rather than the
+     * first in the document.
+     *
+     * "At or after" and not "nearest": the opening token has already been
+     * snapped to the start of a readable unit by `take-start-point.ts`, so
+     * anything before it belongs to the previous sentence and putting that on
+     * the mark would start the presenter half a line early.
+     */
     let first: MeasuredTokenRect | null = null;
     for (const token of tokens) {
       if (!Number.isFinite(token.topY) || !Number.isFinite(token.bottomY)) continue;
+      if (token.tokenIndex < fromToken) continue;
       if (first === null || token.tokenIndex < first.tokenIndex) first = token;
     }
     if (first === null) return null;
@@ -2275,7 +2305,7 @@
      * measurement's clothes, and §62's rule is the whole reason this file does
      * not act on those.
      */
-    if (!map.covers(0)) return;
+    if (!map.covers(openingTokenIndex)) return;
 
     /*
      * MEASURED INK ON THE MEASURED MARK — not a number derived from the phase.

@@ -200,6 +200,33 @@ describe('followStatus', () => {
     expect(status.line).toBe('Ready to follow');
   });
 
+  it('does not tell somebody already speaking to start speaking', () => {
+    /*
+     * Transcript text and alignment snapshots travel on separate paths, so a
+     * partial can land before the first snapshot. "Ready to follow — start
+     * speaking" at that moment reads as the app not hearing them, which is the
+     * opposite of what is happening.
+     */
+    const status = followStatus(healthy({ receivingFrames: false, heardAnything: true }));
+    expect(status.line).toMatch(/heard you/i);
+    expect(`${status.line} ${status.detail}`).not.toMatch(/start speaking/i);
+  });
+
+  it('names a dead microphone even while the text is rolling', () => {
+    /*
+     * Rolling was checked first, so that the text was never called stationary
+     * while it moved. True, and it made a lost device invisible here for as
+     * long as the roll was armed. Both facts fit in one status.
+     */
+    const status = followStatus(
+      healthy({ rollingAtPace: true, micState: 'disconnected', inputDeviceLost: true }),
+    );
+    expect(status.line).toBe('Microphone disconnected');
+    // ...and it still must not claim the text has stopped.
+    expect(status.detail).toMatch(/still rolling/i);
+    expect(status.detail).not.toMatch(/holding where you left it/i);
+  });
+
   /* ------------------------------------------------------------------ *
    * CCUX-001: no decision code can reach this surface
    * ------------------------------------------------------------------ */

@@ -37,7 +37,10 @@ import SplitButton from '../components/SplitButton.svelte';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
-  import { refreshTakeDestination, takeDestination, watchTakeDestination } from '../stores/destination';
+  import { startMenuItems } from '../lib/present-menu';
+  import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
+  import { listSessionRecords } from '../services/session-records';
+  import { takeDestination, watchTakeDestination } from '../stores/destination';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
@@ -552,14 +555,99 @@ import type { PresentationMode } from '../services/settings-types';
    * makes that choice the new default. See `StartTakeOptions.presentationMode`
    * for why an explicit choice sticks when the mid-take toggle does not.
    */
-  async function present(mode?: PresentationMode): Promise<void> {
+  async function present(mode?: PresentationMode, startTokenIndex?: number): Promise<void> {
     await saveNow();
-    await startTake(scriptId, mode === undefined ? {} : { presentationMode: mode });
+    await startTake(scriptId, {
+      ...(mode === undefined ? {} : { presentationMode: mode }),
+      ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
+    });
   }
 
-  const presentModeItems = $derived(
-    presentMenuItems($settings.stage.presentationMode, (mode) => void present(mode)),
+  /* ------------------------------------------------- CCUX-014 start points */
+
+  /**
+   * The token the caret is sitting on, snapped to a whole sentence.
+   *
+   * Derived from the SOURCE offset through the compiled sentence spans, which
+   * carry `source.utf16Start/End` for exactly this. It is null while a compile
+   * is in flight or the editor has no caret — the menu then simply does not
+   * offer "From here", rather than offering it pointing at the top.
+   */
+  let caretOffset = $state(0);
+
+  const snapInput = $derived({
+    sentences: result?.sentences ?? [],
+    outline: result?.outline ?? [],
+    totalTokens: result?.spokenWordCount ?? 0,
+  });
+
+  const caretStartPoint = $derived.by(() => {
+    const sentences = snapInput.sentences;
+    if (sentences.length === 0) return null;
+    // The last sentence whose source span begins at or before the caret. The
+    // caret can legitimately sit in whitespace, a cue or a heading's markup,
+    // so "the sentence containing it" is not always defined — "the one it is
+    // at or after" always is, and matches how the snapping reads elsewhere.
+    let best: (typeof sentences)[number] | null = null;
+    for (const sentence of sentences) {
+      if (sentence.source.utf16Start <= caretOffset) best = sentence;
+      else break;
+    }
+    if (best === null) return null;
+    return snapToStart(best.startTokenIndex, snapInput);
+  });
+
+  /**
+   * Where the last take of this script stopped.
+   *
+   * Loaded once per script rather than kept live: it changes only when a take
+   * ends, and a take ending navigates through this route anyway.
+   */
+  let lastEndTokenIndex = $state<number | undefined>(undefined);
+
+  $effect(() => {
+    const id = scriptId;
+    lastEndTokenIndex = undefined;
+    void listSessionRecords(id, 5)
+      .then((records) => {
+        if (scriptId !== id) return;
+        // Newest first is what Rust returns; the first one with an ending is
+        // the one to resume from. A take abandoned before it recorded an end
+        // has nothing to offer and is skipped rather than treated as zero.
+        lastEndTokenIndex = records.find((r) => (r.endTokenIndex ?? 0) > 0)?.endTokenIndex;
+      })
+      .catch(() => {
+        // A history that will not load costs one menu row. It must never stop
+        // somebody presenting.
+      });
+  });
+
+  const lastEndingPoint = $derived(continueFrom(lastEndTokenIndex, snapInput));
+
+  const presentStartItems = $derived(
+    startMenuItems(
+      {
+        hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
+        hereLabel: caretStartPoint === null ? null : describeStartPoint(caretStartPoint),
+        lastEndingTokenIndex: lastEndingPoint?.tokenIndex ?? null,
+        lastEndingLabel: lastEndingPoint === null ? null : lastEndingPoint.label,
+        markers: takeMarkers.map((t) => ({ id: t.id, label: t.label, tokenIndex: t.tokenIndex })),
+      },
+      (tokenIndex) => void present(undefined, tokenIndex),
+    ),
   );
+
+  /*
+   * Start rows first, then the two shapes.
+   *
+   * Order matters: where to start is the choice somebody is most often
+   * reaching for — a section retake is the high-frequency action this menu
+   * exists for — and the mode is usually already correct from last time.
+   */
+  const presentModeItems = $derived([
+    ...presentStartItems,
+    ...presentMenuItems($settings.stage.presentationMode, (mode) => void present(mode)),
+  ]);
 
   /*
    * WHERE PRESENT IS ACTUALLY GOING (CCUX-004).
@@ -568,24 +656,26 @@ import type { PresentationMode } from '../services/settings-types';
    * worth nothing after the button is pressed — at that point the operator can
    * see the destination and can no longer choose a different one.
    */
+  /*
+   * ONE effect, not two.
+   *
+   * The first version had a `watchTakeDestination` effect and a separate
+   * `refreshTakeDestination` effect, both reading the same settings — so a
+   * settings change tore the watcher down, rebuilt it (which refreshes), and
+   * then refreshed again. Two concurrent resolutions of the same question,
+   * every time somebody touched Settings.
+   *
+   * `$effect` re-runs on any dependency it read, and reading the settings here
+   * means a settings change already restarts the watcher, which already
+   * refreshes. The returned teardown removes the listeners in between, so
+   * nothing accumulates.
+   */
   $effect(() =>
     watchTakeDestination({
       mode: $settings.stage.presentationMode,
-      calibratedFingerprint: $settings.stage.displayFingerprint,
+      optical: $settings.optical,
     }),
   );
-
-  /*
-   * Settings can change under a mounted editor — the preferences window is its
-   * own window — and both of these change the answer, so the watcher is told
-   * rather than restarted. Restarting it would re-add the focus listener.
-   */
-  $effect(() => {
-    void refreshTakeDestination({
-      mode: $settings.stage.presentationMode,
-      calibratedFingerprint: $settings.stage.displayFingerprint,
-    });
-  });
 
   function withView(fn: (view: NonNullable<ReturnType<MarkdownEditor['getView']>>) => void): void {
     const view = editorRef?.getView();
@@ -1074,11 +1164,31 @@ import type { PresentationMode } from '../services/settings-types';
               class:mismatch={destination.mismatch !== null}
               title={destination.mismatch?.detail ?? undefined}
             >
-              <!-- One live region for the pair, so a screen reader is told the
-                   destination and its caveat as one fact rather than two. -->
-              <span class="sr-only">{destinationAnnouncement(destination)}</span>
+              <!--
+                ONE live region for the pair, so a screen reader is told the
+                destination and its caveat as one fact rather than two.
+
+                It carries the WHOLE mismatch — what is different, and what to
+                do — because the visual treatment can afford a tooltip (the
+                colour change invites a hover) and a screen-reader user gets no
+                such invitation. `polite`, because this changes when a window is
+                dragged and must never interrupt.
+              -->
+              <span class="sr-only" role="status" aria-live="polite">
+                {destinationAnnouncement(destination)}
+              </span>
               <span aria-hidden="true">{destination.summary}</span>
             </p>
+            {#if destination.mismatch}
+              <!--
+                Visible, not hover-only. A colour change alone says "something
+                is different" and never says what, and it is invisible to
+                anybody not using a mouse. The full explanation and the remedy
+                are in the live region above and the tooltip; this is the half
+                that has to be readable at a glance.
+              -->
+              <p class="present-mismatch">{destination.mismatch.title}</p>
+            {/if}
           {/if}
         </div>
       {/snippet}
@@ -1148,6 +1258,7 @@ import type { PresentationMode } from '../services/settings-types';
               value={$editor.source}
               placeholder="Start writing, paste a script, or import Markdown…"
               onchange={setSource}
+              onselectionchange={(offset) => (caretOffset = offset)}
             />
           </div>
           {#if layout === 'split'}
@@ -1866,5 +1977,15 @@ import type { PresentationMode } from '../services/settings-types';
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  .present-mismatch {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: 1.3;
+    /* Small terracotta text needs the strong token to clear AA in light. */
+    color: var(--accent-strong);
+    text-align: center;
+    max-width: 26ch;
   }
 </style>

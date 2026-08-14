@@ -1947,6 +1947,7 @@
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
             stageGeneration={app.envelope?.stageGeneration ?? 0}
             scriptCompileHash={app.envelope?.sourceHash ?? ''}
+            openingTokenIndex={app.envelope?.initialTokenIndex ?? 0}
             {followProfile}
             bottomInsetPx={0}
             cueHollow={holdStatus.rung !== 'none'}
