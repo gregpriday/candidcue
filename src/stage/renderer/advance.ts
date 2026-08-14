@@ -33,6 +33,7 @@
  */
 
 import type { SafeRenderNode } from '../../shared/contracts';
+import { resolveWordTokens } from './word-tokens';
 
 /** The marks the compiler can put on a text run. */
 export type Mark = 'strong' | 'em' | 'strike' | 'code';
@@ -329,7 +330,7 @@ export function flattenWords(
         const runStyle = styleForMarks(style, node.marks);
         let wordIdx = 0;
         const wordCount = parts.filter((p, i) => i % 2 === 0 && p.length > 0).length;
-        const aligned = !!node.tokenIndexes && node.tokenIndexes.length === wordCount;
+        const byWord = resolveWordTokens(wordCount, node.tokenIndexes, node.wordTokens);
         for (const [i, part] of parts.entries()) {
           if (part.length === 0) continue;
           if (i % 2 === 1) {
@@ -346,25 +347,14 @@ export function flattenWords(
             continue;
           }
           /*
-           * Token identity is resolved EXACTLY as `segmentText` resolves it,
-           * fallback included — including the misaligned case, where it anchors
-           * the run's first word to the first index and gives up on the rest.
-           *
-           * The two must agree because the plan is keyed on token index and the
-           * renderer draws the break by looking that index up. They currently
-           * diverge safely (the planner would just be more conservative) only
-           * because compiler indexes are unique across the script; deriving the
-           * identity the same way instead means the join does not rest on that
-           * argument at all.
+           * Token identity comes from the same rule `segmentText` uses, out of
+           * the same module — not a copy of it. The two must agree because the
+           * plan is keyed on token index and the renderer draws the break by
+           * looking that index up on a span.
            */
-          let tokenIndex: number | null = null;
-          if (aligned) tokenIndex = node.tokenIndexes?.[wordIdx] ?? null;
-          else if (node.tokenIndexes && node.tokenIndexes.length > 0 && wordIdx === 0) {
-            tokenIndex = node.tokenIndexes[0] ?? null;
-          }
           words.push({
             text: part,
-            tokenIndex,
+            tokenIndex: byWord[wordIdx] ?? null,
             spaceAfter: false,
             breakableAfter: false,
             separatorText: '',

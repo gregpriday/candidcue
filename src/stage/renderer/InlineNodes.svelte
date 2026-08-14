@@ -226,7 +226,7 @@
 
 {#each nodes as node}
   {#if node.type === 'text'}
-    {#each segmentText(node.text, node.tokenIndexes) as seg}
+    {#each segmentText(node.text, node.tokenIndexes, node.wordTokens) as seg}
       {#if seg.space}
         <span class="sp">{seg.text}</span>
       {:else if seg.tokenIndex !== null}

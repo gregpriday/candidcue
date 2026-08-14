@@ -584,6 +584,77 @@ describe('compile: §22.3 formatting never splits a spoken word', () => {
     ]);
   });
 
+  /*
+   * `wordTokens` is what the stage draws its word spans from, so what it has to
+   * be right about is the correspondence with the words as SPLIT ON WHITESPACE
+   * — including the words that are written and not spoken. It is asserted per
+   * word rather than as a length, because a mapping of the right length that
+   * named the wrong token would be worse than no mapping at all.
+   */
+  const wordTokensOf = (script: CompiledScript, blockIndex = 0) => {
+    const node = script.blocks[blockIndex]!.renderNodes.find((n) => n.type === 'text') as Extract<
+      SafeRenderNode,
+      { type: 'text' }
+    >;
+    const surfaces = (node.wordTokens ?? []).map((index) =>
+      index === null ? null : script.spokenTokens[index]!.surface,
+    );
+    return { words: node.text.split(/\s+/).filter(Boolean), node, surfaces };
+  };
+
+  it('maps every whitespace word to its token, and unspoken words to null', () => {
+    const script = compile('Wait for it — like that.', OPTS);
+    const { words, node, surfaces } = wordTokensOf(script);
+    expect(node.wordTokens).toHaveLength(words.length);
+    expect(surfaces).toEqual(['Wait', 'for', 'it', null, 'like', 'that']);
+    // The older field keeps its own meaning: the tokens, not the words.
+    expect(node.tokenIndexes).toHaveLength(5);
+  });
+
+  /*
+   * The dangerous shape, and the reason the length check was never enough.
+   *
+   * "The cat/dog — bird sings." is five words and five tokens — "cat/dog" is
+   * two, the dash is none — so the counts AGREE and zipping them looks sound.
+   * It puts "dog" on the dash and shifts nothing back: a span anchored to a
+   * word it is not, which is the one error class that can move the presenter's
+   * position on the glass rather than merely fail to mark it.
+   */
+  it('does not anchor a word to a token that is not it when the counts happen to agree', () => {
+    const script = compile('The cat/dog — bird sings.', OPTS);
+    const { node, surfaces } = wordTokensOf(script);
+    expect(node.tokenIndexes).toHaveLength(5);
+    expect(node.text.split(/\s+/).filter(Boolean)).toHaveLength(5);
+    expect(surfaces).toEqual(['The', 'cat', null, 'bird', 'sings']);
+  });
+
+  it('anchors a word said as several tokens at the word it is drawn as', () => {
+    const script = compile('The API{say="a p i"} docs.', OPTS);
+    const node = script.blocks[0]!.renderNodes.find(
+      (n) => n.type === 'text' && n.text === 'API',
+    ) as Extract<SafeRenderNode, { type: 'text' }>;
+    expect(node.tokenIndexes).toHaveLength(3);
+    expect(node.wordTokens).toEqual([node.tokenIndexes![0]]);
+  });
+
+  it('maps a spoken override word for word when the two sides count the same', () => {
+    // A `:::spoken` block is the only override whose visual can be several
+    // words, so it is the only route to the positional branch.
+    const script = compile(':::spoken\nvisual: Alpha Beta\nsay: one two\n:::\n', OPTS);
+    const { node, surfaces } = wordTokensOf(script);
+    expect(node.text).toBe('Alpha Beta');
+    expect(surfaces).toEqual(['one', 'two']);
+  });
+
+  it('anchors a mismatched spoken override at its first word and claims no more', () => {
+    const script = compile(':::spoken\nvisual: Alpha Beta\nsay: one two three\n:::\n', OPTS);
+    const { node, surfaces } = wordTokensOf(script);
+    expect(node.tokenIndexes).toHaveLength(3);
+    // Two words, three tokens, no honest correspondence: the first word takes
+    // the first token and the second says nothing rather than guessing.
+    expect(surfaces).toEqual(['one', null]);
+  });
+
   it('maps a merged token onto every render node it spans', () => {
     const script = compile('**Candid**Cue ships.', OPTS);
     const merged = script.spokenTokens[0]!;
@@ -594,6 +665,15 @@ describe('compile: §22.3 formatting never splits a spoken word', () => {
     expect(textNodes[0]!.marks).toEqual(['strong']);
     expect(textNodes[0]!.tokenIndexes).toContain(merged.index);
     expect(textNodes[1]!.tokenIndexes).toContain(merged.index);
+    /*
+     * And both halves anchor it as their own first word. The continuation's
+     * slot is counted against the CONTINUATION's text, so getting it wrong
+     * would put the merged word's anchor on "ships" — a word the presenter
+     * reaches later, on the other side of a space.
+     */
+    expect(textNodes[0]!.wordTokens?.[0]).toBe(merged.index);
+    expect(textNodes[1]!.wordTokens?.[0]).toBe(merged.index);
+    expect(textNodes[1]!.wordTokens).toEqual([merged.index, script.spokenTokens[1]!.index]);
   });
 
   it('does not merge across a skipped, unspoken inline code span', () => {

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import type { CompiledBlock, SafeRenderNode } from '../../shared/contracts';
 import { flattenWords, type AdvanceMeasurer, type AdvanceStyle } from './advance';
 import { planBlockBreaks, planScriptBreaks } from './wrap-plan';
+import { compile } from '../../shared/markdown/compile';
 import { bestOf, budgetMessage } from '../../shared/perf-budget';
 
 const BASE: AdvanceStyle = {
@@ -109,6 +110,49 @@ describe('flattening a block into words', () => {
       BASE,
     );
     expect(words.map((w) => w.tokenIndex)).toEqual([7, null, null, null]);
+  });
+
+  /*
+   * The failure this replaced, and the reason `wordTokens` exists.
+   *
+   * An em dash between spaces is a WORD on the glass and no token in the
+   * stream, so `tokenIndexes` is one short of the words and the misaligned rule
+   * above then gave up on the whole paragraph: one anchor on its first word and
+   * nothing after it. Every later word became unbreakable — a break is keyed by
+   * token index — so the solver's only legal break in a four-line paragraph was
+   * after its FIRST word, which is exactly what reached the glass.
+   */
+  it('keeps every spoken word anchored around a word that is written, not spoken', () => {
+    const words = flattenWords(
+      [
+        {
+          type: 'text',
+          text: 'pause in the middle of this one — like that',
+          tokenIndexes: [40, 41, 42, 43, 44, 45, 46, 47, 48],
+          wordTokens: [40, 41, 42, 43, 44, 45, 46, null, 47, 48],
+        },
+      ],
+      BASE,
+    );
+    expect(words.map((w) => w.tokenIndex)).toEqual([40, 41, 42, 43, 44, 45, 46, null, 47, 48]);
+    // The unspoken word is the only one a line may not end on: there is no
+    // index to key its break to.
+    expect(words.filter((w) => w.spaceAfter && !w.breakableAfter)).toHaveLength(0);
+  });
+
+  it('breaks a paragraph at its phrase seams even when it contains an em dash', () => {
+    const node: SafeRenderNode = {
+      type: 'text',
+      text: 'Now try slowing right down for a sentence or two, and put a real pause in the middle of this one — like that.',
+      // 24 words on the glass, 23 of them spoken: the em dash is written only.
+      tokenIndexes: Array.from({ length: 23 }, (_, i) => i),
+      wordTokens: [...Array.from({ length: 21 }, (_, i) => i), null, 21, 22],
+    };
+    const plan = planBlockBreaks([node], { columnWidthPx: 520, baseStyle: BASE, measure: fake });
+    expect(plan).not.toBeNull();
+    // Not one stranded break after the first word.
+    expect([...plan!.breakAfterTokens]).not.toEqual([0]);
+    expect(plan!.lineCount).toBeGreaterThan(2);
   });
 
   it('does not treat an image or a cue as a word', () => {
@@ -415,6 +459,29 @@ function paragraph_(t: string, tokenStart: number, id: string): CompiledBlock {
 }
 
 describe('planning a script', () => {
+  /*
+   * Against the real compiler rather than a hand-built node, because the bug
+   * this pins lived in the disagreement between the two: every fixture in this
+   * file gives one token to one word, which is the one case where the mapping
+   * cannot be wrong. Real prose has an em dash in it.
+   */
+  it('plans a compiled paragraph containing a written-but-unspoken word', () => {
+    const script = compile(
+      'Now try slowing right down for a sentence or two, and put a real pause in the middle of this one — like that. The text should ease off and wait for you.',
+      { scriptId: 'wrap-plan-test' },
+    );
+    const plan = planScriptBreaks(script.blocks, {
+      columnWidthPx: 300,
+      baseStyle: BASE,
+      measure: fake,
+    });
+    const breaks = [...plan.breakAfterTokens].sort((a, b) => a - b);
+    expect(plan.unplannedBlocks).toBe(0);
+    // The stranded-first-word plan: one break, on the block's opening token.
+    expect(breaks).not.toEqual([script.blocks[0]!.startTokenIndex]);
+    expect(breaks.length).toBeGreaterThan(2);
+  });
+
   it('plans prose and leaves everything else to the browser', () => {
     const blocks: CompiledBlock[] = [
       paragraph([text(SENTENCE)], 'p1'),

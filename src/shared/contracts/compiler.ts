@@ -77,7 +77,34 @@ export interface CompiledBlock {
  * Do not use `SafeRenderNode` as a disguised arbitrary HTML field.
  */
 export type SafeRenderNode =
-  | { type: 'text'; text: string; marks?: ('strong' | 'em' | 'strike' | 'code')[]; tokenIndexes?: number[] }
+  | {
+      type: 'text';
+      text: string;
+      marks?: ('strong' | 'em' | 'strike' | 'code')[];
+      /**
+       * Every spoken token this node carries, in order. NOT one per word — a
+       * word can carry several (a spoken override: "API" said as "a p i") and a
+       * word can carry none (an em dash between spaces is written, not spoken).
+       */
+      tokenIndexes?: number[];
+      /**
+       * One entry per whitespace-separated word of `text`: the token that word
+       * anchors, or null where the word is not spoken.
+       *
+       * `tokenIndexes` cannot answer that question, and the two renderers that
+       * need it — the word spans in `text.ts` and the wrap planner's word list
+       * in `advance.ts` — used to guess by zipping it against the words and
+       * giving up on the whole node when the lengths disagreed. Giving up cost
+       * the node every per-word anchor it had: no `data-t`, so nothing to
+       * position or dim, and no legal line break for the planner. One em dash in
+       * a paragraph was enough (`Now try slowing right down … — like that.`),
+       * which is ordinary prose rather than an edge case.
+       *
+       * A word carrying several tokens takes the FIRST as its anchor: one span
+       * can only be in one place, and that is the position the word starts at.
+       */
+      wordTokens?: (number | null)[];
+    }
   | { type: 'line_break' }
   | { type: 'link'; label: SafeRenderNode[]; href?: string; external: boolean }
   | { type: 'image'; assetId: string; alt: string }

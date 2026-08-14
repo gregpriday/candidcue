@@ -17,6 +17,7 @@
  * font file fails the build instead of degrading to the fallback on a rig.
  */
 import '../../styles/fonts.css';
+import { resolveWordTokens } from './word-tokens';
 
 export interface TextSegment {
   text: string;
@@ -25,10 +26,14 @@ export interface TextSegment {
   space: boolean;
 }
 
-export function segmentText(text: string, tokenIndexes?: readonly number[]): TextSegment[] {
+export function segmentText(
+  text: string,
+  tokenIndexes?: readonly number[],
+  wordTokens?: readonly (number | null)[],
+): TextSegment[] {
   const parts = text.split(/(\s+)/);
   const words = parts.filter((p, i) => i % 2 === 0 && p.length > 0);
-  const aligned = !!tokenIndexes && tokenIndexes.length === words.length;
+  const byWord = resolveWordTokens(words.length, tokenIndexes, wordTokens);
   const segments: TextSegment[] = [];
   let wordIdx = 0;
   for (let i = 0; i < parts.length; i++) {
@@ -38,14 +43,7 @@ export function segmentText(text: string, tokenIndexes?: readonly number[]): Tex
     if (isSpace) {
       segments.push({ text: part, tokenIndex: null, space: true });
     } else {
-      let tokenIndex: number | null = null;
-      if (aligned && tokenIndexes) {
-        tokenIndex = tokenIndexes[wordIdx] ?? null;
-      } else if (tokenIndexes && tokenIndexes.length > 0 && wordIdx === 0) {
-        // Misaligned mapping: anchor at least the run start.
-        tokenIndex = tokenIndexes[0] ?? null;
-      }
-      segments.push({ text: part, tokenIndex, space: false });
+      segments.push({ text: part, tokenIndex: byWord[wordIdx] ?? null, space: false });
       wordIdx++;
     }
   }

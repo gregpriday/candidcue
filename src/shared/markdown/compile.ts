@@ -45,14 +45,18 @@ import { tokenizeText } from './tokenize';
 import { segmentSentences } from './segment';
 
 /*
- * Bumped for the grammatical-sentence-end field.
+ * Bumped for `wordTokens`, and before that for the grammatical-sentence-end
+ * field.
  *
- * This is the compiled-document cache key. A document compiled by 1.0.0 has no
- * `grammaticalSentenceEnd` on any token, and alignment falls back to
- * navigation units when it is absent — correct, and it means a cached document
- * silently keeps the old braking behaviour until something invalidates it.
+ * This is the compiled-document cache key, and both bumps are for the same
+ * reason: the new field is ADDITIVE, so a document compiled by an older version
+ * is still valid and still renders — it just renders the old way. A 1.1.0
+ * document has no per-word mapping, so every paragraph containing a word that
+ * is written and not spoken goes back to being unanchored past its first word.
+ * A cache that answered with one would reinstate the bug quietly, which is
+ * exactly what a version key is for.
  */
-export const COMPILER_VERSION = '1.1.0';
+export const COMPILER_VERSION = '1.2.0';
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_WORDS_PER_MINUTE = 130;
 const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
@@ -112,10 +116,55 @@ interface TokenDraft {
    * Render text nodes to receive this token's global index. A token can span
    * several nodes: `**Candid**Cue` is one spoken word drawn from two nodes.
    */
-  renderRefs: RenderRef[];
+  renderRefs: RenderSlot[];
 }
 
-type RenderRef = { tokenIndexes?: number[] };
+type RenderRef = { text: string; tokenIndexes?: number[]; wordTokens?: (number | null)[] };
+
+/**
+ * A node to receive a token's index, and WHICH of that node's words it is.
+ *
+ * The word slot is recorded here, at the only point in the compile where it is
+ * known: the tokenizer is a regex over the whole run rather than a walk of
+ * whitespace-separated words, so once a token is a `TokenDraft` there is
+ * nothing left that says which word it came out of. Recovering it downstream
+ * means running a second tokenizer beside this one and hoping the two agree —
+ * see the note on `SafeRenderNode.wordTokens` for what that cost.
+ */
+type RenderSlot = { ref: RenderRef; wordSlot: number };
+
+/**
+ * Word-start offsets in a rendered text run, in order.
+ *
+ * The same split the renderers do (`segmentText`, `flattenWords`): whitespace
+ * separates words and nothing else does. It has to be the same split, because
+ * the whole point of `wordTokens` is that its indexes line up with theirs.
+ */
+function wordStarts(text: string): number[] {
+  const starts: number[] = [];
+  let inWord = false;
+  for (let i = 0; i < text.length; i++) {
+    const space = /\s/.test(text.charAt(i));
+    if (!space && !inWord) starts.push(i);
+    inWord = !space;
+  }
+  return starts;
+}
+
+/**
+ * Record `index` as the token the word at `slot` anchors.
+ *
+ * The array is created dense and null-filled, so a node that has one word
+ * spoken and five not still answers for all six — a sparse array would leave
+ * the renderer's length check false and put it straight back on the fallback
+ * this exists to retire. First writer wins: a word said as several tokens
+ * anchors at the first, which is where the word starts.
+ */
+function anchorWordToken(ref: RenderRef, slot: number, index: number): void {
+  const words = ref.wordTokens ?? (ref.wordTokens = wordStarts(ref.text).map(() => null));
+  if (slot < 0 || slot >= words.length) return;
+  if (words[slot] === null) words[slot] = index;
+}
 
 /**
  * Maps a local index inside an appended text run back to an absolute source
@@ -372,16 +421,28 @@ function appendSpoken(
   draft.spokenText += text;
 
   const raws = tokenizeText(text);
+  /*
+   * Which word each token starts in. The raws are in ascending offset order, so
+   * one shared pointer walks the word list once for the whole run rather than
+   * re-scanning the text per token.
+   */
+  const starts = wordStarts(text);
+  let slot = -1;
+  const slotFor = (offset: number): number => {
+    while (slot + 1 < starts.length && starts[slot + 1]! <= offset) slot++;
+    return slot;
+  };
   for (let i = 0; i < raws.length; i++) {
     const raw = raws[i]!;
     const srcStart = span.at(raw.start);
     const srcEnd = span.at(raw.end);
+    const wordSlot = slotFor(raw.start);
     if (i === 0 && mergeTarget && raw.start === 0) {
       // Continuation of the word that ended at the formatting boundary.
       mergeTarget.surface += raw.surface;
       mergeTarget.srcEnd = srcEnd;
       mergeTarget.textEnd = textBase + raw.end;
-      if (renderRef) mergeTarget.renderRefs.push(renderRef);
+      if (renderRef) mergeTarget.renderRefs.push({ ref: renderRef, wordSlot });
       continue;
     }
     draft.tokens.push({
@@ -391,7 +452,7 @@ function appendSpoken(
       textStart: textBase + raw.start,
       textEnd: textBase + raw.end,
       isOverrideAnchor: false,
-      renderRefs: renderRef ? [renderRef] : [],
+      renderRefs: renderRef ? [{ ref: renderRef, wordSlot }] : [],
     });
   }
   draft.lastSpokenSrcEnd = span.exact ? span.at(text.length) : -1;
@@ -652,22 +713,36 @@ function appendOverrideTokens(
   },
 ): void {
   const sayTokens = tokenizeText(spec.say);
-  const refs = spec.renderRef ? [spec.renderRef] : [];
+  /*
+   * The render node here is the VISUAL text, so a say-token's own offsets say
+   * nothing about which word on the glass it belongs to. Word slots are taken
+   * positionally when the two agree on how many words there are — the same rule
+   * the visual-form aliases above use — and otherwise everything anchors to the
+   * first word, which is where the override starts.
+   */
+  const visualWords = spec.renderRef ? wordStarts(spec.renderRef.text).length : 0;
+  const positional = visualWords > 0 && visualWords === sayTokens.length;
+  const slotsFor = (i: number): RenderSlot[] =>
+    spec.renderRef ? [{ ref: spec.renderRef, wordSlot: positional ? i : 0 }] : [];
 
   if (sayTokens.length === 0) {
     // Empty or unspeakable say value: fall back to the visual word verbatim.
     if (draft.spokenText && !/\s$/.test(draft.spokenText)) draft.spokenText += ' ';
     const textBase = draft.spokenText.length;
     draft.spokenText += spec.visual;
+    // These tokens ARE the visual text, so their offsets index the node.
+    const starts = spec.renderRef ? wordStarts(spec.renderRef.text) : [];
+    let slot = -1;
     for (const raw of tokenizeText(spec.visual)) {
+      while (slot + 1 < starts.length && starts[slot + 1]! <= raw.start) slot++;
       draft.tokens.push({
         surface: raw.surface,
         srcStart: spec.srcStart,
         srcEnd: spec.srcEnd,
         textStart: textBase + raw.start,
         textEnd: textBase + raw.end,
-          isOverrideAnchor: false,
-        renderRefs: [...refs],
+        isOverrideAnchor: false,
+        renderRefs: spec.renderRef ? [{ ref: spec.renderRef, wordSlot: slot }] : [],
       });
     }
     return;
@@ -686,7 +761,7 @@ function appendOverrideTokens(
       textStart: textBase + raw.start,
       textEnd: textBase + raw.end,
       isOverrideAnchor: true,
-      renderRefs: [...refs],
+      renderRefs: slotsFor(i),
     });
   }
 }
@@ -1752,8 +1827,9 @@ function finalize(
             ? { grammaticalSentenceEnd: true }
             : {}),
         });
-        for (const ref of tokenDraft.renderRefs) {
-          (ref.tokenIndexes ??= []).push(spokenTokens.length - 1);
+        for (const slot of tokenDraft.renderRefs) {
+          (slot.ref.tokenIndexes ??= []).push(spokenTokens.length - 1);
+          anchorWordToken(slot.ref, slot.wordSlot, spokenTokens.length - 1);
         }
       }
 

@@ -29,6 +29,15 @@ const nodes: SafeRenderNode[] = [
   { type: 'text', text: 'alpha beta gamma delta epsilon', tokenIndexes: [0, 1, 2, 3, 4] },
 ];
 
+/** Every anchored span, as the pairs `[token, word]` it claims. */
+function anchored(html: string): [number, string][] {
+  const out: [number, string][] = [];
+  for (const match of html.matchAll(/data-t="(\d+)"[^>]*>([^<]*)</g)) {
+    out.push([Number(match[1]), match[2]!]);
+  }
+  return out;
+}
+
 /** The class attribute of the span anchored at `token`. */
 function classesAt(html: string, token: number): string[] {
   const match = new RegExp(`<span class="([^"]*)"[^>]*data-t="${token}"`).exec(html);
@@ -60,6 +69,45 @@ describe('per-word marking on the stage', () => {
     // returns first, then something starts setting it.
     expect(source).not.toContain('class:current');
     expect(source).not.toMatch(/\.w\.current\b/);
+  });
+
+  /*
+   * A paragraph with an em dash in it used to render with NO per-word marking
+   * at all: the compiler's `tokenIndexes` counts tokens and the renderer splits
+   * words, the dash is a word and not a token, and the length check that
+   * reconciled the two then failed for the whole node. Every span lost its
+   * `data-t`, so the block dimmed as one flat shade however far into it the
+   * reader was — which is what a presenter reported seeing, on the one
+   * paragraph of the sample script that contains a dash.
+   */
+  it('marks the words around a written-but-unspoken word', () => {
+    const dashed: SafeRenderNode[] = [
+      {
+        type: 'text',
+        text: 'alpha beta — gamma delta',
+        tokenIndexes: [0, 1, 2, 3],
+        wordTokens: [0, 1, null, 2, 3],
+      },
+    ];
+    const marked = render(InlineNodes, { props: { nodes: dashed, cursor: 2 } }).body;
+    /*
+     * The words each anchor is ON, not just how many there are. A mapping that
+     * shifted by one across the dash would leave every assertion about classes
+     * true and still point each anchor at its neighbour — and an anchor on the
+     * wrong word is what moves the presenter's position.
+     */
+    expect(anchored(marked)).toEqual([
+      [0, 'alpha'],
+      [1, 'beta'],
+      [2, 'gamma'],
+      [3, 'delta'],
+    ]);
+    expect(classesAt(marked, 0)).toContain('past');
+    expect(classesAt(marked, 1)).toContain('past');
+    expect(classesAt(marked, 2)).not.toContain('past');
+    // The dash is drawn, and anchored to nothing.
+    expect(marked).toContain('—');
+    expect(marked).not.toMatch(/data-t="[^"]*"[^>]*>—/);
   });
 
   it('never underlines a word, whatever the cursor is', () => {

@@ -894,7 +894,7 @@
     const walk = (nodes: readonly SafeRenderNode[]): void => {
       for (const node of nodes) {
         if (node.type === 'text') {
-          for (const segment of segmentText(node.text, node.tokenIndexes)) {
+          for (const segment of segmentText(node.text, node.tokenIndexes, node.wordTokens)) {
             if (segment.space || segment.tokenIndex === null) continue;
             out.set(segment.tokenIndex, segment.text);
           }
