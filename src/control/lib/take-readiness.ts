@@ -129,11 +129,22 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
 
   if (input.voiceTake) {
     if (!input.modelSupported) {
+      /*
+       * WARNING, not blocking — corrected.
+       *
+       * It was blocking on the reasoning that no action fixes it in place, and
+       * that is true of the MODEL. It is not true of the take: an unloadable
+       * recogniser leaves exactly the same take a missing model leaves, one
+       * that rolls at a pace and is driven by hand. Blocking it removed Start
+       * anyway and made this a gate over a take the product otherwise supports,
+       * which is the one thing this surface must never become.
+       */
       findings.push({
         id: 'model_unsupported',
-        severity: 'blocking',
+        severity: 'warning',
         label: 'Voice following',
-        detail: 'This build cannot load the selected speech model.',
+        detail:
+          'This build cannot load the selected speech model, so this take cannot follow your voice.',
         action: { label: 'Choose a language', settingsSection: 'speech' },
       });
     } else if (!input.modelInstalled) {

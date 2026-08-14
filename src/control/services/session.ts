@@ -200,7 +200,21 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
       disposed = true;
       prompting = false;
       stopSnapshots();
-      void stopAlignment().catch(() => {});
+      /*
+       * STOP AFTER THE START HAS FINISHED, NOT DURING IT.
+       *
+       * `start_alignment` awaits a database-backed language lookup and then
+       * installs the engine unconditionally. A stop issued while that is still
+       * in flight can run FIRST, after which the old startup installs its
+       * engine into an app that has no take — an orphan that the next take then
+       * finds already there, or that overwrites the next take's own.
+       *
+       * Waiting costs nothing here: the take is already over, snapshots are
+       * already unsubscribed, and `stopAlignment` is idempotent. The `.catch`
+       * on `alignmentReady` means a failed start resolves rather than rejects,
+       * so this always runs.
+       */
+      void alignmentReady.then(() => stopAlignment()).catch(() => {});
     },
   };
 }

@@ -2,8 +2,9 @@
 
 **Status: this is the gate that no suite in this repository can stand in for.**
 
-macOS ships WKWebView, for which Apple provides no WebDriver, so nothing
-automated on this machine can drive the packaged app. Every layer that does run
+macOS ships WKWebView, for which Apple provides no WebDriver, and no suite in
+this repository drives the packaged app — Playwright runs against the Vite dev
+server with an injected Tauri shim. Every layer that does run
 here — node vitest, jsdom vitest, Playwright against the dev server, cargo tests,
 cc-bench — is listed in `CLAUDE.md` along with what it proves, and a large green
 suite has repeatedly coexisted with a broken product.
@@ -55,11 +56,11 @@ opening placement in `ScriptLayer`.
 | A2 | First readable frame | Text is at final size and position when first seen — it does not settle visibly | |
 | A3 | Destination readout | The panel named under Present is the panel it opened on | |
 | A4 | Present with the window on a second display | Opens on that display, not the calibrated one | |
-| A5 | Present from a section (`From here`) | Opens AT that section — does not open at the top and travel | |
+| A5 | Present from the caret (`From here`) | Opens at the sentence the caret is in — does not open at the top and travel | |
 | A6 | Present from a take marker | Opens at the marker | |
-| A7 | Continue from last ending | Opens where the previous take stopped | |
-| A8 | Present from a section far down a long script (2000+ words) | Same as A5. **This is the case windowed rendering is most likely to break** | |
-| A9 | Present with no model installed | Readiness sheet appears, names the model, offers Start anyway | |
+| A7 | Continue from last ending | Opens at the start of the sentence the previous take stopped inside — it snaps backwards on purpose | |
+| A8 | Present from a point far down a script of **more than 300 blocks** | Same as A5. **This is the case windowed rendering is most likely to break**, and the trigger is block count, not word count — a 2,000-word script in twenty paragraphs does not exercise it. Count paragraphs, headings, list items and cues | |
+| A9 | Present with no model installed | Readiness sheet appears, says voice following is unavailable, offers Start anyway. (It does not name the model — the sheet carries booleans, not a model id) | |
 | A10 | Present a script with no spoken words | Blocked, with a reason. No stage opens | |
 | A11 | Reader mode | Window returns to its remembered frame | |
 | A12 | Launch failure (unplug the display mid-launch) | Returns to a usable editor; no half-presented window | |
@@ -152,9 +153,11 @@ List every section and case skipped, and why. **This section is not optional**
 - **Windows and Linux**: there is no build. Not applicable rather than untested.
 - **Intel Macs**: the release ships a universal binary; if no Intel Mac was
   used, say so here rather than implying coverage.
-- **Choppy-delivery detection**: `pauseLocation` is not supplied to the cadence
-  lane, so the check cannot fire. Documented in the README; do not test for it.
-- **The variety score**: runs in its documented degraded mode.
+- **Delivery analysis of any kind**: there is none to test. Live coaching and
+  the second model were removed, and no cadence or variety scoring runs in this
+  tree. Older specs and README passages still describe them; `CLAUDE.md` is
+  explicit that the code is the authority. Do not write a case for a lane that
+  does not exist.
 - **The reversible dim frontier**: `bench/README.md` records that the gate has
   never opened on the recorded corpus. If you see a provisional dim on a real
   take, that is a new observation and worth recording.

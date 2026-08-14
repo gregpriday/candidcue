@@ -98,10 +98,17 @@ describe('resolveReadiness', () => {
     expect(verdict.blocked).toBe(false);
   });
 
-  it('blocks a model this build cannot load at all', () => {
-    // Different from "not downloaded": no action by the user fixes it in place,
-    // so it is not a warning with a download button behind it.
-    expect(resolveReadiness(ready({ modelSupported: false })).blocked).toBe(true);
+  it('warns about an unloadable model without blocking the take', () => {
+    /*
+     * This blocked at first, reasoning that no user action fixes it in place.
+     * True of the MODEL and false of the TAKE: an unloadable recogniser leaves
+     * exactly the take a missing model leaves — one that rolls at a pace and is
+     * driven by hand. Blocking removed Start anyway and made this a gate over a
+     * take the product supports.
+     */
+    const verdict = resolveReadiness(ready({ modelSupported: false }));
+    expect(verdict.show).toBe(true);
+    expect(verdict.blocked).toBe(false);
   });
 
   it('warns when a pinned microphone has gone, and says what will happen', () => {
@@ -177,12 +184,23 @@ describe('the sheet cannot become a gate', () => {
   it('never blocks a healthy take for any device or display condition', () => {
     // Everything else on this surface is launch-past-able by construction.
     for (const modelInstalled of [true, false]) {
-      for (const pinnedMicAvailable of [true, false]) {
-        for (const destinationMismatch of [null, { title: 'x', suggestion: 'y' }]) {
-          const verdict = resolveReadiness(
-            ready({ modelInstalled, pinnedMicLabel: 'Mic', pinnedMicAvailable, destinationMismatch }),
-          );
-          expect(verdict.blocked, JSON.stringify({ modelInstalled, pinnedMicAvailable })).toBe(false);
+      for (const modelSupported of [true, false]) {
+        for (const pinnedMicAvailable of [true, false]) {
+          for (const destinationMismatch of [null, { title: 'x', suggestion: 'y' }]) {
+            const verdict = resolveReadiness(
+              ready({
+                modelInstalled,
+                modelSupported,
+                pinnedMicLabel: 'Mic',
+                pinnedMicAvailable,
+                destinationMismatch,
+              }),
+            );
+            expect(
+              verdict.blocked,
+              JSON.stringify({ modelInstalled, modelSupported, pinnedMicAvailable }),
+            ).toBe(false);
+          }
         }
       }
     }

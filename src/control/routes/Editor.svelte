@@ -247,7 +247,9 @@ import type { PresentationMode } from '../services/settings-types';
       // The controls these mirror are behind the panel; the subscription is not.
       if (opening) return;
       if (action === 'save') void manualSave();
-      if (action === 'present') void present();
+      // The same path the button takes. A shortcut that skipped readiness would
+      // make the check depend on which control somebody happened to use.
+      if (action === 'present') void checkThenPresent();
     }),
   );
 
@@ -583,8 +585,18 @@ import type { PresentationMode } from '../services/settings-types';
    */
   let modelReady = $state({ installed: true, supported: true });
 
+  /*
+   * Re-read when the configured model changes, and ASK ABOUT THAT MODEL.
+   *
+   * `getSpeechModelStatus()` with no argument answers about the catalogue
+   * default, not the model this take will load — a mismatch Settings already
+   * documents. Without the id, somebody who had installed a non-default
+   * language would be told they had no model, and somebody who had switched
+   * away from an installed default would be told they had one.
+   */
   $effect(() => {
-    void getSpeechModelStatus()
+    const modelId = $settings.speech.transcriptionModel;
+    void getSpeechModelStatus(modelId)
       .then((status) => {
         modelReady = { installed: status.installed, supported: status.supported };
       })
@@ -603,7 +615,10 @@ import type { PresentationMode } from '../services/settings-types';
    * replug can change them. Comparing raw ids here would report a perfectly
    * present microphone as missing on some restarts.
    */
-  async function readinessNow(requested = false): Promise<ReadinessVerdict> {
+  async function readinessNow(
+    requested = false,
+    mode?: PresentationMode,
+  ): Promise<ReadinessVerdict> {
     const scriptFactsKnown = isCompileSettledForScript(scriptId, $editor, $compiled);
     const audio = $settings.audio;
     const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
@@ -651,7 +666,18 @@ import type { PresentationMode } from '../services/settings-types';
        */
       spokenWordCount: scriptFactsKnown ? wordCount : 1,
       blockingDiagnostics: scriptFactsKnown ? blockingCount : 0,
-      destinationMismatch: $takeDestination?.mismatch ?? null,
+      /*
+       * The mismatch belongs to the mode being LAUNCHED, not the saved default.
+       *
+       * `takeDestination` is resolved for the default, and a reading window
+       * deliberately never mismatches — it is placed by dragging it. So
+       * choosing "Present in a window" from a prompter default would otherwise
+       * warn about a rig the take is not going to use.
+       */
+      destinationMismatch:
+        (mode ?? $settings.stage.presentationMode) === 'reader'
+          ? null
+          : $takeDestination?.mismatch ?? null,
       requested,
     });
   }
@@ -669,7 +695,7 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode,
     startTokenIndex?: number,
   ): Promise<void> {
-    const verdict = await readinessNow();
+    const verdict = await readinessNow(false, mode);
     if (!verdict.show) {
       await present(mode, startTokenIndex);
       return;

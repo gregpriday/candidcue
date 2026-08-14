@@ -80,11 +80,34 @@ describe('resolveTakeOutcome', () => {
     expect(outcome.health).not.toBe('no_speech');
   });
 
-  it('does not say you moved the script when a pace did', () => {
-    // "You moved the script yourself" is simply false of a fixed-pace take.
-    const outcome = resolveTakeOutcome(take({ mode: 'fixed', wordsHeard: 0, followingShare: null }));
-    expect(outcome.detail).toMatch(/rolled at your set pace/i);
-    expect(outcome.detail).not.toMatch(/you moved the script/i);
+  it('claims nothing about what moved the script on a non-voice take', () => {
+    /*
+     * "You moved the script yourself" is false of a fixed-pace take, and
+     * "the script rolled at your set pace" is false of a fixed take nobody ever
+     * started rolling — `autoScroll.running` begins false and the transport
+     * starts it. So it says only what is known.
+     */
+    for (const mode of ['manual', 'fixed'] as const) {
+      const outcome = resolveTakeOutcome(take({ mode, wordsHeard: 0, followingShare: null }));
+      expect(outcome.detail).not.toMatch(/you moved the script/i);
+      expect(outcome.detail).not.toMatch(/rolled at your set pace/i);
+      expect(outcome.detail).toContain('Call to action');
+    }
+  });
+
+  it('does not blame the microphone for a take that had no model', () => {
+    /*
+     * Readiness deliberately lets a take start with no speech model — it still
+     * rolls and can be driven by hand. Reporting "nothing was transcribed, test
+     * your microphone" afterwards sends that presenter to debug hardware that
+     * was never involved.
+     */
+    const outcome = resolveTakeOutcome(
+      take({ wordsHeard: 0, durationSeconds: 200, voiceFollowingAvailable: false }),
+    );
+    expect(outcome.suggestion).not.toMatch(/microphone/i);
+    expect(outcome.suggestion).toMatch(/install a language/i);
+    expect(outcome.tone).not.toBe('attention');
   });
 
   it('does not claim the stage stayed still when the operator moved it', () => {
@@ -97,6 +120,8 @@ describe('resolveTakeOutcome', () => {
     // 0.8 opens the steady band; saying "for the whole take" of a measured 80%
     // is a claim the number underneath contradicts.
     expect(resolveTakeOutcome(take({ followingShare: 0.8 })).detail).not.toMatch(/whole take/i);
+    // 0.98 is not the whole take either — 2% of it was not followed.
+    expect(resolveTakeOutcome(take({ followingShare: 0.98 })).detail).not.toMatch(/whole take/i);
     expect(resolveTakeOutcome(take({ followingShare: 1 })).detail).toMatch(/whole take/i);
   });
 

@@ -1266,7 +1266,23 @@
    * uses, so a presenter who has begun reading is never yanked by a late seed.
    */
   let seededForToken = $state(-1);
+  let seededForSession = $state(-1);
   $effect(() => {
+    /*
+     * Scoped to the SESSION, not just to the token.
+     *
+     * A stage outlives a take. Latching on the token alone meant a second take
+     * that opened at the same place — the obvious case, "Retry last section"
+     * twice — was suppressed, and `openingHandedOver` is plain state that a new
+     * session resets without waking this effect. Reading the generation makes
+     * the effect re-run when a take begins and gives the latch something that
+     * actually changes between takes.
+     */
+    const session = sessionGeneration;
+    if (session !== seededForSession) {
+      seededForSession = session;
+      seededForToken = -1;
+    }
     if (!virtual || openingTokenIndex <= 0 || openingHandedOver) return;
     if (seededForToken === openingTokenIndex) return;
     // Estimated heights are enough; this only has to land in the right region.

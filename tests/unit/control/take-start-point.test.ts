@@ -63,9 +63,21 @@ const INPUT: SnapInput = {
   sentences: [
     sentence('s1', 0, 9, 'welcome to the product update'),
     sentence('s2', 10, 19, 'today we are covering three things'),
-    sentence('s3', 22, 34, 'our pricing changed at the start of the quarter'),
-    sentence('s4', 35, 49, 'the standard plan is now thirty dollars a month'),
-    sentence('s5', 52, 60, 'let me show you the new dashboard'),
+    /*
+     * The heading's OWN sentence, at the heading's own start.
+     *
+     * With `readHeadings` on, a heading is a `singleSentence` block and emits a
+     * SentenceUnit beginning at the same token as its outline node. With it off
+     * — the default — the heading emits no tokens at all and the next sentence
+     * simply starts there. Either way a heading start and a sentence start
+     * COINCIDE; the compiler cannot produce a heading whose tokens no sentence
+     * covers, which an earlier version of this fixture invented.
+     */
+    sentence('s3', 20, 21, 'pricing'),
+    sentence('s4', 22, 34, 'our pricing changed at the start of the quarter'),
+    sentence('s5', 35, 49, 'the standard plan is now thirty dollars a month'),
+    sentence('s6', 50, 51, 'demo'),
+    sentence('s7', 52, 60, 'let me show you the new dashboard'),
   ],
   outline: [
     heading('h0', 'Opening', 0, 19),
@@ -113,13 +125,16 @@ describe('snapToStart', () => {
     }
   });
 
-  it('opens on the heading, not its first body sentence', () => {
-    // The heading is the line that tells the presenter where they are. Starting
-    // below it loses that.
+  it('opens at the top of the section when you point at its heading', () => {
+    /*
+     * The heading start and its sentence start COINCIDE, so which of the two
+     * the resolver reports is a labelling question — the token is the same
+     * either way, and the token is what the take actually uses. What must hold
+     * is that pointing at a heading opens the section rather than dropping into
+     * its body.
+     */
     const point = snapToStart(20, INPUT);
-    expect(point.kind).toBe('section');
     expect(point.tokenIndex).toBe(20);
-    expect(point.label).toBe('Pricing');
   });
 
   it('labels a sentence by the section that contains it', () => {
@@ -154,11 +169,27 @@ describe('snapToStart', () => {
     expect(point.kind).toBe('sentence');
   });
 
-  it('opens on the heading when the target is above its first sentence', () => {
-    // Tokens 20 and 21 are the heading's own words: after "Pricing" starts and
-    // before s3 begins at 22.
-    expect(snapToStart(21, INPUT).kind).toBe('section');
+  it('does not fall into the body when pointed inside a heading', () => {
     expect(snapToStart(21, INPUT).tokenIndex).toBe(20);
+  });
+
+  it('reports a section when a heading has tokens no sentence covers', () => {
+    /*
+     * The current compiler always emits a sentence at a heading's start, so
+     * this shape does not arise today. It is asserted anyway because the
+     * `section` branch exists for it, and a resolver whose only untested branch
+     * is the one that handles a future compiler change is a resolver nobody can
+     * safely change the compiler around.
+     */
+    const gapped: SnapInput = {
+      sentences: [sentence('a', 0, 9, 'intro line'), sentence('b', 22, 30, 'body line')],
+      outline: [heading('h', 'Pricing', 20, 30)],
+      totalTokens: 31,
+    };
+    const point = snapToStart(21, gapped);
+    expect(point.kind).toBe('section');
+    expect(point.tokenIndex).toBe(20);
+    expect(point.label).toBe('Pricing');
   });
 
   it('clamps a request past the end instead of launching into nothing', () => {
@@ -210,7 +241,10 @@ describe('describeStartPoint', () => {
     // A readout that appeared only when the start was unusual would make the
     // usual case look like a missing readout.
     expect(describeStartPoint(beginning())).toBe('From beginning');
-    expect(describeStartPoint(snapToStart(20, INPUT))).toBe('From “Pricing”');
+    // A heading start coincides with its own sentence in real compiler output,
+    // so this reads as "From here" — the same token, described as the caret
+    // position it is. The section wording is exercised on the gapped shape.
+    expect(describeStartPoint(snapToStart(20, INPUT))).toBe('From here');
     expect(describeStartPoint(continueFrom(40, INPUT)!)).toBe('From last ending');
     expect(describeStartPoint(snapToStart(40, INPUT))).toBe('From here');
   });

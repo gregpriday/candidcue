@@ -34,6 +34,15 @@
 /** Everything the outcome is allowed to look at. */
 export interface TakeOutcomeInput {
   mode: 'voice' | 'manual' | 'fixed';
+  /**
+   * Whether voice following was even possible this take.
+   *
+   * False when the take was started past a missing speech model — which
+   * readiness deliberately allows, because a take can still roll at a pace and
+   * be driven by hand. Without this the summary told those presenters to go and
+   * test their microphone, which was never the problem.
+   */
+  voiceFollowingAvailable?: boolean;
   /** Words the recogniser FINALISED. Zero with none in flight means silence. */
   wordsHeard: number;
   /** Words in the utterance still open when the take stopped. */
@@ -111,11 +120,29 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   if (input.mode !== 'voice') {
     return {
       headline: 'Take finished',
-      detail:
-        input.mode === 'fixed'
-          ? `The script rolled at your set pace this take. You ended in ${input.endingLocation}.`
-          : `You moved the script yourself this take. You ended in ${input.endingLocation}.`,
+      /*
+       * Neither branch claims WHAT moved the script beyond what is known. A
+       * fixed-mode take does not start rolling on its own — `autoScroll.running`
+       * begins false and the transport starts it — so "the script rolled at
+       * your set pace" would be false for a fixed take nobody ever started.
+       */
+      detail: `CandidCue did not follow your voice on this take. You ended in ${input.endingLocation}.`,
       suggestion: null,
+      health: 'no_tracking',
+      tone: 'neutral',
+    };
+  }
+
+  /*
+   * A voice take that never had a recogniser is not a microphone failure, and
+   * must not be reported as one. The presenter was told before they started and
+   * chose to go ahead.
+   */
+  if (input.voiceFollowingAvailable === false) {
+    return {
+      headline: 'Take finished without voice following',
+      detail: `No speech model was available, so CandidCue did not follow your voice. You ended in ${input.endingLocation}.`,
+      suggestion: 'Install a language in Settings to follow your voice on the next take.',
       health: 'no_tracking',
       tone: 'neutral',
     };
@@ -210,7 +237,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   return {
     headline: 'CandidCue stayed with you',
     detail:
-      input.followingShare >= 0.98
+      input.followingShare >= 1
         ? `Speech was detected and the stage followed for the whole take. You ended in ${input.endingLocation}.`
         : `Speech was detected and the stage followed almost all of the take. You ended in ${input.endingLocation}.`,
     suggestion: null,
