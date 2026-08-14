@@ -425,7 +425,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         const accepted = await requestConfirm({
           title: 'End the session?',
           body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'End session',
+          confirmLabel: 'End take',
           danger: true,
         });
         if (!accepted) return false;

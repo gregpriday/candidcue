@@ -424,6 +424,13 @@ export const mockStage = {
       },
     ];
   },
+  /**
+   * Browser dev has no window manager to ask, so the mock answers with the
+   * panel a control window would ordinarily be on: the primary one.
+   */
+  currentWindowDisplay(): DisplayDescriptor | null {
+    return this.listDisplays().find((d) => d.primary) ?? null;
+  },
   identifyDisplays(): IdentificationSession {
     return {
       sessionId: makeId(),

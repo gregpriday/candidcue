@@ -63,22 +63,44 @@ function followState(state: SmoothFollowState['state']): SmoothFollowState {
   return store.snapshot();
 }
 
-function textOf(voiceInput: boolean, state: SmoothFollowState['state']): string {
+interface PanelInputs {
+  micState?: 'live' | 'muted' | 'disconnected';
+  inputDeviceLost?: boolean;
+  heardAnything?: boolean;
+  heldByUser?: boolean;
+  rollingAtPace?: boolean;
+}
+
+function textOf(
+  voiceInput: boolean,
+  state: SmoothFollowState['state'],
+  inputs: PanelInputs = {},
+): string {
   const { container } = render(FollowStatePanel, {
-    props: { follow: followState(state), voiceInput },
+    props: { follow: followState(state), voiceInput, ...inputs },
   });
   return container.textContent ?? '';
 }
 
+/*
+ * A deliberate hold is expressed with the `heldByUser` PROP, not by driving the
+ * store's `followingPaused`. That flag is also raised automatically on device
+ * loss, so the panel deliberately no longer reads it — see the note on
+ * `FollowStatusInput.heldByUser`.
+ */
 describe('FollowStatePanel honesty', () => {
   it('a manual take never offers a wake word or a transcription feed', () => {
-    const paused = textOf(false, 'paused');
-    // "Hold text" rather than "Pause following" (CCUX-002) — the retired label
-    // shared a verb with pausing the TAKE and pausing the MICROPHONE.
-    expect(paused).toContain('Text held');
+    const paused = textOf(false, 'paused', { heldByUser: true });
+    /*
+     * The no-microphone branch wins over the hold, and that is the point: on a
+     * take that never opened an input, "Text held — CandidCue is still
+     * listening" would be false in its second half. So a manual take says
+     * `paused` in its own words even when the operator did hold the text.
+     */
+    expect(paused).toContain('Paused');
     // A manual take has no microphone, so it must not offer to be spoken to
     // nor claim a feed it does not have.
-    expect(paused).toContain('Use the transport to move it');
+    expect(paused).toMatch(/transport moves the script/i);
     expect(paused).not.toContain('CandidCue');
     expect(paused).not.toContain('Transcription');
 
@@ -88,7 +110,7 @@ describe('FollowStatePanel honesty', () => {
   });
 
   it('a voice take keeps the transcription copy', () => {
-    const paused = textOf(true, 'paused');
+    const paused = textOf(true, 'paused', { heldByUser: true });
     expect(paused).toContain('Text held');
     /*
      * §48: pausing FOLLOWING is not pausing the session. The panel has to say
@@ -116,5 +138,50 @@ describe('FollowStatePanel honesty', () => {
     const text = textOf(true, 'following');
     expect(text).not.toMatch(/microphone/i);
     expect(text).not.toMatch(/nothing heard/i);
+  });
+
+  /*
+   * ------------------------------------------------------------------------
+   * The props actually rendered, not just defaulted.
+   * ------------------------------------------------------------------------
+   * The first version of this file passed neither new input, so it proved the
+   * component compiled and nothing about CCUX-018. These drive the panel
+   * through the states the feature exists for.
+   */
+  it('renders a lost device as a fault with a way out', () => {
+    const text = textOf(true, 'holding', { micState: 'disconnected', inputDeviceLost: true });
+    expect(text).toContain('Microphone disconnected');
+    expect(text).toMatch(/another input/i);
+  });
+
+  it('does not offer the input picker for a recogniser failure', () => {
+    // Same `micState`, different cause. Telling somebody to change microphone
+    // because the recogniser stopped is an instruction they cannot follow.
+    const text = textOf(true, 'holding', { micState: 'disconnected', inputDeviceLost: false });
+    expect(text).toMatch(/not the microphone/i);
+    expect(text).not.toMatch(/another input/i);
+  });
+
+  it('never says the text is stationary while it rolls', () => {
+    // Auto-scroll raises the same pause flag a deliberate hold does, and the
+    // text is moving down the glass the whole time.
+    const text = textOf(true, 'following', { rollingAtPace: true, heldByUser: true });
+    expect(text).toContain('Rolling at pace');
+    expect(text).not.toMatch(/stays where it is/i);
+  });
+
+  it('separates an operator hold from an automatic one', () => {
+    const chosen = textOf(true, 'holding', { heldByUser: true });
+    expect(chosen).toContain('Text held');
+    expect(chosen).toMatch(/still listening/i);
+
+    // The store's broad pause flag is raised by device loss too. Reading it as
+    // a decision claimed CandidCue was listening to a microphone that had gone.
+    const automatic = textOf(true, 'holding', {
+      heldByUser: false,
+      micState: 'disconnected',
+      inputDeviceLost: true,
+    });
+    expect(automatic).not.toMatch(/still listening/i);
   });
 });

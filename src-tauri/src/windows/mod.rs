@@ -366,6 +366,38 @@ pub fn list_displays<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<DisplayDescri
         .collect())
 }
 
+/// The panel a named window is sitting on right now, as a full descriptor.
+///
+/// -----------------------------------------------------------------------
+/// WHY THIS EXISTS AT ALL (CCUX-004)
+/// -----------------------------------------------------------------------
+/// Single-window presentation fills whichever monitor the control window is
+/// already on — deliberately, because teleporting the window would take it
+/// away from the person driving it. That makes "where will this take open?"
+/// a question about the CURRENT window position, and nothing in the app
+/// could answer it before the take started. Settings could only name the
+/// panel chosen for calibration and preview, which is a different panel, and
+/// the operator had no way to find out they differed until the window had
+/// already changed shape.
+///
+/// `None` is an honest "cannot tell", never a guess. A caller that wants a
+/// fallback has `chooseStageDisplay` on the frontend; conflating the two
+/// here would hand a guess to a UI whose entire job is to stop guessing.
+pub fn window_display<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+) -> Result<Option<DisplayDescriptor>, AppError> {
+    let Some(window) = app.get_webview_window(label) else {
+        return Ok(None);
+    };
+    let Some(fingerprint) = window_monitor_fingerprint(app, &window) else {
+        return Ok(None);
+    };
+    Ok(list_displays(app)?
+        .into_iter()
+        .find(|d| d.fingerprint == fingerprint))
+}
+
 /// One hash covering the whole desktop arrangement. Used only to notice that
 /// the topology changed so control can revalidate (spec §52.5).
 pub fn topology_signature(descriptors: &[DisplayDescriptor]) -> String {

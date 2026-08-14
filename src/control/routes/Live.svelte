@@ -10,6 +10,7 @@
   import FollowControls from '../components/FollowControls.svelte';
   import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
   import FollowStatePanel from '../components/FollowStatePanel.svelte';
+  import { sessionModeLabel } from '../../shared/take-vocabulary';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
@@ -96,9 +97,9 @@ import { onShortcut } from '../lib/shortcuts';
   const connection = $derived(connectionPill($session.connection));
 
   const snapshot = $derived($session.snapshot);
-  const modeLabel = $derived(
-    $session.mode === 'voice' ? 'Voice' : $session.mode === 'manual' ? 'Manual' : 'Fixed',
-  );
+  // From the glossary, so the pill names the take what the controls that drive
+  // it are called. "Fixed" and "Roll at pace" were the same mode.
+  const modeLabel = $derived(sessionModeLabel($session.mode));
 
   /**
    * Is there a realtime transport and an open microphone to report on at all?
@@ -376,7 +377,7 @@ import { onShortcut } from '../lib/shortcuts';
            * take starts" implied one would begin on its own.
            */
           body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'End session',
+          confirmLabel: 'End take',
           danger: true,
         });
       } finally {
@@ -1269,6 +1270,30 @@ import { onShortcut } from '../lib/shortcuts';
   in Preflight and labels its tiles with the same numbers.
 -->
 {#snippet stageFaultNotice()}
+  <!--
+    THE TAKE MOVED PANELS AFTER IT OPENED (CCUX-010).
+
+    Three sentences in the order the guide asks a fault to answer them: what
+    happened, what CandidCue did to keep the take safe, and what the user can do
+    now. It is `status` rather than `alert` and carries no danger tone, because
+    nothing has failed — the text is perfectly readable, it is simply sized for
+    the panel this take was measured against. Alarming a presenter mid-take over
+    typography would cost more than the typography does.
+
+    There is no in-take repair offered, and that is honest: the optics were
+    resolved once from the opening panel, and re-resolving them means rebuilding
+    the stage document under a presenter who is reading from it.
+  -->
+  {#if $session.displayChangedTo}
+    <div class="stage-window-fault soft" role="status">
+      <p class="lf-title">This window moved to {$session.displayChangedTo}</p>
+      <p class="lf-note">
+        Text sizing still matches the display this take started on, so it may look larger or smaller
+        than usual. The take is otherwise unaffected — end and present again to size it for this
+        display.
+      </p>
+    </div>
+  {/if}
   {#if $session.stageWindowFault}
     {@const fault = $session.stageWindowFault}
     <div class="stage-window-fault" role="alert">
@@ -1458,7 +1483,14 @@ import { onShortcut } from '../lib/shortcuts';
         sectionTitle={currentSectionTitle}
         voiceInput={hasVoiceTransport}
         micState={$session.micState}
+
+        inputDeviceLost={$session.inputDeviceLost}
+
         heardAnything={$session.heardAnything}
+
+        heldByUser={$session.followPausedByUser}
+
+        rollingAtPace={$session.autoScroll.running}
         onnoticeaction={handleNoticeAction}
       />
 
@@ -1617,11 +1649,11 @@ import { onShortcut } from '../lib/shortcuts';
       -->
       <Button
         variant="danger"
-        title={`End session (${transportKey('Mod+.')})`}
+        title={`End take (${transportKey('Mod+.')})`}
         onclick={() => requestEndSession()}
       >
         <Icon name="stop" size={14} />
-        End session
+        End take
       </Button>
     </div>
 
@@ -1751,7 +1783,14 @@ import { onShortcut } from '../lib/shortcuts';
       sectionTitle={currentSectionTitle}
       voiceInput={hasVoiceTransport}
       micState={$session.micState}
+
+      inputDeviceLost={$session.inputDeviceLost}
+
       heardAnything={$session.heardAnything}
+
+      heldByUser={$session.followPausedByUser}
+
+      rollingAtPace={$session.autoScroll.running}
       onnoticeaction={handleNoticeAction}
     />
 
@@ -1763,7 +1802,7 @@ import { onShortcut } from '../lib/shortcuts';
     <div class="tc-end">
       <Button variant="danger" onclick={() => void requestEndSession()}>
         <Icon name="stop" size={14} />
-        End session
+        End take
       </Button>
     </div>
   </section>
@@ -1955,6 +1994,15 @@ import { onShortcut } from '../lib/shortcuts';
     width: 3px;
     border-radius: var(--radius-pill);
     background: var(--danger);
+  }
+  /*
+   * A statement, not an alarm. The display-change notice shares the box so it
+   * sits in the same place operators already look, and swaps the danger rule
+   * for the accent one — nothing has failed, and colouring it as though
+   * something had would teach people to ignore the bar that matters.
+   */
+  .stage-window-fault.soft::before {
+    background: var(--accent);
   }
 
   /* ------------------------------------------------- §115 the take controls

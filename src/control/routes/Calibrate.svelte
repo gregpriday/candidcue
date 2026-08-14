@@ -1127,7 +1127,7 @@
   <Toolbar
     title="Calibrate this display"
     detail={display?.name ?? 'Display'}
-    backLabel="Stage display"
+    backLabel="Prompter display and rigs"
     onback={() => void navigate({ name: 'settings', section: 'stage' })}
   >
     {#snippet status()}

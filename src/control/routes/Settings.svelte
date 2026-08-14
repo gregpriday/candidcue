@@ -91,7 +91,7 @@
     retentionConfirmCopy,
   } from '../lib/transcript-retention';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
-  import { SESSION_MODE_LABELS, sessionModeLabel } from '../lib/take-vocabulary';
+  import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -185,8 +185,22 @@
     { id: 'audio', label: 'Audio', keywords: 'microphone mic input level meter device permission' },
     {
       id: 'stage',
-      label: 'Stage display',
-      keywords: 'display monitor screen panel presentation prompter reader window identify',
+      /*
+       * NOT "Stage display" (CCUX-003).
+       *
+       * That name read as "the display the stage will appear on", which is the
+       * one thing this section does not decide — single-window presentation
+       * fills whichever monitor the control window is already on. A user could
+       * choose and calibrate a panel here, press Present from another, and get
+       * behaviour that follows the architecture exactly while contradicting
+       * every label they had been shown.
+       *
+       * The keywords keep "stage display" so anyone who learnt the old name, or
+       * read it in an older note, still finds this section by searching for it.
+       */
+      label: 'Prompter display and rigs',
+      keywords:
+        'display monitor screen panel presentation prompter reader window identify stage display calibration rig destination',
     },
     {
       id: 'teleprompter',
@@ -518,7 +532,7 @@
     const fingerprint = effectiveDisplay?.fingerprint;
     if (fingerprint === undefined) {
       stagePreviewError =
-        'No display is selected yet. Choose the teleprompter under Stage display first.';
+        'No display is selected yet. Choose the teleprompter under Prompter display and rigs first.';
       return;
     }
 
@@ -2057,8 +2071,8 @@
           window that was never going to move on its own.
         -->
         <Section
-          title="Stage display"
-          description="The panel you calibrate, preview and test against. Present stays on whichever display this window is already on — drag it there first."
+          title="Prompter display and rigs"
+          description="Calibrate and test the displays you use with teleprompter glass. A take opens on the display that currently contains the CandidCue window — the editor's Present button names it."
         >
           {#snippet actions()}
             <Button size="sm" disabled={displaysLoading} onclick={() => void loadDisplays()}>
@@ -2663,7 +2677,7 @@
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
                 Everything below updates it as you drag.
               {:else if displays.length === 0}
-                No displays detected — connect the teleprompter and open Stage display.
+                No displays detected — connect the teleprompter and open Prompter display and rigs.
               {:else}
                 Puts a sample script on <strong
                   >{effectiveDisplay?.name ?? 'the stage display'}</strong
@@ -2784,7 +2798,7 @@
             -->
             <p class="hint-line">
               <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
-                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open Stage display'}
+                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open prompter displays'}
               </button>
             </p>
           {/if}
@@ -2811,12 +2825,12 @@
             <p class="hint-line">
               The marks at the sides of the stage are the band. With the preview running, drag this
               until they sit over your camera lens — that is where your eyes rest, so it is where the
-              lens should be. <strong>Calibrate</strong> under Stage display does the same alignment with
+              lens should be. <strong>Calibrate</strong> under Prompter display and rigs does the same alignment with
               a crosshair and remembers it per rig.
             </p>
             <p class="hint-line">
               These four are what an <strong>uncalibrated</strong> display prompts at. Calibrate one
-              under Stage display and its size, line height, column and reading band are worked out
+              under Prompter display and rigs and its size, line height, column and reading band are worked out
               from how far away you stand instead — which is the only way they can be right on two
               panels of different sizes at once.
             </p>

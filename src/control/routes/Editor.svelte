@@ -36,6 +36,8 @@ import SplitButton from '../components/SplitButton.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
+  import { destinationAnnouncement } from '../lib/take-destination';
+  import { refreshTakeDestination, takeDestination, watchTakeDestination } from '../stores/destination';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
@@ -559,6 +561,32 @@ import type { PresentationMode } from '../services/settings-types';
     presentMenuItems($settings.stage.presentationMode, (mode) => void present(mode)),
   );
 
+  /*
+   * WHERE PRESENT IS ACTUALLY GOING (CCUX-004).
+   *
+   * Kept current from the moment the editor mounts, because the readout is
+   * worth nothing after the button is pressed — at that point the operator can
+   * see the destination and can no longer choose a different one.
+   */
+  $effect(() =>
+    watchTakeDestination({
+      mode: $settings.stage.presentationMode,
+      calibratedFingerprint: $settings.stage.displayFingerprint,
+    }),
+  );
+
+  /*
+   * Settings can change under a mounted editor — the preferences window is its
+   * own window — and both of these change the answer, so the watcher is told
+   * rather than restarted. Restarting it would re-add the focus listener.
+   */
+  $effect(() => {
+    void refreshTakeDestination({
+      mode: $settings.stage.presentationMode,
+      calibratedFingerprint: $settings.stage.displayFingerprint,
+    });
+  });
+
   function withView(fn: (view: NonNullable<ReturnType<MarkdownEditor['getView']>>) => void): void {
     const view = editorRef?.getView();
     if (view) fn(view);
@@ -1018,14 +1046,41 @@ import type { PresentationMode } from '../services/settings-types';
           onclick={() => updateWorkspace({ outlineVisible: !$workspace.outlineVisible })}
         />
         <OverflowMenu items={overflowItems} label="Script actions" />
-        <SplitButton
-          variant="primary"
-          label={$takeStarting ? 'Opening stage…' : 'Present'}
-          menuLabel="How to present"
-          disabled={$takeStarting}
-          items={presentModeItems}
-          onclick={() => void present()}
-        />
+        <!--
+          THE DESTINATION, BESIDE THE BUTTON THAT USES IT (CCUX-004).
+
+          Settings' prompter-display section names the panel used for calibration,
+          preview and display tests. Single-window presentation fills whichever
+          monitor THIS window is on. Both are correct and they are not the same
+          panel, so a user could calibrate one, press Present from the other and
+          get behaviour that follows the architecture while contradicting the
+          interface. This is the sentence that closes that gap, and it is here
+          rather than in a dialog because the whole point is that pressing
+          Present on a healthy setup must stay one click.
+        -->
+        <div class="present-group">
+          <SplitButton
+            variant="primary"
+            label={$takeStarting ? 'Opening stage…' : 'Present'}
+            menuLabel="How to present"
+            disabled={$takeStarting}
+            items={presentModeItems}
+            onclick={() => void present()}
+          />
+          {#if $takeDestination}
+            {@const destination = $takeDestination}
+            <p
+              class="present-destination"
+              class:mismatch={destination.mismatch !== null}
+              title={destination.mismatch?.detail ?? undefined}
+            >
+              <!-- One live region for the pair, so a screen reader is told the
+                   destination and its caveat as one fact rather than two. -->
+              <span class="sr-only">{destinationAnnouncement(destination)}</span>
+              <span aria-hidden="true">{destination.summary}</span>
+            </p>
+          {/if}
+        </div>
       {/snippet}
       {#snippet secondary()}
         {#if layout !== 'preview'}
@@ -1763,5 +1818,53 @@ import type { PresentationMode } from '../services/settings-types';
     font-size: var(--text-meta);
     color: var(--text-muted);
     font-family: var(--font-mono);
+  }
+
+  /*
+   * The Present destination line (CCUX-004).
+   *
+   * Stacked under the button rather than inside it: the button's label is the
+   * ACTION and must stay one short word, while this is a statement of fact that
+   * can run to a panel name. `--text-2xs` keeps it subordinate — it is there to
+   * be checked, not read every time.
+   */
+  .present-group {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    min-width: 0;
+  }
+  .present-destination {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: 1.3;
+    color: var(--text-muted);
+    text-align: center;
+    max-width: 22ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /*
+   * A mismatch is INFORMATION, not an error — presenting where the window is,
+   * is a deliberate supported behaviour — so it warms rather than alarms.
+   * `--accent-strong` because small terracotta text needs it to clear AA.
+   */
+  .present-destination.mismatch {
+    color: var(--accent-strong);
+  }
+
+  /* Announced but not drawn. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

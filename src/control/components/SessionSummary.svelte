@@ -39,7 +39,7 @@
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
   import { formatClock } from '../lib/format';
-  import { sessionModeLabel } from '../lib/take-vocabulary';
+  import { sessionModeLabel } from '../../shared/take-vocabulary';
 
   /*
    * Dismissal is a plain close, because the screen behind this dialog is

@@ -256,7 +256,7 @@
       </dl>
       <p class="hint">
         Worked out from how far away you stand. Change them under
-        <strong>Settings → Stage display</strong>.
+        <strong>Settings → Prompter display and rigs</strong>.
       </p>
     {:else}
       <!--

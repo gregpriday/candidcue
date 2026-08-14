@@ -123,6 +123,7 @@ pub fn run() {
             // Stage / windows (spec §46.6)
             commands::list_displays,
             commands::identify_displays,
+            commands::current_window_display,
             commands::open_stage,
             commands::close_stage,
             commands::set_stage_fullscreen,

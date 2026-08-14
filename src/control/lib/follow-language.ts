@@ -111,28 +111,56 @@ export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
 export interface FollowStatusInput {
   state: StageMotionState;
   decision: AlignmentDecision;
-  /** §48 — following paused without pausing the take. */
-  followingPaused: boolean;
+  /**
+   * The operator switched following off — the dock control, the transport
+   * checkbox, or the Live panel's button.
+   *
+   * DELIBERATELY NOT the store's broad `followingPaused`. That flag is ALSO
+   * raised automatically when a device is lost or the transcript stops being
+   * trustworthy, so reading it as a decision made the app answer a dead
+   * microphone with "Text held — CandidCue is still listening": a sentence that
+   * is false in both halves, at the moment being wrong costs most. The session
+   * store already draws this distinction as `followPausedByUser`, and says why
+   * at its declaration.
+   */
+  heldByUser: boolean;
+  /**
+   * Fixed-pace scrolling is running.
+   *
+   * Outranks a hold in the wording, because starting auto-scroll in a voice
+   * take deliberately raises the pause flag — following really is off — while
+   * the text is visibly moving down the glass. "The text stays where it is" in
+   * front of a presenter watching it move is the one kind of wrong that makes
+   * somebody stop trusting the whole readout.
+   */
+  rollingAtPace: boolean;
   /** True once a motion frame has arrived. The UI must not fake liveness. */
   receivingFrames: boolean;
-  /** False in a manual or roll-at-pace take, where nothing is listening. */
+  /** False in a take that opened with no microphone at all. */
   voiceInput: boolean;
-  /**
-   * The input, as the session knows it.
-   *
-   * 'disconnected' is the only one of the three that is a fault, and it is the
-   * only fault here with a remedy the presenter can carry out mid-take.
-   */
   micState: 'live' | 'muted' | 'disconnected';
   /**
-   * Whether the recogniser has produced ANY words this take.
+   * The INPUT failed — unplugged, silent or refused — as opposed to the
+   * realtime transport dying, which also leaves `micState` disconnected.
    *
-   * Deliberately not derived from the transcript feed's status: a voice take
-   * reports `live` the instant it opens, so that field says whether a feed was
-   * requested, not whether anything came back. Inferring "we heard nothing"
-   * from it would have put a standing microphone warning on every healthy take
-   * for its first second — and a warning that is usually wrong is worse than
-   * none, because it trains the presenter to ignore the one that is right.
+   * Only this one is fixable by choosing another device, so only this one may
+   * say so. Offering a microphone picker as the cure for a recogniser failure
+   * is an instruction the user cannot follow, which is the defect §28.6 exists
+   * to prevent.
+   */
+  inputDeviceLost: boolean;
+  /**
+   * Whether the recogniser has produced ANY words this take, partial or final.
+   *
+   * Partials count, and that is not a detail: Rust aligns on partials and
+   * publishes snapshots from them, so the script can already be following while
+   * the first long utterance is still open. Latching on finals alone put
+   * "nothing heard yet — check the microphone" over a take that was visibly
+   * working.
+   *
+   * Equally, not derived from the transcript feed's status: a voice take
+   * reports `live` the instant it opens, so that field says a feed was
+   * requested and nothing about what came back.
    */
   heardAnything: boolean;
 }
@@ -159,20 +187,32 @@ export interface FollowStatus {
  * A presenter told only "holding" will check the microphone first, because that
  * is the failure they can imagine. So the two states say different things.
  *
- * Order matters below: a deliberate hold outranks a fault, because somebody who
- * pressed Hold text is not being told their microphone is bad; and no-signal
- * outranks off-script, because you cannot be off script if nothing was heard.
+ * ---------------------------------------------------------------------------
+ * THE ORDER, WHICH IS MOST OF THE DESIGN
+ * ---------------------------------------------------------------------------
+ * These conditions overlap constantly, so the resolver needs an opinion about
+ * which to report. Three rules produce the order below:
+ *
+ *  1. Never describe the text as stationary while it is moving. Auto-scroll
+ *     first, always.
+ *  2. A fault the operator can act on outranks a state they chose. Somebody who
+ *     held the text still needs to know the microphone died before they resume.
+ *  3. Nothing may be diagnosed before it is known. The input is checked BEFORE
+ *     the "no frames yet" branch, because a dead microphone produces no frames
+ *     — so a resolver that answered "Ready to follow" first would sit there
+ *     saying "ready" for the whole take, which is precisely the failure
+ *     CCUX-018 exists to remove.
  */
 export function followStatus(input: FollowStatusInput): FollowStatus {
   const { voiceInput } = input;
 
-  // 1. A decision the operator made. Never overwritten by a diagnosis.
-  if (input.followingPaused) {
+  // 1. The text is moving. Nothing below may claim otherwise.
+  if (input.rollingAtPace) {
     return {
-      line: 'Text held',
+      line: 'Rolling at pace',
       detail: voiceInput
-        ? 'The text stays where it is. The take is still running and CandidCue is still listening.'
-        : 'The text stays where it is. Use the transport to move it.',
+        ? 'The text moves at your set pace. Voice following is off while it rolls.'
+        : 'The text moves at your set pace.',
       tone: 'neutral',
     };
   }
@@ -181,45 +221,52 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
    * 2. Nothing is listening by design — every voice sentence below is a lie.
    *
    * The shared copy is written for voice ("start speaking and the stage picks
-   * up your place", "until the words match the script again"), and an operator
-   * reads this panel to decide whether a problem is their microphone or their
-   * script. On a take with no microphone at all, that copy sends them hunting
-   * for a fault in a subsystem the take never opened.
+   * up your place"), and an operator reads this panel to decide whether a
+   * problem is their microphone or their script. On a take with no microphone
+   * at all, that copy sends them hunting a fault in a subsystem the take never
+   * opened.
    */
   if (!voiceInput) {
     return {
-      line: input.state === 'paused' ? 'Paused — the script stays where it is' : 'Manual — no microphone',
+      line: input.state === 'paused' ? 'Paused — the script stays where it is' : 'Manual',
       detail: 'Nothing is listening on this take. The transport moves the script.',
       tone: 'neutral',
     };
   }
 
-  // 3. Before the first frame there is no state to report, only readiness.
-  if (!input.receivingFrames) {
-    return {
-      line: 'Ready to follow',
-      detail: 'Start speaking and the stage picks up your place.',
-      tone: 'accent',
-    };
-  }
-
   /*
-   * 4. The input itself has failed. The one fault here with a remedy the
-   * presenter can carry out from where they are standing, so it outranks
-   * everything about matching.
+   * 3. The input has failed, and the two kinds of failure get different
+   * instructions. Only a lost DEVICE can be cured by picking another one.
    */
   if (input.micState === 'disconnected') {
-    return {
-      line: 'Microphone disconnected',
-      detail: 'The text is holding where you left it. Choose another input, or keep going and move the text yourself.',
-      tone: 'warning',
-    };
+    return input.inputDeviceLost
+      ? {
+          line: 'Microphone disconnected',
+          detail:
+            'The text is holding where you left it. Choose another input, or carry on and move the text yourself.',
+          tone: 'warning',
+        }
+      : {
+          line: 'Speech recognition stopped',
+          detail:
+            'The text is holding where you left it. This is not the microphone — carry on and move the text yourself, or end the take and start again.',
+          tone: 'warning',
+        };
   }
 
   if (input.micState === 'muted') {
     return {
       line: 'Microphone muted',
       detail: 'The text will not move until you unmute. The take is still running.',
+      tone: 'neutral',
+    };
+  }
+
+  // 4. A decision the operator made, now that no fault is hiding behind it.
+  if (input.heldByUser) {
+    return {
+      line: 'Text held',
+      detail: 'The text stays where it is. The take is still running and CandidCue is still listening.',
       tone: 'neutral',
     };
   }
@@ -234,13 +281,22 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
    */
   if (!input.heardAnything) {
     return {
-      line: 'Listening — nothing heard yet',
+      line: input.receivingFrames ? 'Listening — nothing heard yet' : 'Ready to follow',
       detail: 'Start speaking and the stage picks up your place. If you have already started, check the microphone.',
       tone: 'accent',
     };
   }
 
-  // 6. Heard clearly, matched nothing. Not a fault, and must not read as one.
+  // 6. Words are arriving. Anything below here is about MATCHING them.
+  if (!input.receivingFrames) {
+    return {
+      line: 'Ready to follow',
+      detail: 'Start speaking and the stage picks up your place.',
+      tone: 'accent',
+    };
+  }
+
+  // 7. Heard clearly, matched nothing. Not a fault, and must not read as one.
   if (input.decision === 'holdOffScript') {
     return {
       line: 'Holding your place',

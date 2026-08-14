@@ -39,6 +39,8 @@
      * has not wired it up cannot make the panel invent a fault.
      */
     micState?: 'live' | 'muted' | 'disconnected';
+    /** Only a lost DEVICE may be answered with "choose another input". */
+    inputDeviceLost?: boolean;
     /**
      * Whether anything has been transcribed this take.
      *
@@ -47,6 +49,16 @@
      * so an unwired caller must fall silent rather than accuse.
      */
     heardAnything?: boolean;
+    /**
+     * Following was switched off BY SOMEBODY, as opposed to automatically.
+     *
+     * The store's own `follow.followingPaused` is not usable here: it is also
+     * raised by device loss and by an untrustworthy transcript, so reading it
+     * as a decision reports a fault as a choice.
+     */
+    heldByUser?: boolean;
+    /** Fixed-pace scrolling is running, so the text is visibly moving. */
+    rollingAtPace?: boolean;
     onnoticeaction?: (action: NonNullable<FollowNotice['action']>) => void;
   }
 
@@ -55,7 +67,10 @@
     sectionTitle = null,
     voiceInput = true,
     micState = 'live',
+    inputDeviceLost = false,
     heardAnything = true,
+    heldByUser = false,
+    rollingAtPace = false,
     onnoticeaction,
   }: Props = $props();
 
@@ -73,10 +88,12 @@
     followStatus({
       state: follow.state,
       decision: follow.decision,
-      followingPaused: follow.followingPaused,
+      heldByUser,
+      rollingAtPace,
       receivingFrames: follow.receivingFrames,
       voiceInput,
       micState,
+      inputDeviceLost,
       heardAnything,
     }),
   );

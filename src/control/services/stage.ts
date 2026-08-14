@@ -32,6 +32,22 @@ export async function listDisplays(): Promise<DisplayDescriptor[]> {
 }
 
 /**
+ * The panel the control window is on right now, or null when it cannot be
+ * named (CCUX-004).
+ *
+ * Not the same question as `listDisplays` plus the pinned fingerprint: that
+ * pair answers "which panel is calibrated", and single-window presentation
+ * fills whichever monitor this window is already sitting on. Null is a real
+ * answer — the caller must say it does not know rather than substituting the
+ * calibrated display, which is the confusion this exists to remove.
+ */
+export async function currentWindowDisplay(): Promise<DisplayDescriptor | null> {
+  return invokeOrMock<DisplayDescriptor | null>('current_window_display', undefined, () =>
+    mockStage.currentWindowDisplay(),
+  );
+}
+
+/**
  * C12: this used to be typed `| null`. Rust's `identify_displays` returns an
  * `IdentificationSession` or an error — never null — and the mock returns one
  * too, so the null branch was unreachable and every `?.` guarding it was

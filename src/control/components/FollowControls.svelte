@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
   import Button from './Button.svelte';
-  import { MOVEMENT_DETAIL, TAKE_ACTIONS } from '../lib/take-vocabulary';
+  import { MOVEMENT_DETAIL, TAKE_ACTIONS } from '../../shared/take-vocabulary';
   import { smoothFollow, type SmoothFollowState } from '../stores/smooth-follow';
 
   interface Props {

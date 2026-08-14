@@ -817,7 +817,7 @@ describe('a mode that is off may not hide inside the menu (§48)', () => {
 
   it('says so on the trigger, in words, in colour and in a mark', () => {
     const on = mount({ followPaused: false });
-    expect(menuTrigger(on.container).getAttribute('aria-label')).toBe('Session menu');
+    expect(menuTrigger(on.container).getAttribute('aria-label')).toBe('Take menu');
     expect(menuTrigger(on.container).classList.contains('flagged')).toBe(false);
     expect(on.container.querySelector('.menu-trigger .flag')).toBeNull();
     document.body.innerHTML = '';
@@ -838,11 +838,11 @@ describe('a mode that is off may not hide inside the menu (§48)', () => {
 describe('operable without a mouse', () => {
   it('names both controls', () => {
     const { container } = mount({ appearancePanel: PANEL });
-    expect(menuTrigger(container).getAttribute('aria-label')).toBe('Session menu');
-    expect(endButton(container).getAttribute('aria-label')).toBe('End session');
+    expect(menuTrigger(container).getAttribute('aria-label')).toBe('Take menu');
+    expect(endButton(container).getAttribute('aria-label')).toBe('End Take');
     // A tooltip as well as a name: an unlabelled × is also a plausible "close
     // this small panel", and the two readings have very different consequences.
-    expect(endButton(container).getAttribute('title')).toBe('End session');
+    expect(endButton(container).getAttribute('title')).toBe('End Take');
   });
 
   it('skips the audio readout in the tab order', () => {

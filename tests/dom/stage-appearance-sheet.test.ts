@@ -276,7 +276,7 @@ describe('a rig-resolved take', () => {
     expect(getByText('234 px')).toBeTruthy();
     expect(getByText('2.00')).toBeTruthy();
     expect(getByText('Calibrated')).toBeTruthy();
-    expect(getByText(/Settings . Stage display/i)).toBeTruthy();
+    expect(getByText(/Settings . Prompter display and rigs/i)).toBeTruthy();
   });
 
   /*

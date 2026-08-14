@@ -24,10 +24,31 @@ import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = join(__dirname, '../..');
 
-/** Presenter-facing surfaces. Diagnostics components are deliberately absent. */
-const ROUTINE_UI = globSync('src/control/**/*.svelte', { cwd: REPO_ROOT })
-  .concat(globSync('src/stage/**/*.svelte', { cwd: REPO_ROOT }))
-  .filter((rel) => !/FollowDiagnostics\.svelte$/.test(rel));
+/**
+ * Presenter-facing surfaces.
+ *
+ * `.ts` as well as `.svelte`, which the first version of this lint missed
+ * entirely — the command registry, the shortcuts sheet and the status resolvers
+ * are all plain TypeScript, and the stage dock's own "Follow my voice" survived
+ * a rename that this rule was supposed to be enforcing.
+ *
+ * Diagnostics components are deliberately absent: they are where the engine's
+ * vocabulary belongs.
+ */
+const ROUTINE_UI = [
+  ...globSync('src/control/**/*.{svelte,ts}', { cwd: REPO_ROOT }),
+  ...globSync('src/stage/**/*.{svelte,ts}', { cwd: REPO_ROOT }),
+  ...globSync('src/shared/**/*.ts', { cwd: REPO_ROOT }),
+].filter(
+  (rel) =>
+    !rel.includes('.test.') &&
+    !/FollowDiagnostics\.svelte$/.test(rel) &&
+    // The module that DEFINES the vocabulary must name the retired labels in
+    // order to say what replaced them.
+    !/take-vocabulary\.ts$/.test(rel) &&
+    // The diagnostics copy module owns the decision table by contract.
+    !/follow-language\.ts$/.test(rel),
+);
 
 /**
  * A file with its comments removed.
@@ -73,7 +94,7 @@ describe('engine reasoning stays in diagnostics', () => {
 });
 
 describe('one name per concept', () => {
-  const VOCABULARY = join(REPO_ROOT, 'src/control/lib/take-vocabulary.ts');
+  const VOCABULARY = join(REPO_ROOT, 'src/shared/take-vocabulary.ts');
 
   /**
    * Labels that were retired because they named the same act twice, or named
@@ -89,8 +110,26 @@ describe('one name per concept', () => {
     { label: 'Re-find me here', instead: 'Set my place' },
     { label: 'Nudge back', instead: 'Previous sentence' },
     { label: 'Nudge forward', instead: 'Next sentence' },
+    // The two the header cites as the motivating examples, which the first
+    // version of this list did not actually contain — so the live StageDock
+    // regression it was written about passed.
+    { label: 'Follow my voice', instead: 'Follow voice' },
+    { label: 'Fixed speed', instead: 'Roll at pace' },
+    { label: 'End session', instead: 'End take' },
+    { label: 'End Session', instead: 'End Take' },
   ];
 
+  /*
+   * WHAT THIS MATCHER CAN AND CANNOT DO.
+   *
+   * It matches a retired label as an element's whole text (`>Label<`) or as a
+   * whole quoted string. That catches the way these labels are actually
+   * written, and it is trivially evaded by a template literal, a concatenation
+   * or an imported constant. That is accepted rather than papered over: the
+   * rule exists to catch the ordinary regression — somebody typing the old
+   * words back in — not to defeat somebody working around it. A lexer would
+   * catch more and would also be a second parser to maintain.
+   */
   it('uses no retired label as rendered copy', () => {
     const offenders: string[] = [];
     for (const rel of ROUTINE_UI) {
@@ -113,9 +152,14 @@ describe('one name per concept', () => {
     for (const term of ['Follow voice', 'Hold text', 'Roll at pace', 'Set my place', 'Listening']) {
       expect(source, `the glossary must define ${term}`).toContain(term);
     }
-    // Three independent axes, not one blended state. This is the load-bearing
-    // idea of the module — a take can be running, held and listening at once.
-    for (const axis of [/MovementMode/, /MicrophoneState/, /SESSION_MODE_LABELS/]) {
+    /*
+     * All THREE axes, actually defined.
+     *
+     * The module's header claims a take/movement/microphone split, and the
+     * first version jumped straight to movement — the take axis was described
+     * and never written, so the header was documentation of an intention.
+     */
+    for (const axis of [/TakeState/, /MovementMode/, /MicrophoneState/, /SESSION_MODE_LABELS/]) {
       expect(source).toMatch(axis);
     }
   });

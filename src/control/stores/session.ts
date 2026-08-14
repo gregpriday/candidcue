@@ -351,6 +351,21 @@ export interface SessionState {
    * opens, which says a feed was requested and nothing about what came back.
    */
   heardAnything: boolean;
+  /**
+   * The take moved to a different panel after it opened (CCUX-010).
+   *
+   * Null while the take is on the panel it was measured against. Non-null names
+   * the panel it is on NOW, and is a statement about typography rather than a
+   * failure: the optics — millimetres per CSS pixel, safe area, column width —
+   * were resolved once at the opening, and a take cannot re-resolve them
+   * without rebuilding the stage document underneath the presenter.
+   *
+   * `start-take.ts` has recorded this as a known gap for as long as the reader
+   * has existed: "a reader who drags their window to another display MID-TAKE
+   * and changes nothing else still keeps the opening panel's scale". Silently
+   * keeping it is the part that is hard to understand, so now it says so.
+   */
+  displayChangedTo: string | null;
   /** Exact stage instrument payload, rendered locally in single-window mode. */
   voicePill: StageVoicePillPayload | null;
   /** The full production stage document rendered inside the control webview. */
@@ -425,6 +440,7 @@ const initial: SessionState = {
   snapshot: null,
   transcriptTail: [],
   heardAnything: false,
+  displayChangedTo: null,
   voicePill: null,
   stageEnvelope: null,
   outline: [],
@@ -720,6 +736,19 @@ function countSpokenWords(text: string): number {
   return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
 }
 let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Polls the panel the presenting window is on (CCUX-010).
+ *
+ * POLLED, and it has to be. Rust already watches the display TOPOLOGY and emits
+ * on plug/unplug/rearrange, but dragging a window between two monitors that
+ * were both already there changes no topology at all — there is no event in
+ * this app for "the window moved". Two seconds is slow enough to cost nothing
+ * and fast enough that the presenter is told before they have read a paragraph
+ * at the wrong size.
+ */
+let displayWatchTimer: ReturnType<typeof setInterval> | null = null;
+const DISPLAY_WATCH_INTERVAL_MS = 2000;
 /**
  * How often the buffered transcript is written.
  *
@@ -995,6 +1024,25 @@ export function startLiveSession(input: StartSessionInput): string {
         // late partial from a superseded transport must not certify this take.
         if (voicePill !== null && pillEpoch === voicePillEpoch) {
           voicePill = reduceVoicePillText(voicePill, text);
+        }
+        /*
+         * "Something has been heard this take", latched here and nowhere else.
+         *
+         * PARTIALS COUNT. Rust aligns on partials and publishes snapshots from
+         * them, so the script is often already following while the first long
+         * utterance is still open — and a latch that waited for a final put
+         * "nothing heard yet, check the microphone" over a take the presenter
+         * could watch working. It is the same contradiction `wordsInFlight`
+         * exists to fix on the summary, in a different place.
+         *
+         * Epoch-checked for the same reason the pill above is: a shutdown
+         * deliberately lets the last utterance finalise, and `transportGeneration`
+         * is cleared during close, so a late line from the previous take can
+         * still arrive. Certifying THIS take with the last one's audio would be
+         * the worst possible direction for this flag to be wrong in.
+         */
+        if (pillEpoch === voicePillEpoch && text.trim() !== '') {
+          state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
         }
         /*
          * The open utterance counts too — as an ESTIMATE, separately.
@@ -1306,6 +1354,31 @@ export function startLiveSession(input: StartSessionInput): string {
       return { ...s, elapsedSeconds };
     });
   }, 1000);
+
+  /*
+   * Watch for the take being dragged onto another panel.
+   *
+   * Only when the take knows which panel it opened on: with no baseline there
+   * is nothing to compare against, and "the display changed" from an unknown
+   * starting point would be a guess dressed as a fact.
+   */
+  if (stageDisplay !== null) {
+    const openedOn = stageDisplay.fingerprint;
+    displayWatchTimer = setInterval(() => {
+      void stageService.currentWindowDisplay()
+        .then((now) => {
+          if (now === null) return;
+          state.update((st) => {
+            if (!st.active) return st;
+            const changed = now.fingerprint === openedOn ? null : (now.name ?? '').trim() || 'another display';
+            return st.displayChangedTo === changed ? st : { ...st, displayChangedTo: changed };
+          });
+        })
+        // A failed probe is not evidence of anything. Keeping the last answer
+        // is right: the alternative is a notice that blinks with the IPC.
+        .catch(() => {});
+    }, DISPLAY_WATCH_INTERVAL_MS);
+  }
 
   // §36.2: incremental retention, so a crash mid-take costs at most one
   // interval rather than the whole transcript.
@@ -2049,9 +2122,6 @@ function pushTranscriptLine(line: string): void {
   state.update((s) => ({
     ...s,
     transcriptTail: [...s.transcriptTail, line].slice(-4),
-    // Latched, and NOT reset by `onResetTranscriptState` below — a reconnect
-    // does not unhear what was already heard.
-    heardAnything: true,
   }));
 }
 
@@ -3080,6 +3150,16 @@ export function restartParagraph(): void {
   // heard says nothing about this one, and the pill coming back is how the
   // presenter knows the retake is being picked up.
   resetVoicePill();
+  /*
+   * And the follow panel's copy of the same fact, for the same reason.
+   *
+   * This function calls itself a take boundary and behaves like one — it closes
+   * a pass and opens another — so a retake that begins already "heard" would
+   * carry the previous pass's evidence into a pass that has produced none. The
+   * pill and this flag answer the same question on two surfaces and must not
+   * disagree about it.
+   */
+  state.update((s) => (s.heardAnything ? { ...s, heardAnything: false } : s));
   noteCheckpoint('paragraph_start');
   finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
   if (before.sessionId !== null) {
@@ -3855,6 +3935,8 @@ function stopInternals(): void {
   clock = null;
   if (transcriptFlushTimer) clearInterval(transcriptFlushTimer);
   transcriptFlushTimer = null;
+  if (displayWatchTimer) clearInterval(displayWatchTimer);
+  displayWatchTimer = null;
   transcriptRetained = false;
   transcriptRetentionDegraded = false;
   transcriptBuffer = [];

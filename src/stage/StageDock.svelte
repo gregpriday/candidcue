@@ -124,6 +124,7 @@
   (`resolveHoldStatus`); this is the half somebody can click.
 -->
 <script lang="ts">
+  import { END_TAKE_LABEL, TAKE_ACTIONS } from '../shared/take-vocabulary';
   import { tick, type Snippet } from 'svelte';
   import type { PresentationMode, StageVoicePillPayload } from '../shared/contracts';
   import {
@@ -269,7 +270,7 @@
     {
       kind: 'checkbox' as const,
       id: 'follow' as const,
-      label: 'Follow my voice',
+      label: TAKE_ACTIONS.follow,
       checked: !followPaused,
       select: () => onfollowtoggle?.(),
     },
@@ -644,7 +645,7 @@
   class="stage-dock"
   data-stage-chrome
   role="group"
-  aria-label="Session controls"
+  aria-label="Take controls"
   bind:this={dockRoot}
   onpointerenter={() => (pointerInside = true)}
   onpointerleave={() => (pointerInside = false)}
@@ -700,8 +701,8 @@
       data-hidden={!buttonsVisible && !followPaused}
       aria-haspopup="menu"
       aria-expanded={menuOpen || appearanceOpen}
-      aria-label={followPaused ? 'Session menu — voice following is off' : 'Session menu'}
-      title={followPaused ? 'Session menu — voice following is off' : 'Session menu'}
+      aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
+      title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
       bind:this={menuButton}
       onclick={toggleMenu}
       onkeydown={onTriggerKeydown}
@@ -762,9 +763,9 @@
       class="dock-button end"
       data-hidden={!buttonsVisible}
       disabled={appearanceOpen}
-      aria-label="End session"
+      aria-label={END_TAKE_LABEL}
       aria-expanded={confirmOpen}
-      title="End session"
+      title={END_TAKE_LABEL}
       bind:this={endButton}
       onclick={openConfirm}
     >
@@ -797,7 +798,7 @@
       class="dock-popover menu-popover"
       role="menu"
       tabindex="-1"
-      aria-label="Session menu"
+      aria-label="Take menu"
       bind:this={menuPanel}
       onpointerdown={onMenuPointerDown}
     >
@@ -859,16 +860,16 @@
     <div
       class="dock-popover confirm-popover"
       role="dialog"
-      aria-label="End session"
+      aria-label={END_TAKE_LABEL}
       bind:this={confirmPanel}
     >
-      <p class="confirm-title">End session?</p>
+      <p class="confirm-title">End take?</p>
       <p class="confirm-body">Your place in the script will be saved.</p>
       <div class="confirm-actions">
         <button type="button" class="confirm-cancel" bind:this={cancelButton} onclick={closeConfirm}>
           Cancel
         </button>
-        <button type="button" class="confirm-end" onclick={confirmEnd}>End session</button>
+        <button type="button" class="confirm-end" onclick={confirmEnd}>{END_TAKE_LABEL}</button>
       </div>
     </div>
   {/if}

@@ -20,6 +20,20 @@ pub fn identify_displays<R: Runtime>(app: AppHandle<R>) -> Result<Identification
     windows::identify_displays(&app)
 }
 
+/// The panel the CONTROL window is on right now — the destination a take will
+/// actually open on (CCUX-004).
+///
+/// Read-only and cheap enough to call whenever the editor wants to re-state
+/// where Present is going. `None` means the panel could not be determined, and
+/// the caller must say so rather than substituting the calibrated display: the
+/// whole point of the readout is that those two are not the same thing.
+#[tauri::command]
+pub fn current_window_display<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<DisplayDescriptor>, AppError> {
+    windows::window_display(&app, windows::CONTROL_LABEL)
+}
+
 #[tauri::command]
 pub fn open_stage<R: Runtime>(app: AppHandle<R>, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
     // M2: opening the stage used to add BOTH managed roots to the asset scope

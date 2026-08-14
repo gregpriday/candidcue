@@ -231,7 +231,10 @@ export function buildDisplayProfile(
 ): DisplayProfileInput {
   return {
     ...(existingId ? { id: existingId } : {}),
-    name: displayName.trim() === '' ? 'Stage display' : displayName.trim(),
+    // A rig's fallback NAME, for a panel the OS would not name. Not the
+    // Settings section, which is "Prompter display and rigs" (CCUX-003) — this
+    // one is a label on a saved profile and reads as one.
+    name: displayName.trim() === '' ? 'Unnamed display' : displayName.trim(),
     displayFingerprint: fingerprint,
     stage,
   };

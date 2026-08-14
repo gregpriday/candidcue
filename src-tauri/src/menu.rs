@@ -612,7 +612,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &sep()?,
             &item("session.identify-displays", "Identify Displays", None)?,
             &sep()?,
-            &item("session.end-take", "End Session", Some(keys::END_TAKE))?,
+            &item("session.end-take", "End Take", Some(keys::END_TAKE))?,
         ],
     )?;
     menu.append(&session)?;

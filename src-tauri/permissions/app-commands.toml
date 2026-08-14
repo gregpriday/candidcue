@@ -65,6 +65,7 @@ commands.allow = [
   "reacquire_alignment",
   "log_client_diagnostic",
   "list_displays",
+  "current_window_display",
   "identify_displays",
   "open_stage",
   "close_stage",

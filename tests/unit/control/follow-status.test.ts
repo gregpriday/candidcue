@@ -1,20 +1,29 @@
 /**
  * The status line a presenter reads mid-take (CCUX-001, CCUX-018).
  *
- * Two properties are under test and only one of them is about wording.
+ * ---------------------------------------------------------------------------
+ * WHAT THIS IS ACTUALLY GUARDING
+ * ---------------------------------------------------------------------------
+ * "I cannot hear you" and "I can hear you and those words are not in the
+ * script" used to share the sentence "Holding your place". They have opposite
+ * remedies — one is a microphone problem no amount of re-reading fixes, the
+ * other is not a problem at all — and a presenter given one sentence for both
+ * will check the microphone, because that is the failure they can imagine.
  *
- * The first is that "I cannot hear you" and "I can hear you and those words
- * are not in the script" are DIFFERENT states. They used to share the sentence
- * "Holding your place", and they have opposite remedies: one is a microphone
- * problem no amount of re-reading fixes, the other is not a problem at all and
- * is fixed by reading the next line on the glass. A presenter given one sentence
- * for both will check the microphone, because that is the failure they can
- * imagine.
+ * Most of the tests below are about ORDER rather than wording, because these
+ * conditions overlap constantly on a real take and the first version of this
+ * resolver got three of the overlaps wrong:
  *
- * The second is the ordering. These conditions overlap constantly on a real
- * take — a deliberate hold with a dead microphone is perfectly reachable — so
- * the resolver has to have an opinion about which one to report, and that
- * opinion is what these tests pin down.
+ *  - it read the store's broad `followingPaused` as a decision, but that flag
+ *    is ALSO raised automatically on device loss, so a dead microphone reported
+ *    "Text held — CandidCue is still listening": false in both halves;
+ *  - it answered "Ready to follow" before looking at the microphone, and a dead
+ *    microphone produces no motion frames, so the panel would have said "ready"
+ *    for the entire take;
+ *  - it called the text stationary while auto-scroll was rolling it, because
+ *    starting auto-scroll deliberately raises that same pause flag.
+ *
+ * Each of those has a test here so they cannot come back quietly.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -28,14 +37,18 @@ function healthy(over: Partial<FollowStatusInput> = {}): FollowStatusInput {
   return {
     state: 'following',
     decision: 'localConfirmed',
-    followingPaused: false,
+    heldByUser: false,
+    rollingAtPace: false,
     receivingFrames: true,
     voiceInput: true,
     micState: 'live',
+    inputDeviceLost: false,
     heardAnything: true,
     ...over,
   };
 }
+
+const whole = (s: { line: string; detail: string | null }): string => `${s.line} ${s.detail ?? ''}`;
 
 describe('followStatus', () => {
   it('says it is following when it is', () => {
@@ -49,16 +62,14 @@ describe('followStatus', () => {
    * ------------------------------------------------------------------ */
 
   it('distinguishes hearing nothing from hearing something off script', () => {
-    const deaf = followStatus(healthy({ state: 'holding', micState: 'disconnected' }));
+    const deaf = followStatus(
+      healthy({ state: 'holding', micState: 'disconnected', inputDeviceLost: true }),
+    );
     const offScript = followStatus(healthy({ state: 'holding', decision: 'holdOffScript' }));
 
-    const whole = (s: { line: string; detail: string | null }) => `${s.line} ${s.detail ?? ''}`;
-
     expect(deaf.line).not.toBe(offScript.line);
-    // The no-signal case must point at the input, since nothing the presenter
-    // says will change it.
     expect(whole(deaf)).toMatch(/microphone/i);
-    // The off-script case must NOT, anywhere in the line or the detail, or it
+    // The off-script case must NOT mention the microphone, anywhere, or it
     // sends them hunting a fault that is not there while the take runs.
     expect(whole(offScript)).not.toMatch(/microphone/i);
     expect(offScript.detail).toMatch(/can hear you/i);
@@ -73,6 +84,21 @@ describe('followStatus', () => {
     );
   });
 
+  it('offers the input picker only for a fault the picker can fix', () => {
+    // Both leave micState 'disconnected'. Only a lost DEVICE is curable by
+    // choosing another one; telling somebody to switch microphone because the
+    // recogniser died is an instruction they cannot follow.
+    const device = followStatus(healthy({ micState: 'disconnected', inputDeviceLost: true }));
+    expect(device.detail).toMatch(/another input/i);
+
+    const transport = followStatus(healthy({ micState: 'disconnected', inputDeviceLost: false }));
+    expect(transport.detail).not.toMatch(/another input/i);
+    expect(
+      transport.detail,
+      'it must say what it is NOT, or they will go and unplug things',
+    ).toMatch(/not the microphone/i);
+  });
+
   it('reports nothing-heard-yet without calling it a fault', () => {
     /*
      * At the top of every take this is simply true — the presenter has not
@@ -85,84 +111,130 @@ describe('followStatus', () => {
     expect(status.tone).not.toBe('warning');
   });
 
-  it('names a disconnected microphone and offers a way out', () => {
-    const status = followStatus(healthy({ micState: 'disconnected' }));
-    expect(status.line).toBe('Microphone disconnected');
-    expect(status.detail).toMatch(/holding/i);
-    expect(status.detail, 'a fault must carry its remedy').toMatch(/another input/i);
-  });
-
   it('tells a muted microphone from a disconnected one', () => {
     const muted = followStatus(healthy({ micState: 'muted' }));
     expect(muted.line).toBe('Microphone muted');
-    // Muting is something the operator did. It is not a fault and must not be
-    // coloured as one.
+    // Muting is something the operator did. Not a fault, not coloured as one.
     expect(muted.tone).toBe('neutral');
   });
 
   /* ------------------------------------------------------------------ *
-   * Ordering, where the conditions overlap
+   * Ordering. Every one of these is a bug the first version had.
    * ------------------------------------------------------------------ */
 
-  it('reports a deliberate hold ahead of any diagnosis', () => {
-    // Somebody who pressed Hold text is not to be told their microphone is
-    // broken — they made a decision and the app is doing what they asked.
+  it('never calls the text stationary while it is rolling', () => {
+    /*
+     * Starting auto-scroll in a voice take deliberately raises the pause flag —
+     * following really is off — while the text moves down the glass. "The text
+     * stays where it is" in front of a presenter watching it move is the kind
+     * of wrong that costs the whole readout its credibility.
+     */
+    const status = followStatus(healthy({ rollingAtPace: true, heldByUser: true }));
+    expect(status.line).toBe('Rolling at pace');
+    expect(whole(status)).not.toMatch(/stays where it is/i);
+  });
+
+  it('reports a real input fault instead of an automatic hold', () => {
+    /*
+     * Device loss sets the store's broad `followingPaused` itself. Reading that
+     * as a decision produced "Text held — the take is still running and
+     * CandidCue is still listening" over a microphone that had gone. Only
+     * `heldByUser` may produce that sentence.
+     */
     const status = followStatus(
-      healthy({ followingPaused: true, micState: 'disconnected', decision: 'holdOffScript' }),
+      healthy({ heldByUser: false, micState: 'disconnected', inputDeviceLost: true }),
     );
-    expect(status.line).toBe('Text held');
-    expect(status.detail).toMatch(/still listening/i);
+    expect(status.line).toBe('Microphone disconnected');
+    expect(whole(status)).not.toMatch(/still listening/i);
+  });
+
+  it('still names the fault when the operator had also held the text', () => {
+    // They chose to hold; they did not choose to lose the microphone, and they
+    // need to know that before they resume.
+    const status = followStatus(
+      healthy({ heldByUser: true, micState: 'disconnected', inputDeviceLost: true }),
+    );
+    expect(status.line).toBe('Microphone disconnected');
+  });
+
+  it('claims listening only when something is', () => {
+    const held = followStatus(healthy({ heldByUser: true }));
+    expect(held.line).toBe('Text held');
+    expect(held.detail).toMatch(/still listening/i);
+  });
+
+  it('diagnoses the microphone before waiting for a frame', () => {
+    /*
+     * THE ORDERING BUG THAT DEFEATED THE WHOLE FEATURE.
+     *
+     * A dead microphone produces no transcript, so the aligner publishes no
+     * snapshot, so `receivingFrames` stays false forever. A resolver that
+     * answered "Ready to follow" on that condition first would sit there saying
+     * "ready" for the entire take — precisely the silence CCUX-018 exists to
+     * break.
+     */
+    const status = followStatus(
+      healthy({ receivingFrames: false, micState: 'disconnected', inputDeviceLost: true }),
+    );
+    expect(status.line).toBe('Microphone disconnected');
   });
 
   it('promises no listening on a take that has no microphone', () => {
     const status = followStatus(healthy({ voiceInput: false, heardAnything: false }));
     expect(status.detail).toMatch(/nothing is listening/i);
-    // "Check that the right microphone is selected" over a take that opened
-    // without one is an instruction to fix something that is not broken.
-    expect(status.detail).not.toMatch(/check that/i);
+    // "Check the microphone" over a take that opened without one is an
+    // instruction to fix something that is not broken.
+    expect(whole(status)).not.toMatch(/check the microphone/i);
   });
 
   it('holds a paused manual take at paused rather than calling it manual', () => {
-    const status = followStatus(healthy({ voiceInput: false, state: 'paused' }));
-    expect(status.line).toMatch(/paused/i);
+    expect(followStatus(healthy({ voiceInput: false, state: 'paused' })).line).toMatch(/paused/i);
   });
 
   it('reports readiness, not state, before the first frame', () => {
     // There is no tracking state yet. Reporting `searching` here would claim
     // the engine is doing something it has not started.
-    const status = followStatus(healthy({ receivingFrames: false, state: 'searching' }));
-    expect(status.line).toBe('Ready to follow');
-  });
-
-  it('prefers the input fault over off-script', () => {
-    // You cannot be off script if the microphone is gone, so the pair is not
-    // symmetric and the resolver must not report the weaker claim.
     const status = followStatus(
-      healthy({ micState: 'disconnected', decision: 'holdOffScript', state: 'holding' }),
+      healthy({ receivingFrames: false, state: 'searching', heardAnything: false }),
     );
-    expect(status.line).toBe('Microphone disconnected');
+    expect(status.line).toBe('Ready to follow');
   });
 
   /* ------------------------------------------------------------------ *
    * CCUX-001: no decision code can reach this surface
    * ------------------------------------------------------------------ */
 
-  it('never renders an engine decision code, whatever the decision', () => {
+  it('never renders an engine decision code, in any reachable combination', () => {
     const codes = Object.keys(FOLLOW_DECISION_LABELS) as Array<keyof typeof FOLLOW_DECISION_LABELS>;
     expect(codes.length).toBeGreaterThan(5);
 
     const leaked: string[] = [];
     for (const decision of codes) {
-      for (const paused of [true, false]) {
+      for (const held of [true, false]) {
         for (const frames of [true, false]) {
-          const status = followStatus(healthy({ decision, followingPaused: paused, receivingFrames: frames }));
-          const text = `${status.line} ${status.detail ?? ''}`;
-          /*
-           * The diagnostics label verbatim, which is the actual regression:
-           * "Relocated", "Possible jump — gathering evidence". Substring rather
-           * than equality because it was rendered inside a row, not alone.
-           */
-          if (text.includes(FOLLOW_DECISION_LABELS[decision])) leaked.push(decision);
+          for (const mic of ['live', 'muted', 'disconnected'] as const) {
+            for (const rolling of [true, false]) {
+              const status = followStatus(
+                healthy({
+                  decision,
+                  heldByUser: held,
+                  receivingFrames: frames,
+                  micState: mic,
+                  rollingAtPace: rolling,
+                }),
+              );
+              /*
+               * Case-insensitive, because `describeMovement` renders these same
+               * labels lowercased into its headline — so a copy-paste of that
+               * phrasing onto this surface is the realistic regression, not a
+               * verbatim capitalised one.
+               */
+              const text = whole(status).toLowerCase();
+              if (text.includes(FOLLOW_DECISION_LABELS[decision].toLowerCase())) {
+                leaked.push(decision);
+              }
+            }
+          }
         }
       }
     }

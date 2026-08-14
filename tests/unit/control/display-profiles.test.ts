@@ -282,7 +282,10 @@ describe('projecting a saved profile back onto the calibration controls', () => 
     expect(profiles.buildDisplayProfile('Studio Monitor', 'dsp-1', stage).name).toBe(
       'Studio Monitor',
     );
-    expect(profiles.buildDisplayProfile('   ', 'dsp-1', stage).name).toBe('Stage display');
+    // "Stage display" was this fallback until that phrase became the name of a
+    // Settings section that means something else (CCUX-003). A rig's fallback
+    // name has to read as a label on a saved profile, not as a place to go.
+    expect(profiles.buildDisplayProfile('   ', 'dsp-1', stage).name).toBe('Unnamed display');
     expect(profiles.buildDisplayProfile('X', 'dsp-1', stage, 'keep-me').id).toBe(
       'keep-me',
     );

@@ -97,7 +97,7 @@
     // §115: one verb. This key raises "End the session?" — the help calling the
     // same action "Stop session" is the vocabulary split that issue names.
     {
-      label: 'End Session',
+      label: 'End Take',
       keys: `${mod}.`,
       actions: ['stop-session'],
       mirrors: ['session.end-take'],

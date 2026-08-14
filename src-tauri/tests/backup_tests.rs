@@ -932,6 +932,7 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("list_sessions", "read-only"),
         ("list_session_takes", "read-only"),
         ("list_displays", "read-only"),
+        ("current_window_display", "read-only; asks the window manager, not the database"),
         ("identify_displays", "shows overlays; no persistence"),
         ("list_display_profiles", "read-only"),
         ("get_system_diagnostics", "read-only; a support request needs it"),

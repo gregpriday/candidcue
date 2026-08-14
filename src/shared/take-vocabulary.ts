@@ -26,6 +26,26 @@
  */
 
 /* ---------------------------------------------------------------------------
+ * Axis A: the take itself
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Whether a presentation attempt is under way.
+ *
+ * The narrowest of the three axes and the one most often conflated with the
+ * others: "Pause" was used for pausing this, for stopping the text moving, and
+ * for closing the microphone, which are three decisions with three different
+ * consequences.
+ */
+export type TakeState = 'running' | 'paused' | 'ended';
+
+export const TAKE_STATE_LABELS: Record<TakeState, string> = {
+  running: 'Running',
+  paused: 'Paused',
+  ended: 'Ended',
+};
+
+/* ---------------------------------------------------------------------------
  * Axis B: what is moving the text
  * ------------------------------------------------------------------------- */
 
@@ -108,6 +128,16 @@ export const TAKE_ACTIONS = {
   nextSentence: 'Next sentence',
   endTake: 'End take',
 } as const;
+
+/**
+ * The take's own name for itself, used by the menu, the shortcuts sheet, the
+ * transport and the stage dock.
+ *
+ * "End Session" named the DATABASE ROW. What the presenter is ending is the
+ * attempt they just made in front of a camera, and the command's own id has
+ * said `session.end-take` all along.
+ */
+export const END_TAKE_LABEL = 'End Take';
 
 /* ---------------------------------------------------------------------------
  * Axis C: the microphone

@@ -183,7 +183,7 @@ export interface SmoothFollowStoreOptions {
 export interface FollowActions {
   /** Manual nudge in whole sentences; negative moves back (§48). */
   nudge(deltaSentences: number): void;
-  /** "Re-find me here" — re-anchor around the current position (§48). */
+  /** "Set my place" — re-anchor around the current position (§48). */
   reAnchor(): void;
   /** Accept one of the offered local candidates when lost (§48). */
   acceptCandidate(candidate: FollowCandidate): void;
@@ -752,14 +752,14 @@ export function createSmoothFollowStore(
         timeline: push(
           s,
           'action',
-          direction === 'forward' ? 'Nudged forward one sentence' : 'Nudged back one sentence',
+          direction === 'forward' ? 'Next sentence' : 'Previous sentence',
         ),
       }));
     },
 
     reAnchorHere() {
       actions.reAnchor();
-      update((s) => ({ ...s, timeline: push(s, 'action', 'Re-find me here') }));
+      update((s) => ({ ...s, timeline: push(s, 'action', 'Set my place') }));
     },
 
     acceptCandidate(candidateId) {

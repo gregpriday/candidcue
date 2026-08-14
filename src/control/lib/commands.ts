@@ -670,11 +670,13 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   'session.end-take': {
     id: 'session.end-take',
     /*
-     * "End Session", not "End Take" — §115's one verb. This chord raises the
-     * "End the session?" confirmation, and the shortcuts page has always called
-     * it End session; the menu was the third name for it.
+     * "End Take" (CCUX-002). The one verb is still the point — this chord, the
+     * menu item and the shortcuts sheet must not be three names — but the noun
+     * was wrong: a session is the RECORD, and what the presenter ends is the
+     * attempt they just made in front of a camera. The command's own id has
+     * said `end-take` all along.
      */
-    label: 'End Session',
+    label: 'End Take',
     accelerator: 'Mod+.',
     available: (c) => c.sessionActive,
     run: (a) => a.endTake(),
