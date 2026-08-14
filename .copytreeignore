@@ -13,16 +13,32 @@
 #   copytree --scope bench --scope-include-ignored -S   # one subtree
 #   echo 'docs/**' >> .copytreeinclude                  # permanently
 #
-# This file is the "everything real" baseline, and it is at its floor: what
-# survives is ~104k lines of actual source, spread evenly (src-tauri/src 20%,
-# src/stage 19%, crates 15%, src/shared 9%, routes 9%, components 6%) with no
-# lump left to cut. To NARROW, scope per task rather than editing this file:
+# This file is the "everything real" baseline, and it is at its floor. After
+# the last pass ~98% of what survives is .ts/.svelte/.rs source, spread evenly
+# (src-tauri/src 20%, src/stage 19%, crates 15%, src/shared 9%, routes 9%,
+# components 6%) with no non-code lump left to cut. Every remaining byte is a
+# file somebody wrote to make the app behave. If the export still feels too
+# big, that is the app being big — do NOT go hunting here for another 20%.
+#
+# Three reasons no further rule helps, all measured:
+#
+#   - ~42% of the export is inline Rust `#[cfg(test)]` modules (34% of the
+#     Rust; `align/mod.rs` is 82% test tail, `logging.rs` 72%, `ledger.rs`
+#     55%) and comment lines (49% of the TS/Svelte). Both sit INSIDE files
+#     that have to stay. Ignore rules work per file, so nothing reaches them.
+#   - The mass is in a handful of genuinely enormous source files —
+#     stores/session.ts 180 KB, ScriptLayer.svelte 164 KB, tracker.rs 156 KB,
+#     Settings.svelte 150 KB, StageApp.svelte 118 KB. Real logic, all of it.
+#   - `.github/workflows/*` and `.github/SECURITY.md` are FORCE-included by
+#     copytree itself. They survive both this file and an explicit `-x`, so
+#     don't add a rule for them and wonder why it does nothing (~26 KB).
+#
+# To narrow, scope per task rather than editing this file:
 #   copytree --scope src/stage --scope src/shared -S
 #
-# Also note ~42% of the export is inline Rust `#[cfg(test)]` modules (34% of
-# the Rust) and comment lines (49% of the TS/Svelte). Both live inside files
-# that have to stay, so no ignore pattern can reach them — don't go hunting
-# for a pattern that trims them.
+# If you truly need the default smaller, the only lever left is dropping whole
+# working subsystems — see "Opt-in subsystem cuts" at the bottom, which lists
+# the candidates with measured sizes, switched off.
 #
 # Syntax is .gitignore syntax, including directory pruning: once `dir/**` is
 # excluded the walker never descends into it, so a `!dir/sub/file` negation
@@ -122,6 +138,100 @@ src-tauri/icons/**
 # themselves are the authored artefact and stay in.
 src-tauri/gen/**
 
+# ── Legal, licensing and release prose ───────────────────────────────────────
+# ~117 KB of text that ships WITH the product but describes none of it. The
+# EULA, privacy and refund policies are contract language; PLACEHOLDERS.md is
+# the @@LEGAL_*@@ token inventory the `pnpm legal:check` gate reads, which is
+# a release process, not a code path. licenses/ holds two verbatim upstream
+# licence texts (Apache-2.0, CC-BY-SA-4.0) and THIRD_PARTY_NOTICES.md is
+# generated wholesale by scripts/generate-notices.mjs, already excluded above.
+#
+# Bring the whole lot back for a licensing or store-submission task:
+#   copytree --scope legal --scope-include-ignored -S
+legal/**
+THIRD_PARTY_NOTICES.md
+LICENSE
+
+# Release notes. A record of what changed and when — useful to a human picking
+# up the project, useless to anything reasoning about how the code works, and
+# it grows every release.
+CHANGELOG.md
+
+# Not reachable from here, so no rule for it: src-tauri/models/x-asr-480ms/
+# ATTRIBUTION.md (2.2 KB) is re-included by a negation in that directory's own
+# .gitignore, which is evaluated after this file and wins. `copytree explain`
+# on it shows the rule here matching and then being overridden — don't add one
+# back and trust `ignore check`'s "redundant" verdict to mean it worked.
+# catalogue.json beside it STAYS regardless: the download flow reads it.
+
+# ── Duplicated orientation prose ─────────────────────────────────────────────
+# AGENTS.md restates CLAUDE.md's structure-and-commands tour in shorter form,
+# and CLAUDE.md is the one that is kept current. Two tellings of the same
+# layout is worse than one — the reader has to diff them to find out which
+# is stale. README.md stays: it is written for a person, not an agent, and it
+# carries the honest-gaps section nothing else does.
+AGENTS.md
+
+# Git plumbing. The only thing .gitattributes configures is LFS for bench/**,
+# which is excluded above, so it documents a subtree the export cannot see.
+.gitattributes
+
 # ── Housekeeping ─────────────────────────────────────────────────────────────
 # Empty directory markers with nothing to say.
 **/.gitkeep
+
+# ── Opt-in subsystem cuts (OFF by default) ───────────────────────────────────
+# Everything below is working product code, which is why none of it is active.
+# Uncomment a block only when you have a task that provably does not touch it,
+# and put it back afterwards — a subsystem missing from context reads to an
+# agent as a subsystem that does not exist, and it will cheerfully reinvent it.
+#
+# Sizes are shares of the export. Prefer `--scope` for one-off narrowing; reach
+# for these only if the DEFAULT bundle has to be smaller for everyone.
+#
+# 6.3% — the Settings surface. Huge, but it defines real runtime behaviour
+#        (follow profiles, optics, audio), so this is the riskiest cut here.
+# src/control/routes/Settings.svelte
+# src/control/services/settings*.ts
+# src/control/stores/settings.ts
+# src-tauri/src/settings/mod.rs
+# src-tauri/src/commands/settings_cmds.rs
+#
+# 5.1% — the recogniser install pipeline: digest-verified download, extraction,
+#        sealing, catalogue and the language picker. Install-time plumbing; the
+#        following loop never runs it. speech/mod.rs + session.rs are the parts
+#        that actually decode audio and they are NOT in this list.
+# src-tauri/src/speech/model_download.rs
+# src-tauri/src/speech/model_manager.rs
+# src-tauri/src/speech/model_store.rs
+# src-tauri/src/speech/catalogue.rs
+# src-tauri/src/speech/language_options.rs
+# src/control/services/speech-models.ts
+# src/control/components/SpeechLanguagePicker.svelte
+# src-tauri/models/catalogue.json
+#
+# 2.0% — backup, restore and crash recovery.
+# src-tauri/src/backup/**
+# src-tauri/src/commands/recovery_cmds.rs
+# src/control/routes/Recovery.svelte
+# src/control/services/recovery.ts
+#
+# 1.8% — the optical calibration UI (the maths it drives lives in
+#        src/shared/optics.ts and optical-resolve.ts, which stay).
+# src/control/routes/Calibrate.svelte
+# src/stage/renderer/CalibrationCard.svelte
+# src/control/lib/optical-calibration.ts
+#
+# 1.4% — diagnostics and logging. Reports on the follow loop; is not it.
+# src-tauri/src/diagnostics/**
+# src/control/components/FollowDiagnostics.svelte
+# src/control/lib/diagnostics-format.ts
+# src/control/services/diagnostics.ts
+# src/control/services/audio-trace.ts
+# src/stage/motion/diagnostics.ts
+#
+# 0.9% — script import/export and revision history.
+# src-tauri/src/scripts/import_export.rs
+# src/control/components/RevisionHistory.svelte
+# src/control/services/revisions.ts
+# src/control/lib/revision-format.ts
