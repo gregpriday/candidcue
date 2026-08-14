@@ -277,6 +277,59 @@ pub async fn reveal_logs(paths: tauri::State<'_, DataPaths>) -> Result<(), AppEr
         .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
 }
 
+/// Open one of CandidCue's own pages in the user's browser (Help).
+///
+/// Named rather than addressed. The argument is a key into a compile-time table
+/// in `crate::web`, never a URL — which is what lets the control window keep
+/// having no `opener:default` grant. See that module for the whole argument.
+///
+/// An unknown name is an error rather than a silent no-op: the only ways to
+/// send one are a bug in the frontend and an attempt to use this as a general
+/// opener, and both are worth seeing.
+#[tauri::command]
+pub async fn open_web_destination(name: String) -> Result<(), AppError> {
+    let Some(url) = crate::web::url_for(&name) else {
+        return Err(AppError::unsafe_path(
+            "CandidCue only opens its own pages, and that is not one of them.",
+        )
+        .with_detail("destination", name));
+    };
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| AppError::Internal(format!("could not open that page: {e}")))
+}
+
+/// Open the third-party notices that ship inside the bundle (Help › Licences).
+///
+/// CandidCue is proprietary and links a lot of other people's work. Apache-2.0,
+/// MIT, BSD and the model's own licence all require the notice to travel with
+/// the binary, and `tauri.conf.json` already bundles `THIRD_PARTY_NOTICES.md`
+/// as a resource — but nothing in the application pointed at it, so a user
+/// could not read what they had been given. A notice nobody can find is a
+/// notice that has not been delivered.
+///
+/// The path comes from the resource resolver, not from the webview: this takes
+/// no argument, so it cannot be turned into "open any file". `open_path` rather
+/// than a reveal because a text file the user is meant to READ should open, and
+/// macOS has a handler for it.
+#[tauri::command]
+pub async fn open_third_party_notices<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<(), AppError> {
+    use tauri::Manager;
+    let path = app
+        .path()
+        .resolve("THIRD_PARTY_NOTICES.md", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| AppError::Internal(format!("notices path: {e}")))?;
+    if !path.is_file() {
+        return Err(AppError::not_found(
+            "The third-party notices are missing from this build. This is a problem with the \
+             release rather than with your machine.",
+        ));
+    }
+    tauri_plugin_opener::open_path(path, None::<&str>)
+        .map_err(|e| AppError::Internal(format!("could not open the notices: {e}")))
+}
+
 /// The control window's resting geometry, persisted between launches.
 ///
 /// "Resting" is the operative word and the reason this is not merged with the

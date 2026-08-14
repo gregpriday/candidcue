@@ -1533,12 +1533,35 @@
     }
   }
 
+  /**
+   * Whether there is a bundle to reveal.
+   *
+   * The Reveal button is not shown before the first export of the session,
+   * because `reveal_support_bundle` has nothing to point at until then and a
+   * control whose only possible answer is an error is worse than no control.
+   * It is not persisted either: the path lives in the Rust process, so a
+   * relaunch legitimately has nothing to show.
+   */
+  let bundleExported = $state(false);
+
   async function runSupportBundle(): Promise<void> {
     await runMaintenance(
       () => diagnosticsService.exportSupportBundle(),
       // Rust runs the folder picker; cancelling is not a failure.
-      (result) => (result.cancelled ? null : 'Support bundle ready'),
+      (result) => {
+        if (result.cancelled) return null;
+        bundleExported = true;
+        return 'Support bundle ready';
+      },
     );
+  }
+
+  async function revealBundle(): Promise<void> {
+    try {
+      await diagnosticsService.revealSupportBundle();
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
   }
 
   /**
@@ -2939,8 +2962,8 @@
             <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
               CandidCue has no update service and never contacts one. The only time it reaches the
-              network is when you download a language in Speech settings, and that request carries
-              neither your script nor your audio.
+              network is when you download a language — from the Welcome screen or from Speech
+              settings — and that download carries neither your script nor your audio.
             </p>
           </div>
 
@@ -3075,6 +3098,11 @@
             <Button size="sm" variant="ghost" onclick={() => void runSupportBundle()}>
               Export support bundle
             </Button>
+            {#if bundleExported}
+              <Button size="sm" variant="ghost" onclick={() => void revealBundle()}>
+                Reveal bundle
+              </Button>
+            {/if}
           </div>
           <ul class="bundle-contents">
             {#each SUPPORT_BUNDLE_CONTENTS as line (line)}

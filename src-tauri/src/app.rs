@@ -142,6 +142,7 @@ pub fn run() {
             commands::get_system_diagnostics,
             commands::log_client_diagnostic,
             commands::export_support_bundle,
+            commands::reveal_support_bundle,
             // Desktop shell (refinement §5, §6)
             commands::set_menu_state,
             commands::set_window_title,
@@ -150,6 +151,10 @@ pub fn run() {
             commands::close_preferences,
             commands::focus_app_window,
             commands::reveal_logs,
+            commands::open_third_party_notices,
+            // Help's website destinations. NOT an opener: the argument is a
+            // name from a compile-time table (web.rs), never a url.
+            commands::open_web_destination,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates
             // manually (docs/updates.md); both used to be registered here and
             // always returned NOT_IMPLEMENTED, which put a dead command on the
@@ -275,6 +280,9 @@ pub fn run() {
             handle.manage(Database::new(pool.clone()));
             handle.manage(paths.clone());
             handle.manage(ScriptLocks::default());
+            // Where the last support bundle went, so Finder can be pointed at
+            // it without a path crossing IPC (commands::LastSupportBundle).
+            handle.manage(commands::LastSupportBundle::default());
 
             // Cross-window authority (spec §43.4).
             handle.manage(AppCoordinator::default());

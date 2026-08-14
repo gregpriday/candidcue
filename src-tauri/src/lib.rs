@@ -28,6 +28,7 @@ pub mod sessions;
 pub mod speech;
 pub mod settings;
 pub mod util;
+pub mod web;
 pub mod windows;
 
 pub use errors::AppError;

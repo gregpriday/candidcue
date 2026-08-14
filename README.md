@@ -9,10 +9,14 @@ are, and lets you jump forward and back.
 Nothing about the display is generated at runtime — the model never writes what
 you see. It transcribes, and a deterministic local engine decides where you are.
 
-Nothing leaves your machine either. Speech recognition runs on-device against a
+Your work stays on your machine. Speech recognition runs on-device against a
 streaming Zipformer transducer, so there is no account, no API key, and no audio
 upload. On the benchmark corpus it matches the hosted service it replaced — see
-`bench/REPORT.md`.
+`bench/REPORT.md`. The one network activity a stock build has is the
+speech-model download you start yourself — one activity, not one request, since
+a resume or a redirect is several. `docs/network-inventory.md` is the full
+inventory, and the source every privacy claim in this repository is written
+from.
 
 ## Running it
 
@@ -51,8 +55,10 @@ takes the same in-app download a user does.
 The recogniser runs in Rust, on its own thread, beside the alignment engine that
 consumes it — the two share an audio clock, and a transcript frame never has to
 cross a process boundary to reach the thing that times it. The renderer captures
-audio and pushes PCM frames over IPC. Neither window's CSP allows a request to
-any remote host, and now neither does Rust.
+audio and pushes PCM frames over IPC. No window's CSP allows a fetch to any
+remote host, and the only thing Rust contacts anything for is a model download
+the user started — `docs/network-inventory.md` has the whole picture, redirects
+included.
 
 ## Testing
 
@@ -183,8 +189,8 @@ from genuine evaluation to regular use is obliged to register.
 
 The [privacy policy](legal/PRIVACY_POLICY.md) is the one worth reading, because
 the honest version is short: speech recognition runs on-device, nothing about
-your scripts or your audio leaves the machine, and the only network request the
-app makes in normal use is the speech-model download you start yourself. The
+your scripts or your audio leaves the machine, and the only network activity the
+app has in normal use is the speech-model download you start yourself. The
 [refund policy](legal/REFUND_POLICY.md) is 30 days, no reason required.
 
 These documents are drafted but not yet in force. Every fact that could not be

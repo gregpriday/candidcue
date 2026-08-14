@@ -171,7 +171,27 @@ export interface CommandActions {
   exportSupportBundle(): void;
   revealLogs(): void;
   privacy(): void;
+  /**
+   * Open one of CandidCue's own pages, BY NAME.
+   *
+   * The name is the whole contract. Rust maps it to a URL under one
+   * compile-time origin (`src-tauri/src/web.rs`); the control window has no
+   * permission to open an address it chose, and this signature is where that
+   * stays true — the moment this takes a URL, the restriction is gone.
+   */
+  openWebDestination(name: WebDestination): void;
+  /** Open the third-party notices this build shipped with. */
+  thirdPartyNotices(): void;
 }
+
+/**
+ * The names `open_web_destination` answers to.
+ *
+ * Spelled out rather than `string`, so a typo is a compile error here instead
+ * of a menu item that opens nothing at runtime. Keep in step with `DESTINATIONS`
+ * in `src-tauri/src/web.rs`.
+ */
+export type WebDestination = 'website' | 'guide' | 'support' | 'release-notes' | 'download';
 
 export interface CommandDefinition {
   id: CommandId;
@@ -749,6 +769,51 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Privacy and Local Processing',
     available: (c) => !presenting(c),
     run: (a) => a.privacy(),
+  },
+  /*
+   * The website destinations, all unavailable while presenting.
+   *
+   * That is not tidiness. Every one of these launches a browser, which takes
+   * focus, and taking focus during a take puts another application's window in
+   * front of the operator while they are being filmed. The stage would keep
+   * running — it is always-on-top — but the person driving it would be looking
+   * at a web page.
+   */
+  'help.website': {
+    id: 'help.website',
+    label: 'CandidCue Website',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('website'),
+  },
+  'help.guide': {
+    id: 'help.guide',
+    label: 'User Guide',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('guide'),
+  },
+  'help.report-problem': {
+    id: 'help.report-problem',
+    label: 'Report a Problem',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('support'),
+  },
+  'help.release-notes': {
+    id: 'help.release-notes',
+    label: 'Release Notes',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('release-notes'),
+  },
+  'help.download': {
+    id: 'help.download',
+    label: 'Download Latest Version',
+    available: (c) => !presenting(c),
+    run: (a) => a.openWebDestination('download'),
+  },
+  'help.notices': {
+    id: 'help.notices',
+    label: 'Third-Party Notices',
+    available: (c) => !presenting(c),
+    run: (a) => a.thirdPartyNotices(),
   },
 };
 

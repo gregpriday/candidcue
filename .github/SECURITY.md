@@ -26,14 +26,20 @@ runtime API key, no analytics or crash-reporting client, and no backend of ours
 for the app to talk to. Logs and session records stay on your machine unless you
 export them and send them to us yourself.
 
-Two paths do reach the network. Speech recognition models are downloaded and
-checked against digests compiled into the app before they are installed, and
-remote images can be fetched by the Rust core when a script pulls one in, under
-its own URL and content rules. Both disclose ordinary HTTPS request metadata to
-the host being contacted, including your IP address and a CandidCue User-Agent.
-Neither one sends us your scripts or your audio. If you find CandidCue
-transmitting user content with no clear user action behind it, that is a bug and
-we want to hear about it.
+One path reaches the network in a stock build: the speech recognition model you
+choose to install, downloaded and checked against digests compiled into the app
+before it is installed. It discloses ordinary HTTPS request metadata to the host
+being contacted, including your IP address and a CandidCue User-Agent. It does
+not send us your scripts or your audio. `docs/network-inventory.md` is the full
+inventory and the source of truth for every claim in this section. If you find
+CandidCue transmitting user content with no clear user action behind it, that is
+a bug and we want to hear about it.
+
+The Rust core also contains a hardened remote-image importer, and 1.0 ships with
+**no way to reach it**: its IPC command is compiled out, it is in neither the
+command registry nor the permissions file, and nothing in the interface invokes
+it. Reports about it are still welcome, and are in scope as source rather than
+as a live path.
 
 ### In scope
 
@@ -49,7 +55,8 @@ Examples rather than an exhaustive list:
   script bodies, revisions, the database, logs, or anything else outside the
   intended media scope.
 - Remote image fetching and decoding: URL validation, redirect handling, SSRF
-  controls, content checks and storage.
+  controls, content checks and storage. Unreachable in 1.0, and in scope as
+  source because the implementation is still in the tree.
 - The speech model supply and loading path: archive and per-file digest
   verification, catalogue-limited extraction, staged installation,
   install-marker checks, resolution, and ONNX loading and inference.

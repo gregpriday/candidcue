@@ -33,3 +33,17 @@ export async function exportSupportBundle(): Promise<{ path?: string; cancelled:
   if (result === null) return { cancelled: true };
   return { path: result.path, cancelled: false };
 }
+
+/**
+ * Show the last exported bundle in Finder.
+ *
+ * The disclosure beside the button tells the operator to read the bundle before
+ * they send it, and this is what makes that one click instead of a hunt through
+ * whichever folder they picked. It takes no argument on purpose: Rust remembers
+ * where it wrote (`LastSupportBundle` in `commands/settings_cmds.rs`), because a
+ * reveal command that accepted a path from this side would be an
+ * arbitrary-directory reveal (C5, spec §50.7).
+ */
+export async function revealSupportBundle(): Promise<void> {
+  await ipcInvoke<void>('reveal_support_bundle');
+}

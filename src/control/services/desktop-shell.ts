@@ -20,7 +20,14 @@ import {
   type CommandId,
   type MenuItemState,
 } from '../../shared/contracts/commands';
-import { COMMANDS, menuStateFor, runCommand, type CommandActions, type CommandContext } from '../lib/commands';
+import {
+  COMMANDS,
+  menuStateFor,
+  runCommand,
+  type CommandActions,
+  type CommandContext,
+  type WebDestination,
+} from '../lib/commands';
 import { ipcInvoke, isTauriRuntime } from './ipc';
 
 /**
@@ -439,6 +446,24 @@ export async function focusAppWindow(target: 'control' | 'stage'): Promise<void>
 /** Reveal the log directory (Help › Reveal Logs). */
 export async function revealLogs(): Promise<void> {
   await ipcInvoke('reveal_logs');
+}
+
+/**
+ * Open one of CandidCue's own pages in the browser (Help › the website group).
+ *
+ * The payload is a NAME. Rust holds the table that turns it into a URL under a
+ * single compile-time origin (`src-tauri/src/web.rs`), which is what lets the
+ * control window keep having no permission to open an arbitrary address — the
+ * `opener:default` grant was removed in the 1.0 readiness pass and this is
+ * deliberately not a way to get it back.
+ */
+export async function openWebDestination(destination: WebDestination): Promise<void> {
+  await ipcInvoke('open_web_destination', { name: destination });
+}
+
+/** Open the third-party notices this build shipped with (Help › Licences). */
+export async function openThirdPartyNotices(): Promise<void> {
+  await ipcInvoke('open_third_party_notices');
 }
 
 /** Rust → control, from `windows/drag_drop.rs`. */

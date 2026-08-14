@@ -30,10 +30,12 @@
   <key>com.apple.security.device.audio-input</key>
   <true/>
 
-  <!-- Outbound HTTPS for the speech-model download in Settings › Speech, which
-       is the only network request the shipped app makes in normal use (§152) —
-       `import_remote_image` (src-tauri/src/assets/remote.rs) is registered and
-       ACL-allowed but has no UI caller. Transcription itself is on-device and
+  <!-- Outbound HTTPS for the speech-model download offered by the Welcome
+       screen and Settings › Speech, which is the only network activity the
+       shipped app has in normal use (§152, docs/network-inventory.md) —
+       `import_remote_image` (src-tauri/src/assets/remote.rs) is compiled out
+       and is in neither the command registry nor the permissions file.
+       Transcription itself is on-device and
        needs no network at all — this key predates that change and used to name
        a hosted STT provider, which no code has talked to since. Strictly it is
        an App Sandbox key and is inert under the hardened runtime alone; it is

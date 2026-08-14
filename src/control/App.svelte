@@ -19,12 +19,7 @@
   import Live from './routes/Live.svelte';
   import Recovery from './routes/Recovery.svelte';
   import Welcome from './routes/Welcome.svelte';
-  import {
-    createAndOpenScript,
-    exportScriptToFile,
-    importMarkdown,
-    openExternal,
-  } from './lib/app-actions';
+  import { createAndOpenScript, exportScriptToFile, importMarkdown } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
   import { openSettingsWindow } from './lib/open-settings';
   import { startTake, takeStarting } from './lib/start-take';
@@ -40,6 +35,8 @@
     installMenuCommands,
     installMenuStateOnFocus,
     openPreferences,
+    openThirdPartyNotices,
+    openWebDestination,
     type DragHoverPayload,
     type DragImportedPayload,
     pushMenuState,
@@ -969,6 +966,22 @@ import { rememberReaderFrame } from './lib/reader-frame';
       });
     },
     privacy: () => void openSettingsWindow('privacy'),
+    /*
+     * Reported rather than swallowed. The browser not opening is invisible from
+     * inside the app — nothing changes on screen — so a user who clicks Help ›
+     * User Guide and sees nothing has no way to tell whether they missed the
+     * click or the app failed. One toast is the difference.
+     */
+    openWebDestination: (destination) => {
+      void openWebDestination(destination).catch((err: unknown) => {
+        showToast(`That page could not be opened. ${describeError(err)}`, 'danger');
+      });
+    },
+    thirdPartyNotices: () => {
+      void openThirdPartyNotices().catch((err: unknown) => {
+        showToast(`The notices could not be opened. ${describeError(err)}`, 'danger');
+      });
+    },
   };
 
   /** The script a File command acts on: the open one, or the selected row. */

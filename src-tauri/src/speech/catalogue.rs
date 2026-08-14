@@ -14,9 +14,11 @@
 //! this design does not ask. That changes the day the catalogue itself arrives
 //! over the network, which is issue #152's territory, not this module's.
 //!
-//! Nothing here downloads anything. The URL and hash fields are carried so the
-//! in-app downloader has them when it exists; today only the shell script
-//! fetches, and it verifies before it unpacks.
+//! Nothing here downloads anything. The URL and hash fields are what the
+//! in-app downloader (`speech::model_download`) and the developer shell script
+//! both take their targets from: each checks the ARCHIVE hash before it
+//! unpacks, and the per-file hashes after, because a member's digest cannot be
+//! taken until the member exists.
 
 use std::sync::LazyLock;
 

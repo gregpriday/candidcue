@@ -75,7 +75,7 @@ reported it as a clean pass.
 | `LEGAL_BUSINESS_ADDRESS` | Postal address | GDPR Art. 13 requires a real one; a PO box may not be enough |
 | `LEGAL_SUPPORT_EMAIL` | Support and refunds | Must be monitored — the refund policy promises a reply. Must not contradict the address already published in `.github/SECURITY.md` (greg@siteorigin.com); change both together if it moves |
 | `LEGAL_PRIVACY_EMAIL` | Data-subject requests | May be the same address |
-| `LEGAL_WEBSITE_ORIGIN` | e.g. `https://candidcue.com` | The distribution site (#193) |
+| `LEGAL_WEBSITE_ORIGIN` | e.g. `https://candidcue.com` | The distribution site (#193). **The application already carries a copy of this answer:** `WEBSITE_ORIGIN` in `src-tauri/src/web.rs` is `https://candidcue.com`, because the Help menu has to open something and a menu item that opens nothing is worse than a blank in a document. Resolving this token means changing both, and a test in `web.rs` fails if this row stops naming the file |
 | `LEGAL_EFFECTIVE_DATE` | Date these take effect | Set when they are published, not when written |
 
 ### Jurisdiction
@@ -309,21 +309,26 @@ The expected inventory, and the only one the policy is written against:
 
 1. **The speech-model download** — `src-tauri/src/speech/model_download.rs`,
    through the shared hardened client in `src-tauri/src/net.rs`. User-initiated
-   from Speech settings, hash-pinned. This is the one the policy describes.
-2. **A remote-image importer** — `src-tauri/src/assets/remote.rs`, reachable as
-   the `import_remote_image` command, wrapped by
-   `src/control/services/assets.ts`. **It has no UI caller**; nothing in the
-   editor invokes it. The policy does not
-   describe it, on the same reasoning that #180 used for the in-app copy: naming
-   an action a user cannot take is its own kind of inaccuracy. **If a future
-   version surfaces it, the policy must be revised** — it would send a
-   user-supplied URL to a third-party host.
+   from the Welcome screen or Speech settings, hash-pinned against
+   `src-tauri/models/catalogue.json`. This is the one the policy describes, and
+   `docs/network-inventory.md` is its full description.
+2. **A remote-image importer** — `src-tauri/src/assets/remote.rs`. The
+   `import_remote_image` command that would reach it is **compiled out** for
+   1.0 (`#[cfg(feature = "remote-images")]`), so it is in neither the command
+   registry nor `permissions/app-commands.toml` and nothing in the application
+   can invoke it. The policy says exactly that and no more: naming an action a
+   user cannot take is its own kind of inaccuracy, and so is implying the code
+   was deleted when only the door was. **If a future version surfaces it, the
+   policy must be revised** — it would send a user-supplied URL to a
+   third-party host.
 3. **`src/stage/preview.ts`** — fetches a replay fixture. Dev/preview only, and
    the shipped CSP confines it to local URLs.
 4. **`cc-bench` TTS** — benchmark tooling, gated behind
    `CANDIDCUE_ALLOW_TTS_GENERATION=1` and `FAL_KEY`. Not linked into the app.
 5. **`sherpa-onnx-sys` build script** — downloads prebuilt native libraries at
    *build* time via `ureq`. Not present at runtime.
+6. **`scripts/fetch-stt-model.sh`** — the developer's model fetch, `curl` from a
+   shell script. Never runs on a user's machine.
 
 Only (1) is a request the shipped application makes.
 

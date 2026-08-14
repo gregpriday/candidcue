@@ -95,5 +95,25 @@ export const SUPPORT_BUNDLE_CONTENTS = [
   'Application logs from the last few days, and the step-by-step trace of the current and previous runs.',
 ] as const;
 
+/**
+ * What a bundle is designed to leave out — stated as a design, not as a
+ * guarantee, because that is what the mechanism supports.
+ *
+ * This used to say a bundle "never includes your API key, microphone audio,
+ * script text, or transcripts". Two things were wrong with it. There is no API
+ * key any more — the recogniser runs on-device and the credential store went
+ * with it — so the sentence reassured about a risk that no longer exists while
+ * saying nothing about the one that does. And "never" is stronger than the code
+ * proves: `redact_log_line` in `diagnostics/logging.rs` handles paths, URLs and
+ * device names, and says plainly that it cannot tell a sentence the user wrote
+ * from any other prose. What keeps scripts out of logs is that the call sites
+ * log ids, counts and step names — a discipline enforced by
+ * `tests/integration/log-content-discipline.test.ts`, which is a tripwire and
+ * not a proof.
+ *
+ * A discipline is a good reason to believe a bundle is clean. It is not a good
+ * reason to promise a stranger that it is. So the claim is what the app does,
+ * and the last sentence hands the decision to the person whose folder it is.
+ */
 export const SUPPORT_BUNDLE_EXCLUSIONS =
-  'A bundle never includes your API key, microphone audio, script text, or transcripts. Logs record step names, states and timings — worth a look before you send one.';
+  'A bundle is designed to leave out your scripts, your transcripts and your microphone audio, and it never contains the database or a recording. What it carries is diagnostic state, versions, timings, and log lines with home paths and web addresses removed. CandidCue cannot recognise prose, so that last part rests on what the app writes rather than on a filter — reveal the bundle and read it before you send it to anyone.';

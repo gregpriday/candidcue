@@ -6,11 +6,13 @@
  * provider messages, and never surface a raw Rust debug string.
  */
 
+// No 'auth'. The category described a rejected API key from the hosted speech
+// provider; the recogniser is on-device and the app holds no credential, so
+// nothing in Rust can produce it. See `ErrorCategory` in src-tauri/src/errors.rs.
 export type AppErrorCategory =
   | 'validation'
   | 'permission'
   | 'network'
-  | 'auth'
   | 'quota'
   | 'storage'
   | 'database'

@@ -339,6 +339,40 @@ pub struct SupportBundleResult {
     pub path: String,
 }
 
+/// Where the last support bundle was written, for `reveal_support_bundle`.
+///
+/// The bundle is the one thing in this app a user is asked to inspect before
+/// handing it to a stranger, and "reveal it" is how a Mac user inspects a
+/// folder. The obvious implementation — pass the path back to the webview and
+/// let it ask Rust to reveal that path — is the one thing this codebase does
+/// not do (C5, spec §50.7): a reveal command taking a path from JavaScript is
+/// an arbitrary-directory reveal, and the webview would only be handing back a
+/// string Rust gave it a moment ago anyway.
+///
+/// So Rust keeps it. The webview asks to reveal "the bundle", not a path, and
+/// the answer is a directory this process created inside a folder the operator
+/// picked in a native dialog.
+///
+/// A `std::sync::Mutex` and not an async one: it is held for a pointer swap.
+#[derive(Debug, Default)]
+pub struct LastSupportBundle(std::sync::Mutex<Option<PathBuf>>);
+
+impl LastSupportBundle {
+    fn remember(&self, path: PathBuf) {
+        *self.0.lock().expect("last support bundle poisoned") = Some(path);
+    }
+
+    /// The remembered directory, if it is still there.
+    ///
+    /// Checked rather than trusted: a user can move or delete the folder
+    /// between exporting and pressing Reveal, and `reveal_item_in_dir` on a
+    /// path that no longer exists opens the wrong thing or nothing at all.
+    fn current(&self) -> Option<PathBuf> {
+        let guard = self.0.lock().expect("last support bundle poisoned");
+        guard.as_ref().filter(|path| path.is_dir()).cloned()
+    }
+}
+
 /// Support bundle (spec §44.11): system facts, recovery reports, and the logs
 /// (§179). No audio, script, or transcript content — the logs carry step names,
 /// states and timings, which is a property of what the call sites write rather
@@ -360,6 +394,7 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
+    last_bundle: State<'_, LastSupportBundle>,
 ) -> Result<Option<SupportBundleResult>, AppError> {
     let Some(dest_root) =
         crate::dialogs::pick_destination_folder(&app, "Choose a folder for the support bundle")
@@ -380,10 +415,34 @@ pub async fn export_support_bundle<R: tauri::Runtime>(
 
     let diagnostics = get_system_diagnostics(app, db, paths.clone()).await?;
     write_support_bundle(&paths, &bundle_dir, &diagnostics)?;
+    last_bundle.remember(bundle_dir.clone());
 
     Ok(Some(SupportBundleResult {
         path: bundle_dir.to_string_lossy().to_string(),
     }))
+}
+
+/// Show the last support bundle in Finder, so it can be read before it is sent.
+///
+/// The user-facing copy (`SUPPORT_BUNDLE_EXCLUSIONS` in
+/// `src/control/lib/diagnostics-format.ts`) says a bundle is *designed* to leave
+/// scripts, transcripts and audio out, and that the redactor cannot recognise
+/// prose — so the honest end of that sentence is "read it before you send it".
+/// This is the action that makes reading it one click rather than a hunt
+/// through a folder the operator picked several minutes ago.
+///
+/// It takes no argument. See [`LastSupportBundle`] for why that matters.
+#[tauri::command]
+pub async fn reveal_support_bundle(
+    last_bundle: State<'_, LastSupportBundle>,
+) -> Result<(), AppError> {
+    let Some(path) = last_bundle.current() else {
+        return Err(AppError::not_found(
+            "There is no support bundle to show. Export one first.",
+        ));
+    };
+    tauri_plugin_opener::reveal_item_in_dir(path)
+        .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
 }
 
 /// Everything a support bundle contains, given a destination.

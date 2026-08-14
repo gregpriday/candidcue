@@ -142,12 +142,15 @@ telemetry, no analytics, no advertising, no crash reporting upload, and no
 licence check — CandidCue does not verify a registration, because there is
 nothing for it to verify.
 
-The network request this version makes in normal use is one you start:
-**downloading a speech recognition language from Speech settings.** That
-download:
+The network activity this version has in normal use is one you start:
+**downloading a speech recognition language, from the Welcome screen or from
+Speech settings.** That download:
 
-- goes to the model publisher's own release hosting, which is GitHub. The host
-  it will contact is named in the application before you start;
+- goes to the model publisher's own release hosting, which is GitHub. The
+  initial host is named in the application before you begin, and like any
+  download it may be redirected — to a content delivery network, for
+  example — so the host that finally serves the file is not something we can
+  promise in advance. What we can promise is the next point;
 - is verified against a SHA-256 hash recorded in the application, so a
   substituted file is rejected;
 - may involve more than one HTTP request, because a download can be redirected
@@ -155,15 +158,17 @@ download:
 - carries **none of your script, audio or transcripts.** It is a request for a
   file.
 
-CandidCue also contains a remote-image importer that would fetch an image from a
-URL you supply; no part of the interface currently invokes it, so it is not a
-request this version can make through normal use. If a future version surfaces
-it, this policy will be revised first.
+Like any download, the model download tells the server your IP address. That
+server's operator handles it under its own privacy policy; **we receive nothing
+about it.** CandidCue ordinarily writes a line to its own local log recording
+that an install finished, was cancelled or failed — that log stays on your
+machine, and the [Diagnostic logs](#diagnostic-logs) section below covers it.
 
-Like any download, that request tells GitHub your IP address. GitHub handles
-that under its own privacy policy; we receive nothing about it, and CandidCue
-does not record that the download happened beyond what is needed to install and
-verify the model.
+CandidCue's source also contains a remote-image importer that would fetch an
+image from a URL you supply. **This version is built without a way to use it.**
+The command it would be reached through is compiled out, so nothing in the
+application can call it, and it is not a request this version can make. If a
+future version includes it, this policy will be revised first.
 
 Links in the application that point to third-party pages — such as the licence
 for the speech model — open in your browser and are governed by those sites'

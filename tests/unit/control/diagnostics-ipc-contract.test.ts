@@ -113,12 +113,27 @@ describe('diagnostics presentation is honest about what it knows', () => {
     expect(text).toContain(base.dataDir);
   });
 
-  /** The disclosure must keep naming what a bundle does NOT carry (§44.11). */
-  it('states what a support bundle excludes', () => {
+  /**
+   * The disclosure must keep naming what a bundle does NOT carry (§44.11).
+   *
+   * "API key" used to be in this list, and its removal is the point rather than
+   * a relaxation: there is no API key any more — the recogniser is on-device
+   * and the credential store went with the hosted provider — so the sentence
+   * reassured about a risk that no longer exists. What replaced it is a claim
+   * about the user's own words that the mechanism can actually support, plus an
+   * instruction to look. `tests/integration/log-content-discipline.test.ts`
+   * holds the other end: it fails if the copy goes back to promising "never".
+   */
+  it('names what a support bundle is designed to leave out', () => {
     expect(SUPPORT_BUNDLE_CONTENTS.length).toBeGreaterThan(0);
-    for (const claim of ['API key', 'audio', 'script text', 'transcripts']) {
+    for (const claim of ['scripts', 'transcripts', 'audio', 'database']) {
       expect(SUPPORT_BUNDLE_EXCLUSIONS).toContain(claim);
     }
+    expect(
+      SUPPORT_BUNDLE_EXCLUSIONS,
+      'the disclosure must tell the operator to look at the bundle before ' +
+        'sending it — that is what makes a designed exclusion honest',
+    ).toMatch(/reveal/i);
   });
 
   /**

@@ -9,9 +9,12 @@ behaviour, not a plan.
 ## What the app does
 
 Nothing. CandidCue never contacts an update service, on launch or otherwise.
-The only network request the application makes at all is the speech-model
-download the user starts from **Settings › Speech**, and that request is
-digest-pinned against `scripts/model-catalogue.mjs`.
+The only network activity the application has at all is the speech-model
+download the user starts from the **Welcome screen** or **Settings › Speech**,
+and it is digest-pinned against `src-tauri/models/catalogue.json`, which the
+binary compiles in.
+`docs/network-inventory.md` is the whole picture, and the file to revise first
+if that ever changes.
 
 **Settings › Data, privacy & updates** states the running version — read from
 the signed bundle by the `app_version` command — and says how to get a newer
@@ -28,11 +31,16 @@ in `/Applications`. Scripts, revisions, assets, settings, calibrations, the
 database and the installed speech model all live in the application data
 directory, not in the bundle, so replacing the app does not touch any of them.
 
-The download origin is a legal placeholder (`@@LEGAL_WEBSITE_ORIGIN@@` — see
-`legal/PLACEHOLDERS.md`). The UI deliberately does not hard-code a URL that
-nobody has committed to yet; it names the official website in prose. When the
-origin is resolved, the sentence can link to it — and that link needs a narrow
-opener permission, not `opener:default` (see the capability-minimisation work).
+**Help › Download Latest Version** opens that page. It goes through
+`open_web_destination`, which takes a NAME and maps it to a path under the one
+origin in `src-tauri/src/web.rs` — not through `opener:default`, which the
+capability-minimisation work removed and which nothing should reintroduce. Help
+also carries Release Notes, so a user can read what changed before deciding.
+
+The origin is still a legal placeholder in the documents
+(`@@LEGAL_WEBSITE_ORIGIN@@` — see `legal/PLACEHOLDERS.md`), and the register
+records that the application already compiles a copy of the answer. The two move
+together.
 
 ## What was removed, and why it is not "reserved for later"
 

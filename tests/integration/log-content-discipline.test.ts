@@ -118,4 +118,37 @@ describe('nothing logs the user’s words', () => {
       expect(source, `the exclusion copy must name ${excluded}`).toMatch(excluded);
     }
   });
+
+  /*
+   * And does not promise more than the tests above can support.
+   *
+   * The rule this file enforces is a tripwire over call sites, not a filter:
+   * `redact_log_line` handles paths, URLs and device names and says outright
+   * that it cannot recognise prose. "A bundle never includes script text" is
+   * therefore a stronger claim than anything here proves, and it was on screen
+   * for a year. Absolutes about the DATABASE or a RECORDING are fine — the
+   * bundle writer copies diagnostics.json, recovery reports and allow-listed
+   * log files, and neither of those is one of them.
+   */
+  it('claims a design about the user’s words, not a guarantee', () => {
+    const source = readFileSync(join(REPO_ROOT, 'src/control/lib/diagnostics-format.ts'), 'utf8');
+    const copy = /SUPPORT_BUNDLE_EXCLUSIONS\s*=\s*([\s\S]*?);\n/.exec(source)?.[1] ?? '';
+    expect(copy.length, 'SUPPORT_BUNDLE_EXCLUSIONS could not be read').toBeGreaterThan(80);
+
+    expect(
+      copy,
+      'The exclusion copy promises that a bundle NEVER carries the user\'s own ' +
+        'words. Nothing in this file or in diagnostics/logging.rs can establish ' +
+        'that — the redactor handles paths and URLs and cannot recognise prose. ' +
+        'Say what the bundle is designed to leave out, and tell the reader to ' +
+        'look before they send it.',
+    ).not.toMatch(/\bnever\b[^.]*\b(script|transcript|prose|words)/i);
+
+    expect(
+      copy,
+      'The copy no longer tells the user to look at the bundle before sending ' +
+        'it. That sentence is what makes the weaker promise honest rather than ' +
+        'merely vaguer, and `reveal_support_bundle` exists to serve it.',
+    ).toMatch(/\b(reveal|read|review|look)\b/i);
+  });
 });

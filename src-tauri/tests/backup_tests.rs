@@ -907,6 +907,19 @@ fn every_registered_command_is_classified_for_recovery_mode() {
             "the boot-failure screen offers it, so it must work when the database did not open",
         ),
         (
+            "reveal_support_bundle",
+            "shows a folder this process already wrote; touches no database and takes no path",
+        ),
+        (
+            "open_web_destination",
+            "hands a compile-time url to the browser; a boot failure is exactly when \
+             somebody needs Help › Report a Problem",
+        ),
+        (
+            "open_third_party_notices",
+            "opens a file from this build's own resources; reads nothing of the user's",
+        ),
+        (
             "log_client_diagnostic",
             "the recovery screen's own failures have to be recordable",
         ),

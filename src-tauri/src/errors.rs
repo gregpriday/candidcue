@@ -28,7 +28,13 @@ pub enum ErrorCategory {
     Validation,
     Permission,
     Network,
-    Auth,
+    // No `Auth`. It existed for one thing — a rejected API key from the hosted
+    // speech provider — and the recogniser runs on-device now, so the app holds
+    // no credential that can be wrong. Nothing constructed it, and its only
+    // trace in the tree was a `user_message` arm telling a user that "there is
+    // a problem with the stored API key" about an application that has never
+    // had one. A category that can only produce a false sentence is worse than
+    // an absent one.
     Quota,
     Storage,
     Database,
@@ -243,7 +249,6 @@ impl AppError {
             ErrorCategory::Network => "A network problem interrupted the operation.".into(),
             ErrorCategory::Database => "CandidCue could not access its local database.".into(),
             ErrorCategory::Window => "The stage window could not be opened or positioned.".into(),
-            ErrorCategory::Auth => "There is a problem with the stored API key.".into(),
             ErrorCategory::Storage => "A file operation failed.".into(),
             ErrorCategory::Validation => "The request was not valid.".into(),
             _ => "Something unexpected went wrong.".into(),
