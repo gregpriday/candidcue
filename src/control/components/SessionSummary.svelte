@@ -39,6 +39,7 @@
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
   import { formatClock } from '../lib/format';
+  import { sessionModeLabel } from '../lib/take-vocabulary';
 
   /*
    * Dismissal is a plain close, because the screen behind this dialog is
@@ -97,7 +98,9 @@
       <dt>Duration</dt>
       <dd>{formatClock(summary.durationSeconds)}</dd>
       <dt>Mode</dt>
-      <dd>{summary.mode === 'voice' ? 'Voice follow' : summary.mode === 'manual' ? 'Manual' : 'Fixed speed'}</dd>
+      <!-- Named from the shared vocabulary, so the take the presenter just ran
+           is called what the control that ran it was called. -->
+      <dd>{sessionModeLabel(summary.mode)}</dd>
       <!-- The two rows that answer "did it actually work". Everything else
            here reads the same whether the microphone was live or the take was
            nine seconds of silence, which is why a take could look complete and

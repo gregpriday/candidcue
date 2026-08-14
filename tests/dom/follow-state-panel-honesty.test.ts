@@ -73,7 +73,9 @@ function textOf(voiceInput: boolean, state: SmoothFollowState['state']): string 
 describe('FollowStatePanel honesty', () => {
   it('a manual take never offers a wake word or a transcription feed', () => {
     const paused = textOf(false, 'paused');
-    expect(paused).toContain('Following paused');
+    // "Hold text" rather than "Pause following" (CCUX-002) — the retired label
+    // shared a verb with pausing the TAKE and pausing the MICROPHONE.
+    expect(paused).toContain('Text held');
     // A manual take has no microphone, so it must not offer to be spoken to
     // nor claim a feed it does not have.
     expect(paused).toContain('Use the transport to move it');
@@ -82,18 +84,37 @@ describe('FollowStatePanel honesty', () => {
 
     const searching = textOf(false, 'searching');
     expect(searching).not.toContain('Start speaking');
-    expect(searching).toContain('nothing is listening');
+    expect(searching.toLowerCase()).toContain('nothing is listening');
   });
 
   it('a voice take keeps the transcription copy', () => {
     const paused = textOf(true, 'paused');
-    expect(paused).toContain('Following paused');
-    // §48: pausing FOLLOWING is not pausing the session. The panel has to say
-    // so, or a presenter reasonably concludes the microphone is off.
-    expect(paused).toContain('Transcription and voice commands keep running');
+    expect(paused).toContain('Text held');
+    /*
+     * §48: pausing FOLLOWING is not pausing the session. The panel has to say
+     * so, or a presenter reasonably concludes the microphone is off.
+     *
+     * The sentence carrying that promise changed with the vocabulary — it used
+     * to be "Transcription and voice commands keep running" — so the assertion
+     * is on the promise rather than on the old wording: the take is still
+     * running AND something is still listening.
+     */
+    expect(paused).toMatch(/take is still running/i);
+    expect(paused).toMatch(/still listening/i);
 
     const searching = textOf(true, 'searching');
     expect(searching).toContain('Start speaking and the stage picks up your place.');
-    expect(searching).not.toContain('nothing is listening');
+    expect(searching.toLowerCase()).not.toContain('nothing is listening');
+  });
+
+  /*
+   * The default that stops an unwired caller inventing a fault. `heardAnything`
+   * is the one prop here whose failure mode is a standing accusation over a
+   * take that is going perfectly, so it defaults to "assume we heard you".
+   */
+  it('accuses nothing when the caller has not wired the input signals', () => {
+    const text = textOf(true, 'following');
+    expect(text).not.toMatch(/microphone/i);
+    expect(text).not.toMatch(/nothing heard/i);
   });
 });

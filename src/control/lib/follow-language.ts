@@ -96,6 +96,167 @@ export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
 };
 
 /* ---------------------------------------------------------------------------
+ * The one status line (CCUX-001, CCUX-018)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Everything the status line is allowed to look at.
+ *
+ * Narrow on purpose: it is the whole point of this function that the panel
+ * cannot reach past it into the decision codes. A component handed the full
+ * `SmoothFollowState` will eventually render a field from it, which is exactly
+ * how `FOLLOW_DECISION_LABELS` came to be on screen during takes despite the
+ * contract above saying it must not be.
+ */
+export interface FollowStatusInput {
+  state: StageMotionState;
+  decision: AlignmentDecision;
+  /** §48 — following paused without pausing the take. */
+  followingPaused: boolean;
+  /** True once a motion frame has arrived. The UI must not fake liveness. */
+  receivingFrames: boolean;
+  /** False in a manual or roll-at-pace take, where nothing is listening. */
+  voiceInput: boolean;
+  /**
+   * The input, as the session knows it.
+   *
+   * 'disconnected' is the only one of the three that is a fault, and it is the
+   * only fault here with a remedy the presenter can carry out mid-take.
+   */
+  micState: 'live' | 'muted' | 'disconnected';
+  /**
+   * Whether the recogniser has produced ANY words this take.
+   *
+   * Deliberately not derived from the transcript feed's status: a voice take
+   * reports `live` the instant it opens, so that field says whether a feed was
+   * requested, not whether anything came back. Inferring "we heard nothing"
+   * from it would have put a standing microphone warning on every healthy take
+   * for its first second — and a warning that is usually wrong is worse than
+   * none, because it trains the presenter to ignore the one that is right.
+   */
+  heardAnything: boolean;
+}
+
+export interface FollowStatus {
+  line: string;
+  detail: string | null;
+  tone: FollowStateTone;
+}
+
+/**
+ * The presenter-facing status, resolved from behaviour rather than reasoning.
+ *
+ * ---------------------------------------------------------------------------
+ * SIGNAL AND MATCHING ARE DIFFERENT FAULTS (CCUX-018)
+ * ---------------------------------------------------------------------------
+ * "Holding your place" was the answer to two completely different questions,
+ * and they have opposite remedies. If CandidCue cannot HEAR you, the fix is the
+ * microphone and no amount of re-reading will help. If it can hear you
+ * perfectly and the words are not in the script — an ad-lib, an aside, a
+ * paragraph skipped on purpose — then nothing is broken at all and the fix is
+ * to read the next line on the glass.
+ *
+ * A presenter told only "holding" will check the microphone first, because that
+ * is the failure they can imagine. So the two states say different things.
+ *
+ * Order matters below: a deliberate hold outranks a fault, because somebody who
+ * pressed Hold text is not being told their microphone is bad; and no-signal
+ * outranks off-script, because you cannot be off script if nothing was heard.
+ */
+export function followStatus(input: FollowStatusInput): FollowStatus {
+  const { voiceInput } = input;
+
+  // 1. A decision the operator made. Never overwritten by a diagnosis.
+  if (input.followingPaused) {
+    return {
+      line: 'Text held',
+      detail: voiceInput
+        ? 'The text stays where it is. The take is still running and CandidCue is still listening.'
+        : 'The text stays where it is. Use the transport to move it.',
+      tone: 'neutral',
+    };
+  }
+
+  /*
+   * 2. Nothing is listening by design — every voice sentence below is a lie.
+   *
+   * The shared copy is written for voice ("start speaking and the stage picks
+   * up your place", "until the words match the script again"), and an operator
+   * reads this panel to decide whether a problem is their microphone or their
+   * script. On a take with no microphone at all, that copy sends them hunting
+   * for a fault in a subsystem the take never opened.
+   */
+  if (!voiceInput) {
+    return {
+      line: input.state === 'paused' ? 'Paused — the script stays where it is' : 'Manual — no microphone',
+      detail: 'Nothing is listening on this take. The transport moves the script.',
+      tone: 'neutral',
+    };
+  }
+
+  // 3. Before the first frame there is no state to report, only readiness.
+  if (!input.receivingFrames) {
+    return {
+      line: 'Ready to follow',
+      detail: 'Start speaking and the stage picks up your place.',
+      tone: 'accent',
+    };
+  }
+
+  /*
+   * 4. The input itself has failed. The one fault here with a remedy the
+   * presenter can carry out from where they are standing, so it outranks
+   * everything about matching.
+   */
+  if (input.micState === 'disconnected') {
+    return {
+      line: 'Microphone disconnected',
+      detail: 'The text is holding where you left it. Choose another input, or keep going and move the text yourself.',
+      tone: 'warning',
+    };
+  }
+
+  if (input.micState === 'muted') {
+    return {
+      line: 'Microphone muted',
+      detail: 'The text will not move until you unmute. The take is still running.',
+      tone: 'neutral',
+    };
+  }
+
+  /*
+   * 5. Listening, and nothing has come back yet.
+   *
+   * Hedged rather than accusing, and deliberately not toned as a warning. At
+   * the top of a take this is simply true and expected — the presenter has not
+   * started — and a red state for "you have not spoken yet" would fire on every
+   * single take before its first word.
+   */
+  if (!input.heardAnything) {
+    return {
+      line: 'Listening — nothing heard yet',
+      detail: 'Start speaking and the stage picks up your place. If you have already started, check the microphone.',
+      tone: 'accent',
+    };
+  }
+
+  // 6. Heard clearly, matched nothing. Not a fault, and must not read as one.
+  if (input.decision === 'holdOffScript') {
+    return {
+      line: 'Holding your place',
+      detail: 'CandidCue can hear you, but these words are not in the script. The text is holding until you come back to it.',
+      tone: 'neutral',
+    };
+  }
+
+  return {
+    line: FOLLOW_STATE_LABELS[input.state],
+    detail: FOLLOW_STATE_DETAIL[input.state],
+    tone: followStateTone(input.state),
+  };
+}
+
+/* ---------------------------------------------------------------------------
  * Confidence (§48 "without implying false precision")
  * ------------------------------------------------------------------------- */
 

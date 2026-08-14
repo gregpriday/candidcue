@@ -336,6 +336,21 @@ export interface SessionState {
   stageWindowFault: StageWindowFault | null;
   snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
+  /**
+   * Whether the recogniser has produced ANY words since this take began.
+   *
+   * Latched: it goes true on the first transcript line and never goes back
+   * within a take. `transcriptTail` cannot answer this — it holds the last four
+   * lines and is emptied outright by mid-take transcript recovery, so a take
+   * that heard a thousand words and then reconnected would read as one that had
+   * heard nothing.
+   *
+   * It exists because the follow panel had no honest way to tell "you have not
+   * started speaking" from "your microphone is dead", and the transcript feed's
+   * status could not help: a voice take reports `live` from the instant it
+   * opens, which says a feed was requested and nothing about what came back.
+   */
+  heardAnything: boolean;
   /** Exact stage instrument payload, rendered locally in single-window mode. */
   voicePill: StageVoicePillPayload | null;
   /** The full production stage document rendered inside the control webview. */
@@ -409,6 +424,7 @@ const initial: SessionState = {
   stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
+  heardAnything: false,
   voicePill: null,
   stageEnvelope: null,
   outline: [],
@@ -2033,6 +2049,9 @@ function pushTranscriptLine(line: string): void {
   state.update((s) => ({
     ...s,
     transcriptTail: [...s.transcriptTail, line].slice(-4),
+    // Latched, and NOT reset by `onResetTranscriptState` below — a reconnect
+    // does not unhear what was already heard.
+    heardAnything: true,
   }));
 }
 

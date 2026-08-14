@@ -1457,6 +1457,8 @@ import { onShortcut } from '../lib/shortcuts';
         follow={$smoothFollow}
         sectionTitle={currentSectionTitle}
         voiceInput={hasVoiceTransport}
+        micState={$session.micState}
+        heardAnything={$session.heardAnything}
         onnoticeaction={handleNoticeAction}
       />
 
@@ -1748,6 +1750,8 @@ import { onShortcut } from '../lib/shortcuts';
       follow={$smoothFollow}
       sectionTitle={currentSectionTitle}
       voiceInput={hasVoiceTransport}
+      micState={$session.micState}
+      heardAnything={$session.heardAnything}
       onnoticeaction={handleNoticeAction}
     />
 

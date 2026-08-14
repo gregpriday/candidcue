@@ -13,11 +13,8 @@
   import {
     CONFIDENCE_BANDS,
     CONFIDENCE_BAND_LABELS,
-    FOLLOW_DECISION_LABELS,
-    FOLLOW_STATE_DETAIL,
-    FOLLOW_STATE_LABELS,
     confidenceBandIndex,
-    followStateTone,
+    followStatus,
     formatPace,
   } from '../lib/follow-language';
   import type { FollowNotice, SmoothFollowState } from '../stores/smooth-follow';
@@ -37,59 +34,65 @@
      * problem is their microphone or their script, so it says what is true.
      */
     voiceInput?: boolean;
+    /**
+     * The input as the session knows it. Defaults to 'live' so a caller that
+     * has not wired it up cannot make the panel invent a fault.
+     */
+    micState?: 'live' | 'muted' | 'disconnected';
+    /**
+     * Whether anything has been transcribed this take.
+     *
+     * Defaults TRUE, and that direction is deliberate: the failure mode of this
+     * flag is a standing "nothing heard" line over a take that is going fine,
+     * so an unwired caller must fall silent rather than accuse.
+     */
+    heardAnything?: boolean;
     onnoticeaction?: (action: NonNullable<FollowNotice['action']>) => void;
   }
 
-  let { follow, sectionTitle = null, voiceInput = true, onnoticeaction }: Props = $props();
+  let {
+    follow,
+    sectionTitle = null,
+    voiceInput = true,
+    micState = 'live',
+    heardAnything = true,
+    onnoticeaction,
+  }: Props = $props();
 
-  /** Copy for a take with no microphone; keys not listed keep the shared text. */
-  const MANUAL_LABELS: Partial<Record<SmoothFollowState['state'], string>> = {
-    paused: 'Paused — the script stays where it is',
-  };
-  const MANUAL_DETAILS: Partial<Record<SmoothFollowState['state'], string>> = {
-    searching: 'Manual take — nothing is listening. The transport moves the script.',
-    paused: 'Manual take — nothing is listening. The transport moves the script.',
-    holding: 'The text stays where it is. Use the transport to move it.',
-    ambiguous: 'The text stays where it is. Use the transport to move it.',
-  };
-
-  const statusLine = $derived(
-    follow.followingPaused
-      ? 'Following paused'
-      : follow.receivingFrames
-        ? (voiceInput ? undefined : MANUAL_LABELS[follow.state]) ?? FOLLOW_STATE_LABELS[follow.state]
-        : voiceInput
-          ? 'Ready to follow'
-          : 'Manual — no microphone',
-  );
-
-  const statusDetail = $derived(
-    follow.followingPaused
-      ? voiceInput
-        ? 'The text stays where it is. Transcription and voice commands keep running.'
-        : 'The text stays where it is. Use the transport to move it.'
-      : follow.receivingFrames
-        ? (voiceInput ? undefined : MANUAL_DETAILS[follow.state]) ??
-          FOLLOW_STATE_DETAIL[follow.state]
-        : voiceInput
-          ? 'Start speaking and the stage picks up your place.'
-          : 'Manual take — nothing is listening. The transport moves the script.',
+  /*
+   * One resolver, and the panel reads nothing else about the tracker.
+   *
+   * The nest of ternaries this replaced had to be read three times to work out
+   * what a manual take says while paused, and it is also how the decision-code
+   * row below it survived: with the copy scattered across the component there
+   * was no single place that said what this panel is allowed to show.
+   * `followStatus` takes a narrow input, so reaching for a decision code now
+   * means widening a declared contract rather than adding one more line here.
+   */
+  const status = $derived(
+    followStatus({
+      state: follow.state,
+      decision: follow.decision,
+      followingPaused: follow.followingPaused,
+      receivingFrames: follow.receivingFrames,
+      voiceInput,
+      micState,
+      heardAnything,
+    }),
   );
 
   const bandIndex = $derived(confidenceBandIndex(follow.band));
-
-  const stateTone = $derived(followStateTone(follow.state));
 </script>
 
 <div class="follow-state">
   <div class="head">
-    <p class="status {follow.followingPaused ? 'neutral' : stateTone}" role="status" aria-live="polite">
-      {statusLine}
+    <p class="status {status.tone}" role="status" aria-live="polite">
+      {status.line}
     </p>
   </div>
 
-  {#if statusDetail}
-    <p class="detail">{statusDetail}</p>
+  {#if status.detail}
+    <p class="detail">{status.detail}</p>
   {/if}
 
   <!-- Banded confidence: four steps, labelled in words (§48). -->
@@ -115,11 +118,21 @@
     <span class="confidence-label">{CONFIDENCE_BAND_LABELS[follow.band]}</span>
   </div>
 
+  <!--
+    NO DECISION-CODE ROW HERE (CCUX-001).
+
+    This used to carry a "Doing" row rendering `FOLLOW_DECISION_LABELS`, which
+    put "Local match confirmed", "Relocated" and "Possible jump — gathering
+    evidence" in front of a presenter mid-take. `follow-language.ts` states
+    plainly that those codes are diagnostics vocabulary and must not become
+    user-facing copy — they describe the engine's internal reasoning, which is
+    re-tuned freely, whereas the four states above are a promise about
+    behaviour. The row was a live contradiction of its own module's contract.
+
+    The codes are not lost: `FollowDiagnostics` shows them, per-movement and
+    with the scores that make them mean anything, one disclosure away.
+  -->
   <dl class="facts">
-    <div class="fact">
-      <dt>Doing</dt>
-      <dd>{FOLLOW_DECISION_LABELS[follow.decision]}</dd>
-    </div>
     <div class="fact">
       <dt>Pace</dt>
       <dd>{formatPace(follow.paceWordsPerMinute)}</dd>

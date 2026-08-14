@@ -1,0 +1,148 @@
+/**
+ * The words CandidCue uses for a take, in one place (CCUX-002).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A MODULE RATHER THAN A STYLE NOTE
+ * ---------------------------------------------------------------------------
+ * The product has several legitimate but overlapping ideas — a session that is
+ * running or ended, following that is on or off, a microphone that is open or
+ * shut, a transport that can move text with no voice involved — and each was
+ * named at the place it was rendered. So the same act had three names: the
+ * control panel called it "Pause following", the stage dock called it "Follow
+ * my voice", and the summary called the resulting take "Fixed speed". A
+ * presenter mid-take had to work out that these were one concept.
+ *
+ * Three axes, and they are INDEPENDENT. That is the whole point of separating
+ * them: a take can be running with the text held and the microphone listening,
+ * and every combination of the three is reachable and meaningful.
+ *
+ *   Take      — running, paused, ended
+ *   Movement  — follow voice, hold text, roll at pace, manual
+ *   Microphone— listening, muted, unavailable
+ *
+ * The engine's internal vocabulary (decision codes, endpointing, transport
+ * state) maps INTO these and never leaks out of diagnostics — see
+ * `follow-language.ts`, which owns that boundary.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Axis B: what is moving the text
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How the script is being moved, as the user thinks about it.
+ *
+ * Distinct from the session `mode` ('voice' | 'manual' | 'fixed'), which is
+ * fixed when the take opens and recorded on the session row. Movement can
+ * change mid-take — a voice take whose following is held is still a voice take.
+ */
+export type MovementMode = 'follow' | 'hold' | 'roll' | 'manual';
+
+export const MOVEMENT_LABELS: Record<MovementMode, string> = {
+  follow: 'Follow voice',
+  hold: 'Hold text',
+  roll: 'Roll at pace',
+  manual: 'Manual',
+};
+
+/**
+ * One line saying what the chosen movement mode actually does.
+ *
+ * "Hold text" is the one that has to earn its wording: it is the control a
+ * presenter reaches for when they are about to go off script deliberately, and
+ * the thing they most need to know is that the take is NOT ending and the
+ * microphone is NOT closing.
+ */
+export const MOVEMENT_DETAIL: Record<MovementMode, string> = {
+  follow: 'The text moves when CandidCue is sure it has found your place.',
+  hold: 'The text stays where it is. The take keeps running and CandidCue keeps listening.',
+  roll: 'The text moves at a set pace regardless of what you say.',
+  manual: 'The text moves only when you move it.',
+};
+
+/* ---------------------------------------------------------------------------
+ * Session mode — what a take was OPENED as
+ * ------------------------------------------------------------------------- */
+
+/** The persisted session mode, as stored on the session record. */
+export type SessionMode = 'voice' | 'manual' | 'fixed';
+
+/**
+ * Session mode in the movement vocabulary.
+ *
+ * 'fixed' reads as "Roll at pace" rather than "Fixed speed" so the summary, the
+ * settings readout and the live control all name one thing one way. The stored
+ * value is untouched — this is a display mapping, not a migration.
+ */
+export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
+  voice: 'Follow voice',
+  manual: 'Manual',
+  fixed: 'Roll at pace',
+};
+
+export function sessionModeLabel(mode: string): string {
+  return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
+}
+
+/* ---------------------------------------------------------------------------
+ * Axis B actions — the buttons that change movement
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Action labels for the live controls.
+ *
+ * `setPlace` replaced "Re-find me here", which described the ENGINE's job
+ * ("re-find") rather than the user's ("this is where I am"). The distinction
+ * matters under pressure: a presenter who has lost their place is looking for
+ * a control that asserts something, not one that requests a search.
+ *
+ * The sentence nudges lost "Nudge" for the same reason — "Nudge forward" does
+ * not say how far, and the answer (exactly one sentence) is the only thing
+ * anybody needs to know before pressing it.
+ */
+export const TAKE_ACTIONS = {
+  hold: 'Hold text',
+  follow: 'Follow voice',
+  setPlace: 'Set my place',
+  previousSentence: 'Previous sentence',
+  nextSentence: 'Next sentence',
+  endTake: 'End take',
+} as const;
+
+/* ---------------------------------------------------------------------------
+ * Axis C: the microphone
+ * ------------------------------------------------------------------------- */
+
+export type MicrophoneState = 'listening' | 'muted' | 'unavailable';
+
+export const MICROPHONE_LABELS: Record<MicrophoneState, string> = {
+  listening: 'Listening',
+  muted: 'Muted',
+  unavailable: 'Unavailable',
+};
+
+/* ---------------------------------------------------------------------------
+ * Nouns
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The product's nouns, so a component never has to guess between two of them.
+ *
+ * "Take" and "session" were used interchangeably and they are not the same: a
+ * session is the record, a take is the attempt the presenter just made. The
+ * end-of-take dialog is the place this mattered most — it was headed "Session
+ * complete", which named the database row rather than the thing that just
+ * happened in front of the camera.
+ */
+export const NOUNS = {
+  take: 'take',
+  Take: 'Take',
+  script: 'script',
+  Script: 'Script',
+  /** Full-display mode, for glass or an external panel. */
+  prompter: 'Teleprompter',
+  /** An ordinary desktop window near the camera. */
+  reader: 'Reading window',
+  /** A named panel + glass + mirroring + optics combination. */
+  rig: 'Rig',
+} as const;

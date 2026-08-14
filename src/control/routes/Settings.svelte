@@ -91,6 +91,7 @@
     retentionConfirmCopy,
   } from '../lib/transcript-retention';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
+  import { SESSION_MODE_LABELS, sessionModeLabel } from '../lib/take-vocabulary';
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
@@ -1810,13 +1811,13 @@
           {#if $settings.general.defaultSessionMode === 'voice'}
             <SettingReadout
               label="Session mode"
-              value="Voice follow"
+              value={SESSION_MODE_LABELS.voice}
               description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take (see the pace below), but there is no mode that starts one without a microphone — so manual and fixed-speed modes are not offered rather than shipped as something that silently behaves like this one."
             />
           {:else}
             <SettingReadout
               label="Session mode"
-              value={$settings.general.defaultSessionMode === 'manual' ? 'Manual' : 'Fixed speed'}
+              value={sessionModeLabel($settings.general.defaultSessionMode)}
               description="This setting was stored by an earlier version and takes no longer open in it. Switch back to voice follow to prompt normally; auto-scroll still rolls the script at a set pace from inside any take."
             />
             <p class="hint-line">

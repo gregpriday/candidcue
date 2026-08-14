@@ -8,6 +8,7 @@
 -->
 <script lang="ts">
   import Button from './Button.svelte';
+  import { MOVEMENT_DETAIL, TAKE_ACTIONS } from '../lib/take-vocabulary';
   import { smoothFollow, type SmoothFollowState } from '../stores/smooth-follow';
 
   interface Props {
@@ -16,6 +17,21 @@
   let { follow }: Props = $props();
 </script>
 
+<!--
+  ONE VOCABULARY (CCUX-002).
+
+  Every label here came from `take-vocabulary.ts` rather than being written in
+  place, because writing them in place is how the app ended up with three names
+  for the same act: this panel said "Pause following", the stage dock said
+  "Follow my voice", and the summary called the resulting take "Fixed speed".
+
+  The renames are not cosmetic. "Pause following" shares a verb with pausing the
+  TAKE and pausing the MICROPHONE, which are different things with different
+  consequences, and the presenter deciding between them is usually on camera.
+  "Re-find me here" described the engine's job rather than the user's assertion.
+  "Nudge forward" never said how far, and the answer — exactly one sentence — is
+  the only thing anybody needs before pressing it.
+-->
 <div class="follow-controls">
   <div class="row">
     <Button
@@ -23,22 +39,21 @@
       variant={follow.followingPaused ? 'primary' : 'default'}
       onclick={() => smoothFollow.toggleFollowingPaused()}
     >
-      {follow.followingPaused ? 'Resume following' : 'Pause following'}
+      {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
     </Button>
-    <Button size="sm" onclick={() => smoothFollow.reAnchorHere()}>Re-find me here</Button>
+    <Button size="sm" onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
   </div>
   <p class="hint">
-    {follow.followingPaused
-      ? 'Automatic movement is stopped. Transcription is still connected.'
-      : 'Pausing following stops the text moving on its own — the session keeps running.'}
+    {follow.followingPaused ? MOVEMENT_DETAIL.hold : MOVEMENT_DETAIL.follow}
   </p>
 
   <div class="row">
-    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('back')}>Nudge back</Button>
-    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('forward')}>
-      Nudge forward
+    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('back')}>
+      {TAKE_ACTIONS.previousSentence}
     </Button>
-    <span class="hint inline">One sentence at a time</span>
+    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('forward')}>
+      {TAKE_ACTIONS.nextSentence}
+    </Button>
   </div>
 
   <!-- §48: offer the local candidates instead of guessing when lost. -->
@@ -82,9 +97,6 @@
     font-size: var(--text-2xs);
     line-height: 1.45;
     color: var(--text-muted);
-  }
-  .hint.inline {
-    flex: 0 0 auto;
   }
 
 
