@@ -112,12 +112,33 @@ export function watchTakeDestination(initial: DestinationContext): () => void {
   context = initial;
   void refreshTakeDestination();
 
-  const stopTopology = onDisplayTopologyChange(() => void refreshTakeDestination());
+  /*
+   * Coalesced, because a drag emits one native `Moved` per frame.
+   *
+   * Rust now forwards window moves onto the display-change event — that is what
+   * makes dragging between two already-connected monitors visible at all — and
+   * a drag therefore arrives as a burst. Each one would otherwise start two IPC
+   * reads; the `inFlight` ticket stops a stale answer being STORED but does
+   * nothing about the requests themselves. 150 ms is below noticing and well
+   * above a frame.
+   */
+  let coalesce: ReturnType<typeof setTimeout> | null = null;
+  const refreshSoon = (): void => {
+    if (coalesce !== null) clearTimeout(coalesce);
+    coalesce = setTimeout(() => {
+      coalesce = null;
+      void refreshTakeDestination();
+    }, 150);
+  };
 
-  const onFocus = (): void => void refreshTakeDestination();
+  const stopTopology = onDisplayTopologyChange(refreshSoon);
+
+  const onFocus = (): void => refreshSoon();
   if (typeof window !== 'undefined') window.addEventListener('focus', onFocus);
 
   return () => {
+    if (coalesce !== null) clearTimeout(coalesce);
+    coalesce = null;
     stopTopology();
     if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus);
   };

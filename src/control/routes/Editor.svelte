@@ -45,6 +45,7 @@ import { startTake, takeStarting } from '../lib/start-take';
   import { getVoiceFacade } from '../services/voice-facade';
   import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
   import { listSessionRecords } from '../services/session-records';
+  import { session } from '../stores/session';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
@@ -724,8 +725,18 @@ import type { PresentationMode } from '../services/settings-types';
 
   $effect(() => {
     const id = scriptId;
+    /*
+     * Re-read when a take ends, not only when the script opens.
+     *
+     * `stopSession` fire-and-forgets the row's ending index, and this route is
+     * where a finished take lands — so a single read at mount could observe the
+     * newest session before its ending was written and then offer an older
+     * ending, or none, for the whole mount. Depending on the summary makes the
+     * dialog's arrival the trigger.
+     */
+    void $session.summary;
     lastEndTokenIndex = undefined;
-    void listSessionRecords(id, 5)
+    void listSessionRecords(id, 20)
       .then((records) => {
         if (scriptId !== id) return;
         // Newest first is what Rust returns; the first one with an ending is

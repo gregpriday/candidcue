@@ -80,6 +80,36 @@ describe('resolveTakeOutcome', () => {
     expect(outcome.health).not.toBe('no_speech');
   });
 
+  it('does not say you moved the script when a pace did', () => {
+    // "You moved the script yourself" is simply false of a fixed-pace take.
+    const outcome = resolveTakeOutcome(take({ mode: 'fixed', wordsHeard: 0, followingShare: null }));
+    expect(outcome.detail).toMatch(/rolled at your set pace/i);
+    expect(outcome.detail).not.toMatch(/you moved the script/i);
+  });
+
+  it('does not claim the stage stayed still when the operator moved it', () => {
+    const outcome = resolveTakeOutcome(take({ wordsHeard: 0, durationSeconds: 120, manualJumps: 2 }));
+    expect(outcome.detail).not.toMatch(/stayed where it was/i);
+    expect(outcome.detail).toContain('2 moves');
+  });
+
+  it('never claims a whole take it did not follow', () => {
+    // 0.8 opens the steady band; saying "for the whole take" of a measured 80%
+    // is a claim the number underneath contradicts.
+    expect(resolveTakeOutcome(take({ followingShare: 0.8 })).detail).not.toMatch(/whole take/i);
+    expect(resolveTakeOutcome(take({ followingShare: 1 })).detail).toMatch(/whole take/i);
+  });
+
+  it('does not contradict the detail rows in the middle band', () => {
+    /*
+     * Under 0.6 the technical rows say "the stage spent most of it holding".
+     * The card previously said "it followed most of the take" from 0.4 up, so
+     * one dialog made two statements that cannot both be true.
+     */
+    const outcome = resolveTakeOutcome(take({ followingShare: 0.45 }));
+    expect(outcome.detail).not.toMatch(/most of the take/i);
+  });
+
   it('reports a manual take as finished, not as a following failure', () => {
     // There was no microphone. "Nothing was transcribed" would report the
     // absence of a subsystem this take never started.
@@ -137,9 +167,20 @@ describe('resolveTakeOutcome', () => {
     for (const followingShare of shares) {
       for (const reconnects of [0, 1, 3]) {
         for (const wordsHeard of [0, 5, 900]) {
-          const outcome = resolveTakeOutcome(take({ followingShare, reconnects, wordsHeard }));
-          const text = `${outcome.headline} ${outcome.detail} ${outcome.suggestion ?? ''}`;
-          expect(text, `judged the delivery: ${text}`).not.toMatch(banned);
+          // Every mode and both duration branches, so `Take ended early`,
+          // manual and fixed outcomes are covered too — the first version of
+          // this test reached only long voice takes.
+          for (const mode of ['voice', 'manual', 'fixed'] as const) {
+            for (const durationSeconds of [2, 180]) {
+              for (const manualJumps of [0, 3]) {
+                const outcome = resolveTakeOutcome(
+                  take({ followingShare, reconnects, wordsHeard, mode, durationSeconds, manualJumps }),
+                );
+                const text = `${outcome.headline} ${outcome.detail} ${outcome.suggestion ?? ''}`;
+                expect(text, `judged the delivery: ${text}`).not.toMatch(banned);
+              }
+            }
+          }
         }
       }
     }

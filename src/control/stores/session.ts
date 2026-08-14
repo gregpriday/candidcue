@@ -917,7 +917,6 @@ export function startLiveSession(input: StartSessionInput): string {
     Math.min(Math.round(input.startTokenIndex ?? 0), Math.max(0, input.totalTokens - 1)),
   );
 
-  evidenceEpoch += 1;
   // §36.3: the session's first take opens with it, on a fresh history.
   sessionTakes = [];
   beginTake(sessionId, 1, startTokenIndex);
@@ -1094,10 +1093,27 @@ export function startLiveSession(input: StartSessionInput): string {
          * the worst possible direction for this flag to be wrong in.
          */
         if (pillEpoch === voicePillEpoch && text.trim() !== '') {
-          const at = evidenceEpoch;
-          state.update((st) =>
-            st.heardAnything || at !== evidenceEpoch ? st : { ...st, heardAnything: true },
-          );
+          /*
+           * A LATE PARTIAL FROM THE PREVIOUS PASS MAY CERTIFY THIS ONE, AND
+           * THAT IS THE RIGHT DIRECTION TO BE WRONG IN.
+           *
+           * `restartParagraph` clears the latch and the pipeline stays open, so
+           * a partial still in flight from before the restart can arrive after
+           * it. There is an epoch guard here for the PIPELINE, but there is
+           * genuinely no signal on this callback that distinguishes "audio from
+           * a moment ago" from "audio from now" — and an epoch compared inside
+           * the synchronous update it was captured beside cannot differ, which
+           * is what the first attempt at this did.
+           *
+           * So it is left alone deliberately. What this flag answers is "can
+           * CandidCue hear you", and a partial that arrived one second ago is
+           * evidence that it can. The failure that matters is the other one: a
+           * take reporting "nothing heard yet — check the microphone" over a
+           * working microphone would send somebody to unplug hardware mid-take.
+           * Being briefly too optimistic costs nothing; being wrongly pessimistic
+           * costs a take.
+           */
+          state.update((st) => (st.heardAnything ? st : { ...st, heardAnything: true }));
         }
         /*
          * The open utterance counts too — as an ESTIMATE, separately.
@@ -1931,17 +1947,6 @@ let voicePillDeviceLost = false;
  */
 let voicePillEpoch = 0;
 
-/**
- * Bumped at every point where a pass starts proving itself again.
- *
- * Separate from `voicePillEpoch` because the two have different boundaries: the
- * pill's epoch tracks the PIPELINE, and only a full take teardown replaces one,
- * whereas `restartParagraph` is a take boundary with the same pipeline still
- * open. Clearing the latch there without moving an epoch left the pre-restart
- * utterance's late partial free to certify the new pass immediately — the flag
- * went false and true again inside a frame.
- */
-let evidenceEpoch = 0;
 
 /** Begin a take's pill. Torn down by `stopInternals` on every path out. */
 function startVoicePill(): number {
@@ -2043,6 +2048,29 @@ function roundToken(token: number | undefined): number | undefined {
  * summary that made the old numbers untrustworthy.
  */
 function takeWordsFollowed(): number {
+  if (activeTake === null) return 0;
+  /*
+   * How far this PASS got, not where its cursor ended up in the document.
+   *
+   * `maxConfirmedToken` is an absolute index and starts at the pass's own start
+   * token, so a take that opened at token 500 and then followed nothing at all
+   * reported "500 of 900 words followed" — a take that never heard a word
+   * looking like one that read more than half the script. Subtracting the start
+   * makes it the distance travelled, which is what the summary claims it is.
+   */
+  return Math.max(0, Math.round(activeTake.maxConfirmedToken - activeTake.startTokenIndex));
+}
+
+/**
+ * The furthest ABSOLUTE token this pass reached — a position, not a distance.
+ *
+ * Split out from `takeWordsFollowed` when start points arrived, because the two
+ * numbers stopped being the same the moment a take could open anywhere but
+ * zero. This one answers "where did it get to" and is what the session row's
+ * ending index and the retake's section are resolved from; the other answers
+ * "how far did it travel" and is what the summary shows.
+ */
+function takeEndToken(): number {
   if (activeTake === null) return 0;
   return Math.max(0, Math.round(activeTake.maxConfirmedToken));
 }
@@ -3256,7 +3284,6 @@ export function restartParagraph(): void {
    * pill and this flag answer the same question on two surfaces and must not
    * disagree about it.
    */
-  evidenceEpoch += 1;
   state.update((s) => (s.heardAnything ? { ...s, heardAnything: false } : s));
   noteCheckpoint('paragraph_start');
   finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
@@ -3829,8 +3856,8 @@ export function stopSession(): SessionSummary {
     retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s),
-    endTokenIndex: roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed(),
-    sectionStartTokenIndex: sectionStartFor(s, roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed()),
+    endTokenIndex: roundToken(s.snapshot?.confirmedToken) ?? takeEndToken(),
+    sectionStartTokenIndex: sectionStartFor(s, roundToken(s.snapshot?.confirmedToken) ?? takeEndToken()),
     /*
      * The OUTCOME, not the setting. A write that failed is re-queued and
      * retried, so `transcriptBuffer` still holding items at the end of a take
@@ -3901,7 +3928,7 @@ export function stopSession(): SessionSummary {
      * reporting `undefined` there would make "did it follow anything" and "was
      * there a session at all" the same answer.
      */
-    const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed();
+    const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
     finishTake(s.sessionId, endTokenIndex);
     void trackPersistence(endSessionRecord(s.sessionId, {
       endTokenIndex,

@@ -111,7 +111,10 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   if (input.mode !== 'voice') {
     return {
       headline: 'Take finished',
-      detail: `You moved the script yourself this take. You ended in ${input.endingLocation}.`,
+      detail:
+        input.mode === 'fixed'
+          ? `The script rolled at your set pace this take. You ended in ${input.endingLocation}.`
+          : `You moved the script yourself this take. You ended in ${input.endingLocation}.`,
       suggestion: null,
       health: 'no_tracking',
       tone: 'neutral',
@@ -134,7 +137,9 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
     return {
       headline: 'Nothing was transcribed',
       detail:
-        'The stage stayed where it was, but CandidCue did not hear this take. Nothing was lost — the script is exactly as you left it.',
+        input.manualJumps > 0
+          ? `CandidCue did not hear this take, so the ${input.manualJumps === 1 ? 'one move you made was' : `${input.manualJumps} moves you made were`} the only thing that moved the script. Nothing was lost — it is exactly as you left it.`
+          : 'The stage stayed where it was, because CandidCue did not hear this take. Nothing was lost — the script is exactly as you left it.',
       suggestion: 'Test or change the microphone in Settings before trying again.',
       health: 'no_speech',
       tone: 'attention',
@@ -183,10 +188,19 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
     };
   }
 
+  /*
+   * The middle band, and its wording is careful for a reason.
+   *
+   * "Followed most of the take" has to remain TRUE at the bottom of the band,
+   * and the technical rows below report "the stage spent most of it holding"
+   * under 0.6. Two statements on one dialog that contradict each other cost
+   * more trust than either buys, so this band says what it did without
+   * quantifying it, and the number is one disclosure away.
+   */
   if (input.followingShare < STEADY_ABOVE) {
     return {
       headline: 'CandidCue stayed with you',
-      detail: `It followed most of the take and held its place through the rest. You ended in ${input.endingLocation}.`,
+      detail: `It followed you and held its place whenever it was unsure. You ended in ${input.endingLocation}.`,
       suggestion: null,
       health: 'occasional_holds',
       tone: 'good',
@@ -195,7 +209,10 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
 
   return {
     headline: 'CandidCue stayed with you',
-    detail: `Speech was detected and the stage followed for the whole take. You ended in ${input.endingLocation}.`,
+    detail:
+      input.followingShare >= 0.98
+        ? `Speech was detected and the stage followed for the whole take. You ended in ${input.endingLocation}.`
+        : `Speech was detected and the stage followed almost all of the take. You ended in ${input.endingLocation}.`,
     suggestion: null,
     health: 'steady',
     tone: 'good',

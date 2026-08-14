@@ -47,9 +47,17 @@ function heading(id: string, title: string, start: number, end: number, children
 }
 
 /*
- * A small script: an intro, then a "Pricing" section with two sentences, then
- * a "Demo" section. Token spans are contiguous so "inside a sentence" and
- * "inside a heading" are both reachable.
+ * A small script, with an outline shaped the way the COMPILER shapes one.
+ *
+ * This matters more than it looks. `compile.ts` gives every outline node the
+ * whole section beneath it — `endTokenIndex` runs to the token before the next
+ * heading, not to the end of the heading's own words — and widens a parent
+ * across its children. An earlier version of this fixture invented narrow
+ * heading spans (20–21, 50–51), which is not a shape the compiler can produce,
+ * and it hid a resolver bug that collapsed every start point in the product to
+ * the top of its section.
+ *
+ * So: "Opening" spans 0–19, "Pricing" spans 20–49, "Demo" spans 50–60.
  */
 const INPUT: SnapInput = {
   sentences: [
@@ -60,9 +68,23 @@ const INPUT: SnapInput = {
     sentence('s5', 52, 60, 'let me show you the new dashboard'),
   ],
   outline: [
-    heading('h1', 'Pricing', 20, 21),
-    heading('h2', 'Demo', 50, 51),
+    heading('h0', 'Opening', 0, 19),
+    heading('h1', 'Pricing', 20, 49),
+    heading('h2', 'Demo', 50, 60),
   ],
+  totalTokens: 61,
+};
+
+/**
+ * The other shape the compiler really produces: a script with NO headings gets
+ * one synthetic node spanning the entire document.
+ *
+ * Under the old rule this made every request collapse to token 0 — the feature
+ * silently did nothing at all for anybody who wrote without headings.
+ */
+const NO_HEADINGS: SnapInput = {
+  sentences: INPUT.sentences,
+  outline: [heading('synthetic', '', 0, 60)],
   totalTokens: 61,
 };
 
@@ -111,6 +133,32 @@ describe('snapToStart', () => {
     // Quoting the opening words back at somebody who did not ask for a section
     // is more confusing than saying "the beginning".
     expect(snapToStart(3, INPUT).kind).toBe('beginning');
+  });
+
+  it('snaps to a sentence on a script with no headings at all', () => {
+    /*
+     * The compiler gives such a script ONE synthetic node spanning everything,
+     * so any rule that asks "is the target inside this heading" answers yes
+     * everywhere and sends every start point back to token 0.
+     */
+    const point = snapToStart(40, NO_HEADINGS);
+    expect(point.tokenIndex).toBe(35);
+    expect(point.kind).toBe('sentence');
+  });
+
+  it('is not fooled by a section span that covers the whole section', () => {
+    // Token 40 is inside "Pricing" (20–49) and inside sentence s4 (35–49). The
+    // sentence is the unit the presenter pointed at.
+    const point = snapToStart(40, INPUT);
+    expect(point.tokenIndex).toBe(35);
+    expect(point.kind).toBe('sentence');
+  });
+
+  it('opens on the heading when the target is above its first sentence', () => {
+    // Tokens 20 and 21 are the heading's own words: after "Pricing" starts and
+    // before s3 begins at 22.
+    expect(snapToStart(21, INPUT).kind).toBe('section');
+    expect(snapToStart(21, INPUT).tokenIndex).toBe(20);
   });
 
   it('clamps a request past the end instead of launching into nothing', () => {

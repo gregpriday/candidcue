@@ -91,18 +91,34 @@ export function snapToStart(token: number, input: SnapInput): StartPoint {
   const target = Math.min(Math.floor(token), Math.max(0, totalTokens - 1));
 
   /*
-   * A heading wins over the sentence beneath it when the request lands inside
-   * the heading's own tokens. "Present from this section" must open on the
-   * section, not on its first body sentence, or the presenter loses the line
-   * that tells them where they are.
+   * WHICHEVER UNIT STARTS LATER IS THE ONE THE TARGET IS INSIDE.
+   *
+   * This is not the obvious rule, and the obvious one is wrong. An
+   * `OutlineNode` does NOT span a heading's own words: `compile.ts` gives every
+   * node the whole section beneath it, up to the next heading, and widens a
+   * parent across its children. A script with no headings at all gets ONE
+   * synthetic "Script" node spanning the entire document.
+   *
+   * So "is the target inside this heading's range" is true almost everywhere,
+   * and using it collapsed every start point to the top of its section — or,
+   * on a script without headings, to token zero, which silently turned the
+   * whole feature off. Comparing STARTS instead asks the question that actually
+   * distinguishes them: if the heading begins after the last sentence did, the
+   * target is in the gap between the heading and its first body sentence, which
+   * is exactly when the section is the right unit to open on.
    */
   const headings = flattenOutline(input.outline);
   const heading = lastAtOrBefore(headings, target, (n) => n.startTokenIndex);
-  if (heading && target <= heading.endTokenIndex && heading.startTokenIndex <= target) {
+  const sentence = lastAtOrBefore(sentences, target, (s) => s.startTokenIndex);
+
+  if (
+    heading !== null &&
+    heading.title.trim() !== '' &&
+    (sentence === null || heading.startTokenIndex > sentence.startTokenIndex)
+  ) {
     return { tokenIndex: heading.startTokenIndex, kind: 'section', label: heading.title };
   }
 
-  const sentence = lastAtOrBefore(sentences, target, (s) => s.startTokenIndex);
   if (sentence === null) return beginning();
 
   // Starting at the first sentence of the document IS starting at the

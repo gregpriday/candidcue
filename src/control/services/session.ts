@@ -112,7 +112,25 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
     options.onSnapshot(snapshot);
   });
 
-  void startAlignment(generation, compiled).catch((error) => {
+  /*
+   * The engine is installed asynchronously, and positions must wait for it.
+   *
+   * `start_alignment` awaits a database-backed language lookup before it
+   * installs the engine, while `set_alignment_position` returns `Ok(())`
+   * whether or not there is a session to position — it simply does nothing when
+   * there is not. So a `moveTo` issued in the same tick as the driver was built
+   * reached Rust, reported success, and was dropped on the floor.
+   *
+   * That was invisible until takes could start somewhere other than the top:
+   * the opening anchor is issued immediately, so a take asked to begin at a
+   * section left the aligner searching from token zero while the glass showed
+   * the section — and the most likely outcome is a confident relocation
+   * BACKWARDS to a similar-sounding opening.
+   *
+   * Every `moveTo` waits on this, not just the opening one: an operator who
+   * steps a sentence in the first moments of a take had the same race.
+   */
+  const alignmentReady = startAlignment(generation, compiled).catch((error) => {
     // A take with no alignment still records and still shows the script; it
     // simply does not follow. Failing the whole take here would be worse.
     console.warn('alignment failed to start', error);
@@ -131,11 +149,15 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
   function moveTo(tokenIndex: number): void {
     if (disposed) return;
     trace('align-cmd', `move to token ${tokenIndex}`);
-    void setAlignmentPosition(tokenIndex).catch(() => {
-      // The move did not land. The presenter will see the display stay where
-      // it was, which is the honest outcome — better than a UI that claims a
-      // position the engine never adopted.
-    });
+    // `disposed` is re-checked after the wait: the take can end between a move
+    // being asked for and the engine being ready to hear it.
+    void alignmentReady
+      .then(() => (disposed ? undefined : setAlignmentPosition(tokenIndex)))
+      .catch(() => {
+        // The move did not land. The presenter will see the display stay where
+        // it was, which is the honest outcome — better than a UI that claims a
+        // position the engine never adopted.
+      });
   }
 
   return {

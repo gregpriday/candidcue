@@ -3,6 +3,8 @@ import {
   shouldVirtualize,
   computeOffsets,
   computeWindow,
+  seedScrollForToken,
+  DEFAULT_OVERSCAN_PX,
   VIRTUALIZATION_BLOCK_THRESHOLD,
 } from './virtualization';
 
@@ -64,5 +66,65 @@ describe('stage virtualization (spec §51.3)', () => {
   it('handles an empty document', () => {
     const win = computeWindow(computeOffsets([], 0, 0), 0, 500, 200);
     expect(win).toEqual({ startIndex: 0, endIndex: 0, leadingSpacePx: 0, trailingSpacePx: 0 });
+  });
+});
+
+/**
+ * Seeding the window for a far-down opening (CCUX-014).
+ *
+ * The window is computed from `scrollY`, which starts at zero, and the stage
+ * can only measure what it rendered. So a take asked to open part-way down a
+ * long script found no measured token at its opening index, correctly refused
+ * to place against a top-of-document map, and revealed at the top — the feature
+ * silently failing on exactly the long scripts it exists for.
+ *
+ * The arithmetic lives here rather than in the component because jsdom lays
+ * nothing out: a component test could prove the effect ran and nothing about
+ * where it landed. What the RENDERED result looks like is case A8 of the
+ * real-rig protocol, and is not claimed by this file.
+ */
+describe('seedScrollForToken', () => {
+  /** Ten blocks, twenty tokens and 500px each. Offsets are cumulative tops. */
+  const blocks = Array.from({ length: 10 }, (_, i) => ({
+    startTokenIndex: i * 20,
+    endTokenIndex: i * 20 + 19,
+  }));
+  const offsets = Array.from({ length: 11 }, (_, i) => i * 500);
+  const VH = 900;
+  const MAX = 5000 - VH;
+
+  it('lands the target block inside the window', () => {
+    // Token 125 is in block 6 (120–139), whose top is 3000.
+    const seed = seedScrollForToken(blocks, offsets, 125, VH, MAX);
+    expect(seed).not.toBeNull();
+    // Above the block by a third of a viewport, so the row is inside the
+    // window rather than on its very edge.
+    expect(seed).toBeCloseTo(3000 - VH / 3, 5);
+    // And the block really is within the rendered window from there.
+    const w = computeWindow(offsets, seed!, VH, DEFAULT_OVERSCAN_PX);
+    expect(w.startIndex).toBeLessThanOrEqual(6);
+    expect(w.endIndex).toBeGreaterThan(6);
+  });
+
+  it('never seeds past the end of the document', () => {
+    const seed = seedScrollForToken(blocks, offsets, 199, VH, MAX);
+    expect(seed).toBeLessThanOrEqual(MAX);
+    expect(seed).toBeGreaterThanOrEqual(0);
+  });
+
+  it('never seeds above the top', () => {
+    // An early token would put the biased seed negative.
+    expect(seedScrollForToken(blocks, offsets, 5, VH, MAX)).toBe(0);
+  });
+
+  it('declines rather than guessing when there is nothing to seed', () => {
+    // Leaving the scroll alone is right: jumping somewhere arbitrary would be
+    // worse than opening at the top, which is at least a place in the script.
+    expect(seedScrollForToken(blocks, offsets, 0, VH, MAX)).toBeNull();
+    expect(seedScrollForToken(blocks, offsets, -1, VH, MAX)).toBeNull();
+    expect(seedScrollForToken(blocks, offsets, Number.NaN, VH, MAX)).toBeNull();
+    // A token past every block — a stale index from a longer revision.
+    expect(seedScrollForToken(blocks, offsets, 9999, VH, MAX)).toBeNull();
+    expect(seedScrollForToken([], [], 100, VH, MAX)).toBeNull();
   });
 });

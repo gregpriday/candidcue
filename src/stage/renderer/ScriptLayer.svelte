@@ -90,6 +90,7 @@
     computeOffsets,
     computeWindow,
     estimateBlockHeightPx,
+    seedScrollForToken,
     DEFAULT_OVERSCAN_PX,
   } from './virtualization';
   import { segmentText, stageFontStack } from './text';
@@ -1239,6 +1240,45 @@
 
   // Recompute the window in ~400px buckets so scrolling doesn't thrash it.
   let scrollBucket = $state(0);
+
+  /**
+   * SEED THE VIRTUAL WINDOW FOR A FAR-DOWN OPENING (CCUX-014).
+   *
+   * ---------------------------------------------------------------------------
+   * WITHOUT THIS, "PRESENT FROM HERE" IS BROKEN ON EXACTLY THE SCRIPTS IT IS FOR
+   * ---------------------------------------------------------------------------
+   * Above 300 blocks only the window around `scrollY` is rendered, and `scrollY`
+   * starts at zero. Measurement can only see rendered `[data-t]` nodes, so for
+   * an opening token further down the document:
+   *
+   *   - `firstSpokenRowCentre` finds no token at or after it and returns null;
+   *   - `map.covers(openingTokenIndex)` correctly refuses the top-of-document
+   *     map, because answering from it would be a guess wearing a
+   *     measurement's clothes;
+   *   - so no opening target is ever armed, and the stage reveals at the top.
+   *
+   * Neither guard is wrong — the missing piece is that nothing ever rendered
+   * the region being asked for. The estimated offsets are enough to put the
+   * window in the right place; `placeOpeningPosition` then refines to the real
+   * measured position, instantly, once the ink is on the glass.
+   *
+   * Runs once per opening. `openingHandedOver` is the same latch the placement
+   * uses, so a presenter who has begun reading is never yanked by a late seed.
+   */
+  let seededForToken = $state(-1);
+  $effect(() => {
+    if (!virtual || openingTokenIndex <= 0 || openingHandedOver) return;
+    if (seededForToken === openingTokenIndex) return;
+    // Estimated heights are enough; this only has to land in the right region.
+    // The arithmetic lives in `virtualization.ts` so it can be tested without a
+    // laid-out document — jsdom measures nothing, so a component test here
+    // would prove only that the effect ran.
+    const seed = seedScrollForToken(performanceBlocks, offsets, openingTokenIndex, vh, maxScroll);
+    if (seed === null) return;
+    seededForToken = openingTokenIndex;
+    scrollY = seed;
+    scrollBucket = Math.round(scrollY / 400);
+  });
   const renderWindow = $derived.by(() => {
     if (!virtual) {
       return {

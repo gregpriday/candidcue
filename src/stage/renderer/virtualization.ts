@@ -118,3 +118,54 @@ export function computeWindow(
   const trailingSpacePx = Math.max(0, total - (offsets[end] ?? total));
   return { startIndex: start, endIndex: end, leadingSpacePx, trailingSpacePx };
 }
+
+/**
+ * Where to put the scroll plane so a given token is inside the rendered window
+ * (CCUX-014).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A SEED IS NEEDED AT ALL
+ * ---------------------------------------------------------------------------
+ * The window is computed from `scrollY`, and `scrollY` starts at zero. Above
+ * the block threshold only that window is rendered, and the stage can only
+ * MEASURE what it rendered — so a take asked to open part-way down a long
+ * script found no measured token at its opening index, correctly refused to
+ * place against a top-of-document map, and revealed at the top instead. The
+ * guards were right; nothing had rendered the region being asked about.
+ *
+ * Estimated block offsets are enough to fix that: they only have to land the
+ * window in the right region, after which the real measurement arrives and the
+ * opening placement refines to the exact row.
+ *
+ * Returns null when there is nothing sensible to seed — a token at or before
+ * the start, or a document whose blocks do not reach it — so the caller leaves
+ * the scroll alone rather than jumping somewhere arbitrary.
+ */
+export function seedScrollForToken(
+  blocks: readonly { startTokenIndex?: number; endTokenIndex?: number }[],
+  offsets: readonly number[],
+  tokenIndex: number,
+  viewportHeightPx: number,
+  maxScrollPx: number,
+): number | null {
+  if (!Number.isFinite(tokenIndex) || tokenIndex <= 0) return null;
+  if (offsets.length === 0) return null;
+
+  const index = blocks.findIndex((b) => {
+    const end = b.endTokenIndex ?? b.startTokenIndex;
+    return end !== undefined && end >= tokenIndex;
+  });
+  if (index < 0) return null;
+
+  const at = offsets[index];
+  if (at === undefined || !Number.isFinite(at)) return null;
+
+  /*
+   * Biased ABOVE the block by a third of a viewport, so the target row lands
+   * inside the window rather than on its very edge — the overscan then covers
+   * the rest. Landing it exactly at the top edge would put the row one
+   * estimation error away from being outside the render again, and the estimate
+   * is by construction approximate.
+   */
+  return Math.max(0, Math.min(at - viewportHeightPx / 3, Math.max(0, maxScrollPx)));
+}
