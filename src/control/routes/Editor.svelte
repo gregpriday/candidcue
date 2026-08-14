@@ -604,6 +604,7 @@ import type { PresentationMode } from '../services/settings-types';
    * present microphone as missing on some restarts.
    */
   async function readinessNow(requested = false): Promise<ReadinessVerdict> {
+    const scriptFactsKnown = isCompileSettledForScript(scriptId, $editor, $compiled);
     const audio = $settings.audio;
     const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
 
@@ -633,8 +634,23 @@ import type { PresentationMode } from '../services/settings-types';
       modelSupported: modelReady.supported,
       pinnedMicLabel,
       pinnedMicAvailable,
-      spokenWordCount: wordCount,
-      blockingDiagnostics: blockingCount,
+      /*
+       * SCRIPT FACTS ONLY WHEN THE COMPILE HAS SETTLED.
+       *
+       * `wordCount` and `blockingCount` come off the EDITOR's compile, which is
+       * debounced against typing. Mid-compile there is no result, so both read
+       * zero — and a zero word count is a BLOCKING finding. Reading them
+       * unconditionally would refuse to present a perfectly good script for as
+       * long as somebody had recently typed in it, which is a regression on
+       * behaviour that has always worked.
+       *
+       * Optimistic when unsettled, and safe to be: `startTake` compiles again
+       * from the saved source and throws on a blocking diagnostic itself, so
+       * the only thing skipping these costs is the chance to say so a moment
+       * earlier.
+       */
+      spokenWordCount: scriptFactsKnown ? wordCount : 1,
+      blockingDiagnostics: scriptFactsKnown ? blockingCount : 0,
       destinationMismatch: $takeDestination?.mismatch ?? null,
       requested,
     });

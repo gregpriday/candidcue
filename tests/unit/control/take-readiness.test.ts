@@ -158,6 +158,37 @@ describe('resolveReadiness', () => {
   });
 });
 
+describe('the sheet cannot become a gate', () => {
+  /*
+   * The regression this guards is specific and was real: `wordCount` comes off
+   * the EDITOR's debounced compile, and mid-compile it reads zero — which is a
+   * BLOCKING finding. Wired unconditionally, that refuses to present a
+   * perfectly good script for as long as somebody had recently typed in it.
+   *
+   * The caller now passes optimistic values while the compile is unsettled.
+   * These assert the property that makes that safe: only a KNOWN-empty script
+   * blocks, and a script with words never does.
+   */
+  it('blocks only on a script known to be empty', () => {
+    expect(resolveReadiness(ready({ spokenWordCount: 1 })).blocked).toBe(false);
+    expect(resolveReadiness(ready({ spokenWordCount: 0 })).blocked).toBe(true);
+  });
+
+  it('never blocks a healthy take for any device or display condition', () => {
+    // Everything else on this surface is launch-past-able by construction.
+    for (const modelInstalled of [true, false]) {
+      for (const pinnedMicAvailable of [true, false]) {
+        for (const destinationMismatch of [null, { title: 'x', suggestion: 'y' }]) {
+          const verdict = resolveReadiness(
+            ready({ modelInstalled, pinnedMicLabel: 'Mic', pinnedMicAvailable, destinationMismatch }),
+          );
+          expect(verdict.blocked, JSON.stringify({ modelInstalled, pinnedMicAvailable })).toBe(false);
+        }
+      }
+    }
+  });
+});
+
 describe('summariseReadiness', () => {
   it('says what is true rather than counting rows', () => {
     // "2 issues" makes somebody count, and the count is not the decision.
