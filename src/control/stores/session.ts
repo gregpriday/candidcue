@@ -3998,7 +3998,7 @@ const PAUSED_MANUAL_LABEL = 'Paused — the script stays where it is';
  * was never opened and a wake word that nothing is listening for.
  */
 export const liveStatusLabel = derived(state, (s): string => {
-  if (!s.active) return s.summary ? 'Session complete' : 'Ready to start';
+  if (!s.active) return s.summary ? 'Take complete' : 'Ready to start';
   const voice = s.mode === 'voice';
   if (voice) {
     if (s.connection === 'offline') return 'Disconnected — voice following has stopped';

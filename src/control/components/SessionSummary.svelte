@@ -39,7 +39,9 @@
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
   import { formatClock } from '../lib/format';
+  import Disclosure from './Disclosure.svelte';
   import { sessionModeLabel } from '../../shared/take-vocabulary';
+  import { FOLLOW_HEALTH_LABELS, resolveTakeOutcome } from '../lib/take-outcome';
 
   /*
    * Dismissal is a plain close, because the screen behind this dialog is
@@ -72,6 +74,30 @@
     clearSession();
     if (scriptId !== null) await startTake(scriptId);
   }
+
+  /**
+   * The conclusion, drawn once (CCUX-006).
+   *
+   * The measurements below it are unchanged and still exact — support and QA
+   * need every one, and several exist because a specific failure was invisible
+   * without them. What changed is that the presenter is no longer the one
+   * expected to derive "did it hear me, and did it follow" from nineteen rows
+   * while standing up from a camera.
+   */
+  const outcome = $derived(
+    $session.summary === null
+      ? null
+      : resolveTakeOutcome({
+          mode: $session.summary.mode,
+          wordsHeard: $session.summary.wordsHeard,
+          wordsInFlight: $session.summary.wordsInFlight,
+          followingShare: $session.summary.followingShare,
+          reconnects: $session.summary.reconnects,
+          manualJumps: $session.summary.manualJumps,
+          durationSeconds: $session.summary.durationSeconds,
+          endingLocation: $session.summary.endingLocation,
+        }),
+  );
 </script>
 
 <!--
@@ -89,11 +115,65 @@
 -->
 <Dialog
   open={!$session.active && $session.summary !== null && !coverIsUp($presentingPhase)}
-  title="Session complete"
+  title="Take complete"
   onclose={dismiss}
 >
   {#if $session.summary}
     {@const summary = $session.summary}
+
+    <!--
+      THE ANSWER, ABOVE THE EVIDENCE (CCUX-006).
+
+      Nothing here judges the delivery, and it must stay that way: CandidCue can
+      report whether it heard and whether it followed, and the two lanes that
+      would bear on how the take went are documented as incomplete. Praise would
+      be an invented measurement.
+    -->
+    {#if outcome}
+      <div class="outcome {outcome.tone}">
+        <p class="outcome-headline">{outcome.headline}</p>
+        <p class="outcome-detail">{outcome.detail}</p>
+        {#if outcome.suggestion}
+          <p class="outcome-suggestion">{outcome.suggestion}</p>
+        {/if}
+      </div>
+
+      <!--
+        The five facts a presenter actually reads, in front of the disclosure.
+        Everything else is instrumentation.
+      -->
+      <dl class="take-facts">
+        <dt>Duration</dt>
+        <dd>{formatClock(summary.durationSeconds)}</dd>
+        <dt>Mode</dt>
+        <dd>{sessionModeLabel(summary.mode)}</dd>
+        <dt>Ended in</dt>
+        <dd>{summary.endingLocation}</dd>
+        <dt>Following</dt>
+        <dd>{FOLLOW_HEALTH_LABELS[outcome.health]}</dd>
+        {#if summary.transcriptSaved || summary.transcriptPartial}
+          <!--
+            Shown only when there IS a transcript to account for. "Not saved" on
+            every take of a product whose default is not to save reports a
+            setting working correctly as though it were an outcome.
+          -->
+          <dt>Transcript</dt>
+          <dd>
+            {summary.transcriptPartial ? 'Partly saved — some of it could not be written' : 'Saved'}
+          </dd>
+        {/if}
+      </dl>
+    {/if}
+
+    <!--
+      EVERY ORIGINAL ROW, INTACT (CCUX-007).
+
+      Collapsed, not culled. These are the numbers that separate "the aligner
+      lost you" from "the aligner followed you and the glass discarded every
+      update" — unrelated faults with one symptom — and a support request is
+      unanswerable without them.
+    -->
+    <Disclosure label="Take details">
     <dl class="summary-grid">
       <dt>Duration</dt>
       <dd>{formatClock(summary.durationSeconds)}</dd>
@@ -251,6 +331,7 @@
             : 'Not saved'}
       </dd>
     </dl>
+    </Disclosure>
   {/if}
 
   {#snippet footer()}
@@ -298,5 +379,75 @@
     font-weight: 600;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * The outcome card (CCUX-006).
+   *
+   * It carries the conclusion, so it is the one element on this dialog with any
+   * weight. The tones are deliberately restrained — `attention` is warm rather
+   * than red, because "following needed help" and "the connection dropped" are
+   * conditions to understand, not failures to be alarmed by, and the product's
+   * whole posture is that holding is the system working.
+   */
+  .outcome {
+    position: relative;
+    padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+    margin-bottom: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
+  /* Inset bar, never a one-sided border on a rounded box. */
+  .outcome::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: var(--space-3);
+    bottom: var(--space-3);
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--text-faint);
+  }
+  .outcome.good::before {
+    background: var(--success);
+  }
+  .outcome.attention::before {
+    background: var(--accent);
+  }
+  .outcome-headline {
+    margin: 0;
+    font-size: var(--text-base);
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+  .outcome-detail {
+    margin: var(--space-1) 0 0;
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+  .outcome-suggestion {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+
+  .take-facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-1) var(--space-5);
+    margin: 0 0 var(--space-3);
+  }
+  .take-facts dt {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .take-facts dd {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
   }
 </style>

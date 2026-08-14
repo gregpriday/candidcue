@@ -613,7 +613,7 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
    * by App rather than by the route it came from, which is what lets those two
    * be true at once.
    */
-  const summary = page.getByRole('dialog', { name: 'Session complete' });
+  const summary = page.getByRole('dialog', { name: 'Take complete' });
   await expect(summary).toBeVisible();
   // The cover must be DOWN: it sits above the dialog host at z-index 9999, so a
   // summary shown while it is up is a summary nobody can see.
@@ -687,7 +687,7 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
    * button most people press.
    */
   await page.getByRole('button', { name: 'Back to the script' }).click();
-  await expect(page.getByRole('dialog', { name: 'Session complete' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Take complete' })).toHaveCount(0);
   await expect(
     page.locator('.cm-content').getByText('Thank you for joining me today.'),
   ).toBeVisible();
@@ -720,11 +720,11 @@ test('Present again starts a second take of the same script from the summary', a
 
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Session complete' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Take complete' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Present again' }).click();
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('dialog', { name: 'Session complete' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Take complete' })).toHaveCount(0);
   await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
 
   // Presented, un-presented, presented again — the pairing is what says the
