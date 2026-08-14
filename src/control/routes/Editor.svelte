@@ -38,6 +38,11 @@ import SplitButton from '../components/SplitButton.svelte';
 import { startTake, takeStarting } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
   import { startMenuItems } from '../lib/present-menu';
+  import TakeReadinessSheet from '../components/TakeReadinessSheet.svelte';
+  import { resolveReadiness, type ReadinessVerdict } from '../lib/take-readiness';
+  import { getSpeechModelStatus } from '../services/speech-models';
+  import { matchRememberedMicrophone } from '../services/audio/devices';
+  import { getVoiceFacade } from '../services/voice-facade';
   import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
   import { listSessionRecords } from '../services/session-records';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
@@ -555,6 +560,118 @@ import type { PresentationMode } from '../services/settings-types';
    * makes that choice the new default. See `StartTakeOptions.presentationMode`
    * for why an explicit choice sticks when the mid-take toggle does not.
    */
+  /* ------------------------------------------------ CCUX-013 readiness */
+
+  /**
+   * The pending launch, held while the readiness sheet is up.
+   *
+   * A healthy setup never populates this: `checkThenPresent` resolves the
+   * readiness verdict and, when it says nothing, launches without ever
+   * rendering the sheet. That is the whole design — the surface exists to be
+   * absent.
+   */
+  let readiness = $state<ReadinessVerdict | null>(null);
+  let pendingLaunch: { mode?: PresentationMode; startTokenIndex?: number } | null = null;
+
+  /**
+   * Whether the speech model is there, refreshed when the editor opens.
+   *
+   * Optimistic defaults: an unknown model status must never invent a warning
+   * over a take that would have been fine. The take path itself reports a
+   * genuinely missing model from the stage regardless.
+   */
+  let modelReady = $state({ installed: true, supported: true });
+
+  $effect(() => {
+    void getSpeechModelStatus()
+      .then((status) => {
+        modelReady = { installed: status.installed, supported: status.supported };
+      })
+      .catch(() => {
+        // Unknown stays optimistic. See above.
+      });
+  });
+
+  /**
+   * Resolve the readiness verdict, enumerating microphones as `startTake` does.
+   *
+   * Async because the device list is the only fact here that has to be fetched,
+   * and it must be fetched the SAME way the take path fetches it — through
+   * `matchRememberedMicrophone`, which matches on id and falls back to the
+   * remembered label, because WKWebView salts device ids per origin and a
+   * replug can change them. Comparing raw ids here would report a perfectly
+   * present microphone as missing on some restarts.
+   */
+  async function readinessNow(requested = false): Promise<ReadinessVerdict> {
+    const audio = $settings.audio;
+    const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
+
+    let pinnedMicLabel: string | null = null;
+    let pinnedMicAvailable = true;
+    if (pinned !== undefined) {
+      pinnedMicLabel = audio.preferredDeviceLabel ?? pinned;
+      try {
+        const devices = await getVoiceFacade().listMicrophones();
+        pinnedMicAvailable =
+          matchRememberedMicrophone(devices, {
+            deviceId: pinned,
+            ...(audio.preferredDeviceLabel === undefined
+              ? {}
+              : { label: audio.preferredDeviceLabel }),
+          }) !== null;
+      } catch {
+        // Enumeration failed, so absence is not proven. `start-take.ts` honours
+        // the pin in exactly this case; accusing the hardware would be worse.
+        pinnedMicAvailable = true;
+      }
+    }
+
+    return resolveReadiness({
+      voiceTake: $settings.general.defaultSessionMode === 'voice',
+      modelInstalled: modelReady.installed,
+      modelSupported: modelReady.supported,
+      pinnedMicLabel,
+      pinnedMicAvailable,
+      spokenWordCount: wordCount,
+      blockingDiagnostics: blockingCount,
+      destinationMismatch: $takeDestination?.mismatch ?? null,
+      requested,
+    });
+  }
+
+  /**
+   * Present, unless there is something the presenter has to know first.
+   *
+   * The immediate-launch rule is load-bearing: on a healthy familiar setup this
+   * is exactly the old behaviour, one click, no sheet. Anything else and the
+   * launch is held rather than cancelled — `pendingLaunch` keeps the mode and
+   * start point so "Start anyway" resumes precisely the take that was asked
+   * for, not a default one.
+   */
+  async function checkThenPresent(
+    mode?: PresentationMode,
+    startTokenIndex?: number,
+  ): Promise<void> {
+    const verdict = await readinessNow();
+    if (!verdict.show) {
+      await present(mode, startTokenIndex);
+      return;
+    }
+    pendingLaunch = { ...(mode === undefined ? {} : { mode }), ...(startTokenIndex === undefined ? {} : { startTokenIndex }) };
+    readiness = verdict;
+  }
+
+  function dismissReadiness(): void {
+    readiness = null;
+    pendingLaunch = null;
+  }
+
+  async function startAnyway(): Promise<void> {
+    const launch = pendingLaunch;
+    dismissReadiness();
+    await present(launch?.mode, launch?.startTokenIndex);
+  }
+
   async function present(mode?: PresentationMode, startTokenIndex?: number): Promise<void> {
     await saveNow();
     await startTake(scriptId, {
@@ -633,7 +750,7 @@ import type { PresentationMode } from '../services/settings-types';
         lastEndingLabel: lastEndingPoint === null ? null : lastEndingPoint.label,
         markers: takeMarkers.map((t) => ({ id: t.id, label: t.label, tokenIndex: t.tokenIndex })),
       },
-      (tokenIndex) => void present(undefined, tokenIndex),
+      (tokenIndex) => void checkThenPresent(undefined, tokenIndex),
     ),
   );
 
@@ -646,7 +763,15 @@ import type { PresentationMode } from '../services/settings-types';
    */
   const presentModeItems = $derived([
     ...presentStartItems,
-    ...presentMenuItems($settings.stage.presentationMode, (mode) => void present(mode)),
+    ...presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+    {
+      label: 'Review take setup…',
+      description: 'Check the model, microphone and display before opening the stage.',
+      onselect: () => {
+        pendingLaunch = {};
+        void readinessNow(true).then((verdict) => (readiness = verdict));
+      },
+    },
   ]);
 
   /*
@@ -1077,6 +1202,12 @@ import type { PresentationMode } from '../services/settings-types';
   }
 </script>
 
+<!--
+  Only ever mounted; almost never open (CCUX-013). `resolveReadiness` returns
+  `show: false` for every healthy familiar setup, which is the design.
+-->
+<TakeReadinessSheet verdict={readiness} onstart={() => void startAnyway()} onclose={dismissReadiness} />
+
 <div class="page">
   {#if opening}
     <!--
@@ -1155,7 +1286,7 @@ import type { PresentationMode } from '../services/settings-types';
             menuLabel="How to present"
             disabled={$takeStarting}
             items={presentModeItems}
-            onclick={() => void present()}
+            onclick={() => void checkThenPresent()}
           />
           {#if $takeDestination}
             {@const destination = $takeDestination}
