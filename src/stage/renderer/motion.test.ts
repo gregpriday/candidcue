@@ -26,7 +26,6 @@ describe('transition classification (spec §32.3, §16.3)', () => {
   it('catches up on explicit jumps within two viewport heights', () => {
     for (const decision of [
       'jumpForwardAccepted',
-      'retakeAccepted',
       'relocationAccepted',
       'manualAnchor',
     ] as const) {
@@ -50,6 +49,59 @@ describe('transition classification (spec §32.3, §16.3)', () => {
         reducedMotion: false,
       }),
     ).toBe('fade_jump');
+  });
+
+  /* ------------------------------------------------------------------ §30.5 --
+   * An accepted retake is a walk at every distance.
+   *
+   * The presenter has restarted an earlier phrase and is saying it out loud. The
+   * script coming back to meet them IS the information; a fade and a cut hides
+   * the one move they can actually follow with their eye, and the further back
+   * they went the worse that trade gets. There is no length at which this
+   * becomes a teleport.
+   */
+  describe('an accepted retake (§30.5)', () => {
+    it('is a guided rewind at any distance, near or a whole document away', () => {
+      for (const distancePx of [0, 40, 400, 1900, 2100, 4000, 40_000]) {
+        expect(
+          classifyTransition({
+            decision: 'retakeAccepted',
+            distancePx,
+            viewportHeightPx: 1000,
+            reducedMotion: false,
+          }),
+        ).toBe('smooth_rewind');
+      }
+    });
+
+    it('is not recaptured by the fade threshold at any pitch', () => {
+      // The generic branch narrows with the pitch (see below). A retake never
+      // reaches it, so no type size can turn one into a cut.
+      for (const linePitchPx of [20, 48, 86, 150, 320]) {
+        expect(
+          classifyTransition({
+            decision: 'retakeAccepted',
+            distancePx: 3000,
+            viewportHeightPx: 600,
+            reducedMotion: false,
+            linePitchPx,
+          }),
+        ).toBe('smooth_rewind');
+      }
+    });
+
+    it('still yields to reduced motion, which is the one documented exception', () => {
+      // §32.4. Somebody who has asked their system not to animate is not asking
+      // for a gentler animation, and this exception may not leak the other way.
+      expect(
+        classifyTransition({
+          decision: 'retakeAccepted',
+          distancePx: 3000,
+          viewportHeightPx: 1000,
+          reducedMotion: true,
+        }),
+      ).toBe('instant');
+    });
   });
 
   it('respects reduced motion with near-instant repositioning', () => {

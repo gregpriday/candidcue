@@ -78,7 +78,12 @@ export const SMOOTH_JUMP_VIEWPORT_FACTOR = 2;
  */
 export const SMOOTH_JUMP_MAX_LINES = 24;
 
-export type TransitionClass = 'spring' | 'smooth_jump' | 'fade_jump' | 'instant';
+export type TransitionClass =
+  | 'spring'
+  | 'smooth_rewind'
+  | 'smooth_jump'
+  | 'fade_jump'
+  | 'instant';
 
 /**
  * A bound stated in lines, met by the bound the panel sets (§30).
@@ -153,6 +158,24 @@ export function classifyTransition(opts: {
   linePitchPx?: number | null;
 }): TransitionClass {
   if (opts.reducedMotion) return 'instant';
+  /*
+   * §30.5. An accepted retake is a walk at every distance, and the branch below
+   * never sees it.
+   *
+   * The threshold under this one asks "is this correction small enough to be
+   * worth showing?", which is the right question for a FORWARD jump: the text
+   * being flown past is not being spoken, so travelling it is a spectacle and
+   * the fade is a mercy. A retake inverts every term. The presenter is reading
+   * the destination out loud right now, they know what it says, and the script
+   * returning to meet them is the information rather than the wrapper around
+   * it — so the further back it is, the more they need to SEE it happen, and
+   * the worse a cut serves them. Distance changes how long the walk takes and
+   * nothing else.
+   *
+   * Placed before the generic branch rather than inside it so that no future
+   * change to the fade threshold can quietly recapture retakes.
+   */
+  if (opts.decision === 'retakeAccepted') return 'smooth_rewind';
   if (ALIGNMENT_RELOCATIONS.has(opts.decision)) {
     /*
      * This threshold decides whether a correction is SHOWN travelling or hidden

@@ -730,39 +730,46 @@ describe('forward target latch (§70.5)', () => {
       expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
     });
 
-    it('cuts to a second retake when the first one spent the reverse budget', () => {
+    it('walks to a second retake even though the first one spent the budget', () => {
       const { map, layout } = mapFor();
       const engine = makeEngine(map, layout.contentHeightPx);
       drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
 
-      // A near-budget walk, which leaves most of §30.5's travel spent.
-      retakeTo(engine, 18, 4000, 7000);
+      // A near-budget walk, which leaves most of §30.5's standing travel spent.
+      retakeTo(engine, 18, 4000, 9000);
       expect(engine.reanchorFades).toBe(0);
       expect(engine.controller.reverseTravelPx).toBeGreaterThan(budgetPx(map) * 0.5);
 
       // The presenter re-reads a little — not far enough for forward motion to
       // refund what the walk spent.
-      let t = 7000;
+      let t = 9000;
       for (let unit = 18; unit <= 26; unit += 2) {
         engine.receiveSnapshot(snapshotAt(unit, t, { rateTokensPerSecond: 3 }), t);
         for (const end = t + 700; t < end; t += 16.7) engine.frame(t);
       }
       const remainingPx = budgetPx(map) - engine.controller.reverseTravelPx;
 
-      // A second retake that fits the budget ON PAPER but not what is left of
-      // it. Walking it would park the plant above the presenter for good.
+      /*
+       * A second retake that fits the standing budget ON PAPER but not what is
+       * left of it — which is precisely the case that used to be promoted to a
+       * cut, on the reasoning that a walk would strand the plant half way. The
+       * licence is sized to the destination now, and it INCLUDES what the first
+       * walk already spent, because the controller compares it against a
+       * cumulative counter rather than against the distance remaining.
+       */
       const destinationPx = map.sampleMotionPath(6)?.scrollPx ?? 0;
       const travelPx = engine.controller.state.q - destinationPx;
       expect(travelPx).toBeLessThan(budgetPx(map));
       expect(travelPx).toBeGreaterThan(remainingPx);
 
-      retakeTo(engine, 6, t, t + 4000);
-      expect(engine.reanchorFades).toBe(1);
-      // It arrives, which is the whole reason the step exists.
+      const trace = retakeTo(engine, 6, t, t + 8000);
+      expect(engine.reanchorFades).toBe(0);
+      expect(trace.every((f) => f.documentOpacity === 1)).toBe(true);
       expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+      expect(engine.guidedRewindTimeouts).toBe(0);
     });
 
-    it('still cuts to one further back than the reverse budget can carry', () => {
+    it('walks to one much further back than the standing reverse budget', () => {
       const { map, layout } = mapFor();
       const engine = makeEngine(map, layout.contentHeightPx);
       drive(engine, { durationMs: 8000, unitsPerSecond: 12 });
@@ -770,15 +777,21 @@ describe('forward target latch (§70.5)', () => {
 
       const retakeUnit = 2;
       const destinationPx = map.sampleMotionPath(retakeUnit)?.scrollPx ?? 0;
-      expect(advanced - destinationPx).toBeGreaterThan(budgetPx(map));
+      // Several times the standing §30.5 budget: the distance that used to
+      // guarantee a fade and a teleport.
+      expect(advanced - destinationPx).toBeGreaterThan(budgetPx(map) * 2);
 
-      const trace = retakeTo(engine, retakeUnit, 8000, 11000);
+      const trace = retakeTo(engine, retakeUnit, 8000, 24_000);
 
-      // Beyond the budget a walk would strand the plant part-way, so §20.4's
-      // obscured step is the only thing that arrives.
-      expect(engine.reanchorFades).toBe(1);
-      expect(trace.some((f) => f.documentOpacity === 0)).toBe(true);
+      // Distance changed the DURATION, not the transition type.
+      expect(engine.reanchorFades).toBe(0);
+      expect(engine.latchReanchors).toBe(0);
+      expect(trace.every((f) => f.documentOpacity === 1)).toBe(true);
+      expect(trace.every((f) => !f.controllerState.includes('reanchor'))).toBe(true);
       expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+      expect(engine.guidedRewindStarts).toBe(1);
+      expect(engine.guidedRewindCompletes).toBe(1);
+      expect(engine.guidedRewindTimeouts).toBe(0);
     });
   });
 

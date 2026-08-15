@@ -225,6 +225,106 @@ export const REACQUIRE_FALLBACK_VELOCITY_PX_S = 340;
  */
 export const REACQUIRE_REVERSE_SLACK_PX = 96;
 
+/* ------------------------------------------------------------------ §30.5 --
+ * The guided rewind ceiling.
+ *
+ * A `rewind` is what an accepted retake looks like on the glass: the presenter
+ * has restarted an earlier phrase and the script walks back to meet them. It is
+ * the one correction they are watching WORD BY WORD — they are already reading
+ * the destination out loud — so the only question that matters is whether an
+ * eye can stay on the text while it moves.
+ *
+ * That is a claim about reading, so the unit is rendered LINES, exactly as it
+ * is for manual re-acquisition. What this replaces was a claim about nothing at
+ * all: the profile's `maxBackwardVelocityPxS` (600) times the rewind
+ * multiplier (0.9) is 540 px/s, which is 6.4 lines a second at the ~85 px
+ * reference pitch and over ten a second on a 50 px one. The identical setting
+ * therefore meant "a readable walk" on one rig and "the document leaving" on
+ * another, and on both it was faster than anybody reads.
+ */
+
+/**
+ * Three lines a second, deliberately BELOW the four that manual re-acquisition
+ * gets (`REACQUIRE_LINES_PER_SECOND`).
+ *
+ * A re-acquisition happens when the presenter has stopped reading and moved the
+ * script; a retake happens when they are mid-sentence and recovering their
+ * place. The second is the worse moment of the two to make somebody chase text,
+ * so it is the slower of the two ceilings, not the faster.
+ */
+export const GUIDED_REWIND_LINES_PER_SECOND = 3;
+
+/**
+ * And the viewport ceiling those three lines are met by (§30).
+ *
+ * A line-relative speed becomes a screen-relative sweep once a line is a large
+ * part of the glass: at a calibrated 300 px pitch three lines a second is
+ * 900 px/s, most of a 1080 px stage every second. Roughly a third of the glass
+ * per second is the point past which "the script walking back" stops being
+ * something anybody reads, however few lines it happens to be.
+ */
+export const GUIDED_REWIND_VIEWPORTS_PER_SECOND = 0.35;
+
+/**
+ * The same ceiling for a stage that has measured no pitch, px/s.
+ *
+ * 255 px/s is three lines at the ~85 px reference pitch, and it is the figure
+ * `resolveLineLimitPx` clamps the line-relative answer around — so a pitch that
+ * is not a size anybody chose (a font that never loaded) can move this by at
+ * most half or three times, never by the factor a raw multiplication would.
+ */
+export const GUIDED_REWIND_FALLBACK_VELOCITY_PX_S = 255;
+
+/** The reference pitch the two pixel fallbacks above are three and one line of. */
+export const GUIDED_REWIND_REFERENCE_PITCH_PX = 85;
+
+/**
+ * Slack on the backward licence a guided rewind is granted, in lines.
+ *
+ * Sized to the destination for the same reason `REACQUIRE_REVERSE_SLACK_PX` is:
+ * §30.5's standing reverse budget bounds how far ordinary tracker jitter may
+ * reverse the document, and a retake is not jitter — the engine has made an
+ * expensive semantic decision that the presenter is reading an earlier line. A
+ * licence cut exactly to the gap strands the last few pixels, because the plant
+ * brakes into the wall while still short of the target, so it carries one
+ * ordinary line of slack.
+ */
+export const GUIDED_REWIND_SLACK_LINES = 1;
+
+/**
+ * How fast a guided rewind may travel on THIS rig, px/s.
+ *
+ * The smaller of the line-relative and viewport-relative bounds — never the
+ * product, never a band around either. Both are absolute safety limits rather
+ * than preferences, so the stricter one is always the answer.
+ */
+export function guidedRewindVelocityLimitPx(
+  linePitchPx?: number | null,
+  viewportHeightPx?: number | null,
+): number {
+  const lineRelative = resolveLineLimitPx(
+    GUIDED_REWIND_LINES_PER_SECOND,
+    GUIDED_REWIND_FALLBACK_VELOCITY_PX_S,
+    linePitchPx,
+  );
+  const viewportRelative =
+    typeof viewportHeightPx === 'number' &&
+    Number.isFinite(viewportHeightPx) &&
+    viewportHeightPx > 0
+      ? viewportHeightPx * GUIDED_REWIND_VIEWPORTS_PER_SECOND
+      : Number.POSITIVE_INFINITY;
+  return Math.min(lineRelative, viewportRelative);
+}
+
+/** One rendered line of slack on the reverse licence, px. */
+export function guidedRewindSlackPx(linePitchPx?: number | null): number {
+  return resolveLineLimitPx(
+    GUIDED_REWIND_SLACK_LINES,
+    GUIDED_REWIND_REFERENCE_PITCH_PX,
+    linePitchPx,
+  );
+}
+
 export interface MotionLimitOptions {
   reducedMotion?: boolean;
   /** §61: the frame budget is being missed; simplify rather than jump. */
@@ -257,6 +357,25 @@ export interface MotionLimitOptions {
    * Omitted or non-finite leaves the profile's standing §30.5 budget alone.
    */
   reacquireReverseBudgetPx?: number;
+  /**
+   * Total backward travel the guided rewind episode in force is authorized to
+   * spend, px — the same ABSOLUTE, already-inclusive-of-what-is-spent licence
+   * `reacquireReverseBudgetPx` is, for the same reason.
+   *
+   * Read only while `transition` is `rewind`. Omitted or non-finite leaves the
+   * profile's standing §30.5 budget alone, which is what every caller that does
+   * not run episodes gets.
+   */
+  rewindReverseBudgetPx?: number;
+  /**
+   * The glass, CSS px — the stage's own measurement, never a setting.
+   *
+   * Supplied alongside `linePitchPx` so that a line-relative SPEED bound can be
+   * met by the viewport ceiling it needs at large type (see
+   * `guidedRewindVelocityLimitPx`). Its absence simply drops the viewport half
+   * of that pair rather than guessing at a height.
+   */
+  viewportHeightPx?: number;
   /**
    * §30.3. Fraction of the profile's catch-up boost the frame loop licenses
    * this frame — the smaller of the corridor-relative decay and the duration
@@ -491,6 +610,65 @@ export function limitsForState(
     // correction the presenter did not ask for reads as the document hunting.
     limits.zeta = limits.zeta * 1.2;
     limits.omega = limits.omega * 0.9;
+  }
+
+  if (options.transition === 'rewind' && options.reducedMotion !== true) {
+    /*
+     * §30.5, the guided rewind. See `GUIDED_REWIND_LINES_PER_SECOND`.
+     *
+     * Applied LAST and as a `min`, never as a multiplier, for the same reason
+     * the re-acquisition ceiling above is: this bounds a correction the
+     * presenter is reading through, so a state that happens to be feeling
+     * energetic may not raise it, and a profile that is already gentler than
+     * three lines a second keeps its own number. Large type can make the walk
+     * faster in PIXELS — that is what keeps it three LINES a second on every
+     * rig — and nothing can make it faster in lines.
+     *
+     * After the `manualGrace` branch on purpose: that branch zeroes both
+     * velocity budgets because nothing automatic may move while the presenter's
+     * hand is on the script, and `Math.min` with zero is zero. A rewind that
+     * arrives mid-drag still cannot move until the grace runs out.
+     *
+     * Reduced motion is exempt and keeps `snap` (§32.4): somebody who has asked
+     * their system not to animate is not asking for a gentler animation. That
+     * exception is confined to this branch — ordinary motion mode never inherits
+     * it — and is the ONE case where a retake repositions without travelling.
+     */
+    const ceilingPxS = guidedRewindVelocityLimitPx(
+      options.linePitchPx,
+      options.viewportHeightPx,
+    );
+    /*
+     * Forward as well as backward, and the asymmetry it removes is the point.
+     * The target stays live while the presenter reads on through the sentence
+     * they restarted, so it can cross the plant mid-episode; without a forward
+     * bound the document would answer that by rebounding at the profile's full
+     * 900 px/s, which is the same eye-losing flight the backward cap exists to
+     * prevent, pointing the other way. Completion (see the engine's guided
+     * rewind episode) hands ordinary forward speed straight back the moment the
+     * backward correction is genuinely over.
+     */
+    limits.vBackwardMax = Math.min(limits.vBackwardMax, ceilingPxS);
+    limits.vForwardMax = Math.min(limits.vForwardMax, ceilingPxS);
+    // Backward is the direction this exists for; the multiplier table already
+    // says so, and restating it here keeps the branch honest on its own.
+    limits.allowBackward = true;
+    /*
+     * No leading while recovering. Feed-forward is a bet on where the reader
+     * will be next, and a rewind is the stage closing a disagreement about
+     * where they are NOW. It is also what turns a live target revision into a
+     * rebound: the term survives the target crossing the plant and pushes on
+     * in the direction the episode has just finished with.
+     */
+    limits.feedForwardScale = 0;
+    // Overshoot at the end of a correction the presenter is reading through
+    // reads as the document hunting for its place. Raise the damping, never
+    // lower it — a profile that is already more overdamped keeps its own.
+    limits.zeta = Math.max(limits.zeta, 1.25);
+    const budgetPx = options.rewindReverseBudgetPx;
+    if (typeof budgetPx === 'number' && Number.isFinite(budgetPx) && budgetPx > 0) {
+      limits.reverseTravelMaxPx = Math.max(limits.reverseTravelMaxPx, budgetPx);
+    }
   }
 
   return limits;

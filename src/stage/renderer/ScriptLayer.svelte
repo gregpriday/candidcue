@@ -2840,13 +2840,15 @@
         linePitchPx: measuredLinePitchPx,
       });
       disposition =
-        cls === 'smooth_jump'
-          ? 'catch_up'
-          : cls === 'fade_jump'
-            ? 'reanchor'
-            : cls === 'instant'
-              ? 'instant'
-              : 'follow';
+        cls === 'smooth_rewind'
+          ? 'rewind'
+          : cls === 'smooth_jump'
+            ? 'catch_up'
+            : cls === 'fade_jump'
+              ? 'reanchor'
+              : cls === 'instant'
+                ? 'instant'
+                : 'follow';
     }
 
     engine.setFallbackTarget({ scrollPx: target, disposition, atMs: performance.now() });

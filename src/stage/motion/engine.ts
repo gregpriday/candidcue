@@ -41,7 +41,6 @@ import {
   alignmentDisplayRateAt,
   ALIGNMENT_RELOCATIONS,
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
-  resolveLineLimitPx,
   type AlignmentDecision,
   type AlignmentSnapshot,
   type SmoothFollowProfile,
@@ -65,6 +64,8 @@ import {
 import type { StageRenderedLineMap, VisualBlockSpan } from './lineMap';
 import { createLineHandoffPlanner, type LineHandoffPlanner, type LineTarget } from './planner';
 import {
+  guidedRewindSlackPx,
+  guidedRewindVelocityLimitPx,
   limitsForState,
   REACQUIRE_REVERSE_SLACK_PX,
   type MotionLimits,
@@ -86,8 +87,15 @@ export interface FallbackTarget {
    * How the correction should be spent. `reanchor` is the only value that
    * overwrites plant state, and only because an explicit command/manual
    * navigation produced it.
+   *
+   * `rewind` is the degraded path's accepted retake, and it enters exactly the
+   * same guided rewind policy an alignment `rewind` directive does — a visible,
+   * eye-trackable walk backward under the one persistent controller. The two
+   * paths run at the moments the presenter can least afford a difference
+   * between them (the fallback is what drives while the rendered line map is
+   * rebuilding), so a retake must not be a walk on one and a cut on the other.
    */
-  disposition: 'follow' | 'catch_up' | 'reanchor' | 'instant';
+  disposition: 'follow' | 'rewind' | 'catch_up' | 'reanchor' | 'instant';
   atMs: number;
   /**
    * How fast this target is itself moving, px/s. Optional; 0 for a target that
@@ -256,6 +264,20 @@ export interface StageMotionEngine {
    */
   readonly catchUpCapExpiries: number;
   /**
+   * §30.5 guided rewind episodes — diagnostics only.
+   *
+   * The shape a healthy retake leaves behind is `starts` and `completes` both
+   * up by one with `timeouts`, `reanchorFades` and `latchReanchors` unmoved. A
+   * timeout is not a slower success: it is the walk failing to arrive under
+   * ordinary conditions, and it means the licence was mis-sized.
+   */
+  readonly guidedRewindStarts: number;
+  readonly guidedRewindCompletes: number;
+  readonly guidedRewindCancels: number;
+  readonly guidedRewindTimeouts: number;
+  /** Times a live episode's latched licence had to grow — never shrink. */
+  readonly guidedRewindBudgetExtensions: number;
+  /**
    * §30.6. The presenter moved the script by hand and has not spoken since, so
    * manual authority stands until they do — the half of the hold that the grace
    * interval's clock cannot express.
@@ -363,6 +385,29 @@ export interface StageMotionEngine {
 const RELOCATION_MIN_TOKENS = 6;
 
 /**
+ * The same gate for an accepted RETAKE, in tokens — and it is deliberately
+ * almost nothing.
+ *
+ * `RELOCATION_MIN_TOKENS` is the stage second-guessing the engine, which is
+ * right for a forward jump: `relocationAccepted` describes a position that
+ * moved, and whether that is worth a bounded discontinuity is a question about
+ * pixels the engine cannot see. A `retakeAccepted` is not that. The alignment
+ * engine has already spent its most expensive semantic decision concluding that
+ * the presenter went BACK and started an earlier phrase again, and ordinary
+ * following is forward-only — so a retake the stage declines to license is a
+ * retake nothing on the glass can act on at all. It sits behind the §70.5
+ * forward latch until the disagreement grows past `reanchorThresholdPx` and the
+ * latch's escape hatch teleports the document, which is the outcome the whole
+ * of this file is trying to avoid.
+ *
+ * So this exists only to swallow numerical noise — a retake whose reported
+ * position is the same place the display already is. One token is under half of
+ * the ±2-token accuracy the engine benchmarks at, which is the point: the
+ * decision code is the evidence here, not the distance.
+ */
+const RETAKE_MIN_TOKENS = 1;
+
+/**
  * How long a synthesized relocation directive stays live.
  *
  * Long enough for the ~220 ms re-anchor fade plus a line-map rebuild; short
@@ -379,35 +424,14 @@ const RELOCATION_MIN_TOKENS = 6;
 const RELOCATION_TTL_MS = 1500;
 
 /**
- * How far back a retake may be FLOWN rather than stepped, in tokens — the
- * BLIND fallback, used only when the geometry cannot answer the question
- * properly (see `RewindReach`).
- *
- * A `rewind` is ordinary motion under a backward-capable profile, and ordinary
- * backward motion is hard-capped at `reverseTravelMaxPx` (420 px by default,
- * about a third of a screen) precisely so a rewind can never run away. That cap
- * makes a rewind the wrong shape for a DISTANT retake: the plant creeps back
- * its 420 px, the directive expires, and forward-only following resumes with
- * the presenter still thousands of pixels from where they restarted — stranded,
- * with nothing left that can carry them there.
- *
- * So distance decides, and the honest unit for that distance is PIXELS, because
- * the budget it is being compared against is pixels. Twelve tokens is roughly a
- * rendered line, which is somewhere between a fifth and a half of the travel a
- * rewind may actually spend — so as the only gate it sent every retake longer
- * than about a line to the obscured step, including the very common one where
- * the presenter backs up to a phrase still on the glass and would rather watch
- * the script walk back to it than have it cut. It survives as the answer for a
- * stage that has no map yet, where a token count is the only measure there is.
- */
-const REWIND_MAX_TOKENS = 12;
-
-/**
- * What a `rewind` would cost, measured on the glass (§30.5).
+ * What a `rewind` will cost, measured on the glass (§30.5).
  *
  * Only the stage can supply this — the alignment engine has no notion of a
  * pixel, and `relocationDirectiveFor` has no notion of a line map — so it is
- * handed in, and its absence falls back to `REWIND_MAX_TOKENS`.
+ * handed in. It no longer decides ANYTHING about the shape of the transition:
+ * distance changes how long a rewind takes and never what it is. What it is
+ * still needed for is sizing the licence to the journey, which is a TTL long
+ * enough to cover the travel at the speed the travel will actually run at.
  */
 export interface RewindReach {
   /** Backward travel from where the display IS to the retake point, px. */
@@ -422,35 +446,25 @@ export interface RewindReach {
    * backward afterwards.
    *
    * The grace OUTSTANDING, not the profile's whole grace interval. A retake
-   * arriving when nobody has touched the script gets no extension, which keeps
-   * the window where the document may move backward — and the §70.5 forward
-   * latch is therefore released — as short as the travel actually needs.
+   * arriving when nobody has touched the script gets no extension.
    */
   graceRemainingMs: number;
-  /**
-   * §30.5 reverse-travel budget the rewind may spend, px — what is LEFT of it,
-   * not what a fresh plant would get.
-   *
-   * The budget is cumulative and only forward motion refunds it, so a second
-   * retake before the presenter has read their way back is measured against a
-   * partly spent one. Classifying it against the full budget is how a rewind
-   * gets licensed for travel the controller will not grant: measured on a
-   * paragraph retake followed by two lines of re-reading and a second retake,
-   * the walk was licensed for 197 px with 134 px left and the plant parked
-   * 69 px — over a line — above the presenter, with forward-only following
-   * unable to close it. A re-anchor is the honest answer there, and it arrives.
-   */
-  budgetPx: number;
+  /** Measured pitch, for the line-relative half of the speed cap. Zero: unknown. */
+  linePitchPx: number;
+  /** The glass, for the viewport half of the same cap. Zero: unknown. */
+  viewportHeightPx: number;
 }
 
 /**
  * How the stage animates each kind of accepted discontinuity.
  *
- * A `retakeAccepted` the plant can walk to is a `rewind`, because backward
- * motion over a distance the presenter can see still reads as reading — they
- * watch the script return to where they restarted, which is the whole
- * information content of the move. One beyond the reverse-travel budget becomes
- * a `reanchor` (see `RewindReach`). A forward jump has no such reading to show:
+ * A `retakeAccepted` is ALWAYS a `rewind`, at every distance. The presenter has
+ * restarted an earlier phrase and is reading it out loud right now, so the
+ * script walking back to meet them is not a spectacle wrapped around the
+ * information — it IS the information, and it is the one correction they can
+ * follow with their eye because they already know what the destination says.
+ * Distance changes how long that walk takes and nothing else; there is no
+ * length at which it becomes a cut. A forward jump has no such reading to show:
  * the text between is not being spoken, so flying through it at speed is a
  * spectacle rather than information, and `catch_up` bounds it.
  */
@@ -469,63 +483,98 @@ const RELOCATION_SHAPE: Record<
 };
 
 /**
- * Can the plant WALK to this retake point, or does it have to step?
- *
- * The pixel answer whenever the stage has one: a rewind is ordinary motion, so
- * the only thing that decides whether it arrives is whether the travel fits the
- * §30.5 reverse budget it is allowed to spend. Travel that is zero or forward
- * fits trivially — a backward-capable profile never obliges the plant to move
- * backward, so a retake whose destination is already at or below the display is
- * simply followed.
- *
- * With no reach to measure against, the token proxy: about a rendered line.
- */
-function rewindFits(reach: RewindReach | null, distanceTokens: number): boolean {
-  if (!reach || !Number.isFinite(reach.travelPx) || !Number.isFinite(reach.budgetPx)) {
-    return distanceTokens <= REWIND_MAX_TOKENS;
-  }
-  return reach.travelPx <= Math.max(0, reach.budgetPx);
-}
-
-/**
  * How long a `rewind`'s backward licence has to stay open.
  *
  * A rewind is not spent in one step the way a re-anchor is — it is ordinary
  * motion under a backward-capable profile — so the DIRECTIVE has to outlive the
- * travel. While the gate was a single line, any TTL longer than the fade
- * covered it. Now that the gate is the reverse-travel budget itself, a flat
- * 1.5 s expires part-way up the far end of that budget: `allowBackward` goes
- * false with the plant still parked below the retake point, and forward-only
- * following has nothing that can bring it down again.
+ * travel, and the travel now runs at a deliberately unhurried three rendered
+ * lines a second. A licence that expires mid-walk is unrecoverable: `allowBackward`
+ * goes false with the plant still parked above the retake point, forward-only
+ * following has nothing that can bring it down again, and the directive is
+ * idempotent by `id` so no re-sent copy revives it.
  *
- * So the licence is the base TTL — which covers the jerk-limited reversal at
- * the start, including whatever forward velocity the plant is carrying — plus
- * the travel's own cruise time at the profile's backward ceiling, doubled for
- * the damped approach that follows it. A second-order controller spends about
- * as long easing into the last few pixels as it does crossing the rest, and it
- * spends longer the further it came, so the allowance has to scale with the
- * distance rather than sit in the constant.
+ * This is a SAFETY NET and not the completion mechanism. A guided rewind ends
+ * when it arrives — see the episode's arrival check in `frame()` — so the only
+ * thing a TTL has to do is be comfortably longer than any journey that is going
+ * to happen. It is therefore generous in every term: a ten-second floor, the
+ * travel's own cruise time at the guided ceiling, and a threefold multiplier on
+ * that for the jerk-limited reversal at the start and the damped approach at the
+ * end (a second-order controller spends about as long easing into the last few
+ * pixels as it does crossing the rest, and longer the further it came).
  *
  * And whatever manual grace is still outstanding, for the same reason `catch_up`
- * carries it (§30.6) — see `RewindReach.graceRemainingMs`. Unlike catch-up this
- * takes the grace REMAINING rather than the profile's whole interval, because a
- * live rewind releases the §70.5 forward latch, and a licence held open for
- * seconds after the walk is done is a licence for tracker jitter to reverse the
- * document. Travel is what this bound is trying to describe; the grace only
- * covers the part of it that cannot be spent yet.
+ * carries it (§30.6) — see `RewindReach.graceRemainingMs`. That interval is time
+ * during which the licence provably cannot be spent at all.
  */
-const REWIND_APPROACH_SHARE = 2;
+const GUIDED_REWIND_MIN_TTL_MS = 10_000;
+const GUIDED_REWIND_TRAVEL_SAFETY = 3;
 
-function rewindTtlMs(reach: RewindReach | null, profile: SmoothFollowProfile): number {
+function rewindTtlMs(reach: RewindReach | null): number {
   const travelPx = reach && Number.isFinite(reach.travelPx) ? Math.max(0, reach.travelPx) : 0;
   const graceMs =
     reach && Number.isFinite(reach.graceRemainingMs) ? Math.max(0, reach.graceRemainingMs) : 0;
-  // The ceiling the rewind will actually run under, multiplier included, read
-  // from the same table the frame loop reads rather than restated here.
-  const vBackwardPxS = limitsForState('following', profile, { transition: 'rewind' }).vBackwardMax;
-  if (!(vBackwardPxS > 0) || !Number.isFinite(vBackwardPxS)) return RELOCATION_TTL_MS + graceMs;
-  return RELOCATION_TTL_MS + graceMs + (travelPx / vBackwardPxS) * 1000 * REWIND_APPROACH_SHARE;
+  // The ceiling the rewind will actually run under, resolved from the same
+  // geometry the frame loop resolves it from rather than restated here.
+  const vBackwardPxS = guidedRewindVelocityLimitPx(reach?.linePitchPx, reach?.viewportHeightPx);
+  const travelMs =
+    vBackwardPxS > 0 && Number.isFinite(vBackwardPxS) ? (travelPx / vBackwardPxS) * 1000 : 0;
+  return (
+    graceMs +
+    Math.max(GUIDED_REWIND_MIN_TTL_MS, RELOCATION_TTL_MS + travelMs * GUIDED_REWIND_TRAVEL_SAFETY)
+  );
 }
+
+/**
+ * One accepted retake, as a journey the stage is managing.
+ *
+ * POLICY state, not a second controller. Every pixel of a guided rewind is
+ * produced by the same persistent `JerkLimitedScrollController` under the same
+ * jerk, acceleration and frame-time protections as ordinary following; what
+ * lives here is the one latched number that keeps the walk from stopping half
+ * way, and the identity that lets it be completed or cancelled exactly once.
+ */
+interface GuidedRewindEpisode {
+  /** The directive id for an alignment rewind; a synthesized one for a fallback. */
+  id: string;
+  source: 'alignment' | 'fallback';
+  startedAtMs: number;
+  /**
+   * The safety net, on the stage's own clock.
+   *
+   * An alignment episode is bounded twice over — its directive carries the same
+   * deadline and `transitions.update` retires it — and this is deliberately not
+   * a duplicate of that: a FALLBACK episode has no directive, so without this it
+   * has no bound at all. That matters because an episode holds `allowBackward`
+   * open and both velocity budgets capped, and the degraded path can simply
+   * stop publishing (`setFallbackTarget(null)`) mid-walk with no alignment feed
+   * to take over. The walk would then wait for a frame that never comes, and
+   * every later take on that stage window would run at three lines a second.
+   */
+  expiresAtMs: number;
+  /**
+   * The ABSOLUTE backward licence this episode was granted, px, or null until
+   * valid geometry has resolved a destination to size it against.
+   *
+   * Latched and expand-only, for exactly the reason `reacquireBudgetPx` is: the
+   * controller's `reverseTravelPx` is cumulative and the gap being closed is
+   * not, so a cap recomputed from the shrinking remaining distance falls as fast
+   * as the counter rises and dead-stops the walk short of its destination. It
+   * MAY grow — a second snapshot in the same episode can resolve a destination
+   * further back — and it may never shrink.
+   */
+  reverseBudgetPx: number | null;
+  /** Where the last eligible frame was aiming — diagnostics and budget growth. */
+  lastDestinationPx: number | null;
+}
+
+/** Why a guided rewind stopped being the right thing to be doing. */
+type GuidedRewindCancelReason =
+  | 'manual'
+  | 'follow_off'
+  | 'release'
+  | 'reset'
+  | 'session'
+  | 'superseded';
 
 /**
  * Turn an accepted discontinuity into a §53 transition directive, or null when
@@ -560,15 +609,30 @@ export function relocationDirectiveFor(
 
   const from = previousToken ?? snapshot.observedToken;
   const distance = Math.abs(snapshot.observedToken - from);
+  const isRetake = shape.type === 'rewind';
   // A manual move is authoritative regardless of distance: the presenter asked
   // to be somewhere, and honouring that only when it is far enough away would
-  // make a short jump-to-section silently do nothing.
-  if (shape.authority !== 'manual' && distance < RELOCATION_MIN_TOKENS) return null;
+  // make a short jump-to-section silently do nothing. An accepted retake gets
+  // its own, far smaller gate — see `RETAKE_MIN_TOKENS`.
+  if (isRetake) {
+    if (distance < RETAKE_MIN_TOKENS) return null;
+  } else if (shape.authority !== 'manual' && distance < RELOCATION_MIN_TOKENS) {
+    return null;
+  }
 
-  // A retake further back than ordinary reverse motion can carry has to be a
-  // step, not a walk — see `RewindReach`.
-  const type: StageTransitionDirective['type'] =
-    shape.type === 'rewind' && !rewindFits(rewindReach, distance) ? 'reanchor' : shape.type;
+  /*
+   * The shape the table says, unconditionally.
+   *
+   * This used to promote a `rewind` to a `reanchor` whenever the destination
+   * was further back than the remaining §30.5 reverse budget could carry — so
+   * the further back the presenter had gone, and the more important it was to
+   * show them the script returning, the more likely they were to get the fade
+   * and the teleport instead. The budget was the wrong instrument: it is a
+   * bound on how far ordinary tracker JITTER may reverse the document, and an
+   * accepted retake is the opposite of jitter. The answer is to size the
+   * licence to the journey (see `GuidedRewindEpisode`), not to give up on it.
+   */
+  const type: StageTransitionDirective['type'] = shape.type;
 
   /*
    * A catch-up runs until §30.3's duration cap retires it, and a rewind until
@@ -592,7 +656,7 @@ export function relocationDirectiveFor(
           manualGraceMs + profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs,
         )
       : type === 'rewind'
-        ? rewindTtlMs(rewindReach, profile)
+        ? rewindTtlMs(rewindReach)
         : RELOCATION_TTL_MS;
 
   return {
@@ -1010,6 +1074,19 @@ export function createStageMotionEngine(
    * ordinary forward-only following unable to finish the journey.
    */
   let reacquireBudgetPx: number | null = null;
+  /**
+   * The accepted retake currently being walked back to, or null.
+   *
+   * See `GuidedRewindEpisode`. One episode per accepted retake, replaced rather
+   * than stacked when a second retake arrives during the first.
+   */
+  let guidedRewind: GuidedRewindEpisode | null = null;
+  /* Guided rewind counters — diagnostics only, never a feedback loop (§9). */
+  let guidedRewindStarts = 0;
+  let guidedRewindCompletes = 0;
+  let guidedRewindCancels = 0;
+  let guidedRewindTimeouts = 0;
+  let guidedRewindBudgetExtensions = 0;
   let lastFrameAtMs: number | null = null;
   let lastStyleAtMs = Number.NEGATIVE_INFINITY;
   /** Token position the last rendered frame aimed at — the layout-recovery anchor. */
@@ -1146,6 +1223,138 @@ export function createStageMotionEngine(
     fadePhase = 'idle';
     fadeStartedAtMs = 0;
     fadeFromOpacity = 1;
+  }
+
+  /* ------------------------------------------------------------- §30.5 --
+   * The guided rewind episode's lifecycle.
+   *
+   * Three doors in and out, and all three are here rather than scattered, so
+   * that "a backward licence is in force" can never outlive the reason for it.
+   */
+
+  /**
+   * Take every scrap of backward authority off the table, whoever is holding it.
+   *
+   * A walk has TWO possible owners — an alignment `rewind` directive and the
+   * degraded path's `rewind` disposition — and the episode carries only the
+   * identity of the one that started it. Ending an episode by tearing down just
+   * that one leaves the other armed, and each half is enough on its own to keep
+   * `allowBackward` true and both velocity budgets capped at three lines a
+   * second. Two ways that bites:
+   *
+   *   - a long alignment rewind outlives `snapshotStaleMs`, the degraded path
+   *     takes over and re-mints the episode against ITS identity, and arriving
+   *     then completes the fallback while the `align-*` directive runs on for
+   *     the rest of its (now ten-second) TTL;
+   *   - a retake is followed by silence, so no later snapshot ever overwrites
+   *     the renderer's `rewind` disposition, and it starts a second walk the
+   *     moment the feed goes stale.
+   *
+   * So ending a walk means ending it. `keepId` is the one owner that may
+   * survive: the directive a REPLACEMENT episode was just built around.
+   */
+  function retireGuidedRewind(keepId?: string): void {
+    if (guidedRewind && guidedRewind.id !== keepId) transitions.complete(guidedRewind.id);
+    const active = transitions.active;
+    if (active && active.directive.type === 'rewind' && active.directive.id !== keepId) {
+      transitions.complete(active.directive.id);
+    }
+    if (fallback?.disposition === 'rewind') {
+      fallback = { ...fallback, disposition: 'follow' };
+    }
+  }
+
+  /**
+   * Start or refresh the episode for `id`.
+   *
+   * Refreshing an episode that is already running under the same id is a no-op
+   * on purpose: the budget it has latched is the whole point of the identity,
+   * and re-minting it every frame would be the shrinking-cap bug written a
+   * different way.
+   */
+  function ensureGuidedRewind(
+    id: string,
+    source: GuidedRewindEpisode['source'],
+    nowMs: number,
+    expiresAtMs: number,
+  ): GuidedRewindEpisode {
+    if (guidedRewind && guidedRewind.id === id) return guidedRewind;
+    retireGuidedRewind(id);
+    guidedRewind = {
+      id,
+      source,
+      startedAtMs: nowMs,
+      expiresAtMs,
+      // Sized on the first eligible frame, once geometry can answer for the
+      // destination. Null until then, which is what lets a retake that arrives
+      // during a line-map rebuild WAIT rather than be spent on a guess.
+      reverseBudgetPx: null,
+      lastDestinationPx: null,
+    };
+    /*
+     * §20.4. Whatever was being obscured is over.
+     *
+     * A rewind that supersedes a re-anchor inherits its fade — the licence is
+     * revoked with the supersession, so nothing is pending behind it, and
+     * `abortFadeIfOrphaned` merely ramps the opacity back up over the next
+     * ~110 ms. The plant is not frozen during that ramp, so the first stretch
+     * of the walk would be painted as a half-transparent ghost, or not at all
+     * if the fade happened to be at zero. The presenter is about to read the
+     * script back to where they restarted; it has to be legible from the first
+     * frame. `manualOverride` resets the fade for exactly this reason.
+     */
+    resetFade();
+    guidedRewindStarts++;
+    return guidedRewind;
+  }
+
+  /**
+   * The presenter, or the session, has said something that outranks the walk.
+   *
+   * A stale rewind that resumed after a manual grace expired would be the
+   * document travelling backward seconds after the presenter told it to be
+   * somewhere else — the exact failure §30.6 exists to prevent.
+   */
+  function cancelGuidedRewind(_reason: GuidedRewindCancelReason): void {
+    /*
+     * Unconditionally, because backward authority can exist before an episode
+     * does. The renderer publishes `disposition: 'rewind'` the moment it
+     * classifies a retake, and the fallback branch that turns that into an
+     * episode only runs on frames where the fallback is the SELECTED source —
+     * so between the two there is a window (alignment still fresh, or simply no
+     * frame yet) with the walk armed and nothing to cancel. Returning early
+     * there left `setPaused(true)` and `releaseAlignment()` looking like they
+     * had taken the authority away when they had not, and the next fallback
+     * frame started the stale walk.
+     *
+     * The COUNTER still only moves for a real episode: it reports journeys, and
+     * disarming something that never became one is not a cancelled journey.
+     */
+    const had = guidedRewind !== null;
+    retireGuidedRewind();
+    guidedRewind = null;
+    if (had) guidedRewindCancels++;
+  }
+
+  /** The walk is over: the document is where the presenter is. */
+  function completeGuidedRewind(): void {
+    if (!guidedRewind) return;
+    retireGuidedRewind();
+    guidedRewind = null;
+    guidedRewindCompletes++;
+  }
+
+  /**
+   * How close is close enough to stop calling this a backward correction.
+   *
+   * A twentieth of a rendered line, floored at the resting deadband the plant
+   * is going to snap inside anyway. Tight enough that the spoken line genuinely
+   * lands on the reading band, loose enough that the last fraction of a pixel
+   * does not hold the backward licence open while the presenter reads on.
+   */
+  function guidedRewindArrivalTolerancePx(restDeadbandPx: number): number {
+    const pitch = measuredPitchPx();
+    return Math.max(Math.max(0, restDeadbandPx), pitch > 0 ? pitch * 0.05 : 4);
   }
 
   /** Every authorized plant write goes through here so the latch stays honest. */
@@ -1331,17 +1540,12 @@ export function createStageMotionEngine(
       travelPx: controller.state.q - destination.scrollPx,
       // Zero unless the presenter is actually holding the script right now.
       graceRemainingMs: Math.max(0, manualUntilMs - nowMs),
-      // The bound exactly as the frame loop will resolve it — the profile this
-      // panel may run, in lines where a pitch has been measured — LESS what the
-      // plant has already spent going backward. Resolving it any other way here
-      // would let a retake be classified against travel the controller is not
-      // going to grant. See `RewindReach`.
-      budgetPx:
-        resolveLineLimitPx(
-          boundedProfile.lineUnits?.reverseTravelMaxLines,
-          boundedProfile.motion.reverseTravelMaxPx,
-          measuredPitchPx(),
-        ) - controller.reverseTravelPx,
+      // The two halves of the speed cap the walk will actually run under, read
+      // off the same geometry the frame loop reads them from — so the TTL is
+      // sized against the journey that is going to happen rather than a
+      // different one.
+      linePitchPx: measuredPitchPx(),
+      viewportHeightPx: viewportHeightPx(),
     };
   }
 
@@ -1390,6 +1594,21 @@ export function createStageMotionEngine(
     get catchUpCapExpiries() {
       return catchUpCapExpiries;
     },
+    get guidedRewindStarts() {
+      return guidedRewindStarts;
+    },
+    get guidedRewindCompletes() {
+      return guidedRewindCompletes;
+    },
+    get guidedRewindCancels() {
+      return guidedRewindCancels;
+    },
+    get guidedRewindTimeouts() {
+      return guidedRewindTimeouts;
+    },
+    get guidedRewindBudgetExtensions() {
+      return guidedRewindBudgetExtensions;
+    },
     get awaitingManualEvidence() {
       return manualAwaitingEvidence;
     },
@@ -1428,6 +1647,15 @@ export function createStageMotionEngine(
       reacquireOwed = false;
       reacquireElapsedMs = 0;
       reacquireBudgetPx = null;
+      // A retake is a fact about a take that is over. `transitions.reset()` has
+      // already taken the directive; this takes the episode with it so the next
+      // session cannot open holding a backward licence.
+      cancelGuidedRewind('session');
+      guidedRewindStarts = 0;
+      guidedRewindCompletes = 0;
+      guidedRewindCancels = 0;
+      guidedRewindTimeouts = 0;
+      guidedRewindBudgetExtensions = 0;
       // A new session cannot inherit a half-finished fade from the old one.
       resetFade();
       reanchorFades = 0;
@@ -1497,6 +1725,18 @@ export function createStageMotionEngine(
         reacquireOwed = false;
         reacquireElapsedMs = 0;
         reacquireBudgetPx = null;
+        /*
+         * §48 + §30.5. Switching following off cancels an in-flight rewind
+         * outright rather than parking it.
+         *
+         * The alternative — hold it and resume when following comes back — is
+         * the one policy that cannot be defended: the presenter turns following
+         * off, scrolls wherever they like for however long, turns it back on,
+         * and the document sets off backward toward a retake decided before any
+         * of that happened. A temporary layout freeze holds the walk (see the
+         * `frozen` guard in `frame`); a deliberate instruction ends it.
+         */
+        cancelGuidedRewind('follow_off');
         // Switching following off is the presenter taking the script, so it
         // supersedes an ordinary directive the same way a wheel gesture does.
         if (Number.isFinite(nowMs)) manualAuthorityAtMs = nowMs;
@@ -1507,6 +1747,10 @@ export function createStageMotionEngine(
 
     releaseAlignment() {
       receiver.reset();
+      // The same for a guided rewind, and more so: it is the one directive that
+      // stays live for ten seconds or more. Cancelled BEFORE the controller is
+      // reset, so the fallback's own disposition is cleared with it.
+      cancelGuidedRewind('release');
       // An in-flight re-anchor or catch-up is a decision the tracker made about
       // where the presenter is. Once the operator has taken the wheel that is
       // no longer a question anybody is asking, and spending the directive
@@ -1560,7 +1804,34 @@ export function createStageMotionEngine(
         manualGraceMs,
         rewindReachFor(accepted, nowMs),
       );
-      if (directive) transitions.submit(directive, nowMs);
+      if (directive) {
+        const outcome = transitions.submit(directive, nowMs);
+        /*
+         * §30.5. The episode is bound to the SUBMISSION, not to what happens to
+         * be active on some later frame.
+         *
+         * A directive can be refused — duplicate, expired, out-ranked by a
+         * manual transition already in flight — and inferring the episode from
+         * `transitions.active` afterwards cannot tell "my rewind was accepted"
+         * from "somebody else's rewind is still running". Getting that wrong
+         * means latching a licence against the wrong destination.
+         */
+        if (outcome.accepted) {
+          if (directive.type === 'rewind') {
+            // The episode's deadline IS the directive's, so the two can never
+            // disagree about when the walk stopped being authorized.
+            ensureGuidedRewind(directive.id, 'alignment', nowMs, directive.expiresAtMs);
+          } else {
+            /*
+             * Something else has been authorized, and the transition controller
+             * only ever holds one. §8.4's newer decision wins: the walk back to
+             * the old retake point is describing a place the engine has since
+             * changed its mind about.
+             */
+            cancelGuidedRewind('superseded');
+          }
+        }
+      }
       previousDisplayToken = accepted.observedToken;
 
       /*
@@ -1767,15 +2038,48 @@ export function createStageMotionEngine(
             : 0;
         state = 'following';
         if (fallback.disposition === 'instant') {
-          // §32.4 reduced motion: reposition with no spectacle at all.
+          // §32.4 reduced motion: reposition with no spectacle at all. An
+          // authorized plant overwrite is the end of any walk that was under
+          // way — the document is now somewhere the walk knows nothing about.
+          cancelGuidedRewind('superseded');
           reanchorTo(fallback.scrollPx);
           fallback = { ...fallback, disposition: 'follow' };
           reanchorApplied = true;
+        } else if (fallback.disposition === 'rewind') {
+          /*
+           * §30.5. The degraded path's accepted retake — the same guided walk
+           * an alignment `rewind` directive gets, and deliberately NOT a second
+           * implementation of it. Everything below this line (the latched
+           * licence, the speed cap, the arrival check) is shared; all that
+           * differs is where the episode's identity comes from.
+           *
+           * Keyed on the target rather than on the frame, so the episode
+           * survives the fallback being re-published on every later snapshot
+           * with its disposition back at `follow`. Losing it there would take
+           * the backward licence away mid-walk and strand the plant above the
+           * presenter, which forward-only following cannot fix.
+           */
+          ensureGuidedRewind(
+            `fallback-rewind-${fallback.atMs}-${Math.round(fallback.scrollPx)}`,
+            'fallback',
+            nowMs,
+            // The same bound an alignment rewind's directive carries, computed
+            // from the same journey — see `rewindTtlMs`. It is the only bound a
+            // fallback episode has.
+            nowMs +
+              rewindTtlMs({
+                travelPx: controller.state.q - fallback.scrollPx,
+                graceRemainingMs: Math.max(0, manualUntilMs - nowMs),
+                linePitchPx: measuredPitchPx(),
+                viewportHeightPx: viewportHeightPx(),
+              }),
+          );
         } else if (fallback.disposition === 'reanchor') {
           // The degraded path's `fade_jump` (§20.4) — an explicit jump beyond
           // the comfortable traversal distance. Same rule as a directive: move
           // only once the fade-down has finished.
           if (fadeAdmitsReanchor(nowMs, fallback.scrollPx)) {
+            cancelGuidedRewind('superseded');
             reanchorTo(fallback.scrollPx);
             fallback = { ...fallback, disposition: 'follow' };
             reanchorApplied = true;
@@ -1814,6 +2118,47 @@ export function createStageMotionEngine(
       if (paused && !operatorMandate) state = 'paused';
 
       const activeTransition = transitions.active;
+
+      /*
+       * §30.5. The safety net, reached only when something went wrong.
+       *
+       * A guided rewind is supposed to end by ARRIVING, and every deliberate
+       * ending — manual authority, following switched off, a superseding
+       * decision, a session boundary — cancels the episode explicitly. So an
+       * alignment episode whose directive is no longer the active transition
+       * has had its TTL expire underneath it with the walk unfinished, and the
+       * TTL is sized at ten seconds plus three times the journey precisely so
+       * that cannot happen under ordinary conditions.
+       *
+       * The response is to HOLD, never to re-anchor. Somewhere between here and
+       * the presenter is a distance the stage failed to close gently, and
+       * closing it in one step is the failure this whole change exists to
+       * remove — a stranded document is recoverable by reading on or by hand; a
+       * teleport is not recoverable at all.
+       */
+      if (
+        guidedRewind !== null &&
+        (nowMs >= guidedRewind.expiresAtMs ||
+          (guidedRewind.source === 'alignment' &&
+            activeTransition?.directive.id !== guidedRewind.id))
+      ) {
+        // Same teardown as an arrival: both possible owners, so a renderer that
+        // has not published since the retake cannot mint the walk again.
+        retireGuidedRewind();
+        guidedRewind = null;
+        guidedRewindTimeouts++;
+      }
+
+      /*
+       * §30.5. A fallback rewind reshapes the limits exactly as a directive
+       * does, because it is the same journey seen from the degraded path — and
+       * the two run at the moments the presenter can least afford them to
+       * differ. An alignment directive still wins where both exist: it is the
+       * more recent semantic decision by construction.
+       */
+      const effectiveTransition: StageTransitionDirective['type'] | undefined =
+        activeTransition?.directive.type ??
+        (guidedRewind?.source === 'fallback' ? 'rewind' : undefined);
 
       // No map, no accepted frame, no fallback: hold. Never move on guessed
       // geometry (§62).
@@ -1870,6 +2215,45 @@ export function createStageMotionEngine(
         activeTransition.directive.authority === 'ordinary' &&
         activeTransition.directive.issuedAtMs <= manualAuthorityAtMs;
 
+      /* ------------------------------------------------------------ §30.5 --
+       * Is the guided rewind allowed to spend anything this frame?
+       *
+       * Every reason the plant might not be moving is a reason to leave the
+       * episode PENDING rather than charging or completing it: a retake that
+       * lands while the line map is rebuilding waits, and begins the moment the
+       * geometry can answer. That is the difference between deferring a
+       * correction and giving up on one.
+       *
+       * Decided here, above everything that reads it, because it is also what
+       * keeps the §30.6 re-grab from spending its 2.5 s cap on frames the
+       * rewind is driving — a fallback rewind carries no directive, so
+       * `transitionOwnsIt` cannot see it.
+       */
+      const guidedRewindActive =
+        guidedRewind !== null &&
+        // The limits the plant will actually run under have to BE a rewind's.
+        // A fallback episode carries no directive, so an unrelated alignment
+        // directive still inside its own TTL — a `catch_up` from before the
+        // feed went quiet — would otherwise shape the limits while the episode
+        // charged its budget and judged its arrival against them.
+        effectiveTransition === 'rewind' &&
+        !frozen &&
+        !manualGrace &&
+        !(guidedRewind.source === 'alignment' && supersededTransition);
+      /*
+       * §8.6. A visual-block hold is not a hold of the PLANT — `frozen` does
+       * not include it, and the target is simply re-aimed at the span's entry
+       * so the document parks there rather than racing the image height.
+       *
+       * So the walk goes on, and it must keep its destination-sized licence
+       * while it does: without one the plant reverses toward the span entry on
+       * the standing §30.5 budget alone and can hit that wall before it
+       * arrives. What it must NOT do is call itself finished — the span entry
+       * is not where the presenter is, it is as far as the geometry can carry
+       * them for now.
+       */
+      const guidedRewindEligible = guidedRewindActive && !visualSpanHold;
+
       const catchUpLicensed =
         !frozen &&
         !manualGrace &&
@@ -1890,7 +2274,7 @@ export function createStageMotionEngine(
       const limitOptions = {
         reducedMotion,
         degraded: diagnostics.degraded,
-        transition: activeTransition?.directive.type,
+        transition: effectiveTransition,
         /*
          * The open-ended halves of manual authority — following switched off,
          * and "they moved it and have not spoken since" — are about automatic
@@ -1919,6 +2303,13 @@ export function createStageMotionEngine(
          * rebuilt.
          */
         linePitchPx: measuredPitchPx(),
+        /*
+         * The other half of every line-relative SPEED bound (§30). A rendered
+         * line is the right unit for how fast a correction may travel right up
+         * until a line stops being a small part of the glass, and only the
+         * viewport can say when that is — see `guidedRewindVelocityLimitPx`.
+         */
+        viewportHeightPx: viewportHeightPx(),
       };
       /**
        * The state/transition shape of the limits, with no §30.3 bounds applied.
@@ -2024,7 +2415,12 @@ export function createStageMotionEngine(
          */
         const transitionOwnsIt = activeTransition !== null && !supersededTransition;
         const eligible =
-          !frozen && !visualSpanHold && !manualGrace && !catchUpLicensed && !transitionOwnsIt;
+          !frozen &&
+          !visualSpanHold &&
+          !manualGrace &&
+          !catchUpLicensed &&
+          !guidedRewindActive &&
+          !transitionOwnsIt;
         if (eligible) {
           reacquireGapPx = Math.abs(targetPx - controller.state.q);
           /*
@@ -2048,6 +2444,84 @@ export function createStageMotionEngine(
             reacquiring = true;
           }
         }
+      }
+
+      /* ------------------------------------------------------------ §30.5 --
+       * The guided rewind's licence, sized to the destination it is for.
+       *
+       * Derived HERE, once the forward latch has finished with `targetPx`,
+       * because the budget is a fact about a journey and a journey with no
+       * resolved destination has no length.
+       */
+      if (guidedRewindActive && guidedRewind) {
+        /*
+         * `controller.reverseTravelPx` is part of the sum because the cap it
+         * becomes is compared against that same cumulative counter — a licence
+         * that ignored what had already been spent would be short by exactly
+         * that much, which is how a second retake before the presenter has read
+         * their way back used to hit the §30.5 wall part-way home.
+         */
+        const remainingBackwardGapPx = Math.max(0, controller.state.q - targetPx);
+        const requiredBudgetPx =
+          controller.reverseTravelPx +
+          remainingBackwardGapPx +
+          guidedRewindSlackPx(measuredPitchPx());
+        /* ---------------------------------------------------------------
+         * Arm both bounds together, on the frames the journey CHANGES.
+         *
+         * The licence is expand-only: a cap recomputed downward each frame
+         * falls as fast as the cumulative counter rises, which dead-stops the
+         * walk short of its destination (see
+         * `GuidedRewindEpisode.reverseBudgetPx`).
+         *
+         * The DEADLINE is re-armed on exactly those same frames, and on no
+         * others, which is what keeps the safety net a net. The directive was
+         * minted before any of this was knowable — a retake landing during a
+         * line-map rebuild has no geometry to resolve a destination from, so
+         * `rewindReachFor` answers null and the TTL is just its ten-second
+         * floor, which at three lines a second is about 2 550 px. A retake to
+         * the top of a long script is further than that, so the licence used to
+         * expire mid-walk and strand the plant with forward-only following
+         * unable to finish it, or hand the §70.5 latch's escape hatch a
+         * beyond-threshold disagreement to teleport 400 ms later.
+         *
+         * Re-arming every eligible frame would fix that and break something
+         * worse: `nowMs + ttl` grows with the clock, so a walk that could never
+         * arrive — a target clamped outside the document, a plant against a
+         * wall — would push its own deadline forward for ever and hold the
+         * backward licence open for the rest of the session. Tying it to the
+         * budget instead means the deadline only moves when the JOURNEY gets
+         * longer, and that sum is invariant under backward travel (what the
+         * plant spends, the gap gives back) and bounded by the document.
+         */
+        const armDeadline = () => {
+          if (!guidedRewind) return;
+          const deadlineMs =
+            nowMs +
+            rewindTtlMs({
+              travelPx: remainingBackwardGapPx,
+              graceRemainingMs: Math.max(0, manualUntilMs - nowMs),
+              linePitchPx: measuredPitchPx(),
+              viewportHeightPx: viewportHeightPx(),
+            });
+          if (deadlineMs <= guidedRewind.expiresAtMs) return;
+          guidedRewind.expiresAtMs = deadlineMs;
+          // Both owners together, so the episode and its directive cannot
+          // disagree about when the walk stopped being authorized.
+          if (guidedRewind.source === 'alignment') {
+            transitions.extend(guidedRewind.id, deadlineMs);
+          }
+        };
+
+        if (guidedRewind.reverseBudgetPx === null) {
+          guidedRewind.reverseBudgetPx = requiredBudgetPx;
+          armDeadline();
+        } else if (requiredBudgetPx > guidedRewind.reverseBudgetPx) {
+          guidedRewind.reverseBudgetPx = requiredBudgetPx;
+          guidedRewindBudgetExtensions++;
+          armDeadline();
+        }
+        guidedRewind.lastDestinationPx = targetPx;
       }
 
       /* ------------------------------------------------------------ §30.3 --
@@ -2153,15 +2627,23 @@ export function createStageMotionEngine(
             catchUpBoost,
             forwardPositionCeilingPx: catchUpCeilingPx,
           })
-        : reacquiring
-          ? limitsForState(state ?? 'holding', boundedProfile, {
+        : guidedRewindActive && guidedRewind?.reverseBudgetPx !== null
+          ? // §30.5. The speed cap is already in `structuralLimits` (it comes
+            // from `transition: 'rewind'` alone); this rebuild is only to hand
+            // the plant the destination-sized reverse licence.
+            limitsForState(state ?? 'holding', boundedProfile, {
               ...limitOptions,
-              reacquire: true,
-              ...(reacquireBudgetPx === null
-                ? {}
-                : { reacquireReverseBudgetPx: reacquireBudgetPx }),
+              rewindReverseBudgetPx: guidedRewind?.reverseBudgetPx ?? undefined,
             })
-          : structuralLimits;
+          : reacquiring
+            ? limitsForState(state ?? 'holding', boundedProfile, {
+                ...limitOptions,
+                reacquire: true,
+                ...(reacquireBudgetPx === null
+                  ? {}
+                  : { reacquireReverseBudgetPx: reacquireBudgetPx }),
+              })
+            : structuralLimits;
 
       /*
        * Never feed forward faster than the target is ACTUALLY moving.
@@ -2197,6 +2679,33 @@ export function createStageMotionEngine(
         allowRest: true,
       });
 
+      /* ------------------------------------------------------------ §30.5 --
+       * Has the backward correction finished?
+       *
+       * Asked every eligible frame, because arrival — not the TTL — is what
+       * ends a guided rewind. A directive left live after the walk is done is a
+       * backward licence with nothing to spend it on, and the §70.5 forward
+       * latch stays released underneath it: ordinary tracker jitter could then
+       * reverse the document for the rest of the licence's ten seconds.
+       *
+       * Two conditions, and the second is what makes the first safe. The gap
+       * has closed (or the live target has moved forward past the plant, which
+       * is what continued reading looks like), AND the plant is no longer
+       * travelling meaningfully backward — so a frame taken mid-descent, where
+       * the position happens to cross the target on its way through, does not
+       * retire the licence while the controller is still committed to reversing.
+       */
+      let guidedRewindArrived = false;
+      if (guidedRewindEligible && guidedRewind) {
+        const tolerancePx = guidedRewindArrivalTolerancePx(limits.restDeadbandPx);
+        const speedCapPxS = guidedRewindVelocityLimitPx(measuredPitchPx(), viewportHeightPx());
+        const settledPxS = Math.max(8, speedCapPxS * 0.1);
+        if (step.q - targetPx <= tolerancePx && step.v >= -settledPxS) {
+          completeGuidedRewind();
+          guidedRewindArrived = true;
+        }
+      }
+
       if (!holding) lastTarget = targetPx;
       lastLineId = lineId;
 
@@ -2211,6 +2720,11 @@ export function createStageMotionEngine(
         // indistinguishable from one describing a document that is held.
         operatorMandate ? 'operator' : null,
         reacquiring ? 'reacquire' : null,
+        // §30.5. Distinguishes "a rewind directive exists" (already on the
+        // record as the transition type) from "the stage is actively walking
+        // the document back under a destination-sized licence".
+        guidedRewindActive ? 'guided_rewind' : null,
+        guidedRewindArrived ? 'guided_rewind_arrived' : null,
         mapUnresolved ? 'map_unresolved' : null,
         visualSpanHold ? 'visual_block' : null,
         regressed ? 'target_regression' : null,
@@ -2324,6 +2838,10 @@ export function createStageMotionEngine(
       reacquireOwed = false;
       reacquireElapsedMs = 0;
       reacquireBudgetPx = null;
+      // And so is a guided rewind. The latest deliberate human action wins, and
+      // it wins permanently: cancelling completes the directive, so nothing is
+      // left to resume when the grace expires (§30.6).
+      cancelGuidedRewind('manual');
       fallback = null;
       // Direct manipulation is never obscured: the presenter is looking at the
       // text they are dragging. If a directive was mid-fade it re-fades from
@@ -2380,6 +2898,7 @@ export function createStageMotionEngine(
 
     reset(positionPx) {
       reanchorTo(positionPx);
+      cancelGuidedRewind('reset');
       transitions.reset();
       receiver.reset();
       diagnostics.reset();
@@ -2403,6 +2922,11 @@ export function createStageMotionEngine(
       reacquireOwed = false;
       reacquireElapsedMs = 0;
       reacquireBudgetPx = null;
+      guidedRewindStarts = 0;
+      guidedRewindCompletes = 0;
+      guidedRewindCancels = 0;
+      guidedRewindTimeouts = 0;
+      guidedRewindBudgetExtensions = 0;
       resetFade();
       reanchorFades = 0;
     },

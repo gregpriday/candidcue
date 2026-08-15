@@ -42,7 +42,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use cc_align::{Snapshot, TrackingState};
+use cc_align::{DecisionCode, Snapshot, TrackingState};
 
 use crate::replay::ReplayResult;
 
@@ -689,9 +689,62 @@ pub struct StageTrace {
 /// Fade-down/-up duration for a re-anchor, from `ScriptLayer.svelte`'s
 /// `--dur-slow`. A relocation this large is hidden rather than travelled.
 const REANCHOR_FADE_MS: f64 = 200.0;
-/// A target move at least this many lines is re-anchored (faded) rather than
-/// travelled — `reanchorThresholdLines`.
+/// A FORWARD target move at least this many lines is re-anchored (faded) rather
+/// than travelled — `reanchorThresholdLines`.
 const REANCHOR_THRESHOLD_LINES: f64 = 4.25;
+
+/* --------------------------------------------------------------- §30.5 --
+ * Backward is not the mirror of forward, and this port used to say it was.
+ *
+ * The branch below was symmetric (`.abs() >= threshold`), so a retake more than
+ * about four lines back was modelled as a fade and a plant overwrite — which is
+ * what the product used to do and no longer does. An accepted retake is now a
+ * guided rewind: the document stays fully visible and the same persistent plant
+ * walks it back at a reading-relative ceiling, because the presenter is reading
+ * the destination out loud and the return is the information rather than a
+ * spectacle wrapped around it.
+ *
+ * Modelling it the old way would leave every Tier C retake metric —
+ * `retake_legibility_loss`, `retake_anchor_bright_p95_ms`,
+ * `gate.visible_relocation` — scoring a design the shipping stage does not have.
+ *
+ * The numbers mirror `profiles.ts`. This is a PORT and can drift; the shipping
+ * behaviour is asserted directly in `tests/unit/stage/guided-rewind.test.ts`.
+ */
+const GUIDED_REWIND_LINES_PER_SECOND: f64 = 3.0;
+const GUIDED_REWIND_VIEWPORTS_PER_SECOND: f64 = 0.35;
+
+/// How long a walk may run before the safety net retires it, matching
+/// `rewindTtlMs`: a ten-second floor plus three times the journey's own cruise
+/// time. Reaching it is a defect, not a slow success — the walk is supposed to
+/// end by arriving.
+const GUIDED_REWIND_MIN_TTL_MS: f64 = 10_000.0;
+const GUIDED_REWIND_TRAVEL_SAFETY: f64 = 3.0;
+
+fn guided_rewind_ttl_ms(travel_px: f64, pitch_px: f64, viewport_h_px: f64) -> f64 {
+    let cap = guided_rewind_velocity_px_s(pitch_px, viewport_h_px);
+    let travel_ms = if cap > 0.0 && cap.is_finite() {
+        travel_px.max(0.0) / cap * 1_000.0
+    } else {
+        0.0
+    };
+    GUIDED_REWIND_MIN_TTL_MS.max(travel_ms * GUIDED_REWIND_TRAVEL_SAFETY)
+}
+
+/// How fast a guided rewind may travel: the narrower of the two bounds.
+fn guided_rewind_velocity_px_s(pitch_px: f64, viewport_h_px: f64) -> f64 {
+    let line_relative = if pitch_px > 0.0 {
+        GUIDED_REWIND_LINES_PER_SECOND * pitch_px
+    } else {
+        f64::INFINITY
+    };
+    let viewport_relative = if viewport_h_px > 0.0 {
+        GUIDED_REWIND_VIEWPORTS_PER_SECOND * viewport_h_px
+    } else {
+        f64::INFINITY
+    };
+    line_relative.min(viewport_relative)
+}
 
 /// Render a replayed engine trace through the stage model.
 pub fn render(
@@ -725,6 +778,9 @@ pub fn render(
     let mut latched_cursor: Option<i64> = None;
     let mut retreat_ms = 0.0f64;
     let mut fade_until = f64::NEG_INFINITY;
+    // §30.5. A backward correction is in flight and the plant is walking it.
+    let mut rewinding = false;
+    let mut rewind_deadline_ms = f64::INFINITY;
     let mut last_target = f64::NAN;
     let mut last_seq: u64 = u64::MAX;
 
@@ -765,10 +821,50 @@ pub fn render(
         let target_px = (line_map.y_of(display_atoms + layout.focus_lead_atoms) - reading_line)
             .clamp(min_px, max_px);
 
-        // A large target move is a re-anchor: fade out, move under cover, fade
-        // back. `visible_relocation_distance` is the metric that checks the
-        // cover actually held.
-        if last_target.is_finite() && (target_px - last_target).abs() >= reanchor_threshold {
+        /* §30.5 / §53. What kind of discontinuity is this?
+         *
+         * Keyed on the DECISION for a retake, and on distance for everything
+         * else, because that is what the shipping stage does. `retakeAccepted`
+         * mints a `rewind` directive at any distance — three words back is the
+         * common case and it walks like a paragraph does — while a large
+         * backward disagreement the engine did NOT call a retake is suppressed
+         * by the §70.5 forward latch and eventually spent as that latch's
+         * authorized re-anchor. Reading the distance alone got both wrong: it
+         * missed every short retake and rewound corrections that are not
+         * retakes at all.
+         */
+        let retake = arrived
+            && matches!(snap.map(|s| s.decision), Some(DecisionCode::RetakeAccepted));
+        let moved = if last_target.is_finite() { target_px - last_target } else { 0.0 };
+        if retake {
+            // No fade and no plant overwrite at any distance — the walk itself
+            // is what the presenter reads. The frontier still comes back,
+            // because they are about to re-read words the ramp had greyed out
+            // behind them.
+            rewinding = true;
+            rewind_deadline_ms = t + guided_rewind_ttl_ms(
+                (plant.q - target_px).max(0.0),
+                layout.line_pitch_px,
+                layout.viewport_h_px,
+            );
+            // A retake that supersedes a forward re-anchor inherits its fade,
+            // and the walk must not run behind one — `ensureGuidedRewind` calls
+            // `resetFade()` for exactly this.
+            fade_until = f64::NEG_INFINITY;
+            // The frontier goes back, because the reader is about to re-read
+            // words the ramp had greyed out behind them. The rendered opacities
+            // are deliberately NOT snapped bright with it: the re-anchor branch
+            // below may do that because its transition is hidden behind a fade,
+            // and a retake's is not. The words stay mounted and the shipping
+            // renderer tweens them back over `DIM_TWEEN_MS`, which is what the
+            // per-token approach at the bottom of this loop already models.
+            latched_cursor = None;
+            retreat_ms = 0.0;
+        } else if moved.abs() >= reanchor_threshold && (moved > 0.0 || !rewinding) {
+            // A large forward move is hidden, and so is a large backward one
+            // that no retake explains — the latter is the §70.5 latch's escape
+            // hatch. A forward relocation also SUPERSEDES a walk in flight.
+            rewinding = false;
             fade_until = t + REANCHOR_FADE_MS;
             plant.reanchor(target_px);
             // A relocation is the one thing that may move the dim frontier
@@ -777,6 +873,11 @@ pub fn render(
             latched_cursor = None;
             retreat_ms = 0.0;
             rendered_opacity.iter_mut().for_each(|o| *o = 1.0);
+        }
+        // The safety net. A walk that has not arrived by its deadline holds
+        // where it is; it is never closed in one step.
+        if rewinding && t >= rewind_deadline_ms {
+            rewinding = false;
         }
         last_target = target_px;
         let doc_opacity = if t < fade_until {
@@ -796,12 +897,32 @@ pub fn render(
             frame_ms
         };
 
-        let limits = MotionLimits::for_state(
+        let mut limits = MotionLimits::for_state(
             state.unwrap_or(TrackingState::Searching),
             layout.line_pitch_px,
         );
+        if rewinding {
+            // The `rewind` shape from `limitsForState`: backward unlocked, both
+            // directions capped to the reading-relative ceiling, no leading, and
+            // overdamped so the approach does not hunt.
+            let cap = guided_rewind_velocity_px_s(layout.line_pitch_px, layout.viewport_h_px);
+            limits.allow_backward = true;
+            limits.v_backward_max = limits.v_backward_max.min(cap);
+            limits.v_forward_max = limits.v_forward_max.min(cap);
+            limits.feed_forward_scale = 0.0;
+            limits.zeta = limits.zeta.max(1.25);
+        }
         let ff = rate * px_per_atom;
         let step = plant.step(dt, target_px, ff, &limits, min_px, max_px);
+        if rewinding {
+            // The episode ends by ARRIVING, and a backward licence left open
+            // afterwards would let ordinary target jitter reverse the document.
+            let cap = guided_rewind_velocity_px_s(layout.line_pitch_px, layout.viewport_h_px);
+            let tolerance = limits.rest_deadband_px.max(layout.line_pitch_px * 0.05);
+            if plant.q - target_px <= tolerance && plant.v >= -(cap * 0.1).max(8.0) {
+                rewinding = false;
+            }
+        }
 
         // ---- opacity ----
         // `dimFrozen`: the ramp only advances while the engine claims to be
@@ -982,6 +1103,163 @@ mod tests {
                 plant.q
             );
         }
+    }
+
+    /* --------------------------------------------------------------- §30.5 --
+     * The port must model the guided rewind, not the design it replaced.
+     *
+     * A Tier C number about retakes is only worth reading if the simulated
+     * stage does what the shipping stage does. These two pin the halves that
+     * changed: backward is walked at a reading-relative ceiling, forward keeps
+     * its obscured step.
+     */
+
+    #[test]
+    fn guided_rewind_ceiling_takes_the_narrower_of_its_two_bounds() {
+        // Lines bind on an ordinary panel…
+        assert!((guided_rewind_velocity_px_s(85.0, 1080.0) - 255.0).abs() < 1e-9);
+        // …and the glass binds once a line is a large part of it.
+        assert!((guided_rewind_velocity_px_s(300.0, 1080.0) - 378.0).abs() < 1e-9);
+        assert!((guided_rewind_velocity_px_s(150.0, 600.0) - 210.0).abs() < 1e-9);
+        // An unmeasured input simply drops its half of the pair.
+        assert!(guided_rewind_velocity_px_s(0.0, 0.0).is_infinite());
+    }
+
+    #[test]
+    fn a_backward_correction_is_walked_and_a_forward_one_is_cut() {
+        let l = limits();
+        let cap = guided_rewind_velocity_px_s(REFERENCE_LINE_PITCH_PX, 1080.0);
+        let rewind = MotionLimits {
+            allow_backward: true,
+            v_backward_max: l.v_backward_max.min(cap),
+            v_forward_max: l.v_forward_max.min(cap),
+            feed_forward_scale: 0.0,
+            zeta: l.zeta.max(1.25),
+            ..l
+        };
+        // The cap really is a narrowing: 600 px/s was over six rendered lines a
+        // second at this pitch, which is faster than anybody reads.
+        assert!(rewind.v_backward_max < l.v_backward_max * 0.5);
+
+        // Several viewports back — the distance that used to guarantee a fade
+        // and a plant overwrite — travelled continuously instead.
+        let mut plant = Plant { q: 6_000.0, v: 0.0, a: 0.0 };
+        let mut worst_step = 0.0f64;
+        let mut moved_frames = 0;
+        for _ in 0..3_000 {
+            let before = plant.q;
+            plant.step(16.7, 500.0, 0.0, &rewind, 0.0, 10_000.0);
+            let step = (plant.q - before).abs();
+            if step > 0.5 {
+                moved_frames += 1;
+            }
+            worst_step = worst_step.max(step);
+        }
+        assert!(moved_frames > 200, "not a walk: {moved_frames} moving frames");
+        assert!(
+            worst_step <= (cap * 16.7 / 1000.0) + 1e-6,
+            "a frame moved {worst_step}px, past the {cap}px/s ceiling"
+        );
+        assert!((plant.q - 500.0).abs() < 5.0, "did not arrive: {}", plant.q);
+    }
+
+    /// A snapshot sequence with total control over the decision codes, built by
+    /// cloning one the real engine produced rather than by writing the struct
+    /// out — a literal here would break every time `Snapshot` gains a field, and
+    /// what this test is about is two of them.
+    fn synthetic_replay(script: &cc_align::CompiledScript, base: Snapshot) -> ReplayResult {
+        let mut snapshots: Vec<Snapshot> = Vec::new();
+        let mut push = |seq: u64, at_ms: f64, atom: f64, rate: f64, decision: DecisionCode| {
+            let mut s = base.clone();
+            s.seq = seq;
+            s.state = TrackingState::Following;
+            s.decision = decision;
+            s.observed = atom;
+            s.confirmed = (atom - 1.0).max(0.0);
+            s.rate = rate;
+            s.evidence_audio_ms = at_ms;
+            s.at_audio_ms = at_ms;
+            s.suggestion = None;
+            s.display_limit = script.len() as f64;
+            snapshots.push(s);
+        };
+        // Twelve seconds of ordinary reading, up to atom 300…
+        for i in 0..12u64 {
+            let at = i as f64 * 1_000.0;
+            push(i + 1, at, 25.0 * (i + 1) as f64, 25.0, DecisionCode::LocalConfirmed);
+        }
+        // …then the presenter restarts near the top, and holds there.
+        push(13, 12_000.0, 12.0, 0.0, DecisionCode::RetakeAccepted);
+        for i in 0..30u64 {
+            push(14 + i, 13_000.0 + i as f64 * 1_000.0, 12.0, 0.0, DecisionCode::LocalObserved);
+        }
+        ReplayResult {
+            snapshots,
+            items: Vec::new(),
+            event_us: Vec::new(),
+            final_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn render_walks_an_accepted_retake_instead_of_cutting_to_it() {
+        let words = (0..400).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
+        let script = cc_align::compile(&words, cc_align::CompileOptions::default());
+        let base = {
+            let mut engine =
+                cc_align::Engine::new(script.clone(), cc_align::AlignmentConfig::default());
+            engine.handle(cc_align::SessionEvent::Final {
+                acoustic_end_ms: None,
+                item_id: "seed".into(),
+                text: "w0 w1".into(),
+                audio_end_ms: 500.0,
+                word_times: None,
+            })
+        };
+        let layout = default_layouts()
+            .into_iter()
+            .next()
+            .expect("at least one modelled panel");
+        let trace = render(&script, &synthetic_replay(&script, base), &layout);
+
+        // The retake lands at 12 s. Everything after it is the walk.
+        let after: Vec<&Frame> = trace.frames.iter().filter(|f| f.t_ms >= 12_000.0).collect();
+        assert!(after.len() > 500, "not enough frames after the retake");
+
+        // Nothing was obscured, and nothing stepped.
+        let cap = guided_rewind_velocity_px_s(layout.line_pitch_px, layout.viewport_h_px);
+        let frame_step_px = cap * layout.frame_ms() * 2.0 / 1_000.0;
+        let mut worst_dim = 1.0f64;
+        let mut worst_step = 0.0f64;
+        let mut previous = after[0].q_px;
+        for f in &after {
+            worst_dim = worst_dim.min(f.doc_opacity);
+            worst_step = worst_step.max((f.q_px - previous).abs());
+            previous = f.q_px;
+        }
+        assert!(
+            worst_dim > 0.999,
+            "the document was faded during a retake (min opacity {worst_dim})"
+        );
+        assert!(
+            worst_step <= frame_step_px + 1.0,
+            "a frame moved {worst_step}px, past the {cap}px/s ceiling"
+        );
+
+        // It really travelled backward, and it arrived.
+        let last = after.last().expect("frames");
+        assert!(
+            after[0].q_px - last.q_px > layout.line_pitch_px * 4.0,
+            "the walk did not happen: {} -> {}",
+            after[0].q_px,
+            last.q_px
+        );
+        assert!(
+            (last.q_px - last.target_px).abs() < layout.line_pitch_px * 0.5,
+            "did not arrive: q {} target {}",
+            last.q_px,
+            last.target_px
+        );
     }
 
     #[test]

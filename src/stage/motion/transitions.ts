@@ -49,6 +49,21 @@ export interface StageTransitionController {
    * Parking it here keeps it valid until the map resolves or it expires.
    */
   deferPlantOverwrite(directive: StageTransitionDirective): void;
+  /**
+   * Push the active transition's deadline later — never earlier, and never for
+   * a transition that is not the active one.
+   *
+   * §30.5. A `rewind`'s TTL has to outlive its travel, and the travel cannot be
+   * measured when the directive is minted: the destination is a scroll position,
+   * and during a line-map rebuild there is no geometry to resolve one from. The
+   * directive is therefore issued against a floor, and the frame loop re-arms it
+   * on the first frame that can actually see the journey.
+   *
+   * Extension only, so this can never become a way to retire a licence early —
+   * that is `complete`'s job, and it is the one that revokes the overwrite token
+   * with it.
+   */
+  extend(id: string, expiresAtMs: number): void;
   /** Mark the active transition finished (arrived at destination). */
   complete(id: string): void;
   reset(): void;
@@ -173,6 +188,13 @@ export function createStageTransitionController(
       // is a stale re-anchor waiting to teleport the plant.
       if (!active || active.directive.id !== directive.id) return;
       pendingOverwrite = directive;
+    },
+
+    extend(id, expiresAtMs) {
+      if (!active || active.directive.id !== id) return;
+      if (!Number.isFinite(expiresAtMs)) return;
+      if (expiresAtMs <= active.expiresAtMs) return;
+      active = { ...active, expiresAtMs };
     },
 
     complete(id) {
