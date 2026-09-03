@@ -18,6 +18,12 @@ export interface LogicalDimensions {
   height: number;
 }
 
+/** Twin of Rust `PhysicalSizeMm` (`windows/panel_size.rs`). */
+export interface PhysicalSizeMm {
+  width: number;
+  height: number;
+}
+
 /** Twin of Rust `DisplayDescriptor` (spec §52.3). */
 export interface DisplayDescriptor {
   id: string;
@@ -39,6 +45,12 @@ export interface DisplayDescriptor {
    * ever a "your arrangement changed" hint; never used to resolve a profile.
    */
   topologyHash: string;
+  /**
+   * The panel's active area in millimetres, read off its EDID, when the
+   * platform could and the answer was believable. Absent otherwise — never a
+   * guess, because it feeds straight into the angular model.
+   */
+  physicalSizeMm?: PhysicalSizeMm;
 }
 
 /** Twin of Rust `IdentificationSession` (spec §52.4). */

@@ -64,7 +64,11 @@
     type StageSettings,
     type TextIntensity,
   } from '../../shared/contracts';
-  import { discoverProfile, identifyHardware } from '../../shared/optical-discovery';
+  import {
+    AUTOMATIC_RIG_NAME,
+    discoverProfile,
+    identifyHardware,
+  } from '../../shared/optical-discovery';
   import { resolveStageGeometry } from '../../shared/optical-resolve';
   import {
     opticalProfileFieldsForPreset,
@@ -293,6 +297,7 @@
           name: display.name,
           physicalSize: display.physicalSize,
           scaleFactor: display.scaleFactor,
+          physicalSizeMm: display.physicalSizeMm ?? null,
         }
       : null,
   );
@@ -398,7 +403,12 @@
     const existing = $settings.optical.profiles[opticalRigKey(displayFingerprint, rigName)] ?? null;
     const found = discoverProfile(
       panel
-        ? { name: panel.name, physicalSize: panel.physicalSize, scaleFactor: panel.scaleFactor }
+        ? {
+            name: panel.name,
+            physicalSize: panel.physicalSize,
+            scaleFactor: panel.scaleFactor,
+            physicalSizeMm: panel.physicalSizeMm ?? null,
+          }
         : null,
       existing,
     );
@@ -932,7 +942,9 @@
         ? 'Measured against the glass'
         : profile.scale.source === 'diagonal'
           ? 'From the diagonal you typed'
-          : 'From the panel model',
+          : profile.scale.source === 'display'
+            ? 'From the size the display reports'
+            : 'From the panel model',
   );
 
   /* ------------------------------------------------------- step: distance */
@@ -1085,6 +1097,21 @@
       stepIndex = STEPS.findIndex((s) => s.id === 'hardware');
       return;
     }
+    /*
+     * The one name a rig may not have. `isAutomaticProfile` tells the
+     * profile a take built from the panel apart from one somebody measured by
+     * this name alone, so a measured rig called "Automatic" would wear the
+     * Automatic badge on the Live screen and be told it cannot be nudged
+     * because it was never calibrated — which is exactly backwards.
+     */
+    if (name.toLowerCase() === AUTOMATIC_RIG_NAME.toLowerCase()) {
+      showToast(
+        `“${AUTOMATIC_RIG_NAME}” is the name of the sizing CandidCue works out on its own. Call this rig something else.`,
+        'danger',
+      );
+      stepIndex = STEPS.findIndex((s) => s.id === 'hardware');
+      return;
+    }
     const next: OpticalProfile = { ...profile, rigName: name, completedSteps: answered };
     finishing = true;
     try {
@@ -1234,6 +1261,9 @@
             Identified from the display’s own name: {identification.label}.
           {:else if identification.confidence === 'resolution'}
             {identification.label}
+          {:else if identification.confidence === 'panel'}
+            CandidCue does not recognise the model, but the display reports its own physical size
+            ({identification.label}), so the text can be sized from that without measuring.
           {:else}
             CandidCue could not recognise this panel, so it will ask you to measure it.
           {/if}
@@ -1266,7 +1296,7 @@
         </div>
         <p class="hint-line">
           A ruler held against the glass is the only method that measures the finished optical path,
-          so it absorbs a beamsplitter that magnifies and a panel that overscans. The other two
+          so it absorbs a beamsplitter that magnifies and a panel that overscans. The others
           describe the panel alone.
         </p>
         <div class="row-actions">

@@ -105,7 +105,7 @@
     type TextIntensity,
   } from '../../shared/contracts';
   import { presentationModeShortcutLabel } from '../lib/shortcuts';
-  import { discoverProfile } from '../../shared/optical-discovery';
+  import { automaticProfile, discoverProfile } from '../../shared/optical-discovery';
   import {
     DEFAULT_BOTTOM_FADE_LINES,
     DEFAULT_DEAD_ZONE_LINES,
@@ -801,10 +801,12 @@
    * the panel model from the display name, the physical scale from that model,
    * a plausible distance for that hardware — and it is a PROPOSAL, not a rig.
    *
-   * The proposal is deliberately not adopted silently. Doing so would resize
-   * the stage of every existing Elgato owner the first time they launched a new
-   * build, which is the one thing the uncalibrated path is preserved verbatim
-   * to prevent. So it is shown, with what it would give them, behind one button.
+   * The proposal IS what a take runs on now, under the name "Automatic":
+   * `prompterOpticalProfile` in services/stage-envelope.ts reaches for the
+   * same discovery whenever no rig has been chosen for the panel. So what this
+   * section shows for an unrigged display is not a preview of a button — it
+   * is the geometry the next take opens with, and editing it turns it into a
+   * stored rig that then takes precedence.
    */
   const displayShape = $derived(
     effectiveDisplay
@@ -812,6 +814,7 @@
           name: effectiveDisplay.name,
           physicalSize: effectiveDisplay.physicalSize,
           scaleFactor: effectiveDisplay.scaleFactor,
+          physicalSizeMm: effectiveDisplay.physicalSizeMm ?? null,
         }
       : null,
   );
@@ -820,6 +823,13 @@
   const rigs = $derived(opticalRigsForDisplay($settings.optical, rigFingerprint));
   const appliedRig = $derived(activeOpticalProfile($settings.optical, rigFingerprint));
   const discovered = $derived(discoverProfile(displayShape, null));
+  /**
+   * What a take on this panel actually runs on when no rig is chosen — the
+   * same complete-or-null test `prompterOpticalProfile` applies, so the copy
+   * cannot promise automatic sizing to a panel (an iPad, say) that discovery
+   * recognises but cannot size.
+   */
+  const automaticRig = $derived(automaticProfile(displayShape));
   /**
    * The profile the panel below describes — the applied rig, or the proposal.
    *
@@ -928,7 +938,7 @@
     if (fingerprint === null) return;
     const accepted = await requestConfirm({
       title: `Forget ${name}?`,
-      body: 'The measurements for this arrangement are deleted. Takes on this display go back to the uncalibrated size until another rig is chosen.',
+      body: 'The measurements for this arrangement are deleted. Takes on this display go back to automatic sizing until another rig is chosen.',
       confirmLabel: 'Forget rig',
       danger: true,
     });
@@ -1005,6 +1015,9 @@
       return { label: 'the reading window', toRig: false };
     }
     if (appliedRig !== null) return { label: `${appliedRig.rigName} calibration`, toRig: true };
+    // Automatic sizing owns the geometry just as a rig does: these four
+    // sliders would move and change nothing on a panel it can size.
+    if (automaticRig !== null) return { label: 'automatic sizing', toRig: true };
     return null;
   });
 
@@ -2328,19 +2341,25 @@
             {/if}
 
             {#if appliedRig === null}
-              <!-- The proposal. Not applied silently, because doing so would
-                   resize the stage of everyone who already owns one of these
-                   panels the first time they launched a build that knew how. -->
+              <!-- Automatic sizing: what an unrigged panel actually prompts at.
+                   The same discovery a take runs (`prompterOpticalProfile`),
+                   so the readout below is the next take's geometry, not a
+                   proposal. -->
               <p class="hint-line">
-                <strong>Nothing is applied to this display yet</strong>, so takes run at the
-                uncalibrated size ({$settings.teleprompter.fontSizePx} px).
-                {#if discovered.identification.confidence === 'unknown'}
-                  CandidCue does not recognise this panel, so it cannot work out how physically
-                  large a pixel is — calibrating is the only way to size the text by distance.
+                {#if automaticRig === null}
+                  <strong>No rig is chosen for this display</strong>, and CandidCue cannot size it
+                  automatically: {discovered.identification.confidence === 'unknown'
+                    ? 'the panel is not one it recognises and it does not report its own physical size'
+                    : `it recognised ${discovered.identification.label} but cannot assume that panel’s size`},
+                  so takes run at the fallback size ({$settings.teleprompter.fontSizePx} px).
+                  Calibrating is the way to size the text by distance here.
                 {:else}
-                  CandidCue recognised it as {discovered.identification.label} and can size the text
-                  from that. The numbers below are what it would give you; changing any of them, or
-                  finishing the calibration, applies the rig.
+                  <strong>Sized automatically.</strong> CandidCue recognised this display as
+                  {discovered.identification.label} and sizes takes from that, assuming a viewing
+                  distance of about {(automaticRig.viewingDistanceMm ?? 0) / 1000} m. The numbers
+                  below are what takes on this display open with; changing any of them, or
+                  finishing the calibration, stores a rig that takes precedence — and measuring
+                  the real distance is the one thing that makes the size more than an estimate.
                 {/if}
               </p>
             {/if}
@@ -2647,7 +2666,7 @@
               {format}
               disabled={owned}
               description={owner
-                ? `Controlled by ${owner.label} — the number here is the fallback for an uncalibrated display, not what a take prompts at.`
+                ? `Controlled by ${owner.label} — the number here is the fallback for a display CandidCue cannot size, not what a take prompts at.`
                 : undefined}
               onchange={(next) => void patchSettings('teleprompter', { [key]: next })}
             />
@@ -2852,10 +2871,11 @@
               a crosshair and remembers it per rig.
             </p>
             <p class="hint-line">
-              These four are what an <strong>uncalibrated</strong> display prompts at. Calibrate one
-              under Prompter display and rigs and its size, line height, column and reading band are worked out
-              from how far away you stand instead — which is the only way they can be right on two
-              panels of different sizes at once.
+              These four are the <strong>fallback</strong> — what a display prompts at when CandidCue
+              can neither recognise it nor read its physical size. Every other panel is sized
+              automatically from how large it is and how far away you stand, and a rig calibrated
+              under Prompter display and rigs refines that with real measurements — which is the only
+              way the text can be right on two panels of different sizes at once.
             </p>
           {/if}
           <!--

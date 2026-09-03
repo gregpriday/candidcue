@@ -70,6 +70,12 @@
      */
     rigResolved: boolean;
     /**
+     * The rig that resolved it was the automatic one — built from the panel at
+     * Present, not calibrated by anybody — so the badge and the hint say so
+     * rather than calling a table lookup "Calibrated".
+     */
+    automatic?: boolean;
+    /**
      * The take's size ceiling, fixed when it opened.
      *
      * Handed in rather than derived here so it cannot move under the thumb: a
@@ -102,6 +108,7 @@
   let {
     appearance,
     rigResolved,
+    automatic = false,
     maxFontSizePx,
     charactersPerLine = null,
     onchange,
@@ -216,7 +223,7 @@
       <!-- A badge rather than a sentence. "This display runs from a saved rig"
            was doing two jobs — naming the state and explaining it — and the
            explanation belongs with the values it applies to, below. -->
-      <span class="badge">Calibrated</span>
+      <span class="badge">{automatic ? 'Automatic' : 'Calibrated'}</span>
     {/if}
   </header>
 
@@ -255,8 +262,13 @@
         </div>
       </dl>
       <p class="hint">
-        Worked out from how far away you stand. Change them under
-        <strong>Settings → Prompter display and rigs</strong>.
+        {#if automatic}
+          Sized automatically for this display and a typical viewing distance. To change them,
+          calibrate a rig under <strong>Settings → Prompter display and rigs</strong>.
+        {:else}
+          Worked out from how far away you stand. Change them under
+          <strong>Settings → Prompter display and rigs</strong>.
+        {/if}
       </p>
     {:else}
       <!--
