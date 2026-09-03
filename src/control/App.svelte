@@ -100,6 +100,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     awaitPendingPersistence,
     clearSession,
     identifyStageDisplays,
+    installLiveSettingsFollow,
     liveMirrorX,
     session,
     stopSession,
@@ -359,6 +360,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * optimistic-concurrency check nobody could account for.
      */
     const teardownSettingsSync = installSettingsSync();
+    /*
+     * And into the take on the glass, not only into the next one. The Settings
+     * window is the control surface on the desk while this window is the
+     * prompter on the other display; `stores/session.ts` says why.
+     */
+    const teardownLiveSettingsFollow = installLiveSettingsFollow();
 
     /*
      * And the OVERLAY, which the broadcast above cannot carry.
@@ -767,6 +774,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       teardownMenuFocus();
       teardownDrop();
       teardownSettingsSync();
+      teardownLiveSettingsFollow();
       teardownOverlaySync();
       teardownShortcuts();
       teardownHelp();

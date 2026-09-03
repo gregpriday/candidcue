@@ -69,6 +69,11 @@
     font-weight: 600;
     letter-spacing: -0.01em;
     white-space: nowrap;
+    /* Never wider than the row it sits in. A caller with a label that can run
+       long wraps it in something that ellipsizes (`Settings.svelte`'s rig
+       action); this is what gives that something a box to be shorter than. */
+    max-width: 100%;
+    min-width: 0;
     transition:
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out),

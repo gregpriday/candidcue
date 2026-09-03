@@ -377,6 +377,23 @@ mod tests {
         let _ = cat.default_model();
     }
 
+    /// `model_manager::entry_for` accepts either id, so the two namespaces
+    /// must never overlap: an `id` that equalled another entry's `modelName`
+    /// would win the first lookup and resolve the persisted model to the wrong
+    /// package, silently.
+    #[test]
+    fn catalogue_ids_and_recogniser_ids_are_disjoint() {
+        let ids: HashSet<&str> = catalogue().models.iter().map(|m| m.id.as_str()).collect();
+        for model in &catalogue().models {
+            assert!(
+                !ids.contains(model.model_name.as_str()),
+                "{}: modelName {} is another entry's id",
+                model.id,
+                model.model_name
+            );
+        }
+    }
+
     #[test]
     fn every_entry_is_well_formed() {
         let mut ids = HashSet::new();

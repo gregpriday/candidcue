@@ -511,6 +511,10 @@ export async function startTake(
     const presentation = await enterPresentation(
       presentationMode,
       restoreFrameFor(s, presentationMode),
+      // The pinned panel, for a prompter to fill. Rust falls back to the
+      // monitor the window is on when nothing is pinned or the pin is
+      // unplugged, and reports whichever it chose — see below.
+      s.stage.displayFingerprint,
     );
     await awaitViewportSettled(presentation);
 
@@ -519,13 +523,14 @@ export async function startTake(
      * THE TAKE IS MEASURED AGAINST THE PANEL IT IS ACTUALLY ON
      * ------------------------------------------------------------------------
      * Composed HERE, after presenting, because that is the first moment anybody
-     * knows which panel that is. Presenting fills whichever monitor this window
-     * was already on and deliberately not the pinned one (`windows/present.rs`
-     * argues the case), so a take composed before the move was sized from a
-     * fingerprint that named a different, possibly disconnected, panel. That is
-     * not cosmetic: `mmPerCssPx` is the whole basis of the angular model, so an
-     * operator with an external prompter pinned who pressed Present at their
-     * laptop read type laid out for the external panel's millimetres.
+     * knows which panel that is. Presenting asks for the pinned panel but fills
+     * the monitor this window is on when the pin is absent or unplugged
+     * (`windows/present.rs`), so a take composed before the move could be sized
+     * from a fingerprint naming a panel it does not land on. That is not
+     * cosmetic: `mmPerCssPx` is the whole basis of the angular model, so an
+     * operator with a disconnected external prompter still pinned who pressed
+     * Present at their laptop would read type laid out for the external
+     * panel's millimetres.
      *
      * Doing this late costs no LAYOUT work, which is what the ordering argument
      * above is about: `buildStageEnvelope` assembles data, the stage has not

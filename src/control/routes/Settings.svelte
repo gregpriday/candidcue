@@ -2263,8 +2263,17 @@
           -->
           {#snippet actions()}
             {#if appliedRig}
-              <Button size="sm" onclick={() => calibrate(appliedRig.rigName)}>
-                Re-calibrate {appliedRig.rigName}…
+              <!-- The full name is in the tooltip; the label ellipsizes rather
+                   than dictate the width of the panel. A discovered rig is
+                   named for how it was identified ("Elgato Prompter (9-inch)
+                   (identified by its 1024 x 600 panel)"), which is a sentence,
+                   not a button. -->
+              <Button
+                size="sm"
+                title={`Re-calibrate ${appliedRig.rigName}`}
+                onclick={() => calibrate(appliedRig.rigName)}
+              >
+                <span class="rig-action-label">Re-calibrate {appliedRig.rigName}…</span>
               </Button>
               <Button size="sm" variant="ghost" onclick={() => calibrate()}>
                 Measure another rig…
@@ -3548,6 +3557,16 @@
   }
 
   /* --- the optical rig --- */
+  /* The primary rig action, which names a rig whose name can be a sentence.
+     It shortens with an ellipsis; the tooltip carries the whole thing. */
+  .rig-action-label {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .rig-list {
     display: flex;
     flex-direction: column;

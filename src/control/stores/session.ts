@@ -81,7 +81,7 @@ import {
 } from '../../stage/renderer/autoscroll';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
-import { getSettingsSnapshot, patchSettings } from './settings';
+import { getSettingsSnapshot, onSettingsCommitted, patchSettings } from './settings';
 import { clearConditionToasts, dismissToastByKey, showToast } from './toasts';
 
 /**
@@ -3640,6 +3640,94 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
   takeTeleprompter = { ...merged, ...clampStageAppearance(merged, takeFontCeilingPx) };
   return recomposeStageSettings();
 }
+
+/**
+ * Let a change made in Settings reach the take that is already running.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SETTINGS WINDOW IS THE ONLY CONTROL SURFACE LEFT ON THE DESK
+ * ---------------------------------------------------------------------------
+ * In single-window presentation this window IS the prompter, filling the glass
+ * on the other display. The in-session sheet lives inside it, which puts every
+ * appearance control on the panel the presenter is reading from — fine for a
+ * nudge with `+`/`-`, and no use at all for sitting at the desk monitor and
+ * dragging the text size until it reads right through the lens. Settings is
+ * its own window on the desk, and its sliders write the document; without this
+ * those writes reached the store here and stopped, honoured by the NEXT take
+ * and ignored by the one on the glass.
+ *
+ * So each document COMMITTED while a take is running is diffed against the one
+ * committed before it, and the stage fields that changed are applied to the
+ * take through `applyStageAppearance` — the same path the sheet and the voice
+ * commands use, so the corridor is re-derived and the clamp still holds. Only
+ * the fields that CHANGED, on purpose: the take may carry nudges of its own
+ * that the saved document does not know about, and replacing the whole section
+ * would snap those back. A change to the optical rigs recomposes too, with no
+ * field patch, because the rig is read from the snapshot at every rebuild —
+ * compared by value, since every read rebuilds the section and an identity
+ * check would call an unrelated save a rig change.
+ *
+ * Commits, not the store. The store also shows this window's optimistic
+ * values and their rollbacks, and a rollback is the old numbers coming back —
+ * which a follower cannot tell from somebody setting them. The sheet's Done
+ * button is the case that matters: it promotes the take's appearance into the
+ * saved document, and if that write is refused the store rolls back while the
+ * take is meant to keep its look. When it succeeds, the commit arrives as a
+ * diff whose values the take already holds — a rebuild to the same numbers.
+ *
+ * Not every teleprompter field is a stage field. `fixedSpeedWpm` is the
+ * transport's pace, read once at the take's opening; it is routed to the
+ * transport here so a pace changed in Settings applies to the roll in
+ * progress. The rest — what a take does at its end, whether the pointer hides
+ * — are for the next take and are left alone.
+ *
+ * Installed by the shell rather than at module scope: the Settings window has
+ * its own copy of this store with no take in it, and the unit suites that mock
+ * the settings store do not all provide the hook.
+ */
+export function installLiveSettingsFollow(): () => void {
+  let previous = getSettingsSnapshot();
+  return onSettingsCommitted((next) => {
+    const last = previous;
+    previous = next;
+    if (!get(state).active) return;
+    const patch: Partial<TeleprompterSettings> = {};
+    for (const key of LIVE_STAGE_FIELDS) {
+      if (!Object.is(next.teleprompter[key], last.teleprompter[key])) {
+        (patch as Record<string, unknown>)[key] = next.teleprompter[key];
+      }
+    }
+    const rigChanged = JSON.stringify(next.optical) !== JSON.stringify(last.optical);
+    if (Object.keys(patch).length > 0 || rigChanged) applyStageAppearance(patch);
+
+    const pace = next.teleprompter.fixedSpeedWpm;
+    if (!Object.is(pace, last.teleprompter.fixedSpeedWpm)) {
+      const s = get(state);
+      publishAutoScroll({ ...s.autoScroll, wordsPerMinute: clampAutoScrollWpm(pace) });
+    }
+  });
+}
+
+/**
+ * The teleprompter fields the stage is composed from — the ones
+ * `stageSettingsFromSettings` reads. A change to any other field is not a
+ * change to the glass.
+ */
+const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
+  'fontFamilyId',
+  'fontSizePx',
+  'lineHeight',
+  'mirrorX',
+  'mirrorY',
+  'columnWidthPercent',
+  'readingBandCenterPercent',
+  'phraseHighlight',
+  'pastDimming',
+  'semanticLineBreaks',
+  'textIntensity',
+  'stageMode',
+  'readingCue',
+];
 
 /**
  * Rebuild the live `StageSettings` from this take's own overrides.

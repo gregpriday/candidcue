@@ -620,7 +620,7 @@ import { onShortcut } from '../lib/shortcuts';
      */
     const forSession = $session.sessionId;
     try {
-      const switched = await switchPresentationMode(next);
+      const switched = await switchPresentationMode(next, $settings.stage.displayFingerprint);
       /*
        * Switching AWAY from reader mode reports the bounds the reading window
        * had a moment ago, and this is the only time they are reported outside a

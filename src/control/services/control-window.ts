@@ -85,11 +85,14 @@ export interface ControlPresentationState {
 /**
  * Present this window as the teleprompter, in the mode asked for.
  *
- * `prompter` fills the current monitor: borderless, above the menu bar, black
- * behind the webview. The monitor is whichever one the window is already on —
- * the operator drags it to the panel they want and presses Present, and moving
- * it somewhere else on their behalf would be taking the window away from the
- * person driving it.
+ * `prompter` fills a monitor: borderless, above the menu bar, black behind the
+ * webview. Which monitor is `displayFingerprint` — the panel pinned in
+ * Settings › Prompter — when it is set and connected, and otherwise whichever
+ * one the window is already on. It used to be only the latter, on the argument
+ * that moving the window was taking it away from the person driving it; on a
+ * real rig that meant dragging the editor onto the prompter glass before every
+ * take and back off it after, which "Show test on this display" had already
+ * shown was not necessary. `windows/present.rs` has the full account.
  *
  * `reader` presents in place and moves no geometry at all, so the viewport is
  * already the size it is going to be and `awaitViewportSettled` matches on its
@@ -104,13 +107,19 @@ export interface ControlPresentationState {
 export async function enterPresentation(
   mode: PresentationMode = 'prompter',
   readerFrame?: ReaderFrame | null,
+  displayFingerprint?: string | null,
 ): Promise<ControlPresentationState> {
   return invokeOrMock<ControlPresentationState>(
     'set_control_presenting',
-    // Omitted rather than sent as null when there is nothing to restore: the
-    // command's argument is optional, and an explicit null would have to be
-    // deserialized as one.
-    { enabled: true, mode, ...(readerFrame ? { readerFrame } : {}) },
+    // Omitted rather than sent as null when there is nothing to restore or
+    // nothing pinned: both arguments are optional on the command, and an
+    // explicit null would have to be deserialized as one.
+    {
+      enabled: true,
+      mode,
+      ...(readerFrame ? { readerFrame } : {}),
+      ...(displayFingerprint ? { displayFingerprint } : {}),
+    },
     () => browserViewport(true, mode),
   );
 }
@@ -139,8 +148,9 @@ export async function exitPresentation(): Promise<ControlPresentationState> {
  */
 export async function switchPresentationMode(
   mode: PresentationMode,
+  displayFingerprint?: string | null,
 ): Promise<ControlPresentationState> {
-  return enterPresentation(mode);
+  return enterPresentation(mode, undefined, displayFingerprint);
 }
 
 /**

@@ -593,6 +593,11 @@ import type { PresentationMode } from '../services/settings-types';
    * documents. Without the id, somebody who had installed a non-default
    * language would be told they had no model, and somebody who had switched
    * away from an installed default would be told they had one.
+   *
+   * The id held here is the RECOGNISER id (`audio.transcriptionModel`), not
+   * the catalogue id the download controls use; `model_manager::entry_for`
+   * resolves either. It did not always, and this call was refused as
+   * `STT_MODEL_UNKNOWN` on every settings change, for an installed model.
    */
   $effect(() => {
     const modelId = $settings.speech.transcriptionModel;
@@ -1810,12 +1815,22 @@ import type { PresentationMode } from '../services/settings-types';
   .editor-pane {
     display: flex;
     flex-direction: column;
-    /* Not `0`: in split the flex basis is a percentage, and with no floor a
-       narrow window let the preview take the editor down to nothing. */
+    /*
+     * The pane SHRINKS, and `min-width: 0` is what lets it.
+     *
+     * It was `flex-shrink: 0`. With no inline basis (Edit and Preview modes)
+     * the basis is `auto` — the pane's max-content width, which CodeMirror
+     * reports as the full 70ch measure plus its insets — so on any window too
+     * narrow for that the pane kept its measure and ran under the outline
+     * rail instead of wrapping: 661px of editor in a 470px slot, the script's
+     * lines painting over "Outline" and the readiness line. Split mode never
+     * saw it because its inline `flex: 0 0 N%` overrides all of this, and the
+     * `PANE_LIMITS` floor on that fraction is what keeps the editor from being
+     * dragged to nothing there.
+     */
     min-width: 0;
     min-height: 0;
-    flex-grow: 1;
-    flex-shrink: 0;
+    flex: 1 1 auto;
     /*
      * View › Larger/Smaller Editor Text (§11.3).
      *
