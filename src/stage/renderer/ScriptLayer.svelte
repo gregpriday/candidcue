@@ -974,7 +974,10 @@
   const wrapPlan = $derived.by(() => {
     void fontEpoch;
     // Off is exactly the pre-existing behaviour: nothing measured, nothing
-    // planned, the browser wraps. Absent means on — see the contract note.
+    // planned, the browser wraps. Absent means on — see the contract note. On
+    // is a request, not a promise: a column under `MIN_PLANNED_COLUMN_CHARS`
+    // (every prompter take under the automatic profile) is left to the browser
+    // too, and the planner says so with its own signature.
     if (settings.semanticLineBreaks === false) return EMPTY_WRAP_PLAN;
     return planScriptBreaks(performanceBlocks, {
       columnWidthPx,

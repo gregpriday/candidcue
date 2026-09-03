@@ -2935,9 +2935,11 @@
             onchange={(value) => void patchSettings('teleprompter', { semanticLineBreaks: value })}
           />
           <p class="hint-line">
-            The stage ends each line where a phrase ends rather than at the last word that fits,
-            so the sweep back to the left edge lands somewhere natural — never on "the", and
-            never through the middle of a name. Turn it off to wrap the way a browser does.
+            On a wide column — about 48 characters a line and up, which a reader window or a
+            large panel gives you — the stage ends each line where a phrase ends rather than at
+            the last word that fits, so the sweep back to the left edge lands somewhere natural.
+            A small prompter panel holds too few words a line for that to read well, so it wraps
+            the way a browser does whatever this says. Turn it off to wrap that way everywhere.
           </p>
           <Select
           layout="row"

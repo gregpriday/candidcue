@@ -8,8 +8,14 @@
 import { describe, expect, it } from 'vitest';
 import type { CompiledBlock, SafeRenderNode } from '../../shared/contracts';
 import { flattenWords, type AdvanceMeasurer, type AdvanceStyle } from './advance';
-import { planBlockBreaks, planScriptBreaks } from './wrap-plan';
+import {
+  EMPTY_WRAP_PLAN,
+  MIN_PLANNED_COLUMN_CHARS,
+  planBlockBreaks,
+  planScriptBreaks,
+} from './wrap-plan';
 import { compile } from '../../shared/markdown/compile';
+import { FONT_METRICS_PROSE_SAMPLE } from './fontMetrics';
 import { bestOf, budgetMessage } from '../../shared/perf-budget';
 
 const BASE: AdvanceStyle = {
@@ -471,7 +477,7 @@ describe('planning a script', () => {
       { scriptId: 'wrap-plan-test' },
     );
     const plan = planScriptBreaks(script.blocks, {
-      columnWidthPx: 300,
+      columnWidthPx: 490,
       baseStyle: BASE,
       measure: fake,
     });
@@ -489,7 +495,7 @@ describe('planning a script', () => {
       { ...paragraph([text(SENTENCE)], 'table1'), kind: 'table' },
     ];
     const plan = planScriptBreaks(blocks, {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: fake,
     });
@@ -506,7 +512,7 @@ describe('planning a script', () => {
   it('does not plan a heading, whose rendered size it cannot know', () => {
     const heading: CompiledBlock = { ...paragraph([text(SENTENCE)], 'h1'), kind: 'heading' };
     const plan = planScriptBreaks([heading], {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: fake,
     });
@@ -515,13 +521,13 @@ describe('planning a script', () => {
 
   it('gives a list item a narrower column, because the bullet takes some', () => {
     const asParagraph = planScriptBreaks([paragraph([text(SENTENCE)], 'p')], {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: fake,
     });
     const asListItem = planScriptBreaks(
       [{ ...paragraph([text(SENTENCE)], 'p'), kind: 'list_item' }],
-      { columnWidthPx: 300, baseStyle: BASE, measure: fake },
+      { columnWidthPx: 500, baseStyle: BASE, measure: fake },
     );
     // Same words, same column, less room: the plan cannot be the same one.
     expect(asListItem.signature).not.toBe(asParagraph.signature);
@@ -533,11 +539,13 @@ describe('planning a script', () => {
   it('measures a blockquote in the italic it is drawn in', () => {
     const seen: boolean[] = [];
     const watching: AdvanceMeasurer = (t, style) => {
-      seen.push(style.italic);
+      // The column gate measures the prose sample in the base face first;
+      // it is the block's own words that have to be italic.
+      if (t !== FONT_METRICS_PROSE_SAMPLE) seen.push(style.italic);
       return fake(t, style);
     };
     planScriptBreaks([{ ...paragraph([text(SENTENCE)], 'q'), kind: 'blockquote' }], {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: watching,
     });
@@ -548,21 +556,77 @@ describe('planning a script', () => {
   it('changes its signature when the column changes', () => {
     const blocks = [paragraph([text(SENTENCE)])];
     const wide = planScriptBreaks(blocks, {
-      columnWidthPx: 600,
+      columnWidthPx: 900,
       baseStyle: BASE,
       measure: fake,
     });
     const narrow = planScriptBreaks(blocks, {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: fake,
     });
     expect(wide.signature).not.toBe(narrow.signature);
   });
 
+  /*
+   * The 9-inch Prompter resolves to 25-30 characters, and on that column the
+   * planned wrap read as three-word lines and a sweep every breath. Below the
+   * measure the model was tuned at, the whole script is the browser's.
+   */
+  describe('a column too narrow to plan', () => {
+    // The fake measures every glyph at 10px, so the gate in pixels is the
+    // character gate times ten, plus the planner's 2px safety margin.
+    const atGate = MIN_PLANNED_COLUMN_CHARS * 10 + 2;
+
+    it('is left to the browser whole', () => {
+      const plan = planScriptBreaks([paragraph([text(SENTENCE)])], {
+        columnWidthPx: 300,
+        baseStyle: BASE,
+        measure: fake,
+      });
+      expect(plan.breakAfterTokens.size).toBe(0);
+      // Not a failure to plan: nothing was attempted.
+      expect(plan.unplannedBlocks).toBe(0);
+      expect(plan.signature).toBe('narrow');
+    });
+
+    it('is planned from exactly the column the model was tuned at', () => {
+      const blocks = [paragraph([text(SENTENCE)])];
+      const at = planScriptBreaks(blocks, { columnWidthPx: atGate, baseStyle: BASE, measure: fake });
+      const under = planScriptBreaks(blocks, {
+        columnWidthPx: atGate - 1,
+        baseStyle: BASE,
+        measure: fake,
+      });
+      expect(at.breakAfterTokens.size).toBeGreaterThan(0);
+      expect(under.signature).toBe('narrow');
+    });
+
+    it('is not the same layout as the feature being off', () => {
+      // Both draw no breaks; the fingerprint still has to tell them apart, or
+      // toggling the setting on a narrow column would not be a layout change.
+      const plan = planScriptBreaks([paragraph([text(SENTENCE)])], {
+        columnWidthPx: 300,
+        baseStyle: BASE,
+        measure: fake,
+      });
+      expect(plan.signature).not.toBe(EMPTY_WRAP_PLAN.signature);
+    });
+
+    it('still reports an unmeasurable platform as unplanned, not as narrow', () => {
+      const plan = planScriptBreaks([paragraph([text(SENTENCE)])], {
+        columnWidthPx: 300,
+        baseStyle: BASE,
+        measure: refuses,
+      });
+      expect(plan.signature).not.toBe('narrow');
+      expect(plan.unplannedBlocks).toBe(1);
+    });
+  });
+
   it('counts the blocks it could not plan rather than pretending it planned them', () => {
     const plan = planScriptBreaks([paragraph([text(SENTENCE)])], {
-      columnWidthPx: 300,
+      columnWidthPx: 500,
       baseStyle: BASE,
       measure: refuses,
     });

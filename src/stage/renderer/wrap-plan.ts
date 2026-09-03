@@ -73,6 +73,53 @@ import { FONT_METRICS_PROSE_SAMPLE } from './fontMetrics';
 const COLUMN_SAFETY_MARGIN_PX = 2;
 
 /**
+ * The narrowest column the planner will plan, in characters.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A NARROW COLUMN IS LEFT TO THE BROWSER
+ * ---------------------------------------------------------------------------
+ * The solver's cost model is scale-free — raggedness is charged on a FRACTION
+ * of the measure and the seam and glue penalties are constants — so it makes
+ * the same trades on every column, and those trades were tuned and judged on
+ * columns of forty characters and more, where a line 40% short is two or three
+ * words and reads as phrasing. On the 9-inch Prompter the automatic profile
+ * resolves to 25 to 30 characters, four or five words a line, and the same
+ * trades read as three-word lines and a return sweep every breath. A presenter
+ * reported exactly that from the glass (2026-09-03).
+ *
+ * It is not a tuning problem, and a retune was measured before this gate was
+ * chosen instead. Most of the shortness at a narrow column is the price of
+ * glue avoidance: every "the" or "of" pushed off a line end costs a word, and
+ * on a four-word line a word is a quarter of the measure. On the fixture
+ * scripts the planned wrap at 25 to 34 characters fills its interior lines to
+ * 77-80% of the column against the browser's 88-91% and uses 11-13% more
+ * lines; a factor that made shortness dearer on narrow columns and let the
+ * softer glue yield recovered about half of that gap and no more, and the
+ * presenter's answer was that on a small panel the feature should not run at
+ * all. So below this measure the stage wraps the way a browser does, whatever
+ * the setting says.
+ *
+ * What still gets planned: a reader-mode window, whose measure is 55 to 75
+ * characters; a calibrated rig with a character override above the prompter
+ * band; and the flat 64px fallback on a big monitor, which is where the
+ * feature was first judged good. Under the automatic PROMPTER profile the
+ * resolver caps the column at 38 characters (`READING_MEASURE.idealMax`), so a
+ * prompter take on any panel lands below this line and takes the browser's
+ * wrap.
+ *
+ * 48 rather than the 42 the model was tuned from, for a margin: the stage
+ * turns the resolver's `ch` column into pixels with a fixed 0.55em per `ch`
+ * (`ScriptLayer.svelte`, `columnWidthPx`), and in a face whose zero advance is
+ * narrower than that the 38-character cap comes out up to a tenth wider in
+ * the units measured here. 48 is what no prompter take reaches by accident and
+ * what every reader window clears.
+ *
+ * Applied to the whole script rather than per block, so a list item's inset
+ * cannot put half a document on one side of the line and half on the other.
+ */
+export const MIN_PLANNED_COLUMN_CHARS = 48;
+
+/**
  * The shortest block worth planning.
  *
  * A block that cannot reach two lines has no break to choose, and planning it
@@ -387,10 +434,39 @@ export const EMPTY_WRAP_PLAN: ScriptWrapPlan = {
   reasons: {},
 };
 
+/**
+ * The plan for a column too narrow to plan: no breaks, and a signature that
+ * says which of the two reasons it has none.
+ *
+ * Distinct from `EMPTY_WRAP_PLAN` for the same reason that one is distinct
+ * from an empty string — the layout fingerprint carries it, and crossing the
+ * gate in either direction re-wraps every line.
+ */
+export const NARROW_WRAP_PLAN: ScriptWrapPlan = {
+  breakAfterTokens: new Set(),
+  signature: 'narrow',
+  unplannedBlocks: 0,
+  reasons: {},
+};
+
 export function planScriptBreaks(
   blocks: readonly CompiledBlock[],
   options: WrapPlanOptions,
 ): ScriptWrapPlan {
+  /*
+   * The gate, in the same characters the solver will be handed: the column
+   * less its safety margin, over one measured average character. A platform
+   * that will not measure text falls through — every block then declines on
+   * its own and is counted as unplanned, which is the honest answer there.
+   */
+  const cell = cellWidth(options.baseStyle, options.measure);
+  if (
+    cell !== null &&
+    (options.columnWidthPx - COLUMN_SAFETY_MARGIN_PX) / cell < MIN_PLANNED_COLUMN_CHARS
+  ) {
+    return NARROW_WRAP_PLAN;
+  }
+
   const breakAfterTokens = new Set<number>();
   const reasons: Record<string, number> = {};
   const parts: string[] = [];
