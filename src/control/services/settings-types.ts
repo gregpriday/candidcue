@@ -78,9 +78,9 @@ export interface AppSettings {
    * Its own section rather than a corner of `teleprompter`, because the answer
    * is about a physical panel rather than about type.
    *
-   * It used to say "where the prompt window opens". Nothing here decides that:
-   * single-window presentation stays on the display the control window is
-   * already on. See `displayFingerprint` below for what the choice does govern.
+   * `displayFingerprint` is where a prompter take opens — Present moves this
+   * window onto that panel — as well as which panel the preview, the display
+   * test and the optical rigs belong to.
    *
    * ---------------------------------------------------------------------------
    * THE SECTION IS SPLIT DOWN THE MIDDLE, AND THAT IS THE POINT
@@ -105,18 +105,19 @@ export interface AppSettings {
      * `null` means "choose one": an external display when one is connected,
      * otherwise the only display there is.
      *
-     * NOT where a take opens, however much the name suggests it. Single-window
-     * presentation stays on whichever monitor the control window is already on
-     * and never moves to this one (`windows/present.rs` argues why), and the
-     * take is calibrated against the panel Rust reports it landed on. What this
-     * actually selects is which panel the preview, the display test and the
-     * optical rigs belong to — which is why it is per-machine, a fingerprint
-     * meaning nothing on another Mac.
+     * Where a prompter take opens: Present hands it to `set_control_presenting`
+     * and Rust moves this window onto that panel before filling it. When it is
+     * null, or names a panel that is no longer connected, the take fills the
+     * monitor the window is already on instead — and either way the take is
+     * calibrated against the panel Rust reports it actually landed on, never
+     * against this value. It also selects which panel the preview, the display
+     * test and the optical rigs belong to, which is why it is per-machine: a
+     * fingerprint means nothing on another Mac.
      *
-     * It is still read on ONE take path, and only as a last resort: when Rust
-     * can name no panel at all, `chooseStageDisplay` falls back to this. That
-     * is a guess, and it can be the wrong panel — but it is the guess takes
-     * were composed from before any of them were told where they landed.
+     * Read directly on ONE other take path, as a last resort: when Rust can
+     * name no panel at all, `chooseStageDisplay` falls back to this. That is a
+     * guess, and it can be the wrong panel — but it is the guess takes were
+     * composed from before any of them were told where they landed.
      */
     displayFingerprint: string | null;
     /**

@@ -93,18 +93,25 @@ pub fn set_stage_fullscreen<R: Runtime>(
 /// already asymmetric — Rust is the only thing that can MEASURE the frame, the
 /// settings document is the only thing that can KEEP it — so the frontend owns
 /// the storage half at both ends and Rust stays a pure window operation.
+///
+/// `display_fingerprint` is the panel a PROMPTER should fill — the one pinned
+/// in Settings › Prompter, as `list_displays` fingerprints it. Optional for the
+/// same compatibility reason as the others: absent, the prompter fills the
+/// monitor the window is already on, which is all it ever did before. Ignored
+/// by reader mode, which presents in place, and on the way out.
 pub fn set_control_presenting<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
     mode: Option<windows::PresentMode>,
     reader_frame: Option<windows::ReaderFrame>,
+    display_fingerprint: Option<String>,
 ) -> Result<ControlPresentationState, AppError> {
     let requested = if enabled {
         Some(mode.unwrap_or(windows::PresentMode::Prompter))
     } else {
         None
     };
-    windows::set_control_presenting(&app, requested, reader_frame)
+    windows::set_control_presenting(&app, requested, reader_frame, display_fingerprint.as_deref())
 }
 
 #[tauri::command]

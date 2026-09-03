@@ -72,6 +72,17 @@ export const SAVED_BADGE_MS = 2400;
 export const COMPILE_DEBOUNCE_MS = 90;
 
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The save on the wire, so a second `saveNow` waits for it rather than racing
+ * it.
+ *
+ * Two saves in flight carry the same `scriptRevision`, and the second is
+ * refused as `SCRIPT_CONFLICT` — "This document changed elsewhere" — for a
+ * change this window made itself. Keep typing through a slow save and the
+ * debounce fires again before the first answer lands; the conflict sheet then
+ * asks the user to choose between two copies of their own text.
+ */
+let saveInFlight: Promise<void> | null = null;
 let savedBadgeTimer: ReturnType<typeof setTimeout> | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -180,22 +191,56 @@ export async function setTitle(title: string): Promise<void> {
 
 /** Immediate save (autosave flush and Cmd/Ctrl+S). */
 export async function saveNow(): Promise<void> {
-  const s = get(state);
   // Flush the pending compile first, even when there is nothing to save:
   // Preflight awaits saveNow() and then issues its own compile at revision 0,
   // and a debounced keystroke landing after that would supersede it.
   flushPendingCompile();
+  /*
+   * Behind the save already on the wire, and re-read afterwards: it will have
+   * adopted the new revision and recomputed `dirty`, so what follows either
+   * has nothing left to do or sends the right revision. A loop, not a single
+   * await, because two waiters woken by the same save would otherwise both
+   * proceed — and that is the race this exists to end.
+   */
+  while (saveInFlight) await saveInFlight;
+  const s = get(state);
   if (s.scriptId === null || !s.dirty) return;
+  /*
+   * Not into a conflict. The sheet is up and only its arms carry a revision
+   * that can land; a save from here would be the same stale one again, and
+   * each refusal makes Rust snapshot the "external" version afresh. Typing
+   * while the first save was on the wire is enough to have scheduled this.
+   */
+  if (s.saveState === 'conflict') return;
   if (autosaveTimer) {
     clearTimeout(autosaveTimer);
     autosaveTimer = null;
   }
+  const inFlight = performSave(s.scriptId, s);
+  saveInFlight = inFlight;
+  try {
+    await inFlight;
+  } finally {
+    if (saveInFlight === inFlight) saveInFlight = null;
+  }
+}
+
+async function performSave(scriptId: string, s: EditorState): Promise<void> {
   state.update((prev) => ({ ...prev, saveState: 'saving' }));
   const savedSource = s.source;
+  /*
+   * The document this answer belongs to. Close the editor, or open another
+   * script, while the write is on the wire and the answer would otherwise
+   * stamp its revision and status onto whatever is open NOW — a different
+   * script, or nothing. The write itself still lands; only the bookkeeping is
+   * abandoned.
+   */
+  const generation = openGeneration;
   try {
-    const result = await scriptsService.saveScript(s.scriptId, s.scriptRevision, savedSource, {
+    const result = await scriptsService.saveScript(scriptId, s.scriptRevision, savedSource, {
       title: s.title,
     });
+    if (generation !== openGeneration) return;
     // Only the mock backend answers with a `status`. Rust's SaveResult has no
     // such field — see the catch below, which is the real conflict path.
     if (result.status === 'conflict') {
@@ -231,6 +276,7 @@ export async function saveNow(): Promise<void> {
       state.update((prev) => (prev.saveState === 'saved' ? { ...prev, saveState: 'idle' } : prev));
     }, SAVED_BADGE_MS);
   } catch (err) {
+    if (generation !== openGeneration) return;
     /*
      * F.8 external-change conflict.
      *

@@ -512,7 +512,7 @@ describe('single-window Present', () => {
     // The main Present button. It asks no question and changes no setting.
     settingsState.value!.stage.presentationMode = 'reader';
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
-    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, null);
     expect(calls.patchSettings).not.toHaveBeenCalled();
   });
 
@@ -576,7 +576,7 @@ describe('single-window Present', () => {
       startTake(SCRIPT.id, { presentationMode: 'reader' }),
     ).resolves.toBe(true);
     expect(calls.patchSettings).toHaveBeenCalledWith('stage', { presentationMode: 'reader' });
-    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, null);
   });
 
   it('does not write a setting that already says what was asked for', async () => {
@@ -590,7 +590,7 @@ describe('single-window Present', () => {
     // refuse to present. `patchSettings` has already reported the failure.
     calls.patchSettings.mockRejectedValue(new Error('revision conflict'));
     await expect(startTake(SCRIPT.id, { presentationMode: 'reader' })).resolves.toBe(true);
-    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, null);
   });
 
   it('hands back a remembered reading window', async () => {
@@ -599,7 +599,7 @@ describe('single-window Present', () => {
     settingsState.value!.stage.readerFrame = frame;
     settingsState.value!.general.restoreWindows = true;
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
-    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', frame);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', frame, null);
   });
 
   it('leaves the window where it is when the operator asked us not to remember', async () => {
@@ -607,7 +607,7 @@ describe('single-window Present', () => {
     settingsState.value!.stage.readerFrame = { x: 40, y: 60, width: 720, height: 540 };
     settingsState.value!.general.restoreWindows = false;
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
-    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, null);
   });
 
   it('never hands a stored frame to a prompter', async () => {
@@ -616,7 +616,21 @@ describe('single-window Present', () => {
     settingsState.value!.stage.presentationMode = 'prompter';
     settingsState.value!.stage.readerFrame = { x: 40, y: 60, width: 720, height: 540 };
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
-    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null, null);
+  });
+
+  it('hands the pinned panel to a prompter, so Present moves the window there', async () => {
+    /*
+     * The rig this app is for: the editor lives on the desk monitor and the
+     * prompter is a 1024x600 panel behind a lens. Present used to fill whichever
+     * monitor the window was on, so every take began by dragging the editor
+     * onto the glass. Rust honours the pin when it is connected and falls back
+     * to the current monitor when it is not; the frontend's job is to pass it.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = 'elgato-1024x600';
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null, 'elgato-1024x600');
   });
 
   it('ignores a second Present while the first one is still starting', async () => {

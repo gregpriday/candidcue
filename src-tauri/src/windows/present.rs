@@ -25,23 +25,32 @@
 //! nothing left over to paint.
 //!
 //! ---------------------------------------------------------------------------
-//! THE MONITOR IS THE ONE THE WINDOW IS ALREADY ON
+//! THE MONITOR IS THE PINNED ONE, OR FAILING THAT THE ONE THE WINDOW IS ON
 //! ---------------------------------------------------------------------------
-//! Deliberately not `settings.stage.displayFingerprint`. In single-window
-//! presentation the operator moves this window to the panel they want to
-//! present on and then presses Present — that is the whole gesture, and it is
-//! what `start-take.ts` documents at its display-enumeration step. A present
-//! that teleported the window to whichever display a pinned fingerprint named
-//! would be moving the window out from under the person driving it.
+//! A prompter fills the panel pinned in Settings › Prompter
+//! (`settings.stage.displayFingerprint`), which the caller passes in. This used
+//! to be deliberately NOT that: the argument was that moving the window to
+//! another display was taking it out from under the person driving it, and the
+//! gesture was "drag the window to the glass, then press Present". On the rig
+//! this app is for that gesture is the whole cost of a take — the control
+//! window lives on the desk monitor, the Elgato is a 1024×600 panel behind a
+//! lens, and dragging a document window onto it to present and back off it to
+//! edit is exactly the chore "Show test on this display" already spares the
+//! operator in Settings. Present now does what that button does.
+//!
+//! The pin is a preference, not a precondition: no pin, or a pinned panel that
+//! is no longer connected, falls back to the monitor the window is on, with a
+//! log line rather than a refusal — the operator pressed Present and a take
+//! on the wrong panel beats no take. `StageDisplayMissing`'s copy ("choose
+//! another display") belongs to the separate stage window, whose selection is
+//! the only thing it can open on.
 //!
 //! The other half of that bargain is that this module has to SAY which monitor
-//! it chose. Ignoring the pin for placement while the renderer still sized its
-//! type from the pinned panel is how an operator with an external prompter
-//! pinned could press Present at their laptop and get a take laid out in the
-//! external panel's millimetres-per-pixel — the wrong physical size, stated
-//! confidently. So every arm reports the panel it is landing on, from the
-//! geometry it is about to apply rather than from a read taken afterwards, and
-//! `startTake` composes the take's optics from that answer.
+//! it chose. Every arm reports the panel it is landing on, from the geometry it
+//! is about to apply rather than from a read taken afterwards, and `startTake`
+//! composes the take's optics from that answer — so the fallback case is laid
+//! out in the millimetres-per-pixel of the panel it actually fills, not the
+//! one it was asked for.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
@@ -977,10 +986,22 @@ fn leave_native_fullscreen<R: Runtime>(window: &WebviewWindow<R>) {
     }
 }
 
+/// Fill a monitor with the control window, borderless and pinned above the
+/// menu bar — the pinned panel when `wanted` names one that is connected,
+/// otherwise the monitor the window is on (see the module doc).
+///
+/// Returns the bounds applied, the scale factor of the monitor they belong to,
+/// and that monitor's fingerprint. The scale travels with the bounds because a
+/// prompter can now CROSS monitors: `logical_size` divides by the scale of the
+/// monitor the window is on, and after an asynchronous move that is still the
+/// old one — a 2x laptop to the 1x Elgato would report 512x300 for a 1024x600
+/// viewport, and `awaitViewportSettled` would sit out its whole ceiling waiting
+/// for a size that never comes.
 fn apply_presentation<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
-) -> Result<(PhysicalSize<u32>, Option<String>), AppError> {
+    wanted: Option<&str>,
+) -> Result<(PhysicalSize<u32>, f64, Option<String>), AppError> {
     /*
      * Black BEFORE the geometry moves, not after.
      *
@@ -1020,18 +1041,39 @@ fn apply_presentation<R: Runtime>(
      */
     leave_native_fullscreen(window);
 
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        // Not `StageDisplayMissing`: its copy tells the operator the display
-        // they SELECTED is gone and to choose another, and this path never
-        // consults a selection — it uses whichever monitor the window is on. A
-        // machine that reports no monitors at all is the same "could not
-        // reshape this window" failure as the rest of them.
-        .ok_or_else(|| presentation_failed("no monitor to present on"))?;
+    let pinned = wanted.and_then(|fingerprint| {
+        match super::resolve_monitor(app, Some(fingerprint)) {
+            Ok(monitor) => Some(monitor),
+            Err(_) => {
+                tracing::warn!(
+                    "the pinned prompter display {fingerprint:?} is not connected; presenting on \
+                     the monitor the window is on"
+                );
+                None
+            }
+        }
+    });
+    let monitor = match pinned {
+        Some(monitor) => monitor,
+        None => window
+            .current_monitor()
+            .ok()
+            .flatten()
+            // Not `StageDisplayMissing`: its copy tells the operator the display
+            // they SELECTED is gone and to choose another, and by this point the
+            // selection has already been given up on — this is the fallback to
+            // whichever monitor the window is on. A machine that reports no
+            // monitors at all is the same "could not reshape this window"
+            // failure as the rest of them.
+            .ok_or_else(|| presentation_failed("no monitor to present on"))?,
+    };
 
     let bounds = *monitor.size();
+    let scale = if monitor.scale_factor() > 0.0 {
+        monitor.scale_factor()
+    } else {
+        1.0
+    };
     /*
      * Named before the setters run, for the reason in the doc comment above —
      * and named from the SAME `monitor` whose bounds are applied below, so the
@@ -1076,7 +1118,7 @@ fn apply_presentation<R: Runtime>(
     window
         .set_size(tauri::Size::Physical(bounds))
         .map_err(presentation_failed)?;
-    Ok((bounds, display))
+    Ok((bounds, scale, display))
 }
 
 /// Putting the prompter above everything, and taking it back down.
@@ -1613,10 +1655,15 @@ mod pin {
 /// `mode` is the shape to present in and `None` means "stop". Idempotent in
 /// every direction — see [`PresentAction`] for what each of the five
 /// combinations means, and [`PresentState`] for why there are two frames.
+///
+/// `display` is the pinned prompter panel, honoured by every arm that fills a
+/// monitor — the opening, a reassert, and the mid-take switch out of reader
+/// mode — and ignored by the ones that do not.
 pub fn set_control_presenting<R: Runtime>(
     app: &AppHandle<R>,
     mode: Option<PresentMode>,
     reader_frame: Option<ReaderFrame>,
+    display: Option<&str>,
 ) -> Result<ControlPresentationState, AppError> {
     let window = control_window(app)?;
     let mut saved = lock();
@@ -1642,6 +1689,12 @@ pub fn set_control_presenting<R: Runtime>(
      * would be a take measured against the panel it just left.
      */
     let mut landed_display: Option<String> = None;
+    /*
+     * The scale the reported size is divided by, when the arm knows better than
+     * the window. A prompter arm names the monitor it fills, and that monitor's
+     * scale is the right divisor even while the window is still on its way there.
+     */
+    let mut target_scale: Option<f64> = None;
 
     match plan(saved.map(|state| state.mode), mode) {
         PresentAction::Enter(entering) => {
@@ -1666,8 +1719,9 @@ pub fn set_control_presenting<R: Runtime>(
                  * and a stored rectangle would be describing the wrong thing.
                  */
                 PresentMode::Prompter => {
-                    let (bounds, display) = apply_presentation(app, &window)?;
-                    landed_display = display;
+                    let (bounds, scale, landed) = apply_presentation(app, &window, display)?;
+                    landed_display = landed;
+                    target_scale = Some(scale);
                     bounds
                 }
                 PresentMode::Reader => {
@@ -1706,8 +1760,9 @@ pub fn set_control_presenting<R: Runtime>(
             let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;
             target = match current {
                 PresentMode::Prompter => {
-                    let (bounds, display) = apply_presentation(app, &window)?;
-                    landed_display = display;
+                    let (bounds, scale, landed) = apply_presentation(app, &window, display)?;
+                    landed_display = landed;
+                    target_scale = Some(scale);
                     bounds
                 }
                 // Never `reader_frame`: a reassert re-applies the mode the
@@ -1772,8 +1827,9 @@ pub fn set_control_presenting<R: Runtime>(
                      * and no second chance to fail.
                      */
                     departing_reader = Some(logical_frame(&window, &departing));
-                    let (bounds, display) = apply_presentation(app, &window)?;
-                    landed_display = display;
+                    let (bounds, scale, landed) = apply_presentation(app, &window, display)?;
+                    landed_display = landed;
+                    target_scale = Some(scale);
                     target = bounds;
                 }
                 PresentMode::Reader => {
@@ -1908,7 +1964,10 @@ pub fn set_control_presenting<R: Runtime>(
      * report the truth without anybody having to remember to update this.
      */
     let applied = saved.map(|state| state.mode);
-    let (width, height) = logical_size(&window, target);
+    let (width, height) = match target_scale {
+        Some(scale) => (target.width as f64 / scale, target.height as f64 / scale),
+        None => logical_size(&window, target),
+    };
     /*
      * ONLY the departure measurement, never a live read of the window here.
      *

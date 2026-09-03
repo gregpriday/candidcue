@@ -73,11 +73,75 @@ export function adoptSettings(payload: unknown): boolean {
  */
 let commitCount = 0;
 
+/**
+ * The last document Rust agreed to — what a refused write rolls back to.
+ *
+ * Not `get(state)`, which may already be carrying the optimistic values of
+ * patches queued behind the one that failed; see `patchSettings`.
+ */
+let lastCommitted: AppSettings = get(state);
+
+type CommitListener = (value: AppSettings) => void;
+const commitListeners = new Set<CommitListener>();
+
+/**
+ * Hear every document Rust has agreed to — and nothing else.
+ *
+ * The store itself also carries this window's optimistic values and their
+ * rollbacks, and a listener that wants "what changed in the saved document"
+ * cannot tell those apart from a subscription: a refused write shows up as the
+ * old values coming BACK, indistinguishable from somebody setting them. The
+ * running take's follow (`stores/session.ts`) is exactly that listener, and
+ * reacting to a rollback there would put the saved appearance back onto a take
+ * whose look the presenter just asked to keep.
+ */
+export function onSettingsCommitted(listener: CommitListener): () => void {
+  commitListeners.add(listener);
+  return () => {
+    commitListeners.delete(listener);
+  };
+}
+
 /** Every write to the document goes through here, so nothing is missed. */
 function commitSettings(value: AppSettings): void {
   commitCount += 1;
-  state.set(value);
+  lastCommitted = value;
+  // ONE set, already carrying the queued patches: a subscriber must never see
+  // the committed document alone, which would be a slider's value going
+  // backwards for the length of a synchronous callback.
+  state.set(withQueued(value));
   loaded = true;
+  for (const listener of commitListeners) {
+    /*
+     * Contained. A listener is somebody else's code running inside a save's
+     * success path; letting it throw here would leave the batch's callers
+     * unsettled and the queue stalled behind them.
+     */
+    try {
+      listener(value);
+    } catch (err) {
+      console.error('a settings commit listener failed', err);
+    }
+  }
+}
+
+/**
+ * A document that has just replaced the store — a commit, or a rollback —
+ * with the patches still waiting laid over it.
+ *
+ * A committed document is Rust's answer to the write BEFORE those patches, so
+ * it does not carry them; adopting it as-is would take a slider's newest
+ * position off the screen for the length of a round trip, and — worse — the
+ * next batch reads the sections it sends off the store, so it would send the
+ * committed values back and quietly drop the change it was queued to make.
+ */
+function withQueued(document: AppSettings): AppSettings {
+  if (queued.length === 0) return document;
+  const next = { ...document };
+  for (const { section, patch } of queued) {
+    (next as Record<keyof AppSettings, unknown>)[section] = mergeSection(next[section], patch);
+  }
+  return next;
 }
 
 export async function loadSettings(force = false): Promise<AppSettings> {
@@ -199,37 +263,117 @@ async function adoptOpticalFromOverlay(): Promise<void> {
   }
 }
 
-/** Patch one settings section optimistically; reverts on failure. */
-export async function patchSettings<K extends keyof AppSettings>(
+/** A patch waiting its turn, with the promise its caller is holding. */
+interface QueuedPatch {
+  section: keyof AppSettings;
+  patch: object;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
+let queued: QueuedPatch[] = [];
+let draining = false;
+
+/**
+ * Patch one or more settings fields optimistically; reverts on failure.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE SAVE IN FLIGHT AT A TIME, AND THE REST COALESCE BEHIND IT
+ * ---------------------------------------------------------------------------
+ * Every write is checked against `expectedRevision`, and this used to send
+ * each patch the moment it was asked for, with whatever revision the store
+ * held. Drag a slider and it asks thirty times in a second: the first write
+ * lands and bumps the revision, and every one already in flight behind it was
+ * sent with the revision it just retired — so all of them were refused, each
+ * one toasted "Could not save settings", and the screen filled with a column
+ * of identical errors for a value that had in fact been saved.
+ *
+ * So the writes are serialised. A patch made while one is in flight is
+ * applied to the store immediately — the optimism is unchanged — and queued;
+ * when the in-flight write settles, everything queued since is merged into ONE
+ * write, sent with the revision that write handed back. A drag costs a handful
+ * of saves rather than one per pixel, none of them can be stale, and every
+ * caller's promise still settles with the outcome of the write that carried
+ * its change.
+ */
+export function patchSettings<K extends keyof AppSettings>(
   section: K,
   patch: Partial<AppSettings[K]>,
 ): Promise<void> {
-  const before = get(state);
-  const sectionValue = before[section];
-  const optimistic: AppSettings = {
-    ...before,
-    [section]:
-      typeof sectionValue === 'object' && sectionValue !== null
-        ? { ...(sectionValue as object), ...(patch as object) }
-        : patch,
-  };
   /*
    * Deliberately NOT a commit.
    *
-   * This is the optimistic half — shown immediately, and rolled back below if
-   * the write is refused. Counting it would make a value that may never exist
-   * invalidate a read that is about to deliver a real one. The commit is the
-   * `commitSettings(saved)` a few lines down, once Rust has agreed.
+   * This is the optimistic half — shown immediately, and rolled back if the
+   * write that carries it is refused. Counting it would make a value that may
+   * never exist invalidate a read that is about to deliver a real one. The
+   * commit is the `commitSettings(saved)` in `sendPatchBatch`, once Rust has
+   * agreed.
    */
-  state.set(optimistic);
+  state.update((current) => ({
+    ...current,
+    [section]: mergeSection(current[section], patch as object),
+  }));
+  return new Promise<void>((resolve, reject) => {
+    queued.push({ section, patch: patch as object, resolve, reject });
+    if (!draining) void drainQueuedPatches();
+  });
+}
+
+async function drainQueuedPatches(): Promise<void> {
+  draining = true;
+  try {
+    while (queued.length > 0) {
+      const batch = queued;
+      queued = [];
+      try {
+        await sendPatchBatch(batch);
+      } catch (err) {
+        // `sendPatchBatch` settles its own callers on every ordinary path;
+        // this is the containment for an exceptional one — a subscriber
+        // throwing out of a rollback — so the callers still hear an answer
+        // and the loop goes on to the patches queued behind them.
+        for (const entry of batch) entry.reject(err);
+      }
+    }
+  } finally {
+    draining = false;
+  }
+}
+
+/** The section with the patch laid over it — or the patch, for a scalar section. */
+function mergeSection(current: unknown, patch: object): unknown {
+  return typeof current === 'object' && current !== null ? { ...current, ...patch } : patch;
+}
+
+async function sendPatchBatch(batch: QueuedPatch[]): Promise<void> {
+  /*
+   * The sections as the store shows them NOW — every patch in the batch has
+   * already been laid over the store, in order, so the store's copy of each
+   * section is the merged result. The revision is the store's too: optimistic
+   * updates never touch it, so it is always the one Rust last handed back.
+   */
+  const before = lastCommitted;
+  const current = get(state);
+  const payload: Partial<AppSettings> = {};
+  for (const { section } of batch) {
+    (payload as Record<keyof AppSettings, unknown>)[section] = current[section];
+  }
   const committedAt = commitCount;
   try {
-    const saved = await settingsService.updateSettings(before.revision, {
-      [section]: optimistic[section],
-    } as Partial<AppSettings>);
-    /* A commit, so a read that started before this one cannot land after it
-       and put the old value back. See `commitCount`. */
-    commitSettings(saved);
+    const saved = await settingsService.updateSettings(current.revision, payload);
+    /*
+     * A commit, so a read that started before this one cannot land after it
+     * and put the old value back. See `commitCount`.
+     *
+     * Unless a NEWER document already stands. The other window can write the
+     * revision after ours and Rust can broadcast it before our own answer
+     * arrives — event and response ordering is not something this store can
+     * enforce — and adopting our older answer over it would send the next
+     * batch stale. Equal revisions still commit: an overlay-only write hands
+     * back the current document at the current revision, and its sections
+     * have changed.
+     */
+    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
 
     /*
      * A local-storage failure is reported, not swallowed.
@@ -268,10 +412,12 @@ export async function patchSettings<K extends keyof AppSettings>(
      * When something did commit, the newer document stands. This save failed
      * and changed nothing, which is what the toast says either way.
      */
-    if (commitCount === committedAt) state.set(before);
+    if (commitCount === committedAt) state.set(withQueued(before));
     showToast('Could not save settings. Nothing was changed.', 'danger');
-    throw err;
+    for (const entry of batch) entry.reject(err);
+    return;
   }
+  for (const entry of batch) entry.resolve();
 }
 
 export function getSettingsSnapshot(): AppSettings {

@@ -135,8 +135,21 @@ pub struct SpeechModelManager {
 /// the caller's string: `install_path` joins `install_dir`, which the
 /// catalogue tests pin to a single safe segment. An unknown id is refused here
 /// and therefore cannot reach the filesystem at all.
+///
+/// Either of a model's two ids is accepted. The CATALOGUE id (`x-asr-480ms`)
+/// is what Settings' download controls send; the RECOGNISER id
+/// (`x-asr-480ms-streaming-zipformer-punct-int8-…`, `ModelEntry::model_name`)
+/// is what `audio.transcriptionModel` persists, and it is the one the editor
+/// holds when it asks whether the model a take will load is installed. That
+/// call was refused as `STT_MODEL_UNKNOWN` on every settings change — logged
+/// as an error twice per change, for a model that was installed. The
+/// catalogue's tests pin `modelName` unique, so the second lookup is as exact
+/// as the first.
 pub fn entry_for(model_id: &str) -> Result<&'static ModelEntry, AppError> {
-    catalogue().get(model_id).ok_or_else(|| {
+    let cat = catalogue();
+    cat.get(model_id)
+        .or_else(|| cat.models.iter().find(|entry| entry.model_name == model_id))
+        .ok_or_else(|| {
         AppError::structured(
             "STT_MODEL_UNKNOWN",
             ErrorCategory::Validation,
@@ -539,4 +552,25 @@ async fn run_install<R: tauri::Runtime>(
 fn emit_status<R: tauri::Runtime>(app: &tauri::AppHandle<R>, entry: &ModelEntry) {
     let status = app.state::<SpeechModelManager>().status(app, entry);
     let _ = app.emit_to(CONTROL_LABEL, events::SPEECH_MODEL_PROGRESS, status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_entry_resolves_by_either_of_its_ids() {
+        for expected in &catalogue().models {
+            let by_catalogue_id = entry_for(&expected.id).expect("catalogue id");
+            let by_recogniser_id = entry_for(&expected.model_name).expect("recogniser id");
+            assert_eq!(by_catalogue_id.id, expected.id);
+            assert_eq!(by_recogniser_id.id, expected.id);
+        }
+    }
+
+    #[test]
+    fn an_unknown_id_is_still_refused() {
+        let err = entry_for("not-a-model").expect_err("unknown id");
+        assert_eq!(err.code(), "STT_MODEL_UNKNOWN");
+    }
 }

@@ -36,17 +36,31 @@
     min-width: 0;
   }
 
+  /*
+   * The actions WRAP under the heading when the row is short of room.
+   *
+   * They used to be `flex: 0 0 auto` beside a heading that could shrink to
+   * nothing, and a button label is `white-space: nowrap` — so one long action
+   * ("Re-calibrate Elgato Prompter (9-inch) (identified by its 1024 x 600
+   * panel)…") crushed "This rig" and its description into a column one word
+   * wide, with the rest of the panel empty. The heading now keeps a readable
+   * floor and the actions drop to their own line, right-aligned, when the two
+   * cannot share one.
+   */
   .header {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-end;
     justify-content: space-between;
-    gap: var(--space-4);
+    gap: var(--space-3) var(--space-4);
   }
 
   .heading {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    /* The floor: below this the actions wrap rather than the heading. */
+    flex: 1 1 28ch;
     min-width: 0;
   }
 
@@ -69,9 +83,16 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: var(--space-2);
-    flex: 0 0 auto;
+    /* Shrinks and wraps; `margin-left: auto` keeps it on the right once it
+       has a line of its own. */
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
   }
 
   .body {

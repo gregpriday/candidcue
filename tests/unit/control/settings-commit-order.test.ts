@@ -215,11 +215,14 @@ describe('the settings document commits in the right order', () => {
     await first;
 
     const save = patchSettings('general', { launchBehavior: 'recent' }).catch(() => undefined);
-    // The other window's save lands while ours is still in flight.
-    expect(adoptSettings(broadcast(11, 'last_script'))).toBe(true);
+    // The other window's save lands while ours is still in flight — with the
+    // OPPOSITE value to ours, so a rollback that wrongly re-laid the refused
+    // patch over it would show.
+    expect(adoptSettings(broadcast(11, 'library'))).toBe(true);
     updates[0]!.reject(new Error('refused'));
     await save;
 
     expect(get(settings).revision).toBe(11);
+    expect(get(settings).general.launchBehavior).toBe('library');
   });
 });

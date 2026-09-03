@@ -143,6 +143,27 @@ describe('editor autosave', () => {
     vi.useRealTimers();
   });
 
+  /*
+   * Two saves on the wire carry the same `scriptRevision`, and the second is
+   * refused as `SCRIPT_CONFLICT` — the "changed elsewhere" sheet, for a change
+   * this window made itself. Typing through a slow save is all it took.
+   */
+  it('waits for the save in flight rather than racing it with a stale revision', async () => {
+    setSource('# Start\n\nFirst.\n');
+    const first = saveNow();
+    expect(get(editor).saveState).toBe('saving');
+    // More typing while the first save is on the wire, then a second flush.
+    setSource('# Start\n\nFirst. Second.\n');
+    const second = saveNow();
+    await Promise.all([first, second]);
+
+    expect(get(editor).saveState).not.toBe('conflict');
+    expect(get(editor).dirty).toBe(false);
+    const persisted = await scripts.getScript(scriptId);
+    expect(persisted.source).toContain('Second.');
+    expect(persisted.scriptRevision).toBe(get(editor).scriptRevision);
+  });
+
   it('debounces autosave ~500 ms after typing stops', async () => {
     vi.useFakeTimers();
     setSource('# Start\n\nMore words.\n');
