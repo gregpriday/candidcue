@@ -27,6 +27,7 @@ import {
   type ReadingContext,
 } from '../../shared/optics';
 import { resolveFollowProfile, type FollowingSettings } from '../lib/follow-profiles';
+import { automaticProfile, type AutomaticProfileSeed } from '../../shared/optical-discovery';
 import { invokeOrMock } from './ipc';
 import {
   activeOpticalProfile,
@@ -330,7 +331,10 @@ export function stageSettingsFromSettings(
    */
   const profile = reader
     ? readerOpticalProfile(s.optical, display?.fingerprint ?? null)
-    : activeOpticalProfile(s.optical, display?.fingerprint ?? null);
+    : prompterOpticalProfile(s.optical, display, {
+        intensity: t.textIntensity,
+        readingCue: t.readingCue,
+      });
   return buildStageSettings({
     fontFamilyId: t.fontFamilyId,
     fontSizePx: t.fontSizePx,
@@ -387,8 +391,43 @@ export function stageSettingsFromSettings(
 }
 
 /**
- * True when a saved rig decided this take's appearance rather than the flat
- * Settings values.
+ * The rig a prompter take runs with on this panel.
+ *
+ * ---------------------------------------------------------------------------
+ * A CHOSEN RIG, OR THE PANEL'S OWN ANSWER — NEVER THE 64PX GUESS FIRST
+ * ---------------------------------------------------------------------------
+ * `activeOpticalProfile` refuses to adopt a rig nobody chose, and it is right
+ * to: a stale arrangement is how a stage ends up sized for a distance the
+ * presenter no longer stands at. But "no rig chosen" used to fall all the way
+ * through to a flat 64px column at 68% of the width, whatever the glass — the
+ * layout that looked wrong on a 9-inch Prompter for the plain reason that it
+ * was never sized for one.
+ *
+ * `automaticProfile` is what stands between those two now. It is rebuilt from
+ * the landed panel on every take, so it can never be stale, and it is complete
+ * only when discovery can size the glass — a recognised Elgato, or any monitor
+ * that reports its own millimetres — so the uncalibrated layout is still what
+ * an unidentifiable panel gets, and still says so. A rig somebody calibrated
+ * wins outright: a ruler and a measured distance beat a table and a guess.
+ *
+ * The one thing this deliberately does NOT do is adopt a rig that is stored
+ * but not chosen. Automatic is a fresh derivation with nothing to go stale;
+ * an unchosen rig is somebody's measurements for an arrangement they may have
+ * dismantled.
+ */
+export function prompterOpticalProfile(
+  optical: AppSettings['optical'],
+  display: DisplayDescriptor | null | undefined,
+  seed?: AutomaticProfileSeed,
+): OpticalProfile | null {
+  return (
+    activeOpticalProfile(optical, display?.fingerprint ?? null) ?? automaticProfile(display, seed)
+  );
+}
+
+/**
+ * True when a rig — saved and chosen, or the automatic one built from the
+ * panel — decided this take's appearance rather than the flat Settings values.
  *
  * The distinction the in-session sheet has to make: wherever `buildStageSettings`
  * has an optics block, size, line height, column, reading band, brightness and

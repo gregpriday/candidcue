@@ -44,15 +44,21 @@ export type OpticalHardwareKind =
 /**
  * The physical scale, and where it came from.
  *
- * Provenance is carried because the three sources are not equally trustworthy
- * and the operator deserves to know which one is in force. A ruler measurement
+ * Provenance is carried because the sources are not equally trustworthy and
+ * the operator deserves to know which one is in force. A ruler measurement
  * describes the finished optical path — including a beamsplitter that magnifies
  * — while a model lookup describes only the panel.
+ *
+ * `'display'` is the panel's own answer: the EDID image size the window layer
+ * reads off the monitor (`DisplayDescriptor.physicalSizeMm`). Like `'model'`
+ * and `'diagonal'` it describes bare glass, not an optical path, so it ranks
+ * with them — below a ruler, above a guess — and is what lets a monitor
+ * CandidCue has never heard of be sized without anybody measuring it.
  */
 export interface OpticalScale {
   mmPerCssPx: number;
-  source: 'model' | 'diagonal' | 'ruler';
-  /** Physical diagonal used, when the source was a model or a typed diagonal. */
+  source: 'model' | 'diagonal' | 'ruler' | 'display';
+  /** Physical diagonal used, when the source was a model, the panel, or a typed diagonal. */
   diagonalMm?: number;
 }
 

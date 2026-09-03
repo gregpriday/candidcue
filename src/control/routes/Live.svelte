@@ -11,6 +11,7 @@
   import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
   import FollowStatePanel from '../components/FollowStatePanel.svelte';
   import { sessionModeLabel } from '../../shared/take-vocabulary';
+  import { isAutomaticProfile } from '../../shared/optical-discovery';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
@@ -707,9 +708,13 @@ import { onShortcut } from '../lib/shortcuts';
      * size that is not this key's to set.
      */
     if ($session.stageRigResolved) {
-      showToast('This display sizes its text from its calibration', 'info', {
-        durationMs: 2200,
-      });
+      showToast(
+        stageSizedAutomatically
+          ? 'This display is sized automatically — calibrate a rig in Settings to change it'
+          : 'This display sizes its text from its calibration',
+        'info',
+        { durationMs: 2200 },
+      );
       return;
     }
     const next = adjustStageFontSize(delta);
@@ -882,6 +887,15 @@ import { onShortcut } from '../lib/shortcuts';
    * width slider is a percentage. Only the stage can produce it.
    */
   let stageCharactersPerLine = $state<number | null>(null);
+  /**
+   * Whether the rig that resolved this take is the automatic one — built from
+   * the panel at Present rather than calibrated by anybody. The sheet and the
+   * size shortcut both say so, because calling a table lookup "calibrated"
+   * would send someone hunting for measurements they never took.
+   */
+  const stageSizedAutomatically = $derived(
+    isAutomaticProfile($session.stageEnvelope?.stageSettings.opticalProfile),
+  );
 
   /**
    * Open chrome owns the keyboard — see `chromeOpen` on the stage bridge.
@@ -1145,6 +1159,7 @@ import { onShortcut } from '../lib/shortcuts';
   <StageAppearanceSheet
     appearance={$session.stageAppearance}
     rigResolved={$session.stageRigResolved}
+    automatic={stageSizedAutomatically}
     maxFontSizePx={$session.stageFontCeilingPx}
     charactersPerLine={stageCharactersPerLine}
     onchange={(patch) => applyStageAppearance(patch)}

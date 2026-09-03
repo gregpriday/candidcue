@@ -410,6 +410,8 @@ export const mockStage = {
         primary: true,
         fingerprint: 'dsp-mock-builtin',
         topologyHash: 'top-mock-builtin',
+        // A 14-inch MacBook Pro panel, as its EDID reports it.
+        physicalSizeMm: { width: 302, height: 196 },
       },
       {
         id: 'display-1',
@@ -421,6 +423,10 @@ export const mockStage = {
         primary: false,
         fingerprint: 'dsp-mock-prompter',
         topologyHash: 'top-mock-prompter',
+        // A 15.6-inch 1080p panel. The name says "prompter" but the grid is
+        // not the 9-inch's, so identification falls through to these
+        // millimetres — the path an ordinary monitor takes.
+        physicalSizeMm: { width: 344, height: 194 },
       },
     ];
   },

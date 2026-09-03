@@ -174,6 +174,28 @@ Stage-side motion lives in `src/stage/motion/`: a persistent jerk-limited
 follower (`controller.ts`, pure — the caller supplies `dt`, no rAF, no DOM) fed
 by `engine.ts`, rendering through `src/stage/renderer/ScriptLayer.svelte`.
 
+### How a prompter take is sized
+
+A prompter fills whichever monitor the control window is on, and its type is
+sized by **visual angle**, not pixels (`src/shared/optics.ts`). The profile that
+drives it is chosen in `prompterOpticalProfile` (`services/stage-envelope.ts`)
+in this order: a rig the operator calibrated **and chose** for that panel; else
+the **automatic** profile, rebuilt from the landed panel on every Present
+(`shared/optical-discovery.ts::automaticProfile` — hardware table for the two
+Elgato models, otherwise the panel's own EDID millimetres, which Rust reads
+via `windows/panel_size.rs` into `DisplayDescriptor.physicalSizeMm`); else the
+flat 64px fallback, which only an unidentifiable panel gets now. The automatic
+profile is never stored — its `rigName` is `AUTOMATIC_RIG_NAME` (a name the
+wizard refuses) and that is how the appearance sheet and Live tell it from a
+calibrated rig. A stored rig that is not chosen is deliberately never adopted.
+On macOS the monitor `name` is tao's `Monitor #<model>`, so the "name contains
+Prompter" check never fires there; the 9-inch is identified by its 1024x600
+grid and everything else by millimetres. EDID lies in known ways, so
+`plausible_panel_mm` refuses `0x0`, the `160x90` placeholder, any size whose
+aspect disagrees with the pixel grid, and the 72-DPI estimate CoreGraphics
+substitutes when a display has no EDID; `cargo test --lib windows::panel_size --
+--ignored --nocapture` prints what the connected panels actually report.
+
 ### Stage event protocol
 
 `src/shared/contracts/stage.ts` is the complete surface between control/Rust and

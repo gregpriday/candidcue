@@ -573,7 +573,7 @@ const FRAMING_PRESETS: readonly FramingPreset[] = [
 const TEXT_INTENSITIES: readonly TextIntensity[] = ['soft', 'standard', 'strong'];
 const LENS_PLACEMENTS: readonly LensPlacement[] = ['in-panel', 'above', 'below', 'none'];
 const READING_CUES: readonly ReadingCueStyle[] = ['ticks', 'wash', 'none'];
-const SCALE_SOURCES = ['model', 'diagonal', 'ruler'] as const;
+const SCALE_SOURCES = ['model', 'diagonal', 'ruler', 'display'] as const;
 const CALIBRATION_STEPS: readonly OpticalCalibrationStep[] = [
   'hardware',
   'safe-area',

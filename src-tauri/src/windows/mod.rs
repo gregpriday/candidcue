@@ -11,6 +11,7 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
 pub mod drag_drop;
+pub mod panel_size;
 pub mod preferences;
 pub mod present;
 pub mod shutdown;
@@ -203,6 +204,11 @@ pub struct DisplayDescriptor {
     /// Only ever used to hint "your arrangement changed" — never to resolve a
     /// saved profile.
     pub topology_hash: String,
+    /// The panel's active area in millimetres, from its own EDID, when the
+    /// platform can read it and the answer is believable (`panel_size`).
+    /// Absent otherwise — never guessed, because it feeds the angular model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub physical_size_mm: Option<panel_size::PhysicalSizeMm>,
 }
 
 /// Stable display identity (spec §52.3) from the facts that describe the
@@ -326,6 +332,7 @@ fn monitor_descriptor(
     primary: bool,
     index: usize,
     fingerprint: String,
+    panel_sizes: &panel_size::PanelSizes,
 ) -> DisplayDescriptor {
     let size = monitor.size();
     let position = monitor.position();
@@ -349,6 +356,7 @@ fn monitor_descriptor(
         primary,
         fingerprint,
         topology_hash: monitor_topology_hash(monitor),
+        physical_size_mm: panel_sizes.for_monitor(monitor),
     }
 }
 
@@ -356,12 +364,20 @@ pub fn list_displays<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<DisplayDescri
     let primary = app.primary_monitor()?;
     let monitors = app.available_monitors()?;
     let fingerprints = monitor_fingerprints(&monitors);
+    // One read of the panels for the whole list — see `PanelSizes`.
+    let panel_sizes = panel_size::PanelSizes::snapshot();
     Ok(monitors
         .iter()
         .enumerate()
         .map(|(index, monitor)| {
             let is_primary = primary.as_ref().is_some_and(|p| same_monitor(p, monitor));
-            monitor_descriptor(monitor, is_primary, index, fingerprints[index].clone())
+            monitor_descriptor(
+                monitor,
+                is_primary,
+                index,
+                fingerprints[index].clone(),
+                &panel_sizes,
+            )
         })
         .collect())
 }
@@ -2048,6 +2064,7 @@ mod tests {
             primary: true,
             fingerprint: display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0),
             topology_hash: display_topology_hash(Some("DELL U2720Q"), 3840, 2160, 2.0, x, 0),
+            physical_size_mm: None,
         };
         assert_eq!(topology_signature(&[make(0)]), topology_signature(&[make(0)]));
         assert_ne!(topology_signature(&[make(0)]), topology_signature(&[make(3840)]));
