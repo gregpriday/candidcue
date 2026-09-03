@@ -134,10 +134,16 @@ const READER_MIN_HEIGHT_PX: f64 = 360.0;
 /// that is not enough to describe the chrome — see [`chrome`], which snapshots
 /// the real `NSWindowStyleMask` instead and leaves this field to the platforms
 /// where the bool IS the whole state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `scale` is the scale factor of the monitor the physical values were taken
+/// against, and it is what makes the frame replayable from ANOTHER monitor —
+/// see [`set_logical_position`] for why the window's own scale is the wrong
+/// divisor at replay time.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct ControlFrame {
     position: PhysicalPosition<i32>,
     inner_size: PhysicalSize<u32>,
+    scale: f64,
     decorations: bool,
     maximized: bool,
 }
@@ -218,10 +224,17 @@ fn reader_placement<R: Runtime>(
     frame: ReaderFrame,
     decorations: bool,
 ) -> ControlFrame {
-    let (position, inner_size) = fit_reader_frame(frame, &monitor_rects(app));
+    let rects = monitor_rects(app);
+    let (position, inner_size) = fit_reader_frame(frame, &rects);
+    // The same monitor `fit_reader_frame` fitted to, so the scale describes the
+    // physical values beside it.
+    let scale = fit_reader_monitor_index(frame, &rects)
+        .and_then(|index| rects.get(index))
+        .map_or(1.0, |monitor| monitor.scale);
     ControlFrame {
         position,
         inner_size,
+        scale,
         decorations,
         maximized: false,
     }
@@ -252,7 +265,7 @@ fn reader_placement<R: Runtime>(
 /// ones — which is the way they actually disagreed, rather than a topology that
 /// changed inside a single synchronous command.
 fn control_frame_display<R: Runtime>(app: &AppHandle<R>, frame: &ControlFrame) -> Option<String> {
-    let placed = restore_position(app, frame);
+    let (placed, _) = restore_position(app, frame);
     let monitors = app.available_monitors().ok()?;
     let rects: Vec<MonitorRect> = monitors.iter().map(MonitorRect::of).collect();
     let index = monitor_index_at(placed, &rects)?;
@@ -473,7 +486,7 @@ pub fn plan(current: Option<PresentMode>, want: Option<PresentMode>) -> PresentA
 ///
 /// So the reader's bounds get their own home, `resting` keeps its original
 /// promise verbatim, and neither has to know about the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct PresentState {
     resting: ControlFrame,
     /// Which mode is applied over `resting` right now.
@@ -523,6 +536,9 @@ fn measure_frame<R: Runtime>(window: &WebviewWindow<R>) -> Result<ControlFrame, 
     Ok(ControlFrame {
         position: window.outer_position().map_err(presentation_failed)?,
         inner_size: window.inner_size().map_err(presentation_failed)?,
+        // Plain getters describe the monitor the window is on NOW, which is
+        // the monitor these physical values are in the units of.
+        scale: scale_factor(window),
         decorations: window.is_decorated().unwrap_or(true),
         maximized: window.is_maximized().unwrap_or(false),
     })
@@ -647,8 +663,11 @@ fn logical_size<R: Runtime>(window: &WebviewWindow<R>, size: PhysicalSize<u32>) 
 /// reader mode, switched away, and is now being restored from the prompter. The
 /// reading window no longer exists to be read, so the latch's copy is converted
 /// instead.
-fn logical_frame<R: Runtime>(window: &WebviewWindow<R>, frame: &ControlFrame) -> ReaderFrame {
-    let scale = scale_factor(window);
+fn logical_frame(frame: &ControlFrame) -> ReaderFrame {
+    // The frame's OWN scale, not the window's: by the time a latched reader
+    // frame is converted on the way out of a prompter, the window is on the
+    // prompter's panel, whose scale says nothing about the reader's rectangle.
+    let scale = frame.scale;
     ReaderFrame {
         x: frame.position.x as f64 / scale,
         y: frame.position.y as f64 / scale,
@@ -669,10 +688,13 @@ fn logical_frame<R: Runtime>(window: &WebviewWindow<R>, frame: &ControlFrame) ->
 /// Containment is checked against the monitor's own rect rather than a margin:
 /// a window whose ORIGIN is on a live display can always be dragged, which is
 /// the only property that has to hold.
+///
+/// Answers with the scale factor the position is in the units of: the frame's
+/// own when the saved origin stands, the rescuing monitor's when it does not.
 fn restore_position<R: Runtime>(
     app: &AppHandle<R>,
     frame: &ControlFrame,
-) -> PhysicalPosition<i32> {
+) -> (PhysicalPosition<i32>, f64) {
     let monitors = app.available_monitors().unwrap_or_default();
     let on_a_live_display = monitors.iter().any(|monitor| {
         let origin = monitor.position();
@@ -683,14 +705,73 @@ fn restore_position<R: Runtime>(
             && frame.position.y < origin.y.saturating_add(size.height as i32)
     });
     if on_a_live_display {
-        return frame.position;
+        return (frame.position, frame.scale);
     }
     app.primary_monitor()
         .ok()
         .flatten()
         .or_else(|| monitors.into_iter().next())
-        .map(|monitor| *monitor.position())
-        .unwrap_or(frame.position)
+        .map(|monitor| (*monitor.position(), MonitorRect::of(&monitor).scale))
+        .unwrap_or((frame.position, frame.scale))
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * EVERY MOVE IN THIS MODULE IS APPLIED IN LOGICAL UNITS
+ * ---------------------------------------------------------------------------
+ * `set_position(Physical(..))` and `set_size(Physical(..))` look like the
+ * exact thing to hand a monitor's own physical bounds to, and on a window that
+ * never leaves its monitor they are. They are not once a window CROSSES
+ * monitors of different scale, which a prompter now does: tao converts a
+ * physical value to points with the window's scale factor AT THE TIME THE
+ * MESSAGE IS HANDLED (`platform_impl/macos/window.rs::set_inner_size`,
+ * `set_outer_position`), and the window is still on the monitor it is leaving.
+ * A 2x laptop handing its window the Elgato's 1024x600 physical bounds got a
+ * 512x300-point window on a 1x panel — the take in the top-right quarter of
+ * the glass — and the way back handed the 1x panel a frame measured in 2x
+ * pixels, so the editor came home at twice its size.
+ *
+ * Points are global on macOS, so a value converted with the scale of the
+ * monitor it BELONGS to is right wherever the window happens to be when the
+ * message lands. That is what the separate stage window has always done
+ * (`open_stage` builds with `position / scale`), and it is what every setter
+ * here does now: the caller says which monitor's scale its numbers are in.
+ */
+
+/// The logical point a physical position is at, on a monitor of this scale.
+fn to_logical_position(position: PhysicalPosition<i32>, scale: f64) -> tauri::LogicalPosition<f64> {
+    tauri::LogicalPosition {
+        x: position.x as f64 / scale,
+        y: position.y as f64 / scale,
+    }
+}
+
+/// The logical size a physical size measures, on a monitor of this scale.
+fn to_logical_size(size: PhysicalSize<u32>, scale: f64) -> tauri::LogicalSize<f64> {
+    tauri::LogicalSize {
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+    }
+}
+
+fn set_logical_position<R: Runtime>(
+    window: &WebviewWindow<R>,
+    position: PhysicalPosition<i32>,
+    scale: f64,
+) -> Result<(), AppError> {
+    window
+        .set_position(tauri::Position::Logical(to_logical_position(position, scale)))
+        .map_err(presentation_failed)
+}
+
+fn set_logical_size<R: Runtime>(
+    window: &WebviewWindow<R>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+) -> Result<(), AppError> {
+    window
+        .set_size(tauri::Size::Logical(to_logical_size(size, scale)))
+        .map_err(presentation_failed)
 }
 
 /// The minimum size the control window was DECLARED with, in logical pixels.
@@ -771,7 +852,7 @@ fn apply_reader<R: Runtime>(
     window: &WebviewWindow<R>,
     decorations: bool,
     place_at: Option<ReaderFrame>,
-) -> Result<PhysicalSize<u32>, AppError> {
+) -> Result<(PhysicalSize<u32>, f64), AppError> {
     if let Some(frame) = place_at {
         /*
          * The stored frame goes through `apply_windowed` rather than through a
@@ -821,7 +902,7 @@ fn apply_reader_in_place<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
     decorations: bool,
-) -> Result<PhysicalSize<u32>, AppError> {
+) -> Result<(PhysicalSize<u32>, f64), AppError> {
     /*
      * Black, for the same reason the prompter path sets it — and it is NOT
      * redundant here just because nothing below moves the window.
@@ -853,7 +934,8 @@ fn apply_reader_in_place<R: Runtime>(
      * precisely the number `awaitViewportSettled` should match on its first
      * check, which is what makes entering reader mode instant.
      */
-    window.inner_size().map_err(presentation_failed)
+    let size = window.inner_size().map_err(presentation_failed)?;
+    Ok((size, scale_factor(window)))
 }
 
 /// Put the window back into an ordinary decorated frame at a known rectangle.
@@ -871,7 +953,7 @@ fn apply_windowed<R: Runtime>(
     window: &WebviewWindow<R>,
     frame: &ControlFrame,
     min_size: Option<tauri::LogicalSize<f64>>,
-) -> Result<PhysicalSize<u32>, AppError> {
+) -> Result<(PhysicalSize<u32>, f64), AppError> {
     window.set_always_on_top(false).map_err(presentation_failed)?;
     chrome::restore(app, window, frame.decorations)?;
     set_min_size(window, min_size);
@@ -891,16 +973,16 @@ fn apply_windowed<R: Runtime>(
          */
         let _ = window.unmaximize();
     }
-    window
-        .set_position(tauri::Position::Physical(restore_position(app, frame)))
-        .map_err(presentation_failed)?;
-    window
-        .set_size(tauri::Size::Physical(frame.inner_size))
-        .map_err(presentation_failed)?;
+    // The position in the scale of the monitor it lands on; the size in the
+    // scale it was measured in — a rescued frame keeps the rectangle somebody
+    // chose even when its origin has to move.
+    let (position, position_scale) = restore_position(app, frame);
+    set_logical_position(window, position, position_scale)?;
+    set_logical_size(window, frame.inner_size, frame.scale)?;
     if frame.maximized {
         let _ = window.maximize();
     }
-    Ok(frame.inner_size)
+    Ok((frame.inner_size, frame.scale))
 }
 
 /// Move the window onto the whole of the monitor it is currently on, without
@@ -1109,15 +1191,12 @@ fn apply_presentation<R: Runtime>(
     set_min_size(window, declared_min_size(app));
     chrome::strip(app, window)?;
     pin::above_everything(app, window)?;
-    window
-        .set_position(tauri::Position::Physical(*monitor.position()))
-        .map_err(presentation_failed)?;
-    // Inner size, and on a window with no decorations inner IS outer — which is
-    // what makes filling the monitor's bounds exact rather than approximately
-    // right by a titlebar.
-    window
-        .set_size(tauri::Size::Physical(bounds))
-        .map_err(presentation_failed)?;
+    // In the TARGET monitor's scale, never the window's — see
+    // `set_logical_position`. Inner size, and on a window with no decorations
+    // inner IS outer — which is what makes filling the monitor's bounds exact
+    // rather than approximately right by a titlebar.
+    set_logical_position(window, *monitor.position(), scale)?;
+    set_logical_size(window, bounds, scale)?;
     Ok((bounds, scale, display))
 }
 
@@ -1740,7 +1819,9 @@ pub fn set_control_presenting<R: Runtime>(
                         }
                         None => super::window_monitor_fingerprint(app, &window),
                     };
-                    apply_reader(app, &window, decorations, reader_frame)?
+                    let (bounds, scale) = apply_reader(app, &window, decorations, reader_frame)?;
+                    target_scale = Some(scale);
+                    bounds
                 }
             };
             /*
@@ -1772,7 +1853,9 @@ pub fn set_control_presenting<R: Runtime>(
                 PresentMode::Reader => {
                     // In place, so the current monitor is also the landing one.
                     landed_display = super::window_monitor_fingerprint(app, &window);
-                    apply_reader_in_place(app, &window, decorations)?
+                    let (bounds, scale) = apply_reader_in_place(app, &window, decorations)?;
+                    target_scale = Some(scale);
+                    bounds
                 }
             };
         }
@@ -1826,7 +1909,7 @@ pub fn set_control_presenting<R: Runtime>(
                      * reading of the window, so the two copies cannot disagree,
                      * and no second chance to fail.
                      */
-                    departing_reader = Some(logical_frame(&window, &departing));
+                    departing_reader = Some(logical_frame(&departing));
                     let (bounds, scale, landed) = apply_presentation(app, &window, display)?;
                     landed_display = landed;
                     target_scale = Some(scale);
@@ -1848,7 +1931,9 @@ pub fn set_control_presenting<R: Runtime>(
                     // popping back to a reading window that lives on another
                     // panel changes which panel the take is measured against.
                     landed_display = control_frame_display(app, &frame);
-                    target = apply_windowed(app, &window, &frame, Some(reader_min))?;
+                    let (bounds, scale) = apply_windowed(app, &window, &frame, Some(reader_min))?;
+                    target = bounds;
+                    target_scale = Some(scale);
                     // The backing stays black across the switch (the take is
                     // still running), so there is nothing to set here that
                     // `Enter` has not already set.
@@ -1887,7 +1972,7 @@ pub fn set_control_presenting<R: Runtime>(
                 PresentMode::Reader => ReaderFrame::measure(&window).ok(),
                 PresentMode::Prompter => state
                     .reader
-                    .map(|reader| logical_frame(&window, &reader)),
+                    .map(|reader| logical_frame(&reader)),
             };
             /*
              * RESTORE, THEN FORGET — never the other way round.
@@ -1906,7 +1991,9 @@ pub fn set_control_presenting<R: Runtime>(
              * pressing Escape again, ending the next take, or navigating away
              * all try it again with the same numbers.
              */
-            target = apply_windowed(app, &window, &frame, declared_min_size(app))?;
+            let (bounds, scale) = apply_windowed(app, &window, &frame, declared_min_size(app))?;
+            target = bounds;
+            target_scale = Some(scale);
             *saved = None;
             sleep::release(app);
             /*
@@ -2105,6 +2192,44 @@ mod tests {
         assert_eq!(monitor_index_at(PhysicalPosition { x: 100, y: 120 }, &screens), Some(0));
         // Off every panel: the first one, which is visible by definition.
         assert_eq!(monitor_index_at(PhysicalPosition { x: 9000, y: 0 }, &screens), Some(0));
+    }
+
+    /* ------------------------------------------------ crossing monitors */
+
+    /// The bug that put the take in the top-right quarter of the glass.
+    ///
+    /// The Elgato's 1024x600 physical bounds, handed to `set_size(Physical)`
+    /// while the window was still on a 2x laptop, were converted with the
+    /// laptop's scale into a 512x300-point window. Converted with the scale of
+    /// the monitor the bounds BELONG to, they are 1024x600 points wherever the
+    /// window is when the message lands — and a 2x frame going home is 1440x900
+    /// points, not 2880x1800.
+    #[test]
+    fn geometry_is_converted_with_the_scale_of_the_monitor_it_belongs_to() {
+        let elgato = to_logical_size(PhysicalSize { width: 1024, height: 600 }, 1.0);
+        assert_eq!((elgato.width, elgato.height), (1024.0, 600.0));
+        let laptop = to_logical_size(PhysicalSize { width: 2880, height: 1800 }, 2.0);
+        assert_eq!((laptop.width, laptop.height), (1440.0, 900.0));
+        // A 1x panel sitting to the right of a 2x laptop: its physical origin
+        // is in its OWN scale, so dividing by 2 would put it inside the laptop.
+        let origin = to_logical_position(PhysicalPosition { x: 2880, y: 0 }, 1.0);
+        assert_eq!((origin.x, origin.y), (2880.0, 0.0));
+    }
+
+    /// A frame remembers the scale it was measured in, so the un-present after
+    /// a cross-monitor take restores the rectangle the editor actually had.
+    #[test]
+    fn a_frame_converts_with_its_own_scale_not_the_windows() {
+        let frame = ControlFrame {
+            position: PhysicalPosition { x: 200, y: 100 },
+            inner_size: PhysicalSize { width: 2400, height: 1500 },
+            scale: 2.0,
+            decorations: true,
+            maximized: false,
+        };
+        let logical = logical_frame(&frame);
+        assert_eq!((logical.x, logical.y), (100.0, 50.0));
+        assert_eq!((logical.width, logical.height), (1200.0, 750.0));
     }
 
     /* ------------------------------------------ what the renderer is handed */

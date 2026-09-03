@@ -176,7 +176,9 @@ by `engine.ts`, rendering through `src/stage/renderer/ScriptLayer.svelte`.
 
 ### How a prompter take is sized
 
-A prompter fills whichever monitor the control window is on, and its type is
+A prompter fills the panel pinned in Settings › Prompter — Present moves the
+control window onto it (`windows/present.rs`; the current monitor is the
+fallback when nothing is pinned or the pin is unplugged) — and its type is
 sized by **visual angle**, not pixels (`src/shared/optics.ts`). The profile that
 drives it is chosen in `prompterOpticalProfile` (`services/stage-envelope.ts`)
 in this order: a rig the operator calibrated **and chose** for that panel; else

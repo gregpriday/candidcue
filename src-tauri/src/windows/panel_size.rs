@@ -157,7 +157,10 @@ pub fn plausible_panel_mm(report: PanelReport) -> Option<PhysicalSizeMm> {
 }
 
 fn is_72_dpi_estimate(mm: f64, points: f64) -> bool {
-    if !(points > 0.0) {
+    // NaN as well as zero and negative: a NaN point count is not an estimate
+    // of anything. (Spelled out rather than `!(points > 0.0)`, which clippy
+    // refuses on partially ordered types.)
+    if points.is_nan() || points <= 0.0 {
         return false;
     }
     let estimate = points * MM_PER_POINT_AT_72_DPI;

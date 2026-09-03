@@ -276,10 +276,19 @@
     text-overflow: ellipsis;
     min-width: 0;
   }
+  /*
+   * Unclipped while editing. The ellipsis above needs `overflow: hidden`, and
+   * the input below sits 8px LEFT of this box on purpose (its padding lives in
+   * the gap so its text lines up with the resting title) — so the resting clip
+   * cut the field's left border and focus edge off. The input truncates its
+   * own text, so nothing here is lost by letting it show.
+   */
   .title.editing {
     display: flex;
     min-width: 0;
     flex: 0 1 auto;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   /*
