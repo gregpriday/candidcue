@@ -18,6 +18,7 @@
  *    exercisable without a microphone or an API key.
  */
 import type { AlignmentSnapshot, CompiledScript, SentenceUnit } from '../../shared/contracts';
+import { ALIGNMENT_RELOCATIONS } from '../../shared/contracts';
 import {
   reacquireAlignment,
   setAlignmentPosition,
@@ -100,6 +101,29 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
     lastSnapshot = snapshot;
     // Every committed advance, once. This is the line that distinguishes "the
     // aligner is following" from "the stage is coasting on pace".
+    // A relocation names its decision, as its own line: a forward jump moves
+    // `observed` and may leave `confirmed` where it was, so riding the
+    // confirmed line below would miss it. The one time a take ran away — 636
+    // tokens forward on two partials — the trace showed the landing and
+    // nothing about how it got there, and the reason had to be reconstructed
+    // from the script.
+    if (ALIGNMENT_RELOCATIONS.has(snapshot.decision)) {
+      trace(
+        'relocation',
+        `${snapshot.decision} to token ${snapshot.observedToken.toFixed(1)} ` +
+          `confidence ${snapshot.confidence.toFixed(2)}`,
+      );
+    } else if (
+      snapshot.decision === 'holdOffScreen' &&
+      previous?.decision !== 'holdOffScreen'
+    ) {
+      // The leash refused a place the words fit. Logged once per streak, with
+      // where it would have gone, so a held display can be told apart from a
+      // silent one after the fact. Independent of the state line: the first
+      // refusal usually IS the moment following turns to holding.
+      const at = snapshot.suggestionToken === null ? '?' : snapshot.suggestionToken.toFixed(0);
+      trace('leash', `held: the words fit near token ${at}, which is off the glass`);
+    }
     if (previous?.confirmedToken !== snapshot.confirmedToken) {
       trace(
         'confirmed',

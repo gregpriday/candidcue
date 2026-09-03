@@ -88,6 +88,7 @@ export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
   holdLowEvidence: 'Holding — weak evidence',
   holdOffScript: 'Holding — off script',
   holdAmbiguous: 'Holding — two places fit',
+  holdOffScreen: 'Holding — the match is off screen',
   relocationAccepted: 'Relocated',
   jumpForwardAccepted: 'Jumped forward',
   retakeAccepted: 'Retake accepted',

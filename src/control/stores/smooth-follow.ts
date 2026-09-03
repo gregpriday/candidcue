@@ -571,6 +571,9 @@ export function createSmoothFollowStore(
         const nontrivial =
           ALIGNMENT_RELOCATIONS.has(snapshot.decision) ||
           snapshot.decision === 'jumpPending' ||
+          // A place the words fit that the leash refused to go to. The display
+          // did not move, and that is exactly the decision worth explaining.
+          snapshot.decision === 'holdOffScreen' ||
           stateChanged ||
           snapshot.confidence < 0.6;
 

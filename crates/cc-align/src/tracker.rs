@@ -10,10 +10,14 @@
 //!   the initial lock go through stricter gates: more exact content evidence,
 //!   a rank margin over the local explanation, and persistence across
 //!   consecutive revisions. A wrong jump is worse than a late one.
-//! * **The viewport is a prior, not a command.** `set_viewport_hint` tells the
-//!   tracker what the presenter can currently see; candidates near it get a
-//!   rank bonus and relocation prefers it, but text evidence always outranks
-//!   the hint.
+//! * **The viewport is a prior, and a leash.** `set_viewport_hint` tells the
+//!   tracker what the presenter can currently see. As a PRIOR, candidates near
+//!   it get a rank bonus and a cold lock prefers it, while text evidence still
+//!   decides between places that are both visible. As a LEASH
+//!   (`viewport_confines_jumps`), no discontinuity may land off the glass: a
+//!   presenter reads what they can see or improvises, and neither is grounds
+//!   to carry the sheet somewhere they cannot. The best off-glass explanation
+//!   is still reported — as `suggestion`, never as motion.
 //! * **Three positions.** `confirmed` is conservative and (retakes aside)
 //!   monotonic; `observed` follows the best supported evidence including
 //!   provisional partials; the display extrapolates `observed` forward by the
@@ -46,6 +50,9 @@ pub enum DecisionCode {
     HoldLowEvidence,
     HoldOffScript,
     HoldAmbiguous,
+    /// The words fit best somewhere the presenter cannot see, and the leash
+    /// refused to take them there. The refused place travels as `suggestion`.
+    HoldOffScreen,
     RelocationAccepted,
     JumpForwardAccepted,
     RetakeAccepted,
@@ -394,6 +401,11 @@ pub struct Engine {
     confidence: f64,
     pending_jump: Option<PendingJump>,
     viewport: Option<(u32, u32)>,
+    /// A strong discontinuity candidate this revision refused because it lies
+    /// off the glass (`on_glass`). Per-revision: cleared at the top of every
+    /// `update`, so it stands only while the evidence does. Reaches the
+    /// snapshot as `suggestion` when no jump is pending.
+    off_screen_target: Option<u32>,
     /// Consecutive events with weak local evidence — the trigger for global
     /// search (spec §9.5: global proposals only when local evidence fails).
     weak_streak: u32,
@@ -455,6 +467,7 @@ impl Engine {
             confidence: 0.0,
             pending_jump: None,
             viewport: None,
+            off_screen_target: None,
             weak_streak: 0,
             approximate_streak: 0,
             provisional: None,
@@ -505,13 +518,82 @@ impl Engine {
 
     /// Tell the tracker what range of atoms the presenter can currently see.
     /// This is the probabilistic "I am reading around here" prior: it biases
-    /// candidate ranking and relocation, it never forces a position.
+    /// candidate ranking and relocation, it never forces a position. With
+    /// `viewport_confines_jumps` it is also the leash on discontinuities —
+    /// see [`Self::on_glass`].
     pub fn set_viewport_hint(&mut self, first_atom: u32, last_atom: u32) {
         self.viewport = Some((first_atom, last_atom.max(first_atom)));
+        self.revalidate_pending_jump();
     }
 
     pub fn clear_viewport_hint(&mut self) {
         self.viewport = None;
+    }
+
+    /// A far target that was gathering persistence while visible loses it
+    /// the moment the glass moves off it. Otherwise the count survives the
+    /// revisions in between and a target that comes back into view inherits
+    /// evidence from before the presenter looked away — and the stale target
+    /// would be reported as `suggestion` over the one refused this revision.
+    fn revalidate_pending_jump(&mut self) {
+        if self
+            .pending_jump
+            .as_ref()
+            .is_some_and(|p| !self.on_glass(p.target))
+        {
+            self.pending_jump = None;
+        }
+    }
+
+    /// May a discontinuity land on this atom?
+    ///
+    /// Yes when the presenter can see it — the stage's reported range plus
+    /// `viewport_slack_atoms` either side — and yes unconditionally when no
+    /// viewport is known or the leash is off: an engine that does not know
+    /// what is on the glass has no business refusing evidence on its account.
+    ///
+    /// This is asked of DISCONTINUITIES only (jumps, retakes, cold locks,
+    /// global reconnections), never of ordinary local continuity, which the
+    /// search band already bounds and which a stale hint must not be able to
+    /// park. A manual move is the presenter's own assertion and is not asked
+    /// either.
+    fn on_glass(&self, atom: u32) -> bool {
+        if !self.config.viewport_confines_jumps {
+            return true;
+        }
+        match self.viewport {
+            Some((lo, hi)) => {
+                let slack = self.config.viewport_slack_atoms;
+                atom >= lo.saturating_sub(slack) && atom <= hi.saturating_add(slack)
+            }
+            None => true,
+        }
+    }
+
+    /// Worth telling the operator about? A refused off-glass candidate is
+    /// reported as `suggestion` only when it would have carried a move on its
+    /// own evidence — the content bar of the move it would have been, a jump
+    /// when locked and a cold relocation when not. Anything weaker is noise,
+    /// not a place.
+    fn worth_suggesting(&self, candidate: &Candidate, locked: bool) -> bool {
+        let ev = &candidate.evidence;
+        let content = if locked {
+            self.config.jump_min_content
+        } else {
+            self.config.relocation_min_content
+        };
+        ev.fidelity >= self.config.jump_min_fidelity && self.content_authority_ok(ev, content)
+    }
+
+    /// The hold to report when nothing local explains the words: the leash
+    /// refusing a place is a different fact from the evidence coming up short,
+    /// and the diagnostic should say which one happened.
+    fn hold_code_for_no_local(&self) -> DecisionCode {
+        if self.off_screen_target.is_some() {
+            DecisionCode::HoldOffScreen
+        } else {
+            DecisionCode::HoldLowEvidence
+        }
     }
 
     /// Hard user action: "I am here". Resets evidence continuity.
@@ -523,6 +605,7 @@ impl Engine {
         self.rate_anchors.clear();
         self.rate = self.config.rate_default;
         self.pending_jump = None;
+        self.off_screen_target = None;
         self.weak_streak = 0;
         self.approximate_streak = 0;
         self.provisional = None;
@@ -594,6 +677,7 @@ impl Engine {
         self.rate_anchors.clear();
         self.rate = self.config.rate_default;
         self.pending_jump = None;
+        self.off_screen_target = None;
         self.weak_streak = 0;
         self.approximate_streak = 0;
         self.provisional = None;
@@ -720,6 +804,8 @@ impl Engine {
     }
 
     fn update(&mut self, now_ms: f64) -> Snapshot {
+        // A refused place stands only while the evidence for it does.
+        self.off_screen_target = None;
         let mut query = self.ledger.tail(
             self.config.max_query_atoms,
             self.config.partial_lag_ms,
@@ -768,6 +854,51 @@ impl Engine {
                     })
                 },
             )
+        });
+
+        // A phase-1 hit that is a BACKWARD relocation claim is not a local
+        // explanation. The band reaches `local_back` atoms behind the
+        // prediction, and a reader re-saying a sentence from thirty atoms up
+        // lands inside it — as a backward candidate the local gate below can
+        // never take (backward beyond six atoms is always a discontinuity).
+        // Left standing as "the local candidate" it did two things wrong at
+        // once: it counted the tail as explained, so no unexplained material
+        // reached the global search, and it passed the health gates, so the
+        // revision was not weak either. The result was a hold with no way out
+        // — three re-read sentences, forty atoms back, and the sheet never
+        // moved (the probe that found this is now the test
+        // `a_retake_inside_the_local_band_is_still_a_retake`). Hand the claim
+        // to the machinery built for it: nothing is explained locally, the
+        // revision is weak, and phase 2 proposes the same place through the
+        // retake corridor or an anchor, where it meets the ordinary jump gates
+        // and the leash.
+        //
+        // Two things are deliberately NOT handed over, and both are measured.
+        //
+        // A forward hit beyond `discontinuity_atoms` is held here as it always
+        // was and recovered as the prediction coasts up to it. Handing those
+        // to the jump gates put false jumps into Tier A's `small_skip` cells;
+        // a held forward lookalike costs a moment, a jumped one is the
+        // incident this change exists to prevent.
+        //
+        // A backward hit whose NEWEST words did not match there is held too.
+        // After a small skip the band's DP path flips for a partial or two:
+        // it ends where the pre-skip words matched and carries the post-skip
+        // words as trailing insertions, which looks like a ten-atom retake and
+        // is nothing of the kind — the next partial puts it back. A reader
+        // genuinely re-saying a sentence is the opposite shape: the words they
+        // are saying NOW are the ones that matched, so the last solid run
+        // reaches the end of the tail. That is the test, and it is what kept
+        // `safety.false_jumps` at zero while the stuck retake was freed.
+        let local_candidate = local_candidate.filter(|c| {
+            let backward_claim = c.backward && c.distance > 6.0;
+            let newest_words_matched = c
+                .evidence
+                .last_solid_match_query_index
+                // The very last atom of a partial is often still provisional
+                // and unmatched; one atom of grace, no more.
+                .is_some_and(|i| i + 2 >= query.len());
+            !(backward_claim && newest_words_matched)
         });
 
         // How much of the tail does the local explanation actually cover?
@@ -996,23 +1127,59 @@ impl Engine {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.evidence.end_position.cmp(&b.evidence.end_position))
         });
+        // The beam counts places the presenter can SEE. An off-glass cluster
+        // can only ever become a suggestion, and one is enough for that; let
+        // eight exact off-glass copies of a refrain fill the beam and the
+        // slightly noisier on-glass match the leash would accept is truncated
+        // before it is ever looked at. The local candidate is exempt — local
+        // continuity is not leashed and must not be crowded out either.
         let mut clusters: Vec<Candidate> = Vec::new();
+        let mut visible_clusters = 0usize;
+        let mut off_glass_kept = false;
         for c in candidates {
+            let visible = !c.from_global || self.on_glass(c.evidence.end_position);
+            if !visible && off_glass_kept {
+                continue;
+            }
             let dup = clusters.iter().any(|k| {
                 (k.evidence.end_position as i64 - c.evidence.end_position as i64).unsigned_abs()
                     <= self.config.cluster_radius as u64
             });
             if !dup {
+                if visible {
+                    visible_clusters += 1;
+                } else {
+                    off_glass_kept = true;
+                }
                 clusters.push(c);
             }
-            if clusters.len() >= self.config.beam_size {
+            if visible_clusters >= self.config.beam_size {
                 break;
             }
         }
 
         if !locked {
-            let best = clusters[0].clone();
-            let competitor = clusters
+            // A cold lock is a discontinuity from nowhere, and the leash
+            // applies: only places the presenter can see are candidates for
+            // it, and only they can make it ambiguous. The best off-glass
+            // explanation is remembered for the operator, not adopted.
+            if let Some(refused) = clusters
+                .iter()
+                .find(|c| !self.on_glass(c.evidence.end_position))
+            {
+                if self.worth_suggesting(refused, false) {
+                    self.off_screen_target = Some(refused.evidence.end_position);
+                }
+            }
+            let visible: Vec<&Candidate> = clusters
+                .iter()
+                .filter(|c| self.on_glass(c.evidence.end_position))
+                .collect();
+            let Some(best) = visible.first().map(|c| (*c).clone()) else {
+                let code = self.hold_code_for_no_local();
+                return self.hold(code, now_ms);
+            };
+            let competitor = visible
                 .iter()
                 .skip(1)
                 .find(|c| {
@@ -1020,7 +1187,7 @@ impl Engine {
                         .unsigned_abs()
                         > self.config.discontinuity_atoms as u64
                 })
-                .cloned();
+                .map(|c| (*c).clone());
             let margin = competitor
                 .as_ref()
                 .map(|c| best.score - c.score)
@@ -1038,7 +1205,25 @@ impl Engine {
                 && (c.distance > self.config.discontinuity_atoms as f64
                     || (c.backward && c.distance > 6.0))
         };
-        let best_distant = clusters.iter().find(|c| is_distant(c)).cloned();
+        // The leash. A distant candidate the presenter cannot see is not a
+        // place the display may go, however well the words fit — they were
+        // read from the glass or improvised, and neither is evidence for a
+        // page they are not looking at. The strongest such candidate is kept
+        // as a suggestion so the refusal is visible in the diagnostics and
+        // the operator can take it by hand; the search then carries on among
+        // the places that ARE visible.
+        if let Some(refused) = clusters
+            .iter()
+            .find(|c| is_distant(c) && !self.on_glass(c.evidence.end_position))
+        {
+            if self.worth_suggesting(refused, true) {
+                self.off_screen_target = Some(refused.evidence.end_position);
+            }
+        }
+        let best_distant = clusters
+            .iter()
+            .find(|c| is_distant(c) && self.on_glass(c.evidence.end_position))
+            .cloned();
         if std::env::var("CC_ALIGN_DEBUG").is_ok() {
             eprintln!(
                 "t={now_ms:.0} pred={predicted:.1} unexpl_start={unexplained_start} unexpl_content={unexplained_content} weak={} local_ok={local_ok} local_end={:?} clusters={:?}",
@@ -1061,8 +1246,12 @@ impl Engine {
             let best_evidence = evidence_score(&distant);
             let mut distant_rivals_gap = f64::INFINITY;
             let mut blocking: Vec<&Candidate> = Vec::new();
+            // Only a rival the presenter could actually be reading can make
+            // a visible target ambiguous: two places that fit the words, one
+            // on the glass and one off it, are not a coin toss.
             for rival in clusters.iter().filter(|c| {
                 is_distant(c)
+                    && self.on_glass(c.evidence.end_position)
                     && (c.evidence.end_position as i64 - distant.evidence.end_position as i64)
                         .unsigned_abs()
                         > self.config.cluster_radius as u64 * 4
@@ -1202,6 +1391,9 @@ impl Engine {
                         && candidate.distance <= self.config.discontinuity_atoms as f64
                         && !(candidate.backward && candidate.distance > 6.0)
                         && candidate.evidence.end_position as f64 > self.observed + 1.0
+                        // A global proposal, so the leash applies: within the
+                        // band or not, it must be somewhere the reader can see.
+                        && self.on_glass(candidate.evidence.end_position)
                         && candidate.evidence.fidelity >= self.config.observe_min_fidelity
                         && candidate.evidence.coverage >= self.config.observe_min_coverage
                         // Discounted, unlike the other `observe_min_content`
@@ -1234,10 +1426,12 @@ impl Engine {
         let local_choice = nearby_suffix.or(local_candidate);
 
         match local_choice {
-            // A phase-1 result far from the observed position (possible with
-            // a very short tail and the band's free start) is a relocation
-            // claim, and relocation claims go through the discontinuity
-            // machinery — never through the cheap local gate.
+            // A backward relocation claim never reaches this gate: it was
+            // dropped above and left to the discontinuity machinery, and
+            // `nearby_suffix` is filtered the same way. A phase-1 result far
+            // AHEAD (a very short tail and the band's free start) still can,
+            // and is held: relocation claims go through the discontinuity
+            // gates or nowhere, never through the cheap local one.
             Some(local)
                 if local.distance <= self.config.discontinuity_atoms as f64
                     && !(local.backward && local.distance > 6.0) =>
@@ -1252,12 +1446,16 @@ impl Engine {
                 if self.weak_streak >= 3
                     && local.evidence.end_position as f64 <= self.observed + 1.0
                 {
-                    self.hold(DecisionCode::HoldLowEvidence, now_ms)
+                    let code = self.hold_code_for_no_local();
+                    self.hold(code, now_ms)
                 } else {
                     self.decide_local(local, predicted, now_ms)
                 }
             }
-            _ => self.hold(DecisionCode::HoldLowEvidence, now_ms),
+            _ => {
+                let code = self.hold_code_for_no_local();
+                self.hold(code, now_ms)
+            }
         }
     }
 
@@ -1623,15 +1821,21 @@ impl Engine {
             1
         };
 
-        // "Automatic micro-following, manual macro-navigation": a far target
-        // the presenter cannot even SEE demands one extra round of evidence.
-        // If they scrolled there, the viewport agrees and no extra round is
-        // charged.
+        // "Automatic micro-following, manual macro-navigation". With the leash
+        // on, every candidate that reaches here is one the presenter can see
+        // (`on_glass`, applied by the caller), and the ordinary persistence is
+        // the whole requirement. With it OFF, the older rule stands: a far
+        // target the presenter cannot even SEE demands one extra round of
+        // evidence. Kept so that `viewport_confines_jumps: false` is the
+        // pre-leash engine exactly, which is what a benchmark comparison
+        // against it has to mean.
         let mut required = c.jump_persistence;
-        if let Some((lo, hi)) = self.viewport {
-            let outside = target < lo.saturating_sub(16) || target > hi + 16;
-            if outside {
-                required = required.saturating_add(1);
+        if !c.viewport_confines_jumps {
+            if let Some((lo, hi)) = self.viewport {
+                let outside = target < lo.saturating_sub(16) || target > hi + 16;
+                if outside {
+                    required = required.saturating_add(1);
+                }
             }
         }
 
@@ -1846,6 +2050,12 @@ impl Engine {
         if discontinuity {
             self.rate_anchors.clear();
             self.rate = self.config.rate_default;
+            // The display just went somewhere on evidence; offering the place
+            // it did NOT go as well would read as "resume here" the moment
+            // after a successful relocation. A local step keeps the
+            // suggestion: the sheet is following where it is while a refused
+            // place is still worth a note.
+            self.off_screen_target = None;
         } else if evidence_ms > self.last_evidence_ms {
             self.rate_anchors.push((evidence_ms, position));
             if self.rate_anchors.len() > 8 {
@@ -1989,7 +2199,14 @@ impl Engine {
             lead_decay_ms: self.config.lead_decay_ms,
             display_limit: self.prediction_ceiling(),
             confidence: self.confidence,
-            suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
+            // A pending jump is the nearer fact; otherwise the place the leash
+            // refused this revision, so a refusal is visible rather than a
+            // silent hold.
+            suggestion: self
+                .pending_jump
+                .as_ref()
+                .map(|p| p.target as f64)
+                .or(self.off_screen_target.map(f64::from)),
             provisional: self.provisional,
             provisional_retracted: self.provisional_retracted,
             script_len: self.script.len() as f64,
@@ -2723,6 +2940,283 @@ mod tests {
             discontinuity_atoms: 40,
             biased_content_weight_milli: 500,
             ..Default::default()
+        }
+    }
+
+    /* -------------------------------------------------------------------
+     * The leash: no discontinuity lands off the glass
+     * ------------------------------------------------------------------- */
+
+    /// Filler, then EIGHT distinct far words in two sentences, so a second
+    /// utterance can continue the passage rather than repeat it — a repeated
+    /// four-word tail aligns as one copy plus four insertions and fails the
+    /// fidelity gate for a reason that has nothing to do with the leash.
+    fn leash_script() -> CompiledScript {
+        compile(
+            &jump_source(&[
+                "Zanzibar quartzite mnemonic obsidian. ",
+                "Kestrel lattice paprika vortex.",
+            ]),
+            CompileOptions::default(),
+        )
+    }
+
+    const FAR_SECOND_HALF: &str = "kestrel lattice paprika vortex";
+
+    /// Where the far passage lands when nothing confines the jump — learnt from
+    /// an unleashed engine rather than hard-coded, because `region 0` compiles
+    /// its digit to its own atom and the count is nobody's business here.
+    fn unleashed_landing() -> f64 {
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+        jumped.observed
+    }
+
+    /// The incident this exists for, reduced: a strong far match while the
+    /// glass shows the top of the script. The display does not move, the hold
+    /// says why, and the refused place is offered rather than taken.
+    #[test]
+    fn a_jump_off_the_glass_is_refused_and_offered_as_a_suggestion() {
+        let landing = unleashed_landing();
+
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, 30);
+        let held = final_item(&mut engine, 1, DISTANT, 900.0);
+
+        assert_eq!(held.decision, DecisionCode::HoldOffScreen);
+        assert_eq!(held.observed, 0.0, "the sheet must not move off the glass");
+        assert_eq!(held.confirmed, 0.0);
+        assert_ne!(held.state, TrackingState::Following);
+        assert_eq!(
+            held.suggestion,
+            Some(landing),
+            "the refused place is reported so the operator can take it by hand"
+        );
+    }
+
+    /// The control: the same words with the far passage ON the glass jump
+    /// exactly as they always did. The leash is a leash, not a ban on skips.
+    #[test]
+    fn the_same_jump_onto_the_glass_is_taken() {
+        let landing = unleashed_landing() as u32;
+
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(landing.saturating_sub(12), landing + 4);
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+        assert_eq!(jumped.observed as u32, landing);
+        assert_eq!(jumped.suggestion, None, "an accepted jump leaves nothing refused");
+    }
+
+    /// The presenter's way out: scroll to where you want to be. Once the glass
+    /// shows the passage, the words that were refused a moment ago carry the
+    /// display there on the same evidence.
+    #[test]
+    fn scrolling_to_the_refused_place_lets_the_same_words_move_there() {
+        let landing = unleashed_landing() as u32;
+
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, 30);
+        let held = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(held.decision, DecisionCode::HoldOffScreen);
+
+        // The stage reports the far passage is now what the reader sees.
+        engine.set_viewport_hint(landing.saturating_sub(12), landing + 12);
+        let moved = final_item(&mut engine, 2, FAR_SECOND_HALF, 1_800.0);
+        assert_eq!(
+            moved.decision,
+            DecisionCode::JumpForwardAccepted,
+            "with the passage on the glass the jump must be taken, from a lock that never reset"
+        );
+        assert_eq!(moved.suggestion, None, "a taken jump leaves nothing refused");
+        assert!(
+            moved.observed > landing as f64,
+            "the reader has read past the first sentence of the passage, got {}",
+            moved.observed
+        );
+    }
+
+    /// The slack is a boundary, not a second viewport: the last atom inside
+    /// it is taken and the first atom beyond it is refused.
+    #[test]
+    fn the_slack_is_an_exact_boundary() {
+        let landing = unleashed_landing() as u32;
+        let slack = gate_config().viewport_slack_atoms;
+
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, landing - slack);
+        let taken = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(taken.decision, DecisionCode::JumpForwardAccepted, "hi + slack is on the glass");
+
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, landing - slack - 1);
+        let refused = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(refused.decision, DecisionCode::HoldOffScreen, "hi + slack + 1 is off it");
+    }
+
+    /// A cleared hint — the stage cannot measure, or shows an overview — takes
+    /// the leash off with it. The engine does not guess at what is visible.
+    #[test]
+    fn clearing_the_viewport_slackens_the_leash() {
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, 30);
+        engine.clear_viewport_hint();
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+    }
+
+    /// No viewport, no leash. Every benchmark fixture without a hint — which is
+    /// nearly all of them — must replay exactly as before.
+    #[test]
+    fn without_a_viewport_the_leash_is_slack() {
+        let mut engine = Engine::new(leash_script(), gate_config());
+        engine.set_manual_position(0, 0.0);
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+        assert_eq!(jumped.suggestion, None);
+    }
+
+    /// The knob the benchmark sweeps: with the leash off, a hint is a prior
+    /// again and nothing more.
+    #[test]
+    fn the_leash_can_be_switched_off() {
+        let config = AlignmentConfig {
+            viewport_confines_jumps: false,
+            ..gate_config()
+        };
+        let mut engine = Engine::new(leash_script(), config);
+        engine.set_manual_position(0, 0.0);
+        engine.set_viewport_hint(0, 30);
+        let jumped = final_item(&mut engine, 1, DISTANT, 900.0);
+        assert_eq!(jumped.decision, DecisionCode::JumpForwardAccepted);
+    }
+
+    /// Eighty distinct three-letter words, one atom each, nothing repeated —
+    /// so a retake has one place to go and the only question is whether the
+    /// glass shows it.
+    fn unique_words_script() -> CompiledScript {
+        let letters: Vec<char> = ('a'..='z').collect();
+        let words: Vec<String> = (0..80usize)
+            .map(|i| {
+                [letters[(i / 676) % 26], letters[(i / 26) % 26], letters[i % 26]]
+                    .iter()
+                    .collect()
+            })
+            .collect();
+        compile(&words.join(" "), CompileOptions::default())
+    }
+
+    fn unique_words(from: usize, to: usize) -> String {
+        let letters: Vec<char> = ('a'..='z').collect();
+        (from..to)
+            .map(|i| -> String {
+                [letters[(i / 676) % 26], letters[(i / 26) % 26], letters[i % 26]]
+                    .iter()
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Backward is leashed the same way. Re-reading a paragraph that has
+    /// scrolled off the top does not rewind the sheet; scrolling up to it and
+    /// reading on does.
+    #[test]
+    fn a_retake_off_the_glass_is_refused_until_the_presenter_scrolls_up() {
+        let mut engine = Engine::new(unique_words_script(), AlignmentConfig::default());
+        engine.set_manual_position(60, 0.0);
+        engine.set_viewport_hint(50, 70);
+
+        let held = final_item(&mut engine, 1, &unique_words(10, 15), 1_000.0);
+        assert_eq!(held.decision, DecisionCode::HoldOffScreen);
+        assert_eq!(held.observed, 60.0, "a retake off the glass must not rewind the sheet");
+        assert_eq!(held.confirmed, 60.0);
+        assert!(
+            held.suggestion.is_some_and(|s| (14.0..=16.0).contains(&s)),
+            "the refused retake target is offered, got {:?}",
+            held.suggestion
+        );
+
+        // The presenter scrolls up to the paragraph and keeps reading.
+        engine.set_viewport_hint(5, 25);
+        let retaken = final_item(&mut engine, 2, &unique_words(15, 20), 2_000.0);
+        assert_eq!(retaken.decision, DecisionCode::RetakeAccepted);
+        assert!(
+            (19.0..=21.0).contains(&retaken.observed),
+            "the sheet follows the re-read once it is on the glass, got {}",
+            retaken.observed
+        );
+        assert!(retaken.confirmed <= 20.0);
+    }
+
+    /// A cold lock is a discontinuity from nowhere and is leashed too: with
+    /// the top of the script on the glass, words from the far end hold rather
+    /// than lock there.
+    #[test]
+    fn a_cold_lock_off_the_glass_holds() {
+        let mut engine = Engine::new(unique_words_script(), AlignmentConfig::default());
+        engine.set_viewport_hint(0, 20);
+
+        let held = final_item(&mut engine, 1, &unique_words(60, 66), 1_000.0);
+        assert_eq!(held.state, TrackingState::Searching);
+        assert_eq!(held.decision, DecisionCode::HoldOffScreen);
+        assert_eq!(held.observed, 0.0, "nothing was established, so nothing moved");
+        assert_eq!(held.confirmed, 0.0);
+        assert!(held.suggestion.is_some_and(|s| s >= 60.0), "got {:?}", held.suggestion);
+
+        // The same words with the far end on the glass lock immediately.
+        let mut engine = Engine::new(unique_words_script(), AlignmentConfig::default());
+        engine.set_viewport_hint(55, 75);
+        let locked = final_item(&mut engine, 1, &unique_words(60, 66), 1_000.0);
+        assert_eq!(locked.decision, DecisionCode::RelocationAccepted);
+        assert_eq!(locked.state, TrackingState::Following);
+    }
+
+    /// A re-read that starts INSIDE the local search band — thirty or forty
+    /// atoms up, the previous sentence or two — is the most ordinary retake
+    /// there is, and it used to be the one the engine could never take. The
+    /// band found it as a backward local candidate, the local gate refused it
+    /// (backward beyond six atoms is a discontinuity), and because the band
+    /// had "explained" the tail nothing reached the global search that would
+    /// have proposed it as one. Three finals, fifteen words, no motion.
+    #[test]
+    fn a_retake_inside_the_local_band_is_still_a_retake() {
+        let config = AlignmentConfig {
+            viewport_confines_jumps: false,
+            ..AlignmentConfig::default()
+        };
+        assert!(config.local_back > 40, "the test needs the band to reach the retake");
+        for back in [20usize, 30, 40] {
+            let mut engine = Engine::new(unique_words_script(), config.clone());
+            engine.set_manual_position(60, 0.0);
+            let from = 60 - back;
+            let first = final_item(&mut engine, 1, &unique_words(from, from + 5), 1_000.0);
+            assert_eq!(
+                first.decision,
+                DecisionCode::RetakeAccepted,
+                "a five-word re-read {back} atoms up must be taken, got {:?}",
+                first.decision
+            );
+            assert!(
+                (from as f64 + 4.0..=from as f64 + 6.0).contains(&first.observed),
+                "back={back}: the sheet rewinds to the re-read, got {}",
+                first.observed
+            );
+            let second = final_item(&mut engine, 2, &unique_words(from + 5, from + 10), 2_000.0);
+            assert!(
+                matches!(second.decision, DecisionCode::LocalObserved | DecisionCode::LocalConfirmed),
+                "back={back}: reading on from the retake is local, got {:?}",
+                second.decision
+            );
         }
     }
 

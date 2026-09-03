@@ -196,6 +196,16 @@ events (full-restatement partials ~0.9 s, finals ~1.2 s after silence,
 seeded ASR-style corruption). Runs in seconds, byte-for-byte reproducible;
 this is what CI regression numbers come from.
 
+A note on `Viewport` ops: since 2026-09-03 the hint is also a leash in the
+engine (`viewport_confines_jumps`, default on) — no discontinuity may land
+outside the reported range plus `viewport_slack_atoms`. Only three Tier A
+scenarios and three captured runs carry a hint at all, and the hints they carry
+cover the place the plan then reads from, so every Tier A and Tier B number
+was unchanged by the change; compare against `{"viewport_confines_jumps":
+false}` to measure it. A scenario that reads far past a static hint is
+measuring the leash, not the engine — in the app the stage re-reports as it
+scrolls.
+
 **Tier B — live end-to-end.** The same performances are rendered by three
 independent fal.ai TTS engines (`gemini-3.1-flash-tts`, `qwen-3-tts` 1.7 B,
 `xai/tts/v1`), stitched at 24 kHz mono PCM16 with real silence for pauses,

@@ -61,7 +61,11 @@
     StageSettings,
     StageViewportHintPayload,
   } from '../../shared/contracts';
-  import { STAGE_EVENT, VIEWPORT_HINT_INTERVAL_MS } from '../../shared/contracts';
+  import {
+    STAGE_EVENT,
+    VIEWPORT_HINT_INTERVAL_MS,
+    VIEWPORT_HINT_REFRESH_MS,
+  } from '../../shared/contracts';
   import { resolveStageGeometry } from '../../shared/optical-resolve';
   import { emitStageEvent } from '../events';
   import {
@@ -3403,8 +3407,10 @@
    *
    * A PRIOR, not a command: it biases the engine's candidate ranking toward
    * the part of the script actually on the glass, which is what makes a lock
-   * that starts mid-script fast instead of ambiguous, and makes a far jump to
-   * something off-screen need an extra round of evidence before it is taken.
+   * that starts mid-script fast instead of ambiguous. It is also the engine's
+   * LEASH: a far jump, retake or cold lock to something off-screen is refused
+   * rather than taken, which is why it must keep being said (see
+   * `VIEWPORT_HINT_REFRESH_MS`).
    *
    * It has to travel as an event rather than a command because the stage
    * window holds no invoke permission at all. Debounced, because a flung
@@ -3444,7 +3450,17 @@
       if (line.lastTokenIndex > last) last = line.lastTokenIndex;
     }
     if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return;
-    if (lastHintRange && lastHintRange[0] === first && lastHintRange[1] === last) return;
+    // Unchanged is not "never again". A hint Rust dropped — the alignment
+    // session was not installed yet — must be repeated, or the engine spends
+    // the take without a viewport and its off-glass leash is slack.
+    if (
+      lastHintRange &&
+      lastHintRange[0] === first &&
+      lastHintRange[1] === last &&
+      nowMs - lastHintAtMs < VIEWPORT_HINT_REFRESH_MS
+    ) {
+      return;
+    }
 
     lastHintRange = [first, last];
     lastHintAtMs = nowMs;

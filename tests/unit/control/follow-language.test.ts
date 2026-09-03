@@ -33,6 +33,7 @@ const ALL_DECISIONS: AlignmentDecision[] = [
   'holdLowEvidence',
   'holdOffScript',
   'holdAmbiguous',
+  'holdOffScreen',
   'relocationAccepted',
   'jumpForwardAccepted',
   'retakeAccepted',

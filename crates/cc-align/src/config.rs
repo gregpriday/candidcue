@@ -121,6 +121,34 @@ pub struct AlignmentConfig {
     /// reaches (atoms).
     pub retake_corridor_atoms: u32,
 
+    // ---- the glass ----
+    /// Confine every accepted DISCONTINUITY — a forward jump, a backward
+    /// retake, a cold relocation, a global reconnection — to the range the
+    /// stage reports as visible, widened by `viewport_slack_atoms` either side.
+    ///
+    /// The rule this encodes: a presenter reads what is on the glass, or
+    /// improvises. Neither is a reason to move the sheet somewhere they cannot
+    /// see. The failure it exists for is a real one: a script that used a
+    /// phrase twice, a presenter ad-libbing around the first copy, and two
+    /// partials 500 ms apart carrying the display 636 atoms forward onto the
+    /// second — a scroll that ran for the rest of the take. Somebody who wants
+    /// to be somewhere else scrolls there, the viewport follows them, and the
+    /// engine may then move there on the same evidence.
+    ///
+    /// Ordinary local continuity is NOT confined. It is bounded by the search
+    /// band around the pace prediction already, and a stale hint must not be
+    /// able to park a reader who is simply reading on. Only moves that would
+    /// have gone through the discontinuity gates go through this one.
+    ///
+    /// Inert while no viewport is known — a take that has published no hint,
+    /// or every benchmark fixture without one — so the recorded corpora
+    /// replay exactly as before.
+    pub viewport_confines_jumps: bool,
+    /// Atoms past either edge of the visible range a confined move may still
+    /// land on. Covers the debounce on the stage's report and a multi-atom
+    /// token straddling the bottom line; it is not a second viewport.
+    pub viewport_slack_atoms: u32,
+
     // ---- off-script aside ----
     /// Consecutive insertion-dominated revisions before the tracker latches
     /// off-script.
@@ -485,6 +513,9 @@ impl AlignmentConfig {
             self.viewport_sigma = d.viewport_sigma;
         }
         fix(&mut self.viewport_bonus, d.viewport_bonus);
+        // Wider than a screen of text and the "on the glass" test stops meaning
+        // anything; the cap keeps a sweep honest about what it is measuring.
+        self.viewport_slack_atoms = self.viewport_slack_atoms.min(64);
         fix(
             &mut self.local_approx_min_confidence,
             d.local_approx_min_confidence,
@@ -582,6 +613,8 @@ impl Default for AlignmentConfig {
             weak_unexplained_total: 4,
             desperate_search_after: 3,
             retake_corridor_atoms: 240,
+            viewport_confines_jumps: true,
+            viewport_slack_atoms: 8,
 
             off_script_enter_revisions: 3,
             off_script_return_revisions: 2,

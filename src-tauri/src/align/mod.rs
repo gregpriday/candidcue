@@ -391,8 +391,9 @@ impl AlignmentState {
     }
 
     /// "This is what I can see." A prior on candidate ranking, never a command:
-    /// it speeds up locks that start mid-script and makes a jump to somewhere
-    /// off-screen require an extra round of evidence.
+    /// it speeds up locks that start mid-script — and it is the engine's leash,
+    /// so a jump, retake or cold lock to somewhere off-screen is refused
+    /// (`viewport_confines_jumps`).
     fn set_viewport(&self, first_token: f64, last_token: f64) {
         let mut guard = self.lock();
         let Some(session) = guard.as_mut() else {

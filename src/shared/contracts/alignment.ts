@@ -61,6 +61,7 @@ export const ALIGNMENT_DECISIONS = [
   'holdLowEvidence',
   'holdOffScript',
   'holdAmbiguous',
+  'holdOffScreen',
   'relocationAccepted',
   'jumpForwardAccepted',
   'retakeAccepted',
@@ -461,8 +462,10 @@ export function isAlignmentSnapshot(value: unknown): value is AlignmentSnapshot 
 /**
  * "This is what I can see." A prior on candidate ranking, never a command.
  *
- * It speeds up locks that start mid-script and makes a far jump to somewhere
- * off-screen require an extra round of evidence before it is accepted. It
+ * It speeds up locks that start mid-script and, with the engine's
+ * `viewport_confines_jumps` on (the default), it is also the leash: a far
+ * jump, retake or cold lock to somewhere off-screen is refused, holds as
+ * `holdOffScreen`, and the refused place travels as `suggestionToken`. It
  * travels stage → Rust as an event because the stage window holds no invoke
  * permission at all.
  */
@@ -486,3 +489,12 @@ export interface AlignmentViewportHint {
  * event bus for every frame of its travel.
  */
 export const VIEWPORT_HINT_INTERVAL_MS = 250;
+
+/**
+ * How long an UNCHANGED viewport goes unrepeated before the stage says it
+ * again. The hint is a level, not an edge: Rust drops a hint that arrives
+ * before its alignment session is installed, and a page that has not scrolled
+ * since would otherwise never repeat it — leaving the engine with no viewport
+ * and the off-glass leash slack for the rest of the take.
+ */
+export const VIEWPORT_HINT_REFRESH_MS = 2_000;

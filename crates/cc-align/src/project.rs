@@ -47,6 +47,7 @@ pub fn decision_name(decision: DecisionCode) -> &'static str {
         DecisionCode::HoldLowEvidence => "holdLowEvidence",
         DecisionCode::HoldOffScript => "holdOffScript",
         DecisionCode::HoldAmbiguous => "holdAmbiguous",
+        DecisionCode::HoldOffScreen => "holdOffScreen",
         DecisionCode::RelocationAccepted => "relocationAccepted",
         DecisionCode::JumpForwardAccepted => "jumpForwardAccepted",
         DecisionCode::RetakeAccepted => "retakeAccepted",

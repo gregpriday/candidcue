@@ -218,8 +218,12 @@ engine.set_viewport_hint(first_visible_atom, last_visible_atom);
 ```
 
 This is a *prior*, not a command — it biases candidate ranking, speeds up
-starting-in-the-middle locks (3.6 s in the benchmarks), and makes far jumps
-to off-screen targets require an extra round of evidence. Debounce to ~4/s;
+starting-in-the-middle locks (3.6 s in the benchmarks), and, with
+`viewport_confines_jumps` on (the default), leashes discontinuities: a far
+jump, retake or cold lock to an off-screen target is refused and reported as
+`suggestion` instead. Debounce to ~4/s, and repeat an unchanged range every
+couple of seconds — a hint that arrives before the session is installed is
+dropped, and an engine with no viewport has no leash;
 call `clear_viewport_hint()` if the concept doesn't apply (e.g. full-script
 minimap view).
 

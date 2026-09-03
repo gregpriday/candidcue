@@ -693,7 +693,7 @@ export function relocationDirectiveFor(
  * actually heard the presenter say something it was willing to act on. The
  * codes left out are the ones that report the opposite: `noEvidence` is
  * silence, `jumpPending` is a jump the engine has explicitly not accepted, and
- * the three `hold*` codes are the tracker declining to move on what it heard.
+ * the `hold*` codes are the tracker declining to move on what it heard.
  *
  * Releasing on those would put the wall clock back in charge by the side door,
  * because the aligner emits them on its own cadence whether or not anybody is

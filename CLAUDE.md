@@ -152,6 +152,23 @@ engine.
 `crates/` is a **separate cargo workspace** from `src-tauri/` on purpose, so the
 alignment core and benchmark tooling build without Tauri or a WebView.
 
+**No discontinuity lands off the glass.** The stage reports its visible token
+range over `stage://viewport-hint`; the engine treats it as a prior for ranking
+and, since 2026-09-03, as a leash (`viewport_confines_jumps`): a forward jump,
+retake, cold lock or global reconnect whose target is not on the reported
+range (plus `viewport_slack_atoms`) is refused with `holdOffScreen`, and the
+refused place travels as `suggestionToken` instead of motion. Scrolling there
+by hand moves the viewport, and the same words then carry the display. The
+incident behind it was a script that used one phrase twice: an ad-lib around
+the first copy matched the second, 636 tokens on, on two partials 500 ms
+apart. Ordinary local continuity is deliberately NOT leashed, and neither is a
+manual move. With no hint known the leash is slack, which is why the recorded
+corpora replay unchanged. A related fix landed with it: a re-read that starts
+inside the local search band (under `local_back` atoms up) used to be held
+forever, because the band "explained" it as an unusable backward local
+candidate; it now reaches the retake gates when the newest words are what
+matched there.
+
 One snapshot field is **dim-only and must stay that way**: `provisionalToken` is
 a reversible frontier fed by fuzzy/phonetic evidence, and it is allowed to lead
 precisely because shading can be taken back and scroll cannot. In the renderer it
