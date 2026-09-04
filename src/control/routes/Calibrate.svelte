@@ -399,6 +399,18 @@
       loadError = `CandidCue could not list the connected displays. ${describeError(err)}`;
     }
 
+    /*
+     * Validated here as it is everywhere else it is read: the value comes from
+     * a localStorage overlay merged field-wise, so "a number" is not a safe
+     * assumption, and a NaN would reach a font size before anything noticed.
+     */
+    const looseSizeBias = (): number => {
+      const value = $settings.teleprompter.sizeBias;
+      return typeof value === 'number' && Number.isFinite(value)
+        ? Math.min(1, Math.max(0, value))
+        : defaultOpticalProfile().bias;
+    };
+
     const panel = displays.find((d) => d.fingerprint === displayFingerprint) ?? null;
     const existing = $settings.optical.profiles[opticalRigKey(displayFingerprint, rigName)] ?? null;
     const found = discoverProfile(
@@ -442,6 +454,19 @@
             horizontal: $settings.teleprompter.mirrorX,
             vertical: $settings.teleprompter.mirrorY,
           },
+      /*
+       * And the size balance starts from what is in force too, for the same
+       * reason and with the same exception.
+       *
+       * A rig that exists has answered this itself, standing at the glass. A
+       * FRESH one has not, and the honest starting point is the balance the
+       * presenter has actually been reading at — which on an automatic panel
+       * is the loose preference. Starting from `defaultOpticalProfile()`
+       * instead put the wizard's own preview back to the narrow line somebody
+       * had just widened, and stored 0.4 unless they noticed and moved the
+       * slider a second time.
+       */
+      bias: existing ? found.profile.bias : looseSizeBias(),
     };
     answered = completed;
     // Discovery filling fields in is not the user having answered anything, so

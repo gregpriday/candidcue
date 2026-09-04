@@ -125,12 +125,14 @@ let teardown: (() => void) | null = null;
 let originalFontSizePx: number;
 let originalLineHeight: number;
 let originalPace: number;
+let originalSizeBias: number;
 
 beforeEach(() => {
   vi.useFakeTimers();
   originalFontSizePx = get(settings).teleprompter.fontSizePx;
   originalLineHeight = get(settings).teleprompter.lineHeight;
   originalPace = get(settings).teleprompter.fixedSpeedWpm;
+  originalSizeBias = get(settings).teleprompter.sizeBias;
 });
 
 afterEach(async () => {
@@ -143,6 +145,7 @@ afterEach(async () => {
     fontSizePx: originalFontSizePx,
     lineHeight: originalLineHeight,
     fixedSpeedWpm: originalPace,
+    sizeBias: originalSizeBias,
   });
 });
 
@@ -185,6 +188,29 @@ describe('saved settings follow into the running take', () => {
     expect(get(session).autoScroll.wordsPerMinute).toBe(170);
     // Not a stage field: the glass was not rebuilt for it.
     expect(get(session).stageEnvelope).toBe(envelope);
+  });
+
+  it('rebuilds the glass for a size-bias change, like its two sibling preferences', async () => {
+    /*
+     * `sizeBias` is seeded into the AUTOMATIC optical profile by
+     * `stageSettingsFromSettings`, exactly as `textIntensity` and `readingCue`
+     * are — so it is a field the stage is composed from, and a change to it has
+     * to reach a take already on the glass.
+     *
+     * Asserted as a rebuild rather than a resolved font size, because this
+     * fixture starts a take with no display descriptor and therefore no optical
+     * block to read a number out of. What is being pinned is membership of
+     * `LIVE_STAGE_FIELDS`: leave it out and the presenter moves the slider on
+     * the desk while the panel behind them keeps the old measure until the next
+     * take — the exact shape of the bug the follow was built to close.
+     */
+    start();
+    teardown = installLiveSettingsFollow();
+    const envelope = get(session).stageEnvelope;
+
+    await patchSettings('teleprompter', { sizeBias: 0 });
+
+    expect(get(session).stageEnvelope).not.toBe(envelope);
   });
 
   it('leaves the glass alone for a commit that changed nothing the stage reads', async () => {

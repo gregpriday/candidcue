@@ -334,6 +334,7 @@ export function stageSettingsFromSettings(
     : prompterOpticalProfile(s.optical, display, {
         intensity: t.textIntensity,
         readingCue: t.readingCue,
+        bias: t.sizeBias,
       });
   return buildStageSettings({
     fontFamilyId: t.fontFamilyId,

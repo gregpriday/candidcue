@@ -263,8 +263,10 @@
       </dl>
       <p class="hint">
         {#if automatic}
-          Sized automatically for this display and a typical viewing distance. To change them,
-          calibrate a rig under <strong>Settings → Prompter display and rigs</strong>.
+          Sized automatically for this display and a typical viewing distance. Trade size against
+          how much of a line fits with the size slider under
+          <strong>Settings → Prompter display and rigs</strong>; calibrating a rig there is what
+          replaces the assumed distance with a measured one.
         {:else}
           Worked out from how far away you stand. Change them under
           <strong>Settings → Prompter display and rigs</strong>.

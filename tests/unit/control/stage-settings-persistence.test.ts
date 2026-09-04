@@ -101,6 +101,42 @@ beforeEach(() => {
   store.clear();
 });
 
+describe('the size bias survives a reload', () => {
+  it('round-trips through the overlay, since Rust has no field for it', async () => {
+    /*
+     * `teleprompter.sizeBias` is the control that decides how much of a line a
+     * panel running on the AUTOMATIC profile shows. It is overlay-owned, like
+     * `textIntensity` and `readingCue` beside it — Rust's `AppSettings` has no
+     * teleprompter section at all — so this is the only thing standing between
+     * the preference and a reload that forgets it.
+     *
+     * The failure it catches is the one this file was written for: a mapping
+     * that exists in one direction. A `sizeBias` that writes but does not read
+     * back presents as a slider that works, and then silently returns the
+     * prompter to the narrow line on the next launch.
+     */
+    const current = await settings.getSettings();
+    await settings.updateSettings(current.revision, {
+      teleprompter: { ...current.teleprompter, sizeBias: 0 },
+    });
+    expect((await settings.getSettings()).teleprompter.sizeBias).toBe(0);
+
+    // And it is genuinely in the store, not merely in a cached document.
+    const overlay = JSON.parse(store.get(OVERLAY_KEY) ?? '{}');
+    expect(overlay.teleprompter?.sizeBias).toBe(0);
+  });
+
+  it('is never sent to Rust, which has nowhere to put it', async () => {
+    const current = await settings.getSettings();
+    await settings.updateSettings(current.revision, {
+      teleprompter: { ...current.teleprompter, sizeBias: 0.25 },
+    });
+    for (const call of ipc.calls.filter((c) => c.command === 'update_settings')) {
+      expect(JSON.stringify(call.args)).not.toContain('sizeBias');
+    }
+  });
+});
+
 describe('the presentation mode is Rust-owned', () => {
   it('reads the persisted document when it has an answer', async () => {
     ipc.setStageBehavior({ presentationMode: 'reader' });

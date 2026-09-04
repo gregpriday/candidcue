@@ -710,7 +710,7 @@ import { onShortcut } from '../lib/shortcuts';
     if ($session.stageRigResolved) {
       showToast(
         stageSizedAutomatically
-          ? 'This display is sized automatically — calibrate a rig in Settings to change it'
+          ? 'Sized automatically — trade size for line width with the size slider in Settings'
           : 'This display sizes its text from its calibration',
         'info',
         { durationMs: 2200 },

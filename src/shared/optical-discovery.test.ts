@@ -321,6 +321,55 @@ describe('the automatic profile', () => {
     );
   });
 
+  /* ---------------------------------------------------------------- bias --
+   * The seeded size/measure bias. It is the control a presenter on an
+   * automatic panel actually reaches for — "the text is big enough, I want
+   * more of the sentence" — and before it was seeded the only way to move it
+   * was to store a rig, which traded automatic sizing for a question about
+   * type.
+   */
+  it('takes the seeded size bias, because it is a preference and not a measurement', () => {
+    const profile = automaticProfile(prompter9, {
+      intensity: 'standard',
+      readingCue: 'ticks',
+      bias: 0,
+    });
+    expect(profile?.bias).toBe(0);
+    expect(profile?.rigName).toBe(AUTOMATIC_RIG_NAME);
+  });
+
+  it('keeps discovery\'s own bias when the presenter has expressed nothing', () => {
+    const fallback = defaultOpticalProfile().bias;
+    // No seed at all, and a seed that carries the other two fields but not this
+    // one — the shape every caller written before the field existed produces.
+    expect(automaticProfile(prompter9)?.bias).toBe(fallback);
+    expect(
+      automaticProfile(prompter9, { intensity: 'soft', readingCue: 'wash' })?.bias,
+    ).toBe(fallback);
+  });
+
+  it('clamps a bias out of range and ignores one that is not a number', () => {
+    /*
+     * It arrives from a localStorage overlay merged field-wise with no
+     * per-field validation, so this is the boundary that has to hold. A NaN
+     * would otherwise reach `arcminutesForBias` and come back out as a NaN font
+     * size — a blank stage with nothing anywhere reporting a fault.
+     */
+    const fallback = defaultOpticalProfile().bias;
+    const seed = { intensity: 'standard', readingCue: 'ticks' } as const;
+    expect(automaticProfile(prompter9, { ...seed, bias: Number.NaN })?.bias).toBe(fallback);
+    expect(
+      automaticProfile(prompter9, { ...seed, bias: undefined as unknown as number })?.bias,
+    ).toBe(fallback);
+    expect(
+      automaticProfile(prompter9, { ...seed, bias: 'wide' as unknown as number })?.bias,
+    ).toBe(fallback);
+    // Out of range is clamped rather than refused: a slider that overshoots is
+    // still an expressed preference.
+    expect(automaticProfile(prompter9, { ...seed, bias: 4 })?.bias).toBe(1);
+    expect(automaticProfile(prompter9, { ...seed, bias: -2 })?.bias).toBe(0);
+  });
+
   it('is nothing for a panel it cannot size, rather than a guess in a rig\'s clothing', () => {
     expect(
       automaticProfile({ name: 'DELL U2720Q', physicalSize: { width: 3840, height: 2160 }, scaleFactor: 2 }),

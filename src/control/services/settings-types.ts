@@ -265,6 +265,28 @@ export interface AppSettings {
     stageMode: StageMode;
     /** What marks the reading position: fixed side ticks, a soft wash, or nothing. */
     readingCue: ReadingCueStyle;
+    /**
+     * Larger type, or more of the sentence — on a panel that cannot have both.
+     *
+     * The same single control a calibrated rig carries as `bias` (0 is "more
+     * text on screen", 1 is "larger, easier text"), for the panels running on
+     * the AUTOMATIC profile, which is most of them: automatic sizing is
+     * derived fresh from the landed panel on every take and so has nowhere of
+     * its own to keep a preference.
+     *
+     * It is here beside `textIntensity` and `readingCue` because it is the
+     * same kind of thing they are — something the presenter prefers, not
+     * something anybody measured — and those two already travel to the
+     * automatic profile through `AutomaticProfileSeed` for exactly this
+     * reason. Without it the slider existed but could only be reached by
+     * storing a rig, so a presenter who simply wanted a wider line had to
+     * freeze discovery's ESTIMATED viewing distance into a saved calibration
+     * to get one, and lost automatic sizing to ask a question about type.
+     *
+     * A stored rig still ignores this: it carries its own `bias`, chosen at
+     * the glass, and a loose preference must not reach around a measurement.
+     */
+    sizeBias: number;
   };
   /**
    * Calibrated rigs, per panel (`shared/contracts/optical.ts`).
@@ -941,6 +963,9 @@ export function defaultAppSettings(): AppSettings {
        */
       stageMode: 'diagnostic',
       readingCue: 'ticks',
+      // The same value a fresh rig starts at, so turning the automatic profile
+      // into a calibrated one changes nothing about the type by itself.
+      sizeBias: defaultOpticalProfile().bias,
     },
     // Nothing calibrated until somebody stands at a rig and measures it.
     optical: { profiles: {}, activeRig: {} },

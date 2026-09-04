@@ -3727,6 +3727,11 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'textIntensity',
   'stageMode',
   'readingCue',
+  // Seeded into the automatic profile by `stageSettingsFromSettings`, exactly
+  // as the two above it are, so a change to it is a change to the glass. On a
+  // take running a calibrated rig the recomposition is a no-op, because the
+  // rig's own bias wins.
+  'sizeBias',
 ];
 
 /**

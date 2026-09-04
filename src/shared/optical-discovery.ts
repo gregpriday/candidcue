@@ -383,15 +383,25 @@ export function isAutomaticProfile(profile: OpticalProfile | null | undefined): 
  * The presenter's own choices that an automatic profile must carry, because
  * `buildStageSettings` reads them off whichever profile is in force.
  *
- * A profile decides more than geometry: text intensity and the reading cue
- * live on it too, since a calibrated rig chose them at the glass. The
- * automatic profile has no glass to have chosen them at, so it takes the
- * loose Settings values — otherwise merely upgrading would have quietly reset
- * a Soft, Wash presenter to Standard, Ticks.
+ * A profile decides more than geometry: text intensity, the reading cue and
+ * the size/measure bias live on it too, since a calibrated rig chose them at
+ * the glass. The automatic profile has no glass to have chosen them at, so it
+ * takes the loose Settings values — otherwise merely upgrading would have
+ * quietly reset a Soft, Wash presenter to Standard, Ticks.
+ *
+ * `bias` is the same argument one step further, and it is the one a presenter
+ * notices: it decides the trade between type size and how much of a sentence
+ * a line holds, which on a small panel is the difference between 26 and 36
+ * characters. The slider for it existed only on a stored rig, so asking for a
+ * wider line on an automatic panel meant saving discovery's ESTIMATED
+ * distance as a calibration — trading automatic sizing for a question about
+ * type. It is a preference, so it belongs with the preferences.
  */
 export interface AutomaticProfileSeed {
   intensity: OpticalProfile['intensity'];
   readingCue: OpticalProfile['readingCue'];
+  /** 0 is "more text on screen", 1 is "larger, easier text". */
+  bias?: number;
 }
 
 /**
@@ -429,5 +439,18 @@ export function automaticProfile(
   const discovered = discoverProfile(display, null);
   const { profile } = discovered;
   if (profile.scale === null || profile.viewingDistanceMm === null) return null;
-  return { ...profile, ...(seed ?? {}), rigName: AUTOMATIC_RIG_NAME };
+  const seeded = { ...profile, ...(seed ?? {}), rigName: AUTOMATIC_RIG_NAME };
+  /*
+   * The bias arrives from a localStorage overlay that is merged field-wise and
+   * validated section-wise, so "a number" is not a safe assumption here — and a
+   * NaN would travel all the way to a font size before anything noticed. Not a
+   * number at all means the presenter has expressed nothing, so discovery's own
+   * value stands; a number outside the range is still an expressed preference
+   * and is clamped rather than discarded.
+   */
+  seeded.bias =
+    typeof seeded.bias === 'number' && Number.isFinite(seeded.bias)
+      ? Math.min(1, Math.max(0, seeded.bias))
+      : profile.bias;
+  return seeded;
 }

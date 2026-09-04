@@ -95,6 +95,7 @@
   import {
     OPTICAL_HARDWARE,
     STAGE_EVENT,
+    defaultOpticalProfile,
     type AudioDeviceInfo,
     type AudioLevelSnapshot,
     type FramingPreset,
@@ -831,6 +832,17 @@
    */
   const automaticRig = $derived(automaticProfile(displayShape));
   /**
+   * The size bias an automatic take runs at: the presenter's loose preference,
+   * defended the same way `automaticProfile` defends it, since the readout
+   * built from it must not be able to show NaN.
+   */
+  const automaticBias = $derived.by(() => {
+    const value = $settings.teleprompter.sizeBias;
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.min(1, Math.max(0, value))
+      : defaultOpticalProfile().bias;
+  });
+  /**
    * The profile the panel below describes — the applied rig, or the proposal.
    *
    * The proposal is given a name no rig stored against this panel is already
@@ -847,7 +859,23 @@
    * named rig still stored.
    */
   const rig = $derived<OpticalProfile>(
-    appliedRig ?? { ...discovered.profile, rigName: unusedRigName(discovered.profile.rigName) },
+    appliedRig ?? {
+      ...discovered.profile,
+      /*
+       * The proposal carries the loose preferences, because on this panel they
+       * are what a take is actually running: `prompterOpticalProfile` seeds all
+       * three into the automatic profile. Leaving discovery's own values here
+       * made the readout describe a stage the take would not produce — the one
+       * thing its note promises it cannot do — and, worse, editing ANY control
+       * stores this object as a rig, so a Soft/Wash presenter who changed their
+       * framing was silently returned to Standard/Ticks by the rig they had
+       * just created.
+       */
+      bias: automaticBias,
+      intensity: $settings.teleprompter.textIntensity,
+      readingCue: $settings.teleprompter.readingCue,
+      rigName: unusedRigName(discovered.profile.rigName),
+    },
   );
 
   /**
@@ -2366,9 +2394,11 @@
                   <strong>Sized automatically.</strong> CandidCue recognised this display as
                   {discovered.identification.label} and sizes takes from that, assuming a viewing
                   distance of about {(automaticRig.viewingDistanceMm ?? 0) / 1000} m. The numbers
-                  below are what takes on this display open with; changing any of them, or
-                  finishing the calibration, stores a rig that takes precedence — and measuring
-                  the real distance is the one thing that makes the size more than an estimate.
+                  below are what takes on this display open with. The size balance is a preference
+                  shared by every automatically sized display and stores nothing; changing
+                  anything else here — or finishing the calibration — stores a rig for this
+                  display that takes precedence, and measuring the real distance is the one thing
+                  that makes the size more than an estimate.
                 {/if}
               </p>
             {/if}
@@ -2460,14 +2490,48 @@
               them to reason about arcminutes AND characters is asking them to
               solve the constrained optimisation themselves.
             -->
-            <Slider
-              label="More text on screen ⟷ Larger, easier text"
-              value={Math.round(rig.bias * 100)}
-              min={0}
-              max={100}
-              format={(v) => `${v}%`}
-              onchange={(value) => void updateRig({ bias: value / 100 })}
-            />
+            <!--
+              The one control on this panel that an UNRIGGED display can move
+              without becoming a rigged one.
+
+              Everything else here is a measurement, and editing a measurement
+              is a statement that you measured it — so it stores a rig, which is
+              what the copy above promises. This is not a measurement, it is a
+              preference about type, and making it cost the presenter their
+              automatic sizing was the reason a 9-inch panel could not simply be
+              asked for a wider line.
+            -->
+            {#if appliedRig === null && automaticRig === null}
+              <!--
+                Nothing to balance. This panel cannot be sized at all, so it
+                takes the flat fallback pixel size and the angular model never
+                runs — a live slider here would move its thumb, change nothing
+                on the glass in front of the presenter, and quietly restyle
+                every OTHER automatic display they own.
+              -->
+              <p class="hint-line">
+                Size balance needs a display CandidCue can size. This one runs at the fallback
+                size until it is calibrated.
+              </p>
+            {:else}
+              <Slider
+                label="More text on screen ⟷ Larger, easier text"
+                value={Math.round((appliedRig ? rig.bias : automaticBias) * 100)}
+                min={0}
+                max={100}
+                format={(v) => `${v}%`}
+                onchange={(value) =>
+                  void (appliedRig
+                    ? updateRig({ bias: value / 100 })
+                    : patchSettings('teleprompter', { sizeBias: value / 100 }))}
+              />
+              {#if appliedRig === null}
+                <p class="hint-line">
+                  Shared by every display CandidCue sizes automatically. A calibrated rig carries
+                  its own.
+                </p>
+              {/if}
+            {/if}
 
             <Select
           layout="row"
