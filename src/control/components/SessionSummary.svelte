@@ -35,6 +35,7 @@
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
+  import { summaryActions } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
@@ -69,11 +70,20 @@
    * toasts them and returns false without changing the route, which is now
    * exactly right: the summary is gone and the editor is already underneath.
    */
-  async function presentAgain(startTokenIndex?: number): Promise<void> {
+  async function presentAgain(startTokenIndex?: number, partId?: string): Promise<void> {
     const scriptId = $session.scriptId;
     clearSession();
     if (scriptId === null) return;
-    await startTake(scriptId, startTokenIndex === undefined ? {} : { startTokenIndex });
+    await startTake(scriptId, {
+      ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
+      /*
+       * §parts: identity only. `startTake` re-resolves the span against the
+       * compile the new take runs on, which matters most here — this dialog can
+       * sit open while the editor behind it is being edited, and the part that
+       * was recorded may not be the part that now bears its name.
+       */
+      ...(partId === undefined ? {} : { part: { id: partId } }),
+    });
   }
 
   /**
@@ -88,6 +98,28 @@
    * second button.
    */
   const retrySection = $derived($session.summary?.sectionStartTokenIndex ?? null);
+
+  /*
+   * §parts. The part this take was recording, and the one after it.
+   *
+   * `part` being set is what turns the primary action from "the whole script
+   * again" into "this part again": somebody who launched part three and stopped
+   * at the end of it is, essentially always, about to do part three again or
+   * part four next. Offering them the top of a forty-minute script as the
+   * highlighted button was the behaviour worth changing.
+   */
+  const takePart = $derived($session.summary?.part ?? null);
+  const takeNextPart = $derived($session.summary?.nextPart ?? null);
+  const partComplete = $derived($session.summary?.partComplete ?? false);
+
+  const actions = $derived(
+    summaryActions({
+      retrySectionTokenIndex: retrySection,
+      part: takePart,
+      partComplete,
+      nextPart: takeNextPart,
+    }),
+  );
 
   /**
    * The conclusion, drawn once (CCUX-006).
@@ -163,6 +195,28 @@
         <dd>{sessionModeLabel(summary.mode)}</dd>
         <dt>Ended in</dt>
         <dd>{summary.endingLocation}</dd>
+        <!--
+          §parts. Shown only for a take that was aimed at one — an unbounded
+          take has no part to have finished or fallen short of, and a row
+          saying so would be reporting on a goal nobody set.
+        -->
+        {#if summary.part !== null}
+          <dt>Part</dt>
+          <dd>
+            {summary.part.ordinal} of {summary.part.totalParts} · {summary.part.label}
+            <!--
+              The completion claim is made only for a take that was FOLLOWING A
+              VOICE, because that is the only take it can be made about.
+              `partComplete` is raised by alignment snapshots, and a manual or
+              fixed-speed reading produces none — so a perfectly finished
+              auto-scroll take would have been reported "stopped part way",
+              which is not a cautious answer but a wrong one.
+            -->
+            {#if summary.mode === 'voice'}
+              {summary.partComplete ? '— read to the end' : '— stopped part way'}
+            {/if}
+          </dd>
+        {/if}
         <dt>Following</dt>
         <dd>{FOLLOW_HEALTH_LABELS[outcome.health]}</dd>
         {#if summary.transcriptSaved || summary.transcriptPartial}
@@ -361,10 +415,20 @@
     -->
     <Button variant="ghost" onclick={() => void returnToLibrary()}>Return to library</Button>
     <Button onclick={dismiss}>Back to the script</Button>
-    {#if retrySection !== null}
-      <Button onclick={() => void presentAgain(retrySection)}>Retry last section</Button>
-    {/if}
-    <Button variant="primary" onclick={() => void presentAgain()}>Present again</Button>
+    <!--
+      The four conditional rows are DECIDED in `summary-actions.ts` rather than
+      here. They are a matrix over three facts, with one property that has to
+      hold across every combination — exactly one primary — and that is not a
+      thing a stack of `{#if}` blocks can be checked for.
+    -->
+    {#each actions as action (action.id)}
+      <Button
+        variant={action.primary ? 'primary' : 'default'}
+        onclick={() => void presentAgain(action.startTokenIndex, action.partId)}
+      >
+        {action.label}
+      </Button>
+    {/each}
   {/snippet}
 </Dialog>
 

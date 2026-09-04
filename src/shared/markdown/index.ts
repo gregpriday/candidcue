@@ -14,6 +14,13 @@ export {
 export { tokenizeText, type RawToken } from './tokenize';
 export { segmentSentences, type SentenceRange } from './segment';
 export {
+  deriveParts,
+  flattenOutlineNodes,
+  partAt,
+  nextPart,
+  type DerivePartsInput,
+} from './parts';
+export {
   scanContainers,
   containerAt,
   ContainerIndex,

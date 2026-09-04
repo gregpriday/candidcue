@@ -507,7 +507,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      *
      * These are the editor's formatting-row controls, given names and keys. The
      * row is a set of glyphs and icons whose meanings have to be hovered for;
-     * this is where somebody finds out that a Cue and a Take Marker exist at
+     * this is where somebody finds out that a Cue and a Part Break exist at
      * all, and it is the only surface that can say so without being on the
      * screen already.
      */
@@ -529,7 +529,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             // they are the ones that mean something to a TAKE rather than to a
             // document — §11.4's grouping.
             &item("insert.cue", "Cue", None)?,
-            &item("insert.take-marker", "Take Marker", None)?,
+            &item("insert.take-marker", "Part Break", None)?,
         ],
     )?;
     menu.append(&insert)?;

@@ -20,6 +20,10 @@ function makeScript(scriptId: string, spokenWordCount = 12): CompiledScript {
     spokenTokens: [],
     sentences: [],
     navigationTargets: [],
+    parts: [
+      { id: 'p1', label: 'Opening', ordinal: 1, startTokenIndex: 0, endTokenIndex: 5, origin: 'marker' },
+      { id: 'p2', label: 'Close', ordinal: 2, startTokenIndex: 6, endTokenIndex: 11, origin: 'marker' },
+    ],
     cues: [],
     assets: [],
     diagnostics: [],
@@ -83,6 +87,21 @@ afterEach(() => {
 });
 
 describe('compiler service', () => {
+  it('carries the script parts through to the UI result (§parts)', async () => {
+    /*
+     * The service RESHAPES the compiled script into `CompileOutput`, field by
+     * field. A field the worker produces and that mapping forgets is invisible
+     * everywhere else: the compiler tests would still pass, the contract would
+     * still typecheck, and the launch menu would simply never offer a part.
+     */
+    const fake = new FakeWorker();
+    setCompilerWorkerFactoryForTesting(() => fake);
+    const pending = compileScript('s1', '# Hello');
+    fake.respondResult(fake.requests[0]!['requestId'] as number);
+    const output = await pending;
+    expect(output.parts.map((p) => p.label)).toEqual(['Opening', 'Close']);
+  });
+
   it('round-trips a compile through the worker protocol', async () => {
     const fake = new FakeWorker();
     setCompilerWorkerFactoryForTesting(() => fake);

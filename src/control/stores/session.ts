@@ -274,6 +274,39 @@ export interface SessionSummary {
    */
   endTokenIndex: number;
   sectionStartTokenIndex: number | null;
+  /**
+   * The part this take was recording, and whether the presenter read to the end
+   * of it (§parts).
+   *
+   * `part` is null for a take that was not bounded to one — every take before
+   * §parts, and every "from the beginning" launch since. `partComplete` is then
+   * false, and both the "reached the end" line and the "record the next part"
+   * action are hidden rather than answered about a part that does not exist.
+   *
+   * `nextPart` is carried alongside rather than looked up from the compiled
+   * script, because the summary outlives the compile the take ran on: the
+   * editor behind this dialog can be recompiling already, and a part list read
+   * a moment later could be a different division of a different document.
+   */
+  part: TakePart | null;
+  partComplete: boolean;
+  nextPart: TakePart | null;
+}
+
+/**
+ * The part a take is bounded to (§parts).
+ *
+ * A reduced {@link ScriptPart} — identity, name, position and span, and nothing
+ * derived. The session store must not carry a second opinion about how a script
+ * divides; it carries which piece of one division this take was given.
+ */
+export interface TakePart {
+  id: string;
+  label: string;
+  ordinal: number;
+  totalParts: number;
+  startTokenIndex: number;
+  endTokenIndex: number;
 }
 
 export interface SessionState {
@@ -295,6 +328,43 @@ export interface SessionState {
    * session, deliberately — see `practice` in `StartTakeOptions`.
    */
   practice: boolean;
+  /**
+   * The part this take is recording, or null for an unbounded one (§parts).
+   *
+   * ADVISORY. It does not truncate the document, gate the recogniser or stop
+   * the take — the engine is still given the whole script and the presenter can
+   * read straight past the boundary. See `ScriptPart` for why enforcing it
+   * would be worse than not having it: the engine's position is an estimate
+   * that runs slightly ahead on a confident phrase, and a take that ended
+   * itself on that estimate would cut people off mid-sentence.
+   *
+   * Not persisted, for the same reason `practice` is not: the session row
+   * records where a take started and stopped, which is a fact about the
+   * reading. Which part it was aimed at is a fact about the launch.
+   */
+  part: TakePart | null;
+  /**
+   * The part after {@link SessionState.part}, or null when this is the last one
+   * (§parts).
+   *
+   * Resolved at LAUNCH, from the same compile the take is running on, and then
+   * carried. The alternative is to look it up when the summary asks — but by
+   * then the editor behind the dialog may already have recompiled, and the next
+   * part of a document that has since been edited is not the next part of the
+   * one that was just read.
+   */
+  nextPart: TakePart | null;
+  /**
+   * The presenter has read to the end of the part (§parts).
+   *
+   * LATCHED. It is set the first time the confirmed position reaches the part's
+   * last token and never cleared while the take runs — the aligner can and does
+   * step backwards (a retake, a re-read, a correction after a lookalike hold),
+   * and a badge that appeared and vanished as the estimate wobbled around the
+   * boundary would be noise at exactly the moment somebody is deciding whether
+   * to stop.
+   */
+  partComplete: boolean;
   displayLabel: string;
   startedAtMs: number;
   elapsedSeconds: number;
@@ -450,6 +520,9 @@ const initial: SessionState = {
   scriptTitle: '',
   mode: 'voice',
   practice: false,
+  part: null,
+  nextPart: null,
+  partComplete: false,
   displayLabel: '',
   startedAtMs: 0,
   elapsedSeconds: 0,
@@ -850,6 +923,10 @@ export interface StartSessionInput {
   presentationMode?: PresentationMode;
   /** §practice. A rehearsal: the whole document, and no report at the end. */
   practice?: boolean;
+  /** §parts. The part this take is recording; absent means the whole script. */
+  part?: TakePart | null;
+  /** §parts. The part after it, so the summary can offer to record it next. */
+  nextPart?: TakePart | null;
   /** The panel the geometry was resolved against; see `stageDisplay`. */
   stageDisplay?: DisplayDescriptor | null;
   transcription?: TranscriptionConfig;
@@ -952,6 +1029,9 @@ export function startLiveSession(input: StartSessionInput): string {
     scriptTitle: input.scriptTitle,
     mode: input.mode,
     practice: input.practice ?? false,
+    part: input.part ?? null,
+    nextPart: input.nextPart ?? null,
+    partComplete: false,
     displayLabel: input.displayLabel,
     startedAtMs: Date.now(),
     voiceFollow: input.mode === 'voice',
@@ -1730,6 +1810,37 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
   state.update((s) => ({
     ...s,
     snapshot,
+    /*
+     * §parts: the presenter has read to the end of the part they launched.
+     *
+     * Read off `confirmedToken` rather than the provisional or observed
+     * frontier, deliberately. The frontier LEADS — it is allowed to, because
+     * shading can be taken back — and "you have finished this part" is a
+     * conclusion, not a shade. Drawing it from a reversible signal would
+     * announce the end of a part on a fuzzy match the engine then withdrew.
+     *
+     * A MANUAL ANCHOR IS NOT EVIDENCE OF READING, and excluding it is not a
+     * refinement — without it the flag is simply wrong twice over:
+     *
+     *   - every take bounded to a part OPENS with one. `startTake` hands the
+     *     engine the part's first token through `moveToToken`, Rust publishes
+     *     that position as a snapshot, and a short part — a one-sentence
+     *     interstitial, the last part of a script that ends on a line —
+     *     satisfied `>= endTokenIndex` from the anchor alone. It was reported
+     *     read to the end before a word was said;
+     *   - operating the transport past the boundary claimed the same thing.
+     *     Stepping forward through the script is how somebody SKIPS a passage,
+     *     and calling that "read to the end" is the one reading of it that is
+     *     certainly false.
+     *
+     * Latched: once true it stays true for the rest of the take. See
+     * `partComplete`.
+     */
+    partComplete:
+      s.partComplete ||
+      (s.part !== null &&
+        snapshot.decision !== 'manualAnchor' &&
+        Math.floor(snapshot.confirmedToken) >= s.part.endTokenIndex),
     blocksSeen:
       blockId && !s.blocksSeen.includes(blockId) ? [...s.blocksSeen, blockId] : s.blocksSeen,
   }));
@@ -3986,6 +4097,9 @@ export function stopSession(): SessionSummary {
     endingLocation: locateEnding(s),
     endTokenIndex: roundToken(s.snapshot?.confirmedToken) ?? takeEndToken(),
     sectionStartTokenIndex: sectionStartFor(s, roundToken(s.snapshot?.confirmedToken) ?? takeEndToken()),
+    part: s.part,
+    partComplete: s.partComplete,
+    nextPart: s.nextPart,
     /*
      * The OUTCOME, not the setting. A write that failed is re-queued and
      * retried, so `transcriptBuffer` still holding items at the end of a take
@@ -4123,6 +4237,9 @@ function emptySummary(s: SessionState): SessionSummary {
   return {
     endTokenIndex: 0,
     sectionStartTokenIndex: null,
+    part: null,
+    partComplete: false,
+    nextPart: null,
     durationSeconds: 0,
     mode: s.mode,
     sectionsReached: 0,

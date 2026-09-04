@@ -205,6 +205,7 @@ function compiled(): CompileOutput {
       },
     ] as never,
     navigationTargets: [],
+    parts: [],
     diagnostics: [],
     spokenWordCount: 2,
     estimatedDurationSeconds: 2,
@@ -1111,5 +1112,122 @@ describe('starting a practice', () => {
     expect(calls.startSessionRecord).toHaveBeenCalledWith(
       expect.objectContaining({ startTokenIndex: expect.any(Number) }),
     );
+  });
+});
+
+
+/**
+ * Recording ONE PART of a script (§parts).
+ *
+ * The unit tests for the division itself live in `src/shared/markdown/parts.test.ts`
+ * and the store's completion latch in `take-part-bounds.test.ts`. What is
+ * asserted here is the WIRING, and specifically the one thing only this seam can
+ * get wrong: a part is chosen from a menu drawn against whatever the editor had
+ * compiled at the time, and the take runs against a compile taken fresh at
+ * launch. Those two documents can differ — somebody edits, then presents — so
+ * the part has to be re-measured here or the take is bounded to a span that
+ * moved.
+ */
+describe('recording one part of a script', () => {
+  const PARTS = [
+    { id: 'p1', label: 'Welcome', ordinal: 1, startTokenIndex: 0, endTokenIndex: 19, origin: 'marker' as const },
+    { id: 'p2', label: 'Pricing', ordinal: 2, startTokenIndex: 20, endTokenIndex: 29, origin: 'marker' as const },
+    { id: 'p3', label: 'Close', ordinal: 3, startTokenIndex: 30, endTokenIndex: 39, origin: 'marker' as const },
+  ];
+
+  /** The same three-sentence script, divided into three parts. */
+  function divided(parts = PARTS) {
+    const base = compiled();
+    const sentences = [
+      { id: 's1', blockId: 'b1', startTokenIndex: 0, endTokenIndex: 19, normalizedText: 'welcome to the update' },
+      { id: 's2', blockId: 'b2', startTokenIndex: 20, endTokenIndex: 29, normalizedText: 'our pricing changed' },
+      { id: 's3', blockId: 'b3', startTokenIndex: 30, endTokenIndex: 39, normalizedText: 'the standard plan is thirty' },
+    ];
+    return {
+      ...base,
+      sentences: sentences as never,
+      parts: parts as never,
+      spokenWordCount: 40,
+      script: {
+        ...(base.script as unknown as Record<string, unknown>),
+        sentences,
+        parts,
+      } as never,
+    };
+  }
+
+  function opened(): { startTokenIndex: number; part: unknown; nextPart: unknown } {
+    return calls.startLiveSession.mock.calls[0]![0] as never;
+  }
+
+  beforeEach(() => {
+    calls.compileScript.mockResolvedValue(divided());
+  });
+
+  it('bounds the take to the chosen part, with the part after it', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 20, part: { id: 'p2' } }),
+    ).resolves.toBe(true);
+    expect(opened().part).toEqual({
+      id: 'p2',
+      label: 'Pricing',
+      ordinal: 2,
+      totalParts: 3,
+      startTokenIndex: 20,
+      endTokenIndex: 29,
+    });
+    expect(opened().nextPart).toMatchObject({ id: 'p3', ordinal: 3 });
+  });
+
+  it('offers no next part for the last one', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 30, part: { id: 'p3' } }),
+    ).resolves.toBe(true);
+    expect(opened().nextPart).toBeNull();
+  });
+
+  it('re-measures the part against the compile the take runs on', async () => {
+    /*
+     * The script grew before the row was chosen: "Pricing" now begins at 30,
+     * not at 20. The caller's token index is the stale one, and following it
+     * would open the take inside part one while reporting on part two.
+     */
+    calls.compileScript.mockResolvedValue(
+      divided([
+        { ...PARTS[0]!, endTokenIndex: 29 },
+        { ...PARTS[1]!, startTokenIndex: 30, endTokenIndex: 39 },
+      ]),
+    );
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 20, part: { id: 'p2' } }),
+    ).resolves.toBe(true);
+    expect(opened().startTokenIndex).toBe(30);
+    expect(opened().part).toMatchObject({ startTokenIndex: 30, endTokenIndex: 39 });
+  });
+
+  it('records the part start on the session row and the glass together', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 20, part: { id: 'p2' } }),
+    ).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ startTokenIndex: 20 }),
+    );
+    expect(opened().startTokenIndex).toBe(20);
+  });
+
+  it('runs unbounded when the chosen part no longer exists', async () => {
+    await expect(
+      startTake(SCRIPT.id, { startTokenIndex: 20, part: { id: 'deleted' } }),
+    ).resolves.toBe(true);
+    expect(opened().part).toBeNull();
+    expect(opened().nextPart).toBeNull();
+    // The caller's own start point still stands — it is all that is left.
+    expect(opened().startTokenIndex).toBe(20);
+  });
+
+  it('leaves an ordinary take unbounded', async () => {
+    await expect(startTake(SCRIPT.id, {})).resolves.toBe(true);
+    expect(opened().part).toBeNull();
+    expect(opened().nextPart).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import type {
   CompileDiagnostic,
   CompiledBlock,
   CompiledScript,
+  ScriptPart,
   NavigationTarget,
   OutlineNode,
   SentenceUnit,
@@ -32,6 +33,13 @@ export interface CompileOutput {
   outline: OutlineNode[];
   sentences: SentenceUnit[];
   navigationTargets: NavigationTarget[];
+  /**
+   * §parts. Empty when the script has no division — and empty, rather than
+   * absent, so no consumer has to spell the "an older compile did not carry
+   * this" case a second time. `CompiledScript.parts` is the optional one,
+   * because that type is persisted; this is a live result.
+   */
+  parts: ScriptPart[];
   diagnostics: CompileDiagnostic[];
   spokenWordCount: number;
   estimatedDurationSeconds: number;
@@ -82,6 +90,7 @@ function supersededOutput(requestId: number, scriptId: string): CompileOutput {
     outline: [],
     sentences: [],
     navigationTargets: [],
+    parts: [],
     diagnostics: [],
     spokenWordCount: 0,
     estimatedDurationSeconds: 0,
@@ -104,6 +113,7 @@ function handleResponse(data: CompilerWorkerResponse): void {
       outline: script.outline,
       sentences: script.sentences,
       navigationTargets: script.navigationTargets,
+      parts: script.parts ?? [],
       diagnostics: script.diagnostics,
       spokenWordCount: script.statistics.spokenWordCount,
       estimatedDurationSeconds: script.statistics.estimatedDurationSeconds,

@@ -498,7 +498,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
   },
   'insert.take-marker': {
     id: 'insert.take-marker',
-    label: 'Take Marker',
+    label: 'Part Break',
     available: (c) => editing(c),
     run: (a) => a.insert('take-marker'),
   },

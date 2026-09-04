@@ -45,6 +45,7 @@ import { startTake, takeStarting } from '../lib/start-take';
   import { matchRememberedMicrophone } from '../services/audio/devices';
   import { getVoiceFacade } from '../services/voice-facade';
   import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
+  import { partAt } from '../../shared/markdown/parts';
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
@@ -75,7 +76,7 @@ import type { PresentationMode } from '../services/settings-types';
   import { duplicateScript, loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
-  import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
+  import type { CompiledBlock, OutlineNode, ScriptPart } from '../../shared/contracts';
 
   interface Props {
     scriptId: string;
@@ -354,9 +355,12 @@ import type { PresentationMode } from '../services/settings-types';
   const diagnostics = $derived(result?.diagnostics ?? []);
   const blockingCount = $derived(diagnostics.filter((d) => d.blocking).length);
   const cueCount = $derived(blocks.filter((b) => b.kind === 'cue').length);
-  const takeMarkers = $derived(
-    (result?.navigationTargets ?? []).filter((t) => t.type === 'take'),
-  );
+  /*
+   * §parts. Derived by the COMPILER, not here: how a script divides is a
+   * property of the document, and a second derivation in the editor would
+   * eventually disagree with the one the take actually runs on.
+   */
+  const parts = $derived(result?.parts ?? []);
   const wordCount = $derived(result?.spokenWordCount ?? 0);
   const durationSeconds = $derived(estimateDurationSeconds(wordCount));
 
@@ -579,6 +583,7 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode;
     startTokenIndex?: number;
     practice?: boolean;
+    part?: ScriptPart;
   } | null = null;
 
   /**
@@ -714,16 +719,18 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
+    part?: ScriptPart,
   ): Promise<void> {
     const verdict = await readinessNow(false, practice ? 'reader' : mode);
     if (!verdict.show) {
-      await present(mode, startTokenIndex, practice);
+      await present(mode, startTokenIndex, practice, part);
       return;
     }
     pendingLaunch = {
       ...(mode === undefined ? {} : { mode }),
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
       ...(practice ? { practice: true } : {}),
+      ...(part === undefined ? {} : { part }),
     };
     readiness = verdict;
   }
@@ -736,13 +743,14 @@ import type { PresentationMode } from '../services/settings-types';
   async function startAnyway(): Promise<void> {
     const launch = pendingLaunch;
     dismissReadiness();
-    await present(launch?.mode, launch?.startTokenIndex, launch?.practice);
+    await present(launch?.mode, launch?.startTokenIndex, launch?.practice, launch?.part);
   }
 
   async function present(
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
+    part?: ScriptPart,
   ): Promise<void> {
     await saveNow();
     await startTake(scriptId, {
@@ -750,6 +758,13 @@ import type { PresentationMode } from '../services/settings-types';
       // be handing `startTake` a preference it is about to overrule anyway.
       ...(practice ? { practice: true } : mode === undefined ? {} : { presentationMode: mode }),
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
+      /*
+       * §parts. A practice is deliberately never bounded to a part: nothing is
+       * reported at the end of one, so "you reached the end of part three" and
+       * "record part four next" would both be claims about a reading the app
+       * has already decided not to report on.
+       */
+      ...(part === undefined || practice ? {} : { part }),
     });
   }
 
@@ -829,11 +844,24 @@ import type { PresentationMode } from '../services/settings-types';
       {
         hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
         hereLabel: caretStartPoint === null ? null : describeStartPoint(caretStartPoint),
+        /*
+         * §parts: starting at the caret starts the part the caret is IN.
+         *
+         * Two reasons. The plainer one is that it is true — on a divided script
+         * every token belongs to exactly one part, and a take opened in the
+         * middle of part three is a take of part three, begun part way. The
+         * sharper one is that the parts menu is capped: its overflow row tells
+         * anybody with more than twelve parts to put the cursor in one and use
+         * this row, and before this that advice was false. It started an
+         * unbounded take, so the parts a creator reached late in a long project
+         * were exactly the ones the feature stopped working for.
+         */
+        herePart: caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
         lastEndingTokenIndex: lastEndingPoint?.tokenIndex ?? null,
         lastEndingLabel: lastEndingPoint === null ? null : lastEndingPoint.label,
-        markers: takeMarkers.map((t) => ({ id: t.id, label: t.label, tokenIndex: t.tokenIndex })),
+        parts,
       },
-      (tokenIndex) => void checkThenPresent(undefined, tokenIndex),
+      (tokenIndex, part) => void checkThenPresent(undefined, tokenIndex, false, part),
     ),
   );
 
@@ -1463,7 +1491,7 @@ import type { PresentationMode } from '../services/settings-types';
             <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
             <span class="toolbar-rule" aria-hidden="true"></span>
             <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
-            <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
+            <IconButton icon="flag" label="Insert part break" onclick={() => withView(inserts.insertTakeMarker)} />
           </div>
         {/if}
       {/snippet}
@@ -1577,9 +1605,17 @@ import type { PresentationMode } from '../services/settings-types';
                 <p class="panel-meta">
                   {cueCount}
                   {cueCount === 1 ? 'cue' : 'cues'}
-                  {#if takeMarkers.length > 0}
-                    · {takeMarkers.length}
-                    {takeMarkers.length === 1 ? 'take marker' : 'take markers'}
+                  <!--
+                    Parts rather than the take-marker count this replaced. They
+                    are not the same number — a script with no markers still has
+                    parts, divided on its headings — and of the two it is the one
+                    that means something for every script. Two counts describing
+                    the same authored marks, in two vocabularies, was the worse
+                    half of the pair.
+                  -->
+                  {#if parts.length > 0}
+                    · {parts.length}
+                    {parts.length === 1 ? 'part' : 'parts'}
                   {/if}
                 </p>
               {:else}

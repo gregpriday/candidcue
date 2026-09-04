@@ -102,7 +102,7 @@ test('the insert toolbar is one tab stop with arrow-key navigation', async ({ pa
   await page.keyboard.press('ArrowLeft');
   await expect(toolbar.getByRole('button', { name: 'Cycle heading level' })).toBeFocused();
   await page.keyboard.press('End');
-  await expect(toolbar.getByRole('button', { name: 'Insert take marker' })).toBeFocused();
+  await expect(toolbar.getByRole('button', { name: 'Insert part break' })).toBeFocused();
   await page.keyboard.press('Home');
   await expect(toolbar.getByRole('button', { name: 'Cycle heading level' })).toBeFocused();
 });

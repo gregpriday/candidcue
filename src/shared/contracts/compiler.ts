@@ -261,6 +261,19 @@ export interface CompiledScript {
    * `buildTrackingDocument(...)` and `CommandRouterDeps.literalCommandRanges`.
    * Ranges are inclusive, non-overlapping, and in ascending token order.
    */
+  /**
+   * The script's presentable segments, in document order (§parts).
+   *
+   * Empty when the script has no natural division — one part and "the whole
+   * script" are the same offer, and a launch menu that made it twice would be
+   * explaining a distinction that does not exist.
+   *
+   * Optional for the same reason `coaching` is: a `CompiledScript` outlives the
+   * process that produced it, so a document compiled before this field existed
+   * is still a valid document. The compiler always emits it; readers must treat
+   * its absence as "no parts".
+   */
+  parts?: ScriptPart[];
   literalCommandRanges: SpokenTokenRange[];
   /**
    * §19.4 / §19.5 coaching directives derived from the script.
@@ -278,6 +291,70 @@ export interface CompiledScript {
 export interface SpokenTokenRange {
   startTokenIndex: number;
   endTokenIndex: number;
+}
+
+/**
+ * One presentable segment of a script.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A SCRIPT HAS PARTS AT ALL
+ * ---------------------------------------------------------------------------
+ * A long script is not read in one sitting. The presenter reaches a fatigue
+ * point, stops, and wants to pick the next piece up on its own — which the app
+ * already half-supported: `startTake` has taken a `startTokenIndex` since
+ * CCUX-014, so a take could BEGIN anywhere. What it could not do is end
+ * anywhere. Every take ran from its start point to whenever somebody pressed
+ * Escape, so "record section three" meant recording section three and then
+ * everything after it.
+ *
+ * A part is the missing half: a start point that also knows where it stops.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BOUND IS ADVISORY, AND THAT IS THE POINT
+ * ---------------------------------------------------------------------------
+ * `endTokenIndex` does NOT truncate the document, stop the recogniser or halt
+ * the take. The alignment engine is still given the whole script and the
+ * presenter can read straight past the boundary if they want to.
+ *
+ * It is deliberate. The engine's position is an ESTIMATE, and it runs a little
+ * ahead of the words on a good confident phrase. A take that ended itself on
+ * that estimate would cut people off mid-sentence — a far worse failure than
+ * one that runs a few seconds long, because the first destroys a take and the
+ * second costs a keystroke. So reaching the end of a part is reported (the
+ * take is marked complete, the summary offers the next one) and never enforced.
+ */
+export interface ScriptPart {
+  /**
+   * Stable across recompiles of unchanged source: this is the id of whatever
+   * DEFINED the boundary — the take marker's cue event, or the outline node —
+   * rather than a fresh hash of the span. A part that keeps its identity
+   * is what lets a session row still name the part it recorded after an edit
+   * somewhere else in the document.
+   */
+  id: string;
+  /** The marker's name or the heading's title, as authored. */
+  label: string;
+  /** 1-based position in document order, for "Part 3 of 7". */
+  ordinal: number;
+  /** First spoken token of the part. Always a legal place to start reading. */
+  startTokenIndex: number;
+  /**
+   * Last spoken token of the part, INCLUSIVE — one before the next part begins,
+   * or the last token of the script.
+   */
+  endTokenIndex: number;
+  /**
+   * Which division this part belongs to: authored `[Take: …]` markers, or the
+   * headings a script with no markers falls back to.
+   *
+   * A property of the DIVISION rather than of this one boundary, which matters
+   * for exactly one part — the implicit opening a script gets when its first
+   * authored boundary is not at the top. Nothing drew that one, and it takes
+   * the origin of the division it sits in rather than a third value, because
+   * every consumer of this field is asking "how was this script divided", not
+   * "which character produced this particular edge".
+   */
+  origin: 'marker' | 'heading';
 }
 
 /* -------------------------------------------------------------------------

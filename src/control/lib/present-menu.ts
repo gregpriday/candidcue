@@ -7,6 +7,7 @@
  * ("Teleprompter" / "Reading window") next to a picture; this has one line to
  * say what will happen to the window.
  */
+import type { ScriptPart } from '../../shared/contracts';
 import type { PresentationMode } from '../services/settings-types';
 
 /**
@@ -23,6 +24,7 @@ export interface PresentMenuItem {
   label: string;
   description?: string;
   selected?: boolean;
+  disabled?: boolean;
   onselect: () => void;
 }
 
@@ -36,7 +38,8 @@ export interface PresentMenuItem {
  * take, not editing a preference.
  */
 /**
- * Where a take can begin, as menu rows (CCUX-014, CCUX-015, CCUX-016).
+ * Where a take can begin — and, since §parts, where it ends (CCUX-014,
+ * CCUX-015, CCUX-016).
  *
  * The three questions somebody answers at launch are where to start, how to
  * display, and whether this is a take or a rehearsal. This covers the first;
@@ -49,27 +52,48 @@ export interface PresentMenuItem {
  * Rows appear only when they lead somewhere different. "From last ending" over
  * a script that has never been presented would be a third button that silently
  * does what the other two do.
+ *
+ * ---------------------------------------------------------------------------
+ * PART ROWS REPLACED MARKER ROWS
+ * ---------------------------------------------------------------------------
+ * This used to offer one row per authored `[Take: …]` marker, and each of them
+ * started a take that ran to the end of the script. A part row starts the same
+ * take and also carries the part's end, so the take knows what it is recording
+ * — which is the whole of what §parts added. A script with no markers now gets
+ * rows too, divided on its own headings, so the feature is reachable without
+ * having to learn a directive first.
  */
 export interface StartMenuInput {
   /** Snapped caret/selection position, or null when the editor has no caret. */
   hereTokenIndex: number | null;
   /** Label for the caret position, e.g. a heading or a quoted phrase. */
   hereLabel: string | null;
+  /**
+   * The part the caret sits in, or null on an undivided script.
+   *
+   * "From here" carries it, so starting part way into part three records part
+   * three. Without it the overflow notice below was advertising a route that
+   * silently produced an unbounded take.
+   */
+  herePart: ScriptPart | null;
   /** Where the last take stopped, snapped, or null when there is no history. */
   lastEndingTokenIndex: number | null;
   lastEndingLabel: string | null;
-  /** Authored take markers, in document order. */
-  markers: Array<{ id: string; label: string; tokenIndex: number }>;
+  /** The script's parts, in document order. Empty when it has no division. */
+  parts: readonly ScriptPart[];
 }
 
 export function startMenuItems(
   input: StartMenuInput,
-  present: (tokenIndex: number) => void,
+  present: (tokenIndex: number, part?: ScriptPart) => void,
 ): PresentMenuItem[] {
   const items: PresentMenuItem[] = [
     {
       label: 'From beginning',
-      description: 'The default. Reads the script from the top.',
+      description:
+        input.parts.length > 0
+          ? 'Reads the whole script, straight through every part.'
+          : 'The default. Reads the script from the top.',
       onselect: () => present(0),
     },
   ];
@@ -77,8 +101,11 @@ export function startMenuItems(
   if (input.hereTokenIndex !== null && input.hereTokenIndex > 0) {
     items.push({
       label: 'From here',
-      description: input.hereLabel ?? 'Starts at the cursor, snapped to a whole sentence.',
-      onselect: () => present(input.hereTokenIndex as number),
+      description:
+        input.herePart === null
+          ? (input.hereLabel ?? 'Starts at the cursor, snapped to a whole sentence.')
+          : `${input.hereLabel ?? 'Starts at the cursor'}. Records part ${input.herePart.ordinal}.`,
+      onselect: () => present(input.hereTokenIndex as number, input.herePart ?? undefined),
     });
   }
 
@@ -91,22 +118,63 @@ export function startMenuItems(
   }
 
   /*
-   * Markers are capped. A script may author dozens, and a launch menu that
-   * scrolled would be slower than starting from the top and navigating — which
-   * is the behaviour this feature exists to replace.
+   * Parts are capped, because a launch menu that scrolled would be slower than
+   * starting from the top and navigating — which is the behaviour this feature
+   * exists to replace.
+   *
+   * What is NOT acceptable is capping quietly, which is what the marker rows
+   * did: a lesson with twelve markers offered eight and said nothing about the
+   * other four, so the parts a creator was most likely to be recording late in
+   * a project were the ones that vanished. The overflow now says so, and names
+   * the route that still reaches them.
    */
-  for (const marker of input.markers.slice(0, MAX_MARKER_ROWS)) {
+  for (const part of input.parts.slice(0, MAX_PART_ROWS)) {
     items.push({
-      label: `From marker “${marker.label}”`,
-      onselect: () => present(marker.tokenIndex),
+      label: `Part ${part.ordinal} · ${part.label}`,
+      description: describePartRange(input.parts, part),
+      onselect: () => present(part.startTokenIndex, part),
+    });
+  }
+
+  const hidden = input.parts.length - MAX_PART_ROWS;
+  if (hidden > 0) {
+    items.push({
+      label: `${hidden} more ${hidden === 1 ? 'part' : 'parts'} below`,
+      description: 'Put the cursor in one and choose “From here” — it records that part.',
+      disabled: true,
+      onselect: () => {},
     });
   }
 
   return items;
 }
 
-/** Enough to cover a lesson's segments without turning the menu into a list. */
-const MAX_MARKER_ROWS = 8;
+/** What a part row promises about where the take stops. */
+/**
+ * What a part row promises — and, as carefully, what it does not.
+ *
+ * "Ends where X begins" was the first wording and it was a lie by implication:
+ * nothing stops there. The bound is advisory (see `ScriptPart`), the engine
+ * still holds the whole script, and reading straight on past the boundary is a
+ * legitimate thing to do. What the app does at that point is mark the part
+ * covered and offer the next one, so that is what the row says.
+ */
+function describePartRange(parts: readonly ScriptPart[], part: ScriptPart): string {
+  const next = parts.find((p) => p.ordinal === part.ordinal + 1);
+  return next === undefined
+    ? `Part ${part.ordinal} of ${parts.length}. Done at the end of the script.`
+    : `Part ${part.ordinal} of ${parts.length}. Done where “${next.label}” begins; carries on if you do.`;
+}
+
+/**
+ * Enough to cover a lesson's parts without turning the menu into a list.
+ *
+ * Twelve rather than the eight the marker rows allowed: parts are now the
+ * primary way to launch a long script rather than an extra for authors who had
+ * found the directive, so the common shape this has to hold — a course module
+ * of eight to twelve segments — should fit whole.
+ */
+const MAX_PART_ROWS = 12;
 
 export function presentMenuItems(
   current: PresentationMode,

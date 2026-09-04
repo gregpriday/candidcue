@@ -138,6 +138,15 @@ export function insertDiagram(view: EditorView): void {
   insertBlock(view, '```mermaid\nflowchart LR\n  A --> B\n```');
 }
 
+/**
+ * A take marker, which is also a PART boundary (§parts).
+ *
+ * The placeholder names the thing that follows the marker rather than the
+ * marker itself. `[Take: name this take]` read as an instruction to describe
+ * the act of recording; what the author is actually being asked for is the name
+ * of the segment that starts here, because that name is what appears in the
+ * launch menu, in the Live status bar and on the take summary.
+ */
 export function insertTakeMarker(view: EditorView): void {
-  insertBlock(view, '[Take: name this take]');
+  insertBlock(view, '[Take: name this part]');
 }

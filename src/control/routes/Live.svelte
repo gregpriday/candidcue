@@ -1248,6 +1248,33 @@ import { onShortcut } from '../lib/shortcuts';
   ("Mic live", "Mic lost"), so the state survives a monochrome display and a
   colour-blind reader.
 -->
+{#snippet partStatus()}
+  <!--
+    §parts. Which piece of the script this take is recording, and whether the
+    presenter has read to the end of it.
+
+    RENDERED IN TWO PLACES, and it had to be. Everything under
+    `{#if $session.active}` is the embedded stage — during a single-window take
+    this route IS the prompter — so the console status bar below it is only on
+    screen when no take is running. Put there alone, this said nothing during
+    the one period it describes. The take-controls drawer is the surface that
+    survives into a live take, and it is where the rest of the operator's
+    readouts already live: the clock, the session status, the pills.
+
+    The completed state is a QUIET one. It is not an alarm and it is not an
+    instruction: nothing stops, and reading on past the boundary is a legitimate
+    thing to do. It says the part is covered and leaves the decision alone —
+    which is also why it does not raise the drawer's attention marker, a signal
+    reserved for faults.
+  -->
+  {#if $session.part}
+    <span class="take-part" class:complete={$session.partComplete} role="status" aria-live="polite">
+      Part {$session.part.ordinal} of {$session.part.totalParts} · {$session.part.label}
+      {#if $session.partComplete}<span class="part-done">— end reached</span>{/if}
+    </span>
+  {/if}
+{/snippet}
+
 {#snippet statusPills()}
   <span class="live-status">
     <span class="status-dot accent" aria-hidden="true"></span>
@@ -1434,6 +1461,7 @@ import { onShortcut } from '../lib/shortcuts';
     <div class="status-left">
       <span class="live-dot" class:paused={$session.paused !== 'none' || !$session.prompting}></span>
       <span class="script-title">{$session.scriptTitle}</span>
+      {@render partStatus()}
       <span class="elapsed">{formatClock($session.elapsedSeconds)}</span>
       <!-- F.11 session status; the follow state itself lives in the Tracking panel. -->
       <span class="session-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
@@ -1837,6 +1865,7 @@ import { onShortcut } from '../lib/shortcuts';
   >
     <header class="tc-head">
       <span class="tc-elapsed">{formatClock($session.elapsedSeconds)}</span>
+      {@render partStatus()}
       <span class="tc-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
       <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
     </header>
@@ -1986,6 +2015,23 @@ import { onShortcut } from '../lib/shortcuts';
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .take-part {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* Shrinks before the title and the clock do: of the three, this is the one
+       that can be read from a truncated form. */
+    min-width: 0;
+  }
+  .take-part.complete {
+    color: var(--text-primary);
+  }
+  .part-done {
+    color: var(--accent-strong);
+    font-weight: 600;
   }
   .elapsed {
     font-size: var(--text-sm);

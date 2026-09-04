@@ -40,6 +40,7 @@ import {
   resolveDocumentAssets,
   stageSettingsFromSettings,
 } from '../services/stage-envelope';
+import type { ScriptPart } from '../../shared/contracts';
 import type { DisplayDescriptor } from '../services/stage-types';
 import type { AppSettings, PresentationMode, ReaderFrame } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
@@ -48,6 +49,7 @@ import {
   clearSession,
   startLiveSession,
   stopSession,
+  type TakePart,
 } from '../stores/session';
 import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
 import { loadSettings, patchSettings, settings } from '../stores/settings';
@@ -359,6 +361,39 @@ export interface StartTakeOptions {
    * no migration.
    */
   practice?: boolean;
+  /**
+   * The part of the script this take is recording (§parts).
+   *
+   * -------------------------------------------------------------------------
+   * IT BOUNDS THE TAKE WITHOUT BOUNDING THE DOCUMENT
+   * -------------------------------------------------------------------------
+   * The compiled script handed to the stage and the token array handed to the
+   * alignment engine are UNCHANGED — the whole script, exactly as an unbounded
+   * take gets it. Nothing is truncated, hidden or filtered.
+   *
+   * What the part adds is an answer to "what am I recording", which the app
+   * previously had no way to hold. From it come three things and no others: the
+   * part's name beside the timer, a "you have reached the end of it" once the
+   * confirmed position gets there, and an offer on the summary to record the
+   * next one.
+   *
+   * Slicing the document instead was the other candidate and it is the wrong
+   * trade. Every index in this system is document-absolute — snapshots, the
+   * stage's viewport hint, `set_alignment_position`, the session row's start and
+   * end — so a sliced engine would need an offset conversion threaded through
+   * all of them, and `align/mod.rs` is emphatic that there is exactly ONE
+   * conversion in the system and it lives there. It would also make reading past
+   * a boundary impossible rather than merely unintended, which is a promise the
+   * engine's position estimate is not accurate enough to keep.
+   *
+   * ONLY THE ID IS READ. The span, the name and the position are re-resolved
+   * against the compile this take actually runs on — see the lookup in
+   * `startTake` — so a caller cannot hand in a part measured against a document
+   * that has since been edited. The type says so rather than a comment saying
+   * so: anything that knows a part's identity can launch it, which is what lets
+   * the summary dialog offer the next part without holding a compiler type.
+   */
+  part?: { id: string };
 }
 
 /**
@@ -490,18 +525,86 @@ export async function startTake(
      * build. Rust assigns, control adopts.
      */
     /*
+     * §parts: which part this take is recording, and which one follows it.
+     *
+     * Resolved against THIS compile, the same one the stage is built from. A
+     * part identified against an older compile could name a span that has since
+     * moved, and the take would report having recorded a piece of a document
+     * that no longer exists.
+     *
+     * The requested part is matched by id rather than trusted wholesale: the
+     * caller's copy came from whatever the editor had compiled when the menu
+     * was drawn, and a script edited between opening the menu and choosing a
+     * row is an ordinary thing to do. When it no longer exists the take simply
+     * runs unbounded, which is what every take did before §parts.
+     */
+    /*
+     * A PRACTICE IS NEVER BOUNDED TO A PART, and that is enforced here rather
+     * than only at the call site. `stopSession` produces no summary for a
+     * rehearsal (§practice), so "you reached the end of part three" and "record
+     * part four next" would both be claims about a reading the app has already
+     * decided not to report on — and the Live readout would name a part whose
+     * completion nothing would ever act on.
+     *
+     * The Editor's Present menu already refuses the combination. This is the
+     * invariant, in the one place every caller of the exported `startTake` goes
+     * through.
+     */
+    const compiledParts = options.practice ? [] : compiled.parts;
+    const takePart = options.part
+      ? reduceToTakePart(
+          compiledParts.find((p) => p.id === options.part!.id) ?? null,
+          compiledParts.length,
+        )
+      : null;
+    const takeNextPart = reduceToTakePart(
+      takePart === null
+        ? null
+        : (compiledParts.find((p) => p.ordinal === takePart.ordinal + 1) ?? null),
+      compiledParts.length,
+    );
+
+    /*
+     * A part that was asked for and is not there any more is SAID, not swallowed.
+     *
+     * The take still opens — refusing would strand somebody in front of a camera
+     * over an edit they may have made on purpose — but "record part three" and
+     * "read from here to the end of the script" are different operations, and
+     * degrading silently from one to the other is the kind of quiet substitution
+     * that gets noticed only in the footage. This happens when a break is renamed
+     * or deleted while the launch menu or the take summary is still open.
+     */
+    if (options.part && takePart === null && !options.practice) {
+      showToast(
+        'That part is no longer in the script, so the take will run to the end.',
+        'info',
+      );
+    }
+
+    /*
      * The start point, snapped to something a presenter can be handed.
      *
      * Done after the compile because it needs the sentences and the outline —
      * and it must be the SAME compile the stage is built from, or the token
      * index would be resolved against a document the take is not going to
      * show.
+     *
+     * A RESOLVED PART OVERRULES THE TOKEN THAT CAME WITH IT (§parts). Both
+     * arrive from the same menu row, but only one of them was re-measured
+     * against this compile: the caller's token index was read off whatever the
+     * editor had compiled when the row was drawn. Edit the script between
+     * opening the menu and choosing the row and the two disagree — and taking
+     * the stale one would open the take a few tokens outside the very part it
+     * is bounded to, then report on a part it did not start in.
      */
-    const startPoint = snapToStart(options.startTokenIndex ?? 0, {
-      sentences: compiled.sentences,
-      outline: compiled.outline,
-      totalTokens: compiled.spokenWordCount,
-    });
+    const startPoint = snapToStart(
+      takePart?.startTokenIndex ?? options.startTokenIndex ?? 0,
+      {
+        sentences: compiled.sentences,
+        outline: compiled.outline,
+        totalTokens: compiled.spokenWordCount,
+      },
+    );
 
     const record = await startSessionRecord({
       scriptId,
@@ -651,6 +754,8 @@ export async function startTake(
       sentences: compiled.sentences,
       totalTokens: Math.max(compiled.spokenWordCount, 1),
       startTokenIndex: startPoint.tokenIndex,
+      part: takePart,
+      nextPart: takeNextPart,
       sessionId,
       compiled: compiled.script,
       scriptRevision: doc.scriptRevision,
@@ -741,6 +846,25 @@ export async function startTake(
  * take with an app the operator cannot see. This is the error path — it is
  * exactly where the teardown is most likely to hit a second fault.
  */
+/**
+ * A compiler {@link ScriptPart} as the session store holds it (§parts).
+ *
+ * Reduced rather than passed whole so the store carries no field it does not
+ * read — `origin` in particular is an authoring detail (marker or heading) that
+ * belongs to the launch menu's copy, not to the record of a reading.
+ */
+function reduceToTakePart(part: ScriptPart | null, totalParts: number): TakePart | null {
+  if (part === null) return null;
+  return {
+    id: part.id,
+    label: part.label,
+    ordinal: part.ordinal,
+    totalParts,
+    startTokenIndex: part.startTokenIndex,
+    endTokenIndex: part.endTokenIndex,
+  };
+}
+
 async function abandonTake(sessionId: string): Promise<void> {
   try {
     stopSession();

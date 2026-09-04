@@ -43,6 +43,7 @@ import {
 import { normalizePhrase, normalizeToken } from './normalize';
 import { tokenizeText } from './tokenize';
 import { segmentSentences } from './segment';
+import { deriveParts } from './parts';
 
 /*
  * Bumped for `wordTokens`, and before that for the grammatical-sentence-end
@@ -2017,6 +2018,13 @@ function finalize(
 
   const title = deriveTitle(drafts);
 
+  /*
+   * Derived here rather than by every consumer, because the division is a
+   * property of the DOCUMENT and two panels that computed it separately would
+   * eventually disagree about how many parts a script has.
+   */
+  const parts = deriveParts({ cues, outline, sentences, totalTokens });
+
   return {
     schemaVersion: SCHEMA_VERSION,
     compilerVersion: COMPILER_VERSION,
@@ -2042,6 +2050,7 @@ function finalize(
     assets,
     diagnostics,
     statistics,
+    parts,
     literalCommandRanges,
     coaching: resolveCoachDirectives(state, blocks, sentences),
   };
