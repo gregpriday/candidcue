@@ -166,7 +166,7 @@ describe('the bottom of the ladder is silence', () => {
     // claiming a hold that is not happening — the presenter can see the text
     // moving and would rightly stop trusting everything else on the glass.
     const status = resolveHoldStatus(held(30_000, { alignmentState: 'following' }));
-    expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', hint: null });
+    expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', glyph: null, hint: null });
   });
 });
 
@@ -199,6 +199,8 @@ describe('a named fault outranks the ladder', () => {
       rung: 'message',
       message: 'No audio from the microphone',
       tone: 'fault',
+      // A fault names a condition to fix; a mark cannot.
+      glyph: null,
       hint: HOLD_FAULT_HINT,
     });
   });
@@ -217,12 +219,13 @@ describe('a named fault outranks the ladder', () => {
     // nothing to act on. The ladder's wording is at least true.
     for (const label of [null, '', '   ']) {
       const status = resolveHoldStatus(held(400, { hasFault: true, faultLabel: label }));
-      expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', hint: null });
+      expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', glyph: null, hint: null });
     }
     expect(resolveHoldStatus(held(5000, { hasFault: true, faultLabel: null }))).toEqual({
       rung: 'message',
       message: 'Holding here',
       tone: 'neutral',
+      glyph: 'held',
       hint: null,
     });
   });
@@ -268,10 +271,36 @@ describe('following switched off skips the ladder too (§48)', () => {
       rung: 'message',
       message: 'Following off',
       tone: 'neutral',
+      // A switch somebody has to throw back is not an ordinary hold.
+      glyph: null,
       // The same key the fault case names, for the same reason: this hold will
       // not clear itself, and one keystroke will carry the script regardless.
       hint: HOLD_FAULT_HINT,
     });
+  });
+
+  it('marks a plain hold rather than spelling it out, and only a plain hold', () => {
+    /*
+     * The chip is drawn at the floor the optics resolve for secondary text, so
+     * on a 9-inch Prompter "Holding here" is a ~390px slab across the top-left
+     * of the glass, sitting over the script it is reporting on. The presenter
+     * already knows what a paused prompter is; the words earned none of that
+     * room.
+     *
+     * Everything else keeps its sentence, and that is the half worth pinning:
+     * `ambiguous` names a choice the presenter can act on in about a second,
+     * and a mark cannot say it.
+     */
+    expect(resolveHoldStatus(held(5000)).glyph).toBe('held');
+    expect(resolveHoldStatus(held(5000, { alignmentState: 'searching' })).glyph).toBeNull();
+    expect(resolveHoldStatus(held(5000, { alignmentState: 'ambiguous' })).glyph).toBeNull();
+  });
+
+  it('marks nothing on the rungs that say nothing', () => {
+    // The mark belongs to the sentence, so it may not outlive it: a rung with
+    // no message must not draw a chip with a glyph alone in it.
+    expect(resolveHoldStatus(held(0)).glyph).toBeNull();
+    expect(resolveHoldStatus(held(0, { alignmentState: 'following' })).glyph).toBeNull();
   });
 
   it('is neutral, not a fault: a mode in force is not a thing gone wrong', () => {
@@ -288,6 +317,7 @@ describe('following switched off skips the ladder too (§48)', () => {
       rung: 'message',
       message: 'No audio',
       tone: 'fault',
+      glyph: null,
       hint: HOLD_FAULT_HINT,
     });
   });
@@ -417,6 +447,7 @@ describe('the chip', () => {
     message: string | null;
     tone: 'neutral' | 'fault';
     secondaryMinPx: number;
+    glyph?: 'held' | null;
   }): string {
     return render(HoldStatus, { props }).body;
   }
@@ -449,13 +480,34 @@ describe('the chip', () => {
     expect(gone).toContain('class="hold-status');
   });
 
-  it('carries no icon in any state — least of all a tick on recovery', () => {
+  it('carries no icon unless the resolver asked for one — least of all a tick on recovery', () => {
     // Recovery is not an achievement. A check mark here would make the ordinary
     // state of the world into an event worth looking away from the script for.
     for (const rung of ['none', 'hollow', 'message'] as const) {
       const body = markup({ rung, message: 'Holding here', tone: 'neutral', secondaryMinPx: 28 });
       expect(body, `${rung} must draw no glyph`).not.toContain('<svg');
     }
+  });
+
+  it('draws the mark instead of the words, and keeps the words for the ear', () => {
+    const body = markup({
+      rung: 'message',
+      message: 'Holding here',
+      tone: 'neutral',
+      secondaryMinPx: 28,
+      glyph: 'held',
+    });
+    expect(body).toContain('<svg');
+    // The sentence is still in the live region, and still hidden from the glass.
+    expect(body).toContain('sr-only');
+    expect(body).toContain('Holding here');
+    /*
+     * Not the transport's pause bars. This app draws two upright bars for its
+     * own Pause command on Space, and the same shape here would tell a
+     * presenter that capture had stopped — the one response that cannot clear
+     * an alignment hold. The mark is the reading cue's own triangles.
+     */
+    expect(body).not.toContain('<rect');
   });
 
   it('sizes itself at the secondary-text floor rather than a fixed small value', () => {

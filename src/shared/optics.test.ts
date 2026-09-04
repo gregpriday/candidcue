@@ -223,9 +223,17 @@ describe('hardware fit', () => {
   });
 
   it('gives type up only once the line cannot reach the character floor', () => {
+    /*
+     * The width is chosen to sit inside this rung rather than for any meaning
+     * of its own: narrow enough that the character floor cannot be reached at
+     * the requested angle, wide enough that dropping to the soft angular floor
+     * rescues it. `MAX_COLUMN_FRACTION` is deliberately left at the shipped
+     * default here — the rung boundary is a property of the real geometry, and
+     * pinning the fraction would test an arrangement nothing ships.
+     */
     const fit = hardwareFitCheck({
       ...base,
-      safeWidthPx: 400,
+      safeWidthPx: 460,
       mmPerCssPx: mmPerCssPixel(PROMPTER_9),
       distanceMm: 1400,
     });

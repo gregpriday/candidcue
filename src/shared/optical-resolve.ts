@@ -16,10 +16,12 @@
 import {
   ANGULAR_HARD_FLOOR_ARCMIN,
   ANGULAR_SOFT_FLOOR_ARCMIN,
+  MAX_COLUMN_FRACTION,
   READING_MEASURE,
   arcminutesForBias,
   arcminutesForFontSizePx,
   charactersForBias,
+  charactersForCh,
   charactersForWidthPx,
   chForCharacters,
   clamp,
@@ -225,8 +227,6 @@ const FRAMING_MEASURE_SCALE: Record<FramingPreset, number> = {
   'full-body': 1.25,
 };
 
-/** Fraction of the safe width the column may occupy before it looks crammed. */
-const MAX_COLUMN_FRACTION = 0.92;
 
 export interface ViewportInfo {
   widthPx: number;
@@ -294,9 +294,21 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   const targetArcmin = resolveTargetArcminutes(profile);
   const targetCharacters = resolveTargetCharacters(profile, readingContext);
 
+  /*
+   * Resolved BEFORE the fit, because it is an input to it.
+   *
+   * It used to be read only afterwards, so the fit always solved against the
+   * default: raising the limit could not widen an unpinned column (the measure
+   * had already been decided against 82%), and lowering it narrowed the render
+   * while the verdict and advice went on describing the wider one.
+   */
+  const columnFraction = usable(profile.overrides?.maxColumnFraction)
+    ? clamp(profile.overrides.maxColumnFraction, 0.1, 1)
+    : MAX_COLUMN_FRACTION;
+
   const fit = hardwareFitCheck({
     safeWidthPx,
-    maxColumnFraction: MAX_COLUMN_FRACTION,
+    maxColumnFraction: columnFraction,
     mmPerCssPx,
     distanceMm,
     targetArcmin,
@@ -335,7 +347,7 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     : null;
 
   const charactersPerLine = charactersForWidthPx(
-    Math.min(safeWidthPx * MAX_COLUMN_FRACTION, columnCh * metrics.zeroAdvanceRatio * bodyFontSizePx),
+    Math.min(safeWidthPx * columnFraction, columnCh * metrics.zeroAdvanceRatio * bodyFontSizePx),
     bodyFontSizePx,
     metrics,
   );
@@ -374,6 +386,14 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   const o = profile.overrides ?? {};
   const overriddenFields: string[] = [];
   /*
+   * The width a column may actually occupy — the same quantity `hardwareFitCheck`
+   * solves against, restated here because the column has to be re-solved when a
+   * pinned size changes what a `ch` is worth. Kept in one expression so the two
+   * cannot drift: an override of the fraction is honoured in both places.
+   */
+  const usableWidthPx = safeWidthPx * columnFraction;
+
+  /*
    * Three overrides act BEFORE the fit check — they change what the model is
    * asked for rather than shadowing what it produced — so they never reach the
    * `take()` helper below and went unrecorded. An override the UI cannot see is
@@ -393,7 +413,62 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
       ? take('fontSizePx', o.fontSizePx, bodyFontSizePx)
       : bodyFontSizePx;
 
-  const derivedColumnCh = columnCh;
+  /*
+   * A pinned SIZE must not shrink the COLUMN.
+   *
+   * `columnCh` is a count of `ch`, and a `ch` is a fraction of the em — so a
+   * column solved against the size the model wanted and then rendered at a
+   * smaller pinned size comes out proportionally narrower. That is not a
+   * near-miss, it is the whole defect: a 9-inch Prompter solved at 70px and
+   * pinned to 48px rendered its column at 647px of a 1024px panel and left a
+   * third of the glass empty, with the text in a ribbon down the middle.
+   *
+   * The fit check's rule is "legibility outranks measure": hold the type at
+   * the size asked for and let the line narrow. Pinning the type SMALLER is
+   * the same statement from the other end — the presenter has bought width
+   * with size — so the honest answer is to spend it. Re-solve the column at
+   * the size that will actually be rendered, still bounded by the width the
+   * panel has and by the measure band's own ceiling, which is what stops a
+   * pinned-tiny size from running the line out to something unreadable.
+   *
+   * Only when the size moved and the column was not itself pinned: an explicit
+   * `columnCh` is a presenter naming a number, and it is not this code's to
+   * reinterpret.
+   */
+  /* What the panel can hold at the size that will be RENDERED, once the cue has
+     its margin. The ceiling in both cases below. */
+  const widthCapCharacters = charactersForWidthPx(usableWidthPx, finalFontSizePx, metrics);
+  /*
+   * And what to ask for.
+   *
+   * With no size pinned, the fit check has already solved the trade against
+   * this panel and its answer stands. With a size pinned, the presenter has
+   * bought width with size and the honest thing is to spend it — up to the
+   * measure this profile actually asked for.
+   *
+   * SMALLER, tested as such rather than as "different". Settings rounds the
+   * automatic size to a whole pixel, so a presenter who pins what the model
+   * already chose usually pins a number a fraction away from it — and a
+   * `!==` test read that visual no-op, and a deliberately LARGER pin, as a
+   * licence to widen the line. A larger pin keeps the fit's measure and simply
+   * renders it bigger, which is what the `ch` unit does correctly on its own.
+   *
+   * `targetCharacters`, not the band's ceiling. The ceiling is a guardrail, not
+   * an editorial target, and asking for it would throw away everything the
+   * profile said about measure: the bias, the framing multiplier, and an
+   * explicit `overrides.characters`. On the 9-inch panel this fix came from the
+   * panel binds first and the two agree, but a 1920px XL pinned to 64px would
+   * run to ~49 characters against a profile that asked for 37, and a pinned
+   * reader window to 90 against a 67-character target.
+   */
+  const boughtWidthWithSize = finalFontSizePx > 0 && finalFontSizePx < bodyFontSizePx;
+  const requestedCharacters = boughtWidthWithSize
+    ? targetCharacters
+    : charactersForCh(columnCh, metrics);
+  const derivedColumnCh = chForCharacters(
+    Math.min(widthCapCharacters, requestedCharacters),
+    metrics,
+  );
   const finalColumnCh = usable(o.columnCh)
     ? take('columnCh', o.columnCh, derivedColumnCh)
     : derivedColumnCh;
@@ -408,10 +483,7 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    * was a good idea.
    */
   const finalCharactersPerLine = charactersForWidthPx(
-    Math.min(
-      safeWidthPx * (usable(o.maxColumnFraction) ? clamp(o.maxColumnFraction, 0.1, 1) : MAX_COLUMN_FRACTION),
-      finalColumnCh * metrics.zeroAdvanceRatio * finalFontSizePx,
-    ),
+    Math.min(usableWidthPx, finalColumnCh * metrics.zeroAdvanceRatio * finalFontSizePx),
     finalFontSizePx,
     metrics,
   );
@@ -554,7 +626,23 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     bodyArcminutes: finalArcminutes,
     charactersPerLine: Number.isFinite(finalCharactersPerLine) ? finalCharactersPerLine : null,
     fitVerdict: fit.verdict,
-    fitAdvice: fit.advice,
+    /*
+     * The advice has to describe the line the presenter will READ.
+     *
+     * `fit.advice` is written against the automatic geometry, and a pinned size
+     * changes that geometry after the fact — so the rig this came from ended up
+     * with an ideal-length 35-character line while Settings and the calibration
+     * preview went on saying "this display fits about 23 characters per line,
+     * which is narrower than ideal". The advice is about measure, so it is
+     * withdrawn once the measure it complains about is no longer the one being
+     * rendered. Every other verdict (uncalibrated, angle-limited, impossible)
+     * is about the RIG rather than the column and still holds.
+     */
+    fitAdvice:
+      fit.verdict === 'width_limited' &&
+      finalCharactersPerLine >= readingMeasureFor(readingContext).bandMin
+        ? ''
+        : fit.advice,
     overriddenFields: overriddenFields.sort(),
   };
 

@@ -96,15 +96,21 @@ pub enum PresentMode {
 /// fits anything a calibrated reading window will ask for.
 ///
 /// Width: the 30-character reader floor at 30 px is 30 x 0.5 x 30 = 450 px of
-/// column, and `MAX_COLUMN_FRACTION` (0.92) turns that into ~489 px. 520 leaves
+/// column, and `MAX_COLUMN_FRACTION` (0.82) turns that into ~549 px. 580 leaves
 /// a little over.
+///
+/// The fraction was 0.92 when this was first derived, which put the floor at
+/// ~489 px and this constant at 520. Widening the designed margin moved the
+/// floor with it: at 520 a reading window would have sat UNDER its own
+/// 30-character minimum with nothing saying so, because the measure warning is
+/// resolved from the rig rather than from the window's width.
 ///
 /// Height: `TARGET_VISIBLE_LINES` (5) at a 30 px x 1.38 = 41.4 px pitch is 207
 /// px, and the rest is the fades and the band's own padding.
 ///
 /// Applied on the way into `Reader` and taken away again on the way out, so the
 /// editor never inherits it.
-const READER_MIN_WIDTH_PX: f64 = 520.0;
+const READER_MIN_WIDTH_PX: f64 = 580.0;
 const READER_MIN_HEIGHT_PX: f64 = 360.0;
 
 /// Everything un-presenting has to put back.

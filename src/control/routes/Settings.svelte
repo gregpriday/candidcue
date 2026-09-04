@@ -125,6 +125,7 @@
   } from '../../shared/optical-resolve';
   import {
     ANGULAR_HARD_FLOOR_ARCMIN,
+    MAX_COLUMN_FRACTION,
     MIN_RENDERABLE_FONT_SIZE_PX,
     MIN_VIEWING_DISTANCE_MM,
     MAX_VIEWING_DISTANCE_MM,
@@ -1090,12 +1091,13 @@
   /**
    * The largest fraction of the safe width the resolver will give a column.
    *
-   * Mirrors `MAX_COLUMN_FRACTION` in shared/optical-resolve.ts, which is module
-   * -private. It is repeated here only so the override slider can show what
-   * "Automatic" currently means; if the resolver's value moves, this is a
-   * label that goes stale rather than a behaviour that changes.
+   * Imported rather than repeated. It was a copy of a module-private constant,
+   * with a note admitting it would go stale if the resolver's value moved — and
+   * then it did move, from 0.92 to 0.82, and the slider went on labelling
+   * "Automatic" as 92%. It is exported from `shared/optics.ts` now, beside the
+   * fit check that consumes it.
    */
-  const AUTOMATIC_MAX_COLUMN_FRACTION = 0.92;
+  const AUTOMATIC_MAX_COLUMN_FRACTION = MAX_COLUMN_FRACTION;
 
   /**
    * The ceiling on the uncalibrated size slider — see `typeCeilingPx` in

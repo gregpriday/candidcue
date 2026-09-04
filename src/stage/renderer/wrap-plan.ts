@@ -111,8 +111,15 @@ const COLUMN_SAFETY_MARGIN_PX = 2;
  * turns the resolver's `ch` column into pixels with a fixed 0.55em per `ch`
  * (`ScriptLayer.svelte`, `columnWidthPx`), and in a face whose zero advance is
  * narrower than that the 38-character cap comes out up to a tenth wider in
- * the units measured here. 48 is what no prompter take reaches by accident and
- * what every reader window clears.
+ * the units measured here. 48 is what no prompter take reaches by accident.
+ *
+ * A reader window mostly clears it and no longer always does: the designed
+ * column margin widened (`MAX_COLUMN_FRACTION`, 0.92 -> 0.82), so a narrow
+ * reading window that used to hold ~51 characters now holds ~46 and takes the
+ * browser's wrap. That is the gate working — it is a floor on when planning is
+ * worth it, not a promise about which windows reach it — but it is a change in
+ * what a small reader window does, and it is written down here rather than
+ * discovered.
  *
  * Applied to the whole script rather than per block, so a list item's inset
  * cannot put half a document on one side of the line and half on the other.

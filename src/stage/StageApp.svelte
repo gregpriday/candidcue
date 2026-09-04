@@ -659,7 +659,8 @@
    * word, the 1.2-1.7 s gap between transcript finals — so a stage that
    * announced every hold would put a status message on the glass several times
    * a minute during a take that is going perfectly. The ladder waits, then says
-   * something wordless, then says a sentence.
+   * something wordless, then shows the top rung — a mark for an ordinary hold,
+   * a sentence for anything that names a condition.
    *
    * The stopwatch lives HERE and nowhere else. The reading cue's hollow state
    * and the chip are two rungs of ONE disclosure, and a second timer beside the
@@ -695,6 +696,7 @@
     rung: 'none',
     message: null,
     tone: 'neutral',
+    glyph: null,
     hint: null,
   });
   /** When the alignment state last left `following`; null while it is following. */
@@ -2027,6 +2029,7 @@
             rung={holdStatus.rung}
             message={holdStatus.message}
             tone={holdStatus.tone}
+            glyph={holdStatus.glyph}
             hint={holdStatus.hint}
             secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
           />

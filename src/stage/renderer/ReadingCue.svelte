@@ -129,11 +129,13 @@
    * How far outside the column the ticks sit.
    *
    * Half a unit: close enough that the eye takes the tick and the line as one
-   * object, far enough that a descender never touches it. The column already
-   * leaves ~4% of the safe width on each side, which on the narrowest panel
-   * CandidCue supports is just enough for a tick and this gap — hence the
-   * clamps below, which pull a tick back on screen rather than letting it slide
-   * off the edge of a display nobody anticipated.
+   * object, far enough that a descender never touches it. The column leaves
+   * about 9% of the safe width on each side (`MAX_COLUMN_FRACTION`), which is a
+   * designed margin rather than a clearance — comfortably more than a tick and
+   * this gap at the sizes a prompter runs. The clamps below stay as the
+   * backstop for the case the fraction cannot cover: type that is a large
+   * fraction of its own panel, where the mark would otherwise slide off the
+   * edge of a display nobody anticipated.
    */
   const gapPx = $derived(unitPx * 0.5);
 

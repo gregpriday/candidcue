@@ -57,9 +57,32 @@
      * rather than communication.
      */
     secondaryMinPx: number;
+    /**
+     * Draw a mark instead of the sentence — `hold-status.ts` decides when, and
+     * only ever for the plain hold. See the note on `HoldStatus.glyph`.
+     *
+     * The words are still latched and still announced: this changes what the
+     * GLASS shows, not what a screen reader is told. A presenter reading by ear
+     * gets "Holding here" exactly as before, which a pause mark cannot say.
+     */
+    glyph?: 'held' | null;
   }
 
-  let { rung, message, tone, hint = null, secondaryMinPx }: Props = $props();
+  let { rung, message, tone, hint = null, secondaryMinPx, glyph = null }: Props = $props();
+
+  /**
+   * The mark latches with the message, and it has to.
+   *
+   * `glyph` clears the instant following resumes while `latched` holds its
+   * sentence for the length of the fade — so an unlatched mark turned the
+   * compact badge back into the full-width slab at nearly full opacity and then
+   * faded THAT, which is the one moment the chip exists not to draw the eye to.
+   */
+  // svelte-ignore state_referenced_locally
+  let latchedGlyph = $state(glyph);
+  $effect(() => {
+    if (typeof message === 'string' && message.length > 0) latchedGlyph = glyph;
+  });
 
   const visible = $derived(rung === 'message' && typeof message === 'string' && message.length > 0);
 
@@ -134,7 +157,42 @@
   aria-live="polite"
   style:font-size="{fontSizePx}px"
 >
-  {latched}
+  {#if latchedGlyph === 'held'}
+    <!--
+      The reading cue's own two marks, facing each other, at chip size.
+
+      NOT a pause symbol, and that is deliberate: this app already draws two
+      upright bars for the transport's Pause, bound to Space (`Live.svelte`), so
+      the same shape on the glass would tell a presenter that capture had
+      stopped — and the response to that is to stop speaking, which is the one
+      thing that will not clear an alignment hold. These are the ticks that
+      bracket the reading line every take, so the badge reads as what it is:
+      that mark, parked.
+
+      aria-hidden, with the sentence kept beside it for anybody listening: the
+      mark is for the eye, and "Holding here" is what the status says. Sized in
+      `em` so it tracks the chip's own resolved floor.
+    -->
+    <svg class="glyph" viewBox="0 0 22 14" aria-hidden="true">
+      <path
+        d="M3 3 L9 7 L3 11 Z"
+        fill="currentColor"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M19 3 L13 7 L19 11 Z"
+        fill="currentColor"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+      />
+    </svg>
+    <span class="sr-only">{latched}</span>
+  {:else}
+    {latched}
+  {/if}
   {#if hintVisible}
     <span class="hint">{latchedHint}</span>
   {/if}
@@ -187,13 +245,48 @@
    * event. It is emphatically not red: red on a prompter reads as "stop", and
    * the presenter should keep going while somebody fixes the microphone.
    *
-   * §20 — state is never colour alone. Here the words themselves are the
-   * distinguishing signal: a fault chip names a condition ("No audio from the
-   * microphone"), a hold chip describes the script ("Holding here"), and the
+   * §20 — state is never colour alone. Here the CONTENT is the distinguishing
+   * signal: a fault chip names a condition in words ("No audio from the
+   * microphone") while an ordinary hold is a mark and no words at all, so the
    * two are never confusable even in monochrome.
    */
   .hold-status[data-tone='fault'] {
     color: var(--stage-cue);
+  }
+
+  /*
+   * The pause mark, sized against the chip's own resolved floor rather than a
+   * pixel count, so it tracks the rig exactly as the words it replaces did.
+   *
+   * `display: block` and a matched height are what keep the chip a square-ish
+   * badge instead of a line box with a glyph adrift in it — the padding is in
+   * `em`, so with no text to set the line height the box would otherwise
+   * collapse to something the border draws a slot around.
+   */
+  .glyph {
+    display: block;
+    width: 1.55em;
+    height: 1em;
+    opacity: 0.92;
+  }
+
+  /*
+   * Present for the ear, absent from the glass.
+   *
+   * `role="status"` on the chip announces whatever is inside it, and the mark
+   * says nothing — so the sentence stays here for a presenter reading by ear.
+   * Not `display: none`, which would take it out of the accessibility tree and
+   * leave the status silent.
+   */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   /*

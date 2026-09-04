@@ -15,7 +15,9 @@
  * finally means something.
  *
  * So nothing is said for the first stretch, then something WORDLESS is said,
- * and only a hold long enough to be a real problem gets a sentence. Each rung
+ * and only a hold long enough to be a real problem earns the top rung. That
+ * rung is a MARK for an ordinary hold and a sentence for everything else —
+ * see `HoldStatus.glyph`. Each rung
  * costs the presenter more attention than the one below it, and each is earned
  * by a hold that has lasted long enough to justify the cost.
  *
@@ -43,7 +45,7 @@ import type { AlignmentState } from '../../shared/contracts';
 export const HOLD_HOLLOW_MS = 1500;
 
 /**
- * Beyond this, use words.
+ * Beyond this, the top rung.
  *
  * By 3.5 s the presenter has noticed the text is not moving, and the question
  * in their head has changed from "is it about to catch up" to "what is it
@@ -127,6 +129,22 @@ export interface HoldStatus {
    * of the condition by a screen reader every time the fault text changes.
    */
   hint: string | null;
+  /**
+   * Draw the chip as a mark rather than a sentence.
+   *
+   * An ordinary hold says one thing — the script is parked where it is — and it
+   * is the rung a presenter sees most. Spelled out at the size the optics
+   * resolve for secondary text on a 9-inch panel it is a 390px slab across the
+   * top-left of the glass, over the script it is reporting on; the words earned
+   * none of that room, because the presenter already knows what a paused
+   * prompter is.
+   *
+   * Only ever for that one rung. Everything else here names something a glyph
+   * cannot: a fault names a condition to fix, `ambiguous` names a choice the
+   * presenter can resolve in about a second, and `Following off` names a switch
+   * somebody has to throw back. Those keep their sentences.
+   */
+  glyph: 'held' | null;
 }
 
 /**
@@ -246,6 +264,7 @@ export function resolveHoldStatus(
       rung: 'message',
       message: CONTROL_LOST_MESSAGE,
       tone: 'fault',
+      glyph: null,
       /*
        * Never suppressed by `autoScrollRunning`, unlike the fault hint below.
        * That suppression exists to avoid advising somebody to start a transport
@@ -272,6 +291,7 @@ export function resolveHoldStatus(
       rung: 'message',
       message: faultLabel,
       tone: 'fault',
+      glyph: null,
       hint: input.autoScrollRunning === true ? null : HOLD_FAULT_HINT,
     };
   }
@@ -321,6 +341,7 @@ export function resolveHoldStatus(
       rung: 'message',
       message: 'Following off',
       tone: 'neutral',
+      glyph: null,
       hint: HOLD_FAULT_HINT,
     };
   }
@@ -328,7 +349,7 @@ export function resolveHoldStatus(
   const message = HOLD_MESSAGES[input.alignmentState] ?? null;
   if (message === null) {
     // Following. The display is moving; there is nothing being withheld.
-    return { rung: 'none', message: null, tone: 'neutral', hint: null };
+    return { rung: 'none', message: null, tone: 'neutral', glyph: null, hint: null };
   }
 
   const elapsed =
@@ -341,6 +362,8 @@ export function resolveHoldStatus(
     rung,
     message: rung === 'message' ? message : null,
     tone: 'neutral',
+    // The plain hold is the one rung that says nothing a mark cannot.
+    glyph: rung === 'message' && input.alignmentState === 'holding' ? 'held' : null,
     // Never on an ordinary hold. See HOLD_FAULT_HINT.
     hint: null,
   };

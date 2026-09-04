@@ -22,6 +22,7 @@ import { defaultOpticalProfile, type OpticalProfile } from './contracts/optical'
 import {
   ANGULAR_PRESET_ARCMIN,
   READING_MEASURE,
+  fallbackFontMetrics,
   inchesToMm,
   mmPerCssPixel,
 } from './optics';
@@ -43,6 +44,92 @@ function calibrated(overrides: Partial<OpticalProfile> = {}): OpticalProfile {
     ...overrides,
   };
 }
+
+describe('a pinned size does not shrink the column', () => {
+  /*
+   * The rig this came from: a 9-inch Elgato Prompter, calibrated at 1.5 m, with
+   * the body size pinned to 48px because the model's own 70px was larger than
+   * the presenter wanted. The column is solved in `ch`, and a `ch` is a
+   * fraction of the em — so the column solved for 70px and rendered at 48px
+   * came out at 647px of a 1024px panel, with a third of the glass empty and
+   * the script in a ribbon down the middle.
+   */
+  const rig = (overrides: Record<string, number>) => ({
+    ...defaultOpticalProfile(),
+    rigName: 'Prompter',
+    hardwareKind: 'elgato-prompter' as const,
+    bias: 0.2,
+    viewingDistanceMm: 1500,
+    scale: { mmPerCssPx: 0.19261321656946984, source: 'model' as const, diagonalMm: 228.6 },
+    overrides,
+  });
+  const resolve = (overrides: Record<string, number>) =>
+    resolveStageGeometry({ profile: rig(overrides), viewport: { widthPx: 1024, heightPx: 600 } })
+      .optics;
+  const columnPx = (o: { columnCh: number; bodyFontSizePx: number }) =>
+    o.columnCh * fallbackFontMetrics().zeroAdvanceRatio * o.bodyFontSizePx;
+
+  it('spends the width a smaller pinned size frees, rather than leaving it black', () => {
+    const pinned = resolve({ fontSizePx: 48 });
+    expect(pinned.bodyFontSizePx).toBe(48);
+    /*
+     * The rendered column on the rig this came from: ~840px of 1024 rather than
+     * the ~647px it used to be. Bounded as a range because the exact number
+     * moves with the DIN fallback metrics, and the point is the size of the
+     * change, not a digit.
+     */
+    expect(columnPx(pinned) / 1024).toBeGreaterThan(0.78);
+    // And the extra width shows up as what it is for: more of the sentence.
+    expect(pinned.charactersPerLine!).toBeGreaterThan(33);
+  });
+
+  it('leaves a margin that reads as deliberate, not a clearance', () => {
+    /*
+     * The rule, and it is a design decision rather than a fit: the column is
+     * inset by about 9% of the glass on each side. Reserving only what the
+     * ticks need takes the text to the bezel and reads as overflow; leaving the
+     * old 18% wastes a third of a small panel. This is half the latter.
+     *
+     * Checked at a pinned and an unpinned size, because they resolve through
+     * different branches, and against the tick's own footprint so the margin
+     * cannot quietly fall below the thing it exists to hold.
+     */
+    const m = fallbackFontMetrics();
+    for (const overrides of [{ fontSizePx: 48 }, {}] as Record<string, number>[]) {
+      const o = resolve(overrides);
+      const sideMarginPx = (1024 - columnPx(o)) / 2;
+      expect(sideMarginPx / 1024).toBeGreaterThan(0.07);
+      expect(sideMarginPx / 1024).toBeLessThan(0.11);
+      // The ticks are drawn outside the column, half a cap height off it, in a
+      // box 16/18 as wide as it is tall. They have to fit in that margin.
+      const capPx = o.bodyFontSizePx * m.capHeightRatio;
+      expect(sideMarginPx).toBeGreaterThan(capPx * (16 / 18 + 0.5));
+    }
+  });
+
+  it('still fills far more of the panel than a proportionally shrunken column', () => {
+    const free = resolve({});
+    expect(free.bodyFontSizePx).toBeGreaterThan(60);
+    expect(columnPx(free) / 1024).toBeGreaterThan(0.75);
+  });
+
+  it('never runs the line past the measure band, however small the pinned size', () => {
+    /*
+     * The counterpart of the fit check's own rule. Spending freed width is
+     * right up to the point a line stops being readable prose; past that the
+     * band's ceiling holds, or a presenter who pinned 12px would get a single
+     * line of 90 characters across the glass.
+     */
+    const tiny = resolve({ fontSizePx: 14 });
+    expect(tiny.charactersPerLine!).toBeLessThanOrEqual(READING_MEASURE.bandMax + 1);
+  });
+
+  it('leaves an explicitly pinned column alone', () => {
+    // A presenter naming a number is not this code's to reinterpret.
+    const pinned = resolve({ fontSizePx: 48, columnCh: 20 });
+    expect(pinned.columnCh).toBe(20);
+  });
+});
 
 describe('an uncalibrated rig', () => {
   it('still prompts, using the historical desk-distance defaults', () => {

@@ -104,6 +104,28 @@ export const ANGULAR_SOFT_FLOOR_ARCMIN = 18;
 export const ANGULAR_HARD_FLOOR_ARCMIN = 16;
 
 /**
+ * Fraction of the safe width the column may occupy.
+ *
+ * A designed margin, not a clearance. The column is inset by about 9% of the
+ * glass on each side — enough that the reading-cue ticks sit clearly inside the
+ * panel with air around them rather than flattened against the bezel, and
+ * enough that the text reads as placed on the glass instead of poured into it.
+ *
+ * It was 0.92, which was neither. Paired with a column that shrank whenever a
+ * size was pinned (see `derivedColumnCh`) it produced the opposite of a margin:
+ * a 9-inch Prompter rendered its text in a 647px ribbon down the middle of a
+ * 1024px panel with a third of the glass black, while the ticks — whose
+ * footprint scales with the TYPE, not with the panel — had more than the 4% a
+ * side left them and were clamped flat to the edge by the CSS backstop.
+ *
+ * This is half the space that layout was leaving, which is the amount that
+ * reads as deliberate. Going further and reserving only what the ticks need
+ * takes the text to the bezel and looks like an overflow rather than a
+ * decision.
+ */
+export const MAX_COLUMN_FRACTION = 0.82;
+
+/**
  * The reading measure, in characters per rendered line.
  *
  * The band is what the evidence supports for on-camera delivery once the
@@ -598,7 +620,7 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
     targetCharacters,
     metrics,
   } = input;
-  const maxColumnFraction = clamp(input.maxColumnFraction ?? 0.92, 0.1, 1);
+  const maxColumnFraction = clamp(input.maxColumnFraction ?? MAX_COLUMN_FRACTION, 0.1, 1);
   const usableWidthPx = safeWidthPx * maxColumnFraction;
   const measure = readingMeasureFor(input.readingContext);
   /*
