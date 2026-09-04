@@ -200,6 +200,9 @@ mod keys {
     pub const DUPLICATE: &str = "CmdOrCtrl+D";
     pub const CLOSE: &str = "CmdOrCtrl+W";
     pub const PRESENT: &str = "CmdOrCtrl+Return";
+    /// Rehearse rather than take. Shift over Present, because it is the same
+    /// gesture with the same precondition and a different consequence.
+    pub const PRACTISE: &str = "CmdOrCtrl+Shift+Return";
     pub const FIND: &str = "CmdOrCtrl+F";
     pub const FIND_NEXT: &str = "CmdOrCtrl+G";
     pub const FIND_PREVIOUS: &str = "CmdOrCtrl+Shift+G";
@@ -441,6 +444,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     &item("file.present-reader", "Reader Window", None)?,
                 ],
             )?,
+            &item("file.practise", "Practise", Some(keys::PRACTISE))?,
             &sep()?,
             &item("file.close-script", "Close Script", Some(keys::CLOSE))?,
             &item("file.move-to-trash", "Move to Trash", None)?,

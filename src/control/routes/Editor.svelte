@@ -35,6 +35,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { presentMenuItems } from '../lib/present-menu';
+  import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import { startTake, takeStarting } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
   import { startMenuItems } from '../lib/present-menu';
@@ -574,7 +575,11 @@ import type { PresentationMode } from '../services/settings-types';
    * absent.
    */
   let readiness = $state<ReadinessVerdict | null>(null);
-  let pendingLaunch: { mode?: PresentationMode; startTokenIndex?: number } | null = null;
+  let pendingLaunch: {
+    mode?: PresentationMode;
+    startTokenIndex?: number;
+    practice?: boolean;
+  } | null = null;
 
   /**
    * Whether the speech model is there, refreshed when the editor opens.
@@ -696,16 +701,30 @@ import type { PresentationMode } from '../services/settings-types';
    * start point so "Start anyway" resumes precisely the take that was asked
    * for, not a default one.
    */
+  /*
+   * A PRACTICE GOES THROUGH THE SAME READINESS CHECK, AND MUST.
+   *
+   * It is a voice take — the whole point is reading aloud and being followed —
+   * so a missing model or an unplugged microphone breaks it in exactly the way
+   * it breaks a take. Waving a rehearsal past the check would put somebody in
+   * front of a script that never moves, which is the failure the check exists
+   * to name before it happens rather than after.
+   */
   async function checkThenPresent(
     mode?: PresentationMode,
     startTokenIndex?: number,
+    practice?: boolean,
   ): Promise<void> {
-    const verdict = await readinessNow(false, mode);
+    const verdict = await readinessNow(false, practice ? 'reader' : mode);
     if (!verdict.show) {
-      await present(mode, startTokenIndex);
+      await present(mode, startTokenIndex, practice);
       return;
     }
-    pendingLaunch = { ...(mode === undefined ? {} : { mode }), ...(startTokenIndex === undefined ? {} : { startTokenIndex }) };
+    pendingLaunch = {
+      ...(mode === undefined ? {} : { mode }),
+      ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
+      ...(practice ? { practice: true } : {}),
+    };
     readiness = verdict;
   }
 
@@ -717,13 +736,19 @@ import type { PresentationMode } from '../services/settings-types';
   async function startAnyway(): Promise<void> {
     const launch = pendingLaunch;
     dismissReadiness();
-    await present(launch?.mode, launch?.startTokenIndex);
+    await present(launch?.mode, launch?.startTokenIndex, launch?.practice);
   }
 
-  async function present(mode?: PresentationMode, startTokenIndex?: number): Promise<void> {
+  async function present(
+    mode?: PresentationMode,
+    startTokenIndex?: number,
+    practice?: boolean,
+  ): Promise<void> {
     await saveNow();
     await startTake(scriptId, {
-      ...(mode === undefined ? {} : { presentationMode: mode }),
+      // A practice forces its own window, so passing a mode alongside it would
+      // be handing `startTake` a preference it is about to overrule anyway.
+      ...(practice ? { practice: true } : mode === undefined ? {} : { presentationMode: mode }),
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
     });
   }
@@ -822,6 +847,28 @@ import type { PresentationMode } from '../services/settings-types';
   const presentModeItems = $derived([
     ...presentStartItems,
     ...presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+    /*
+     * The third launch question, finally answered here.
+     *
+     * `present-menu.ts` has said since it was written that the three choices at
+     * launch are where to start, how to display, and whether this is a take or
+     * a rehearsal — and that the third was not covered. It sits below the two
+     * shapes because it is a rarer choice than either, and it does not carry a
+     * start row of its own: a practice opens at the beginning of the script.
+     *
+     * That is a real limit, not a composition. `SplitButton` runs the row it is
+     * given the moment it is chosen and closes, so there is no gesture that
+     * picks a start row AND this one — practising a single section is simply
+     * not reachable from this menu today. It is recorded in the plan's "what is
+     * not done" rather than papered over here, because the shape of the fix is
+     * a design decision (a start row per shape, or a practice that opens at the
+     * caret) and not a wiring one.
+     */
+    {
+      label: PRACTICE_LABEL,
+      description: 'Read it through in a window, following your voice. Nothing is reported.',
+      onselect: () => void checkThenPresent(undefined, undefined, true),
+    },
     {
       label: 'Review take setup…',
       description: 'Check the model, microphone and display before opening the stage.',

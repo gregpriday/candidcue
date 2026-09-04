@@ -328,6 +328,37 @@ export interface StartTakeOptions {
    * handed an anchor inside half a clause.
    */
   startTokenIndex?: number;
+  /**
+   * This is a rehearsal, not a take.
+   *
+   * -------------------------------------------------------------------------
+   * WHAT IT DOES *NOT* CHANGE, WHICH IS ALMOST EVERYTHING
+   * -------------------------------------------------------------------------
+   * The microphone opens, the recogniser loads, the aligner runs and the script
+   * follows the voice — because reading the script aloud and having it follow
+   * IS what somebody is practising. A rehearsal with the following switched off
+   * would be a different feature that rehearses nothing.
+   *
+   * Three things follow from the flag, and they are the whole of it:
+   *
+   *   1. The window. A practice is always `'reader'`, and the mode is FORCED
+   *      rather than resolved — see below.
+   *   2. The document. The stage renders it as a rehearsal rather than as a
+   *      performance projection, so a reference table stays a table instead of
+   *      becoming the words REFER TO TABLE. `performance-view.ts` has said this
+   *      was the intended distinction since it was written.
+   *   3. The ending. Nothing is reported: `stopSession` produces no summary, so
+   *      the practice ends by putting the editor back rather than by opening a
+   *      card about a performance nobody gave.
+   *
+   * The SESSION ROW is deliberately untouched — an ordinary voice session, in
+   * the ordinary place. A rehearsal is a real reading of the script and its
+   * ending is a real place in it, so "From last ending" on the Present menu
+   * should pick a practice up exactly as it picks a take up. The flag lives in
+   * the control-side session store and nowhere else, which is also why it needs
+   * no migration.
+   */
+  practice?: boolean;
 }
 
 /**
@@ -405,8 +436,23 @@ export async function startTake(
      * settings from it — including `stageSettingsFromSettings`, which composes
      * the rig and the mirror from the same field. See `resolveLaunchSettings`.
      */
-    const s = await resolveLaunchSettings(loaded, options.presentationMode);
-    const presentationMode = s.stage.presentationMode;
+    /*
+     * A PRACTICE NEVER TAKES THE DISPLAY, AND NEVER CHANGES THE DEFAULT.
+     *
+     * `resolveLaunchSettings` persists an explicit mode, because choosing
+     * "Present in a window" from the Present button is a statement about how
+     * this operator works. A practice is not that statement: it is in a window
+     * because rehearsing at a desk is what a practice IS, and somebody who
+     * rehearses before every take would otherwise find their real takes had
+     * quietly stopped filling the display. So the mode is forced here, past the
+     * resolver, and the saved default is left exactly where it was.
+     */
+    const s = options.practice
+      ? await resolveLaunchSettings(loaded, undefined)
+      : await resolveLaunchSettings(loaded, options.presentationMode);
+    const presentationMode: PresentationMode = options.practice
+      ? 'reader'
+      : s.stage.presentationMode;
     const compiled = await compileForTake(scriptId, doc.source, s.general.readHeadings);
 
     /*
@@ -556,7 +602,30 @@ export async function startTake(
     const landed =
       displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
       chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
-    const stageSettings = stageSettingsFromSettings(s, landed);
+    /*
+     * COMPOSED AGAINST THE MODE THIS TAKE IS OPENING IN, not the saved one.
+     *
+     * `stageSettingsFromSettings` branches on `stage.presentationMode` to pick
+     * the optical profile: a reader synthesises its own desk rig, a prompter
+     * resolves the calibrated or automatic one for the glass and carries the
+     * mirroring with it. For an ordinary take the two agree — `resolveLaunchSettings`
+     * has already put an explicit choice into `s` — but a PRACTICE forces the
+     * window past that resolver on purpose, so `s` still says whatever Settings
+     * says. Composing from it would open the operator who presents to glass
+     * every day a reading window sized and mirrored for a teleprompter: the
+     * exact failure the forced mode exists to prevent, arriving by the one door
+     * it did not close.
+     *
+     * The same override, written the same way, is in `recomposeStageSettings`
+     * in the session store — which is why the fault repaired itself the moment
+     * anybody touched an appearance slider, and why it had to be fixed here
+     * rather than there.
+     */
+    const composedFrom: AppSettings = {
+      ...s,
+      stage: { ...s.stage, presentationMode },
+    };
+    const stageSettings = stageSettingsFromSettings(composedFrom, landed);
     const stageEnvelope = buildStageEnvelope({
       script: compiled.script,
       sessionId,
@@ -603,6 +672,7 @@ export async function startTake(
        */
       teleprompter: s.teleprompter,
       presentationMode,
+      ...(options.practice ? { practice: true } : {}),
       // The panel the take was measured against, so the mid-take appearance
       // sheet recomposes against the same one it opened with.
       stageDisplay: landed,

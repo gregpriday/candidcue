@@ -853,3 +853,54 @@ describe('operable without a mouse', () => {
     expect(focusable.some((el) => el.classList.contains('voice-pill'))).toBe(false);
   });
 });
+
+/* --------------------------------------------------------------- practice */
+
+/**
+ * The dock, told that this reading is a rehearsal.
+ *
+ * Only the words change, and only on the way out. That is the whole surface —
+ * a practice is doing the same job with the same controls, so a dock that
+ * rearranged itself would be teaching a second layout for no reason. What it
+ * must not do is offer to end a take somebody does not believe they started.
+ */
+describe('a practice says so where it matters', () => {
+  it('names the exit for what it finishes', () => {
+    const { container } = mount({ practice: true });
+    expect(endButton(container).getAttribute('aria-label')).toBe('Finish Practice');
+    expect(endButton(container).getAttribute('title')).toBe('Finish Practice');
+  });
+
+  it('asks about practising, and promises only what is true', () => {
+    /*
+     * "Your place in the script will be saved" answers a worry about losing a
+     * take. A rehearsal does not create that worry; what somebody wants to know
+     * before finishing one is that nothing is being written down about it.
+     */
+    const { container } = mount({ practice: true });
+    endButton(container).click();
+    flushSync();
+    expect(container.querySelector('.confirm-title')?.textContent).toBe('Finish practising?');
+    expect(container.querySelector('.confirm-body')?.textContent).toContain('Nothing is reported');
+    expect(confirmEnd(container)?.textContent?.trim()).toBe('Finish Practice');
+  });
+
+  it('still ends through the same confirmed path', () => {
+    // The copy is the only difference. The gesture, the anchor and the
+    // confirmation are the take's, and the host is called exactly once.
+    const { container, onend } = mount({ practice: true });
+    endButton(container).click();
+    flushSync();
+    confirmEnd(container)!.click();
+    flushSync();
+    expect(onend).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a take talking about takes', () => {
+    const { container } = mount();
+    expect(endButton(container).getAttribute('aria-label')).toBe('End Take');
+    endButton(container).click();
+    flushSync();
+    expect(container.querySelector('.confirm-title')?.textContent).toBe('End take?');
+  });
+});

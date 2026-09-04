@@ -67,6 +67,24 @@ export const STOP_SESSION_CONFIRM_BODY =
   'Ending the session leaves presentation mode. Your script is unchanged, and ' +
   'presenting again starts a new take from the beginning.';
 
+/**
+ * The same question over a rehearsal (§practice).
+ *
+ * Both halves of "End this take?" are wrong there — there is no take, and "end"
+ * is the word for the thing that produces a report — which is why the dock's
+ * exit control already says something else. The two dialogs share this body for
+ * the same reason they share the one above: they are the other two ways out of
+ * a running session, and copy written out at each site is copy that drifts.
+ *
+ * It says what the take body says minus the promise it cannot keep, and adds
+ * the one thing somebody finishing a rehearsal actually wants to know. It is
+ * honest on BOTH paths: neither Live's exit nor App's guard shows a report for
+ * a practice, because `stopSession` withholds the summary the card opens on.
+ */
+export const STOP_PRACTICE_CONFIRM_BODY =
+  'Finishing leaves presentation mode. Your script is unchanged, and nothing ' +
+  'is reported.';
+
 /** Is this the kind of startup failure that must not be papered over? */
 export function isFatalBootCode(code: string | null): boolean {
   return code !== null && FATAL_BOOT_CODES.has(code);

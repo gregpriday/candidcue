@@ -12,6 +12,7 @@
  * exactly the typography, column width, and wrapping the presenter sees.
  */
 import type { CompiledBlock, LayoutFingerprint, StageSettings } from '../../shared/contracts';
+import type { PerformanceMode } from '../../shared/performance-view';
 import type { MeasuredBlockBox, MeasuredTokenRect } from './lineMap';
 
 export interface StageMeasurement {
@@ -176,6 +177,18 @@ export interface FingerprintInput {
   fontHash?: string;
   /** Digest of the chosen line breaks; absent means the browser wrapped. */
   wrapPlanSignature?: string;
+  /**
+   * Which projection the renderer actually drew.
+   *
+   * `stageMode === 'diagnostic'` used to be the only way to reach the rehearsal
+   * projection, so this was derived from the settings alone. A practice
+   * (§practice) reaches it from a per-take flag that no settings field records,
+   * and a fingerprint that cannot see it would call a table and the words REFER
+   * TO TABLE the same layout — the exact omission `IDENTIFIES_LAYOUT` exists to
+   * prevent. The caller that renders the document is the one that knows, so it
+   * says; the settings derivation stands in when nobody does.
+   */
+  performanceView?: PerformanceMode;
 }
 
 /** Companion §7.2 — everything a map's validity depends on. */
@@ -203,7 +216,7 @@ export function buildLayoutFingerprint(input: FingerprintInput): LayoutFingerpri
     readingBandCenterPercent: s.readingBandCenterPercent,
     readingBandHalfHeightPercent: s.readingBandHalfHeightPercent,
     cueLayout: s.showCues ? 'cues' : 'none',
-    performanceView: s.stageMode === 'diagnostic' ? 'rehearsal' : 'take',
+    performanceView: input.performanceView ?? (s.stageMode === 'diagnostic' ? 'rehearsal' : 'take'),
     wrapPlanSignature: input.wrapPlanSignature ?? '',
   };
 }

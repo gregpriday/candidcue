@@ -69,6 +69,17 @@ export const COMMAND_IDS = [
   'file.present',
   'file.present-prompter',
   'file.present-reader',
+  /**
+   * Rehearse the script in a window, following the voice, reporting nothing.
+   *
+   * A separate command rather than a third row under "Present As" because it
+   * is not a third shape for the window — it is a different ANSWER to a
+   * different question. "Present As" asks how the take should be displayed;
+   * this one answers whether what is about to happen is a take at all. The
+   * two are composed, not ranked: a practice is always in a window, which is
+   * what makes it a practice rather than a take somebody labelled one.
+   */
+  'file.practise',
 
   // ---- Edit ----
   // Undo/Redo/Cut/Copy/Paste/Select All are Tauri PREDEFINED menu items and are

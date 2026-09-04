@@ -57,6 +57,7 @@ import {
   type CommandId,
   type MenuItemState,
 } from '../../shared/contracts/commands';
+import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import type { Route, SettingsSection } from '../stores/router';
 import type { SaveState } from '../stores/editor';
 import type { EditorLayout } from '../stores/workspace';
@@ -140,6 +141,8 @@ export interface CommandActions {
   closeScript(): void;
   closeWindow(): void;
   present(mode?: 'prompter' | 'reader'): void;
+  /** Rehearse in a window: voice following on, nothing reported (§practice). */
+  practise(): void;
   find(): void;
   findNext(): void;
   findPrevious(): void;
@@ -371,6 +374,23 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Reader Window',
     available: (c) => !presenting(c) && targetScriptId(c) !== null,
     run: (a) => a.present('reader'),
+  },
+  /*
+   * ⌘⇧↩ — deliberately next to Present's ⌘↩.
+   *
+   * The two are the same gesture with the same precondition and differ only in
+   * what the app then does with what happens, which is exactly the relationship
+   * a shift modifier expresses. Availability is `file.present`'s verbatim: a
+   * practice is a take, so anything that makes a take impossible makes a
+   * practice impossible for the same reason, and a rehearsal offered where a
+   * take is refused would be an invitation to the same failure by another name.
+   */
+  'file.practise': {
+    id: 'file.practise',
+    label: PRACTICE_LABEL,
+    accelerator: 'Mod+Shift+Return',
+    available: (c) => !presenting(c) && targetScriptId(c) !== null,
+    run: (a) => a.practise(),
   },
 
   // ------------------------------------------------------------------ Edit --

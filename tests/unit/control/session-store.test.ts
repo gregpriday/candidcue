@@ -193,3 +193,65 @@ describe('live session store', () => {
     expect(s.sessionId).toBeNull();
   });
 });
+
+/* --------------------------------------------------------------- practice */
+
+/**
+ * A rehearsal is a take that reports nothing.
+ *
+ * Live opens the F.17 card on `!active && summary !== null`, so the store
+ * withholding the summary is the whole of "no report" — which is why it is
+ * asserted here rather than on the screen.
+ */
+describe('a practice', () => {
+  function practise(): string {
+    return startLiveSession({
+      scriptId: 'script-1',
+      scriptTitle: 'Launch video',
+      mode: 'voice',
+      practice: true,
+      displayLabel: 'This window',
+      outline: [],
+      sentences: [],
+      totalTokens: 200,
+    });
+  }
+
+  it('is a voice take, told that it is a rehearsal', () => {
+    practise();
+    // Both, and the pair is the point: nothing about the MOTION changes.
+    expect(get(session).mode).toBe('voice');
+    expect(get(session).practice).toBe(true);
+  });
+
+  it('opens no end-of-take report', () => {
+    practise();
+    stopSession();
+    expect(get(session).active).toBe(false);
+    expect(get(session).summary).toBeNull();
+  });
+
+  it('still measures the reading for its caller', () => {
+    /*
+     * Withheld from the SCREEN, not from the caller. Everything on the stop
+     * path still runs — the session row closes, the transcript tail flushes and
+     * the ending location reaches Rust — because a rehearsal is a real reading
+     * whose ending is a real place in the script.
+     */
+    practise();
+    const summary = stopSession();
+    expect(summary.mode).toBe('voice');
+    expect(summary).not.toBeNull();
+  });
+
+  it('leaves an ordinary take reporting exactly as it did', () => {
+    start();
+    stopSession();
+    expect(get(session).summary).not.toBeNull();
+  });
+
+  it('is off by default, so nothing becomes a rehearsal by omission', () => {
+    start();
+    expect(get(session).practice).toBe(false);
+  });
+});

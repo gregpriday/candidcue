@@ -14,6 +14,7 @@ import {
   sameLayout,
   sectionIdsForBlocks,
   toDocumentRect,
+  type FingerprintInput,
 } from '../../../src/stage/motion';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
@@ -63,7 +64,7 @@ const BASE_INPUT = {
 function fingerprint(
   overrides: Partial<StageSettings> = {},
   layoutGeneration = 1,
-  inputOverrides: Partial<typeof BASE_INPUT> = {},
+  inputOverrides: Partial<FingerprintInput> = {},
 ) {
   return buildLayoutFingerprint({
     ...BASE_INPUT,
@@ -247,6 +248,30 @@ describe('layout fingerprint (§7.2, §33)', () => {
       if (key === 'layoutGeneration') expect(same).toBe(true);
       else expect(same, `${key} must invalidate the map`).toBe(false);
     }
+  });
+
+  /**
+   * §practice. A rehearsal is reached from a per-take flag, not from a setting.
+   *
+   * `ScriptLayer` renders the whole document for a practice — the reference
+   * table is the thing being rehearsed against — while `stageMode` and every
+   * other declared input sit exactly where an ordinary take left them. Deriving
+   * this field from the settings alone would call a full-height table and the
+   * words REFER TO TABLE the same layout, replace the map under the old
+   * generation and skip the §33 semantic re-anchor. So the renderer says which
+   * projection it drew, and the derivation only stands in when nobody does.
+   */
+  it('takes the rendered projection from the caller when it is given one', () => {
+    const take = fingerprint({}, 1, { performanceView: 'take' });
+    const rehearsal = fingerprint({}, 1, { performanceView: 'rehearsal' });
+    expect(take.performanceView).toBe('take');
+    expect(rehearsal.performanceView).toBe('rehearsal');
+    expect(sameLayout(take, rehearsal)).toBe(false);
+  });
+
+  it('falls back to the diagnostic stage mode when the caller says nothing', () => {
+    expect(fingerprint().performanceView).toBe('take');
+    expect(fingerprint({ stageMode: 'diagnostic' }).performanceView).toBe('rehearsal');
   });
 
   it('invalidates on a new script or stage generation', () => {

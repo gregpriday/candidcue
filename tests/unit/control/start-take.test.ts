@@ -977,3 +977,139 @@ describe('the display a take is calibrated against', () => {
     });
   });
 });
+
+/* --------------------------------------------------------------- practice */
+
+/**
+ * Opening a rehearsal.
+ *
+ * The whole risk in this feature is a practice that quietly becomes something
+ * else — a take, because the voice pipeline was cut; or a habit, because the
+ * window it forces was written back to Settings. Both are asserted here on what
+ * `startLiveSession` is actually handed, which is the object the rest of the
+ * app reads.
+ */
+describe('starting a practice', () => {
+  const openedBy = (): {
+    presentationMode: string;
+    practice?: boolean;
+    mode: string;
+    micDeviceId?: string;
+    transcription?: { model: string; language: string };
+  } => calls.startLiveSession.mock.calls[0]![0];
+
+  it('opens in a window whatever the saved mode says', async () => {
+    /*
+     * Forced, not resolved. Rehearsing at a desk is what a practice IS, so the
+     * operator who presents to glass every day still practises in a window.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+    expect(openedBy().presentationMode).toBe('reader');
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null, null);
+  });
+
+  it('never writes the forced window back to Settings', async () => {
+    /*
+     * The defect this guards is silent and slow: somebody who rehearses before
+     * every take would find their real takes had stopped filling the display,
+     * with nothing that happened at the moment it changed.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+    expect(calls.patchSettings).not.toHaveBeenCalled();
+  });
+
+  it('still follows the voice — that is the thing being practised', async () => {
+    /*
+     * The one property that must never be "optimised" away. A rehearsal with no
+     * microphone and no recogniser rehearses nothing: reading aloud and being
+     * followed is the skill, and the only way to find out whether the script
+     * follows YOUR delivery is to deliver it.
+     */
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'usb';
+    settingsState.value!.audio.preferredDeviceLabel = 'USB microphone';
+
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+    const opened = openedBy();
+    expect(opened.mode).toBe('voice');
+    expect(opened.transcription).toEqual({
+      model: settingsState.value!.speech.transcriptionModel,
+      language: settingsState.value!.speech.language,
+    });
+    // The pinned microphone is resolved exactly as a take resolves it.
+    expect(opened.micDeviceId).toBe('usb');
+  });
+
+  it('composes the stage for the window it forces, not for the saved mode', async () => {
+    /*
+     * THE SAME DEFECT THIS FILE ALREADY GUARDS ONE DOOR AGAINST, arriving by the
+     * other one. See "composes the stage for the mode it is actually opening in"
+     * above: choosing a window out of a prompter default used to compose the
+     * stage from the pre-choice settings, so the reading window opened with
+     * prompter optics and a mirrored script.
+     *
+     * That path is safe because `resolveLaunchSettings` bakes the explicit
+     * choice into the settings it returns. A practice deliberately does NOT go
+     * through the resolver — that is the whole mechanism by which it avoids
+     * writing the default — so the settings it composes from still say
+     * `prompter`, and the fix had to be made again for it.
+     *
+     * This is the operator the feature was written for: somebody who presents
+     * to glass every day and rehearses at their desk. It is the DEFAULT case
+     * for them, not an edge one.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.teleprompter.mirrorX = true;
+
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+
+    const opened = calls.startLiveSession.mock.calls[0]![0] as {
+      presentationMode: string;
+      stageSettings: { readingContext?: string; mirrorX: boolean };
+      stageEnvelope: { stageSettings: { readingContext?: string; mirrorX: boolean } };
+    };
+    expect(opened.presentationMode).toBe('reader');
+    expect(opened.stageSettings.readingContext).toBe('reader');
+    // Nothing in a desk window's optical path for a mirror to undo.
+    expect(opened.stageSettings.mirrorX).toBe(false);
+    // The envelope is what reaches the renderer; it must not disagree.
+    expect(opened.stageEnvelope.stageSettings.readingContext).toBe('reader');
+    expect(opened.stageEnvelope.stageSettings.mirrorX).toBe(false);
+  });
+
+  it('tells the session it is a rehearsal', async () => {
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+    expect(openedBy().practice).toBe(true);
+  });
+
+  it('leaves an ordinary take with no practice flag at all', async () => {
+    /*
+     * Absent rather than false, because the flag is the only thing that makes a
+     * take a rehearsal and an explicit `false` on every take invites a reader to
+     * think there is a third state.
+     */
+    await expect(startTake(SCRIPT.id, {})).resolves.toBe(true);
+    expect(openedBy().practice).toBeUndefined();
+  });
+
+  it('writes an ordinary session row, in the ordinary place', async () => {
+    /*
+     * A rehearsal is a real reading and its ending is a real place in the
+     * script — "From last ending" is offered on it. Nothing about the row says
+     * practice, which is also why the feature needs no migration.
+     */
+    await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ scriptId: SCRIPT.id, mode: 'voice' }),
+    );
+  });
+
+  it('starts from a chosen place like any other take', async () => {
+    await expect(startTake(SCRIPT.id, { practice: true, startTokenIndex: 4 })).resolves.toBe(true);
+    expect(calls.startSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ startTokenIndex: expect.any(Number) }),
+    );
+  });
+});

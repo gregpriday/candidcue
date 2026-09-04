@@ -40,10 +40,11 @@ export interface PresentMenuItem {
  *
  * The three questions somebody answers at launch are where to start, how to
  * display, and whether this is a take or a rehearsal. This covers the first;
- * `presentMenuItems` below covers the second. Deliberately NOT a place for
- * microphone, font or calibration settings — those belong in Settings, and a
- * launch menu that grew them would become the Preflight page this product
- * removed on purpose.
+ * `presentMenuItems` below covers the second; the third is the Practise row the
+ * Editor appends beneath them (`file.practise`, §practice). Deliberately NOT a
+ * place for microphone, font or calibration settings — those belong in
+ * Settings, and a launch menu that grew them would become the Preflight page
+ * this product removed on purpose.
  *
  * Rows appear only when they lead somewhere different. "From last ending" over
  * a script that has never been presented would be a third button that silently

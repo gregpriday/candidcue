@@ -198,6 +198,41 @@ describe('availability by route', () => {
     expect(COMMANDS['file.move-to-trash'].available(selected)).toBe(true);
   });
 
+  /**
+   * Practise is Present's availability, verbatim.
+   *
+   * A practice is a take — same script, same microphone, same recogniser — so
+   * anything that makes a take impossible makes a practice impossible for the
+   * same reason. Offering a rehearsal where a take is refused would be an
+   * invitation to the same failure under a friendlier name.
+   */
+  it('offers Practise exactly where it offers Present', () => {
+    const cases = [
+      context(),
+      context({ librarySelectionId: 'script-1' }),
+      context({ librarySelectionId: 'script-1', libraryInTrash: true }),
+      context({ takeStarting: true, librarySelectionId: 'script-1' }),
+      context({ route: { name: 'editor', scriptId: 'script-1' }, scriptOpen: true }),
+      LIVE,
+    ];
+    for (const c of cases) {
+      expect(COMMANDS['file.practise'].available(c)).toBe(COMMANDS['file.present'].available(c));
+    }
+  });
+
+  it('runs the practice action rather than a present with a mode', () => {
+    /*
+     * The distinction the whole feature rests on: a practice is not a third
+     * shape for the window, so it must not arrive as `present('reader')` — that
+     * would present in a window AND write the window back to Settings.
+     */
+    const { calls, actions } = recordingActions();
+    expect(runCommand('file.practise', actions, context({ librarySelectionId: 'script-1' }))).toBe(
+      true,
+    );
+    expect(calls).toEqual(['practise']);
+  });
+
   it('offers nothing to act on for a selected row in Trash', () => {
     // A trashed script cannot be presented or trashed again, and the Library
     // withholds its open handler entirely — so the menu must agree.

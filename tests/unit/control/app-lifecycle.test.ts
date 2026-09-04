@@ -9,6 +9,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
+  STOP_PRACTICE_CONFIRM_BODY,
+  STOP_SESSION_CONFIRM_BODY,
   editorNavigationDecision,
   initialRouteForBoot,
   isFatalBootCode,
@@ -231,5 +233,35 @@ describe('editorNavigationDecision', () => {
       if (from.name === 'editor') continue;
       expect(editorNavigationDecision({ to: library, from, hasUnsavedWork: true })).toBe('allow');
     }
+  });
+});
+
+/**
+ * The words the two exits from a running session use (§practice).
+ *
+ * Both constants are shared by Live's own dialog and App's navigation guard,
+ * which is the point of them: the same question asked from two places used to
+ * be two pieces of copy, and they drifted. What a test can hold onto is the one
+ * promise each is forbidden to make.
+ */
+describe('stop-session confirmation copy', () => {
+  it('never promises a take will resume where it stopped', () => {
+    // There is no resume-at-position anywhere: presenting again opens at the
+    // beginning. Answering the exact fear the dialog is asked about with a
+    // falsehood is worse than not answering it.
+    expect(STOP_SESSION_CONFIRM_BODY).not.toMatch(/place/i);
+    expect(STOP_SESSION_CONFIRM_BODY).toContain('from the beginning');
+  });
+
+  it('tells a rehearsal the one thing it is asked, and calls it nothing else', () => {
+    /*
+     * A practice reports nothing, and both paths that use this body honour that
+     * — `stopSession` withholds the summary the card opens on. What it must not
+     * do is call the rehearsal a take, which is the whole reason the dock's
+     * copy changed and the reason these two dialogs follow it.
+     */
+    expect(STOP_PRACTICE_CONFIRM_BODY).toContain('nothing is reported');
+    expect(STOP_PRACTICE_CONFIRM_BODY).not.toMatch(/take/i);
+    expect(STOP_PRACTICE_CONFIRM_BODY).not.toBe(STOP_SESSION_CONFIRM_BODY);
   });
 });

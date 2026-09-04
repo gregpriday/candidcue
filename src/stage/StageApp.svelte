@@ -116,6 +116,17 @@
      */
     autoScroll?: StageAutoScrollPayload | null;
     /**
+     * §practice. This reading is a rehearsal.
+     *
+     * Only ever true on the embedded path, and that is a property of the
+     * feature rather than an omission: a practice happens IN the control
+     * window, so there is no separate stage window for the flag to travel to.
+     * It reaches the renderer and the dock and changes nothing else — the
+     * alignment path, the motion path and the optics are the take's, because
+     * following your own voice is the thing being practised.
+     */
+    practice?: boolean;
+    /**
      * "Show nothing", the host's own switch, mirrored the same way
      * `followPaused` is — directly, not through a directive, for the same
      * generation-0 reason.
@@ -1953,6 +1964,7 @@
             {followProfile}
             bottomInsetPx={0}
             cueHollow={holdStatus.rung !== 'none'}
+            rehearsal={embedded?.practice ?? false}
             {autoScroll}
             onautoscrollend={handleAutoScrollEnd}
             onlayoutready={handleLayoutReady}
@@ -2330,6 +2342,7 @@
           onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
           presentationMode={embedded?.presentationMode ?? 'prompter'}
           onpresentationtoggle={embedded?.onpresentationtoggle}
+          practice={embedded?.practice ?? false}
           appearancePanel={embedded?.appearancePanel ?? null}
           appearanceOpen={embedded?.appearanceOpen ?? false}
           onappearanceopen={() => embedded?.onappearanceopen?.()}

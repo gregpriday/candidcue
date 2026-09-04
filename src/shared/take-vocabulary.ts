@@ -140,6 +140,64 @@ export const TAKE_ACTIONS = {
 export const END_TAKE_LABEL = 'End Take';
 
 /* ---------------------------------------------------------------------------
+ * Practice — the same take, told that it is a rehearsal
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What a practice is, in one sentence, because every other name for it is
+ * wrong.
+ *
+ * A practice is NOT a second kind of motion, a second renderer or a take with
+ * the microphone switched off. It is an ordinary voice-following take, opened
+ * in a window, that has been told it is a rehearsal — so it renders the whole
+ * document rather than a performance projection of it, and it reports nothing
+ * when it ends. Everything that makes following work is untouched, because
+ * following your own voice IS the thing being practised.
+ *
+ * The spelling is the product's: British in prose ("practise" as the verb),
+ * and `practice` as the identifier because it reads as the noun everywhere it
+ * appears in code — a practice, the practice flag, `isPractice`.
+ */
+export const PRACTICE_LABEL = 'Practise';
+
+/**
+ * Ending one.
+ *
+ * "End Take" is the wrong promise here in both halves: there is no take, and
+ * "end" is the word for the thing that produces a report. A rehearsal is
+ * finished, and nothing follows it.
+ */
+export const FINISH_PRACTICE_LABEL = 'Finish Practice';
+
+/**
+ * What every confirmation over a rehearsal asks.
+ *
+ * There are three of them — the dock's anchored confirmation, Live's own
+ * dialog and App's navigation guard — and a take reaches all three through
+ * "End this take?". Leaving two of them saying that over a practice would put
+ * the operator in front of an offer to end something they do not believe they
+ * started, which is the whole reason the dock's copy changed.
+ *
+ * The BODY is the dock's, and the dialogs keep their own (see
+ * `STOP_PRACTICE_CONFIRM_BODY` in `control/lib/app-lifecycle.ts`) for the same
+ * reason a take's two bodies differ: the dock is a control on the glass and the
+ * dialog is a question about leaving presentation mode.
+ */
+export const FINISH_PRACTICE_CONFIRM_TITLE = 'Finish practising?';
+
+/**
+ * The dock's body.
+ *
+ * "Your place in the script will be saved" answers a fear about losing a take.
+ * A rehearsal does not create that fear; what somebody wants to know before
+ * finishing one is that nothing is being written down about it. The second
+ * sentence is true for the reason a practice writes an ordinary session row —
+ * "From last ending" picks a rehearsal up exactly as it picks a take up.
+ */
+export const FINISH_PRACTICE_CONFIRM_BODY =
+  'Nothing is reported. Your place in the script is kept.';
+
+/* ---------------------------------------------------------------------------
  * Axis C: the microphone
  * ------------------------------------------------------------------------- */
 

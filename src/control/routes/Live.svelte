@@ -10,7 +10,11 @@
   import FollowControls from '../components/FollowControls.svelte';
   import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
   import FollowStatePanel from '../components/FollowStatePanel.svelte';
-  import { sessionModeLabel } from '../../shared/take-vocabulary';
+  import {
+    FINISH_PRACTICE_CONFIRM_TITLE,
+    FINISH_PRACTICE_LABEL,
+    sessionModeLabel,
+  } from '../../shared/take-vocabulary';
   import { isAutomaticProfile } from '../../shared/optical-discovery';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
@@ -26,7 +30,7 @@
   import type { PresentationMode } from '../../shared/contracts';
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
-  import { STOP_SESSION_CONFIRM_BODY } from '../lib/app-lifecycle';
+  import { STOP_PRACTICE_CONFIRM_BODY, STOP_SESSION_CONFIRM_BODY } from '../lib/app-lifecycle';
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
@@ -56,6 +60,7 @@ import { onShortcut } from '../lib/shortcuts';
     anchorManualScroll,
     applyStageAppearance,
     autoScrollLive,
+    awaitPendingPersistence,
     autoScrollReachedEnd,
     nudgeAutoScrollWpm,
     toggleAutoScroll,
@@ -354,7 +359,12 @@ import { onShortcut } from '../lib/shortcuts';
       let accepted = false;
       try {
         accepted = await requestConfirm({
-          title: 'End this take?',
+          /*
+           * §practice. The dock's exit already says this; a dialog reached from
+           * the drawer or ⌘. that still offered to end a take would be the
+           * fourth name for one action that §115 removed three of.
+           */
+          title: $session.practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End this take?',
           /*
            * The SHARED body, not one written out here.
            *
@@ -377,8 +387,8 @@ import { onShortcut } from '../lib/shortcuts';
            * separate choice made from the summary, and phrasing it as "a new
            * take starts" implied one would begin on its own.
            */
-          body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'End take',
+          body: $session.practice ? STOP_PRACTICE_CONFIRM_BODY : STOP_SESSION_CONFIRM_BODY,
+          confirmLabel: $session.practice ? FINISH_PRACTICE_LABEL : 'End take',
           danger: true,
         });
       } finally {
@@ -546,7 +556,49 @@ import { onShortcut } from '../lib/shortcuts';
        * session sees an inactive one and waves this through without raising its
        * own "End this take?" confirmation over a take that has already ended.
        */
-      await leavePresentation(() => navigate({ name: 'editor', scriptId }));
+      /*
+       * A PRACTICE CLEARS ITS OWN SESSION, BECAUSE NOTHING ELSE WILL (§practice).
+       *
+       * `leavePresentation` deliberately does NOT clear — see the long note on
+       * it — because the store's `summary` is what the F.17 report opens on, and
+       * clearing under the cover was the bug that meant nobody had ever seen
+       * one. `SessionSummary` clears when it is dismissed, and that is what puts
+       * the store back to rest after every take.
+       *
+       * A practice withholds the summary, so that card never opens and that
+       * dismissal never comes: without this, the store would hold a finished
+       * rehearsal — its script, its snapshot, its transcript tail — until the
+       * next take happened to replace it. Safe here for exactly the reason it
+       * was unsafe there: there is no report to destroy, and the stage unmounted
+       * on `active` the moment `stopSession()` ran, so this is behind the cover
+       * and behind an already-empty screen.
+       */
+      const practice = $session.practice;
+      await leavePresentation(async () => {
+        /*
+         * THE ENDING HAS TO BE IN THE DATABASE BEFORE THE EDITOR READS IT.
+         *
+         * `stopSession` fire-and-forgets the session row's ending index, and the
+         * Editor's history effect is written around that: it depends on
+         * `$session.summary` so that the report's ARRIVAL is a second, later
+         * trigger, after a mount that may well have read the row before its
+         * ending was written. A practice publishes no summary, so it has no
+         * second trigger — and "From last ending" picking a rehearsal up exactly
+         * as it picks a take up is the reason a practice writes an ordinary
+         * session row at all (§practice). Without this it could offer an older
+         * ending, or none, for the whole mount.
+         *
+         * Awaiting is free here and nowhere else: this is inside the cover, with
+         * the window already changing shape around it. It is the same primitive
+         * the quit handshake awaits, for the same reason — a fire-and-forget
+         * write is right during a take and wrong at the moment something is
+         * about to read it.
+         */
+        if (practice) await awaitPendingPersistence();
+        const moved = await navigate({ name: 'editor', scriptId });
+        if (practice) clearSession();
+        return moved;
+      });
     } finally {
       endingTake = false;
     }
@@ -1341,6 +1393,12 @@ import { onShortcut } from '../lib/shortcuts';
         blanked: $session.stageBlanked,
         presentationMode: $session.stagePresentationMode,
         onpresentationtoggle: () => void togglePresentationMode(),
+        /*
+         * §practice. Kept on the session rather than derived from the window,
+         * because a practice that pops out to the display with ⌃⌘F is still a
+         * practice — the window is how it opens, not what it is.
+         */
+        practice: $session.practice,
         /*
          * Already confirmed, so it does not go through `requestEndSession`.
          * The stage raises this from two gestures and both have asked: the

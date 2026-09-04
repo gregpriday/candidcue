@@ -51,6 +51,7 @@
     type EditorLayout,
   } from './stores/workspace';
   import {
+    STOP_PRACTICE_CONFIRM_BODY,
     STOP_SESSION_CONFIRM_BODY,
     editorNavigationDecision,
     initialRouteForBoot,
@@ -58,6 +59,10 @@
     recentScriptIdForBoot,
   } from './lib/app-lifecycle';
 import { rememberReaderFrame } from './lib/reader-frame';
+  import {
+    FINISH_PRACTICE_CONFIRM_TITLE,
+    FINISH_PRACTICE_LABEL,
+  } from '../shared/take-vocabulary';
   import { emitShortcut, installShortcuts, onShortcut } from './lib/shortcuts';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
@@ -426,10 +431,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * complaint was one action wearing several names; this guard is the
          * fourth way out of a take and would have kept the old word alive.
          */
+        const practice = $session.practice;
         const accepted = await requestConfirm({
-          title: 'End this take?',
-          body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'End take',
+          // §practice. The third of the three exits, told the same thing the
+          // other two are: over a rehearsal, "end this take" names neither the
+          // thing that is running nor the thing this does to it.
+          title: practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End this take?',
+          body: practice ? STOP_PRACTICE_CONFIRM_BODY : STOP_SESSION_CONFIRM_BODY,
+          confirmLabel: practice ? FINISH_PRACTICE_LABEL : 'End take',
           danger: true,
         });
         if (!accepted) return false;
@@ -889,6 +898,18 @@ import { rememberReaderFrame } from './lib/reader-frame';
       const id = commandTargetScriptId();
       if (id === null) return;
       void startTake(id, mode ? { presentationMode: mode } : {});
+    },
+    /*
+     * A practice does not take `presentationMode` from anywhere.
+     *
+     * `startTake` forces the window, for the reason given at `practice` in
+     * `StartTakeOptions`: a rehearsal that filled the display would be a take
+     * with a different name on it.
+     */
+    practise: () => {
+      const id = commandTargetScriptId();
+      if (id === null) return;
+      void startTake(id, { practice: true });
     },
     find: () => dispatchRouteCommand('edit.find'),
     findNext: () => dispatchRouteCommand('edit.find-next'),

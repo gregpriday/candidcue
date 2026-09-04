@@ -134,6 +134,7 @@
     bottomInsetPx = 0,
     openingTokenIndex = 0,
     cueHollow = false,
+    rehearsal = false,
     autoScroll = null,
     onautoscrollend = undefined,
     onlayoutready = undefined,
@@ -200,6 +201,20 @@
      * would guarantee they eventually did.
      */
     cueHollow?: boolean;
+    /**
+     * This reading is a rehearsal, so show the whole document (§practice).
+     *
+     * The performance projection replaces a table, an image, a diagram and a
+     * code fence with four words apiece, which is right in front of a camera
+     * and wrong at a desk: the reference table is the thing being rehearsed
+     * against. `performance-view.ts` has drawn this distinction since it was
+     * written and had only the diagnostic stage mode to select it with.
+     *
+     * Safe to flip per take because the projection cannot move a spoken token —
+     * it only touches blocks that carry none — so the aligner's indices are the
+     * same document either way.
+     */
+    rehearsal?: boolean;
     /**
      * The fixed-pace transport, when the operator has taken the wheel.
      *
@@ -448,7 +463,7 @@
    * has assigned the indices the aligner tracks against.
    */
   const performanceMode = $derived<PerformanceMode>(
-    (settings.stageMode ?? 'clean') === 'diagnostic' ? 'rehearsal' : 'take',
+    rehearsal || (settings.stageMode ?? 'clean') === 'diagnostic' ? 'rehearsal' : 'take',
   );
 
   /**
@@ -1776,6 +1791,18 @@
        * seam, and that depends on the words.
        */
       wrapPlanSignature: wrapPlan.signature,
+      /*
+       * The projection ON THE GLASS, not the one the settings imply.
+       *
+       * `layoutInputs()` below reads `performanceMode`, so a practice schedules
+       * a rebuild — but the fingerprint used to re-derive the same field from
+       * `stageMode` alone, which a practice never touches. `sameLayout()` would
+       * then have called a rendered table and the words REFER TO TABLE the same
+       * layout, replaced the map under the OLD generation and skipped the §33
+       * semantic re-anchor: the precise failure the note on `layoutInputs()`
+       * warns about. One description of the layout, and both sides read it.
+       */
+      performanceView: performanceMode,
     };
     /*
      * The microgap, tracked here rather than in the fingerprint.

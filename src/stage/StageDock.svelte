@@ -124,7 +124,13 @@
   (`resolveHoldStatus`); this is the half somebody can click.
 -->
 <script lang="ts">
-  import { END_TAKE_LABEL, TAKE_ACTIONS } from '../shared/take-vocabulary';
+  import {
+    END_TAKE_LABEL,
+    FINISH_PRACTICE_CONFIRM_BODY,
+    FINISH_PRACTICE_CONFIRM_TITLE,
+    FINISH_PRACTICE_LABEL,
+    TAKE_ACTIONS,
+  } from '../shared/take-vocabulary';
   import { tick, type Snippet } from 'svelte';
   import type { PresentationMode, StageVoicePillPayload } from '../shared/contracts';
   import {
@@ -179,6 +185,17 @@
     followPaused?: boolean;
     /** The follow control was activated. The host owns the decision (§16.9). */
     onfollowtoggle?: () => void;
+    /**
+     * §practice. This reading is a rehearsal, so say so on the way out.
+     *
+     * The only thing it changes here is the WORDS on the exit control and its
+     * confirmation, and that is not decoration: "End take?" over a rehearsal
+     * offers to end something the operator does not believe they started, and
+     * "your place will be saved" answers a worry — losing the take — that a
+     * practice does not create. Everything else on this dock is the same
+     * because everything else is doing the same job.
+     */
+    practice?: boolean;
     /** End the take. Called only after the anchored confirmation. */
     onend: () => void;
     /**
@@ -203,6 +220,7 @@
     revealed,
     presentationMode = 'prompter',
     onpresentationtoggle,
+    practice = false,
     followPaused = false,
     onfollowtoggle,
     appearancePanel = null,
@@ -295,6 +313,13 @@
    * moment they are least likely to have their hand on the mouse.
    */
   const faulted = $derived(pill !== null && pill.reading === 'fault' && pill.visible);
+
+  /** What the exit control is called, and what its confirmation asks. */
+  const exitLabel = $derived(practice ? FINISH_PRACTICE_LABEL : END_TAKE_LABEL);
+  const confirmTitle = $derived(practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End take?');
+  const confirmBody = $derived(
+    practice ? FINISH_PRACTICE_CONFIRM_BODY : 'Your place in the script will be saved.',
+  );
 
   const held = $derived(
     pointerInside || focusInside || confirmOpen || menuOpen || appearanceOpen || faulted,
@@ -763,9 +788,9 @@
       class="dock-button end"
       data-hidden={!buttonsVisible}
       disabled={appearanceOpen}
-      aria-label={END_TAKE_LABEL}
+      aria-label={exitLabel}
       aria-expanded={confirmOpen}
-      title={END_TAKE_LABEL}
+      title={exitLabel}
       bind:this={endButton}
       onclick={openConfirm}
     >
@@ -860,16 +885,16 @@
     <div
       class="dock-popover confirm-popover"
       role="dialog"
-      aria-label={END_TAKE_LABEL}
+      aria-label={exitLabel}
       bind:this={confirmPanel}
     >
-      <p class="confirm-title">End take?</p>
-      <p class="confirm-body">Your place in the script will be saved.</p>
+      <p class="confirm-title">{confirmTitle}</p>
+      <p class="confirm-body">{confirmBody}</p>
       <div class="confirm-actions">
         <button type="button" class="confirm-cancel" bind:this={cancelButton} onclick={closeConfirm}>
           Cancel
         </button>
-        <button type="button" class="confirm-end" onclick={confirmEnd}>{END_TAKE_LABEL}</button>
+        <button type="button" class="confirm-end" onclick={confirmEnd}>{exitLabel}</button>
       </div>
     </div>
   {/if}

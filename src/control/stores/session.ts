@@ -282,6 +282,19 @@ export interface SessionState {
   scriptId: string | null;
   scriptTitle: string;
   mode: SessionMode;
+  /**
+   * This take is a rehearsal (§practice).
+   *
+   * Beside `mode` rather than inside it, because it is a different question.
+   * `mode` says how the script MOVES — a practice follows a voice exactly as a
+   * take does, and the two are indistinguishable from the aligner's side. This
+   * says what the reading is FOR, which is what decides whether the whole
+   * document is on the glass and whether anything is reported at the end.
+   *
+   * Not persisted. The session row a practice writes is an ordinary voice
+   * session, deliberately — see `practice` in `StartTakeOptions`.
+   */
+  practice: boolean;
   displayLabel: string;
   startedAtMs: number;
   elapsedSeconds: number;
@@ -436,6 +449,7 @@ const initial: SessionState = {
   scriptId: null,
   scriptTitle: '',
   mode: 'voice',
+  practice: false,
   displayLabel: '',
   startedAtMs: 0,
   elapsedSeconds: 0,
@@ -834,6 +848,8 @@ export interface StartSessionInput {
    * thing that is right.
    */
   presentationMode?: PresentationMode;
+  /** §practice. A rehearsal: the whole document, and no report at the end. */
+  practice?: boolean;
   /** The panel the geometry was resolved against; see `stageDisplay`. */
   stageDisplay?: DisplayDescriptor | null;
   transcription?: TranscriptionConfig;
@@ -935,6 +951,7 @@ export function startLiveSession(input: StartSessionInput): string {
     scriptId: input.scriptId,
     scriptTitle: input.scriptTitle,
     mode: input.mode,
+    practice: input.practice ?? false,
     displayLabel: input.displayLabel,
     startedAtMs: Date.now(),
     voiceFollow: input.mode === 'voice',
@@ -2421,9 +2438,27 @@ function flushTranscript(sessionId: string, force: boolean): void {
           : s,
       );
     }
+    /*
+     * A PRACTICE IS NOT PROMISED A SUMMARY (§practice).
+     *
+     * The correction above is already a no-op for one — it patches `s.summary`,
+     * which a practice never has — but the toast went on to promise that the
+     * summary "will say if any of it is missing", and for a rehearsal no such
+     * card ever opens. That is the same false promise the exit confirmations
+     * were changed to stop making, arriving somewhere the eye does not look for
+     * it, and it points the operator at a screen they will never see.
+     *
+     * Read live, which is the only place this branch runs: `stillTheSameTake`
+     * means the session is still the one that issued the write, so the flag is
+     * the running session's own.
+     */
+    const practising = stillTheSameTake && get(state).practice;
     showToast(
       stillTheSameTake
-        ? 'CandidCue could not save part of the transcript for this take. It will keep ' +
+        ? practising
+          ? 'CandidCue could not save part of the transcript for this practice. It will ' +
+            'keep trying.'
+          : 'CandidCue could not save part of the transcript for this take. It will keep ' +
             'trying, and the take summary will say if any of it is missing.'
         : 'CandidCue could not save the last part of the transcript for the take that ' +
             'just ended. That section is missing from the saved transcript.',
@@ -4044,7 +4079,31 @@ export function stopSession(): SessionSummary {
   if (s.sessionId && stageGeneration !== 0) {
     void stageService.closeStage(s.sessionId).catch(() => {});
   }
-  state.update((prev) => ({ ...prev, active: false, prompting: false, summary }));
+  /*
+   * A PRACTICE REPORTS NOTHING.
+   *
+   * Live opens the F.17 card on `!active && summary !== null`, so withholding
+   * the summary from the store is the whole of "no report" — there is no second
+   * place to suppress and no dialog to teach about rehearsals.
+   *
+   * The summary is still BUILT and still returned to the caller, and both halves
+   * of that matter. It is built because everything above this line also closes
+   * the session row, flushes the transcript tail and reports the ending location
+   * to Rust, and a rehearsal is a real reading whose ending is a real place in
+   * the script — "From last ending" is offered on it. It is returned because
+   * `stopSession`'s contract is to hand back what it measured, and a caller that
+   * asked for the numbers is not the surface being kept quiet.
+   *
+   * What is withheld is only the CARD: a rehearsal ends by putting the editor
+   * back, which is where somebody who has just practised a paragraph wants to
+   * be, rather than by opening a report on a performance nobody gave.
+   */
+  state.update((prev) => ({
+    ...prev,
+    active: false,
+    prompting: false,
+    summary: s.practice ? null : summary,
+  }));
   return summary;
 }
 
