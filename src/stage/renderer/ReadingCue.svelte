@@ -128,19 +128,36 @@
   /**
    * How far outside the column the ticks sit.
    *
-   * Half a unit: close enough that the eye takes the tick and the line as one
-   * object, far enough that a descender never touches it. The column leaves
-   * about 9% of the safe width on each side (`MAX_COLUMN_FRACTION`), which is a
-   * designed margin rather than a clearance — comfortably more than a tick and
-   * this gap at the sizes a prompter runs. The clamps below stay as the
-   * backstop for the case the fraction cannot cover: type that is a large
-   * fraction of its own panel, where the mark would otherwise slide off the
-   * edge of a display nobody anticipated.
+   * Half a unit, and it is now a FLOOR rather than the placement.
+   *
+   * The mark used to be pushed a fixed gap off the column, which put it
+   * wherever the margin happened to leave it — on a 9-inch Prompter at the
+   * shipped sizes that was 45px of air outside the mark and 17px inside, so it
+   * sat closer to the text than to the bezel and read as pushed aside rather
+   * than placed. It is centred in its own margin now (see below), which is the
+   * same statement the column's `MAX_COLUMN_FRACTION` makes: the mark has equal
+   * air on both sides of it.
+   *
+   * The gap survives as the minimum: centring cannot be allowed to walk the
+   * mark into a descender on a rig whose margin is too tight to centre in.
    */
   const gapPx = $derived(unitPx * 0.5);
 
-  const leftTickPx = $derived(leftPx - gapPx - tickWidthPx);
-  const rightTickPx = $derived(leftPx + widthPx + gapPx);
+  /*
+   * Centred in the margin, each side measured independently.
+   *
+   * Independently because the column is centred on the LENS, not on the panel
+   * (`opticalCenterX`), so the two margins are not always equal — and a mark
+   * centred in the average of them would be centred in neither. The right one
+   * is expressed in `calc` against `100%` because this component is told where
+   * the column starts and how wide it is, never how wide its own container is.
+   */
+  const leftTickPx = $derived(
+    Math.min((leftPx - tickWidthPx) / 2, leftPx - gapPx - tickWidthPx),
+  );
+  /** Distance from the column's right edge to the centred mark's left edge. */
+  const rightTickFromColumnPx = $derived(Math.max(gapPx, 0));
+  const columnRightPx = $derived(leftPx + widthPx);
 
   /**
    * The travel, in cap heights, when no pitch has been handed over.
@@ -221,7 +238,10 @@
     </span>
     <span
       class="tick"
-      style:left="min({rightTickPx}px, calc(100% - {tickWidthPx}px))"
+      style:left="min(
+        max({columnRightPx + rightTickFromColumnPx}px, calc((100% + {columnRightPx - tickWidthPx}px) / 2)),
+        calc(100% - {tickWidthPx}px)
+      )"
       style:top="{centerPx}px"
       style:width="{tickWidthPx}px"
       style:height="{unitPx}px"

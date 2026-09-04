@@ -106,24 +106,25 @@ export const ANGULAR_HARD_FLOOR_ARCMIN = 16;
 /**
  * Fraction of the safe width the column may occupy.
  *
- * A designed margin, not a clearance. The column is inset by about 9% of the
- * glass on each side — enough that the reading-cue ticks sit clearly inside the
- * panel with air around them rather than flattened against the bezel, and
- * enough that the text reads as placed on the glass instead of poured into it.
+ * A designed margin, not a clearance: enough that the text reads as placed on
+ * the glass rather than poured into it.
  *
- * It was 0.92, which was neither. Paired with a column that shrank whenever a
- * size was pinned (see `derivedColumnCh`) it produced the opposite of a margin:
- * a 9-inch Prompter rendered its text in a 647px ribbon down the middle of a
- * 1024px panel with a third of the glass black, while the ticks — whose
- * footprint scales with the TYPE, not with the panel — had more than the 4% a
- * side left them and were clamped flat to the edge by the CSS backstop.
+ * The value is set by where the reading tick lands. The tick sits centred in
+ * this margin (`ReadingCue.svelte`), so the margin is two equal breaths of air
+ * either side of it plus the mark itself — and at the sizes a 9-inch Prompter
+ * runs, that comes to about 12% of the panel a side. At 0.82 the mark had 45px
+ * of air outside it and 17px inside: centred on nothing, and closer to the text
+ * than to the edge.
  *
- * This is half the space that layout was leaving, which is the amount that
- * reads as deliberate. Going further and reserving only what the ticks need
- * takes the text to the bezel and looks like an overflow rather than a
- * decision.
+ * It was 0.92 before either of those, which was neither a margin nor a
+ * clearance. Paired with a column that shrank whenever a size was pinned (see
+ * `derivedColumnCh`) it produced the opposite of a margin: a 9-inch Prompter
+ * rendered its text in a 647px ribbon down the middle of a 1024px panel with a
+ * third of the glass black, while the ticks — whose footprint scales with the
+ * TYPE, not with the panel — had more than the 4% a side left them and were
+ * clamped flat to the edge by the CSS backstop.
  */
-export const MAX_COLUMN_FRACTION = 0.82;
+export const MAX_COLUMN_FRACTION = 0.76;
 
 /**
  * The reading measure, in characters per rendered line.

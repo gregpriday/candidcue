@@ -87,9 +87,9 @@ describe('the size bias on an automatic panel', () => {
     const shipped = opticsFor(defaultOpticalProfile().bias).charactersPerLine!;
     const wide = opticsFor(0).charactersPerLine!;
 
-    expect(shipped).toBeGreaterThan(27);
-    expect(shipped).toBeLessThan(32);
-    expect(wide).toBeGreaterThan(32);
+    expect(shipped).toBeGreaterThan(24);
+    expect(shipped).toBeLessThan(29);
+    expect(wide).toBeGreaterThan(29);
     expect(wide - shipped).toBeGreaterThan(4);
   });
 

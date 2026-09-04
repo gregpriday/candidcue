@@ -78,17 +78,18 @@ describe('a pinned size does not shrink the column', () => {
      * moves with the DIN fallback metrics, and the point is the size of the
      * change, not a digit.
      */
-    expect(columnPx(pinned) / 1024).toBeGreaterThan(0.78);
+    expect(columnPx(pinned) / 1024).toBeGreaterThan(0.72);
     // And the extra width shows up as what it is for: more of the sentence.
-    expect(pinned.charactersPerLine!).toBeGreaterThan(33);
+    expect(pinned.charactersPerLine!).toBeGreaterThan(31);
   });
 
   it('leaves a margin that reads as deliberate, not a clearance', () => {
     /*
      * The rule, and it is a design decision rather than a fit: the column is
-     * inset by about 9% of the glass on each side. Reserving only what the
-     * ticks need takes the text to the bezel and reads as overflow; leaving the
-     * old 18% wastes a third of a small panel. This is half the latter.
+     * inset by about 12% of the glass on each side, which is what it takes to
+     * sit the reading mark in the middle of that margin with equal air on both
+     * sides of it. Reserving only what the ticks need takes the text to the
+     * bezel and reads as overflow; the old 18% wasted a third of a small panel.
      *
      * Checked at a pinned and an unpinned size, because they resolve through
      * different branches, and against the tick's own footprint so the margin
@@ -98,12 +99,17 @@ describe('a pinned size does not shrink the column', () => {
     for (const overrides of [{ fontSizePx: 48 }, {}] as Record<string, number>[]) {
       const o = resolve(overrides);
       const sideMarginPx = (1024 - columnPx(o)) / 2;
-      expect(sideMarginPx / 1024).toBeGreaterThan(0.07);
-      expect(sideMarginPx / 1024).toBeLessThan(0.11);
-      // The ticks are drawn outside the column, half a cap height off it, in a
-      // box 16/18 as wide as it is tall. They have to fit in that margin.
+      expect(sideMarginPx / 1024).toBeGreaterThan(0.1);
+      expect(sideMarginPx / 1024).toBeLessThan(0.14);
+      /*
+       * And the margin is big enough to CENTRE the mark in, not merely to fit
+       * it: the tick is drawn in a box 16/18 as wide as it is tall, and
+       * `ReadingCue` centres it, so equal air either side needs the margin to
+       * clear the tick by at least a gap on both sides.
+       */
       const capPx = o.bodyFontSizePx * m.capHeightRatio;
-      expect(sideMarginPx).toBeGreaterThan(capPx * (16 / 18 + 0.5));
+      const tickPx = capPx * (16 / 18);
+      expect((sideMarginPx - tickPx) / 2).toBeGreaterThan(capPx * 0.5);
     }
   });
 

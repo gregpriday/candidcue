@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_COLUMN_FRACTION,
   ANGULAR_HARD_FLOOR_ARCMIN,
   ANGULAR_PRESET_ARCMIN,
   ANGULAR_SOFT_FLOOR_ARCMIN,
@@ -224,16 +225,19 @@ describe('hardware fit', () => {
 
   it('gives type up only once the line cannot reach the character floor', () => {
     /*
-     * The width is chosen to sit inside this rung rather than for any meaning
-     * of its own: narrow enough that the character floor cannot be reached at
-     * the requested angle, wide enough that dropping to the soft angular floor
-     * rescues it. `MAX_COLUMN_FRACTION` is deliberately left at the shipped
-     * default here — the rung boundary is a property of the real geometry, and
-     * pinning the fraction would test an arrangement nothing ships.
+     * Expressed as the USABLE width, which is what the rung actually turns on,
+     * rather than as a panel width that happens to produce it. The margin has
+     * moved twice (0.92 -> 0.82 -> 0.76) and each time a literal panel width
+     * here silently walked this scenario into the next rung along, testing
+     * something other than the boundary it is named for.
+     *
+     * ~396px of usable width: narrow enough that the character floor cannot be
+     * reached at the requested angle, wide enough that dropping to the soft
+     * angular floor rescues it.
      */
     const fit = hardwareFitCheck({
       ...base,
-      safeWidthPx: 460,
+      safeWidthPx: 396 / MAX_COLUMN_FRACTION,
       mmPerCssPx: mmPerCssPixel(PROMPTER_9),
       distanceMm: 1400,
     });

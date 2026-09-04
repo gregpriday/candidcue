@@ -39,6 +39,7 @@ import {
 import {
   ANGULAR_PRESET_ARCMIN,
   ANGULAR_SOFT_FLOOR_ARCMIN,
+  READING_MEASURE,
   fallbackFontMetrics,
   inchesToMm,
   mmPerCssPixel,
@@ -219,24 +220,32 @@ describe('the honest limits of a 9-inch panel', () => {
     expect(shrunk.budget.sufficient).toBe(true);
   });
 
-  it('holds legibility past its own rating, and pays for it in line length', () => {
+  it('runs out of both at 2.5 m, and gives type up only after the line', () => {
     /*
      * At 2.5 m this panel is well outside Elgato's 1.8 m rating, and the
-     * resolution order shows its teeth: type stays at the requested angular
-     * size and the measure collapses to about three words a line.
+     * resolution order shows its teeth. The line narrows first, all the way to
+     * the 13-character floor; only then does type start to give way, and only
+     * as far as the soft angular floor.
      *
-     * That is the designed trade — legibility outranks measure, because text
-     * too small to read is unusable while a narrow column is merely bad — but
-     * it is worth being explicit that the verdict names WHICH constraint gave
-     * way, not how badly. `width_limited` is the same verdict a perfectly
-     * comfortable desk setup gets. The severity lives in the measure and in the
-     * advice, so those are what a caller must actually look at.
+     * This rig used to stop at the first of those (`width_limited`, ~13.4
+     * characters at the full 23.2'). It reaches the second now because the
+     * designed column margin widened (`MAX_COLUMN_FRACTION`, 0.82 -> 0.76):
+     * with ~62px less to lay a line in, 2.5 m can no longer hold thirteen
+     * characters at the requested size, so the model trades about an
+     * arcminute to keep them. That is the documented order working rather
+     * than a regression — type gives way LAST, and stops well above the 18'
+     * floor — but it is a rung this panel now reaches at a distance it did
+     * not before, which is worth having written down.
      */
     const { optics } = budgetFor(2500);
-    expect(optics.fitVerdict).toBe('width_limited');
+    expect(optics.fitVerdict).toBe('angle_limited');
     expect(optics.charactersPerLine as number).toBeLessThan(18);
+    // The line was held at its floor rather than allowed to collapse further.
+    expect(optics.charactersPerLine as number).toBeGreaterThanOrEqual(READING_MEASURE.hardFloor);
+    // And the type it gave up stops above the floor the evidence puts it at.
+    expect(optics.bodyArcminutes as number).toBeGreaterThanOrEqual(ANGULAR_SOFT_FLOOR_ARCMIN);
+    expect(optics.bodyArcminutes as number).toBeLessThan(ANGULAR_PRESET_ARCMIN.standard);
     expect(optics.fitAdvice).not.toBe('');
-    expect(optics.fitAdvice).toContain('narrower than ideal');
   });
 
   it('keeps the manufacturer rating available so the wizard can warn earlier', () => {
