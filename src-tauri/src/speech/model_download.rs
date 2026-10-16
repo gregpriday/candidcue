@@ -329,10 +329,12 @@ struct Transfer {
 /// where the origin actually started, which is the only one that counts.
 ///
 /// Failing to open is `Interrupted` — no byte on disk has been looked at —
-/// EXCEPT when the origin answers our range in a way that makes the partial
-/// unusable. Those come back identically on every retry for as long as the
-/// partial exists, so keeping it would turn one bad answer into a download
-/// that can never finish.
+/// EXCEPT when the origin refuses or mangles a RANGE request. That answer is
+/// about the partial, and it comes back identically on every retry for as long
+/// as the partial exists, so keeping it would turn one bad answer into a
+/// download that can never finish. A request that asked for no range says
+/// nothing about whatever is on disk — which may be another url's prefix,
+/// left for that url to resume — so its failures never cost it.
 async fn open_transfer(
     url: &str,
     from: u64,
@@ -409,7 +411,7 @@ async fn open_transfer(
             // to an offset chosen by the origin and write the tail of some
             // representation into a file we believe starts elsewhere.
             if !asked_for_range {
-                return Err(rejected("origin sent 206 to a request with no Range".to_string()));
+                return Err(interrupted("origin sent 206 to a request with no Range".to_string()));
             }
             let range = response
                 .headers()
@@ -426,12 +428,20 @@ async fn open_transfer(
             offset
         } else if status.is_success() {
             0
-        } else if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-            // A range is only ever sent with `If-Range`, and a validator that
-            // no longer matched would have earned a whole 200 instead. So this
-            // is the same asset, and it ends before our partial does: nothing
-            // past this point exists to fetch, and asking again would get the
-            // same answer.
+        } else if asked_for_range
+            && status.is_client_error()
+            && status != reqwest::StatusCode::REQUEST_TIMEOUT
+            && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            // The origin refused THIS request, and the range is what makes it
+            // different from a fresh one. A 416 is the plain case: a range is
+            // only ever sent with `If-Range`, and a validator that no longer
+            // matched would have earned a whole 200, so this is the same asset
+            // and it ends before our partial does. A CDN that forbids ranges
+            // outright is the other. Either way asking again gets the same
+            // answer, and only dropping the partial lets the next run ask
+            // without one. Timeouts and rate limits are about the moment, not
+            // the request, and are left to retry.
             return Err(rejected(format!("origin refused to resume at {from}: {status}")));
         } else {
             return Err(interrupted(format!("status {status}")));
@@ -562,27 +572,37 @@ async fn fetch_archive(
     // transfer rather than after — a crash mid-download is exactly the case
     // this is for. After the open rather than before it, so a sidecar naming
     // this url never sits beside bytes that came from somewhere else.
-    let _ = write_resume(
-        resume_path,
-        &ResumeState {
-            version: RESUME_VERSION,
-            model_id: model.id.clone(),
-            archive_sha256: model.archive.sha256.clone(),
-            url: url.to_string(),
-            etag: transfer.etag.clone().filter(|_| transfer.accepts_ranges),
-            last_modified: transfer
-                .last_modified
-                .clone()
-                .filter(|_| transfer.accepts_ranges),
-        },
-    );
+    //
+    // An honoured range is proof of range support in its own right.
+    // `Accept-Ranges` is advisory and a 206 may omit it; trusting only the
+    // header would strip the validator from a resumed transfer, and a second
+    // drop would then start again from zero.
+    let resumable = transfer.accepts_ranges || transfer.start > 0;
+    let state = ResumeState {
+        version: RESUME_VERSION,
+        model_id: model.id.clone(),
+        archive_sha256: model.archive.sha256.clone(),
+        url: url.to_string(),
+        etag: transfer.etag.clone().filter(|_| resumable),
+        last_modified: transfer.last_modified.clone().filter(|_| resumable),
+    };
+    if write_resume(resume_path, &state).is_err() {
+        // Failing to record this transfer is survivable; leaving the PREVIOUS
+        // sidecar in place is not. It names another url's validator, and now
+        // that a dropped transfer is kept, a later run would resume these
+        // bytes against that url. No sidecar costs one restart instead.
+        let _ = std::fs::remove_file(resume_path);
+    }
 
     let mut written = from;
     let mut response = transfer.response;
-    // Whether the response said how long it is. Read before the body is
-    // consumed, and used only to explain a short ending — never to size
-    // anything (see the per-chunk ceiling below).
-    let framed = response.content_length().is_some();
+    // Whether this response claimed to be the origin's WHOLE file, length and
+    // all. Read before the body is consumed, and used only to explain a short
+    // ending — never to size anything (see the per-chunk ceiling below). A
+    // 206's length describes only its own slice, and a server may send less
+    // of a range than was asked for, so a short 206 says nothing about the
+    // file being the wrong one.
+    let whole_and_framed = transfer.start == 0 && response.content_length().is_some();
     let mut last_report = std::time::Instant::now();
     on_progress(Phase::Downloading, written, expected);
     loop {
@@ -595,6 +615,15 @@ async fn fetch_archive(
             // for the next run to resume, rather than thrown away for having
             // stopped. A torn tail after a power cut is still caught: the
             // archive digest covers the resumed file as a whole.
+            //
+            // Unless every byte the catalogue promises has already arrived.
+            // That file is not a prefix of anything; it is a candidate archive,
+            // and it is judged NOW, in this url's turn. Kept as a "partial", it
+            // would meet the next url's complete-archive shortcut, fail the
+            // digest there, and be discarded in a turn that never fetched — so
+            // a mirror that sent the right number of wrong bytes and then
+            // errored would stop upstream from ever being asked.
+            Err(_) if written == expected => break,
             Err(e) => {
                 return Err(keep_partial(
                     file,
@@ -633,13 +662,15 @@ async fn fetch_archive(
     if written != expected {
         // The per-chunk ceiling rules out MORE, so this is always fewer.
         //
-        // A response that declared its length and delivered all of it is the
-        // origin's whole file, and that file is not our archive: resuming past
-        // its end can only be refused. One that never declared a length simply
-        // ended — a dropped close-delimited body looks exactly like this — and
-        // is kept like any other interrupted transfer.
+        // A whole-file response that declared its length and delivered all of
+        // it is the origin's entire file, and that file is not our archive:
+        // resuming past its end can only be refused. Anything else simply
+        // ended — a dropped close-delimited body looks exactly like this, and
+        // so does a 206 that served less of the range than was asked for —
+        // and is kept like any other interrupted transfer. If the origin's
+        // file really is shorter, the resume is answered 416 and dropped then.
         let reason = format!("expected {expected} bytes, received {written}");
-        return Err(if framed {
+        return Err(if whole_and_framed {
             FetchFailure::Rejected(integrity_failed(reason))
         } else {
             FetchFailure::Interrupted(download_failed(reason))
@@ -1475,6 +1506,11 @@ mod tests {
         served: Arc<AtomicU64>,
         /// What each request actually carried.
         seen: Arc<std::sync::Mutex<Vec<SeenRequest>>>,
+        /// The path each of those requests was for. Kept apart from
+        /// `SeenRequest` so the resume assertions stay about the range; this
+        /// is what proves WHICH candidate a mirror test reached, since the
+        /// mirror and upstream share one listener.
+        paths: Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl MockOrigin {
@@ -1499,10 +1535,16 @@ mod tests {
             let requests = Arc::new(AtomicU64::new(0));
             let served = Arc::new(AtomicU64::new(0));
             let seen: Arc<std::sync::Mutex<Vec<SeenRequest>>> = Arc::default();
-            let counters = (Arc::clone(&requests), Arc::clone(&served), Arc::clone(&seen));
+            let paths: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+            let counters = (
+                Arc::clone(&requests),
+                Arc::clone(&served),
+                Arc::clone(&seen),
+                Arc::clone(&paths),
+            );
 
             std::thread::spawn(move || {
-                let (requests, served, seen) = counters;
+                let (requests, served, seen, paths) = counters;
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { continue };
                     let mut buf = [0u8; 4096];
@@ -1555,6 +1597,7 @@ mod tests {
                             .ok()
                     });
                     let if_range = header("if-range");
+                    paths.lock().unwrap().push(path.clone());
                     seen.lock().unwrap().push(SeenRequest {
                         range_from,
                         if_range: if_range.clone(),
@@ -1605,7 +1648,10 @@ mod tests {
                         let slice = &payload[from..];
                         (
                             format!(
-                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nConnection: close\r\n\r\n",
+                                // No `Accept-Ranges`: it is advisory, a 206
+                                // may omit it, and the client must not need it
+                                // to resume a resumed transfer.
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nETag: {etag}\r\nConnection: close\r\n\r\n",
                                 slice.len(),
                                 from,
                                 payload.len().saturating_sub(1),
@@ -1681,11 +1727,16 @@ mod tests {
                 requests,
                 served,
                 seen,
+                paths,
             }
         }
 
         fn seen(&self) -> Vec<SeenRequest> {
             self.seen.lock().unwrap().clone()
+        }
+
+        fn paths(&self) -> Vec<String> {
+            self.paths.lock().unwrap().clone()
         }
 
         fn url(&self, path: &str) -> String {
@@ -2192,9 +2243,25 @@ mod tests {
         .await
     }
 
+    /// The path a mock origin sees for the content-addressed mirror url.
+    fn mirror_path(model: &ModelEntry) -> String {
+        format!("/sha256/{}/{}", model.archive.sha256, model.archive.file_name)
+    }
+
     /// A transfer that stops mid-body leaves exactly what arrived, with its
     /// sidecar, and the next run asks for only the rest.
-    async fn assert_a_drop_is_resumed(drop: Behaviour, half: usize, archive: Vec<u8>) {
+    ///
+    /// `noticed_by` is a fragment of the logged reason, which is what proves
+    /// WHICH path saw the drop: a stream error from the HTTP client, or a body
+    /// that ended cleanly short of the catalogue. The outcome is the same
+    /// either way, so without it a mock that stopped producing one case would
+    /// quietly test the other.
+    async fn assert_a_drop_is_resumed(
+        drop: Behaviour,
+        half: usize,
+        archive: Vec<u8>,
+        noticed_by: &str,
+    ) {
         let files = fixture_files();
         let origin = MockOrigin::start_scripted(archive.clone(), vec![drop, Behaviour::Ranged]);
         let model = aimed_at(
@@ -2212,6 +2279,7 @@ mod tests {
         // A connection problem, worded as one — not a checksum failure, which
         // would also tell the user the bytes were thrown away.
         assert_eq!(err.code(), "STT_MODEL_DOWNLOAD_FAILED", "{err:?}");
+        assert!(err.to_string().contains(noticed_by), "{err}");
         assert!(
             !phases.saw(Phase::VerifyingArchive),
             "an unfinished transfer was hashed as if it were complete"
@@ -2250,7 +2318,7 @@ mod tests {
     async fn a_dropped_connection_keeps_the_partial_and_the_next_run_resumes_it() {
         let archive = build_archive("bundle-root", &fixture_files());
         let half = archive.len() / 2;
-        assert_a_drop_is_resumed(Behaviour::DropsAt(half), half, archive).await;
+        assert_a_drop_is_resumed(Behaviour::DropsAt(half), half, archive, "stream failed").await;
     }
 
     /// A body with no `Content-Length` that stops early looks complete to the
@@ -2260,7 +2328,96 @@ mod tests {
     async fn a_dropped_body_with_no_length_keeps_the_partial_and_resumes() {
         let archive = build_archive("bundle-root", &fixture_files());
         let half = archive.len() / 2;
-        assert_a_drop_is_resumed(Behaviour::UnframedDropsAt(half), half, archive).await;
+        assert_a_drop_is_resumed(Behaviour::UnframedDropsAt(half), half, archive, "received")
+            .await;
+    }
+
+    /// A long download on a bad connection drops more than once. The resumed
+    /// transfer must leave a sidecar as resumable as the first one did — a
+    /// 206 is proof of range support even without `Accept-Ranges`, which the
+    /// mock deliberately omits from every 206.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_resumed_download_that_drops_again_resumes_again() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let (first, second) = (archive.len() / 3, archive.len() * 2 / 3);
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::DropsAt(first), Behaviour::DropsAt(second), Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        for kept in [first, second] {
+            install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+                .await
+                .expect_err("a dropped transfer cannot install");
+            assert_eq!(std::fs::read(&part).unwrap(), &archive[..kept]);
+            assert_eq!(
+                read_resume(&sidecar).as_ref().and_then(ResumeState::validator),
+                Some(FIXTURE_ETAG),
+                "the sidecar after {kept} bytes must still carry a validator"
+            );
+        }
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("the third attempt must finish the download");
+
+        let conditional = |from: usize| SeenRequest {
+            range_from: Some(from as u64),
+            if_range: Some(FIXTURE_ETAG.to_string()),
+        };
+        assert_eq!(
+            origin.seen(),
+            vec![SeenRequest::default(), conditional(first), conditional(second)]
+        );
+        assert_eq!(origin.served.load(Ordering::SeqCst), archive.len() as u64);
+    }
+
+    /// A mirror that sends exactly the archive's length of WRONG bytes and
+    /// then errors has not left a partial — it has left a full-length file,
+    /// and that is judged in the mirror's own turn. Kept instead, upstream's
+    /// turn would take it for a complete archive, fail the digest, and discard
+    /// it without ever asking upstream for anything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mirror_that_errors_after_a_full_length_of_bad_bytes_still_reaches_upstream() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let upstream = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            upstream.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model.clone());
+        // Promises one byte more than the archive, sends exactly the archive's
+        // length of rubbish, and hangs up: a stream error at full length.
+        let mirror = MockOrigin::start(
+            vec![0x5Au8; archive.len() + 1],
+            Behaviour::DropsAt(archive.len()),
+        );
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", mirror.port));
+        let policy = HopPolicy {
+            labels: MODEL_HOP_LABELS,
+            exempt_authority: Some(format!("127.0.0.1:{}", mirror.port)),
+        };
+        let _ = &upstream;
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        let err = install_once(temp.path(), &catalogue, &policy, &no_progress())
+            .await
+            .expect_err("upstream is not exempt under this policy");
+        // Upstream was actually DIALLED, which is the only way to reach the
+        // policy's refusal. The shortcut would have reported a checksum.
+        assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+        assert!(mirror.requests.load(Ordering::SeqCst) >= 1, "the mirror must have been tried");
+        assert!(!part.exists(), "a full-length file that failed its digest must be discarded");
+        assert!(!sidecar.exists(), "and its sidecar with it");
     }
 
     /// A request that never gets a body has judged none of the bytes already
@@ -2333,6 +2490,11 @@ mod tests {
             .await
             .expect("upstream must finish what the mirror dropped");
         assert_eq!(
+            origin.paths(),
+            vec![mirror_path(&model), "/archive".to_string()],
+            "the second request must be upstream's, not the mirror again"
+        );
+        assert_eq!(
             origin.seen(),
             vec![SeenRequest::default(), SeenRequest::default()],
             "upstream must not be asked to continue the mirror's partial"
@@ -2371,7 +2533,11 @@ mod tests {
             .await
             .expect_err("neither source finished");
         assert_eq!(err.code(), "STT_MODEL_DOWNLOAD_FAILED", "{err:?}");
-        assert_eq!(origin.seen().len(), 2, "upstream must still have been tried");
+        assert_eq!(
+            origin.paths(),
+            vec![mirror_path(&model), "/archive".to_string()],
+            "upstream must still have been tried"
+        );
         assert_eq!(
             std::fs::read(&part).expect("the mirror's partial must survive"),
             &archive[..half]
@@ -2392,6 +2558,7 @@ mod tests {
             }),
             "the next run must continue the mirror's partial, not restart it"
         );
+        assert_eq!(origin.paths().get(2), Some(&mirror_path(&model)));
     }
 
     /// The mirror image of the above: an upstream partial is not lost to a
@@ -2417,6 +2584,7 @@ mod tests {
         install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
             .await
             .expect("upstream must resume its own partial");
+        assert_eq!(origin.paths(), vec![mirror_path(&model), "/archive".to_string()]);
         assert_eq!(
             origin.seen(),
             vec![
