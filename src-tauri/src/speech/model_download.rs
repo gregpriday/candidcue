@@ -1018,29 +1018,30 @@ const FREE_SPACE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
 /// An install is not "the size of the model". At its peak the volume holds,
 /// beyond what is already on it:
 ///
-/// * the **archive**, downloaded whole before it is verified and removed only
-///   after the install returns;
+/// * the **archive**, downloaded whole before it is verified and kept through
+///   extraction and the commit — removed only once the install has succeeded;
 /// * the **staging** tree, every file extracted and checked while the archive
 ///   is still there.
 ///
-/// Nothing else costs space. A previous install — there is none on a first
-/// install, which is the normal case — is already on the volume, so `statvfs`
-/// has counted it as used; the commit then moves it aside with a `rename`,
-/// which takes no bytes, and the staged tree becomes the new install the same
-/// way. Counting that previous install again, as this once did for its
-/// "backup", asked for a whole model more than any install holds, and refused
-/// first installs that would have fitted.
+/// Nothing else of any size: the licence notice and text, the seal and the
+/// resume sidecar are kilobytes, and live in the margin. A previous install —
+/// there is none on a first install, which is the normal case — is already on
+/// the volume, so `statvfs` has counted it as used; the commit then moves it
+/// aside with a `rename`, which takes no bytes, and the staged tree becomes the
+/// new install the same way. Counting that previous install again, as this
+/// once did for its "backup", asked for a whole model more than any install
+/// holds, and refused first installs that would have fitted (issue #263).
 ///
 /// So the requirement is archive + installed + a margin. That is neither the
 /// model's size, which is what a user would guess, nor the download they
 /// watch, which is why it is checked rather than assumed. No figure is quoted
-/// here because a catalogue change would make it wrong; the tests hold the
-/// shipped one.
+/// here because a catalogue change would make it wrong; the tests pin the one
+/// the issue was reported in.
 ///
 /// Deliberately conservative in two ways that only ever ask for MORE than the
-/// install needs: a resumed download's partial archive is already on disk and
-/// is counted again here, and so is anything the stale-file sweep in
-/// [`install`] is about to remove, because the check runs before it.
+/// install needs: a resumed download asks for the whole archive although its
+/// partial is already on disk, and the check runs before the stale-file sweep
+/// in [`install`], so it gives no credit for the space that sweep frees.
 fn required_free_bytes(model: &ModelEntry) -> u64 {
     model
         .archive
@@ -3840,6 +3841,7 @@ mod tests {
         let files = fixture_files();
         let archive = build_archive("root", &files);
         let mut model = fixture_entry(&archive, &files, "root");
+        assert_eq!(file_bytes.len(), model.files.len(), "one size per fixture file");
         model.archive.bytes = archive_bytes;
         for (file, bytes) in model.files.iter_mut().zip(file_bytes) {
             file.bytes = *bytes;
@@ -3866,15 +3868,29 @@ mod tests {
         assert_eq!(required_free_bytes(&model), 571_677_810);
     }
 
-    /// Whatever the catalogue ships, the same arithmetic — so a model update
-    /// moves the requirement without anyone editing a test.
+    /// A volume that will not say how much is free is not refused, however
+    /// much the model asks for. An empty path has no ancestor to `statvfs`.
     #[test]
-    fn free_space_needed_for_the_shipped_model_follows_its_catalogue_sizes() {
-        let model = crate::speech::catalogue::default_model();
-        assert_eq!(
-            required_free_bytes(model),
-            model.archive.bytes + model.installed_bytes() + FREE_SPACE_MARGIN_BYTES
-        );
+    fn free_space_that_cannot_be_read_is_not_grounds_to_refuse() {
+        let model = sized_entry(u64::MAX, &[0, 0, 0, 0]);
+        assert_eq!(available_bytes(Path::new("")), None);
+        assert!(check_free_space(Path::new(""), &model).is_ok());
+    }
+
+    /// The real reading reaches the verdict: no volume has `u64::MAX` free.
+    #[cfg(unix)]
+    #[test]
+    fn free_space_read_from_the_volume_decides_the_preflight() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = sized_entry(u64::MAX, &[0, 0, 0, 0]);
+        let err = check_free_space(temp.path(), &model).unwrap_err();
+        assert_eq!(err.code(), "STT_MODEL_INSUFFICIENT_SPACE", "{err:?}");
+
+        let files = fixture_files();
+        let archive = build_archive("root", &files);
+        let model = fixture_entry(&archive, &files, "root");
+        // A few hundred bytes plus the margin: fits on any disk running tests.
+        assert!(check_free_space(temp.path(), &model).is_ok());
     }
 
     #[test]
