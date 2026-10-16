@@ -14,7 +14,6 @@
  *   node scripts/release-verify.mjs --tier=code     — gates + typecheck + tests
  *   node scripts/release-verify.mjs --only=typecheck,node tests
  *   node scripts/release-verify.mjs --list          — print the plan and exit
- *   node scripts/release-verify.mjs --allow-legal-failure
  *
  * ## `--only` is how CI stays honest
  *
@@ -27,19 +26,16 @@
  * is claimed by some CI job. A step added here without a home in CI fails a
  * test rather than quietly never running.
  *
- * ## Why `--allow-legal-failure` exists, and why it is not the default
+ * ## The one step CI does not run
  *
- * `pnpm legal:check` fails today, on purpose: the four legal documents carry
- * unresolved `@@LEGAL_*@@` production placeholders that only the business can
- * fill in. That failure IS the commercial release gate — a build that ships
- * with a placeholder licence agreement is the one outcome nobody can undo.
- *
- * So the default is fail-closed, and the flag exists for development and
- * nightly builds. It suppresses ONLY the legal gate's exit code 2, which that
- * script uses for "the scan ran cleanly and the values are not filled in yet".
- * A legal gate that crashed, was killed, or found a damaged document exits 1
- * and is never suppressed — otherwise the flag would hide a check that never
- * really ran, which is worse than the state it exists to tolerate.
+ * `native licence review` is marked `releaseOnly`. It refuses while any
+ * statically linked native component in `sbom/native-components.json` is
+ * unreviewed — a fact only a person can settle, which should block a release
+ * and should not redden every push. Nothing here treats the flag specially:
+ * the step is `full` tier, so a bare run (which is what a tagged release does)
+ * reaches it, and CI never names it in an `--only=` list. The flag exists so
+ * the parity test can tell that deliberate exception from a step somebody
+ * forgot to give a home, and so it can assert CI keeps not naming it.
  *
  * ## What is NOT here
  *
@@ -75,11 +71,14 @@ const STEPS = [
     proves: 'package.json, Cargo.toml, tauri.conf.json and version.ts agree',
   },
   {
-    tier: 'fast',
-    name: 'legal gate',
-    command: ['node', ['scripts/legal-gate.mjs']],
-    proves: 'no unresolved production placeholder can reach a commercial build',
-    optional: 'legal',
+    // Full tier, but listed here rather than with the other full steps: the
+    // tier filter keeps the array's order, so a full run that is going to stop
+    // on an unreviewed licence stops in a second, not after a Rust build.
+    tier: 'full',
+    name: 'native licence review',
+    command: ['node', ['scripts/verify-native-review.mjs']],
+    proves: 'every statically linked native component has a confirmed licence',
+    releaseOnly: true,
   },
   {
     tier: 'code',
@@ -167,11 +166,13 @@ const STEPS = [
 
 const TIER_ORDER = ['fast', 'code', 'full'];
 
-/** `scripts/legal-gate.mjs` uses this for "scan clean, values not supplied". */
-const LEGAL_PLACEHOLDERS_UNRESOLVED = 2;
-
 /** Exported shape for the CI-parity test — the plan, without running it. */
-export const PLAN = STEPS.map(({ tier, name, proves }) => ({ tier, name, proves }));
+export const PLAN = STEPS.map(({ tier, name, proves, releaseOnly = false }) => ({
+  tier,
+  name,
+  proves,
+  releaseOnly,
+}));
 
 /*
  * Importing this module for `PLAN` must not run anything.
@@ -188,7 +189,6 @@ function main() {
   const args = process.argv.slice(2);
   const tier = args.find((a) => a.startsWith('--tier='))?.slice('--tier='.length) ?? 'full';
   const only = args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
-  const allowLegalFailure = args.includes('--allow-legal-failure');
 
   if (!TIER_ORDER.includes(tier)) {
     console.error(`Unknown tier "${tier}". Use one of: ${TIER_ORDER.join(', ')}.`);
@@ -257,33 +257,16 @@ function main() {
 
     const ok = run.status === 0;
 
-    /*
-     * Suppression is narrow on purpose.
-     *
-     * `--allow-legal-failure` tolerates the ONE state the business owns:
-     * the legal scan ran cleanly and the values are not filled in yet, which
-     * the legal gate reports as exit 2. A crash (`status === null`, with
-     * `error` or `signal` set), a kill, a damaged document or a broken scan all
-     * exit 1 — and suppressing those would mean passing a build on a check that
-     * never ran, which is strictly worse than the state being tolerated.
-     */
-    const suppressed =
-      !ok &&
-      step.optional === 'legal' &&
-      allowLegalFailure &&
-      run.status === LEGAL_PLACEHOLDERS_UNRESOLVED;
-
     results.push({
       name: step.name,
       ok,
-      suppressed,
       seconds,
       status: run.status,
       signal: run.signal,
       error: run.error,
     });
 
-    if (!ok && !suppressed) {
+    if (!ok) {
       hardFailure = true;
       // Everything after the first hard failure is recorded as NOT RUN rather
       // than omitted. An absent row reads as "fine" in a release record.
@@ -302,9 +285,9 @@ function main() {
       console.log(`  NOT RUN     ${result.name.padEnd(28)} (an earlier step failed)`);
       continue;
     }
-    const mark = result.ok ? 'PASS' : result.suppressed ? 'SUPPRESSED' : 'FAIL';
+    const mark = result.ok ? 'PASS' : 'FAIL';
     console.log(`  ${mark.padEnd(11)} ${result.name.padEnd(28)} ${result.seconds.toFixed(1)}s`);
-    if (!result.ok && !result.suppressed) {
+    if (!result.ok) {
       // Why it failed, in the summary itself. `spawnSync` reports a command
       // that could not start as `status: null` with an `error`, and a killed
       // process as `status: null` with a `signal` — both of which used to show
@@ -315,23 +298,10 @@ function main() {
     }
   }
 
-  const suppressedSteps = results.filter((r) => r.suppressed);
-  if (suppressedSteps.length > 0) {
-    console.log(
-      `\n!! ${suppressedSteps.length} gate(s) suppressed by --allow-legal-failure.\n` +
-        `!! This build is NOT commercially releasable: the legal documents still\n` +
-        `!! contain unresolved @@LEGAL_*@@ production placeholders.`,
-    );
-  }
-
   if (hardFailure) {
     console.log('\nrelease:verify FAILED.');
     process.exit(1);
   }
 
-  console.log(
-    suppressedSteps.length > 0
-      ? '\nrelease:verify passed with suppressed gates — development build only.'
-      : '\nrelease:verify PASSED.',
-  );
+  console.log('\nrelease:verify PASSED.');
 }

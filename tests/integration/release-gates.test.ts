@@ -961,6 +961,168 @@ echo '{}'
   });
 });
 
+/* ------------------------------------------------ native licence review */
+
+const NATIVE_REVIEW = 'scripts/verify-native-review.mjs';
+const NATIVE_INVENTORY = 'sbom/native-components.json';
+
+/**
+ * The checker resolves the inventory from its own location, so it is copied
+ * into a scratch tree holding nothing else — which is also the proof that it
+ * needs no legal document, register or other input of the gate it replaced.
+ * `inventory` is written verbatim when it is a string, so a test can hand it
+ * something that is not JSON at all; `null` leaves the file out.
+ */
+function scratchNativeReview(inventory: unknown): { dir: string; script: string } {
+  const dir = scratchRepo([NATIVE_REVIEW]);
+  if (inventory !== null) {
+    mkdirSync(join(dir, 'sbom'), { recursive: true });
+    writeFileSync(
+      join(dir, NATIVE_INVENTORY),
+      typeof inventory === 'string' ? inventory : JSON.stringify(inventory, null, 2),
+    );
+  }
+  return { dir, script: join(dir, NATIVE_REVIEW) };
+}
+
+function component(name: string, reviewed: unknown) {
+  return { component: name, spdx: 'MIT', reviewed };
+}
+
+describe('the native licence review refuses what it exists to refuse', () => {
+  it('passes once every component is reviewed', () => {
+    const { dir, script } = scratchNativeReview({
+      components: [component('alpha', true), component('beta', true)],
+    });
+    const { status, output } = run(script, [], dir);
+    expect(status, output).toBe(0);
+    expect(output).toContain('2 of 2 statically linked native components reviewed');
+  });
+
+  it('reads the committed inventory once its components are reviewed', () => {
+    // The committed file, not a fixture: a shape the checker cannot read would
+    // otherwise be found only on a release tag.
+    const committed = JSON.parse(readFileSync(join(REPO_ROOT, NATIVE_INVENTORY), 'utf8'));
+    expect(committed.components.length).toBeGreaterThan(0);
+    for (const entry of committed.components) entry.reviewed = true;
+
+    const { dir, script } = scratchNativeReview(committed);
+    const { status, output } = run(script, [], dir);
+    expect(status, output).toBe(0);
+    expect(output).toContain(
+      `${committed.components.length} of ${committed.components.length} statically linked`,
+    );
+  });
+
+  it('names every component that is not exactly reviewed: true', () => {
+    const { dir, script } = scratchNativeReview({
+      components: [
+        component('confirmed', true),
+        component('unconfirmed', false),
+        { component: 'never-asked', spdx: 'BSD-3-Clause' },
+        component('truthy-string', 'true'),
+        component('nulled', null),
+      ],
+    });
+    const { status, output } = run(script, [], dir);
+    expect(status, output).toBe(1);
+    expect(output).toContain('4 problems');
+    for (const name of ['unconfirmed', 'never-asked', 'truthy-string', 'nulled']) {
+      expect(output).toContain(`${name} (`);
+    }
+    expect(output).not.toMatch(/: confirmed \(/);
+    expect(output).toContain('1 of 5 statically linked native components reviewed');
+  });
+
+  it.each([
+    ['is missing', null, 'could not be read'],
+    ['is not JSON', '{ "components": [', 'is not valid JSON'],
+    ['is JSON null', 'null', 'declares no components'],
+    ['has no components key', {}, 'declares no components'],
+    ['has components that are not a list', { components: {} }, 'declares no components'],
+    ['lists no components', { components: [] }, 'declares no components'],
+  ])('refuses to pass vacuously when the inventory %s', (_label, inventory, reason) => {
+    const { dir, script } = scratchNativeReview(inventory);
+    const { status, output } = run(script, [], dir);
+    expect(status, output).toBe(1);
+    expect(output).toContain(reason);
+  });
+
+  it('reports a malformed entry instead of dying on it', () => {
+    const { dir, script } = scratchNativeReview({ components: [null, 5, component('ok', true)] });
+    const { status, output } = run(script, [], dir);
+    expect(status, output).toBe(1);
+    expect(output).toContain('components[0] is not an object');
+    expect(output).toContain('components[1] is not an object');
+    expect(output).not.toContain('TypeError');
+  });
+});
+
+describe('only a full release run reaches the native licence review', () => {
+  const RELEASE_VERIFY = join(REPO_ROOT, 'scripts/release-verify.mjs');
+
+  function listed(args: string[]): string[] {
+    const { status, output } = run(RELEASE_VERIFY, [...args, '--list'], REPO_ROOT);
+    expect(status, output).toBe(0);
+    return output
+      .split('\n')
+      .filter((line) => line.startsWith('  '))
+      .map((line) => line.slice(2, 30).trim());
+  }
+
+  it('runs it straight after the fast gates on a full run', () => {
+    for (const args of [[], ['--tier=full']]) {
+      const steps = listed(args);
+      expect(steps.indexOf('native licence review'), `with ${args.join(' ') || 'no flags'}`).toBe(
+        steps.indexOf('version sync') + 1,
+      );
+    }
+  });
+
+  it('leaves it out of the fast and code tiers', () => {
+    for (const tier of ['fast', 'code']) {
+      const steps = listed([`--tier=${tier}`]);
+      expect(steps, tier).toContain('version sync');
+      expect(steps, tier).not.toContain('native licence review');
+    }
+  });
+
+  /**
+   * A copy of the runner whose two fast steps are stubs, so a full run gets
+   * as far as the real native review without a real checkout under it.
+   */
+  function scratchRunner(inventory: unknown): string {
+    const { dir } = scratchNativeReview(inventory);
+    cpSync(RELEASE_VERIFY, join(dir, 'scripts/release-verify.mjs'));
+    for (const stub of ['scripts/verify-repository.mjs', 'scripts/version.mjs']) {
+      writeFileSync(join(dir, stub), 'process.exit(0);\n');
+    }
+    return dir;
+  }
+
+  it('fails a full run on an unreviewed component, before anything expensive', () => {
+    const dir = scratchRunner({ components: [component('unconfirmed', false)] });
+    const { status, output } = run(join(dir, 'scripts/release-verify.mjs'), [], dir);
+    expect(status, output).toBe(1);
+    expect(output).toMatch(/FAIL\s+native licence review/);
+    expect(output).toMatch(/NOT RUN\s+typecheck/);
+    expect(output).toContain('release:verify FAILED.');
+    expect(output).not.toContain('SUPPRESSED');
+  });
+
+  it('passes the step once the inventory is reviewed', () => {
+    const dir = scratchRunner({ components: [component('confirmed', true)] });
+    const { status, output } = run(
+      join(dir, 'scripts/release-verify.mjs'),
+      ['--only=native licence review'],
+      dir,
+    );
+    expect(status, output).toBe(0);
+    expect(output).toMatch(/PASS\s+native licence review/);
+    expect(output).toContain('release:verify PASSED.');
+  });
+});
+
 /* ---------------------------------------------- CI runs the same definition */
 
 describe('CI is defined by the release plan, not a hand-copied subset', () => {
@@ -968,9 +1130,9 @@ describe('CI is defined by the release plan, not a hand-copied subset', () => {
 
   /**
    * Comments stripped, for the same reason every other scanner in this change
-   * set strips them: the workflow's header explains what
-   * `--allow-legal-failure` does, and counting occurrences in raw text made
-   * the prose count as a second use of the flag.
+   * set strips them: the workflow's header names the step CI deliberately
+   * leaves out, and a step name in prose would satisfy "some job names this"
+   * without any job running it.
    */
   const workflow = workflowSource
     .split('\n')
@@ -991,9 +1153,11 @@ describe('CI is defined by the release plan, not a hand-copied subset', () => {
     const { PLAN } = await import('../../scripts/release-verify.mjs');
     expect(PLAN.length, 'importing the plan must not yield an empty list').toBeGreaterThan(5);
 
-    const unclaimed = PLAN.filter((step: { name: string }) => !workflow.includes(step.name));
+    // A release-only step is the one deliberate exception, and the test below
+    // holds it to the opposite rule.
+    const unclaimed = PLAN.filter((step) => !step.releaseOnly && !workflow.includes(step.name));
     expect(
-      unclaimed.map((step: { name: string }) => step.name),
+      unclaimed.map((step) => step.name),
       'these release-plan steps are not named by any CI job',
     ).toEqual([]);
   });
@@ -1018,19 +1182,35 @@ describe('CI is defined by the release plan, not a hand-copied subset', () => {
     expect(named.filter((name) => !known.has(name))).toEqual([]);
   });
 
-  it('suppresses the legal gate only where that is intended', () => {
+  it('never runs a release-only step', async () => {
     /*
-     * `--allow-legal-failure` is how CI tolerates unresolved `@@LEGAL_*@@`
-     * placeholders without training people to ignore a red build. It must not
-     * spread: a job that passed it around the test or build steps would be
-     * suppressing nothing useful and hiding the flag's meaning.
+     * The native licence review refuses while any statically linked native
+     * component is unreviewed, which only a person can settle. Blocking every
+     * push on it would train people to ignore a red CI, so it is a release
+     * step and CI must keep leaving it out — by name, by script, and by never
+     * running the plan bare, which would reach it through the full tier.
      */
-    const occurrences = workflow.match(/--allow-legal-failure/g) ?? [];
-    expect(occurrences.length, 'exactly one job may tolerate the legal gate').toBe(1);
-    // And it must be the job that actually runs the legal gate.
-    const gatesJob = workflow.slice(workflow.indexOf('gates:'), workflow.indexOf('frontend:'));
-    expect(gatesJob).toContain('--allow-legal-failure');
-    expect(gatesJob).toContain('legal gate');
+    const { PLAN } = await import('../../scripts/release-verify.mjs');
+    const releaseOnly = PLAN.filter((step) => step.releaseOnly);
+    expect(
+      releaseOnly.map((step) => step.name),
+      'the native licence review must stay a release-only step',
+    ).toContain('native licence review');
+
+    for (const step of releaseOnly) {
+      expect(workflow, `CI names the release-only step "${step.name}"`).not.toContain(step.name);
+    }
+    expect(workflow, 'CI runs the native licence review directly').not.toContain(
+      'verify-native-review.mjs',
+    );
+
+    const invocations = workflow.match(/release-verify\.mjs/g) ?? [];
+    const selected = workflow.match(/release-verify\.mjs\s+--only=/g) ?? [];
+    expect(invocations.length, 'no release-verify invocations found — this would pass vacuously').toBeGreaterThan(3);
+    expect(
+      selected.length,
+      'every CI invocation of release-verify must select steps with --only=; a bare one runs the full plan',
+    ).toBe(invocations.length);
   });
 });
 
@@ -1043,17 +1223,21 @@ describe('the release workflow cannot publish an unverified build', () => {
     .filter((line) => !line.trimStart().startsWith('#'))
     .join('\n');
 
-  it('does not suppress the legal gate', () => {
+  it('runs the whole release plan before it builds anything', () => {
     /*
-     * `ci.yml` passes `--allow-legal-failure` so day-to-day pushes are not
-     * blocked by placeholders only the business can fill in. A RELEASE must
-     * not: a build shipping an `@@LEGAL_*@@` in its licence agreement is the
-     * one outcome nobody can undo after the fact.
+     * `ci.yml` never names the native licence review. That is only safe
+     * because a release runs the plan bare — no `--only`, no `--tier` — so the
+     * full tier reaches it. Finding `release-verify.mjs` somewhere in the file
+     * is not enough: a narrowed invocation would skip the one step that exists
+     * for releases.
      */
-    expect(uncommented, 'a release may not tolerate unresolved placeholders').not.toContain(
-      '--allow-legal-failure',
-    );
-    expect(uncommented, 'and it must run the gate at all').toContain('release-verify.mjs');
+    const bare = /^\s*run: node scripts\/release-verify\.mjs\s*$/m.exec(uncommented);
+    expect(bare, 'the release must run release-verify.mjs with no arguments').not.toBeNull();
+    expect(
+      uncommented.match(/release-verify\.mjs/g)?.length,
+      'and must not also run a narrowed copy of it',
+    ).toBe(1);
+    expect(bare!.index, 'and before the build').toBeLessThan(uncommented.indexOf('pnpm tauri build'));
   });
 
   it('inspects the artifact rather than trusting the build', () => {

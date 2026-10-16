@@ -168,7 +168,7 @@ if (toolchainToml !== null) {
 /**
  * Every path-shaped token in a package script.
  *
- * A script that runs `node scripts/legal-gate.mjs` is a promise that the file
+ * A script that runs `node scripts/release-verify.mjs` is a promise that the file
  * exists; the review found exactly this class of break. Bare binaries
  * (`vite`, `tsc`) are resolved by the package manager and are not our problem.
  *
