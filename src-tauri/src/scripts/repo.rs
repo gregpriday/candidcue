@@ -9,7 +9,7 @@ use crate::errors::{AppError, ErrorCategory, RecoveryAction};
 use crate::util::{atomic_write, file_fingerprint, now_iso, new_uuid, sha256_hex};
 
 use super::words::{
-    estimated_duration_seconds, preview_text, spoken_plain_text, word_count, SpokenTextOptions,
+    estimated_duration_seconds, preview_text, spoken_text, SpokenTextOptions, SPOKEN_STATS_VERSION,
 };
 use super::{
     CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
@@ -117,17 +117,23 @@ async fn fetch_preview(pool: &SqlitePool, script_id: &ScriptId) -> Result<String
     Ok(preview.unwrap_or_default())
 }
 
+/// The Library's derived fields for a script: its spoken text (preview and
+/// search), spoken word count and estimated duration (§21.8). Every write of
+/// those fields comes through here and stamps `last_compile_version` with
+/// `SPOKEN_STATS_VERSION`, which is how reconciliation finds rows derived by an
+/// older extraction.
 fn stats_for(source: &str, settings: &ScriptSettings) -> (String, u32, u32) {
-    let plain = spoken_plain_text(
+    let spoken = spoken_text(
         source,
         SpokenTextOptions {
             read_headings: settings.read_headings,
             read_image_alt_text: settings.read_image_alt_text,
+            read_inline_code: settings.read_inline_code,
         },
     );
-    let words = word_count(&plain);
-    let duration = estimated_duration_seconds(words, settings.words_per_minute_estimate.max(1));
-    (plain, words, duration)
+    let words = spoken.word_count();
+    let duration = estimated_duration_seconds(words, settings.words_per_minute_estimate);
+    (spoken.plain, words, duration)
 }
 
 /// Search-index maintenance. Takes a connection rather than the pool so it
@@ -211,8 +217,8 @@ pub async fn create_script(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
-             script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?)",
+             last_compile_version, script_settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id.as_str())
     .bind(title)
@@ -222,6 +228,7 @@ pub async fn create_script(
     .bind(input.language.as_deref().unwrap_or("en"))
     .bind(words as i64)
     .bind(duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
     .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
     .bind(&now)
     .bind(&now)
@@ -380,7 +387,8 @@ pub async fn get_script(
         let mut tx = pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, revision = ?,
-             spoken_word_count = ?, estimated_duration_seconds = ?, updated_at = ?
+             spoken_word_count = ?, estimated_duration_seconds = ?,
+             last_compile_version = ?, updated_at = ?
              WHERE id = ? AND revision = ?",
         )
         .bind(&disk_hash)
@@ -388,6 +396,7 @@ pub async fn get_script(
         .bind(revision)
         .bind(words as i64)
         .bind(duration as i64)
+        .bind(SPOKEN_STATS_VERSION)
         .bind(now_iso())
         .bind(script_id.as_str())
         .bind(row.revision)
@@ -630,7 +639,7 @@ async fn commit_save(
         "UPDATE scripts SET
             title = ?, source_hash = ?, file_fingerprint = ?, revision = ?,
             status = ?, spoken_word_count = ?, estimated_duration_seconds = ?,
-            script_settings_json = ?, updated_at = ?,
+            last_compile_version = ?, script_settings_json = ?, updated_at = ?,
             selected_display_profile_id = CASE WHEN ? THEN ? ELSE selected_display_profile_id END,
             last_opened_at = CASE WHEN ? THEN ? ELSE last_opened_at END
          WHERE id = ? AND revision = ?",
@@ -642,6 +651,7 @@ async fn commit_save(
     .bind(c.status.as_str())
     .bind(c.words as i64)
     .bind(c.duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
     .bind(serde_json::to_string(c.settings).unwrap_or_else(|_| "{}".into()))
     .bind(c.now)
     .bind(patch.selected_display_profile_id.is_some())
@@ -768,9 +778,9 @@ pub async fn duplicate_script(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
-             selected_display_profile_id,
+             last_compile_version, selected_display_profile_id,
              script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(new_id.as_str())
     .bind(&title)
@@ -780,6 +790,7 @@ pub async fn duplicate_script(
     .bind(&row.language)
     .bind(words as i64)
     .bind(duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
     .bind(&row.selected_display_profile_id)
     .bind(&row.script_settings_json)
     .bind(&now)
@@ -1426,8 +1437,8 @@ pub(crate) async fn insert_script_row(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
-             script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?)",
+             last_compile_version, script_settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id.as_str())
     .bind(title)
@@ -1437,6 +1448,7 @@ pub(crate) async fn insert_script_row(
     .bind(language)
     .bind(words as i64)
     .bind(duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
     .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
     .bind(&now)
     .bind(&now)
@@ -1478,7 +1490,11 @@ pub async fn restore_canonical_from_latest_revision(
     let canonical = paths.canonical_file(script_id);
     atomic_write(&canonical, source.as_bytes())?;
     sqlx::query(
-        "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
+        // The restored bytes are not the ones the row's word count describes;
+        // clearing the stamp hands the row to `refresh_stale_spoken_stats`.
+        "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, updated_at = ?, revision = revision + 1,
+             last_compile_version = NULL
+         WHERE id = ?",
     )
     .bind(sha256_hex(source.as_bytes()))
     .bind(file_fingerprint(&canonical)?)
@@ -1523,7 +1539,8 @@ pub async fn repair_row_from_canonical_file(
     let mut tx = pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, revision = ?,
-             spoken_word_count = ?, estimated_duration_seconds = ?, updated_at = ?
+             spoken_word_count = ?, estimated_duration_seconds = ?,
+             last_compile_version = ?, updated_at = ?
          WHERE id = ? AND revision = ?",
     )
     .bind(&disk_hash)
@@ -1531,6 +1548,7 @@ pub async fn repair_row_from_canonical_file(
     .bind(row.revision + 1)
     .bind(words as i64)
     .bind(duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
     .bind(now_iso())
     .bind(script_id.as_str())
     .bind(row.revision)
@@ -1544,6 +1562,66 @@ pub async fn repair_row_from_canonical_file(
         script_id = script_id.as_str(),
         "repaired script row whose recorded hash disagreed with the canonical file"
     );
+    Ok(true)
+}
+
+/// Re-derive a row's Library fields — word count, duration, and the spoken
+/// text behind its preview and search entry — when they were produced by an
+/// older extraction than `SPOKEN_STATS_VERSION`. Returns true when it did.
+///
+/// Rows are otherwise only re-derived when their source changes, so without
+/// this a library indexed before a change to what counts as speech would keep
+/// the old numbers until each script happened to be saved again (#249). It is
+/// a derived-data refresh, not an edit: revision, timestamps, source and
+/// history are untouched, so the library's order and every compare-and-swap
+/// against the row are unaffected. A row whose file disagrees with its hash is
+/// left to `repair_row_from_canonical_file`, which re-derives as it repairs.
+pub async fn refresh_stale_spoken_stats(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+    locks: &ScriptLocks,
+) -> Result<bool, AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let version: Option<String> =
+        sqlx::query_scalar("SELECT last_compile_version FROM scripts WHERE id = ?")
+            .bind(script_id.as_str())
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    if version.as_deref() == Some(SPOKEN_STATS_VERSION) {
+        return Ok(false);
+    }
+    let row = fetch_row(pool, script_id).await?;
+    let canonical = paths.canonical_file(script_id);
+    if !canonical.exists() {
+        return Ok(false);
+    }
+    let source = fs::read_to_string(&canonical)?;
+    if sha256_hex(source.as_bytes()) != row.source_hash {
+        return Ok(false);
+    }
+
+    let settings = parse_settings(&row.script_settings_json);
+    let (plain, words, duration) = stats_for(&source, &settings);
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE scripts SET spoken_word_count = ?, estimated_duration_seconds = ?,
+             last_compile_version = ?
+         WHERE id = ? AND revision = ?",
+    )
+    .bind(words as i64)
+    .bind(duration as i64)
+    .bind(SPOKEN_STATS_VERSION)
+    .bind(script_id.as_str())
+    .bind(row.revision)
+    .execute(&mut *tx)
+    .await?;
+    expect_single_row(updated.rows_affected(), row.revision)?;
+    update_fts(&mut tx, script_id, &row.title, &plain).await?;
+    tx.commit().await?;
     Ok(true)
 }
 

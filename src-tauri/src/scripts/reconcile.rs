@@ -135,6 +135,11 @@ pub async fn run_startup_reconciliation(
     // must be detected by content, not by mere existence (H3). The file is
     // the authority for source content (spec §48.1), so the database is
     // brought up to the file; disk content is never replaced here.
+    //
+    // A row that survives that is then brought up to the current spoken-word
+    // extraction, so a library indexed by an older one shows today's previews,
+    // counts and durations without every script being re-saved (#249).
+    let mut stats_refreshed = 0u32;
     for (id, _) in repo::all_script_ids_and_paths(pool).await? {
         let Ok(script_id) = ScriptId::parse(&id) else {
             report
@@ -145,17 +150,37 @@ pub async fn run_startup_reconciliation(
         let canonical = paths.canonical_file(&script_id);
         if !canonical.exists() {
             match repo::restore_canonical_from_latest_revision(pool, paths, &script_id).await {
-                Ok(true) => report.missing_files_restored.push(id),
-                Ok(false) => report.missing_files_unrecoverable.push(id),
-                Err(err) => report.notes.push(format!("restore {id}: {err}")),
+                Ok(true) => report.missing_files_restored.push(id.clone()),
+                Ok(false) => {
+                    report.missing_files_unrecoverable.push(id);
+                    continue;
+                }
+                Err(err) => {
+                    report.notes.push(format!("restore {id}: {err}"));
+                    continue;
+                }
             }
-            continue;
+        } else {
+            match repo::repair_row_from_canonical_file(pool, paths, &script_id, locks).await {
+                Ok(true) => {
+                    report.hash_mismatches_repaired.push(id);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    report.notes.push(format!("repair {id}: {err}"));
+                    continue;
+                }
+            }
         }
-        match repo::repair_row_from_canonical_file(pool, paths, &script_id, locks).await {
-            Ok(true) => report.hash_mismatches_repaired.push(id),
+        match repo::refresh_stale_spoken_stats(pool, paths, &script_id, locks).await {
+            Ok(true) => stats_refreshed += 1,
             Ok(false) => {}
-            Err(err) => report.notes.push(format!("repair {id}: {err}")),
+            Err(err) => report.notes.push(format!("refresh library stats {id}: {err}")),
         }
+    }
+    if stats_refreshed > 0 {
+        tracing::info!(stats_refreshed, "re-derived library word counts and previews");
     }
 
     // 5. Clear expired compiled caches (best effort).

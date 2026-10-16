@@ -16,7 +16,7 @@ use crate::errors::AppError;
 use crate::util::{atomic_write, is_safe_relative_path, new_uuid, now_iso, sha256_hex};
 
 use super::repo::{self, MAX_SOURCE_BYTES};
-use super::words::{spoken_plain_text, SpokenTextOptions};
+use super::words::{spoken_plain_text, spoken_text, SpokenTextOptions};
 use super::{DataPaths, ScriptId, ScriptLocks, ScriptSummary};
 
 /// Spec Appendix A.10 limits.
@@ -322,8 +322,7 @@ pub async fn import_script(
             .await?;
             // Spec §21.4: revision on first save after import.
             let new_id = ScriptId::parse(&summary.id)?;
-            let (plain, _, _) = (spoken_plain_text(&source, SpokenTextOptions::default()), 0, 0);
-            let words = super::words::word_count(&plain);
+            let words = spoken_text(&source, SpokenTextOptions::default()).word_count();
             repo::create_revision_snapshot(pool, paths, &new_id, &source, "import", words)
                 .await?;
             let _ = locks; // imports of flat files need no per-script lock: the id is fresh
@@ -572,8 +571,7 @@ async fn install_bundle_assets(
     tx.commit().await?;
 
     // Spec §21.4: revision on first save after import.
-    let plain = spoken_plain_text(source, SpokenTextOptions::default());
-    let words = super::words::word_count(&plain);
+    let words = spoken_text(source, SpokenTextOptions::default()).word_count();
     repo::create_revision_snapshot(pool, paths, new_id, source, "import", words).await?;
     Ok(())
 }
