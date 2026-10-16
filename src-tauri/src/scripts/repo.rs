@@ -754,7 +754,9 @@ pub async fn duplicate_script(
     atomic_write(&new_canonical, source.as_bytes())?;
     crate::util::create_dir_all_durable(&paths.revisions_dir(&new_id))?;
 
-    // Copy assets directory.
+    // Copy the images the text uses, and only those (#253): the folder still
+    // holds every image whose line was deleted, and a copy starts with no
+    // history that could bring one back.
     let src_assets = paths.assets_dir(script_id);
     let dst_assets = paths.assets_dir(&new_id);
     crate::util::create_dir_all_durable(&dst_assets)?;
@@ -762,7 +764,9 @@ pub async fn duplicate_script(
         let mut copied_any = false;
         for entry in fs::read_dir(&src_assets)? {
             let entry = entry?;
-            if entry.file_type()?.is_file() {
+            if entry.file_type()?.is_file()
+                && crate::assets::text_uses_asset(&source, &entry.file_name().to_string_lossy())
+            {
                 let target = dst_assets.join(entry.file_name());
                 fs::copy(entry.path(), &target)?;
                 // The copy, not just the intention to have made it: the row
@@ -811,7 +815,8 @@ pub async fn duplicate_script(
     .execute(&mut *tx)
     .await?;
 
-    // Duplicate asset rows + references pointing at the copied files.
+    // Duplicate asset rows + references pointing at the copied files — and
+    // only those, so the copy never indexes an image it does not have.
     let asset_rows = sqlx::query(
         "SELECT a.id, a.sha256, a.mime_type, a.extension, a.size_bytes, a.width, a.height,
                 a.rel_path, a.original_name, a.original_url,
@@ -825,6 +830,9 @@ pub async fn duplicate_script(
     for asset in &asset_rows {
         let old_rel: String = asset.try_get("rel_path")?;
         let file_name = old_rel.rsplit('/').next().unwrap_or_default().to_string();
+        if !dst_assets.join(&file_name).is_file() {
+            continue;
+        }
         let new_rel = format!("scripts/{new_id}/assets/{file_name}");
         let new_asset_id = new_uuid();
         sqlx::query(

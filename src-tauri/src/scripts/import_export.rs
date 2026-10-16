@@ -606,11 +606,17 @@ pub async fn export_script(
         .to_path_buf();
 
     let mut warnings = Vec::new();
+    // Only the images the exported text uses (#253). The folder also holds
+    // every image the script ever had: deleting an image's line leaves its
+    // file behind, so revision restore and undo can still show it, and the
+    // screenshot somebody removed for showing the wrong thing is exactly the
+    // one that must not travel with the export.
     let assets_dir = paths.assets_dir(script_id);
     let asset_files: Vec<PathBuf> = if assets_dir.exists() {
         fs::read_dir(&assets_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .filter(|e| crate::assets::text_uses_asset(&source, &e.file_name().to_string_lossy()))
             .map(|e| e.path())
             .collect()
     } else {

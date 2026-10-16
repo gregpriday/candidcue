@@ -1144,3 +1144,481 @@ async fn a_bundle_asset_must_be_a_decodable_image() {
         assert_eq!(err.code(), "IMPORT_INVALID_FORMAT", "{label}: {err:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// #253: images whose lines were deleted
+// ---------------------------------------------------------------------------
+
+/// A real PNG of one colour, so two calls with different colours are two
+/// different images with two different names.
+fn solid_png(rgb: [u8; 3]) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(2, 2, image::Rgb(rgb))
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("encode png");
+    out.into_inner()
+}
+
+fn asset_name(asset: &candidcue_lib::assets::ImportedAsset) -> String {
+    asset.markdown_path.trim_start_matches("assets/").to_string()
+}
+
+fn file_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("list")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+fn with_both(kept: &str, removed: &str) -> String {
+    format!("# Shots\n\n![Kept]({kept})\n\n![Private]({removed})\n")
+}
+
+fn with_kept(kept: &str) -> String {
+    format!("# Shots\n\n![Kept]({kept})\n")
+}
+
+/// The issue's scenario: two screenshots imported and shown, then the line
+/// showing the second one deleted. With `snapshot`, that last save is one that
+/// takes a revision, so a saved version still shows the deleted image.
+async fn script_that_dropped_an_image(
+    h: &Harness,
+    snapshot: bool,
+) -> (
+    ScriptId,
+    candidcue_lib::assets::ImportedAsset,
+    candidcue_lib::assets::ImportedAsset,
+) {
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Shots", "Draft."))
+        .await
+        .expect("create");
+    let id = sid(&created.id);
+    let picked = tempfile::tempdir().expect("picker dir");
+    let mut imported = Vec::new();
+    for (file, rgb) in [("kept.png", [10, 120, 200]), ("private-screenshot.png", [200, 30, 30])] {
+        let path = picked.path().join(file);
+        fs::write(&path, solid_png(rgb)).unwrap();
+        imported.push(
+            candidcue_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
+                .await
+                .expect("import"),
+        );
+    }
+    let removed = imported.pop().unwrap();
+    let kept = imported.pop().unwrap();
+    assert_ne!(kept.sha256, removed.sha256);
+
+    let saved = repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        created.script_revision,
+        with_both(&kept.markdown_path, &removed.markdown_path),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save both");
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        saved.script_revision,
+        with_kept(&kept.markdown_path),
+        ScriptMetadataPatch {
+            revision_reason: snapshot.then(|| "manual".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("save kept");
+    (id, kept, removed)
+}
+
+async fn resolves(h: &Harness, id: &ScriptId, href: &str) -> bool {
+    let request = [candidcue_lib::assets::AssetRequest {
+        id: "img-x".into(),
+        href: href.to_string(),
+    }];
+    candidcue_lib::assets::resolve_asset_urls(&h.pool, &h.paths, id, &request)
+        .await
+        .expect("resolve")
+        .contains_key("img-x")
+}
+
+/// The next launch: a fresh pool, as a relaunched process opens one, and the
+/// reconciliation it runs before anything else. Reusing one pool across
+/// "launches" is not what the app does, and it is not harmless here: with
+/// several connections having written the search index, `quick_check` on one
+/// of them reported that index malformed while another found it fine.
+async fn relaunch(h: &mut Harness) -> reconcile::RecoveryReport {
+    h.pool.close().await;
+    h.pool = candidcue_lib::database::init(h._dir.path())
+        .await
+        .expect("relaunch");
+    reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation")
+}
+
+async fn indexed_assets(h: &Harness, id: &ScriptId) -> Vec<String> {
+    let prefix = format!("scripts/{}/assets/", id.as_str());
+    let mut rows: Vec<String> =
+        sqlx::query_scalar("SELECT rel_path FROM assets WHERE substr(rel_path, 1, ?) = ?")
+            .bind(prefix.len() as i64)
+            .bind(&prefix)
+            .fetch_all(&h.pool)
+            .await
+            .unwrap();
+    rows.sort();
+    rows.into_iter()
+        .map(|rel| rel.trim_start_matches(&prefix).to_string())
+        .collect()
+}
+
+/// The issue's evidence, against the real functions: an exported folder held
+/// the screenshot whose line had been deleted, because export listed the asset
+/// folder rather than reading the text it was exporting.
+#[tokio::test]
+async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
+    let h = harness().await;
+    let (id, kept, removed) = script_that_dropped_an_image(&h, false).await;
+    assert_eq!(
+        file_names(&h.paths.assets_dir(&id)),
+        {
+            let mut both = vec![asset_name(&kept), asset_name(&removed)];
+            both.sort();
+            both
+        },
+        "the script's own folder still holds both, for undo and restore"
+    );
+
+    // Markdown, with its images.
+    let out = tempfile::tempdir().unwrap();
+    let md = out.path().join("talk.md");
+    let result = candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        ExportOptions {
+            include_assets: true,
+            ..export_options(&md, "markdown")
+        },
+    )
+    .await
+    .expect("markdown export");
+    assert_eq!(file_names(&out.path().join("assets")), vec![asset_name(&kept)]);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+
+    // Without them, the warning counts the images the text uses.
+    let bare = tempfile::tempdir().unwrap();
+    let result = candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        export_options(&bare.path().join("talk.md"), "markdown"),
+    )
+    .await
+    .expect("markdown export without assets");
+    assert_eq!(
+        result.warnings,
+        vec!["1 local image(s) were not exported; enable includeAssets to copy them.".to_string()]
+    );
+    assert!(!bare.path().join("assets").exists());
+
+    // A bundle: the manifest and the archive agree, on the kept image alone.
+    let bundle = out.path().join("talk.candidcue");
+    candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        export_options(&bundle, "bundle"),
+    )
+    .await
+    .expect("bundle export");
+    let mut archive = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).expect("zip");
+    let mut entries: Vec<String> = archive.file_names().map(str::to_string).collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec![
+            format!("assets/{}", asset_name(&kept)),
+            "manifest.json".to_string(),
+            "script.md".to_string(),
+        ]
+    );
+    let manifest: serde_json::Value = {
+        use std::io::Read;
+        let mut text = String::new();
+        archive
+            .by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        serde_json::from_str(&text).unwrap()
+    };
+    assert_eq!(manifest["assets"], serde_json::json!([asset_name(&kept)]));
+
+    // And it imports, with the image it shows.
+    let reimported = candidcue_lib::scripts::import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        candidcue_lib::scripts::import_export::ImportOptions {
+            path: bundle.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+    .expect("bundle import");
+    let reimported_id = sid(&reimported.script.id);
+    assert_eq!(file_names(&h.paths.assets_dir(&reimported_id)), vec![asset_name(&kept)]);
+    assert!(resolves(&h, &reimported_id, &kept.markdown_path).await);
+}
+
+/// Duplicate copied the whole folder too, and indexed every image in it.
+#[tokio::test]
+async fn issue_253_a_duplicate_copies_only_the_images_its_text_uses() {
+    let h = harness().await;
+    let (id, kept, removed) = script_that_dropped_an_image(&h, false).await;
+
+    let copy = repo::duplicate_script(&h.pool, &h.paths, &h.locks, &id)
+        .await
+        .expect("duplicate");
+    let copy_id = sid(&copy.id);
+    assert_eq!(file_names(&h.paths.assets_dir(&copy_id)), vec![asset_name(&kept)]);
+    assert_eq!(indexed_assets(&h, &copy_id).await, vec![asset_name(&kept)]);
+    assert!(resolves(&h, &copy_id, &kept.markdown_path).await);
+    assert!(!resolves(&h, &copy_id, &removed.markdown_path).await);
+
+    let copy_references: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM script_asset_references WHERE script_id = ?")
+            .bind(copy_id.as_str())
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    let original_references: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM script_asset_references r JOIN assets a ON a.id = r.asset_id
+         WHERE r.script_id = ? AND a.sha256 = ?",
+    )
+    .bind(id.as_str())
+    .bind(&kept.sha256)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(copy_references, original_references, "the kept image's references, and no others");
+
+    // The original is untouched: both images, both still resolvable.
+    assert!(resolves(&h, &id, &removed.markdown_path).await);
+}
+
+/// Saving never removes an image: an undo can put its line back, and the text
+/// it replays was never in any revision (the 5-minute cadence took none).
+#[tokio::test]
+async fn issue_253_saving_without_an_image_keeps_it_for_undo() {
+    let h = harness().await;
+    let (id, kept, removed) = script_that_dropped_an_image(&h, false).await;
+    let revisions = repo::list_revisions(&h.pool, &id).await.unwrap();
+    for revision in &revisions {
+        let doc = repo::get_revision(&h.pool, &h.paths, &id, &revision.id).await.unwrap();
+        assert!(!doc.source.contains(&removed.sha256), "no revision shows the deleted image");
+    }
+
+    // The undo, autosaved.
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        db_revision(&h, &id).await,
+        with_both(&kept.markdown_path, &removed.markdown_path),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save the undo");
+    assert!(resolves(&h, &id, &removed.markdown_path).await, "the image is still there to show");
+}
+
+/// Startup removes an image only once nothing can bring it back: kept while a
+/// revision shows it, still there after a restore, and gone once retention has
+/// thinned away every version that showed it — with the live image, and every
+/// file nobody indexed, untouched throughout.
+#[tokio::test]
+async fn issue_253_startup_collects_an_image_once_no_revision_can_bring_it_back() {
+    let mut h = harness().await;
+    let (id, kept, removed) = script_that_dropped_an_image(&h, true).await;
+    // Hash-named, never indexed: not this sweep's to judge.
+    let stray = format!("{}.png", "ab".repeat(32));
+    fs::write(h.paths.assets_dir(&id).join(&stray), b"never indexed").unwrap();
+
+    let report = relaunch(&mut h).await;
+    assert!(!report.has_findings(), "{report:?}");
+    assert_eq!(report.unused_assets_removed, 0, "a revision still shows it");
+    assert!(h.paths.assets_dir(&id).join(asset_name(&removed)).exists());
+
+    // Restoring that revision brings the image back with it.
+    let revision = repo::list_revisions(&h.pool, &id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.reason == "manual")
+        .expect("the snapshot of both");
+    repo::restore_revision(&h.pool, &h.paths, &h.locks, &id, &revision.id, db_revision(&h, &id).await)
+        .await
+        .expect("restore");
+    assert!(resolves(&h, &id, &removed.markdown_path).await);
+
+    // Deleted again, and every version that showed it thinned away.
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        db_revision(&h, &id).await,
+        with_kept(&kept.markdown_path),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save kept");
+    let snapshots: Vec<String> =
+        sqlx::query_scalar("SELECT rel_path FROM script_revisions WHERE script_id = ?")
+            .bind(id.as_str())
+            .fetch_all(&h.pool)
+            .await
+            .unwrap();
+    for rel_path in snapshots {
+        fs::remove_file(h.paths.root().join(rel_path)).unwrap();
+    }
+    sqlx::query("DELETE FROM script_revisions WHERE script_id = ?")
+        .bind(id.as_str())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.unused_assets_removed, 1, "{report:?}");
+    assert!(!h.paths.assets_dir(&id).join(asset_name(&removed)).exists());
+    assert_eq!(indexed_assets(&h, &id).await, vec![asset_name(&kept)]);
+    let dangling: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM script_asset_references r
+         LEFT JOIN assets a ON a.id = r.asset_id WHERE a.id IS NULL",
+    )
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(dangling, 0);
+    assert!(resolves(&h, &id, &kept.markdown_path).await);
+    assert!(h.paths.assets_dir(&id).join(&stray).exists(), "an unindexed file is left alone");
+
+    // Nothing left to do on the launch after.
+    let again = relaunch(&mut h).await;
+    assert_eq!(again.unused_assets_removed, 0);
+}
+
+/// Every other text that can come back keeps the image too: parked unsaved
+/// text, a snapshot file without its row, and a listed revision that cannot be
+/// read. A launch that repaired something removes nothing; the next one does.
+#[tokio::test]
+async fn issue_253_startup_keeps_an_image_any_recoverable_text_may_still_use() {
+    let mut h = harness().await;
+    let (id, kept, removed) = script_that_dropped_an_image(&h, false).await;
+    let removed_file = h.paths.assets_dir(&id).join(asset_name(&removed));
+    let both = with_both(&kept.markdown_path, &removed.markdown_path);
+
+    // Text the app could not save when it closed, parked for the user.
+    let unsaved = h.paths.quarantine_dir().join("unsaved");
+    fs::create_dir_all(&unsaved).unwrap();
+    let parked = unsaved.join(format!("{}-20261017T090000Z.md", id.as_str()));
+    fs::write(&parked, &both).unwrap();
+    assert_eq!(relaunch(&mut h).await.unused_assets_removed, 0);
+    assert!(removed_file.exists(), "parked unsaved text still shows it");
+    fs::remove_file(&parked).unwrap();
+
+    // A snapshot whose row was never written.
+    let unlisted = h.paths.revisions_dir(&id).join("20261017T090000000Z-0123456789ab.md");
+    fs::write(&unlisted, &both).unwrap();
+    assert_eq!(relaunch(&mut h).await.unused_assets_removed, 0);
+    assert!(removed_file.exists(), "an unlisted snapshot still shows it");
+    fs::remove_file(&unlisted).unwrap();
+
+    // A listed revision whose file cannot be read: no evidence, no removal.
+    let lost = repo::create_revision_snapshot(&h.pool, &h.paths, &id, "Lost.", "manual", 1)
+        .await
+        .unwrap();
+    let lost_path: String = sqlx::query_scalar("SELECT rel_path FROM script_revisions WHERE id = ?")
+        .bind(&lost)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    fs::remove_file(h.paths.root().join(&lost_path)).unwrap();
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.unused_assets_removed, 0);
+    assert!(removed_file.exists(), "an unreadable revision is not proof of anything");
+    assert!(
+        report.notes.iter().any(|note| note.contains("collect unused images")),
+        "{:?}",
+        report.notes
+    );
+    sqlx::query("DELETE FROM script_revisions WHERE id = ?")
+        .bind(&lost)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    // A launch that repaired the library leaves collection to the next one.
+    fs::write(
+        h.paths.canonical_file(&id),
+        format!("{}\nEdited outside CandidCue.\n", with_kept(&kept.markdown_path)),
+    )
+    .unwrap();
+    let report = relaunch(&mut h).await;
+    assert!(!report.hash_mismatches_repaired.is_empty());
+    assert_eq!(report.unused_assets_removed, 0);
+    assert!(removed_file.exists());
+
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.unused_assets_removed, 1, "{report:?}");
+    assert!(!removed_file.exists());
+    assert!(resolves(&h, &id, &kept.markdown_path).await);
+}
+
+/// An image in the Trash's scripts is judged like any other — and one whose
+/// script cannot be read is not judged at all.
+#[tokio::test]
+async fn issue_253_startup_treats_trashed_scripts_alike_and_skips_unreadable_ones() {
+    let mut h = harness().await;
+    let (trashed, _, trashed_removed) = script_that_dropped_an_image(&h, false).await;
+    repo::trash_script(&h.pool, &h.locks, &trashed, db_revision(&h, &trashed).await)
+        .await
+        .expect("trash");
+    let (missing, _, missing_removed) = script_that_dropped_an_image(&h, false).await;
+
+    // With no text and no revision to restore it from, the script cannot be
+    // judged. That stays true launch after launch, and must not hold every
+    // other script's collection back with it.
+    fs::remove_file(h.paths.canonical_file(&missing)).unwrap();
+    for entry in fs::read_dir(h.paths.revisions_dir(&missing)).unwrap() {
+        fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    sqlx::query("DELETE FROM script_revisions WHERE script_id = ?")
+        .bind(missing.as_str())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.missing_files_unrecoverable, vec![missing.as_str().to_string()]);
+    assert_eq!(report.unused_assets_removed, 1, "{report:?}");
+    assert!(!h.paths.assets_dir(&trashed).join(asset_name(&trashed_removed)).exists());
+    assert!(h.paths.assets_dir(&missing).join(asset_name(&missing_removed)).exists());
+    assert!(
+        report.notes.iter().any(|note| note.contains(missing.as_str())),
+        "{:?}",
+        report.notes
+    );
+}

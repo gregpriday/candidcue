@@ -438,6 +438,218 @@ fn asset_file_name(href: &str) -> Option<&str> {
     }
 }
 
+/// Whether a script's text uses the asset file `file_name` (#253).
+///
+/// The reference rows cannot answer this: they record that a script OWNS a
+/// file, from the moment it was imported, and nothing removes one when the
+/// image's line is deleted. So the text is asked directly, and it is asked for
+/// the file's name anywhere in it rather than parsed for image syntax. That is
+/// deliberately generous — an inline image, a reference definition, an `<img>`
+/// tag and a mention in a code block all count — because the two ways of being
+/// wrong are not alike: a stray name carries one extra file along, while a
+/// missed one drops an image the text shows. Every import names a file after
+/// the SHA-256 of its bytes, so a name the text did not mean is not a name it
+/// will contain by accident.
+///
+/// A file named by its hash is used wherever its hash appears, with or without
+/// the extension after it: the compiler decodes `\.` and `&#46;` before it
+/// resolves a path, so `assets/<hash>&#46;png` shows the image without its
+/// name ever being spelled out.
+pub(crate) fn text_uses_asset(source: &str, file_name: &str) -> bool {
+    if file_name.is_empty() {
+        return false;
+    }
+    if source.contains(file_name) {
+        return true;
+    }
+    match file_name.split_once('.') {
+        Some((stem, _)) if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            source.contains(stem)
+        }
+        _ => false,
+    }
+}
+
+/// Remove the images in a script's folder that nothing can show any more
+/// (#253): not its text, and not any saved version of it a restore could bring
+/// back. Returns how many images went.
+///
+/// Deleting an image's line used to leave its file there for good. It cannot
+/// go when the line does, because the line can come back — an undo replays
+/// text that was never in a revision, and a restore replays one that was — so
+/// this runs only from startup reconciliation, before the first command is
+/// dispatched, when no editor holds an undo history at all. What a revision
+/// still uses stays until retention thins that revision away.
+///
+/// The text that can come back is more than the revisions the database lists:
+/// a snapshot is written before its row, and a rebuild indexes every snapshot
+/// file it finds (#252), so every file in the revisions folder counts; and
+/// text that could not be saved when the app closed is parked in
+/// `quarantine/unsaved/` for the user to copy back by hand, so that counts
+/// too.
+///
+/// It removes only what it can prove unused, and only images it indexed: a
+/// file without an `assets` row was never registered (or was refused by
+/// recovery) and is left where it is, and an image another script references
+/// is left too. If any of that text cannot be read, nothing is removed: text
+/// that cannot be read is evidence that is missing, not evidence that the
+/// image is unused.
+pub(crate) async fn collect_unused_script_assets(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+) -> Result<u32, AppError> {
+    let prefix = format!("scripts/{}/assets/", script_id.as_str());
+    // Compared with `substr` rather than `LIKE`, as `permanently_delete_script`
+    // does, so `%` and `_` can never act as wildcards.
+    let indexed: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT rel_path FROM assets WHERE substr(rel_path, 1, ?) = ?",
+    )
+    .bind(prefix.len() as i64)
+    .bind(&prefix)
+    .fetch_all(pool)
+    .await?;
+    if indexed.is_empty() {
+        return Ok(0);
+    }
+
+    let canonical = String::from_utf8_lossy(&fs::read(paths.canonical_file(script_id))?).into_owned();
+    let mut unused: Vec<String> = indexed
+        .into_iter()
+        .filter(|rel_path| {
+            let name = rel_path.rsplit('/').next().unwrap_or_default();
+            !text_uses_asset(&canonical, name)
+        })
+        .collect();
+    if unused.is_empty() {
+        return Ok(0);
+    }
+
+    for path in recoverable_texts(pool, paths, script_id).await? {
+        // Bytes, decoded leniently: a name is ASCII, and a snapshot that is
+        // not valid UTF-8 can still name an image.
+        let bytes = fs::read(&path)?;
+        let text = String::from_utf8_lossy(&bytes);
+        unused.retain(|asset| {
+            let name = asset.rsplit('/').next().unwrap_or_default();
+            !text_uses_asset(&text, name)
+        });
+        if unused.is_empty() {
+            return Ok(0);
+        }
+    }
+
+    // An image another script still references is not this script's to remove
+    // (and its row could not be deleted under the foreign key anyway).
+    let mut removable = Vec::with_capacity(unused.len());
+    for rel_path in unused {
+        let shared: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM script_asset_references r JOIN assets a ON a.id = r.asset_id
+                 WHERE a.rel_path = ? AND r.script_id != ?
+             )",
+        )
+        .bind(&rel_path)
+        .bind(script_id.as_str())
+        .fetch_one(pool)
+        .await?;
+        if !shared {
+            removable.push(rel_path);
+        }
+    }
+    if removable.is_empty() {
+        return Ok(0);
+    }
+
+    // The rows go first, in one transaction, and the files after it commits:
+    // a file left behind by a failed removal is unindexed and harmless, while a
+    // row left pointing at a removed file would claim an image that is gone.
+    let mut tx = pool.begin().await?;
+    for rel_path in &removable {
+        sqlx::query(
+            "DELETE FROM script_asset_references
+             WHERE script_id = ? AND asset_id IN (SELECT id FROM assets WHERE rel_path = ?)",
+        )
+        .bind(script_id.as_str())
+        .bind(rel_path)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM assets WHERE rel_path = ?")
+            .bind(rel_path)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+
+    let assets_root = paths.assets_dir(script_id);
+    let mut removed = 0u32;
+    for rel_path in &removable {
+        let absolute = paths.root().join(rel_path);
+        if absolute.is_file() && crate::util::is_within_root(&absolute, &assets_root) {
+            match fs::remove_file(&absolute) {
+                Ok(()) => removed += 1,
+                Err(err) => tracing::warn!(
+                    script_id = script_id.as_str(),
+                    error = %err,
+                    "an unused image could not be removed"
+                ),
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// Every file holding text of `script_id` that could come back: the revisions
+/// the database lists, everything else in its revisions folder, and the
+/// unsaved text parked for it when the app closed.
+async fn recoverable_texts(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut found = std::collections::BTreeSet::new();
+    let indexed: Vec<String> =
+        sqlx::query_scalar("SELECT rel_path FROM script_revisions WHERE script_id = ?")
+            .bind(script_id.as_str())
+            .fetch_all(pool)
+            .await?;
+    for rel_path in indexed {
+        found.insert(paths.root().join(rel_path));
+    }
+
+    let mut notes = Vec::new();
+    if let Some(entries) = crate::util::read_owned_dir(&paths.revisions_dir(script_id), &mut notes)? {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                found.insert(entry.path());
+            }
+        }
+    }
+    // A revisions folder that is a link, or not a folder, was not looked in —
+    // which is not the same as having nothing in it.
+    if let Some(note) = notes.into_iter().next() {
+        return Err(AppError::Internal(format!("revisions not read: {note}")));
+    }
+
+    let prefix = format!("{}-", script_id.as_str());
+    match fs::read_dir(paths.quarantine_dir().join("unsaved")) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_type()?.is_file()
+                    && entry.file_name().to_string_lossy().starts_with(&prefix)
+                {
+                    found.insert(entry.path());
+                }
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    Ok(found.into_iter().collect())
+}
+
 /// Drop a script→asset reference; the file itself is collected by GC once
 /// nothing references it.
 pub async fn remove_asset_reference(
@@ -689,6 +901,34 @@ mod tests {
             asset_file_name("  assets/nested/deep.webp  "),
             Some("deep.webp")
         );
+    }
+
+    /// #253: what an export carries and what startup keeps is decided by the
+    /// text, generously — any mention keeps an image, however it is written.
+    #[test]
+    fn an_asset_is_used_wherever_the_text_names_it() {
+        let hash = "305519f5".repeat(8);
+        let name = format!("{hash}.png");
+        for source in [
+            format!("![Kept](assets/{name})"),
+            format!("![Kept][shot]\n\n[shot]: assets/{name}\n"),
+            format!("<img src=\"assets/{name}\">"),
+            format!("```\nassets/{name}\n```"),
+            format!("![Kept]({name})"),
+            // The compiler decodes these before it resolves the path.
+            format!("![Kept](assets/{hash}\\.png)"),
+            format!("![Kept](assets/{hash}&#46;png)"),
+        ] {
+            assert!(text_uses_asset(&source, &name), "{source}");
+        }
+
+        let other = format!("{}.png", "d6593080".repeat(8));
+        assert!(!text_uses_asset(&format!("![Kept](assets/{name})"), &other));
+        assert!(!text_uses_asset("Just words.", &name));
+        assert!(!text_uses_asset("Just words.", ""));
+        // A name that is not a hash is matched as written.
+        assert!(text_uses_asset("![](assets/photo.png)", "photo.png"));
+        assert!(!text_uses_asset("![](assets/photo.jpg)", "photo.png"));
     }
 
     #[test]
