@@ -146,6 +146,7 @@ interface StartOverrides {
     endTokenIndex: number;
     normalizedText: string;
   }>;
+  practice?: boolean;
 }
 
 function start(overrides: StartOverrides = {}): string {
@@ -160,6 +161,7 @@ function start(overrides: StartOverrides = {}): string {
     sessionId: 'session-uuid-1',
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
+    practice: overrides.practice,
   });
 }
 
@@ -305,10 +307,56 @@ describe('#214 — a take keeps its summary and its session row without the hist
     alignmentFeed.push?.(heardAt(compiled.sentences[2]!.startTokenIndex));
 
     restartParagraph();
+    // Time passes on the new pass, so a zero-length pass cannot be what makes
+    // the share null — only the reset of the snapshot history can.
+    await vi.advanceTimersByTimeAsync(500);
 
     const summary = stopSession();
     expect(summary.followingShare, 'the first pass’s snapshots belong to the first pass').toBeNull();
     expect(summary.wordsFollowed).toBe(0);
+  });
+
+  it('counts sections reached across the whole session, not per pass', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    const [opening, , middle, , close] = compiled.sentences;
+    alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
+    alignmentFeed.push?.(heardAt(middle!.startTokenIndex));
+
+    restartParagraph();
+    alignmentFeed.push?.(heardAt(close!.startTokenIndex));
+    alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
+
+    const blocks = new Set(
+      [opening, middle, close].map((sentence) => sentence!.blockId),
+    );
+    const summary = stopSession();
+    expect(summary.sectionsReached).toBe(blocks.size);
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
+      string,
+      { metrics?: { sectionsReached: number } },
+    ];
+    expect(recorded.metrics?.sectionsReached).toBe(blocks.size);
+  });
+
+  it('closes a practice’s session row once, with where it ended', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never, practice: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    stopSession();
+    clearSession();
+
+    expect(get(session).summary, 'a practice opens no report').toBeNull();
+    expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
+    const [, recorded] = records.endSessionRecord.mock.calls[0] as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    expect(recorded.endTokenIndex, 'Editor starts the next take from here').toBe(ended);
   });
 
   it('closes the session record on stop, with the §36.1 aggregate metrics', () => {
@@ -358,16 +406,23 @@ describe('#214 — a take keeps its summary and its session row without the hist
     startPrompting();
     stopSession();
 
-    let drained = false;
-    void awaitPendingPersistence().then(() => {
-      drained = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(drained, 'the quit must wait for the ending token Editor reads').toBe(false);
+    try {
+      let drained = false;
+      void awaitPendingPersistence().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained, 'the quit must wait for the ending token Editor reads').toBe(false);
 
-    deferred.resolve?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(drained).toBe(true);
+      deferred.resolve?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(true);
+    } finally {
+      // `pendingPersistence` is module state: a write left hanging by a failed
+      // assertion would hold every later wait in this file.
+      deferred.resolve?.();
+      await awaitPendingPersistence();
+    }
   });
 });
 
