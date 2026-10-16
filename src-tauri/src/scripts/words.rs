@@ -37,7 +37,10 @@ use regex::Regex;
 /// stamped with a different value, so changing what counts as speech means
 /// bumping this — otherwise existing libraries keep the old numbers until each
 /// script happens to be saved again.
-pub const SPOKEN_STATS_VERSION: &str = "spoken-stats-2";
+///
+/// 3: a leading byte-order mark is no longer read as text (#247). Rows stamped
+/// 2 were counted with it in place, a line-one heading or fence spoken.
+pub const SPOKEN_STATS_VERSION: &str = "spoken-stats-3";
 
 /// The compiler's accepted speaking-rate range (`clampWpm` in `compile.ts`).
 const MIN_WORDS_PER_MINUTE: u32 = 70;

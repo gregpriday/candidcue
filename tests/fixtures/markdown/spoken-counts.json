@@ -693,5 +693,21 @@
     "durationSeconds": 16,
     "tokens": ["This","silent","block","never","closes","so","it","must","compile","as","normal","text","with","a","blocking","diagnostic","More","text","after","a","blank","line","An","unclosed","stage","block","warns","without","blocking","An","unclosed","literal-command","block","also","warns"],
     "plain": "This silent block never closes, so it must compile as normal text with a blocking diagnostic. More text after a blank line. An unclosed stage block warns without blocking. An unclosed literal-command block also warns."
+  },
+  {
+    "name": "issue #247: a leading byte-order mark does not make a line-one heading speech",
+    "source": "\ufeff# Quarterly update\n\nHello everyone, thanks for coming.\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["Hello","everyone","thanks","for","coming"],
+    "plain": "Hello everyone, thanks for coming."
+  },
+  {
+    "name": "issue #247: a leading byte-order mark does not open a line-one fence as speech",
+    "source": "\ufeff:::stage\nWalk to the whiteboard.\n:::\n\nHello everyone.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Hello","everyone"],
+    "plain": "Hello everyone."
   }
 ]

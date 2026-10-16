@@ -946,9 +946,12 @@ async fn a_byte_order_mark_from_the_editor_never_reaches_the_disk() {
 /// Put a script into the state an import left it in before #247: the given
 /// file keeps its mark, the row's hash matches it, and the Library read the
 /// heading as speech — 8 words, a 4-second estimate, the mark in the preview.
+/// The row is stamped `spoken-stats-2`, the last extraction that read the mark
+/// as text, so only the version bump can tell reconciliation it is stale.
 async fn seed_legacy_bom_metadata(h: &Harness, script_id: &ScriptId, marked: &str) {
     sqlx::query(
-        "UPDATE scripts SET source_hash = ?, spoken_word_count = 8, estimated_duration_seconds = 4
+        "UPDATE scripts SET source_hash = ?, spoken_word_count = 8, estimated_duration_seconds = 4,
+             last_compile_version = 'spoken-stats-2'
          WHERE id = ?",
     )
     .bind(candidcue_lib::util::sha256_hex(marked.as_bytes()))
