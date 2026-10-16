@@ -94,7 +94,6 @@ function rustSettingsDocument() {
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
         analyticsEnabled: false,
-        saveTranscript: 'off',
       },
       editor: {},
       stageBehavior: {
@@ -234,10 +233,10 @@ describe('captured IPC payloads (production services → wire)', () => {
     // neither of which this command can do. Rust now REFUSES an `audio.language`
     // patch, so capturing one here would pin a payload the backend rejects.
     // `optical` carries a panel's mirroring (#206), so the Rust replay proves
-    // the per-panel map binds to the document's typed shape.
+    // the per-panel map binds to the document's typed shape. No `privacy`:
+    // the transcript retention window it used to carry left Settings (#215).
     await capture('update_settings', () =>
       settings.updateSettings(3, {
-        privacy: { saveTranscript: '7d' } as never,
         teleprompter: { fixedSpeedWpm: 155 } as never,
         optical: {
           profiles: {},
@@ -287,7 +286,7 @@ describe('captured IPC payloads (production services → wire)', () => {
       'list_scripts_all', // C7 — sort keys Rust never matched
       'save_script', // H1 — compare-and-swap revision
       'start_session', // §43.5 — the generation the stage never got
-      'update_settings', // §36.2 — the retention mapping that was missing
+      'update_settings', // §52 / #206 — the optical maps Rust replaces whole
       // Both directions of single-window presentation. Named rather than left
       // to the count above, which would still pass if both vanished.
       'set_control_presenting_on',

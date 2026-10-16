@@ -8,9 +8,14 @@
  *    a button; CandidCue 1.0 has no updater at all and the section states the
  *    manual-update policy instead (docs/updates.md).
  *  - A "Diagnostic logging" toggle and an "Update channel" dropdown, neither of
- *    which reached Rust. `toRustPatch` maps `privacy.saveTranscript` and nothing
- *    else, so both wrote to the localStorage overlay and no code ever read them
- *    back. Logging ran either way; the channel selected nothing.
+ *    which reached Rust. `toRustPatch` had no mapping for either, so both wrote
+ *    to the localStorage overlay and no code ever read them back. Logging ran
+ *    either way; the channel selected nothing.
+ *
+ * #215 then removed the one control that did reach Rust, "Save session
+ * transcripts", once takes stopped writing transcripts (#214) and the window it
+ * set had nothing left to keep — along with every line elsewhere in Settings
+ * that pointed people at it.
  *  - "Your microphone is open only while a take or a microphone test is
  *    running." Also false: the level meter holds an open capture the whole time
  *    Audio settings is on screen with permission granted (see the `$effect`
@@ -194,61 +199,73 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * Structural, not spelling. The bans above only catch the exact attributes
      * that used to be here; this catches a renamed or re-spelled revival.
      *
-     * The rule is not "no controls" — §36.2 transcript retention is a real
-     * setting that reaches Rust and decides whether spoken words are written to
-     * disk, and it belongs here. The rule is that a control in this section
-     * must DECIDE something, which is exactly what the two removed ones did
-     * not. So: no toggles at all, and precisely one Select, the retention one.
+     * The rule is that a control in this section must DECIDE something, which
+     * is exactly what the two removed ones did not — and, since #214, what the
+     * retention Select did not either. Nothing left in the section is a stored
+     * preference, so: no toggles and no selects at all. A privacy setting that
+     * genuinely ships can relax this, and should say what it decides when it
+     * does.
      */
     expect(privacySection, 'no Toggle may return to this section').not.toMatch(/<Toggle\b/);
-    const selects = privacySection.match(/<Select\b/g) ?? [];
-    expect(selects, 'only the §36.2 retention Select belongs here').toHaveLength(1);
-    expect(privacySection, 'and it must be the retention one').toMatch(
-      /label="Save session transcripts"/,
-    );
+    expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
   });
 
   /*
-   * The contradiction this section shipped with: Speech settings told the user
-   * to turn transcript saving on "under Data & privacy", the settings search
-   * index listed "transcript retention", and this section exposed no such
-   * control. Both halves are asserted, because fixing one alone recreates the
-   * mismatch in the other direction.
+   * #215. The retention row was not the only thing describing it: Speech
+   * settings told the user their words "are kept only if you set Save session
+   * transcripts", and the search index listed "transcript retention". Removing
+   * the row and leaving either of those would recreate the contradiction this
+   * section shipped with (a pointer at a control that does not exist), so all
+   * three are checked.
    */
-  it('offers the transcript retention the rest of Settings points at', () => {
-    expect(privacySection).toMatch(/Save session transcripts/);
-    expect(flatSource, 'Speech settings must point at a control that exists').toMatch(
-      /Save session transcripts[\s\S]{0,120}Data, privacy/,
+  it('no longer offers or points at transcript saving', () => {
+    expect(withoutComments, 'the row may not come back').not.toMatch(/Save session transcripts/i);
+    expect(withoutComments, 'nor its helper').not.toMatch(/transcript-retention/);
+    expect(flatSource, 'nothing may promise that the words are kept').not.toMatch(/kept only if/i);
+    expect(privacySection, 'nor that a transcript travels with an export').not.toMatch(
+      /retained transcripts|transcripts? travel/i,
     );
+
     const privacyKeywords = flatSource.match(
       /id: 'privacy',[\s\S]*?keywords:\s*((?:'[^']*'\s*\+?\s*)+)/,
     );
     expect(privacyKeywords, 'the privacy section keywords could not be located').not.toBeNull();
-    expect(privacyKeywords?.[1]).toMatch(/transcript/i);
+    expect(privacyKeywords?.[1], 'search must not find a setting that is gone').not.toMatch(
+      /transcript|retention/i,
+    );
   });
 
-  /*
-   * A source-level assertion, and deliberately so: what is being pinned is how
-   * the value is PASSED, which no mounted test of this route could distinguish
-   * from the alternative without reproducing the whole settings store.
-   *
-   * A native `<select>` has repainted before its change handler runs. Passing
-   * `value={$settings…}` one-way means a declined confirmation changes nothing
-   * for the prop to react to, so the row would keep showing the user's pick —
-   * reading "Off" over a setting that is still saving for 30 days. On this row
-   * that is not cosmetic staleness; it is a false privacy claim on screen. The
-   * binding is what gives the decline something to write back.
-   */
-  it('binds the retention control so a declined confirmation can put it back', () => {
-    expect(withoutComments).toMatch(/bind:value=\{transcriptRetention\}/);
-    expect(
-      withoutComments,
-      'the retention value must not be handed to the Select one-way',
-    ).not.toMatch(/\bvalue=\{\$settings\.privacy\.saveTranscript\}/);
-    expect(
-      withoutComments,
-      'declining must restore the setting the store still holds',
-    ).toMatch(/if \(!accepted\) \{\s*transcriptRetention = \$settings\.privacy\.saveTranscript;/);
+  it('says the recognised words are not saved, where Speech settings describes them', () => {
+    // The sentence that used to send people to the retention row. Its
+    // replacement has to make the claim the row's absence implies, not just
+    // stop making the old one.
+    const speechHint = flatSource.match(/Once the language is downloaded[^<]*/);
+    expect(speechHint, 'the Speech settings hint could not be located').not.toBeNull();
+    expect(speechHint?.[0]).toMatch(/\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsave/i);
+    expect(speechHint?.[0], 'and audio is still never saved').toMatch(/audio is never[^.]*saved/i);
+  });
+
+  it('still says what is kept on this device, and that audio is not', () => {
+    /*
+     * Removing a control is not permission to say less. The section has to
+     * name what CandidCue really keeps locally — scripts, their saved
+     * versions, settings, the session history Editor reads "start where the
+     * last take ended" from — and still make the one claim about audio that
+     * the retention row's hint used to make in passing.
+     */
+    const local = privacySection.match(/Local by default<\/h3>\s*<p class="privacy-body">([^<]*)/);
+    expect(local, 'the "Local by default" paragraph could not be located').not.toBeNull();
+    const kept = local?.[1] ?? '';
+    expect(kept).toMatch(/\bscripts\b/i);
+    expect(kept, 'saved versions are kept too').toMatch(/saved versions|revisions/i);
+    expect(kept).toMatch(/\bsettings\b/i);
+    expect(kept, 'and the session history').toMatch(/\bsessions?\b/i);
+    expect(kept).toMatch(/this device/i);
+
+    expect(privacySection, 'audio is never saved').toMatch(/CandidCue does not save it/);
+    expect(privacySection, 'nor are the recognised words').toMatch(
+      /words are recognised here[^.]*not saved/i,
+    );
   });
 
   it('offers no update action, because CandidCue 1.0 has no updater', () => {
@@ -291,16 +308,16 @@ describe('#180 the privacy section describes what the app actually does', () => 
 });
 
 describe('#180 the dead privacy settings are gone from the settings shape', () => {
-  it('leaves privacy with saveTranscript and nothing else', async () => {
+  it('leaves no privacy section at all', async () => {
     const { defaultAppSettings } = await import('../../../src/control/services/settings-types');
     /*
-     * `toStrictEqual`, not `toEqual`: the latter ignores own properties whose
-     * value is `undefined`, so a reintroduced `diagnosticLogging: undefined`
-     * would sail straight through the matcher that is supposed to be catching
-     * exactly that.
+     * An own-property check, not `.privacy === undefined`: a reintroduced
+     * `privacy: undefined` — or `privacy: {}` waiting for a field nobody reads
+     * — is the shape this is supposed to be catching. `saveTranscript` was the
+     * last field, and #215 took it (see `settings-retired-keys.test.ts` for
+     * documents and overlays that still carry it).
      */
-    expect(defaultAppSettings().privacy).toStrictEqual({ saveTranscript: 'off' });
-    expect(Object.keys(defaultAppSettings().privacy)).toEqual(['saveTranscript']);
+    expect(Object.hasOwn(defaultAppSettings(), 'privacy')).toBe(false);
   });
 });
 

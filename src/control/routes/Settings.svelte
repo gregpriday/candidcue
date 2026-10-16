@@ -87,12 +87,6 @@
     withoutOpticalProfile,
     withPanelMirror,
   } from '../services/settings-types';
-  import type { TranscriptRetention } from '../services/settings-types';
-  import {
-    TRANSCRIPT_RETENTION_OPTIONS,
-    retentionChangeDeletes,
-    retentionConfirmCopy,
-  } from '../lib/transcript-retention';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
   import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
   import {
@@ -221,7 +215,7 @@
       id: 'privacy',
       label: 'Data, privacy & updates',
       keywords:
-        'privacy data location reveal backup restore export support bundle logs updates version about transcript retention save session transcripts',
+        'privacy data location reveal backup restore export support bundle logs updates version about',
     },
   ];
 
@@ -1725,48 +1719,6 @@
   }
 
   /**
-   * What the retention `<select>` is SHOWING, which is not always the setting.
-   *
-   * A native select has already repainted by the time its change handler runs,
-   * so a confirmation that gets declined would otherwise leave the row reading
-   * "Off" over a setting still saving for 30 days — the one place in this app
-   * where a stale-looking control is a privacy claim. Binding the element to
-   * state this component owns is what makes the decline able to put it back;
-   * passing `$settings…` straight in cannot, because a decline changes nothing
-   * for the prop to react to.
-   *
-   * The effect is the other direction: the store stays authoritative, so an
-   * adopted broadcast from the Settings window, a rolled-back failed write and
-   * the initial load all reach the element without this function's help.
-   */
-  let transcriptRetention = $state<TranscriptRetention>('off');
-  $effect(() => {
-    transcriptRetention = $settings.privacy.saveTranscript;
-  });
-
-  /**
-   * §36.2: ask first when the new window keeps LESS than the current one,
-   * because Rust deletes on write rather than on expiry — see
-   * `lib/transcript-retention.ts` for why that is not obvious from the label.
-   * Lengthening the window destroys nothing and is applied straight away.
-   */
-  async function chooseTranscriptRetention(next: TranscriptRetention): Promise<void> {
-    const current = $settings.privacy.saveTranscript;
-    if (next === current) return;
-    if (retentionChangeDeletes(current, next)) {
-      const accepted = await requestConfirm({ ...retentionConfirmCopy(next), danger: true });
-      if (!accepted) {
-        // The value the store holds NOW, not the one captured before the
-        // dialog: the Settings window and this one share a document, and a
-        // commit adopted while the dialog was open is the newer truth.
-        transcriptRetention = $settings.privacy.saveTranscript;
-        return;
-      }
-    }
-    await patchSettings('privacy', { saveTranscript: next });
-  }
-
-  /**
    * C6: this used to invoke the Rust `all` cache kind, which empties the
    * compiled/vocabulary/thumbnail/download caches and never touches a log
    * file — then reported "Logs cleared." It now calls the real `logs` arm.
@@ -2115,9 +2067,7 @@
           <p class="hint-line">
             Once the language is downloaded, everything happens on this computer. Your voice is
             never sent anywhere, and your audio is never recorded or saved. The words are used only
-            to work out where in the script you are, and they are kept only if you set <strong
-              >Save session transcripts</strong
-            > under Data, privacy &amp; updates.
+            to work out where in the script you are, and CandidCue does not save them.
           </p>
         </Section>
       {:else if section === 'audio'}
@@ -3177,8 +3127,9 @@
           <div class="privacy">
             <h3 class="privacy-head">Local by default</h3>
             <p class="privacy-body">
-              Your Markdown scripts, imported images, settings, and diagnostic logs are stored on
-              this device.
+              Your Markdown scripts and their saved versions, imported images, settings, a history
+              of your sessions (when each take ran and where in the script it stopped), and
+              diagnostic logs are stored on this device.
             </p>
             <h3 class="privacy-head">When your microphone is open</h3>
             <p class="privacy-body">
@@ -3190,9 +3141,9 @@
             </p>
             <h3 class="privacy-head">Your voice and your script stay here</h3>
             <p class="privacy-body">
-              Neither your voice nor your script is sent anywhere. The words are recognised here and
-              matched against your script here — there is no transcription account, no API key, and
-              no third party involved in following you.
+              Neither your voice nor your script is sent anywhere. The words are recognised here,
+              matched against your script here, and not saved afterwards — there is no transcription
+              account, no API key, and no third party involved in following you.
             </p>
             <h3 class="privacy-head">Requests you start</h3>
             <p class="privacy-body">
@@ -3203,32 +3154,13 @@
           </div>
 
           <!--
-            §36.2, and the control the rest of the app had been promising.
-            Speech settings told the user their recognised words "are kept only
-            if you turn on transcript saving under Data & privacy", the search
-            index listed "transcript retention", and the privacy policy
-            describes the setting as theirs to choose — while this section
-            exposed nothing. The plumbing was complete in both directions the
-            whole time; only the row was missing.
+            A "Save session transcripts" row used to sit here (§36.2): Off, 1
+            day, 7 days, 30 days or Forever, with a confirmation before a
+            shorter window deleted anything. Takes stopped writing transcripts
+            (#214), so it decided nothing and went with #215, along with the
+            Speech settings line that pointed people at it. Rust still holds the
+            field and sweeps what older builds kept until #217.
           -->
-          <h3 class="privacy-head">Session transcripts</h3>
-          <Select
-            layout="row"
-            label="Save session transcripts"
-            description="Off keeps nothing. Any other choice writes the words CandidCue recognised during a take to this device and removes them once they are older than that."
-            bind:value={transcriptRetention}
-            options={[...TRANSCRIPT_RETENTION_OPTIONS]}
-            onchange={(value) => void chooseTranscriptRetention(value as TranscriptRetention)}
-          />
-          <p class="hint-line">
-            Retention is decided when a take starts, so turning this on does not bring back a
-            transcript from a take that already ran. Expiry is checked when CandidCue starts, when a
-            take ends, and when you change this — not on a clock, so something may outlive its
-            period while the app is left open. Your audio is never saved either way, and retained
-            transcripts travel with <strong>Export all data</strong> and with the automatic backups
-            taken before a database upgrade.
-          </p>
-
           <div class="row-actions">
             <!--
               "Export all scripts" was the honest name for what this used to

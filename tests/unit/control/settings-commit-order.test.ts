@@ -83,7 +83,7 @@ function loaded(revision: number, launchBehavior: 'library' | 'recent'): AppSett
  * A whole document rather than the two fields these tests read: `fromRust`
  * validates the sections it maps, so a minimal object is rejected outright and
  * `adoptSettings` returns false — which would make the test pass for the wrong
- * reason. Copied from the same fixture `settings-transcript-retention` uses.
+ * reason. The same document `settings-retired-keys` loads.
  */
 function broadcast(revision: number, openTo: 'library' | 'last_script'): unknown {
   const base = RUST_DOCUMENT;
@@ -103,7 +103,6 @@ const RUST_DOCUMENT = {
       revisionIntervalMinutes: 10,
       wordsPerMinuteEstimate: 150,
       analyticsEnabled: false,
-      saveTranscript: 'off',
     },
     editor: {},
     stageBehavior: {

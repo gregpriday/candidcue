@@ -268,9 +268,6 @@
           "stageBehavior": {
             "fixedSpeedWpm": 155
           },
-          "general": {
-            "saveTranscript": "7d"
-          },
           "optical": {
             "profiles": {},
             "activeRig": {},
