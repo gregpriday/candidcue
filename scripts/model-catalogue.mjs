@@ -183,8 +183,8 @@ function load(cataloguePath) {
     if (attribution.licenseNote !== null && attribution.licenseNote !== undefined) {
       requireClean(attribution.licenseNote, `${model.id}: attribution.licenseNote`);
     }
-    // A modification statement is a licence obligation under both Apache-2.0
-    // and CC-BY-SA. Saying "modified" without saying what changed is not one.
+    // A modification statement is a licence obligation under Apache-2.0 §4(b).
+    // Saying "modified" without saying what changed is not one.
     if (attribution.modified && !attribution.licenseNote) {
       fail(`${model.id}: attribution.modified is true but licenseNote does not say what changed`);
     }

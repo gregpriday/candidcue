@@ -7,9 +7,9 @@
 //! in this repository answers, and the three that contribute all mean different
 //! things:
 //!
-//!   * `models/catalogue.json` — everything that can be DOWNLOADED. Four
-//!     models today, and deliberately the longest list: an entry here is a
-//!     promise about bytes and a licence, not about following.
+//!   * `models/catalogue.json` — everything that can be DOWNLOADED. One model
+//!     today. An entry here is a promise about bytes and a licence, not about
+//!     following.
 //!   * `cc_stt::models::BUNDLED` — everything this build can DECODE with,
 //!     because tuning is measured rather than discovered. One model today.
 //!   * `cc_align::AlignmentLanguage::ALL` — everything the engine can
@@ -24,9 +24,9 @@
 //! computed HERE so that no screen has to restate it. Today it selects exactly
 //! one pair — `x-asr-480ms` × `en`, so CandidCue 1.0 follows English and
 //! nothing else. Chinese fails the third list even though the recogniser
-//! transcribes it; the three Kroko models pass it — French, German and Spanish
-//! all have profiles — and fail the second, because no measurement says this
-//! build can decode with them.
+//! transcribes it; French, German and Spanish pass it — all three have
+//! profiles — and fail the second, because no recogniser this build can load
+//! speaks them and no measurement says it could decode with one.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY UNOFFERABLE LANGUAGES ARE NOT RETURNED AT ALL
@@ -475,19 +475,16 @@ mod tests {
             .any(|offer| offer.primary_subtag == "zh"));
     }
 
-    /// The Kroko models fail on the RECOGNISER half: the catalogue can fetch
-    /// them and `cc_stt` has no tuning for them, so they are downloadable and
-    /// not offerable. §157 is what changes this.
+    /// French, German and Spanish fail on the RECOGNISER half: the engine has
+    /// profiles for them and no recogniser this build can load speaks them.
+    /// §157 is what changes this.
     #[test]
-    fn the_kroko_models_are_catalogued_but_not_offerable() {
-        for id in ["kroko-fr", "kroko-de", "kroko-es"] {
-            let entry = catalogue().get(id).unwrap_or_else(|| panic!("{id} is catalogued"));
-            assert!(
-                loadable_model(entry).is_none(),
-                "{id} has no compiled recogniser profile yet"
-            );
-        }
+    fn a_normalisable_language_without_a_recogniser_is_not_offerable() {
         for subtag in ["fr", "de", "es"] {
+            assert!(
+                cc_align::AlignmentLanguage::from_bcp47(subtag).is_some(),
+                "{subtag} should normalise — the engine has the profile"
+            );
             assert!(
                 !offerable_languages()
                     .iter()

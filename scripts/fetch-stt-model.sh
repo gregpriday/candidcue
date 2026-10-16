@@ -10,8 +10,8 @@
 # by name before it asks the C library for anything.
 #
 #   ./scripts/fetch-stt-model.sh                # or: pnpm models:fetch
-#   ./scripts/fetch-stt-model.sh --language fr
-#   ./scripts/fetch-stt-model.sh --model kroko-de
+#   ./scripts/fetch-stt-model.sh --language en
+#   ./scripts/fetch-stt-model.sh --model x-asr-480ms
 #   ./scripts/fetch-stt-model.sh --force        # re-fetch even if verified
 #
 # Nothing about the model is written down here. The archive name, its URL, its

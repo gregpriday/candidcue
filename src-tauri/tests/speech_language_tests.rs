@@ -143,16 +143,6 @@ fn only_followable_languages_are_offered() {
     assert_eq!(languages[0]["languageTag"], "en-US");
     assert_eq!(languages[0]["modelId"], "x-asr-480ms");
 
-    // The Kroko models are catalogued and fetchable; they are not followable,
-    // so no row may mention them.
-    for unfollowable in ["kroko-fr", "kroko-de", "kroko-es"] {
-        assert!(
-            !languages
-                .iter()
-                .any(|row| row["modelId"] == unfollowable),
-            "{unfollowable} must not appear as a language choice"
-        );
-    }
     for unfollowable in ["fr", "de", "es", "zh"] {
         assert!(
             !languages

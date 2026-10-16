@@ -92,8 +92,8 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 /// That one is a FETCH manifest — URLs, digests, sizes, licences for everything
 /// `pnpm models:fetch` can download. This one is a BUNDLE manifest: the models
 /// this build actually ships and the tuning each was measured with. The fetch
-/// catalogue is deliberately the longer list, so the two are asserted equal only
-/// where they overlap, at the default.
+/// catalogue may be the longer list, so the two are asserted equal only where
+/// they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
 
 /// The recogniser resident in memory, and which one it is.
