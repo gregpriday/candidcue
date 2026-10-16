@@ -759,7 +759,6 @@ export async function startTake(
       compiled: compiled.script,
       scriptRevision: doc.scriptRevision,
       sessionGeneration: record.sessionGeneration,
-      transcriptRetained: record.transcriptRetained,
       stageSettings,
       stageEnvelope,
       /*

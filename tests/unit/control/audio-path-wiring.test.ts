@@ -90,13 +90,13 @@ describe('provider frames reach the aligner', () => {
     ).toBe(true);
   });
 
-  it('a final is recorded once and surfaced once', () => {
+  it('a final reaches both the transcript bar and the tail', () => {
     const body = code(PIPELINE);
-    // Both, not either: the retained record and the visible tail are separate
-    // consumers, and a final that reaches one but not the other is a take whose
-    // transcript and whose readout disagree.
+    // Both, not either: the bar and the visible tail are separate consumers,
+    // and a final that reaches one but not the other is a take whose two
+    // readouts disagree.
     expect(/this\.deps\.onTranscriptText\(frame\.text, true\)/.test(body)).toBe(true);
-    expect(/this\.deps\.onTranscriptItem\?\.\(item\)/.test(body)).toBe(true);
+    expect(/this\.deps\.onTranscriptLine\(text\)/.test(body)).toBe(true);
   });
 
   /*

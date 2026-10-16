@@ -1,6 +1,5 @@
 /**
- * C1 / C2 / C11 regression — the three things a packaged build needed and did
- * not have.
+ * C1 / C2 regression — the things a packaged build needed and did not have.
  *
  * The defect these guard survived 2038 green vitest tests, because every one of
  * them stopped at the seam: the store was tested, the stage renderer was tested,
@@ -11,9 +10,7 @@
  *  1. `sessionGeneration` back to a hard-coded 1 → the relayed snapshot carries
  *     1 instead of the generation Rust assigned, and Rust drops it;
  *  2. `publishSemanticFrame` removed → `stage://semantic-frame` has no producer
- *     again and the stage's whole v2 motion engine receives nothing;
- *  3. transcript retention wired to anything other than the Rust-decided flag →
- *     either nothing is ever kept, or words are kept when the user said no.
+ *     again and the stage's whole v2 motion engine receives nothing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
@@ -25,19 +22,14 @@ const stage = vi.hoisted(() => ({
 }));
 
 const records = vi.hoisted(() => ({
-  appendSessionTranscript: vi.fn(async () => 0),
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
-  // §36.3 take history — part of the same module the store imports.
-  recordSessionTake: vi.fn(async () => null),
-  listSessionTakes: vi.fn(async () => []),
 }));
 
 /**
- * The voice pipeline is stubbed so the test can drive `onTranscriptItem` and
- * `onMaskItems` directly — those callbacks are the store's retention feed, and a
- * real WebRTC transport cannot be stood up in node.
+ * The voice pipeline is stubbed so the test can drive its callbacks directly —
+ * a real transport cannot be stood up in node.
  */
 const pipeline = vi.hoisted(() => {
   const captured: {
@@ -111,11 +103,13 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
 const { compile } = await import('../../../src/shared/markdown');
 const {
+  awaitPendingPersistence,
   clearSession,
   goToToken,
   hardPause,
   moveSentences,
   pauseListening,
+  restartParagraph,
   session,
   startLiveSession,
   startPrompting,
@@ -142,7 +136,6 @@ function compiledStub(): CompiledScript {
 
 interface StartOverrides {
   sessionGeneration?: number;
-  transcriptRetained?: boolean;
   mode?: 'voice' | 'manual';
   /** A real compile, for tests that navigate by sentence. */
   compiled?: CompiledScript;
@@ -153,6 +146,7 @@ interface StartOverrides {
     endTokenIndex: number;
     normalizedText: string;
   }>;
+  practice?: boolean;
 }
 
 function start(overrides: StartOverrides = {}): string {
@@ -167,7 +161,7 @@ function start(overrides: StartOverrides = {}): string {
     sessionId: 'session-uuid-1',
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
-    transcriptRetained: overrides.transcriptRetained ?? false,
+    practice: overrides.practice,
   });
 }
 
@@ -182,7 +176,6 @@ beforeEach(() => {
     invoked.push({ command, args });
     return undefined as never;
   });
-  records.appendSessionTranscript.mockClear();
   records.endSessionRecord.mockClear();
   pipeline.captured.deps = null;
   pipeline.captured.instance = null;
@@ -241,188 +234,133 @@ describe('C1 — the generation control hands Rust is the one Rust assigned', ()
   });
 });
 
-describe('C11 — transcript retention follows the setting Rust decided (§36.2)', () => {
-  function finalizeSpeech(): void {
-    const deps = pipeline.captured.deps as unknown as {
-      onTranscriptItem?: (item: {
-        itemId: string;
-        commitSequence: number;
-        audioStartMs?: number;
-        audioEndMs?: number;
-        transcript: string;
-      }) => void;
+/**
+ * #214 — the take history and the retained transcript are gone, and these are
+ * the two things that used to ride along with them and must not have gone too.
+ *
+ * `beginTake` was the only reset of a pass's follow measurements, and it sat
+ * beside the take-row write; the session row shared `pendingPersistence` with
+ * the transcript appends. Removing either neighbour carelessly takes these
+ * with it, and neither failure shows anywhere but a summary or a quit.
+ */
+describe('#214 — a take keeps its summary and its session row without the history', () => {
+  const SOURCE =
+    '# Opening\n\nFirst sentence of the opening. Second sentence of the opening.\n\n' +
+    '## Middle\n\nThird sentence in the middle. Fourth sentence in the middle.\n\n' +
+    '## Close\n\nFifth sentence near the close. Sixth and final sentence of the close.\n';
+
+  let seq = 0;
+
+  function heardAt(token: number): Record<string, unknown> {
+    seq += 1;
+    return {
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: token,
+      observedToken: token,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: token,
+      confirmedAtom: token,
     };
-    deps.onTranscriptItem?.({
-      itemId: 'item_a1',
-      commitSequence: 1,
-      audioStartMs: 0,
-      audioEndMs: 2400,
-      transcript: 'Good morning, everyone.',
-    });
-    deps.onTranscriptItem?.({
-      itemId: 'item_a2',
-      commitSequence: 2,
-      audioStartMs: 2400,
-      audioEndMs: 4100,
-      transcript: 'CandidCue, next section.',
-    });
   }
 
-  it('persists finalized items when the session was started with retention on', () => {
-    start({ transcriptRetained: true });
-    startPrompting();
-    expect(pipeline.captured.deps).not.toBeNull();
-    finalizeSpeech();
+  function startScript() {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    return compiled;
+  }
 
-    const summary = stopSession();
-    expect(summary.transcriptSaved).toBe(true);
-    expect(records.appendSessionTranscript).toHaveBeenCalledTimes(1);
-
-    const [sessionId, items] = records.appendSessionTranscript.mock.calls[0] as unknown as [
-      string,
-      Array<{ commitSequence: number; transcript: string; disposition: string }>,
-    ];
-    expect(sessionId).toBe('session-uuid-1');
-    expect(items).toHaveLength(2);
-    expect(items[0]).toMatchObject({
-      commitSequence: 1,
-      transcript: 'Good morning, everyone.',
-      disposition: 'script',
-    });
-    // Everything the recogniser returns is performed script now: with no
-    // command channel there is nothing else it could be, and the column keeps
-    // its vocabulary so an older row still reads correctly.
-    expect(items[1]).toMatchObject({ commitSequence: 2, disposition: 'script' });
+  beforeEach(() => {
+    seq = 0;
   });
 
-  it('persists nothing at all when the user has retention off', () => {
-    start({ transcriptRetained: false });
-    startPrompting();
-    finalizeSpeech();
-
-    const summary = stopSession();
-    expect(summary.transcriptSaved).toBe(false);
-    // Not "an empty array was sent" — no call, and no text buffered to send.
-    expect(records.appendSessionTranscript).not.toHaveBeenCalled();
-  });
-
-  /*
-   * The late rejection, which is the only interesting one.
-   *
-   * `flushTranscript` clears the buffer before the write is acknowledged, so a
-   * rejection has to put the items back — but the last flush of a take is
-   * issued by `stopSession` itself, and its promise settles AFTER the take has
-   * been torn down. Two versions of the guard got this wrong:
-   *
-   *   1. re-queue unconditionally — one take's transcript ended up in the next
-   *      take's buffer, to be written under the wrong session id;
-   *   2. re-queue when `state.sessionId` still matches — `stopSession` leaves
-   *      the id in place, so the items went back into a buffer whose flush
-   *      timer had been stopped (never retried) under a toast promising a
-   *      retry, and the sticky degraded flag then marked the NEXT take's
-   *      summary "partly saved".
-   *
-   * Both are behaviour a source scan cannot see, so they are driven here.
-   */
-  it('tells the truth when the last append fails after the take has ended', async () => {
-    // A property rather than a `let`: TypeScript narrows a variable assigned
-    // only inside the executor to `never`, and the call below stops compiling.
-    const deferred: { reject?: (err: Error) => void } = {};
-    records.appendSessionTranscript.mockImplementationOnce(
-      () =>
-        new Promise<number>((_resolve, reject) => {
-          deferred.reject = (err: Error) => reject(err);
-        }),
-    );
-
-    start({ transcriptRetained: true });
-    startPrompting();
-    finalizeSpeech();
-    /*
-     * The take ends. This issues the final append, which has not settled.
-     *
-     * Deliberately NOT followed by `clearSession()`: that nulls the session
-     * id, and the whole point is that `stopSession` on its own leaves the id
-     * in place while the take is over and the flush timer is stopped.
-     */
-    stopSession();
-
-    // ...and now the write fails, with nothing left that could retry it.
-    deferred.reject?.(new Error('disk full'));
+  it('measures a restarted paragraph from where the new pass began', async () => {
+    const compiled = startScript();
     await vi.advanceTimersByTimeAsync(0);
+    const restartAt = compiled.sentences[2]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(compiled.sentences[1]!.startTokenIndex));
+    await vi.advanceTimersByTimeAsync(1000);
+    alignmentFeed.push?.(heardAt(restartAt));
 
-    const raised = get(toasts);
-    expect(raised, 'the presenter must be told').toHaveLength(1);
-    expect(raised[0]!.tone).toBe('danger');
-    /*
-     * The wording is the assertion. Comparing `state.sessionId` treated this
-     * as "the same take", so the items went back into a buffer whose flush
-     * timer had already been stopped and the toast promised a retry that could
-     * not happen. Nothing would ever have contradicted it.
-     */
-    expect(raised[0]!.message, 'a retry that cannot happen must not be promised').not.toMatch(
-      /keep trying/i,
-    );
-    expect(raised[0]!.message).toMatch(/missing from the saved transcript/i);
+    restartParagraph();
+    const reached = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(reached));
 
-    /*
-     * And the SUMMARY the presenter is looking at is corrected, not just
-     * shouted over. `stopSession` computes the flags synchronously, so the last
-     * write of every take settles after the answer about it has been given: the
-     * dialog said "Saved" a moment ago and would have gone on saying it.
-     */
-    const ended = get(session).summary;
-    expect(ended, 'the take dialog is still showing this summary').not.toBeNull();
-    expect(ended!.transcriptSaved).toBe(false);
-    expect(ended!.transcriptPartial).toBe(true);
-
-    // A second take, whose writes all succeed, is unaffected.
-    records.appendSessionTranscript.mockClear();
-    start({ transcriptRetained: true });
-    startPrompting();
-    finalizeSpeech();
-    const second = stopSession();
-    expect(second.transcriptSaved).toBe(true);
-    expect(second.transcriptPartial).toBe(false);
-    expect(records.appendSessionTranscript).toHaveBeenCalledTimes(1);
-    const [, items] = records.appendSessionTranscript.mock.calls[0] as unknown as [
-      string,
-      Array<{ commitSequence: number }>,
-    ];
-    expect(items, 'the dead take’s items must not be written under the new take').toHaveLength(2);
+    // The distance THIS pass travelled. Carrying the first pass's start (0)
+    // into the retake would report the whole document up to here.
+    expect(stopSession().wordsFollowed).toBe(reached - restartAt);
   });
 
-  it('reports a mid-take append failure on the take that owns it', async () => {
-    /*
-     * The other side of the same guard: while the take is still running, the
-     * items DO go back in the buffer and the summary says the transcript is
-     * only partly saved.
-     */
-    records.appendSessionTranscript.mockImplementationOnce(async () => {
-      throw new Error('disk full');
-    });
+  it('gives a retake that has heard nothing yet no following share', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    alignmentFeed.push?.(heardAt(compiled.sentences[1]!.startTokenIndex));
+    await vi.advanceTimersByTimeAsync(1000);
+    alignmentFeed.push?.(heardAt(compiled.sentences[2]!.startTokenIndex));
 
-    start({ transcriptRetained: true });
-    startPrompting();
-    finalizeSpeech();
-    // The periodic flush, mid-take — not the one `stopSession` issues.
-    await vi.advanceTimersByTimeAsync(20_000);
+    restartParagraph();
+    // Time passes on the new pass, so a zero-length pass cannot be what makes
+    // the share null — only the reset of the snapshot history can.
+    await vi.advanceTimersByTimeAsync(500);
 
     const summary = stopSession();
-    expect(summary.transcriptPartial, 'the take that lost items must say so').toBe(true);
-    expect(summary.transcriptSaved).toBe(false);
-    // And the items were retried rather than dropped: the second call carries
-    // the same two commit sequences.
-    expect(records.appendSessionTranscript.mock.calls.length).toBeGreaterThan(1);
-    const retried = records.appendSessionTranscript.mock.calls.at(-1) as unknown as [
+    expect(summary.followingShare, 'the first pass’s snapshots belong to the first pass').toBeNull();
+    expect(summary.wordsFollowed).toBe(0);
+  });
+
+  it('counts sections reached across the whole session, not per pass', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    const [opening, , middle, , close] = compiled.sentences;
+    alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
+    alignmentFeed.push?.(heardAt(middle!.startTokenIndex));
+
+    restartParagraph();
+    alignmentFeed.push?.(heardAt(close!.startTokenIndex));
+    alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
+
+    const blocks = new Set(
+      [opening, middle, close].map((sentence) => sentence!.blockId),
+    );
+    const summary = stopSession();
+    expect(summary.sectionsReached).toBe(blocks.size);
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
       string,
-      Array<{ commitSequence: number }>,
+      { metrics?: { sectionsReached: number } },
     ];
-    expect(retried[1].map((i) => i.commitSequence)).toEqual([1, 2]);
+    expect(recorded.metrics?.sectionsReached).toBe(blocks.size);
+  });
+
+  it('closes a practice’s session row once, with where it ended', async () => {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never, practice: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const ended = compiled.sentences[3]!.startTokenIndex;
+    alignmentFeed.push?.(heardAt(ended));
+
+    stopSession();
+    expect(get(session).summary, 'a practice opens no report').toBeNull();
+    stopSession();
+    clearSession();
+
+    expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
+    const [, recorded] = records.endSessionRecord.mock.calls[0] as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    expect(recorded.endTokenIndex, 'Editor starts the next take from here').toBe(ended);
   });
 
   it('closes the session record on stop, with the §36.1 aggregate metrics', () => {
-    start({ transcriptRetained: false });
+    start();
     startPrompting();
     // One real snapshot through the real driver: `sectionsReached` is a fact
     // about alignment output, and a take that produced none has reached none.
@@ -454,6 +392,37 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
     expect(sessionId).toBe('session-uuid-1');
     expect(typeof summary.endTokenIndex).toBe('number');
     expect(summary.metrics?.sectionsReached).toBeGreaterThan(0);
+  });
+
+  it('holds shutdown until the session row is written', async () => {
+    const deferred: { resolve?: () => void } = {};
+    records.endSessionRecord.mockImplementationOnce(
+      () =>
+        new Promise<null>((resolve) => {
+          deferred.resolve = () => resolve(null);
+        }),
+    );
+    start();
+    startPrompting();
+    stopSession();
+
+    try {
+      let drained = false;
+      void awaitPendingPersistence().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained, 'the quit must wait for the ending token Editor reads').toBe(false);
+
+      deferred.resolve?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(true);
+    } finally {
+      // `pendingPersistence` is module state: a write left hanging by a failed
+      // assertion would hold every later wait in this file.
+      deferred.resolve?.();
+      await awaitPendingPersistence();
+    }
   });
 });
 

@@ -206,12 +206,9 @@ const stage = vi.hoisted(() => ({
 }));
 
 const records = vi.hoisted(() => ({
-  appendSessionTranscript: vi.fn(async () => 0),
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
-  recordSessionTake: vi.fn(async () => null),
-  listSessionTakes: vi.fn(async () => []),
 }));
 
 vi.mock('../../src/control/services/stage', () => stage);
@@ -289,7 +286,6 @@ function start(overrides: { micDeviceId?: string } = {}): void {
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
     sessionGeneration: 7,
-    transcriptRetained: false,
     ...overrides,
   });
 }

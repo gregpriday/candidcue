@@ -220,17 +220,6 @@
         {/if}
         <dt>Following</dt>
         <dd>{FOLLOW_HEALTH_LABELS[outcome.health]}</dd>
-        {#if summary.transcriptSaved || summary.transcriptPartial}
-          <!--
-            Shown only when there IS a transcript to account for. "Not saved" on
-            every take of a product whose default is not to save reports a
-            setting working correctly as though it were an outcome.
-          -->
-          <dt>Transcript</dt>
-          <dd>
-            {summary.transcriptPartial ? 'Partly saved — some of it could not be written' : 'Saved'}
-          </dd>
-        {/if}
       </dl>
     {/if}
 
@@ -301,26 +290,6 @@
       <dd>{summary.reconnects}</dd>
       <dt>Ending location</dt>
       <dd>{summary.endingLocation}</dd>
-      <dt>Transcript</dt>
-      <!--
-        Read from the take, not hard-coded. `transcriptSaved` has been on the
-        summary and correctly computed from the retention setting since the
-        session record was wired up; this row simply never asked for it, so a
-        presenter who had deliberately turned transcript saving ON was still
-        told every take that nothing had been kept.
-      -->
-      <!--
-        Three answers, not two. "Saved" used to be the RETENTION SETTING, so a
-        take whose appends failed reported it over a transcript with a hole in
-        it — and this screen is where somebody would ever find out.
-      -->
-      <dd>
-        {summary.transcriptPartial
-          ? 'Partly saved — some of it could not be written'
-          : summary.transcriptSaved
-            ? 'Saved'
-            : 'Not saved'}
-      </dd>
     </dl>
     </Disclosure>
   {/if}

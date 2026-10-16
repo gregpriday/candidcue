@@ -1068,7 +1068,6 @@ fn the_capture_fixture_covers_the_replayed_commands() {
         "save_script",
         "start_session",
         "update_settings",
-        "append_session_transcript",
     ] {
         assert!(
             commands.contains(command),

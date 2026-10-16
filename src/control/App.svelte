@@ -742,15 +742,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
           /*
            * AWAITED, and that is the whole point of this step.
            *
-           * `stopSession` issues the retained transcript tail, the take row
-           * and the session-row closure as `void promise.catch(…)` — right
-           * during a take, where a slow database must never stall the live
-           * loop, and wrong at the moment the process exits. Without this the
-           * handshake reported "the take was finished" and Rust exited out
-           * from under three writes that were still on the wire.
+           * `stopSession` issues the session-row closure as
+           * `void promise.catch(…)` — right during a take, where a slow
+           * database must never stall the stop path, and wrong at the moment
+           * the process exits. Without this the handshake reported "the take
+           * was finished" and Rust exited out from under a write that was
+           * still on the wire.
            *
            * The next launch can close an orphaned session row. It cannot
-           * reconstruct a lost transcript or take.
+           * recover the ending token Editor starts the next take from.
            */
           await awaitPendingPersistence();
         },

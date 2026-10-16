@@ -9,27 +9,6 @@
       "command": "app_version",
       "args": null
     },
-    "append_session_transcript": {
-      "command": "append_session_transcript",
-      "args": {
-        "sessionId": "00000000-0000-4000-8000-0000000000c1",
-        "items": [
-          {
-            "commitSequence": 1,
-            "providerItemId": "item_1",
-            "audioStartMs": 0,
-            "audioEndMs": 1500,
-            "transcript": "Good morning everyone.",
-            "disposition": "script"
-          },
-          {
-            "commitSequence": 2,
-            "transcript": "hey cue pause",
-            "disposition": "command"
-          }
-        ]
-      }
-    },
     "clear_cache_analysis": {
       "command": "clear_cache",
       "args": {

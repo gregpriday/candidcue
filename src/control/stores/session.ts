@@ -53,14 +53,8 @@ import { describeError, errorCode } from '../services/errors';
 import { trace } from '../services/audio-trace';
 import * as stageService from '../services/stage';
 import { monotonicNowMs } from '../services/stage-acks';
-import { FIRST_TAKE_PASS_ORDINAL, takePassIdFor } from '../../shared/take-pass';
 import type { MediaStreamLike } from '../services/audio';
-import {
-  appendSessionTranscript,
-  endSessionRecord,
-  recordSessionTake,
-  type TakeCheckpointInput,
-} from '../services/session-records';
+import { endSessionRecord } from '../services/session-records';
 import {
   AUTO_SCROLL_DEFAULT_WPM,
   AUTO_SCROLL_MAX_WPM,
@@ -107,22 +101,6 @@ export interface SessionSummary {
   retakes: number;
   reconnects: number;
   endingLocation: string;
-  /**
-   * §36.2. Was hard-coded `false` because nothing ever opened a session record,
-   * so no transcript could be saved under any setting. It now reports what Rust
-   * decided at session start.
-   */
-  /**
-   * `true` only when retention was on AND every write landed.
-   *
-   * It used to be `transcriptRetained` — the setting, not the outcome — so a
-   * take whose appends failed reported "Saved" over a transcript with a hole
-   * in it. The summary is where somebody finds out; reporting the intention
-   * there makes the failure invisible for good.
-   */
-  transcriptSaved: boolean;
-  /** Retention was on and something did not make it. */
-  transcriptPartial: boolean;
   /**
    * Times the operator JUMPED the script — sentence steps and outline moves.
    *
@@ -587,45 +565,18 @@ let stopSidecarFeed: (() => void) | null = null;
  */
 
 /* ---------------------------------------------------------------------------
- * §36.3 take history
+ * §36.3 the pass being performed
  *
- * The §36.1 session record has always been able to say "four takes happened"
- * and nothing about any of them: `retake_count` is a scalar, and
- * `sectionsReached` was a single number folded into `metrics_json` at the end.
- *
- * This is the per-take detail on top: when each pass ran, where it started and
- * stopped, which sections it traversed, and the checkpoints along the way — an
- * outline jump and a restarted paragraph. It reuses the sections the store was
- * ALREADY accumulating (`blocksSeen`) and is keyed by the review lane's own
- * `takePassId`, so the two are one history rather than two.
+ * A take is one or more passes: a restarted paragraph closes the pass that was
+ * running and opens the next. The end-of-take summary reports on the LAST pass,
+ * so these measurements belong to it and start again with every restart.
  * ------------------------------------------------------------------------- */
 
 /** The take currently being performed. Null outside a session. */
 interface ActiveTake {
-  /** 1-based; a retake opens the next one and never rewrites this one. */
-  passOrdinal: number;
-  /** `${sessionId}:${passOrdinal}` — the review lane's take-pass identity. */
-  takePassId: string;
-  startedAtIso: string;
   /** Monotonic, so a clock step cannot invent or erase a take's duration. */
   startedAtMs: number;
   startTokenIndex: number;
-  /** Authored block ids in the order this pass first reached them. */
-  sections: string[];
-  checkpoints: TakeCheckpointInput[];
-  /**
-   * §36.3 automatic retake transitions — the engine deciding the presenter went
-   * back and re-read. Distinct from a MANUAL retake, which opens a new pass and
-   * so is a row of its own rather than a counter.
-   */
-  automaticRetakes: number;
-  /**
-   * Accepted relocations — a skipped section or a jump the engine caught up to.
-   * Counted apart from retakes because they say opposite things about a take:
-   * a retake is the presenter redoing something, a relocation is the engine
-   * finding them somewhere else.
-   */
-  relocations: number;
   /**
    * §36.3 unique coverage: the furthest the CONFIRMED anchor ever reached.
    *
@@ -640,61 +591,10 @@ interface ActiveTake {
   /** Wall time of the previous snapshot, for accumulating `followingMs`. */
   lastSnapshotAtMs: number | null;
   lastState: AlignmentSnapshot['state'] | null;
-  /** §36.3 confidence summary, accumulated rather than sampled. */
-  confidenceSum: number;
-  confidenceSamples: number;
 }
 
 let activeTake: ActiveTake | null = null;
 
-/**
- * §36.3's own words: "within the current live session, keep an IN-MEMORY take
- * history ... this powers 'restart this take' and can be discarded at Stop".
- *
- * So the list is held here for the session's own use, and each pass is ALSO
- * written through to `session_takes` as it closes. The persistence is the part
- * the spec does not require and the review screen does: a take history that only
- * exists until Stop cannot answer "how did the third take go" ten minutes later,
- * which is the one moment anybody wants to know.
- */
-let sessionTakes: ActiveTake[] = [];
-
-/**
- * Checkpoints per take. These are deliberate operator actions — a spoken "mark
- * this", a paragraph restart, an outline jump — so two hundred inside a single
- * pass is already far past anything real. The cap keeps the row bounded; the
- * EARLIEST are kept because this is a history, and a history that loses its
- * beginning is not one.
- */
-const MAX_TAKE_CHECKPOINTS = 200;
-
-/* Session record (§36.1) + transcript retention (§36.2). */
-interface PendingTranscriptItem {
-  /** The realtime item id, so the command channel can re-label it. */
-  itemId: string;
-  receivedAtMs: number;
-  commitSequence: number;
-  providerItemId?: string;
-  audioStartMs?: number;
-  audioEndMs?: number;
-  transcript: string;
-  disposition: 'script' | 'command' | 'discarded';
-}
-/** Fixed at session start by Rust; false means "never persist a word". */
-let transcriptRetained = false;
-/**
- * Which take's transcript buffer the module currently holds.
- *
- * Bumped when a take starts and again when one is torn down, so an append that
- * rejects can tell whether the buffer it wants to put items back into is still
- * the one they came from. The session id is NOT enough: `stopSession` leaves
- * the id in the state while the take is over, so a late rejection compared
- * equal and re-queued into a buffer whose flush timer had already been
- * stopped — items that would never be retried, under a toast promising that
- * they would be.
- */
-let transcriptEpoch = 0;
-let transcriptBuffer: PendingTranscriptItem[] = [];
 /**
  * Words the recogniser returned this take (§36 summary).
  *
@@ -713,7 +613,6 @@ function countSpokenWords(text: string): number {
   const trimmed = text.trim();
   return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
 }
-let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Polls the panel the presenting window is on (CCUX-010).
@@ -727,17 +626,6 @@ let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
  */
 let displayWatchTimer: ReturnType<typeof setInterval> | null = null;
 const DISPLAY_WATCH_INTERVAL_MS = 2000;
-/**
- * How often the buffered transcript is written.
- *
- * Purely batching now. There used to be a four-second settle delay as well,
- * because the command router decided a beat later whether a finalized item was
- * script or a command phrase, and `INSERT OR IGNORE` on
- * `UNIQUE(session_id, commit_sequence)` means the first write of a commit is
- * the one that sticks. With no command channel every item is script the moment
- * it arrives, so there is nothing left to wait for.
- */
-const TRANSCRIPT_FLUSH_INTERVAL_MS = 15000;
 
 
 export interface StartSessionInput {
@@ -772,13 +660,6 @@ export interface StartSessionInput {
   scriptRevision?: number;
   /** From `start_session` — the Rust coordinator assigns it, control adopts. */
   sessionGeneration?: number;
-  /**
-   * §36.2: whether the session row was opened with transcript retention on.
-   * Fixed at session start in Rust and never re-derived here — a session
-   * started with retention off must not start keeping text mid-take because
-   * the user flipped a setting.
-   */
-  transcriptRetained?: boolean;
   stageSettings?: StageSettings | null;
   stageEnvelope?: StageSessionEnvelope | null;
   /**
@@ -844,9 +725,6 @@ export function startLiveSession(input: StartSessionInput): string {
   compiledScript = input.compiled ?? null;
   inputFallbackCount = 0;
   sessionGeneration = input.sessionGeneration ?? 0;
-  transcriptRetained = input.transcriptRetained === true;
-  transcriptBuffer = [];
-  transcriptEpoch += 1;
   wordsHeard = 0;
   scriptWordCount = input.totalTokens;
   stageSettings = input.stageSettings ?? null;
@@ -875,9 +753,8 @@ export function startLiveSession(input: StartSessionInput): string {
     Math.min(Math.round(input.startTokenIndex ?? 0), Math.max(0, input.totalTokens - 1)),
   );
 
-  // §36.3: the session's first take opens with it, on a fresh history.
-  sessionTakes = [];
-  beginTake(sessionId, 1, startTokenIndex);
+  // §36.3: the session's first pass opens with it.
+  beginTake(startTokenIndex);
 
   // Smooth-following store (§50.1): user-visible following state + §48 actions.
   const following = input.following ?? currentFollowingSettings();
@@ -1094,10 +971,7 @@ export function startLiveSession(input: StartSessionInput): string {
         }
         if (final) {
           wordsInFlight = 0;
-          // §36 "did it hear me". Counted here rather than from the retained
-          // transcript, because retention is a SETTING and the question this
-          // answers — was anything transcribed at all — has to be answerable
-          // with retention off, which is the default.
+          // §36 "did it hear me": was anything transcribed at all.
           wordsHeard += countSpokenWords(text);
         }
       },
@@ -1115,10 +989,6 @@ export function startLiveSession(input: StartSessionInput): string {
           { key: TOAST_AUDIO_DROPPED },
         );
       },
-      // §36.2: finalized text only, never audio. Buffered here and written
-      // through `append_session_transcript`, which Rust refuses outright when
-      // the session was opened with retention off.
-      onTranscriptItem: (item) => bufferTranscriptItem(item),
       onTranscriptLine: (line) => pushTranscriptLine(line),
       onConnectionState: (connection) => {
         /*
@@ -1453,14 +1323,6 @@ export function startLiveSession(input: StartSessionInput): string {
     }, DISPLAY_WATCH_INTERVAL_MS);
   }
 
-  // §36.2: incremental retention, so a crash mid-take costs at most one
-  // interval rather than the whole transcript.
-  if (transcriptRetained) {
-    transcriptFlushTimer = setInterval(() => {
-      flushTranscript(sessionId, false);
-    }, TRANSCRIPT_FLUSH_INTERVAL_MS);
-  }
-
   return sessionId;
 }
 
@@ -1579,8 +1441,8 @@ function buildStartSequenceGate(input: StartSessionInput): {
  *
  * Derived rather than reported: the engine states where the reader is, and
  * block identity is a property of the compiled document. Resolving it here
- * means the take history keeps answering "which sections did this pass reach"
- * without the engine having to know what a section is.
+ * means the summary can count the sections a take reached without the engine
+ * having to know what a section is.
  */
 function blockIdForToken(token: number): string | null {
   const compiled = compiledScript;
@@ -1603,31 +1465,20 @@ function blockIdForToken(token: number): string | null {
  * "Followed N of M words" read off the last snapshot is a number that flatters
  * every take: a presenter who lost the thread at word 30, jumped to the end and
  * read the closing line scores 100%. What is honest is what accumulates here —
- * how far the CONFIRMED anchor actually advanced, how much time was spent
- * genuinely following, and how many recoveries the engine had to make. Those
- * are three different facts and the summary reports them as three.
+ * how far the CONFIRMED anchor actually advanced, and how much time was spent
+ * genuinely following. Those are two different facts and the summary reports
+ * them as two.
  */
 function handleSnapshot(snapshot: AlignmentSnapshot): void {
   const nowMs = monotonicNowMs();
   const blockId = blockIdForToken(snapshot.confirmedToken);
   if (activeTake !== null) {
-    // §36.3 sections traversed, per take. `blocksSeen` below is the same fact
-    // for the whole session and has only ever been read as a count; this is
-    // the per-pass list, which is what makes "take 2 never reached the close"
-    // sayable.
-    if (blockId && !activeTake.sections.includes(blockId)) {
-      activeTake.sections.push(blockId);
-    }
     // §36.3 unique coverage: the high-water mark of the conservative anchor.
     // `confirmed` is monotone except across an accepted retake or a manual
     // move, and taking the maximum is what makes a retake cost nothing it
     // already earned while still refusing to credit a jump to the end.
     if (snapshot.confirmedToken > activeTake.maxConfirmedToken) {
       activeTake.maxConfirmedToken = snapshot.confirmedToken;
-    }
-    if (Number.isFinite(snapshot.confidence)) {
-      activeTake.confidenceSum += snapshot.confidence;
-      activeTake.confidenceSamples += 1;
     }
     /*
      * §36.3 availability: time spent in `following`, accumulated between
@@ -1671,16 +1522,6 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
     }
     activeTake.lastSnapshotAtMs = nowMs;
     activeTake.lastState = heldMove ? null : snapshot.state;
-    // §36.3 recovery events, from the decision codes that describe one: the
-    // engine concluded the presenter went back and re-read, or relocated. A
-    // manual retake opens a new pass instead, so the two are never conflated.
-    if (snapshot.decision === 'retakeAccepted') activeTake.automaticRetakes += 1;
-    if (
-      snapshot.decision === 'relocationAccepted' ||
-      snapshot.decision === 'jumpForwardAccepted'
-    ) {
-      activeTake.relocations += 1;
-    }
   }
 
   state.update((s) => ({
@@ -1891,62 +1732,22 @@ function takeEndToken(): number {
 }
 
 /* ---------------------------------------------------------------------------
- * §36.3 take history — lifecycle
+ * §36.3 the pass being performed — lifecycle
  * ------------------------------------------------------------------------- */
 
-/** Open a take pass. `startLiveSession` opens the first; a retake opens the next. */
-function beginTake(sessionId: string, passOrdinal: number, startTokenIndex: number): void {
+/**
+ * Open a pass. `startLiveSession` opens the first; a retake opens the next, and
+ * this is the only place its measurements start again from nothing.
+ */
+function beginTake(startTokenIndex: number): void {
   activeTake = {
-    passOrdinal,
-    // The same scheme the coaching subsystem stamps on its own take passes, so
-    // a review report and a take row for the same pass carry one identifier.
-    takePassId: takePassIdFor(sessionId, passOrdinal),
-    startedAtIso: new Date().toISOString(),
     startedAtMs: monotonicNowMs(),
     startTokenIndex,
-    sections: [],
-    checkpoints: [],
-    automaticRetakes: 0,
-    relocations: 0,
     maxConfirmedToken: startTokenIndex,
     followingMs: 0,
     lastSnapshotAtMs: null,
     lastState: null,
-    confidenceSum: 0,
-    confidenceSamples: 0,
   };
-  sessionTakes.push(activeTake);
-}
-
-/**
- * §36.3 in-memory take history for this session, oldest pass first. The open
- * take is the last entry. Empty outside a session — it is discarded at Stop, as
- * the spec says, while the persisted rows outlive it.
- */
-export function takeHistory(): ReadonlyArray<{
-  passOrdinal: number;
-  takePassId: string;
-  startedAtIso: string;
-  startTokenIndex: number;
-  sections: readonly string[];
-  checkpoints: readonly TakeCheckpointInput[];
-  automaticRetakes: number;
-  /** Mean alignment confidence over the pass; null when it saw no snapshots. */
-  confidenceMean: number | null;
-  /** True for the pass currently being performed. */
-  open: boolean;
-}> {
-  return sessionTakes.map((take) => ({
-    passOrdinal: take.passOrdinal,
-    takePassId: take.takePassId,
-    startedAtIso: take.startedAtIso,
-    startTokenIndex: take.startTokenIndex,
-    sections: take.sections,
-    checkpoints: take.checkpoints,
-    automaticRetakes: take.automaticRetakes,
-    confidenceMean: takeConfidenceMean(take),
-    open: take === activeTake,
-  }));
 }
 
 /**
@@ -1991,62 +1792,6 @@ function takeFollowingShare(): number | null {
   return Math.min(1, Math.max(0, take.followingMs / elapsedMs));
 }
 
-/** §36.3 confidence summary. Null, never 0, when the pass saw no snapshots. */
-function takeConfidenceMean(take: ActiveTake): number | null {
-  if (take.confidenceSamples === 0) return null;
-  return take.confidenceSum / take.confidenceSamples;
-}
-
-/**
- * Note a position worth returning to. Times are measured from the START OF THE
- * TAKE on the monotonic clock: a checkpoint at "02:14 into take 3" survives an
- * NTP step, and a wall-clock timestamp would not.
- */
-function noteCheckpoint(kind: 'manual' | 'paragraph_start'): void {
-  const take = activeTake;
-  if (take === null) return;
-  if (take.checkpoints.length >= MAX_TAKE_CHECKPOINTS) return;
-  const snapshot = get(state).snapshot;
-  const tokenIndex = Math.round(snapshot?.confirmedToken ?? take.startTokenIndex);
-  const blockId = blockIdForToken(tokenIndex);
-  take.checkpoints.push({
-    atMs: Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs)),
-    tokenIndex,
-    kind,
-    // "Where did I skip to" is half of what a take history is for, and a token
-    // index alone does not answer it in a form anybody reads.
-    ...(blockId ? { blockId } : {}),
-  });
-}
-
-/**
- * Close the open take and persist it. Best-effort by construction: a take
- * history that cannot be written must never interrupt a take or block a stop.
- */
-function finishTake(sessionId: string | null, endTokenIndex: number | undefined): void {
-  const take = activeTake;
-  activeTake = null;
-  if (take === null || sessionId === null) return;
-  const durationMs = Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs));
-  const confidenceMean = takeConfidenceMean(take);
-  void trackPersistence(recordSessionTake(sessionId, {
-    takePassId: take.takePassId,
-    passOrdinal: take.passOrdinal,
-    startedAt: take.startedAtIso,
-    endedAt: new Date().toISOString(),
-    durationMs,
-    startTokenIndex: take.startTokenIndex,
-    ...(endTokenIndex === undefined ? {} : { endTokenIndex }),
-    sections: [...take.sections],
-    checkpoints: [...take.checkpoints],
-    automaticRetakes: take.automaticRetakes,
-    ...(confidenceMean === null ? {} : { confidenceMean }),
-  })).catch(() => {
-    // §36.3 is history, not state. Losing a row costs a line in the review
-    // screen; failing the stop path would cost the take.
-  });
-}
-
 function pushTranscriptLine(line: string): void {
   state.update((s) => ({
     ...s,
@@ -2065,63 +1810,20 @@ function pushTranscriptLine(line: string): void {
   }));
 }
 
-/* ---------------------------------------------------------------------------
- * Transcript retention (§36.2)
- *
- * Off by default and decided ONCE, in Rust, at session start: `start_session`
- * reads `general.saveTranscript` and stamps `transcript_retained` on the row,
- * and `append_session_transcript` refuses items for a row that says false. This
- * side must therefore never buffer text it was not told to keep — the point is
- * that a user who turned retention off has no transcript in memory either.
- * ------------------------------------------------------------------------- */
-
-function bufferTranscriptItem(item: {
-  itemId: string;
-  commitSequence: number;
-  audioStartMs?: number;
-  audioEndMs?: number;
-  transcript: string;
-}): void {
-  if (!transcriptRetained) return;
-  const text = item.transcript.trim();
-  if (text.length === 0) return;
-  transcriptBuffer.push({
-    itemId: item.itemId,
-    receivedAtMs: Date.now(),
-    commitSequence: item.commitSequence,
-    providerItemId: item.itemId,
-    audioStartMs: item.audioStartMs,
-    audioEndMs: item.audioEndMs,
-    transcript: text,
-    disposition: 'script',
-  });
-}
-
-/**
- * Has a retained-transcript write failed during this take?
- *
- * Sticky for the length of the session. A single failure means the transcript
- * on disk has a hole in it, and that stays true however many later writes
- * succeed — so the take summary has to say "partially saved" rather than
- * reporting retention as a boolean the settings screen set.
- */
-let transcriptRetentionDegraded = false;
-
-
 /**
  * Persistence that has been STARTED but not yet acknowledged.
  *
- * Every durable write a take makes — the retained transcript tail, the take
- * row, the session row — is issued with `void promise.catch(...)` so that a
- * slow database can never stall the live loop. That is right during a take and
- * wrong at the moment the process is about to exit: the close/quit handshake
- * was reporting "the take was finished" while those writes were still in
- * flight, and Rust would then exit out from under them.
+ * The durable write a take makes — closing the session row — is issued with
+ * `void promise.catch(...)` so that a slow database can never stall the stop
+ * path. That is right during a take and wrong at the moment the process is
+ * about to exit: the close/quit handshake was reporting "the take was finished"
+ * while the write was still in flight, and Rust would then exit out from under
+ * it.
  *
- * So every one of them is registered here, and
- * {@link awaitPendingPersistence} is what the shutdown sequence awaits. The
- * next launch can close an orphaned session row, but it cannot reconstruct a
- * lost transcript or take.
+ * So it is registered here, and {@link awaitPendingPersistence} is what the
+ * shutdown sequence awaits. The next launch can close an orphaned session row,
+ * but it cannot recover the ending token Editor reads to start where the last
+ * take ended.
  */
 const pendingPersistence = new Set<Promise<unknown>>();
 
@@ -2141,128 +1843,11 @@ function trackPersistence<T>(promise: Promise<T>): Promise<T> {
  * write is still on the wire.
  */
 export async function awaitPendingPersistence(): Promise<void> {
-  // A write can start another (the take row closes, then the session row), so
-  // drain until the set is empty rather than snapshotting it once.
+  // A stop can land while this is waiting and start another write, so drain
+  // until the set is empty rather than snapshotting it once.
   while (pendingPersistence.size > 0) {
     await Promise.allSettled([...pendingPersistence]);
   }
-}
-
-/**
- * Write out everything buffered so far. `force` is retained on the signature
- * because the call sites read better for it, but every item is now ready the
- * moment it arrives — see {@link TRANSCRIPT_FLUSH_INTERVAL_MS}.
- */
-function flushTranscript(sessionId: string, force: boolean): void {
-  void force;
-  if (!transcriptRetained || transcriptBuffer.length === 0) return;
-  const ready = transcriptBuffer;
-  transcriptBuffer = [];
-  const epoch = transcriptEpoch;
-
-  void trackPersistence(
-    appendSessionTranscript(
-      sessionId,
-      ready.map((item) => ({
-        commitSequence: item.commitSequence,
-        providerItemId: item.providerItemId,
-        audioStartMs: item.audioStartMs,
-        audioEndMs: item.audioEndMs,
-        transcript: item.transcript,
-        disposition: item.disposition,
-      })),
-    ),
-  ).catch(() => {
-    /*
-     * The items go back in the buffer, they are not dropped — but ONLY if the
-     * buffer still belongs to the session they came from.
-     *
-     * They used to be gone outright: the buffer was cleared before the write
-     * was acknowledged, so a failed append lost exactly those items and
-     * nothing said so. The first fix re-queued them into the GLOBAL buffer,
-     * which is worse in one specific way: `stopSession` clears that buffer,
-     * and a rejection arriving after the next take had started would insert
-     * one session's transcript into another's — and it would then be written
-     * under the wrong session id.
-     *
-     * The second fix compared `state.sessionId`, and that is not the same
-     * question. `stopSession` leaves the id in place while the take is over
-     * and the flush timer is stopped, so a rejection landing in that window
-     * still looked like "the same take": the items went back into a buffer
-     * nothing would ever drain, the toast promised a retry that could not
-     * happen, and the sticky degraded flag survived into the NEXT take's
-     * summary. `transcriptEpoch` answers the question actually being asked —
-     * is this still the buffer these items came from — and it changes on
-     * teardown as well as on start.
-     *
-     * A rejection that arrives too late to retry is REPORTED rather than
-     * silently re-homed: the presenter is told, in words that say the section
-     * is missing rather than that CandidCue is still trying.
-     *
-     * Re-queued at the FRONT, so ordering survives. `commitSequence` is unique
-     * per session and Rust inserts with `INSERT OR IGNORE`, so retrying an
-     * item that did land is a no-op rather than a second row.
-     */
-    const stillTheSameTake = transcriptEpoch === epoch;
-    if (stillTheSameTake) {
-      // Sticky for the take, and ONLY for the take it belongs to: setting it
-      // unconditionally marked the next take's summary "partly saved" for a
-      // write that failed before it started.
-      transcriptRetentionDegraded = true;
-      transcriptBuffer = [...ready, ...transcriptBuffer];
-    } else if (transcriptEpoch === epoch + 1) {
-      /*
-       * The take is over and its summary is on screen saying the transcript was
-       * saved — because at the moment that was computed, this write had not
-       * failed yet. `stopSession` issues the final append and reads the flags
-       * synchronously, so the last write of every take settles after the answer
-       * about it has been given.
-       *
-       * So correct the answer where it is. The summary lives in the store and
-       * the dialog renders it, so this reaches the screen the presenter is
-       * looking at rather than only the toast beside it.
-       *
-       * `epoch + 1` and not merely "different": teardown bumps once, and a new
-       * take bumps again. One step means the take that just ended, which is the
-       * take whose summary is being shown; two or more means somebody has moved
-       * on and this is no longer their business.
-       */
-      state.update((s) =>
-        s.summary
-          ? {
-              ...s,
-              summary: { ...s.summary, transcriptSaved: false, transcriptPartial: true },
-            }
-          : s,
-      );
-    }
-    /*
-     * A PRACTICE IS NOT PROMISED A SUMMARY (§practice).
-     *
-     * The correction above is already a no-op for one — it patches `s.summary`,
-     * which a practice never has — but the toast went on to promise that the
-     * summary "will say if any of it is missing", and for a rehearsal no such
-     * card ever opens. That is the same false promise the exit confirmations
-     * were changed to stop making, arriving somewhere the eye does not look for
-     * it, and it points the operator at a screen they will never see.
-     *
-     * Read live, which is the only place this branch runs: `stillTheSameTake`
-     * means the session is still the one that issued the write, so the flag is
-     * the running session's own.
-     */
-    const practising = stillTheSameTake && get(state).practice;
-    showToast(
-      stillTheSameTake
-        ? practising
-          ? 'CandidCue could not save part of the transcript for this practice. It will ' +
-            'keep trying.'
-          : 'CandidCue could not save part of the transcript for this take. It will keep ' +
-            'trying, and the take summary will say if any of it is missing.'
-        : 'CandidCue could not save the last part of the transcript for the take that ' +
-            'just ended. That section is missing from the saved transcript.',
-      'danger',
-    );
-  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -2620,9 +2205,6 @@ export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
   driver?.moveToToken(Math.max(0, tokenIndex));
   noteReposition();
-  // §36.3: an outline jump is a position the operator deliberately went to, and
-  // "where did I skip to" is half of what a take history is for.
-  noteCheckpoint('manual');
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
@@ -2639,11 +2221,7 @@ export function goToToken(tokenIndex: number): void {
  * problem: they travel as `manual_step`, and every one of them re-seeds the
  * cursor.
  *
- * NO CHECKPOINT, and that is the difference from `goToToken`. An outline jump
- * is an operator deciding to be somewhere and is worth a mark in the take
- * history; scrolling is how a presenter reads, and a history with a checkpoint
- * per wheel gesture is a history nobody can find the real jumps in. The
- * correction still COUNTS — `manualCorrectionCount` in the summary is a measure
+ * The correction COUNTS — `manualCorrectionCount` in the summary is a measure
  * of how much hand-holding the take needed, and this is exactly that.
  *
  * The stage decides whether a gesture was a move at all; by the time one
@@ -2685,10 +2263,10 @@ function noteReposition(): void {
 }
 
 /**
- * §15.2 retake. This is also the §36.3 take boundary: the pass that was being
- * performed is over, and the next one starts here. Closing it first means the
- * completed take is written with its own times, sections and checkpoints rather
- * than being merged into whatever follows.
+ * §15.2 retake. This is also the §36.3 pass boundary: the pass that was being
+ * performed is over, and the next one starts here. The summary reports on the
+ * new pass, so its coverage and following time start again rather than being
+ * merged into what came before.
  */
 export function restartParagraph(): void {
   driver?.restartParagraph();
@@ -2708,11 +2286,8 @@ export function restartParagraph(): void {
    * disagree about it.
    */
   state.update((s) => (s.heardAnything ? { ...s, heardAnything: false } : s));
-  noteCheckpoint('paragraph_start');
-  finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
   if (before.sessionId !== null) {
-    const passOrdinal = before.counts.retakes + 2;
-    beginTake(before.sessionId, passOrdinal, roundToken(before.snapshot?.confirmedToken) ?? 0);
+    beginTake(roundToken(before.snapshot?.confirmedToken) ?? 0);
   }
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
@@ -3378,15 +2953,6 @@ export function stopSession(): SessionSummary {
     part: s.part,
     partComplete: s.partComplete,
     nextPart: s.nextPart,
-    /*
-     * The OUTCOME, not the setting. A write that failed is re-queued and
-     * retried, so `transcriptBuffer` still holding items at the end of a take
-     * means some of it never landed.
-     */
-    // Filled in after the final flush below — the tail has not been written
-    // yet at this point, so judging it here would report on the wrong moment.
-    transcriptSaved: false,
-    transcriptPartial: false,
     manualJumps: s.counts.jumps,
     followingShare: takeFollowingShare(),
     wordsHeard,
@@ -3400,45 +2966,9 @@ export function stopSession(): SessionSummary {
      */
     voiceFollowingAvailable: s.voiceFollowingAvailable || everConnected,
   };
-  // §36.2 + §36.1: write the retained tail and close the record BEFORE the
-  // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
-  // abnormal path too, so the ordering here is the only thing that guarantees
-  // the last few seconds of a take are not silently dropped.
+  // §36.1: close the record BEFORE the teardown. `stopInternals` clears the
+  // pass `takeEndToken` reads, so the ending has to be taken from it first.
   if (s.sessionId) {
-    flushTranscript(s.sessionId, true);
-    /*
-     * The OUTCOME, judged after the final flush has been issued.
-     *
-     * `transcriptSaved` used to be `transcriptRetained` — the SETTING, not
-     * what happened — so a take whose appends failed reported "Saved" over a
-     * transcript with a hole in it, on the one screen where anybody would ever
-     * find out. A failed write is now re-queued rather than dropped, so items
-     * still in the buffer here are items that never landed.
-     *
-     * `transcriptRetentionDegraded` is sticky for the session: one failure
-     * means the transcript is incomplete, and that stays true however many
-     * later writes succeed.
-     */
-    summary.transcriptSaved =
-      transcriptRetained && !transcriptRetentionDegraded && transcriptBuffer.length === 0;
-    summary.transcriptPartial =
-      transcriptRetained && (transcriptRetentionDegraded || transcriptBuffer.length > 0);
-    /*
-     * The tail append issued two lines up has not settled yet, so a failure in
-     * THAT write cannot reach the two flags above at this moment — and making
-     * `stopSession` async to wait for it is a larger change than it looks: it
-     * is called from a navigation guard, a shortcut and the shutdown sequence,
-     * and two of those cannot await.
-     *
-     * So the correction comes to the summary instead of the summary waiting
-     * for it: `flushTranscript`'s catch patches this object in the store when
-     * the write that fails belongs to the take that just ended. The dialog
-     * renders from the store, so a summary that said "Saved" a moment ago
-     * changes to "Partly saved" in front of the presenter.
-     */
-    // §36.3: close the take that was running. Before the session row is closed,
-    // so a listener reading the history the moment the session ends sees the
-    // last take rather than a session with one pass missing.
     /*
      * Where the session ended. The conservative anchor when there is one, and
      * the take's own high-water mark otherwise — a session that ran and ended
@@ -3447,7 +2977,6 @@ export function stopSession(): SessionSummary {
      * there a session at all" the same answer.
      */
     const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
-    finishTake(s.sessionId, endTokenIndex);
     void trackPersistence(endSessionRecord(s.sessionId, {
       endTokenIndex,
       commandCount: 0,
@@ -3475,9 +3004,9 @@ export function stopSession(): SessionSummary {
    *
    * The summary is still BUILT and still returned to the caller, and both halves
    * of that matter. It is built because everything above this line also closes
-   * the session row, flushes the transcript tail and reports the ending location
-   * to Rust, and a rehearsal is a real reading whose ending is a real place in
-   * the script — "From last ending" is offered on it. It is returned because
+   * the session row and reports the ending location to Rust, and a rehearsal
+   * is a real reading whose ending is a real place in the script — "From last
+   * ending" is offered on it. It is returned because
    * `stopSession`'s contract is to hand back what it measured, and a caller that
    * asked for the numbers is not the surface being kept quiet.
    *
@@ -3519,8 +3048,6 @@ function emptySummary(s: SessionState): SessionSummary {
     retakes: 0,
     reconnects: 0,
     endingLocation: 'Beginning',
-    transcriptSaved: false,
-    transcriptPartial: false,
     manualJumps: 0,
     followingShare: null,
     wordsHeard: 0,
@@ -3620,23 +3147,15 @@ function stopInternals(): void {
   }
   if (clock) clearInterval(clock);
   clock = null;
-  if (transcriptFlushTimer) clearInterval(transcriptFlushTimer);
-  transcriptFlushTimer = null;
   if (displayWatchTimer) clearInterval(displayWatchTimer);
   displayWatchTimer = null;
-  transcriptRetained = false;
-  transcriptRetentionDegraded = false;
-  transcriptBuffer = [];
-  // Anything still in flight belongs to the take that just ended, not to this
-  // buffer or to whatever take fills it next.
-  transcriptEpoch += 1;
   stopVoicePill();
   stopSidecarFeed?.();
   stopSidecarFeed = null;
   compiledScript = null;
   stageSettings = null;
-  // §36.3: `stopSession` closes the open take first, so anything still here got
-  // past the normal stop path and belongs to a session that is already gone.
+  // §36.3: the pass ends with the take. `stopSession` has already read what it
+  // needed from it, and every other path belongs to a session that is gone.
   activeTake = null;
 }
 

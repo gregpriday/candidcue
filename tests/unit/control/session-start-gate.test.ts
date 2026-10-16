@@ -33,12 +33,9 @@ const stage = vi.hoisted(() => ({
 }));
 
 const records = vi.hoisted(() => ({
-  appendSessionTranscript: vi.fn(async () => 0),
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
-  recordSessionTake: vi.fn(async () => null),
-  listSessionTakes: vi.fn(async () => []),
 }));
 
 /** The pipeline is stubbed so the test can call the gate it was handed. */
@@ -125,7 +122,6 @@ function gateFor(scriptId: string, sourceHash: string): { ensureCompiled(): Prom
     sessionId: `session-${scriptId}`,
     compiled: compiledStub(scriptId, sourceHash),
     sessionGeneration: 1,
-    transcriptRetained: false,
   });
   const deps = pipeline.captured.deps;
   if (!deps) throw new Error('the voice pipeline was never constructed');
