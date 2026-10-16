@@ -30,12 +30,9 @@ const stage = vi.hoisted(() => ({
 }));
 
 const records = vi.hoisted(() => ({
-  appendSessionTranscript: vi.fn(async () => 0),
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
-  recordSessionTake: vi.fn(async () => null),
-  listSessionTakes: vi.fn(async () => []),
 }));
 
 /** A real transport cannot be stood up in node; nothing here needs one. */
@@ -124,7 +121,6 @@ function present(mode: 'voice' | 'manual' = 'voice'): void {
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
     sessionGeneration: 7,
-    transcriptRetained: false,
   });
 }
 

@@ -147,7 +147,6 @@ describe('live session store', () => {
     const summary = stopSession();
     expect(summary.retakes).toBe(1);
     expect(summary.durationSeconds).toBeGreaterThanOrEqual(59);
-    expect(summary.transcriptSaved).toBe(false);
 
     const s = get(session);
     expect(s.active).toBe(false);
@@ -247,9 +246,9 @@ describe('a practice', () => {
   it('still measures the reading for its caller', () => {
     /*
      * Withheld from the SCREEN, not from the caller. Everything on the stop
-     * path still runs — the session row closes, the transcript tail flushes and
-     * the ending location reaches Rust — because a rehearsal is a real reading
-     * whose ending is a real place in the script.
+     * path still runs — the session row closes and the ending location reaches
+     * Rust — because a rehearsal is a real reading whose ending is a real place
+     * in the script.
      */
     practise();
     const summary = stopSession();

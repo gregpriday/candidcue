@@ -52,13 +52,22 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
     'Single-window presentation has no independently selected stage display to persist.',
   list_display_profiles:
     'Single-window presentation uses Settings directly; legacy stage-display rows are dormant.',
+  /*
+   * The take history and the retained transcript had writers and no reader,
+   * so the writers went (#214). The commands, their tables and the retention
+   * setting are removed on the Rust side by #215/#217, and these entries go
+   * with them — "an entry must name a registered command" will insist.
+   */
+  record_session_take: 'Take history removed from the frontend (#214); Rust side goes in #217.',
+  list_session_takes: 'Take history removed from the frontend (#214); Rust side goes in #217.',
+  append_session_transcript:
+    'Transcript retention removed from the frontend (#214); Rust side goes in #217.',
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */
 const MUST_BE_WIRED = [
   'start_session',
   'end_session',
-  'append_session_transcript',
   'publish_stage_document',
   'open_stage',
   'update_settings',

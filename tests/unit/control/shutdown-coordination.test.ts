@@ -163,6 +163,22 @@ describe('the shell wires the steps that matter', () => {
       /writeUnsavedRecovery\(/,
     );
   });
+
+  it('waits for the session row before the take step reports done', () => {
+    /*
+     * `stopSession` closes the session row fire-and-forget, and that row holds
+     * the ending token Editor starts the next take from. The take history and
+     * the transcript appends used to share this wait; the row is what is left
+     * of it, and it is the one write the next launch cannot reconstruct.
+     */
+    const steps = appSource.slice(appSource.indexOf('installShutdownHandshake('));
+    const takeStep = steps.slice(
+      steps.indexOf("name: 'end-take'"),
+      steps.indexOf("name: 'reader-frame'"),
+    );
+    expect(takeStep).toMatch(/stopSession\(\)/);
+    expect(takeStep).toMatch(/await awaitPendingPersistence\(\)/);
+  });
 });
 
 describe('the shutdown protocol keeps its two event names distinct', () => {
@@ -181,64 +197,5 @@ describe('the shutdown protocol keeps its two event names distinct', () => {
     expect(CONTROL_EVENT.shutdownRequested).toBe('app://shutdown-requested');
     expect(SHUTDOWN_COMPLETE_EVENT).toBe('app://shutdown-complete');
     expect(SHUTDOWN_COMPLETE_EVENT).not.toBe(CONTROL_EVENT.shutdownRequested);
-  });
-});
-
-describe('a take reports what was actually saved, not what was configured', () => {
-  const source = readFileSync(
-    new URL('../../../src/control/stores/session.ts', import.meta.url),
-    'utf8',
-  );
-
-  it('re-queues a failed transcript write instead of dropping it', () => {
-    /*
-     * The buffer used to be cleared BEFORE the write was acknowledged, so a
-     * failed append lost exactly those items and nothing anywhere said so —
-     * the readiness review's phrase was "the application can believe retention
-     * is enabled while silently losing retained transcript items".
-     *
-     * Retried at the FRONT, so ordering survives. `commitSequence` is unique
-     * per session and Rust inserts with `INSERT OR IGNORE`, so retrying an
-     * item that did land is a no-op rather than a duplicate row.
-     *
-     * A source scan, and it is only worth what a source scan is worth: it
-     * cannot see WHEN the rejection arrives, which is where the interesting
-     * failures are. `session-live-wiring.test.ts` drives a deferred append
-     * across a take boundary and asserts the behaviour.
-     */
-    const flush = source.slice(
-      source.indexOf('function flushTranscript'),
-      source.indexOf('\n}', source.indexOf('function flushTranscript')),
-    );
-    expect(flush, 'the items must go back in the buffer').toMatch(
-      /transcriptBuffer = \[\.\.\.ready, \.\.\.transcriptBuffer\]/,
-    );
-    expect(flush, 'and the take must be told').toMatch(/transcriptRetentionDegraded = true/);
-  });
-
-  it('does not report the retention SETTING as the outcome', () => {
-    /*
-     * `transcriptSaved: transcriptRetained` was the whole defect in one line:
-     * the summary reported the setting the user chose rather than whether the
-     * writes landed, on the one screen where anybody would find out.
-     */
-    expect(source, 'the setting must not be the reported outcome').not.toMatch(
-      /transcriptSaved:\s*transcriptRetained\s*,/,
-    );
-    expect(source, 'the outcome is judged after the final flush').toMatch(
-      /summary\.transcriptSaved =\s*\n?\s*transcriptRetained && !transcriptRetentionDegraded/,
-    );
-    expect(source, 'and a partial save is its own answer').toMatch(
-      /summary\.transcriptPartial =/,
-    );
-  });
-
-  it('offers "partly saved" as a distinct answer on the summary', () => {
-    const summary = readFileSync(
-      new URL('../../../src/control/components/SessionSummary.svelte', import.meta.url),
-      'utf8',
-    );
-    expect(summary).toMatch(/transcriptPartial/);
-    expect(summary).toMatch(/Partly saved/);
   });
 });

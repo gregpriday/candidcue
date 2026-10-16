@@ -40,7 +40,6 @@ interface Harness {
   /** Raw recogniser text, as the transcript bar and word count receive it. */
   text: Array<{ text: string; final: boolean }>;
   lines: string[];
-  items: Array<{ itemId: string; commitSequence: number; transcript: string }>;
   connection: string[];
   holds: Array<{ held: boolean; reason: string | null }>;
   failures: Array<{ code: string; fatal: boolean }>;
@@ -50,7 +49,6 @@ interface Harness {
 function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
   const text: Harness['text'] = [];
   const lines: string[] = [];
-  const items: Harness['items'] = [];
   const connection: string[] = [];
   const holds: Harness['holds'] = [];
   const failures: Harness['failures'] = [];
@@ -62,12 +60,6 @@ function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
     compiled: compiledStub(),
     onTranscriptText: (value, final) => text.push({ text: value, final }),
     onTranscriptLine: (line) => lines.push(line),
-    onTranscriptItem: (item) =>
-      items.push({
-        itemId: item.itemId,
-        commitSequence: item.commitSequence,
-        transcript: item.transcript,
-      }),
     onConnectionState: (state) => connection.push(state),
     onFollowingHold: (held, reason) => holds.push({ held, reason }),
     onSessionFailure: (code, fatal) => failures.push({ code, fatal }),
@@ -76,7 +68,7 @@ function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
     ...overrides,
   });
 
-  return { pipeline, text, lines, items, connection, holds, failures, dropped };
+  return { pipeline, text, lines, connection, holds, failures, dropped };
 }
 
 /** One complete utterance, exactly as the Rust supervisor would emit it. */
@@ -103,36 +95,27 @@ describe('a take turns provider frames into words the aligner can follow', () =>
     expect(h.text.at(-1)?.text).toBe('Good morning, everyone.');
   });
 
-  it('reports a finished line once, for the tail and for retention', () => {
+  it('reports a finished line once, for the tail', () => {
     const h = harness();
     for (const frame of utterance(1, '1-0', 0, 'Good morning, everyone.')) {
       h.pipeline.handleSttFrame(frame);
     }
     expect(h.lines).toEqual(['Good morning, everyone.']);
-    expect(h.items).toEqual([
-      { itemId: '1-0', commitSequence: 0, transcript: 'Good morning, everyone.' },
-    ]);
   });
 
-  it('keeps consecutive utterances as separate retained items', () => {
+  it('keeps consecutive utterances as separate lines', () => {
     const h = harness();
     for (const frame of utterance(1, '1-0', 0, 'First sentence.')) h.pipeline.handleSttFrame(frame);
     for (const frame of utterance(1, '1-1', 1, 'Second sentence.')) h.pipeline.handleSttFrame(frame);
 
-    expect(h.items.map((item) => item.transcript)).toEqual([
-      'First sentence.',
-      'Second sentence.',
-    ]);
-    // The commit sequence is the retained row's uniqueness key, so two
-    // utterances must not collide on it.
-    expect(h.items.map((item) => item.commitSequence)).toEqual([0, 1]);
+    expect(h.lines).toEqual(['First sentence.', 'Second sentence.']);
   });
 
   it('says nothing for a final that is only whitespace', () => {
     // A recogniser will happily return a transcript for silence — a 100 ms
     // silent clip came back as "Yeah." during protocol work.
     // An empty or blank one must not become a transcript line the presenter
-    // sees, nor a retained row.
+    // sees.
     const h = harness();
     h.pipeline.handleSttFrame({
       kind: 'itemStarted',
@@ -149,7 +132,6 @@ describe('a take turns provider frames into words the aligner can follow', () =>
       audioEndMs: 400,
     });
     expect(h.lines).toEqual([]);
-    expect(h.items).toEqual([]);
   });
 });
 
@@ -174,15 +156,13 @@ describe('a take is not polluted by the take before it', () => {
     // The words actually landed rather than being silently discarded: the two
     // generations are unrelated counters and were once compared to each other.
     expect(h.lines).toEqual(['Spoken during this take.']);
-    expect(h.items.map((item) => item.transcript)).toEqual(['Spoken during this take.']);
   });
 
   it('applies a duplicated final once, however many times it arrives', () => {
     /*
-     * The transcript tail, the retained record and the word count are not
-     * idempotent. A provider that repeats a final — or a reconnect that
-     * replays one — would otherwise show the line twice and inflate the
-     * "words heard" figure past what the presenter said.
+     * The transcript tail is not idempotent. A provider that repeats a
+     * final — or a reconnect that replays one — would otherwise show the line
+     * twice.
      */
     const h = harness();
     const frames = utterance(1, '1-0', 0, 'Said exactly once.');
@@ -190,7 +170,6 @@ describe('a take is not polluted by the take before it', () => {
     h.pipeline.handleSttFrame(frames[frames.length - 1]!);
 
     expect(h.lines).toEqual(['Said exactly once.']);
-    expect(h.items).toHaveLength(1);
   });
 });
 

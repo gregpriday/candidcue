@@ -71,10 +71,10 @@ export interface StartSequenceGate {
   ensureCompiled(): Promise<void>;
 }
 
-/** One finalized transcript item, ready for §36.2 retention. */
+/** One finalized transcript item. */
 export interface FinalizedTranscriptItem {
   itemId: string;
-  /** The ledger's local commit ordering — the row's uniqueness key in SQLite. */
+  /** The ledger's local commit ordering. */
   commitSequence: number;
   audioStartMs?: number;
   audioEndMs?: number;
@@ -112,7 +112,6 @@ export interface VoicePipelineDeps {
   startSequence?: StartSequenceGate;
   /** §29.2 step 9 — transcript state above this layer goes too. */
   onResetTranscriptState?(): void;
-  /** Finalized transcript items, for retention and the visible tail. */
   /**
    * Raw recogniser text, for the stage's transcript bar and the "did it hear
    * me" word count. NOT alignment input: the alignment engine is fed by Rust
@@ -121,12 +120,6 @@ export interface VoicePipelineDeps {
   onTranscriptText(text: string, final: boolean): void;
   /** Final transcript lines for the Live transcript tail. */
   onTranscriptLine(line: string): void;
-  /**
-   * §36.2 retention feed: one finalized item with its commit ordering and audio
-   * window. Text only — never audio. Separate from `onTranscriptLine` because
-   * the tail is a four-line affordance and this is the durable record.
-   */
-  onTranscriptItem?(item: FinalizedTranscriptItem): void;
   onConnectionState(state: ConnectionState): void;
   /**
    * Following must visibly stop while transcription is untrustworthy — a
@@ -199,12 +192,11 @@ export class VoiceSessionPipeline {
    *
    * All that survives of what used to be a full transcript ledger. Alignment
    * has its own, in Rust; what is still needed here is idempotence for the
-   * things that are NOT idempotent — the retained transcript, the visible tail
-   * and the word count. A provider that re-sends a final would otherwise show
-   * the line twice and inflate "words heard" past what was said.
+   * visible tail, which is NOT idempotent. A provider that re-sends a final
+   * would otherwise show the line twice.
    */
   private readonly finalized = new Map<string, FinalizedTranscriptItem>();
-  /** Monotonic commit ordering — the retained row's uniqueness key. */
+  /** Monotonic commit ordering. */
   private commitSequence = 0;
   /** Audio-clock start of each open utterance, by item id. */
   private readonly itemStarts = new Map<string, number>();
@@ -559,9 +551,8 @@ export class VoiceSessionPipeline {
     /*
      * Side effects follow FIRST FINALIZATION, not arrival.
      *
-     * The transcript tail, the retained record and the word count are not
-     * idempotent, so a provider that re-sends a final would show the line
-     * twice and inflate "words heard" past what was said.
+     * The transcript tail is not idempotent, so a provider that re-sends a
+     * final would show the line twice.
      */
     if (this.finalized.has(frame.itemId)) {
       trace('final-duplicate', `item ${frame.itemId}`);
@@ -577,7 +568,6 @@ export class VoiceSessionPipeline {
     this.finalized.set(frame.itemId, item);
     this.itemStarts.delete(frame.itemId);
     this.deps.onTranscriptLine(text);
-    this.deps.onTranscriptItem?.(item);
   }
 
   private setConnectionState(state: ConnectionState): void {

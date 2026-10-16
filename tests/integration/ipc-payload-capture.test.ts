@@ -75,8 +75,6 @@ function responseFor(command: string): unknown {
       return { kind: 'logs', removedFiles: 0, removedBytes: 0 };
     case 'start_session':
       return { id: PLACEHOLDER_SESSION_ID, sessionGeneration: 1 };
-    case 'append_session_transcript':
-      return 1;
     case 'list_sessions':
       return [];
     default:
@@ -221,23 +219,6 @@ describe('captured IPC payloads (production services → wire)', () => {
         reconnectCount: 0,
         manualCorrectionCount: 2,
       }),
-    );
-    await capture('append_session_transcript', () =>
-      sessionRecords.appendSessionTranscript(PLACEHOLDER_SESSION_ID, [
-        {
-          commitSequence: 1,
-          providerItemId: 'item_1',
-          audioStartMs: 0,
-          audioEndMs: 1500,
-          transcript: 'Good morning everyone.',
-          disposition: 'script',
-        },
-        {
-          commitSequence: 2,
-          transcript: 'hey cue pause',
-          disposition: 'command',
-        },
-      ]),
     );
     await capture('list_sessions', () =>
       sessionRecords.listSessionRecords(PLACEHOLDER_SCRIPT_ID, 20),

@@ -27,12 +27,9 @@ const stage = vi.hoisted(() => ({
 }));
 
 const records = vi.hoisted(() => ({
-  appendSessionTranscript: vi.fn(async () => 0),
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
-  recordSessionTake: vi.fn(async () => null),
-  listSessionTakes: vi.fn(async () => []),
 }));
 
 /** The pipeline is stubbed so the test can drive its callbacks directly. */
@@ -146,7 +143,6 @@ function start(mode: 'voice' | 'manual' = 'voice'): void {
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
     sessionGeneration: 7,
-    transcriptRetained: false,
   });
 }
 

@@ -70,23 +70,6 @@ describe('session-record IPC payloads match the Rust DTOs', () => {
     });
   });
 
-  it('append_session_transcript sends commit-ordered items with dispositions', async () => {
-    await sessions.appendSessionTranscript(
-      fixture.append_session_transcript.sessionId,
-      fixture.append_session_transcript
-        .items as Parameters<typeof sessions.appendSessionTranscript>[1],
-    );
-    expect(payloadFor('append_session_transcript')).toEqual({
-      sessionId: fixture.append_session_transcript.sessionId,
-      items: fixture.append_session_transcript.items,
-    });
-  });
-
-  it('never invokes the backend for an empty batch of transcript items', async () => {
-    expect(await sessions.appendSessionTranscript('s-1', [])).toBe(0);
-    expect(calls).toHaveLength(0);
-  });
-
   it('list_sessions sends the filter Rust accepts', async () => {
     await sessions.listSessionRecords(fixture.list_sessions.scriptId, fixture.list_sessions.limit);
     expect(payloadFor('list_sessions')).toEqual({
