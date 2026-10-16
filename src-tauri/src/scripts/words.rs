@@ -1813,15 +1813,11 @@ impl<'a> BlockWalker<'a> {
             return;
         }
         match leaf {
-            Leaf::Paragraph { lines, first } => {
-                if !self.scan.suppressed[first] {
-                    self.markdown_block(&lines.join("\n"));
-                }
+            Leaf::Paragraph { lines, first } if !self.scan.suppressed[first] => {
+                self.markdown_block(&lines.join("\n"));
             }
-            Leaf::Html { end: HtmlEnd::Comment, lines, first } => {
-                if !self.scan.suppressed[first] {
-                    self.comment_block(&lines.join("\n"));
-                }
+            Leaf::Html { end: HtmlEnd::Comment, lines, first } if !self.scan.suppressed[first] => {
+                self.comment_block(&lines.join("\n"));
             }
             _ => {}
         }
