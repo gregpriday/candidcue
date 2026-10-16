@@ -21,6 +21,7 @@
 //! reads `downloadBytes`, not `download_bytes`, and a rename that compiles
 //! would break the picker with nothing failing here.
 
+use candidcue_lib::align::{AlignToken, AlignmentState};
 use candidcue_lib::coordinator::AppCoordinator;
 use candidcue_lib::database::{self, Database};
 use candidcue_lib::settings;
@@ -38,6 +39,9 @@ struct Harness {
     _dir: tempfile::TempDir,
     app: tauri::App<MockRuntime>,
     webview: WebviewWindow<MockRuntime>,
+    /// Settings' window. Commands that care who is asking (#264) are invoked
+    /// from here to stand for the Settings screen.
+    preferences: WebviewWindow<MockRuntime>,
 }
 
 fn harness() -> Harness {
@@ -54,6 +58,7 @@ fn harness() -> Harness {
             commands::update_settings,
             commands::preload_speech_engine,
             commands::start_transcription,
+            commands::stop_transcription,
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
@@ -66,34 +71,31 @@ fn harness() -> Harness {
     app.manage(AppCoordinator::default());
     app.manage(SpeechModelManager::new());
     app.manage(SpeechEngine::new());
+    app.manage(AlignmentState::new());
 
     let webview =
         WebviewWindowBuilder::new(&app, "control", tauri::WebviewUrl::App("control.html".into()))
             .build()
             .expect("mock control webview");
+    let preferences = WebviewWindowBuilder::new(
+        &app,
+        candidcue_lib::windows::preferences::PREFERENCES_LABEL,
+        tauri::WebviewUrl::App("preferences.html".into()),
+    )
+    .build()
+    .expect("mock preferences webview");
 
     Harness {
         _dir: dir,
         app,
         webview,
+        preferences,
     }
 }
 
 impl Harness {
     fn invoke(&self, command: &str, args: Value) -> Result<Value, Value> {
-        tauri::test::get_ipc_response(
-            &self.webview,
-            InvokeRequest {
-                cmd: command.into(),
-                callback: CallbackFn(0),
-                error: CallbackFn(1),
-                url: "tauri://localhost".parse().expect("url"),
-                body: InvokeBody::Json(args),
-                headers: Default::default(),
-                invoke_key: INVOKE_KEY.to_string(),
-            },
-        )
-        .map(|b| b.deserialize::<Value>().expect("response is json"))
+        invoke_from(&self.webview, command, args)
     }
 
     fn expect_ok(&self, command: &str, args: Value) -> Value {
@@ -104,6 +106,11 @@ impl Harness {
     fn expect_err(&self, command: &str, args: Value) -> Value {
         self.invoke(command, args)
             .expect_err(&format!("`{command}` must fail"))
+    }
+
+    /// The same call, made by Settings rather than by control.
+    fn from_settings(&self, command: &str, args: Value) -> Result<Value, Value> {
+        invoke_from(&self.preferences, command, args)
     }
 
     fn options(&self) -> Value {
@@ -117,6 +124,26 @@ impl Harness {
             Some("compile-hash".to_string()),
         );
     }
+}
+
+fn invoke_from(
+    from: &WebviewWindow<MockRuntime>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    tauri::test::get_ipc_response(
+        from,
+        InvokeRequest {
+            cmd: command.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().expect("url"),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        },
+    )
+    .map(|b| b.deserialize::<Value>().expect("response is json"))
 }
 
 fn code_of(err: &Value) -> &str {
@@ -376,6 +403,142 @@ fn starting_a_take_reports_a_missing_model_as_itself() {
         None,
         "no session is armed on a model that is not there"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Who may start a stream during a take (#264)
+// ---------------------------------------------------------------------------
+
+/// Settings' "Test transcription" makes the same call a take does, and there
+/// is one stream at a time: accepted mid-take, it took the take's recogniser
+/// and its alignment binding, and following never came back. Refused instead,
+/// and before anything else, so the refusal is about the take rather than
+/// about the model this machine also lacks.
+#[test]
+fn settings_cannot_test_transcription_while_a_take_is_open() {
+    let h = harness();
+    h.begin_take();
+
+    let err = h
+        .from_settings("start_transcription", json!({ "options": {} }))
+        .expect_err("a test started mid-take must be refused");
+    assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
+    assert_eq!(
+        err.get("recoverable").and_then(Value::as_bool),
+        Some(true),
+        "ending the take is a remedy the user can take"
+    );
+    assert_eq!(h.app.state::<SpeechEngine>().active_generation(), None);
+}
+
+/// The take's own call arrives with its session already open — `startTake`
+/// awaits `start_session` before the voice pipeline starts — so the guard
+/// must not catch it. It gets as far as the model, which is all a test
+/// without ~161 MB of weights can show.
+#[test]
+fn the_take_is_not_refused_by_its_own_session() {
+    let h = harness();
+    h.begin_take();
+
+    let err = h.expect_err("start_transcription", json!({ "options": {} }));
+    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+}
+
+/// With no take open, Settings' test is an ordinary start — and ending a take
+/// lifts the refusal.
+#[test]
+fn settings_can_test_transcription_when_no_take_is_open() {
+    let h = harness();
+    let err = h
+        .from_settings("start_transcription", json!({ "options": {} }))
+        .expect_err("no model is installed in this harness");
+    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+
+    h.begin_take();
+    h.app.state::<AppCoordinator>().end_session("session-under-test");
+    let err = h
+        .from_settings("start_transcription", json!({ "options": {} }))
+        .expect_err("no model is installed in this harness");
+    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+}
+
+/// The two halves only a real recogniser can show: the take's stream and its
+/// alignment binding survive a refused test, and a take still replaces a
+/// running test. Ignored because they need the model:
+///
+/// ```text
+/// CANDIDCUE_MODELS_DIR=/path/to/src-tauri/models \
+///   cargo test --test speech_language_tests transcription_ -- --ignored
+/// ```
+fn require_model() {
+    assert!(
+        std::env::var_os("CANDIDCUE_MODELS_DIR").is_some(),
+        "set CANDIDCUE_MODELS_DIR to a directory `pnpm models:fetch` filled"
+    );
+}
+
+fn arm_alignment(h: &Harness) {
+    let tokens: Vec<AlignToken> = serde_json::from_value(json!([
+        { "surface": "candidcue" },
+        { "surface": "is" },
+        { "surface": "following" },
+    ]))
+    .expect("tokens");
+    h.app.state::<AlignmentState>().start(1, &tokens);
+}
+
+fn generation_of(value: Value) -> u64 {
+    value.as_u64().expect("start_transcription returns its generation")
+}
+
+#[test]
+#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
+    require_model();
+    let h = harness();
+    h.begin_take();
+    arm_alignment(&h);
+    let take = generation_of(h.expect_ok("start_transcription", json!({ "options": {} })));
+    let speech = h.app.state::<SpeechEngine>();
+    let alignment = h.app.state::<AlignmentState>();
+    assert_eq!(speech.active_generation(), Some(take));
+    assert_eq!(alignment.bound_stream(), Some(take));
+
+    let err = h
+        .from_settings("start_transcription", json!({ "options": {} }))
+        .expect_err("a test started mid-take must be refused");
+    assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
+    assert_eq!(speech.active_generation(), Some(take), "the take keeps its stream");
+    assert_eq!(alignment.bound_stream(), Some(take), "and its alignment binding");
+
+    h.expect_ok("stop_transcription", json!({ "generation": take }));
+}
+
+#[test]
+#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+fn transcription_a_take_still_replaces_a_running_settings_test() {
+    require_model();
+    let h = harness();
+    let test = generation_of(
+        h.from_settings("start_transcription", json!({ "options": {} }))
+            .expect("with no take open, Settings may test"),
+    );
+
+    h.begin_take();
+    arm_alignment(&h);
+    let take = generation_of(h.expect_ok("start_transcription", json!({ "options": {} })));
+    let speech = h.app.state::<SpeechEngine>();
+    assert_ne!(take, test);
+    assert_eq!(speech.active_generation(), Some(take));
+    assert_eq!(h.app.state::<AlignmentState>().bound_stream(), Some(take));
+
+    // The test's own Stop, landing late, names its own generation and cannot
+    // end the take that replaced it.
+    h.from_settings("stop_transcription", json!({ "generation": test }))
+        .expect("a stale stop is accepted and ignored");
+    assert_eq!(speech.active_generation(), Some(take));
+
+    h.expect_ok("stop_transcription", json!({ "generation": take }));
 }
 
 // ---------------------------------------------------------------------------

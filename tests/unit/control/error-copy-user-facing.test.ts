@@ -779,3 +779,18 @@ describe('a refused model address points at the network, not the release', () =>
     expect(describeError({ code: 'STT_MODEL_URL_BLOCKED', userMessage: 'x' })).toBe(copy);
   });
 });
+
+/**
+ * #264 — Settings' transcription test is refused while a take holds the
+ * recogniser. It is a refusal with a remedy, not a recogniser failure, so it
+ * names what was blocked and what to do rather than borrowing the failure copy.
+ */
+describe('a transcription test refused during a take says why and what to do', () => {
+  it('names the take and the remedy', () => {
+    const copy = copyForErrorCode('STT_TEST_BLOCKED_BY_TAKE');
+    expect(copy).toMatch(/during a take/);
+    expect(copy).toMatch(/End the take/);
+    expect(copy).not.toMatch(CODE_TOKEN);
+    expect(describeError({ code: 'STT_TEST_BLOCKED_BY_TAKE', userMessage: 'x' })).toBe(copy);
+  });
+});
