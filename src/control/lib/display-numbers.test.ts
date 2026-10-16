@@ -98,6 +98,31 @@ describe('identificationMatches', () => {
     expect(identificationMatches(sessionFor([laptop, twinB]), [laptop, twinA])).toBe(false);
   });
 
+  it('notices identical monitors listed the other way round', () => {
+    // The tiles were listed with the primary twin first. The platform now
+    // lists the other one first, so it takes the bare fingerprint (and the
+    // number 2) while the primary twin takes the ordinal: every fingerprint
+    // still has its number, but the tiles describe the wrong panels.
+    const primaryTwin = { ...twinA, primary: true };
+    const otherTwin = { ...twinB, primary: false };
+    const swapped = sessionFor([
+      laptop,
+      { ...otherTwin, fingerprint: primaryTwin.fingerprint },
+      { ...primaryTwin, fingerprint: otherTwin.fingerprint },
+    ]);
+    expect(identificationMatches(swapped, [laptop, primaryTwin, otherTwin])).toBe(false);
+  });
+
+  it('notices a panel that was rescaled after the tiles were listed', () => {
+    const session = sessionFor([laptop, twinA]);
+    session.displays[1] = { ...session.displays[1]!, logicalSize: { width: 960, height: 540 } };
+    expect(identificationMatches(session, [laptop, twinA])).toBe(false);
+  });
+
+  it('agrees about an empty list', () => {
+    expect(identificationMatches(sessionFor([]), [])).toBe(true);
+  });
+
   it('refuses a session that names one panel twice', () => {
     const session = sessionFor([laptop, twinA]);
     session.displays[1] = { ...session.displays[0]! };

@@ -25,6 +25,13 @@ export function displayNumbers(displays: readonly DisplayDescriptor[]): Map<stri
  * glass. When this is false the tile list is stale and has to be read again —
  * a tile showing a number that a different panel is wearing is worse than no
  * number at all.
+ *
+ * The fingerprint alone is not enough to say "same panel". Two identical
+ * monitors are told apart by an ordinal Rust hands out in enumeration order,
+ * so if the platform lists them the other way round the ordinals swap with
+ * them, every fingerprint still gets the same number, and the tile now
+ * describes the other panel: the Primary pill on the wrong one, say. What the
+ * session repeats of each panel has to agree too.
  */
 export function identificationMatches(
   session: IdentificationSession,
@@ -35,5 +42,15 @@ export function identificationMatches(
   // Two entries for one panel would let the lengths agree while a tile went
   // unaccounted for.
   if (new Set(session.displays.map((d) => d.fingerprint)).size !== numbers.size) return false;
-  return session.displays.every((d) => numbers.get(d.fingerprint) === d.number);
+  const byFingerprint = new Map(displays.map((d) => [d.fingerprint, d]));
+  return session.displays.every((d) => {
+    const tile = byFingerprint.get(d.fingerprint);
+    return (
+      tile !== undefined &&
+      numbers.get(d.fingerprint) === d.number &&
+      tile.primary === d.primary &&
+      tile.logicalSize.width === d.logicalSize.width &&
+      tile.logicalSize.height === d.logicalSize.height
+    );
+  });
 }

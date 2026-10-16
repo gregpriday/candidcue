@@ -421,11 +421,14 @@
   let displaysError = $state<string | null>(null);
   let displaysLoading = $state(false);
   /**
-   * Which `loadDisplays` call is the latest. A topology change, "Check again"
-   * and Identify can all be reading the list at once, and the slowest answer
-   * must not replace a newer one.
+   * Which `loadDisplays` call is the latest, and the read itself while it is
+   * in flight. A topology change, "Check again" and Identify can all be
+   * reading the list at once: the slowest answer must not replace a newer one,
+   * and Identify has to wait for the newest one before it compares anything
+   * (`displaysSettled`).
    */
   let displaysRequest = 0;
+  let displaysInFlight: Promise<void> | null = null;
   let identifying = $state(false);
   let stageTesting = $state(false);
 
@@ -708,8 +711,23 @@
     return stageService.onDisplayTopologyChange(() => void loadDisplays());
   });
 
-  async function loadDisplays(): Promise<void> {
-    const request = ++displaysRequest;
+  function loadDisplays(): Promise<void> {
+    const load = readDisplays(++displaysRequest);
+    displaysInFlight = load;
+    return load;
+  }
+
+  /**
+   * Resolve once no read of the display list is in flight — including one
+   * that started while an earlier one was being waited for — so `displays`
+   * and `displaysError` describe the newest answer and nothing is about to
+   * replace them.
+   */
+  async function displaysSettled(): Promise<void> {
+    while (displaysInFlight !== null) await displaysInFlight;
+  }
+
+  async function readDisplays(request: number): Promise<void> {
     displaysLoading = true;
     displaysError = null;
     try {
@@ -724,7 +742,10 @@
       displays = [];
       displaysError = `CandidCue could not list the connected displays. ${describeError(err)}`;
     } finally {
-      if (request === displaysRequest) displaysLoading = false;
+      if (request === displaysRequest) {
+        displaysLoading = false;
+        displaysInFlight = null;
+      }
     }
   }
 
@@ -784,6 +805,12 @@
    * more and compared again — and if it STILL disagrees the panels are
    * changing under us, which is said rather than papered over with a tile
    * wearing a number that another panel is showing.
+   *
+   * Every comparison waits for the newest read first. A read already in flight
+   * (the section opening, a topology change) is about to replace the tiles,
+   * so agreeing with the list it replaces proves nothing; and the re-read
+   * below can itself be overtaken by a topology change, in which case its own
+   * answer is never shown and the newer one is the list to judge.
    */
   async function identifyDisplays(): Promise<void> {
     if (identifying) return;
@@ -792,8 +819,10 @@
       const identification = await stageService.identifyDisplays();
       const count = identification.displays.length;
       if (count === 0) return;
+      await displaysSettled();
       if (!identificationMatches(identification, displays)) {
-        await loadDisplays();
+        void loadDisplays();
+        await displaysSettled();
         // The re-read failed and has already said why.
         if (displaysError !== null) return;
         if (!identificationMatches(identification, displays)) {

@@ -416,12 +416,16 @@ pub fn window_display<R: Runtime>(
 
 /// One hash covering the whole desktop arrangement. Used only to notice that
 /// the topology changed so control can revalidate (spec §52.5).
+///
+/// In list order, not sorted. The order IS part of the arrangement now: it is
+/// what numbers the panels for Identify displays and the tiles in Settings
+/// (`identified_displays`), so a platform that lists the same panels the other
+/// way round has renumbered them, and Settings has to hear about it.
 pub fn topology_signature(descriptors: &[DisplayDescriptor]) -> String {
-    let mut parts: Vec<String> = descriptors
+    let parts: Vec<String> = descriptors
         .iter()
         .map(|d| format!("{}:{}", d.fingerprint, d.topology_hash))
         .collect();
-    parts.sort();
     let digest = crate::util::sha256_hex(parts.join("|").as_bytes());
     digest[..16].to_string()
 }
@@ -2132,6 +2136,9 @@ mod tests {
         let renumbered = identified_displays(&reversed);
         assert_eq!(renumbered[0].fingerprint, displays[2].fingerprint);
         assert_eq!(renumbered[0].number, 1);
+        // ...so a reorder alone has to register as a topology change, or the
+        // tiles keep numbers the glass no longer shows.
+        assert_ne!(topology_signature(&displays), topology_signature(&reversed));
 
         assert!(identified_displays(&[]).is_empty());
     }
