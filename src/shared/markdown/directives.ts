@@ -91,11 +91,16 @@ interface SourceLine {
   lineNumber: number; // 1-based
 }
 
+/** U+FEFF. Only at offset 0 is it a byte-order mark; anywhere else it is text. */
+export const BYTE_ORDER_MARK = 0xfeff;
+
 function splitLines(source: string): SourceLine[] {
   const lines: SourceLine[] = [];
-  let start = 0;
+  // A leading byte-order mark is not part of line one: left in, `\uFEFF:::stage`
+  // fails every fence test (#247). Offsets stay absolute, so line one starts at 1.
+  let start = source.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
   let lineNumber = 1;
-  for (let i = 0; i <= source.length; i++) {
+  for (let i = start; i <= source.length; i++) {
     if (i === source.length || source.charAt(i) === '\n') {
       let end = i;
       if (end > start && source.charAt(end - 1) === '\r') end--;

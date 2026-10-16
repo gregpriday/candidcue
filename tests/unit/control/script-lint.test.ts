@@ -307,6 +307,24 @@ describe('skipped regions', () => {
     expect(lintScriptSource(withoutCoach)).toEqual([]);
   });
 
+  it('reads a leading byte-order mark as no part of line one (#247)', () => {
+    const BOM = '\uFEFF';
+    // A stage direction opening on line one stays out of the lint...
+    const stage = [':::stage', 'LOOK AT THE LENS NOW', ':::', '', 'All good here.', ''].join('\n');
+    expect(codes(lintScriptSource(BOM + stage))).not.toContain('all-caps-run');
+    expect(lintScriptSource(BOM + stage)).toEqual(lintScriptSource(stage));
+    // ...and so does front matter.
+    const front = ['---', 'title: ALPHA BRAVO CHARLIE DELTA', '---', '', 'All good here.', ''].join('\n');
+    expect(lintScriptSource(BOM + front)).toEqual([]);
+    // Columns count from the editor's line start, which still holds the mark.
+    const caps = 'ALPHA BRAVO CHARLIE DELTA and stop.\n';
+    const [plain] = only(lintScriptSource(caps), 'all-caps-run');
+    const [marked] = only(lintScriptSource(BOM + caps), 'all-caps-run');
+    expect(marked!.line).toBe(1);
+    expect(marked!.column).toBe(plain!.column! + 1);
+    expect(marked!.length).toBe(plain!.length);
+  });
+
   it('does not mistake an opening horizontal rule for front matter', () => {
     // `---`, prose, `---` is indistinguishable from front matter if you only
     // look at the first line, and guessing wrong silences an arbitrary span of

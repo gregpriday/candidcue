@@ -712,6 +712,371 @@ async fn import_markdown_and_bundle_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
+// Byte-order marks (#247)
+// ---------------------------------------------------------------------------
+
+/// U+FEFF, which "UTF-8 with BOM" files open with and `read_to_string` keeps.
+const BOM: &str = "\u{feff}";
+const QUARTERLY: &str = "# Quarterly update\n\nHello everyone, thanks for coming.\n";
+
+async fn import_path(h: &Harness, path: &std::path::Path) -> import_export::ImportResult {
+    import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        ImportOptions {
+            path: path.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+    .expect("import")
+}
+
+#[tokio::test]
+async fn a_byte_order_mark_does_not_survive_a_file_import() {
+    let h = harness().await;
+    for ext in ["md", "markdown", "txt"] {
+        let plain_dir = tempfile::tempdir().unwrap();
+        let marked_dir = tempfile::tempdir().unwrap();
+        let plain_path = plain_dir.path().join(format!("Quarterly update.{ext}"));
+        let marked_path = marked_dir.path().join(format!("Quarterly update.{ext}"));
+        fs::write(&plain_path, QUARTERLY).unwrap();
+        fs::write(&marked_path, format!("{BOM}{QUARTERLY}")).unwrap();
+
+        let plain = import_path(&h, &plain_path).await.script;
+        let marked = import_path(&h, &marked_path).await.script;
+
+        let stored = fs::read(h.paths.canonical_file(&sid(&marked.id))).unwrap();
+        assert!(!stored.starts_with(&[0xEF, 0xBB, 0xBF]), "{ext}: the mark reached the stored script");
+        assert_eq!(stored, fs::read(h.paths.canonical_file(&sid(&plain.id))).unwrap(), "{ext}");
+        // The Library used to count the heading, `#` and all: 8 words, not 5.
+        assert_eq!(marked.spoken_word_count, plain.spoken_word_count, "{ext}");
+        assert_eq!(marked.spoken_word_count, 5, "{ext}");
+        assert_eq!(marked.preview_text, plain.preview_text, "{ext}");
+        assert_eq!(marked.preview_text, "Hello everyone, thanks for coming.", "{ext}");
+
+        // The import revision holds the same bytes as a plain import's.
+        let plain_revisions = repo::list_revisions(&h.pool, &sid(&plain.id)).await.unwrap();
+        let marked_revisions = repo::list_revisions(&h.pool, &sid(&marked.id)).await.unwrap();
+        assert_eq!(marked_revisions.len(), 1, "{ext}");
+        assert_eq!(marked_revisions[0].source_hash, plain_revisions[0].source_hash, "{ext}");
+        assert_eq!(marked_revisions[0].word_count, Some(5), "{ext}");
+
+        // The user's own file is read, never rewritten.
+        assert!(fs::read(&marked_path).unwrap().starts_with(&[0xEF, 0xBB, 0xBF]), "{ext}");
+    }
+}
+
+#[tokio::test]
+async fn a_byte_order_mark_does_not_survive_a_bundle_import() {
+    use std::io::Write;
+
+    let h = harness().await;
+    let external = tempfile::tempdir().unwrap();
+    let bundle = external.path().join("quarterly.candidcue");
+    let mut writer = zip::ZipWriter::new(fs::File::create(&bundle).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file("manifest.json", options).unwrap();
+    writer
+        .write_all(br#"{"schemaVersion":1,"title":"Quarterly update","assets":[]}"#)
+        .unwrap();
+    writer.start_file("script.md", options).unwrap();
+    writer.write_all(format!("{BOM}{QUARTERLY}").as_bytes()).unwrap();
+    writer.finish().unwrap();
+
+    let imported = import_path(&h, &bundle).await.script;
+    let script_id = sid(&imported.id);
+    assert_eq!(fs::read_to_string(h.paths.canonical_file(&script_id)).unwrap(), QUARTERLY);
+    assert_eq!(imported.spoken_word_count, 5);
+    let revisions = repo::list_revisions(&h.pool, &script_id).await.unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].source_hash, candidcue_lib::util::sha256_hex(QUARTERLY.as_bytes()));
+}
+
+#[tokio::test]
+async fn an_external_byte_order_mark_is_adopted_once_and_never_handed_on() {
+    let h = harness().await;
+    let summary = repo::create_script(&h.pool, &h.paths, create_input("Ext", QUARTERLY))
+        .await
+        .expect("create");
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+
+    // An outside editor saves the same words back as "UTF-8 with BOM".
+    fs::write(&canonical, format!("{BOM}{QUARTERLY}")).unwrap();
+
+    // The bytes changed, so this is an ordinary adoption; the editor still
+    // gets the text without the mark.
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get");
+    assert!(doc.externally_changed);
+    assert_eq!(doc.source, QUARTERLY);
+
+    // ...once. The recorded hash describes the file as it is on disk, so a
+    // second open finds nothing new (no phantom-change loop).
+    let again = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get again");
+    assert!(!again.externally_changed);
+    assert_eq!(again.summary.script_revision, doc.summary.script_revision);
+    assert_eq!(again.source, QUARTERLY);
+
+    // Export and duplicate carry the text, not the mark.
+    let external = tempfile::tempdir().unwrap();
+    let md_out = external.path().join("out.md");
+    import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &script_id,
+        ExportOptions {
+            destination: md_out.to_string_lossy().to_string(),
+            format: "markdown".into(),
+            include_assets: false,
+        },
+    )
+    .await
+    .expect("markdown export");
+    assert_eq!(fs::read_to_string(&md_out).unwrap(), QUARTERLY);
+    let copy = repo::duplicate_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("duplicate");
+    assert_eq!(fs::read_to_string(h.paths.canonical_file(&sid(&copy.id))).unwrap(), QUARTERLY);
+    assert_eq!(copy.spoken_word_count, 5);
+
+    // The adoption snapshot preserved the file byte for byte; viewing it
+    // shows the text, and restoring it writes the text.
+    let revisions = repo::list_revisions(&h.pool, &script_id).await.unwrap();
+    let adopted = revisions
+        .iter()
+        .find(|r| r.reason == "external_change")
+        .expect("adoption snapshot");
+    assert_eq!(
+        adopted.source_hash,
+        candidcue_lib::util::sha256_hex(format!("{BOM}{QUARTERLY}").as_bytes())
+    );
+    let viewed = repo::get_revision(&h.pool, &h.paths, &script_id, &adopted.id)
+        .await
+        .expect("view revision");
+    assert_eq!(viewed.source, QUARTERLY);
+
+    // Saving over the marked file is not refused, and writes it clean.
+    let saved = repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &script_id,
+        again.summary.script_revision,
+        format!("{QUARTERLY}More.\n"),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save over a marked file");
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), format!("{QUARTERLY}More.\n"));
+
+    let restored = repo::restore_revision(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &script_id,
+        &adopted.id,
+        saved.script_revision,
+    )
+    .await
+    .expect("restore the marked revision");
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), QUARTERLY);
+    let after = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get after restore");
+    assert!(!after.externally_changed);
+    assert_eq!(after.summary.script_revision, restored.script_revision);
+}
+
+#[tokio::test]
+async fn a_byte_order_mark_from_the_editor_never_reaches_the_disk() {
+    let h = harness().await;
+    // Pasted into a new script...
+    let summary = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input("Pasted", &format!("{BOM}{QUARTERLY}")),
+    )
+    .await
+    .expect("create");
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), QUARTERLY);
+    assert_eq!(summary.spoken_word_count, 5);
+
+    // ...and into an existing one. The file is written without it, and the
+    // recorded hash is of what was written, so nothing reads it as changed.
+    let first = repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &script_id,
+        1,
+        format!("{BOM}Hello again.\n"),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save");
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), "Hello again.\n");
+
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get");
+    assert!(!doc.externally_changed);
+    assert_eq!(doc.summary.script_revision, first.script_revision);
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &script_id,
+        doc.summary.script_revision,
+        "Third time.\n".into(),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("a later save is not refused");
+}
+
+/// Put a script into the state an import left it in before #247: the given
+/// file keeps its mark, the row's hash matches it, and the Library read the
+/// heading as speech — 8 words, a 4-second estimate, the mark in the preview.
+/// The row is stamped `spoken-stats-2`, the last extraction that read the mark
+/// as text, so only the version bump can tell reconciliation it is stale.
+async fn seed_legacy_bom_metadata(h: &Harness, script_id: &ScriptId, marked: &str) {
+    sqlx::query(
+        "UPDATE scripts SET source_hash = ?, spoken_word_count = 8, estimated_duration_seconds = 4,
+             last_compile_version = 'spoken-stats-2'
+         WHERE id = ?",
+    )
+    .bind(candidcue_lib::util::sha256_hex(marked.as_bytes()))
+    .bind(script_id.as_str())
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM script_search WHERE script_id = ?")
+        .bind(script_id.as_str())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO script_search (script_id, title, plain_text) VALUES (?, ?, ?)")
+        .bind(script_id.as_str())
+        .bind("Legacy")
+        .bind(format!("{BOM}# Quarterly update Hello everyone, thanks for coming."))
+        .execute(&h.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup() {
+    use candidcue_lib::scripts::reconcile;
+
+    let h = harness().await;
+    let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
+        .await
+        .expect("create");
+    let clean_duration = summary.estimated_duration_seconds;
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+
+    let marked = format!("{BOM}{QUARTERLY}");
+    fs::write(&canonical, &marked).unwrap();
+    seed_legacy_bom_metadata(&h, &script_id, &marked).await;
+    let before = repo::get_summary(&h.pool, &script_id).await.unwrap();
+    assert_eq!(before.spoken_word_count, 8);
+    assert_ne!(before.estimated_duration_seconds, clean_duration);
+    assert!(before.preview_text.starts_with(BOM));
+
+    // The hash matches, so this is not a repair...
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.hash_mismatches_repaired.is_empty());
+
+    // ...but the Library now reads what the editor does, and nothing else moved.
+    let after = repo::get_summary(&h.pool, &script_id).await.unwrap();
+    assert_eq!(after.spoken_word_count, 5);
+    assert_eq!(after.estimated_duration_seconds, clean_duration);
+    assert_eq!(after.preview_text, "Hello everyone, thanks for coming.");
+    assert_eq!(after.script_revision, before.script_revision);
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), marked);
+
+    // A second startup leaves it be, and opening finds no external change.
+    reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("second reconciliation");
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get");
+    assert!(!doc.externally_changed);
+    assert_eq!(doc.source, QUARTERLY);
+    assert_eq!(doc.summary.spoken_word_count, 5);
+    assert_eq!(doc.summary.script_revision, before.script_revision);
+}
+
+#[tokio::test]
+async fn a_legacy_marked_script_restored_from_its_revision_is_rebuilt_too() {
+    use candidcue_lib::scripts::reconcile;
+
+    let h = harness().await;
+    let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
+        .await
+        .expect("create");
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+
+    // The legacy import's own revision is the newest one, mark and all, and
+    // the canonical file is gone.
+    let marked = format!("{BOM}{QUARTERLY}");
+    repo::create_revision_snapshot(&h.pool, &h.paths, &script_id, &marked, "import", 8)
+        .await
+        .expect("legacy import revision");
+    seed_legacy_bom_metadata(&h, &script_id, &marked).await;
+    fs::remove_file(&canonical).unwrap();
+
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.missing_files_restored.contains(&summary.id));
+
+    // Restored byte for byte, with the metadata rebuilt in the same pass.
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), marked);
+    let after = repo::get_summary(&h.pool, &script_id).await.unwrap();
+    assert_eq!(after.spoken_word_count, 5);
+    assert_eq!(after.preview_text, "Hello everyone, thanks for coming.");
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get");
+    assert!(!doc.externally_changed);
+    assert_eq!(doc.source, QUARTERLY);
+}
+
+#[tokio::test]
+async fn an_import_with_two_marks_stores_one_text() {
+    // Stripping must be idempotent: import strips, then `create_script`
+    // strips what import hands it, and the import revision is written from
+    // import's copy. A file a tool gave a second mark must not come out as
+    // one text in the script and another in its first revision.
+    let h = harness().await;
+    let external = tempfile::tempdir().unwrap();
+    let path = external.path().join("Twice.md");
+    fs::write(&path, format!("{BOM}{BOM}{QUARTERLY}")).unwrap();
+
+    let imported = import_path(&h, &path).await.script;
+    let script_id = sid(&imported.id);
+    assert_eq!(fs::read_to_string(h.paths.canonical_file(&script_id)).unwrap(), QUARTERLY);
+    let revisions = repo::list_revisions(&h.pool, &script_id).await.unwrap();
+    assert_eq!(revisions[0].source_hash, candidcue_lib::util::sha256_hex(QUARTERLY.as_bytes()));
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 

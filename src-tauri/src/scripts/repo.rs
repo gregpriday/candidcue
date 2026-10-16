@@ -12,7 +12,7 @@ use super::words::{
     estimated_duration_seconds, preview_text, spoken_text, SpokenTextOptions, SPOKEN_STATS_VERSION,
 };
 use super::{
-    CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
+    into_without_bom, CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
     RevisionSummary, SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks,
     ScriptMetadataPatch, ScriptPage, ScriptSettings, ScriptStatus, ScriptSummary,
 };
@@ -171,7 +171,9 @@ pub async fn create_script(
     if title.is_empty() {
         return Err(AppError::invalid_input("A script needs a title."));
     }
-    let source = input.source.unwrap_or_default();
+    // A new script is never written with a byte-order mark (#247); it is
+    // stripped before the write and the hash, so both describe the same bytes.
+    let source = into_without_bom(input.source.unwrap_or_default());
     if source.len() > MAX_SOURCE_BYTES {
         return Err(AppError::validation("The script is larger than the 10 MB limit."));
     }
@@ -367,6 +369,10 @@ pub async fn get_script(
     if !canonical.exists() {
         return Err(file_missing_error(script_id));
     }
+    // The hash, and any external-change snapshot, describe the file as it is
+    // on disk; only the text handed to the editor loses a BOM (#247). Hashing
+    // the stripped text instead would turn every legacy BOM file into a
+    // phantom external change on the first open after upgrading.
     let source = fs::read_to_string(&canonical)?;
     let disk_hash = sha256_hex(source.as_bytes());
     let settings = parse_settings(&row.script_settings_json);
@@ -425,7 +431,7 @@ pub async fn get_script(
 
     Ok(ScriptDocument {
         summary,
-        source,
+        source: into_without_bom(source),
         source_hash,
         settings,
         selected_display_profile_id: row.selected_display_profile_id.clone(),
@@ -447,6 +453,10 @@ pub async fn save_script(
     if source.len() > MAX_SOURCE_BYTES {
         return Err(AppError::validation("The script is larger than the 10 MB limit."));
     }
+    // A mark pasted into the editor, or carried by a restored legacy revision,
+    // is not written back (#247). Stripped before the hash below, so the
+    // recorded hash still describes exactly the bytes that land on disk.
+    let source = into_without_bom(source);
     let lock = locks.lock_for(script_id);
     let _guard = lock.lock().await;
 
@@ -733,7 +743,7 @@ pub async fn duplicate_script(
     if !canonical.exists() {
         return Err(file_missing_error(script_id));
     }
-    let source = fs::read_to_string(&canonical)?;
+    let source = into_without_bom(fs::read_to_string(&canonical)?);
 
     let new_id = ScriptId::parse(&new_uuid())?;
     let now = now_iso();
@@ -1239,7 +1249,8 @@ pub async fn get_revision(
     revision_id: &str,
 ) -> Result<RevisionDocument, AppError> {
     let (summary, rel_path) = fetch_revision(pool, script_id, revision_id).await?;
-    let source = fs::read_to_string(paths.root().join(&rel_path))?;
+    // The snapshot keeps the bytes it preserved; the viewer gets the text.
+    let source = into_without_bom(fs::read_to_string(paths.root().join(&rel_path))?);
     Ok(RevisionDocument { summary, source })
 }
 
@@ -1486,6 +1497,10 @@ pub async fn restore_canonical_from_latest_revision(
     if !revision_file.exists() {
         return Ok(false);
     }
+    // Restored byte for byte, like every other preserved artifact: a legacy
+    // byte-order mark goes back with it, and the editor never sees it because
+    // `get_script` hands out text without one (#247). The cleared stamp below
+    // has reconciliation re-derive the Library fields, which ignore the mark.
     let source = fs::read_to_string(&revision_file)?;
     let canonical = paths.canonical_file(script_id);
     atomic_write(&canonical, source.as_bytes())?;
