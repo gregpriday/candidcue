@@ -169,6 +169,7 @@ pub async fn run_startup_reconciliation(
         Ok(purged) => purged,
         Err(err) => {
             tracing::warn!(error = %err, "expired trash could not be listed for purging");
+            report.notes.push(format!("purge trash: {err}"));
             0
         }
     };

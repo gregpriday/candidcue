@@ -59,7 +59,19 @@ pub async fn end_session(
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
     let record =
-        sessions::end_session(db.pool(), &session_id, summary.unwrap_or_default()).await?;
+        match sessions::end_session(db.pool(), &session_id, summary.unwrap_or_default()).await {
+            Ok(record) => record,
+            Err(err) => {
+                // The row is gone only when its script was deleted permanently
+                // mid-take, which deletes the script's sessions. The take is
+                // over all the same; left in the coordinator it would go on
+                // reporting a take that is running (a locked language picker).
+                if err.code() == "NOT_FOUND" {
+                    coordinator.end_session(&session_id);
+                }
+                return Err(err);
+            }
+        };
     coordinator.end_session(&session_id);
 
     /*

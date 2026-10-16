@@ -870,6 +870,10 @@ async fn a_presented_script_deletes_permanently_with_its_history_and_nothing_els
 
     // "Start where the last take ended" reads the other script's sessions.
     assert_eq!(session_history(&h.pool, &survivor_session).await, (1, 1, 1));
+    assert_eq!(
+        fs::read_to_string(h.paths.canonical_file(&sid(&survivor.id))).unwrap(),
+        "Said again."
+    );
     let listed = candidcue_lib::sessions::list_sessions(&h.pool, Some(survivor.id.clone()), 10)
         .await
         .unwrap();
@@ -890,9 +894,15 @@ async fn a_failed_permanent_delete_keeps_the_history_and_the_folder() {
         .expect("trash");
     block_row_delete(&h.pool, &doomed_id).await;
 
-    repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &doomed_id)
+    let err = repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &doomed_id)
         .await
         .expect_err("the blocked delete fails");
+    // Failing anywhere earlier (the quarantine rename, say) would leave the
+    // history alone without the rollback ever being exercised.
+    assert!(
+        format!("{err:?}").contains("blocked by test"),
+        "the delete must fail at the injected trigger, got: {err:?}"
+    );
     assert_eq!(
         repo::get_summary(&h.pool, &doomed_id).await.unwrap().status,
         ScriptStatus::Trash
@@ -923,8 +933,15 @@ async fn expired_trash_purge_deletes_presented_scripts_and_skips_one_that_fails(
         ids.push(id);
     }
     let [presented, never_presented, blocked, recent] = <[ScriptId; 4]>::try_from(ids).unwrap();
-    for id in [&presented, &never_presented, &blocked] {
-        sqlx::query("UPDATE scripts SET trashed_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
+    // The blocked script expired first, so the purge — oldest first — reaches
+    // it before the two behind it.
+    for (id, trashed_at) in [
+        (&blocked, "2019-01-01T00:00:00.000Z"),
+        (&presented, "2020-01-01T00:00:00.000Z"),
+        (&never_presented, "2020-01-01T00:00:00.000Z"),
+    ] {
+        sqlx::query("UPDATE scripts SET trashed_at = ? WHERE id = ?")
+            .bind(trashed_at)
             .bind(id.as_str())
             .execute(&h.pool)
             .await
@@ -932,8 +949,6 @@ async fn expired_trash_purge_deletes_presented_scripts_and_skips_one_that_fails(
     }
     block_row_delete(&h.pool, &blocked).await;
 
-    // Whatever order the candidates come back in, the blocked script must not
-    // keep the others in the trash.
     let purged = repo::purge_expired_trash(&h.pool, &h.paths, &h.locks)
         .await
         .expect("purge");

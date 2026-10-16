@@ -1351,7 +1351,8 @@ pub async fn purge_expired_trash(
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(30))
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM scripts WHERE status = 'trash' AND trashed_at IS NOT NULL AND trashed_at < ?",
+        "SELECT id FROM scripts WHERE status = 'trash' AND trashed_at IS NOT NULL AND trashed_at < ?
+         ORDER BY trashed_at, id",
     )
     .bind(&cutoff)
     .fetch_all(pool)
