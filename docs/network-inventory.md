@@ -23,14 +23,14 @@ Everything below is the **current** behaviour of a stock 1.0 build, not a plan.
 |---|---|---|---|---|---|
 | Speech-model download | **Active** | The user starts it from the Welcome screen or Settings › Speech | Ordinary HTTPS request metadata and no body: a DNS lookup for the host, a TLS handshake carrying the host name, and a `GET` for the archive with the user's IP address, `User-Agent: CandidCue/<version>`, and `Range` with the server's own `If-Range` validator when a partial download is resumed. No script, audio or transcript, and no account or device identifier — the IP address and the version in the User-Agent are the identifying things any HTTPS request carries | The mirror named by the catalogue if one is configured, then the model publisher's own release hosting (`github.com`) — plus any host those redirect to; see below | Start, cancel, remove; the app works without it, without following |
 | Remote-image import | **No command in this build** | None. The IPC command is compiled out, so nothing can call it | Nothing | None | Not exposed |
-| Application update checks | **None** | None. There is no updater and no endpoint to check | Nothing | None | Updates are downloaded manually from the website (`docs/updates.md`) |
+| Application update checks | **None** | None. There is no updater and no endpoint to check | Nothing | None | Updates are downloaded manually from the project's GitHub releases (`docs/updates.md`) |
 | Analytics / product telemetry | **None** | — | — | — | — |
 | Automatic crash-report upload | **None** | — | — | — | Crashes leave local log lines, which go nowhere unless the user exports a support bundle |
 | Licence checks / registration | **None** | Registration is honour-system; nothing verifies it | — | — | — |
 | Speech recognition | **On device** | A take, or the microphone test | Nothing leaves the machine | — | Start and stop |
 | Alignment / following | **On device** | A take | Nothing leaves the machine | — | — |
 | Support-bundle upload | **Never automatic** | The user exports a folder and chooses what to do with it | Whatever the bundle contains, to whoever the user sends it to | The user's own support channel | Explicit, and the bundle can be inspected before it is sent |
-| Links out of the app | **Handed to the browser** | The user picks a Help-menu destination, or the model's licence link in the speech picker | CandidCue makes no request; macOS opens the URL in the default browser, which then behaves like a browser — with its own cookies, its own DNS and its own idea of privacy | `candidcue.com` for the Help destinations (`src-tauri/src/web.rs`), or the licence URL the model catalogue declares | Clicking it |
+| Links out of the app | **Handed to the browser** | The user picks a Help-menu destination, or the model's licence link in the speech picker | CandidCue makes no request; macOS opens the URL in the default browser, which then behaves like a browser — with its own cookies, its own DNS and its own idea of privacy | `github.com/gregpriday/candidcue` for the Help destinations (`src-tauri/src/web.rs`), or the licence URL the model catalogue declares | Clicking it |
 
 ### Redirects, and why "the host" is not a promise
 

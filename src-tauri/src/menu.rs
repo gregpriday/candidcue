@@ -662,13 +662,13 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &item("help.keyboard-shortcuts", "Keyboard Shortcuts", Some(keys::SHORTCUTS))?,
             &item("help.setup-assistant", "Setup Assistant", None)?,
-            &item("help.guide", "User Guide", None)?,
+            &item("help.guide", "Project README", None)?,
             &sep()?,
             // Off the machine and onto the web. Grouped away from the local
             // actions above because leaving the app is a different kind of
             // thing to do, and a user reaching for "Reveal Logs" should not
             // land in a browser.
-            &item("help.website", "CandidCue Website", None)?,
+            &item("help.website", "CandidCue on GitHub", None)?,
             &item("help.release-notes", "Release Notes", None)?,
             &item("help.download", "Download Latest Version", None)?,
             &item("help.report-problem", "Report a Problem", None)?,

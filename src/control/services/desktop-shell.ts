@@ -494,13 +494,13 @@ export async function revealLogs(): Promise<void> {
 }
 
 /**
- * Open one of CandidCue's own pages in the browser (Help › the website group).
+ * Open one of the project's pages in the browser (Help › the web group).
  *
- * The payload is a NAME. Rust holds the table that turns it into a URL under a
- * single compile-time origin (`src-tauri/src/web.rs`), which is what lets the
- * control window keep having no permission to open an arbitrary address — the
- * `opener:default` grant was removed in the 1.0 readiness pass and this is
- * deliberately not a way to get it back.
+ * The payload is a NAME. Rust holds the table that turns it into a fixed page
+ * of the one compile-time repository (`src-tauri/src/web.rs`), which is what
+ * lets the control window keep having no permission to open an arbitrary
+ * address — the `opener:default` grant was removed in the 1.0 readiness pass
+ * and this is deliberately not a way to get it back.
  */
 export async function openWebDestination(destination: WebDestination): Promise<void> {
   await ipcInvoke('open_web_destination', { name: destination });
