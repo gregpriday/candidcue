@@ -1047,10 +1047,11 @@ async fn reconciliation_rederives_stale_library_stats_without_editing_the_script
         "a freshly derived row is stamped, or every startup would re-derive it"
     );
 
-    // What the old line scanner stored for this script, with no stamp.
+    // What an older extraction stored for this script. (Rows indexed before
+    // the stamp existed carry NULL; the restore test above covers that one.)
     sqlx::query(
         "UPDATE scripts SET spoken_word_count = 17, estimated_duration_seconds = 8,
-             last_compile_version = NULL
+             last_compile_version = 'spoken-stats-1'
          WHERE id = ?",
     )
     .bind(&created.id)
@@ -1112,5 +1113,24 @@ async fn reconciliation_rederives_stale_library_stats_without_editing_the_script
     assert!(!repo::refresh_stale_spoken_stats(&h.pool, &h.paths, &sid(&created.id), &h.locks)
         .await
         .unwrap());
+
+    // A file that disagrees with its row is a repair, not a refresh: the
+    // refresh leaves the row alone rather than indexing bytes the row's hash
+    // does not describe.
+    fs::write(h.paths.canonical_file(&sid(&created.id)), "Somebody else's words entirely.").unwrap();
+    sqlx::query("UPDATE scripts SET last_compile_version = NULL WHERE id = ?")
+        .bind(&created.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    assert!(!repo::refresh_stale_spoken_stats(&h.pool, &h.paths, &sid(&created.id), &h.locks)
+        .await
+        .unwrap());
+    let listed = repo::list_scripts(&h.pool, ScriptFilter::default(), None, PageRequest::default())
+        .await
+        .unwrap();
+    let row = listed.items.iter().find(|s| s.id == created.id).expect("listed");
+    assert_eq!(row.spoken_word_count, 4);
+    assert_eq!(row.preview_text, "Welcome back. Let's go.");
 }
 

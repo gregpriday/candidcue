@@ -541,6 +541,95 @@
     "plain": "very important and bold nested text end."
   },
   {
+    "name": "rule of three counts the remaining run lengths",
+    "source": "a***b**c**d\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["a","bc","d"],
+    "plain": "a*bc**d"
+  },
+  {
+    "name": "an attention marker inside emphasis",
+    "source": "a*~b~*c\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["abc"],
+    "plain": "abc"
+  },
+  {
+    "name": "emphasis corner cases",
+    "source": "**a*b** and *a**b* and a**b**c and __init__ and foo*bar*baz\n",
+    "words": 11,
+    "durationSeconds": 5,
+    "tokens": ["a","b","and","a","b","and","abc","and","init","and","foobarbaz"],
+    "plain": "a*b and a**b and abc and init and foobarbaz"
+  },
+  {
+    "name": "an ordered item that cannot interrupt a quoted paragraph",
+    "source": "> Alpha\n2. Beta\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Alpha","Beta"],
+    "plain": "Alpha Beta"
+  },
+  {
+    "name": "a tab after a quote marker",
+    "source": ">\t# Title\n\n>\tQuoted words.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Quoted","words"],
+    "plain": "Quoted words."
+  },
+  {
+    "name": "a definition inside indented code defines nothing",
+    "source": "    [Pause]: /url\n\nHello [Pause] there.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there"],
+    "plain": "Hello there."
+  },
+  {
+    "name": "ordered siblings after a wrapped item",
+    "source": "1. First point\n   wraps here\n2. Second point\n3) Third point\n",
+    "words": 8,
+    "durationSeconds": 4,
+    "tokens": ["First","point","wraps","here","Second","point","Third","point"],
+    "plain": "First point wraps here Second point Third point"
+  },
+  {
+    "name": "a nested ordered list cannot interrupt its item",
+    "source": "1. a\n   2. b\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["a","2","b"],
+    "plain": "a 2. b"
+  },
+  {
+    "name": "titled links and images",
+    "source": "See [the docs](https://example.com \"Docs\") and ![a chart](c.png \"Chart\") now.\n",
+    "options": {"readImageAltText":true},
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["See","the","docs","and","a","chart","now"],
+    "plain": "See the docs and a chart now."
+  },
+  {
+    "name": "a cue at the start of a list item and alone between paragraphs",
+    "source": "- [Cue: point] Start here\n\nFirst.\n\n[Pause]\n\nSecond.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Start","here","First","Second"],
+    "plain": "Start here First. Second."
+  },
+  {
+    "name": "bold cue and an alias in a list item",
+    "source": "- **[Cue: x]** Our API{say=\"a p i\"} works.\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["Our","a","p","i","works"],
+    "plain": "Our a p i works."
+  },
+  {
     "name": "fixture: basic.md",
     "file": "basic.md",
     "words": 98,

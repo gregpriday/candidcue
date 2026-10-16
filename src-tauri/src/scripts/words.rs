@@ -27,6 +27,7 @@
 //! one turns up. Known, accepted differences are listed at the bottom of this
 //! file.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -495,7 +496,7 @@ fn named_entity(name: &str) -> Option<char> {
 /* ------------------------------------------------------------------ */
 
 /// Link and image reference definitions, keyed by normalised label.
-type Definitions = std::collections::HashMap<String, String>;
+type Definitions = HashMap<String, String>;
 
 fn normalize_label(label: &str) -> String {
     label.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
@@ -532,11 +533,13 @@ enum Inline {
     Break,
 }
 
-static INLINE_HTML: LazyLock<Regex> = LazyLock::new(|| {
+/// Inline HTML other than comments. Comments are found through the
+/// precomputed `-->` index instead, because an unterminated `<!--` would
+/// otherwise send this pattern to the end of the block once per occurrence.
+static INLINE_TAG: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r#"^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*/?>"#,
         r"|</[A-Za-z][A-Za-z0-9-]*\s*>",
-        r"|<!---?>|<!--[\s\S]*?-->",
         r"|<\?[\s\S]*?\?>",
         r"|<!\[CDATA\[[\s\S]*?\]\]>",
         r"|<![A-Za-z][^>]*>)",
@@ -553,138 +556,307 @@ static AUTOLINK: LazyLock<Regex> = LazyLock::new(|| {
     .expect("autolink pattern")
 });
 
+/// Link labels nested deeper than this are read as plain text. CommonMark sets
+/// no limit, but each level recurses, and this runs over every script at
+/// startup: a pathological document must not be able to exhaust the stack.
+const MAX_LINK_DEPTH: usize = 8;
+
+/// How far an inline tag, autolink or link destination may run. Each is
+/// matched from one `<` or `(`, so an unbounded match is a scan to the end of
+/// the block per occurrence; nothing a script contains is this long.
+const INLINE_CONSTRUCT_WINDOW: usize = 4096;
+
+fn window_end(src: &str, from: usize, end: usize) -> usize {
+    let mut at = end.min(from.saturating_add(INLINE_CONSTRUCT_WINDOW));
+    while !src.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
 fn is_punctuation(c: char) -> bool {
     c.is_ascii_punctuation() || (!c.is_alphanumeric() && !c.is_whitespace())
 }
 
-/// Parse `src[start..end]` into inline items.
-fn parse_inlines(src: &str, start: usize, end: usize, defs: &Definitions) -> Vec<Inline> {
-    let bytes = src.as_bytes();
-    let mut items = Vec::new();
-    let mut text_start = start;
-    let mut i = start;
-    let flush = |items: &mut Vec<Inline>, from: usize, to: usize| {
-        if from < to {
-            items.push(Inline::Text { start: from, end: to });
-        }
-    };
-    while i < end {
-        match bytes[i] {
-            b'\\' => {
-                if i + 1 < end && bytes[i + 1] == b'\n' {
-                    flush(&mut items, text_start, i);
-                    items.push(Inline::Break);
-                    i += 2;
-                    text_start = i;
-                } else if i + 1 < end && bytes[i + 1].is_ascii_punctuation() {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            b'\n' => {
-                let mut spaces_from = i;
-                while spaces_from > text_start && bytes[spaces_from - 1] == b' ' {
-                    spaces_from -= 1;
-                }
-                if i - spaces_from >= 2 {
-                    flush(&mut items, text_start, spaces_from);
-                    items.push(Inline::Break);
-                    text_start = i + 1;
-                }
-                i += 1;
-            }
-            b'`' => {
-                let run = bytes[i..end].iter().take_while(|b| **b == b'`').count();
-                match find_code_close(bytes, i + run, end, run) {
-                    Some(close) => {
-                        flush(&mut items, text_start, i);
-                        let (content, content_start) = code_content(src, i + run, close);
-                        items.push(Inline::Code {
-                            end: content_start + content.len(),
-                            content,
-                            start: content_start,
-                        });
-                        i = close + run;
-                        text_start = i;
-                    }
-                    None => i += run,
-                }
-            }
-            b'!' if i + 1 < end && bytes[i + 1] == b'[' => match match_link(src, i + 1, end, defs) {
-                Some(link) => {
-                    flush(&mut items, text_start, i);
-                    items.push(Inline::Image {
-                        alt: label_text(src, link.label_start, link.label_end, defs),
-                        alt_start: link.label_start,
-                        url: link.url,
-                    });
-                    i = link.next;
-                    text_start = i;
-                }
-                None => i += 1,
-            },
-            b'[' => match match_link(src, i, end, defs) {
-                Some(link) => {
-                    flush(&mut items, text_start, i);
-                    items.push(Inline::Link {
-                        label: parse_inlines(src, link.label_start, link.label_end, defs),
-                    });
-                    i = link.next;
-                    text_start = i;
-                }
-                None => i += 1,
-            },
-            b'<' => {
-                if let Some(caps) = AUTOLINK.captures(&src[i..end]) {
-                    let inner = caps.get(1).expect("autolink target");
-                    flush(&mut items, text_start, i);
-                    items.push(Inline::Link {
-                        label: vec![Inline::Text {
-                            start: i + inner.start(),
-                            end: i + inner.end(),
-                        }],
-                    });
-                    i += caps.get(0).expect("autolink").end();
-                    text_start = i;
-                } else if let Some(found) = INLINE_HTML.find(&src[i..end]) {
-                    flush(&mut items, text_start, i);
-                    items.push(Inline::Silent);
-                    i += found.end();
-                    text_start = i;
-                } else {
-                    i += 1;
-                }
-            }
-            ch @ (b'*' | b'_' | b'~') => {
-                let len = bytes[i..end].iter().take_while(|b| **b == ch).count();
-                flush(&mut items, text_start, i);
-                items.push(Inline::Delimiter(delimiter_run(src, ch, i, len)));
-                i += len;
-                text_start = i;
-            }
-            _ => i += src[i..].chars().next().map_or(1, char::len_utf8),
-        }
-    }
-    flush(&mut items, text_start, end);
-    match_emphasis(&mut items);
-    items
+/// Inline parsing for one block of text. Everything that would otherwise be
+/// searched for once per opener — the matching `]`, the closing backtick run,
+/// the next `-->` — is indexed once up front, so the work stays linear in the
+/// length of the block however the text is malformed.
+struct InlineParser<'s> {
+    src: &'s str,
+    defs: &'s Definitions,
+    /// The matching `]` for every `[` that has one, escapes respected.
+    brackets: HashMap<usize, usize>,
+    /// Every `-->`, in order.
+    comment_closes: Vec<usize>,
+    /// Start of every maximal backtick run, by run length, in order.
+    backtick_runs: HashMap<usize, Vec<usize>>,
 }
 
-fn find_code_close(bytes: &[u8], from: usize, end: usize, run: usize) -> Option<usize> {
-    let mut j = from;
-    while j < end {
-        if bytes[j] == b'`' {
-            let len = bytes[j..end].iter().take_while(|b| **b == b'`').count();
-            if len == run {
-                return Some(j);
+impl<'s> InlineParser<'s> {
+    fn new(src: &'s str, defs: &'s Definitions) -> Self {
+        let bytes = src.as_bytes();
+        let mut brackets = HashMap::new();
+        let mut open = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    i += 2;
+                    continue;
+                }
+                b'[' => open.push(i),
+                b']' => {
+                    if let Some(at) = open.pop() {
+                        brackets.insert(at, i);
+                    }
+                }
+                _ => {}
             }
-            j += len;
-        } else {
-            j += 1;
+            i += 1;
+        }
+        // Backslashes are literal inside a code span, so closing runs are
+        // indexed without regard to escapes.
+        let mut backtick_runs: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'`' {
+                let len = bytes[i..].iter().take_while(|b| **b == b'`').count();
+                backtick_runs.entry(len).or_default().push(i);
+                i += len;
+            } else {
+                i += 1;
+            }
+        }
+        Self {
+            src,
+            defs,
+            brackets,
+            comment_closes: src.match_indices("-->").map(|(at, _)| at).collect(),
+            backtick_runs,
         }
     }
-    None
+
+    /// The next backtick run of exactly `run` characters after `opener`.
+    fn code_close(&self, opener: usize, run: usize, end: usize) -> Option<usize> {
+        let runs = self.backtick_runs.get(&run)?;
+        let next = runs.partition_point(|&at| at <= opener);
+        runs.get(next).copied().filter(|&at| at < end)
+    }
+
+    /// The end of an inline comment opening at `open`, if it closes before `end`.
+    fn comment_end(&self, open: usize, end: usize) -> Option<usize> {
+        let body = open + 4;
+        let rest = &self.src[body..end];
+        // `<!-->` and `<!--->` are complete (empty) comments.
+        if rest.starts_with('>') {
+            return Some(body + 1);
+        }
+        if rest.starts_with("->") {
+            return Some(body + 2);
+        }
+        let next = self.comment_closes.partition_point(|&at| at < body);
+        let close = *self.comment_closes.get(next)?;
+        (close + 3 <= end).then_some(close + 3)
+    }
+
+    /// Parse `src[start..end]` into inline items.
+    fn parse(&self, start: usize, end: usize, depth: usize) -> Vec<Inline> {
+        let src = self.src;
+        let bytes = src.as_bytes();
+        let mut items = Vec::new();
+        let mut text_start = start;
+        let mut i = start;
+        let flush = |items: &mut Vec<Inline>, from: usize, to: usize| {
+            if from < to {
+                items.push(Inline::Text { start: from, end: to });
+            }
+        };
+        let links = depth < MAX_LINK_DEPTH;
+        while i < end {
+            match bytes[i] {
+                b'\\' => {
+                    if i + 1 < end && bytes[i + 1] == b'\n' {
+                        flush(&mut items, text_start, i);
+                        items.push(Inline::Break);
+                        i += 2;
+                        text_start = i;
+                    } else if i + 1 < end && bytes[i + 1].is_ascii_punctuation() {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b'\n' => {
+                    let mut spaces_from = i;
+                    while spaces_from > text_start && bytes[spaces_from - 1] == b' ' {
+                        spaces_from -= 1;
+                    }
+                    if i - spaces_from >= 2 {
+                        flush(&mut items, text_start, spaces_from);
+                        items.push(Inline::Break);
+                        text_start = i + 1;
+                    }
+                    i += 1;
+                }
+                b'`' => {
+                    let run = bytes[i..end].iter().take_while(|b| **b == b'`').count();
+                    match self.code_close(i, run, end) {
+                        Some(close) => {
+                            flush(&mut items, text_start, i);
+                            let (content, content_start) = code_content(src, i + run, close);
+                            items.push(Inline::Code {
+                                end: content_start + content.len(),
+                                content,
+                                start: content_start,
+                            });
+                            i = close + run;
+                            text_start = i;
+                        }
+                        None => i += run,
+                    }
+                }
+                b'!' if links && i + 1 < end && bytes[i + 1] == b'[' => {
+                    match self.match_link(i + 1, end) {
+                        Some(link) => {
+                            flush(&mut items, text_start, i);
+                            items.push(Inline::Image {
+                                alt: self.label_text(link.label_start, link.label_end, depth + 1),
+                                alt_start: link.label_start,
+                                url: link.url,
+                            });
+                            i = link.next;
+                            text_start = i;
+                        }
+                        None => i += 1,
+                    }
+                }
+                b'[' if links => match self.match_link(i, end) {
+                    Some(link) => {
+                        flush(&mut items, text_start, i);
+                        items.push(Inline::Link {
+                            label: self.parse(link.label_start, link.label_end, depth + 1),
+                        });
+                        i = link.next;
+                        text_start = i;
+                    }
+                    None => i += 1,
+                },
+                b'<' => {
+                    let window = window_end(src, i, end);
+                    if src[i..end].starts_with("<!--") {
+                        match self.comment_end(i, end) {
+                            Some(close) => {
+                                flush(&mut items, text_start, i);
+                                items.push(Inline::Silent);
+                                i = close;
+                                text_start = i;
+                            }
+                            None => i += 1,
+                        }
+                    } else if let Some(caps) = AUTOLINK.captures(&src[i..window]) {
+                        let inner = caps.get(1).expect("autolink target");
+                        flush(&mut items, text_start, i);
+                        items.push(Inline::Link {
+                            label: vec![Inline::Text {
+                                start: i + inner.start(),
+                                end: i + inner.end(),
+                            }],
+                        });
+                        i += caps.get(0).expect("autolink").end();
+                        text_start = i;
+                    } else if let Some(found) = INLINE_TAG.find(&src[i..window]) {
+                        flush(&mut items, text_start, i);
+                        items.push(Inline::Silent);
+                        i += found.end();
+                        text_start = i;
+                    } else {
+                        i += 1;
+                    }
+                }
+                ch @ (b'*' | b'_' | b'~') => {
+                    let len = bytes[i..end].iter().take_while(|b| **b == ch).count();
+                    flush(&mut items, text_start, i);
+                    items.push(Inline::Delimiter(delimiter_run(src, ch, i, len)));
+                    i += len;
+                    text_start = i;
+                }
+                _ => i += src[i..].chars().next().map_or(1, char::len_utf8),
+            }
+        }
+        flush(&mut items, text_start, end);
+        match_emphasis(&mut items);
+        items
+    }
+
+    /// A link (or, after `!`, an image) whose label opens at `open`: inline
+    /// `[label](url)`, full `[label][ref]`, collapsed `[label][]` or shortcut
+    /// `[label]`. A reference form only counts when the reference is defined —
+    /// an undefined `[Cue: smile]` stays text, which is what makes it a
+    /// directive.
+    fn match_link(&self, open: usize, end: usize) -> Option<LinkMatch> {
+        let src = self.src;
+        let bytes = src.as_bytes();
+        let close = *self.brackets.get(&open)?;
+        if close >= end {
+            return None;
+        }
+        let (label_start, label_end) = (open + 1, close);
+        let after = close + 1;
+        if after < end && bytes[after] == b'(' {
+            if let Some((url, next)) = inline_destination(src, after, end) {
+                return Some(LinkMatch { label_start, label_end, url, next });
+            }
+        }
+        if after < end && bytes[after] == b'[' {
+            if let Some(&ref_close) = self.brackets.get(&after).filter(|&&at| at < end) {
+                let reference = &src[after + 1..ref_close];
+                let key = if reference.trim().is_empty() {
+                    &src[label_start..label_end]
+                } else {
+                    reference
+                };
+                if let Some(url) = self.defs.get(&normalize_label(key)) {
+                    return Some(LinkMatch {
+                        label_start,
+                        label_end,
+                        url: url.clone(),
+                        next: ref_close + 1,
+                    });
+                }
+            }
+        }
+        let url = self.defs.get(&normalize_label(&src[label_start..label_end]))?;
+        Some(LinkMatch { label_start, label_end, url: url.clone(), next: after })
+    }
+
+    /// An image's alt text: the label's text content with its markup removed.
+    fn label_text(&self, start: usize, end: usize, depth: usize) -> String {
+        fn collect(src: &str, items: &[Inline], out: &mut String) {
+            for item in items {
+                match item {
+                    Inline::Text { start, end } => {
+                        let mut node = TextNode::default();
+                        node.push_decoded(src, *start, *end);
+                        out.push_str(&node.text);
+                    }
+                    Inline::Delimiter(delimiter) => {
+                        let from = delimiter.start + delimiter.used_front;
+                        let to = delimiter.start + delimiter.len - delimiter.used_back;
+                        out.push_str(&src[from..to]);
+                    }
+                    Inline::Code { content, .. } => out.push_str(content),
+                    Inline::Link { label } => collect(src, label, out),
+                    Inline::Image { alt, .. } => out.push_str(alt),
+                    Inline::Break => out.push(' '),
+                    Inline::Silent => {}
+                }
+            }
+        }
+        let mut out = String::new();
+        collect(self.src, &self.parse(start, end, depth), &mut out);
+        out
+    }
 }
 
 /// Code span content per CommonMark: line endings become spaces, and one space
@@ -698,6 +870,9 @@ fn code_content(src: &str, start: usize, end: usize) -> (String, usize) {
     }
 }
 
+/// Classify a delimiter run as micromark does, including the GFM rule that an
+/// adjacent attention marker of another kind (`*~x~*`) does not stop a `*` or
+/// `_` run from opening or closing.
 fn delimiter_run(src: &str, ch: u8, start: usize, len: usize) -> Delimiter {
     let before = src[..start].chars().next_back();
     let after = src[start + len..].chars().next();
@@ -705,16 +880,30 @@ fn delimiter_run(src: &str, ch: u8, start: usize, len: usize) -> Delimiter {
     let space_after = after.is_none_or(char::is_whitespace);
     let punct_before = before.is_some_and(is_punctuation);
     let punct_after = after.is_some_and(is_punctuation);
-    let left = !space_after && (!punct_after || space_before || punct_before);
-    let right = !space_before && (!punct_before || space_after || punct_after);
-    let (can_open, can_close) = match ch {
-        b'_' => (
-            left && (!right || punct_before),
-            right && (!left || punct_after),
-        ),
-        // GFM strikethrough takes one or two tildes, never more.
-        b'~' if len > 2 => (false, false),
-        _ => (left, right),
+    let marker = |c: Option<char>| matches!(c, Some('*' | '_' | '~'));
+    let (can_open, can_close) = if ch == b'~' {
+        // GFM strikethrough takes one or two tildes, never more, and has no
+        // attention-marker exception of its own.
+        if len > 2 {
+            (false, false)
+        } else {
+            (
+                !space_after && (!punct_after || space_before || punct_before),
+                !space_before && (!punct_before || space_after || punct_after),
+            )
+        }
+    } else {
+        let left = (!space_after && (!punct_after || space_before || punct_before)) || marker(after);
+        let right =
+            (!space_before && (!punct_before || space_after || punct_after)) || marker(before);
+        if ch == b'_' {
+            (
+                left && (space_before || punct_before || !right),
+                right && (space_after || punct_after || !left),
+            )
+        } else {
+            (left, right)
+        }
     };
     Delimiter {
         ch,
@@ -727,51 +916,54 @@ fn delimiter_run(src: &str, ch: u8, start: usize, len: usize) -> Delimiter {
     }
 }
 
+fn delimiter_remaining(items: &[Inline], idx: usize) -> usize {
+    match &items[idx] {
+        Inline::Delimiter(delimiter) => delimiter.remaining(),
+        _ => 0,
+    }
+}
+
 /// CommonMark's "process emphasis", reduced to deciding which delimiter
-/// characters are syntax. Nothing else about emphasis matters to speech.
+/// characters are syntax — nothing else about emphasis matters to speech. The
+/// rule of three is applied to the *remaining* run lengths, as micromark does,
+/// and a failed search records how far down it looked (`openers_bottom`) so a
+/// run of unmatched closers cannot make the pass quadratic.
 fn match_emphasis(items: &mut [Inline]) {
     let mut openers: Vec<usize> = Vec::new();
+    let mut bottom: HashMap<(u8, bool, usize), usize> = HashMap::new();
     for idx in 0..items.len() {
         let Inline::Delimiter(closer) = &items[idx] else {
             continue;
         };
-        let (ch, can_open, can_close, closer_len) =
-            (closer.ch, closer.can_open, closer.can_close, closer.len);
+        let (ch, can_open, can_close) = (closer.ch, closer.can_open, closer.can_close);
         if can_close {
             loop {
-                let Inline::Delimiter(closer) = &items[idx] else {
-                    unreachable!()
-                };
-                if closer.remaining() == 0 {
+                let closer_left = delimiter_remaining(items, idx);
+                if closer_left == 0 {
                     break;
                 }
-                let found = openers.iter().rposition(|&o| {
+                let key = (ch, can_open, if ch == b'~' { closer_left } else { closer_left % 3 });
+                let floor = bottom.get(&key).copied().unwrap_or(0).min(openers.len());
+                let found = openers[floor..].iter().rposition(|&o| {
                     let Inline::Delimiter(opener) = &items[o] else {
                         return false;
                     };
-                    if opener.ch != ch || opener.remaining() == 0 {
+                    let opener_left = opener.remaining();
+                    if opener.ch != ch || opener_left == 0 {
                         return false;
                     }
                     if ch == b'~' {
-                        return opener.len == closer_len;
+                        return opener_left == closer_left;
                     }
-                    let either_both = (opener.can_open && opener.can_close) || (can_open && can_close);
-                    !(either_both
-                        && (opener.len + closer_len) % 3 == 0
-                        && !(opener.len % 3 == 0 && closer_len % 3 == 0))
+                    let odd = opener.can_close || can_open;
+                    !(odd && closer_left % 3 != 0 && (opener_left + closer_left) % 3 == 0)
                 });
-                let Some(position) = found else {
+                let Some(position) = found.map(|p| p + floor) else {
+                    bottom.insert(key, openers.len());
                     break;
                 };
                 let o = openers[position];
-                let opener_left = match &items[o] {
-                    Inline::Delimiter(opener) => opener.remaining(),
-                    _ => unreachable!(),
-                };
-                let closer_left = match &items[idx] {
-                    Inline::Delimiter(closer) => closer.remaining(),
-                    _ => unreachable!(),
-                };
+                let opener_left = delimiter_remaining(items, o);
                 let used = if ch == b'~' {
                     closer_left
                 } else if opener_left >= 2 && closer_left >= 2 {
@@ -790,13 +982,12 @@ fn match_emphasis(items: &mut [Inline]) {
                 if opener_left == used {
                     openers.pop();
                 }
+                for floor in bottom.values_mut() {
+                    *floor = (*floor).min(openers.len());
+                }
             }
         }
-        let remaining = match &items[idx] {
-            Inline::Delimiter(delimiter) => delimiter.remaining(),
-            _ => unreachable!(),
-        };
-        if can_open && remaining > 0 {
+        if can_open && delimiter_remaining(items, idx) > 0 {
             openers.push(idx);
         }
     }
@@ -809,60 +1000,10 @@ struct LinkMatch {
     next: usize,
 }
 
-/// A link (or, after `!`, an image) whose label opens at `open`: inline
-/// `[label](url)`, full `[label][ref]`, collapsed `[label][]` or shortcut
-/// `[label]`. A reference form only counts when the reference is defined —
-/// an undefined `[Cue: smile]` stays text, which is what makes it a directive.
-fn match_link(src: &str, open: usize, end: usize, defs: &Definitions) -> Option<LinkMatch> {
-    let bytes = src.as_bytes();
-    let mut depth = 0usize;
-    let mut j = open + 1;
-    let close = loop {
-        if j >= end {
-            return None;
-        }
-        match bytes[j] {
-            b'\\' => j += 2,
-            b'[' => {
-                depth += 1;
-                j += 1;
-            }
-            b']' if depth == 0 => break j,
-            b']' => {
-                depth -= 1;
-                j += 1;
-            }
-            _ => j += 1,
-        }
-    };
-    let (label_start, label_end) = (open + 1, close);
-    let after = close + 1;
-    if after < end && bytes[after] == b'(' {
-        if let Some((url, next)) = inline_destination(src, after, end) {
-            return Some(LinkMatch { label_start, label_end, url, next });
-        }
-    }
-    if after < end && bytes[after] == b'[' {
-        if let Some(offset) = src[after + 1..end].find(']') {
-            let reference = &src[after + 1..after + 1 + offset];
-            let key = if reference.trim().is_empty() {
-                &src[label_start..label_end]
-            } else {
-                reference
-            };
-            if let Some(url) = defs.get(&normalize_label(key)) {
-                let next = after + 1 + offset + 1;
-                return Some(LinkMatch { label_start, label_end, url: url.clone(), next });
-            }
-        }
-    }
-    let url = defs.get(&normalize_label(&src[label_start..label_end]))?;
-    Some(LinkMatch { label_start, label_end, url: url.clone(), next: after })
-}
-
 /// `(destination "optional title")` starting at the `(`; returns the
 /// destination and the offset after the `)`.
 fn inline_destination(src: &str, paren: usize, end: usize) -> Option<(String, usize)> {
+    let end = window_end(src, paren, end);
     let bytes = src.as_bytes();
     let skip_space = |mut k: usize| {
         while k < end && bytes[k].is_ascii_whitespace() {
@@ -873,7 +1014,7 @@ fn inline_destination(src: &str, paren: usize, end: usize) -> Option<(String, us
     let mut k = skip_space(paren + 1);
     let destination;
     if k < end && bytes[k] == b'<' {
-        let close = src[k + 1..end].find(|c| c == '>' || c == '<' || c == '\n')?;
+        let close = src[k + 1..end].find(['>', '<', '\n'])?;
         if bytes[k + 1 + close] != b'>' {
             return None;
         }
@@ -907,34 +1048,6 @@ fn inline_destination(src: &str, paren: usize, end: usize) -> Option<(String, us
         k = skip_space(k + 1 + offset + 1);
     }
     (k < end && bytes[k] == b')').then(|| (destination, k + 1))
-}
-
-/// An image's alt text: the label's text content with its markup removed.
-fn label_text(src: &str, start: usize, end: usize, defs: &Definitions) -> String {
-    fn collect(src: &str, items: &[Inline], out: &mut String) {
-        for item in items {
-            match item {
-                Inline::Text { start, end } => {
-                    let mut node = TextNode::default();
-                    node.push_decoded(src, *start, *end);
-                    out.push_str(&node.text);
-                }
-                Inline::Delimiter(delimiter) => {
-                    let from = delimiter.start + delimiter.used_front;
-                    let to = delimiter.start + delimiter.len - delimiter.used_back;
-                    out.push_str(&src[from..to]);
-                }
-                Inline::Code { content, .. } => out.push_str(content),
-                Inline::Link { label } => collect(src, label, out),
-                Inline::Image { alt, .. } => out.push_str(alt),
-                Inline::Break => out.push(' '),
-                Inline::Silent => {}
-            }
-        }
-    }
-    let mut out = String::new();
-    collect(src, &parse_inlines(src, start, end, defs), &mut out);
-    out
 }
 
 /// The compiler's URL allowlist (`classifyUrl`): an image whose reference is
@@ -1102,6 +1215,9 @@ fn scan_containers(lines: &[&str]) -> ContainerScan {
     };
     let mut stack: Vec<(Option<ContainerKind>, usize)> = Vec::new();
     let mut fence: Option<(u8, usize)> = None;
+    // +1 where a silent/stage region opens, -1 after it closes: nested regions
+    // cost one entry each rather than one pass over their lines each.
+    let mut suppression = vec![0i32; n + 1];
     for (i, line) in lines.iter().enumerate() {
         if let Some((ch, len)) = fence {
             if is_fence_close(line, ch, len) {
@@ -1144,9 +1260,8 @@ fn scan_containers(lines: &[&str]) -> ContainerScan {
                 scan.spoken_at[open] = parse_spoken_body(&lines[open + 1..i]);
             }
             ContainerKind::Silent | ContainerKind::Stage => {
-                for suppressed in &mut scan.suppressed[open..=i] {
-                    *suppressed = true;
-                }
+                suppression[open] += 1;
+                suppression[i + 1] -= 1;
             }
             ContainerKind::LiteralCommand => {}
         }
@@ -1155,6 +1270,11 @@ fn scan_containers(lines: &[&str]) -> ContainerScan {
         if kind.is_some() {
             scan.masked[open] = true;
         }
+    }
+    let mut depth = 0;
+    for (line, delta) in suppression.iter().take(n).enumerate() {
+        depth += delta;
+        scan.suppressed[line] = depth > 0;
     }
     scan
 }
@@ -1245,7 +1365,7 @@ fn strip_quote(line: &str) -> Option<&str> {
         return None;
     }
     let rest = &line[spaces + 1..];
-    Some(rest.strip_prefix(' ').unwrap_or(rest))
+    Some(rest.strip_prefix([' ', '\t']).unwrap_or(rest))
 }
 
 struct ListItem {
@@ -1255,6 +1375,12 @@ struct ListItem {
     content: usize,
     empty: bool,
     ordered_start: Option<u64>,
+}
+
+impl ListItem {
+    fn can_interrupt_paragraph(&self) -> bool {
+        !self.empty && self.ordered_start.is_none_or(|start| start == 1)
+    }
 }
 
 fn list_item(line: &str) -> Option<ListItem> {
@@ -1522,9 +1648,11 @@ impl<'a> BlockWalker<'a> {
             }
             if let Some(item) = list_item(rest) {
                 // Only a non-empty bullet, or a list starting at 1, may
-                // interrupt a paragraph.
+                // interrupt the paragraph this line would otherwise continue.
+                // (A paragraph in a container the line no longer matches is
+                // not continued: remark closes the quote for `2. Beta`.)
                 let interrupting = paragraph_open && all_matched && opened.is_empty();
-                if interrupting && (item.empty || item.ordered_start.is_some_and(|n| n != 1)) {
+                if interrupting && !item.can_interrupt_paragraph() {
                     break;
                 }
                 opened.push(Container::Item { indent: item.indent });
@@ -1633,7 +1761,7 @@ impl<'a> BlockWalker<'a> {
     fn starts_block(&self, rest: &str) -> bool {
         self.interrupts_paragraph(rest)
             || strip_quote(rest).is_some()
-            || list_item(rest).is_some_and(|item| !item.empty)
+            || list_item(rest).is_some_and(|item| item.can_interrupt_paragraph())
     }
 
     /// A GFM table: a row with pipes over a delimiter row with as many cells.
@@ -1672,7 +1800,7 @@ impl<'a> BlockWalker<'a> {
     }
 
     fn markdown_block(&mut self, text: &str) {
-        let items = parse_inlines(text, 0, text.len(), &self.defs);
+        let items = InlineParser::new(text, &self.defs).parse(0, text.len(), 0);
         let mut draft = Draft::default();
         walk_inlines(&mut draft, text, &items, self.options);
         self.out.push(draft);
@@ -1713,7 +1841,10 @@ fn collect_definitions(lines: &[String]) -> Definitions {
     let mut defs = Definitions::new();
     let mut fence: Option<(u8, usize)> = None;
     for line in lines {
-        let content = line.trim_start_matches([' ', '>']);
+        let mut content = line.as_str();
+        while let Some(inner) = strip_quote(content) {
+            content = inner;
+        }
         if let Some((ch, len)) = fence {
             if is_fence_close(content, ch, len) {
                 fence = None;
@@ -1743,6 +1874,20 @@ fn collect_definitions(lines: &[String]) -> Definitions {
  * - A list or quote that starts outside a `:::` container and runs on inside it
  *   takes the container's semantics per line here and per top-level block in
  *   the compiler.
+ * - Single-column tables without pipes, and table delimiter rows inside a
+ *   different container from their header row.
+ *
+ * Three differences are the compiler's to fix, so they are not copied here:
+ *
+ * - On a continuation line of a quote or list item (`> Start` / `> [Pause]
+ *   now`), the compiler cannot map its text back past the `> ` or the indent,
+ *   treats every bracket and brace as escaped, and speaks `[Pause]` and the raw
+ *   `{say="…"}` as words. This module reads them as directives.
+ * - A multi-line comment inside a list item drops the words after its `-->`
+ *   in the compiler; here they are spoken, as they are outside a list.
+ * - A list item's own paragraphs are emitted before its nested list in the
+ *   compiler, whatever their source order; here they stay in source order.
+ *   The count agrees; only the order of words differs.
  */
 
 #[cfg(test)]
@@ -1867,6 +2012,36 @@ mod tests {
         assert_eq!(estimated_duration_seconds(7, 10), 6);
         assert_eq!(estimated_duration_seconds(7, 0), 6);
         assert_eq!(estimated_duration_seconds(220, 1000), 60);
+    }
+
+    /// Reconciliation runs this over every script at startup, so no input may
+    /// crash it or make it crawl. Each of these was once a deep recursion (a
+    /// stack overflow is an abort, not a panic) or a scan repeated per opener.
+    #[test]
+    fn pathological_markdown_finishes_quickly() {
+        let inputs = [
+            "[".repeat(100_000),
+            format!("{}x{}", "[".repeat(10_000), "](u)".repeat(10_000)),
+            format!("{}x{}", "![".repeat(10_000), "](u)".repeat(10_000)),
+            format!("x {}", "<!--".repeat(25_000)),
+            format!("{}{}", "*a ".repeat(20_000), "a_ ".repeat(20_000)),
+            (1..4000).map(|n| format!("{} x ", "`".repeat(n % 60 + 1))).collect(),
+            format!("{}{}", ":::silent\n".repeat(5_000), ":::\n".repeat(5_000)),
+            "<a href=\"x ".repeat(5_000),
+            "[a](u \"".repeat(5_000),
+            "> ".repeat(5_000) + "deep",
+            "\\".repeat(10_001),
+        ];
+        for input in &inputs {
+            let started = std::time::Instant::now();
+            spoken_text(input, SpokenTextOptions::default());
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(20),
+                "{elapsed:?} for input starting {:?}",
+                &input[..input.len().min(40)]
+            );
+        }
     }
 
     /// The shared fixture, asserted word for word. Its `tokens`, `words` and
