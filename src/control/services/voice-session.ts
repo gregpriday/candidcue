@@ -438,6 +438,17 @@ export class VoiceSessionPipeline {
   softPause(): void {
     if (this.paused) return;
     this.paused = true;
+    /*
+     * And what a loading recogniser was being saved, too.
+     *
+     * Those frames have not been sent, and once the load finishes they would
+     * be — to a take the presenter has paused. Discarded rather than kept for
+     * the resume: by then they are stale, and the recogniser would hear them
+     * run straight on into whatever the presenter says next as one sentence.
+     * Holding itself stays on, so a start still in progress keeps what it
+     * hears after a resume.
+     */
+    this.discardHeld();
     this.armPauseTimer();
   }
 
@@ -879,6 +890,10 @@ export class VoiceSessionPipeline {
   /** Stop holding, and forget anything held. */
   private dropPreRoll(): void {
     this.holdingFrames = false;
+    this.discardHeld();
+  }
+
+  private discardHeld(): void {
     this.preRoll = [];
     this.preRollShed = 0;
   }

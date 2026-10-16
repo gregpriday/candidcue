@@ -22,7 +22,7 @@ const stt = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../src/control/services/stt/local', () => ({
-  STT_EVENT: 'stt://frame',
+  STT_EVENT: 'stt://event',
   // Each frame is identified by its first sample, so order survives encoding.
   encodePcm16: (samples: Float32Array) => `frame-${samples[0]}`,
   startTranscription: () =>
@@ -61,13 +61,15 @@ vi.mock('../../../src/control/services/audio', async (original) => ({
   ...(await original<typeof import('../../../src/control/services/audio')>()),
   requestMicrophoneAccess: async () => ({
     ok: true,
-    stream: { getTracks: () => [] },
+    stream: { getTracks: () => [], getAudioTracks: () => [] },
     attempts: 1,
     fellBackToDefault: false,
   }),
   releaseStream: () => {},
   MicrophoneMonitor: class {
-    onLevel(): void {}
+    onLevel(): () => void {
+      return () => {};
+    }
     async start(): Promise<void> {}
     async stop(): Promise<void> {}
   },
@@ -187,6 +189,65 @@ describe('a take hears its opening words while the recogniser loads', () => {
     expect(new Set(stt.pushed.map((frame) => frame.generation))).toEqual(new Set([7]));
     expect(dropped, 'nothing within the bound is reported lost').toEqual([]);
     expect(traces).toContainEqual(['pre-roll', '12 frames held for the recogniser (1.2s)']);
+    await p.stop();
+  });
+
+  it('keeps the backlog ahead of a frame captured the instant the session opens', async () => {
+    const p = pipeline();
+    const started = p.start();
+    const load = await loading();
+
+    speak(12);
+    load.resolve(7);
+    // Queued behind the continuation of `start()` that assigns the generation.
+    // An `await` between that assignment and the release would let this frame
+    // through with the new generation ahead of everything held before it.
+    queueMicrotask(() => speak(1));
+    await started;
+    await settled();
+
+    expect(stt.pushed.map((frame) => frame.chunk)).toEqual(frames(0, 13));
+    await p.stop();
+  });
+
+  it('keeps what was said before a microphone switch made during the load', async () => {
+    const p = pipeline();
+    const started = p.start();
+    const load = await loading();
+
+    speak(3);
+    await p.switchMicrophone('usb');
+    expect(taps, 'the switch opened a second tap').toHaveLength(2);
+    expect(taps[0].stopped).toBe(true);
+    speak(2);
+    load.resolve(5);
+    await started;
+    await settled();
+
+    // Re-acquiring the device tears down the old audio graph; it must not take
+    // the presenter's opening words with it.
+    expect(stt.pushed.map((frame) => frame.chunk)).toEqual(frames(0, 5));
+    expect(new Set(stt.pushed.map((frame) => frame.generation))).toEqual(new Set([5]));
+    await p.stop();
+  });
+
+  it('sends nothing held to a take that was soft-paused before the load finished', async () => {
+    const p = pipeline();
+    const started = p.start();
+    const load = await loading();
+
+    speak(3);
+    p.softPause();
+    speak(2);
+    load.resolve(6);
+    await started;
+    await settled();
+    expect(stt.pushed, 'a paused take is sent no audio, held or live').toEqual([]);
+
+    await p.resume();
+    speak(2);
+    await settled();
+    expect(stt.pushed.map((frame) => frame.chunk)).toEqual(frames(5, 7));
     await p.stop();
   });
 
