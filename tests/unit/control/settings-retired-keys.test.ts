@@ -164,7 +164,7 @@ describe('#215 nothing writes saveTranscript any more', () => {
 
     const updates = ipc.calls.filter((call) => call.command === 'update_settings');
     expect(updates, 'the speed change must still reach Rust').toHaveLength(1);
-    expect((updates[0].args as { patch: Record<string, unknown> }).patch).toEqual({
+    expect((updates[0]!.args as { patch: Record<string, unknown> }).patch).toEqual({
       stageBehavior: { fixedSpeedWpm: 160 },
     });
     // And the stray section did not land in the overlay instead.
