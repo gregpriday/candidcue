@@ -247,7 +247,7 @@ pub async fn run_startup_reconciliation(
         }
     }
     if stats_refreshed > 0 {
-        tracing::info!(stats_refreshed, "re-derived library word counts and previews");
+        tracing::info!(stats_refreshed, "re-derived library word counts, previews and search entries");
     }
 
     // 5. Clear expired compiled caches (best effort).

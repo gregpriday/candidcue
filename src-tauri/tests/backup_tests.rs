@@ -1185,20 +1185,22 @@ async fn a_healthy_database_with_a_future_migration_is_left_alone() {
      * The anti-vacuity partner to the test above, and the reason the tell is an
      * EXACT checksum rather than "an applied version 2".
      *
-     * The first legitimate post-1.0 migration will be numbered 2. Under the old
-     * heuristic every healthy database in the world would then have looked
-     * pre-baseline and been quarantined on upgrade — a data-loss bug shipped as
-     * a safety feature. Recognition has to be of the one file that existed, and
-     * of nothing else.
+     * The first legitimate post-1.0 migration is numbered 2
+     * (`0002_search_full_source`, #254). Under the old heuristic every healthy
+     * database in the world would then have looked pre-baseline and been
+     * quarantined on upgrade — a data-loss bug shipped as a safety feature.
+     * Recognition has to be of the one file that existed, and of nothing else.
+     * `a_baseline_database_upgrades_to_full_source_search` is the real version
+     * 2 going through; this is one from a build newer than this one.
      */
     let dir = tempfile::tempdir().expect("tempdir");
     let pool = candidcue_lib::database::init(dir.path()).await.expect("init");
 
-    // A future migration 2 that is NOT the legacy one.
+    // A future migration that is NOT the legacy one.
     sqlx::query(
         "INSERT INTO _sqlx_migrations
             (version, description, installed_on, success, checksum, execution_time)
-         VALUES (2, 'some future migration', datetime('now'), 1, X'0123456789ABCDEF', 0)",
+         VALUES (999, 'some future migration', datetime('now'), 1, X'0123456789ABCDEF', 0)",
     )
     .execute(&pool)
     .await
@@ -1206,7 +1208,7 @@ async fn a_healthy_database_with_a_future_migration_is_left_alone() {
     pool.close().await;
 
     // Reopening will fail for an unrelated reason — sqlx does not know a
-    // migration 2 — and that is fine. What must NOT have happened is a
+    // migration 999 — and that is fine. What must NOT have happened is a
     // quarantine.
     let _ = candidcue_lib::database::init(dir.path()).await;
 
@@ -1218,6 +1220,136 @@ async fn a_healthy_database_with_a_future_migration_is_left_alone() {
         dir.path().join("candidcue.sqlite3").exists(),
         "and it must still be where it was"
     );
+}
+
+#[tokio::test]
+async fn a_baseline_database_upgrades_to_full_source_search() {
+    /*
+     * #254 replaced the search index, and FTS5 cannot add a column, so 0002
+     * swaps the table. What a user upgrading has is a database the 1.0 baseline
+     * built — so that is what this starts from: the real `0001` applied by
+     * sqlx, with its own checksum and bookkeeping, then the production `init`.
+     *
+     * Across the upgrade nothing is lost (the spoken entry still searches and
+     * still previews), and the first startup reconciliation rebuilds the entry
+     * from the canonical file so the rest of the page searches too.
+     */
+    use candidcue_lib::scripts::{reconcile, ScriptFilter, ScriptId, ScriptLocks};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let baseline = dir.path().join("baseline-migrations");
+    fs::create_dir_all(&baseline).expect("baseline dir");
+    fs::write(
+        baseline.join("0001_initial.sql"),
+        include_str!("../migrations/0001_initial.sql"),
+    )
+    .expect("baseline migration");
+
+    let id = "0f6c6a52-7a51-4f43-9b4a-2b8cbb4b2c1e";
+    let source = "# Quarterly results\n\n:::stage\nPoint at the revenue chart.\n:::\n\n\
+                  Hello everyone, thanks for coming.\n";
+    let rel_path = format!("scripts/{id}/script.md");
+    fs::create_dir_all(dir.path().join(format!("scripts/{id}"))).expect("script dir");
+    fs::write(dir.path().join(&rel_path), source).expect("canonical file");
+    {
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("candidcue.sqlite3"))
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(options).await.expect("open");
+        sqlx::migrate::Migrator::new(baseline.as_path())
+            .await
+            .expect("baseline migrator")
+            .run(&pool)
+            .await
+            .expect("apply the 1.0 baseline");
+        // What a 1.0 build stored for this script: spoken text only.
+        sqlx::query(
+            "INSERT INTO scripts
+                (id, title, canonical_rel_path, source_hash, spoken_word_count,
+                 estimated_duration_seconds, last_compile_version, created_at, updated_at)
+             VALUES (?, 'Draft 3', ?, ?, 5, 2, 'spoken-stats-3', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(&rel_path)
+        .bind(candidcue_lib::util::sha256_hex(source.as_bytes()))
+        .execute(&pool)
+        .await
+        .expect("seed script");
+        sqlx::query("INSERT INTO script_search (script_id, title, plain_text) VALUES (?, 'Draft 3', ?)")
+            .bind(id)
+            .bind("Hello everyone, thanks for coming.")
+            .execute(&pool)
+            .await
+            .expect("seed index");
+        pool.close().await;
+    }
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+    let paths = DataPaths::new(dir.path().to_path_buf());
+    let script_id = ScriptId::parse(id).expect("id");
+    let search = |query: &'static str| {
+        let pool = pool.clone();
+        async move {
+            repo::list_scripts(
+                &pool,
+                ScriptFilter {
+                    query: Some(query.into()),
+                    ..Default::default()
+                },
+                None,
+                Default::default(),
+            )
+            .await
+            .expect("search")
+            .total
+        }
+    };
+
+    let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+        .fetch_all(&pool)
+        .await
+        .expect("migrations");
+    assert_eq!(applied, vec![1, 2]);
+    assert!(
+        fs::read_dir(dir.path().join("backups"))
+            .expect("a pending migration takes a backup first")
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("pre-migration-")),
+        "the upgrade must be preceded by a verified snapshot"
+    );
+    let leftovers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE 'script_search_v1%'")
+            .fetch_one(&pool)
+            .await
+            .expect("schema");
+    assert_eq!(leftovers, 0, "the replaced index and its shadow tables are gone");
+
+    // Carried across: the old entry still searches and previews.
+    assert_eq!(search("hello").await, 1);
+    assert_eq!(search("quarterly").await, 0, "not rebuilt yet");
+    let before = repo::get_summary(&pool, &script_id).await.expect("summary");
+    assert_eq!(before.preview_text, "Hello everyone, thanks for coming.");
+    let stamp: Option<String> =
+        sqlx::query_scalar("SELECT last_compile_version FROM scripts WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("stamp");
+    assert_eq!(stamp, None, "every row is handed to reconciliation");
+
+    reconcile::run_startup_reconciliation(&pool, &paths, &ScriptLocks::default())
+        .await
+        .expect("reconciliation");
+
+    assert_eq!(search("quarterly").await, 1);
+    assert_eq!(search("revenue").await, 1);
+    assert_eq!(search("hello").await, 1);
+    let after = repo::get_summary(&pool, &script_id).await.expect("summary");
+    assert_eq!(after.spoken_word_count, 5);
+    assert_eq!(after.preview_text, "Hello everyone, thanks for coming.");
+    assert_eq!(after.script_revision, before.script_revision, "a rebuild is not an edit");
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(fs::read_to_string(dir.path().join(&rel_path)).expect("read"), source);
 }
 
 /* ------------------------------------------------- the recovery-mode guard */

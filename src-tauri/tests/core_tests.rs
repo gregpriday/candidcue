@@ -316,6 +316,109 @@ async fn search_and_pagination() {
     assert_eq!(zebra.total, 5);
 }
 
+/// How many scripts a Library search returns.
+async fn search_total(h: &Harness, query: &str) -> u32 {
+    repo::list_scripts(
+        &h.pool,
+        ScriptFilter {
+            query: Some(query.into()),
+            ..Default::default()
+        },
+        None,
+        PageRequest::default(),
+    )
+    .await
+    .unwrap()
+    .total
+}
+
+/// #254: the Library finds a script by any word on the page, not only the
+/// words it speaks. The index used to hold the spoken text alone, so the
+/// heading people remember a script by found nothing — while the word count,
+/// which is what spoken-only is for, must stay exactly as it was.
+#[tokio::test]
+async fn library_search_finds_words_that_are_on_the_page_but_not_spoken() {
+    let h = harness().await;
+    let draft = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input(
+            "Draft 3",
+            "# Quarterly results\n\n:::stage\nPoint at the revenue chart.\n:::\n\n\
+             Hello everyone, thanks for coming.\n\n[Cue: smile at the lens]\n",
+        ),
+    )
+    .await
+    .expect("create");
+    let notes = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input(
+            "Launch notes",
+            "<!-- TODO: confirm figures with finance -->\n\n\
+             :::silent\nRemember the hydration break.\n:::\n\n\
+             ```bash\ndeploy --canary\n```\n\n\
+             Run `kubectl` before we start. ![Lighthouse at dusk](assets/light.png)\n\n\
+             This is **Candid**Cue.\n",
+        ),
+    )
+    .await
+    .expect("create");
+
+    for query in ["quarterly", "revenue", "hello", "smile", "Quarterly results", "draft"] {
+        assert_eq!(search_total(&h, query).await, 1, "searching {query:?}");
+    }
+    for query in ["finance", "hydration", "canary", "kubectl", "lighthouse"] {
+        assert_eq!(search_total(&h, query).await, 1, "searching {query:?}");
+    }
+    // Spoken text stays searchable in its spoken form, which is not always in
+    // the source literally.
+    assert_eq!(search_total(&h, "CandidCue").await, 1);
+    assert_eq!(search_total(&h, "quarterly hydration").await, 0, "terms are ANDed per script");
+    assert_eq!(search_total(&h, "zebra").await, 0);
+
+    // Still spoken-only: the heading, stage block and cue are not speech.
+    assert_eq!(draft.spoken_word_count, 5);
+    assert_eq!(draft.estimated_duration_seconds, 2);
+    assert_eq!(draft.preview_text, "Hello everyone, thanks for coming.");
+    assert!(!notes.preview_text.contains("finance"), "{:?}", notes.preview_text);
+}
+
+/// A save re-indexes the whole page, so a heading edited away stops finding
+/// the script and the new one starts.
+#[tokio::test]
+async fn library_search_follows_a_saved_heading() {
+    let h = harness().await;
+    let created = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input("Talk", "# Quarterly results\n\nHello everyone.\n"),
+    )
+    .await
+    .expect("create");
+    let id = sid(&created.id);
+    assert_eq!(search_total(&h, "quarterly").await, 1);
+
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        created.script_revision,
+        "# Annual review\n\nHello everyone.\n".into(),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save");
+    assert_eq!(search_total(&h, "quarterly").await, 0);
+    assert_eq!(search_total(&h, "annual").await, 1);
+
+    let copy = repo::duplicate_script(&h.pool, &h.paths, &h.locks, &id)
+        .await
+        .expect("duplicate");
+    assert_eq!(search_total(&h, "annual").await, 2, "a duplicate is indexed like its original: {copy:?}");
+}
+
 /// C7: every sort key the library offers must reorder the result. All four of
 /// them used to fall through to `updated_at DESC`, because the only arms Rust
 /// implemented — `title_asc` and `opened_desc` — are names no caller sends.
@@ -1504,7 +1607,8 @@ async fn reconciliation_rederives_stale_library_stats_without_editing_the_script
     .execute(&h.pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE script_search SET plain_text = ? WHERE script_id = ?")
+    // ...and an index from before search covered the whole page (#254).
+    sqlx::query("UPDATE script_search SET plain_text = ?, body = NULL WHERE script_id = ?")
         .bind("<!-- TODO: cut this line before Friday --> Welcome back. Cue: smile at camera Let's go.")
         .bind(&created.id)
         .execute(&h.pool)
@@ -1548,7 +1652,9 @@ async fn reconciliation_rederives_stale_library_stats_without_editing_the_script
     assert_eq!(row.preview_text, "Welcome back. Let's go.");
     assert_eq!(row.script_revision, revision);
     assert_eq!(row.updated_at, updated_at);
-    assert_eq!(search("Friday").await, 0, "an author's note is not searchable script text");
+    // The note is no longer in the spoken text, so only a rebuilt `body` can
+    // still find it: it is on the page, and search covers the page (#254).
+    assert_eq!(search("Friday").await, 1, "an author's note is found by search");
     assert_eq!(search("Welcome").await, 1);
     assert_eq!(
         version(h.pool.clone(), created.id.clone()).await.as_deref(),
