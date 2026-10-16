@@ -229,6 +229,16 @@ describe('block inserts', () => {
     expect(blockKinds(text())).toEqual(kinds);
   });
 
+  /* A block insert has never replaced a selection: it goes in at the
+     selection's start, and the blank line it takes over must be the only text
+     that leaves the document. */
+  it('keeps the selected text when a selection starts on the blank line', () => {
+    const { view, text, selection } = fakeView('P\n \t\nQ', 2, 6);
+    insertImage(view, 'assets/x.png', 'a');
+    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n|\nQ`);
+    expect(blockKinds(text())).toEqual(['paragraph', 'image', 'paragraph']);
+  });
+
   it('makes a part break between two paragraphs a cue of its own', () => {
     const { view, text, selection } = caretView('P\n|\nQ');
     insertTakeMarker(view);
