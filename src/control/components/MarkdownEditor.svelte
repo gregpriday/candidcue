@@ -75,6 +75,28 @@
     },
   ];
 
+  /**
+   * ⌘↩ is Present, and the editor must not answer it as well (issue #268).
+   *
+   * CodeMirror's `defaultKeymap` binds `Mod-Enter` to `insertBlankLine`. The
+   * editor's keydown runs before the window listener in `lib/shortcuts.ts`, so
+   * pressing Present with the caret in a paragraph used to split it, autosave
+   * the split, and only then start the take — one more paragraph break per
+   * press. The search panel has the same problem in its own handler: any Enter
+   * in the Replace field runs `replaceNext`, modifiers or not.
+   *
+   * This binding claims the chord and does nothing with it. Returning true is
+   * what stops the default and makes CodeMirror prevent the event; it does NOT
+   * stop propagation, and must not — the window listener is what actually
+   * presents, through the same readiness check as the Present button. Emitting
+   * Present from here instead would launch twice. The `search-panel` scope is
+   * what reaches the panel's fields: they sit outside `contentDOM`, and the
+   * panel runs that scope's bindings before its own Enter fallback.
+   */
+  const presentReservationKeymap = [
+    { key: 'Mod-Enter', scope: 'editor search-panel', run: () => true },
+  ];
+
   interface Props {
     value: string;
     placeholder?: string;
@@ -174,6 +196,7 @@
         extensions: [
           history(),
           keymap.of([
+            ...presentReservationKeymap,
             ...markdownFormatKeymap,
             ...defaultKeymap,
             ...historyKeymap,
