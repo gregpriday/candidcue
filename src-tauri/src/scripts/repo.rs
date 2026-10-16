@@ -761,12 +761,11 @@ pub async fn duplicate_script(
     let dst_assets = paths.assets_dir(&new_id);
     crate::util::create_dir_all_durable(&dst_assets)?;
     if src_assets.exists() {
+        let mentions = crate::assets::AssetMentions::new(&source);
         let mut copied_any = false;
         for entry in fs::read_dir(&src_assets)? {
             let entry = entry?;
-            if entry.file_type()?.is_file()
-                && crate::assets::text_uses_asset(&source, &entry.file_name().to_string_lossy())
-            {
+            if entry.file_type()?.is_file() && mentions.uses(&entry.file_name().to_string_lossy()) {
                 let target = dst_assets.join(entry.file_name());
                 fs::copy(entry.path(), &target)?;
                 // The copy, not just the intention to have made it: the row

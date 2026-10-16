@@ -612,11 +612,12 @@ pub async fn export_script(
     // screenshot somebody removed for showing the wrong thing is exactly the
     // one that must not travel with the export.
     let assets_dir = paths.assets_dir(script_id);
+    let mentions = crate::assets::AssetMentions::new(&source);
     let asset_files: Vec<PathBuf> = if assets_dir.exists() {
         fs::read_dir(&assets_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .filter(|e| crate::assets::text_uses_asset(&source, &e.file_name().to_string_lossy()))
+            .filter(|e| mentions.uses(&e.file_name().to_string_lossy()))
             .map(|e| e.path())
             .collect()
     } else {

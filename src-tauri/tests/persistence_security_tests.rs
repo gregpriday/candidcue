@@ -1221,7 +1221,8 @@ async fn script_that_dropped_an_image(
     )
     .await
     .expect("save both");
-    repo::save_script(
+    assert!(saved.revision_created, "the first save keeps the text it replaced");
+    let last = repo::save_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1235,6 +1236,10 @@ async fn script_that_dropped_an_image(
     )
     .await
     .expect("save kept");
+    assert_eq!(
+        last.revision_created, snapshot,
+        "within the 5-minute cadence, only an explicit reason takes a revision"
+    );
     (id, kept, removed)
 }
 
@@ -1472,9 +1477,14 @@ async fn issue_253_startup_collects_an_image_once_no_revision_can_bring_it_back(
     repo::restore_revision(&h.pool, &h.paths, &h.locks, &id, &revision.id, db_revision(&h, &id).await)
         .await
         .expect("restore");
+    assert_eq!(
+        fs::read_to_string(h.paths.canonical_file(&id)).unwrap(),
+        with_both(&kept.markdown_path, &removed.markdown_path)
+    );
     assert!(resolves(&h, &id, &removed.markdown_path).await);
 
-    // Deleted again, and every version that showed it thinned away.
+    // Deleted again, and every version that showed it gone — what retention
+    // thinning does over the weeks, done here directly.
     repo::save_script(
         &h.pool,
         &h.paths,
@@ -1503,6 +1513,7 @@ async fn issue_253_startup_collects_an_image_once_no_revision_can_bring_it_back(
 
     let report = relaunch(&mut h).await;
     assert_eq!(report.unused_assets_removed, 1, "{report:?}");
+    assert!(!report.has_findings(), "maintenance, not a finding: {report:?}");
     assert!(!h.paths.assets_dir(&id).join(asset_name(&removed)).exists());
     assert_eq!(indexed_assets(&h, &id).await, vec![asset_name(&kept)]);
     let dangling: i64 = sqlx::query_scalar(
@@ -1536,14 +1547,22 @@ async fn issue_253_startup_keeps_an_image_any_recoverable_text_may_still_use() {
     fs::create_dir_all(&unsaved).unwrap();
     let parked = unsaved.join(format!("{}-20261017T090000Z.md", id.as_str()));
     fs::write(&parked, &both).unwrap();
-    assert_eq!(relaunch(&mut h).await.unused_assets_removed, 0);
+    let report = relaunch(&mut h).await;
+    assert!(report.integrity_ok && !report.notes.iter().any(|n| n.contains("deferred")), "{report:?}");
+    assert_eq!(report.unused_assets_removed, 0);
     assert!(removed_file.exists(), "parked unsaved text still shows it");
     fs::remove_file(&parked).unwrap();
 
-    // A snapshot whose row was never written.
-    let unlisted = h.paths.revisions_dir(&id).join("20261017T090000000Z-0123456789ab.md");
+    // A snapshot whose row was never written: named the way one is, so a
+    // rebuild would index it.
+    let unlisted = h.paths.revisions_dir(&id).join(format!(
+        "20261017T090000000Z-{}.md",
+        &candidcue_lib::util::sha256_hex(both.as_bytes())[..12]
+    ));
     fs::write(&unlisted, &both).unwrap();
-    assert_eq!(relaunch(&mut h).await.unused_assets_removed, 0);
+    let report = relaunch(&mut h).await;
+    assert!(report.integrity_ok && !report.notes.iter().any(|n| n.contains("deferred")), "{report:?}");
+    assert_eq!(report.unused_assets_removed, 0);
     assert!(removed_file.exists(), "an unlisted snapshot still shows it");
     fs::remove_file(&unlisted).unwrap();
 
@@ -1621,4 +1640,134 @@ async fn issue_253_startup_treats_trashed_scripts_alike_and_skips_unreadable_one
         "{:?}",
         report.notes
     );
+
+    let again = relaunch(&mut h).await;
+    assert_eq!(again.missing_files_unrecoverable, vec![missing.as_str().to_string()]);
+    assert_eq!(again.unused_assets_removed, 0);
+    assert!(h.paths.assets_dir(&missing).join(asset_name(&missing_removed)).exists());
+}
+
+/// An image the text never used is neither carried nor mentioned: the
+/// plain-text warning and the Markdown copy both used to count the folder.
+#[tokio::test]
+async fn issue_253_an_export_whose_text_shows_no_image_carries_and_mentions_none() {
+    let h = harness().await;
+    let id = new_script(&h, "Words", "# Words\n\nNo pictures here.\n").await;
+    let picked = tempfile::tempdir().unwrap();
+    let path = picked.path().join("unused.png");
+    fs::write(&path, solid_png([1, 2, 3])).unwrap();
+    candidcue_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
+        .await
+        .expect("import");
+
+    for (format, file) in [("markdown", "words.md"), ("text", "words.txt")] {
+        let out = tempfile::tempdir().unwrap();
+        let result = candidcue_lib::scripts::import_export::export_script(
+            &h.pool,
+            &h.paths,
+            &h.locks,
+            &id,
+            ExportOptions {
+                include_assets: true,
+                ..export_options(&out.path().join(file), format)
+            },
+        )
+        .await
+        .expect(format);
+        assert!(result.warnings.is_empty(), "{format}: {:?}", result.warnings);
+        assert!(!out.path().join("assets").exists(), "{format}");
+    }
+}
+
+/// Where startup must remove nothing: a launch that restored any script's
+/// text from a revision, an image another script references, and — through a
+/// link — a folder that is not the script's own.
+#[tokio::test]
+async fn issue_253_startup_removes_nothing_on_doubtful_ground() {
+    let mut h = harness().await;
+    let (id, _, removed) = script_that_dropped_an_image(&h, false).await;
+    let removed_file = h.paths.assets_dir(&id).join(asset_name(&removed));
+
+    // Another script's file is gone and comes back from its latest revision.
+    let other = new_script(&h, "Other", "Other text.").await;
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &other,
+        db_revision(&h, &other).await,
+        "Other text, saved.".into(),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save other");
+    fs::remove_file(h.paths.canonical_file(&other)).unwrap();
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.missing_files_restored, vec![other.as_str().to_string()]);
+    assert_eq!(report.unused_assets_removed, 0);
+    assert!(removed_file.exists(), "a launch that restored text collects nothing");
+
+    // An image another script references.
+    let asset_id: String = sqlx::query_scalar("SELECT id FROM assets WHERE rel_path = ?")
+        .bind(format!("scripts/{}/assets/{}", id.as_str(), asset_name(&removed)))
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO script_asset_references (script_id, asset_id, role, created_at)
+         VALUES (?, ?, 'image', '2026-10-17T09:00:00.000Z')",
+    )
+    .bind(other.as_str())
+    .bind(&asset_id)
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    let report = relaunch(&mut h).await;
+    assert!(!report.notes.iter().any(|n| n.contains("deferred")), "{report:?}");
+    assert_eq!(report.unused_assets_removed, 0);
+    assert!(removed_file.exists(), "another script still references it");
+    sqlx::query("DELETE FROM script_asset_references WHERE script_id = ?")
+        .bind(other.as_str())
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    #[cfg(unix)]
+    {
+        // A revisions folder that is a link was not looked in.
+        let revisions = h.paths.revisions_dir(&id);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let moved = elsewhere.path().join("revisions");
+        fs::rename(&revisions, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &revisions).unwrap();
+        let report = relaunch(&mut h).await;
+        assert_eq!(report.unused_assets_removed, 0);
+        assert!(removed_file.exists());
+        assert!(report.notes.iter().any(|n| n.contains("revisions not read")), "{:?}", report.notes);
+        fs::remove_file(&revisions).unwrap();
+        fs::rename(&moved, &revisions).unwrap();
+
+        // An assets folder that is a link: what it points at is not the
+        // script's to delete from.
+        let assets = h.paths.assets_dir(&id);
+        let outside = tempfile::tempdir().unwrap();
+        let moved = outside.path().join("assets");
+        fs::rename(&assets, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &assets).unwrap();
+        let report = relaunch(&mut h).await;
+        assert_eq!(report.unused_assets_removed, 0);
+        assert!(moved.join(asset_name(&removed)).exists(), "nothing outside the library is touched");
+        assert!(
+            report.notes.iter().any(|n| n.contains("not a folder inside the library")),
+            "{:?}",
+            report.notes
+        );
+        fs::remove_file(&assets).unwrap();
+        fs::rename(&moved, &assets).unwrap();
+    }
+
+    // On ordinary ground, it goes.
+    let report = relaunch(&mut h).await;
+    assert_eq!(report.unused_assets_removed, 1, "{report:?}");
+    assert!(!removed_file.exists());
 }
