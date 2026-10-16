@@ -165,7 +165,7 @@ pub async fn restore_database_backup(
         ))
     })?;
 
-    let quarantine = backup::rebuild_database_index(&paths)?;
+    let quarantine = backup::rebuild_database_index(&paths).await?;
 
     /*
      * Staged, flushed, checked, then renamed into place.
@@ -201,9 +201,12 @@ pub async fn restore_database_backup(
 /// Discard the index and rebuild it from the canonical Markdown files.
 ///
 /// The recovery that is always available: the Markdown file is the authority
-/// for a script's content (§48.1). Session and take history are not
-/// reconstructible this way, which is why the old database is quarantined
-/// rather than deleted — and why the result says where it went.
+/// for a script's content (§48.1), and its saved versions and images are files
+/// beside it. Names, Trash and per-script settings are read back out of the
+/// old database where it can still be read, and the next launch applies them
+/// (#252). Session and take history are not reconstructible this way, which is
+/// why the old database is quarantined rather than deleted — and why the
+/// result says where it went.
 #[tauri::command]
 pub async fn rebuild_database_index(
     boot: State<'_, crate::database::BootStatus>,
@@ -211,7 +214,7 @@ pub async fn rebuild_database_index(
 ) -> Result<RecoveryOutcome, AppError> {
     // Destructive, and only correct when the database did NOT open.
     boot.require_recovery()?;
-    let quarantine = backup::rebuild_database_index(&paths)?;
+    let quarantine = backup::rebuild_database_index(&paths).await?;
     Ok(RecoveryOutcome {
         previous_state_at: quarantine.to_string_lossy().to_string(),
         restart_required: true,
@@ -249,14 +252,10 @@ pub async fn rescue_scripts<R: tauri::Runtime>(
         "CandidCue-scripts-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     ));
-    let source = paths.scripts_dir();
-    if !source.exists() {
-        return Err(AppError::not_found("a scripts folder to rescue"));
-    }
-    backup::copy_tree(&source, &target)?;
+    let scripts_copied = backup::rescue_scripts_to(&paths, &target).await?;
 
     Ok(Some(ScriptRescueResult {
-        scripts_copied: std::fs::read_dir(&target).map(|d| d.count()).unwrap_or(0) as u32,
+        scripts_copied,
         path: target.to_string_lossy().to_string(),
     }))
 }

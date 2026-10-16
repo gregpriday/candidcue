@@ -624,7 +624,7 @@ async fn a_rebuild_moves_the_database_aside_and_never_deletes_it() {
         .expect("create");
     h.pool.close().await;
 
-    let quarantine = backup::rebuild_database_index(&h.paths).expect("rebuild");
+    let quarantine = backup::rebuild_database_index(&h.paths).await.expect("rebuild");
 
     assert!(
         !h.dir.path().join("candidcue.sqlite3").exists(),
@@ -672,6 +672,7 @@ async fn a_rebuild_does_not_fail_over_a_sidecar_that_is_not_there() {
         }
 
         let quarantine = backup::rebuild_database_index(&paths)
+            .await
             .unwrap_or_else(|e| panic!("rebuild with sidecars {sidecars:?} failed: {e:?}"));
 
         assert!(!dir.path().join("candidcue.sqlite3").exists());
@@ -683,6 +684,286 @@ async fn a_rebuild_does_not_fail_over_a_sidecar_that_is_not_there() {
             );
         }
     }
+}
+
+/// A real 1×1 PNG: assets are decoded before they are trusted, so a fixture
+/// has to be an actual image.
+fn tiny_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xF7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]
+}
+
+fn script_id(raw: &str) -> candidcue_lib::scripts::ScriptId {
+    candidcue_lib::scripts::ScriptId::parse(raw).expect("summary ids are canonical UUIDs")
+}
+
+async fn trashed_at(pool: &sqlx::SqlitePool, id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT trashed_at FROM scripts WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("script row")
+}
+
+#[tokio::test]
+async fn a_rebuild_keeps_names_trash_revisions_and_images() {
+    /*
+     * The evidence in #252, against the real functions: a script with an
+     * imported image and a revision, and a second script in the Trash. After a
+     * rebuild and a relaunch the first came back as "Recovered script
+     * 8a0ece26" with no history and an image that no longer resolved, and the
+     * second came back as a live draft — every file still on disk.
+     */
+    use candidcue_lib::assets::{self, AssetRequest};
+    use candidcue_lib::scripts::{reconcile, ScriptLocks, ScriptMetadataPatch, ScriptStatus};
+
+    let h = harness().await;
+    let locks = ScriptLocks::default();
+
+    let launch = repo::create_script(&h.pool, &h.paths, create_input("Launch video", "Draft."))
+        .await
+        .expect("create");
+    let launch_id = script_id(&launch.id);
+    let picked = tempfile::tempdir().expect("picker dir");
+    let png = picked.path().join("diagram.png");
+    fs::write(&png, tiny_png()).expect("png");
+    let image = assets::import_image(&h.pool, &h.paths, &launch_id, png.to_str().expect("utf-8"))
+        .await
+        .expect("import");
+    repo::save_script(
+        &h.pool,
+        &h.paths,
+        &locks,
+        &launch_id,
+        launch.script_revision,
+        format!("# Launch video\n\nHello.\n\n![Diagram]({})\n", image.markdown_path),
+        ScriptMetadataPatch::default(),
+    )
+    .await
+    .expect("save");
+    let revisions_before = repo::list_revisions(&h.pool, &launch_id).await.expect("revisions");
+    assert!(!revisions_before.is_empty(), "the save must have kept a revision");
+
+    let old = repo::create_script(&h.pool, &h.paths, create_input("Old draft", "Gone soon."))
+        .await
+        .expect("create");
+    repo::trash_script(&h.pool, &locks, &script_id(&old.id), old.script_revision)
+        .await
+        .expect("trash");
+    let trashed_before = trashed_at(&h.pool, &old.id).await;
+    assert!(trashed_before.is_some());
+    h.pool.close().await;
+
+    backup::rebuild_database_index(&h.paths).await.expect("rebuild");
+    assert!(
+        h.dir.path().join("rebuild-script-index.json").exists(),
+        "what the old database knew must survive to the relaunch"
+    );
+
+    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
+        .await
+        .expect("reconciliation");
+
+    assert_eq!(report.orphan_files_recovered.len(), 2);
+    assert_eq!(report.titles_restored, 2);
+    assert_eq!(report.trash_purged, 0);
+
+    let launch_after = repo::get_summary(&pool, &launch_id).await.expect("launch");
+    assert_eq!(launch_after.title, "Launch video", "the name it had, not an invented one");
+    assert_eq!(launch_after.status, ScriptStatus::Draft);
+
+    let old_after = repo::get_summary(&pool, &script_id(&old.id)).await.expect("old");
+    assert_eq!(old_after.title, "Old draft");
+    assert_eq!(old_after.status, ScriptStatus::Trash, "Trash stays Trash");
+    assert_eq!(
+        trashed_at(&pool, &old.id).await,
+        trashed_before,
+        "and its 30 days run from when it was trashed, not from the rebuild"
+    );
+
+    let revisions_after = repo::list_revisions(&pool, &launch_id).await.expect("revisions");
+    assert_eq!(revisions_after.len(), revisions_before.len());
+    assert_eq!(report.revisions_recovered as usize, revisions_before.len());
+    for (before, after) in revisions_before.iter().rev().zip(revisions_after.iter().rev()) {
+        assert_eq!(after.source_hash, before.source_hash, "same snapshots, same order");
+        assert_eq!(after.reason, "recovered", "why it was taken is not claimed");
+        let gap = chrono::DateTime::parse_from_rfc3339(&after.created_at).expect("timestamp")
+            - chrono::DateTime::parse_from_rfc3339(&before.created_at).expect("timestamp");
+        assert!(gap.num_seconds().abs() < 5, "taken when its file says it was");
+    }
+    let restored = repo::get_revision(&pool, &h.paths, &launch_id, &revisions_after[0].id)
+        .await
+        .expect("a recovered revision opens");
+    assert!(!restored.source.is_empty());
+
+    let request = [AssetRequest {
+        id: "img-diagram".into(),
+        href: image.markdown_path.clone(),
+    }];
+    let resolved = assets::resolve_asset_urls(&pool, &h.paths, &launch_id, &request)
+        .await
+        .expect("resolve");
+    assert!(resolved.contains_key("img-diagram"), "the image renders again");
+    assert_eq!(report.assets_recovered, 1);
+
+    // Indexed with a reference, so garbage collection does not take it for
+    // an orphan and delete the file it just found.
+    assets::collect_garbage(&pool, &h.paths).await.expect("gc");
+    assert!(h.paths.assets_dir(&launch_id).join(format!("{}.png", image.sha256)).exists());
+    let resolved = assets::resolve_asset_urls(&pool, &h.paths, &launch_id, &request)
+        .await
+        .expect("resolve");
+    assert!(resolved.contains_key("img-diagram"));
+
+    assert!(
+        !h.dir.path().join("rebuild-script-index.json").exists(),
+        "applied once and gone, so a later rename is never overruled by it"
+    );
+
+    // And a second launch changes nothing.
+    let again = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
+        .await
+        .expect("reconciliation");
+    assert!(again.orphan_files_recovered.is_empty());
+    assert_eq!(
+        repo::list_revisions(&pool, &launch_id).await.expect("revisions").len(),
+        revisions_before.len()
+    );
+}
+
+#[tokio::test]
+async fn a_rebuild_over_an_unreadable_database_names_scripts_from_their_own_text() {
+    use candidcue_lib::scripts::{reconcile, ScriptLocks, ScriptStatus};
+
+    let h = harness().await;
+    let created = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input("Quarterly", "# Quarterly **numbers**\n\nRevenue is up."),
+    )
+    .await
+    .expect("create");
+    h.pool.close().await;
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(h.dir.path().join(format!("candidcue.sqlite3{suffix}")));
+    }
+    fs::write(h.dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+
+    backup::rebuild_database_index(&h.paths)
+        .await
+        .expect("a database with nothing to salvage is still rebuilt");
+    assert!(!h.dir.path().join("rebuild-script-index.json").exists());
+
+    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let locks = ScriptLocks::default();
+    let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
+        .await
+        .expect("reconciliation");
+    assert_eq!(report.titles_restored, 0);
+
+    let after = repo::get_summary(&pool, &script_id(&created.id)).await.expect("summary");
+    assert_eq!(after.title, "Quarterly numbers", "named after its first line, not its UUID");
+    assert_eq!(after.status, ScriptStatus::Draft);
+}
+
+#[tokio::test]
+async fn a_rebuild_reads_names_committed_only_to_the_write_ahead_log() {
+    /*
+     * The database runs in WAL mode, and a commit that has not been
+     * checkpointed lives only in `-wal`. A salvage that opened the quarantined
+     * file `immutable`, or without its log beside it, would not see it.
+     *
+     * The state is captured by copying the files while the pool is still open,
+     * which is what a crashed process leaves behind.
+     */
+    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+
+    let h = harness().await;
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Only in the log", "Body."))
+        .await
+        .expect("create");
+
+    let crashed = tempfile::tempdir().expect("tempdir");
+    let wal = h.dir.path().join("candidcue.sqlite3-wal");
+    assert!(
+        fs::metadata(&wal).map(|m| m.len() > 0).unwrap_or(false),
+        "the fixture needs an uncheckpointed WAL to mean anything"
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let from = h.dir.path().join(format!("candidcue.sqlite3{suffix}"));
+        if from.exists() {
+            fs::copy(&from, crashed.path().join(format!("candidcue.sqlite3{suffix}"))).expect("copy");
+        }
+    }
+    backup::copy_tree(&h.paths.scripts_dir(), &crashed.path().join("scripts")).expect("scripts");
+    let main = fs::read(crashed.path().join("candidcue.sqlite3")).expect("main file");
+    assert!(
+        !main.windows(15).any(|w| w == b"Only in the log"),
+        "the title must not have been checkpointed into the main file yet"
+    );
+    let paths = DataPaths::new(crashed.path().to_path_buf());
+
+    backup::rebuild_database_index(&paths).await.expect("rebuild");
+    let pool = candidcue_lib::database::init(crashed.path()).await.expect("relaunch");
+    let report = reconcile::run_startup_reconciliation(&pool, &paths, &ScriptLocks::default())
+        .await
+        .expect("reconciliation");
+
+    assert_eq!(report.titles_restored, 1);
+    let after = repo::get_summary(&pool, &script_id(&created.id)).await.expect("summary");
+    assert_eq!(after.title, "Only in the log");
+}
+
+#[tokio::test]
+async fn a_rescued_copy_says_which_folder_is_which_script() {
+    /*
+     * "Save my scripts somewhere else" copied a folder of UUID-named folders
+     * and nothing else, so telling them apart meant opening every one (#252).
+     */
+    use candidcue_lib::scripts::ScriptLocks;
+
+    let h = harness().await;
+    let launch = repo::create_script(
+        &h.pool,
+        &h.paths,
+        create_input("Launch video", "# Opening line\n\nHello."),
+    )
+    .await
+    .expect("create");
+    let old = repo::create_script(&h.pool, &h.paths, create_input("Old draft", "Gone soon."))
+        .await
+        .expect("create");
+    repo::trash_script(&h.pool, &ScriptLocks::default(), &script_id(&old.id), old.script_revision)
+        .await
+        .expect("trash");
+    h.pool.close().await;
+
+    let dest = tempfile::tempdir().expect("dest");
+    let target = dest.path().join("rescued");
+    let copied = backup::rescue_scripts_to(&h.paths, &target).await.expect("rescue");
+    assert_eq!(copied, 2, "scripts, not every entry in the folder");
+    assert!(target.join(&launch.id).join("script.md").exists());
+    let readme = fs::read_to_string(target.join("README.txt")).expect("a README names them");
+    assert!(readme.contains(&format!("Launch video\n    {}/script.md", launch.id)), "{readme}");
+    assert!(readme.contains(&format!("Old draft  (in the Trash)\n    {}/script.md", old.id)), "{readme}");
+
+    // The action exists for a database that will not open, and still names
+    // each script — from its own first line — when there is none to read.
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(h.dir.path().join(format!("candidcue.sqlite3{suffix}")));
+    }
+    fs::write(h.dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
+    let target = dest.path().join("rescued-again");
+    assert_eq!(backup::rescue_scripts_to(&h.paths, &target).await.expect("rescue"), 2);
+    let readme = fs::read_to_string(target.join("README.txt")).expect("README");
+    assert!(readme.contains(&format!("Opening line\n    {}/script.md", launch.id)), "{readme}");
+    assert!(readme.contains(&format!("Gone soon.\n    {}/script.md", old.id)), "{readme}");
 }
 
 /* -------------------------------------------- pre-migration backup policy */

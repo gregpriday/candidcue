@@ -7,7 +7,8 @@
  * The `reason` strings are written by Rust (`repo::create_revision_snapshot`
  * callers) and are the ONLY vocabulary that can appear:
  *   initial · autosave_interval · external_change ·
- *   external_change_preserved · before_restore · pre_session · import
+ *   external_change_preserved · before_restore · pre_session · import ·
+ *   recovered
  * `REVISION_REASONS` is asserted against repo.rs by the Rust contract test, so
  * a new reason on the Rust side cannot quietly reach the UI as raw snake_case.
  */
@@ -20,6 +21,7 @@ export const REVISION_REASONS = [
   'before_restore',
   'pre_session',
   'import',
+  'recovered',
 ] as const;
 
 export type RevisionReason = (typeof REVISION_REASONS)[number];
@@ -32,6 +34,8 @@ const REASON_LABELS: Record<RevisionReason, string> = {
   before_restore: 'Before a restore',
   pre_session: 'Before a session',
   import: 'Imported',
+  // Indexed again from its file after a rebuild; why it was taken is gone.
+  recovered: 'Recovered version',
 };
 
 /**

@@ -81,6 +81,8 @@ use sqlx::SqlitePool;
 use crate::errors::AppError;
 use crate::scripts::DataPaths;
 
+pub mod salvage;
+
 /// Bumped when the on-disk export layout changes in a way an older build
 /// cannot read. A restore refuses anything it does not recognise rather than
 /// guessing.
@@ -870,6 +872,12 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
                      it is flagged completed, so the next launch will retire it"
                 ),
             }
+            /*
+             * A rebuild's salvaged script names describe the data that was just
+             * set aside, not the export that replaced it — whose own database
+             * names every script it carries.
+             */
+            salvage::clear_pending_index(paths.root());
             tracing::info!(
                 from = %export_root.display(),
                 previous = %previous.display(),
@@ -1570,7 +1578,7 @@ fn sidecar_of(stem: &Path, suffix: &str) -> PathBuf {
     stem.with_file_name(format!("{name}{suffix}"))
 }
 
-pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
+pub async fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let quarantine = paths.quarantine_dir().join(format!("pre-rebuild-{stamp}"));
 
@@ -1593,10 +1601,13 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
         quarantine.join("README.txt"),
         "This is the CandidCue database as it was immediately before a rebuild.\n\
          \n\
-         The rebuild regenerated the index from the Markdown files in `scripts/`,\n\
-         which are the authority for script content. Session history and retained\n\
-         transcripts are NOT reconstructed by a rebuild — if you need them, this\n\
-         file is where they still are.\n\
+         The rebuild regenerated the index from the folders in `scripts/`, which\n\
+         hold each script's text, its saved versions and its images. Script names,\n\
+         Trash and per-script settings were read back out of this database where\n\
+         it could still be read; a script it could not name is named from its own\n\
+         first line. Session history and retained transcripts are NOT\n\
+         reconstructed by a rebuild — if you need them, this file is where they\n\
+         still are.\n\
          \n\
          Nothing deletes this folder automatically.\n",
     )
@@ -1604,8 +1615,94 @@ pub fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppError> {
 
     if !moved {
         tracing::warn!("rebuild requested but there was no database to move aside");
+        return Ok(quarantine);
+    }
+
+    /*
+     * What only this database knew about each script, read out of it now.
+     *
+     * Titles, Trash and per-script settings are not in any file (#252), so a
+     * rebuild that does not take them from here loses them for good — every
+     * script comes back as "Recovered script" and the Trash comes back live.
+     * Best effort, from a copy, and never a reason for the rebuild to fail: it
+     * has already done the part the user asked for.
+     *
+     * An empty read leaves any earlier index in place. A second rebuild before
+     * the relaunch finds no live database to move, and the first one's index
+     * is still the right one.
+     */
+    let database = quarantine.join(DATABASE_NAME);
+    let scripts = salvage::salvage_scripts(&database, &paths.cache_dir()).await;
+    if !scripts.is_empty() {
+        let count = scripts.len();
+        match salvage::write_pending_index(paths.root(), &database, scripts) {
+            Ok(()) => tracing::info!(count, "kept the old database's script names for the rebuild"),
+            Err(err) => tracing::warn!(error = %err, "could not keep the old database's script names"),
+        }
     }
     Ok(quarantine)
+}
+
+/// Copy the scripts folder to `target`, with a `README.txt` that says which
+/// folder is which script. Returns how many scripts it copied.
+///
+/// The folders are named by id, so without the list a rescued copy is forty
+/// `<uuid>/script.md` files that have to be opened one by one to be told apart
+/// (#252). The names come from the database when it can still be read — which
+/// it often can, this being the action offered when it will not OPEN — and
+/// from each script's own first line when it cannot. The README is best
+/// effort: the copy is what was asked for, and it is complete without it.
+pub async fn rescue_scripts_to(paths: &DataPaths, target: &Path) -> Result<u32, AppError> {
+    let source = paths.scripts_dir();
+    if !source.exists() {
+        return Err(AppError::not_found("a scripts folder to rescue"));
+    }
+    copy_tree(&source, target)?;
+
+    let known: std::collections::HashMap<String, salvage::SalvagedScript> =
+        salvage::salvage_scripts(&paths.root().join(DATABASE_NAME), &paths.cache_dir())
+            .await
+            .into_iter()
+            .map(|script| (script.id.clone(), script))
+            .collect();
+
+    let mut listed = Vec::new();
+    for entry in std::fs::read_dir(target)?.flatten() {
+        let folder = entry.file_name().to_string_lossy().to_string();
+        let script = entry.path().join("script.md");
+        if crate::scripts::ScriptId::parse(&folder).is_err() || !script.is_file() {
+            continue;
+        }
+        let saved = known.get(&folder);
+        let title = saved
+            .map(|s| s.title.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|title| !title.is_empty())
+            .or_else(|| {
+                std::fs::read_to_string(&script)
+                    .ok()
+                    .and_then(|text| crate::scripts::reconcile::title_from_source(&text))
+            })
+            .unwrap_or_else(|| "(untitled)".to_string());
+        let in_trash = saved.and_then(|s| s.status.as_deref()) == Some("trash");
+        listed.push((title, in_trash, folder));
+    }
+    listed.sort_by_key(|(title, _, folder)| (title.to_lowercase(), folder.clone()));
+
+    let mut readme = String::from(
+        "These are your CandidCue scripts, copied out of CandidCue's data folder.\n\
+         \n\
+         Each folder is one script: script.md is its text, assets/ holds its\n\
+         images and revisions/ its saved versions. The folders are named by ID,\n\
+         so this list says which is which.\n\n",
+    );
+    for (title, in_trash, folder) in &listed {
+        let trash = if *in_trash { "  (in the Trash)" } else { "" };
+        readme.push_str(&format!("{title}{trash}\n    {folder}/script.md\n\n"));
+    }
+    if let Err(err) = std::fs::write(target.join("README.txt"), readme) {
+        tracing::warn!(error = %err, "rescued the scripts but could not write the list of their names");
+    }
+    Ok(listed.len() as u32)
 }
 
 /// Open a SQLite file on its own, read-only, and make it prove it is intact.

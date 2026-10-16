@@ -108,7 +108,7 @@
         void run('rescue', async () => {
           const result = await recovery.rescueScripts();
           if (result === null) return null; // cancelled picker
-          return `Saved ${result.scriptsCopied} scripts to ${result.path}.`;
+          return `Saved ${result.scriptsCopied} scripts to ${result.path}. The README.txt there lists them by name.`;
         })}
     >
       {busy === 'rescue' ? 'Saving…' : 'Save my scripts somewhere else'}
@@ -206,9 +206,13 @@
   <h2>Rebuild from your script files</h2>
   <p class="muted">
     Your scripts are Markdown files, and those files are the authority for what a script
-    says. Rebuilding sets the current database aside and builds a new index from them.
-    Session and take history are not rebuilt this way — the old database is kept, not
-    deleted, so they are still there if you need them.
+    says. Rebuilding sets the current database aside and, when you reopen CandidCue, builds
+    a new index from them — text, saved versions and images included. Names, the Trash and
+    each script's settings are only in the database, so they are read back out of the old
+    one where it can still be read; a script it cannot name is named after its first line,
+    and comes back out of the Trash if it was in it. Saved versions keep their dates but
+    not why they were saved. Session and take history are not rebuilt this way — the old
+    database is kept, not deleted, so they are still there if you need them.
   </p>
   <Button
     variant="ghost"
@@ -216,7 +220,7 @@
     onclick={() =>
       void run('rebuild', async () => {
         const outcome = await recovery.rebuildDatabaseIndex();
-        return `Rebuilt. The previous database is at ${outcome.previousStateAt}. Quit and reopen CandidCue.`;
+        return `Ready to rebuild. The previous database is at ${outcome.previousStateAt}. Quit and reopen CandidCue to finish.`;
       })}
   >
     {busy === 'rebuild' ? 'Rebuilding…' : 'Rebuild the index'}

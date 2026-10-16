@@ -8,10 +8,12 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::backup::salvage::{self, SalvagedScript};
 use crate::errors::AppError;
 use crate::util::{atomic_write, now_iso};
 
 use super::repo;
+use super::words::{spoken_text, SpokenTextOptions};
 use super::{DataPaths, ScriptId};
 
 const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
@@ -23,6 +25,13 @@ pub struct RecoveryReport {
     pub integrity_ok: bool,
     pub temp_files_removed: u32,
     pub orphan_files_recovered: Vec<String>,
+    /// Of those, how many got back the name the database had for them before
+    /// a rebuild, rather than one taken from their own text (#252).
+    pub titles_restored: u32,
+    /// Saved versions and images of the recovered scripts indexed again from
+    /// the files they were always in.
+    pub revisions_recovered: u32,
+    pub assets_recovered: u32,
     pub missing_files_restored: Vec<String>,
     pub missing_files_unrecoverable: Vec<String>,
     /// Rows whose canonical file did not match the recorded hash — the
@@ -79,6 +88,13 @@ pub async fn run_startup_reconciliation(
     report.temp_files_removed = remove_stale_temp_files(paths)?;
 
     // 3. Canonical files on disk missing from the database → recover.
+    //
+    // A rebuild leaves behind what the old database still knew about each
+    // script — its name, its Trash, its settings — because none of that is in
+    // any file (#252). Applied here, by id, to the folders that rebuild left
+    // without rows; a folder it did not describe is named from its own text.
+    let salvaged = salvage::read_pending_index(paths.root());
+    let mut adoption_failed = false;
     let known: std::collections::HashSet<String> = repo::all_script_ids_and_paths(pool)
         .await?
         .into_iter()
@@ -110,12 +126,24 @@ pub async fn run_startup_reconciliation(
             }
             match fs::read_to_string(&canonical) {
                 Ok(source) => {
-                    let title = format!("Recovered script {}", &dir_name[..8.min(dir_name.len())]);
-                    if repo::insert_script_row(pool, paths, &script_id, &title, &source, "en")
-                        .await
-                        .is_ok()
-                    {
-                        report.orphan_files_recovered.push(dir_name);
+                    let previous = salvaged.as_ref().and_then(|index| index.get(&dir_name));
+                    let script = adoption_for(&script_id, &source, previous);
+                    match repo::adopt_script_folder(pool, paths, &script_id, &source, &script).await {
+                        Ok(adoption) => {
+                            if previous.is_some() {
+                                report.titles_restored += 1;
+                            }
+                            report.revisions_recovered += adoption.revisions;
+                            report.assets_recovered += adoption.assets;
+                            report.notes.extend(
+                                adoption.skipped.into_iter().map(|note| format!("{dir_name}: {note}")),
+                            );
+                            report.orphan_files_recovered.push(dir_name);
+                        }
+                        Err(err) => {
+                            adoption_failed = true;
+                            report.notes.push(format!("adopt orphan {dir_name}: {err}"));
+                        }
                     }
                 }
                 Err(err) => {
@@ -125,6 +153,14 @@ pub async fn run_startup_reconciliation(
                 }
             }
         }
+    }
+
+    // The rebuild's index has done its job once every folder it could describe
+    // has a row. Kept while one failed, so the retry next launch still has the
+    // name to give it; never applied to anything after that, so a script
+    // renamed or restored from the Trash later is not overruled by it.
+    if salvaged.is_some() && !adoption_failed {
+        salvage::clear_pending_index(paths.root());
     }
 
     // 4. Every row is checked against its canonical file: missing files are
@@ -189,13 +225,24 @@ pub async fn run_startup_reconciliation(
         let _ = remove_older_than(&compiled, Duration::from_secs(30 * 24 * 3600));
     }
 
-    // 6. Purge trash older than 30 days (spec §21.5).
-    report.trash_purged = match repo::purge_expired_trash(pool, paths, locks).await {
-        Ok(purged) => purged,
-        Err(err) => {
-            tracing::warn!(error = %err, "expired trash could not be listed for purging");
-            report.notes.push(format!("purge trash: {err}"));
-            0
+    // 6. Purge trash older than 30 days (spec §21.5) — but not on the launch
+    // that just recovered scripts. A rebuild brings the Trash back with the
+    // dates things were trashed, and some of those may be past 30 days; the
+    // first look at a recovered library should not be preceded by permanently
+    // deleting part of it. The next ordinary launch purges as usual.
+    report.trash_purged = if !report.orphan_files_recovered.is_empty() {
+        report
+            .notes
+            .push("trash purge deferred to the next launch: scripts were recovered".to_string());
+        0
+    } else {
+        match repo::purge_expired_trash(pool, paths, locks).await {
+            Ok(purged) => purged,
+            Err(err) => {
+                tracing::warn!(error = %err, "expired trash could not be listed for purging");
+                report.notes.push(format!("purge trash: {err}"));
+                0
+            }
         }
     };
 
@@ -203,6 +250,105 @@ pub async fn run_startup_reconciliation(
     write_report(paths, &report)?;
 
     Ok(report)
+}
+
+/// How a folder with no row comes back: as the old database had it where a
+/// rebuild could still read that, and otherwise as a draft named after its own
+/// first line. Every value from the old database is checked before it is
+/// trusted, and one that fails falls back on its own without costing the
+/// script the others.
+fn adoption_for(
+    script_id: &ScriptId,
+    source: &str,
+    previous: Option<&SalvagedScript>,
+) -> repo::AdoptedScript {
+    let now = now_iso();
+    let title = previous
+        .map(|p| collapse_whitespace(&p.title))
+        .filter(|title| !title.is_empty())
+        .or_else(|| title_from_source(source))
+        .unwrap_or_else(|| format!("Recovered script {}", &script_id.as_str()[..8]));
+    let status = previous
+        .and_then(|p| p.status.as_deref())
+        .and_then(|status| {
+            ["draft", "ready", "archived", "trash"]
+                .into_iter()
+                .find(|known| *known == status)
+        })
+        .unwrap_or("draft");
+    let timestamp = |value: Option<&String>| {
+        value
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+            .map(|t| {
+                t.with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            })
+    };
+    // A trashed script keeps the date it was trashed, so its 30 days run from
+    // when they always did. Without one it is trashed as of now: never earlier,
+    // which could expire it before anybody has seen it.
+    let trashed_at = (status == "trash").then(|| {
+        timestamp(previous.and_then(|p| p.trashed_at.as_ref())).unwrap_or_else(|| now.clone())
+    });
+    repo::AdoptedScript {
+        title,
+        status,
+        language: previous
+            .and_then(|p| p.language.clone())
+            .unwrap_or_else(|| "en".to_string()),
+        settings_json: previous.and_then(|p| p.script_settings_json.clone()),
+        created_at: timestamp(previous.and_then(|p| p.created_at.as_ref()))
+            .unwrap_or_else(|| now.clone()),
+        updated_at: timestamp(previous.and_then(|p| p.updated_at.as_ref()))
+            .unwrap_or_else(|| now.clone()),
+        trashed_at,
+    }
+}
+
+/// A name for a script nothing remembers the name of: its first line of
+/// spoken text, read the way the Library reads it, so `# Launch video` is
+/// "Launch video" and `**Hello** [there](…)` is "Hello there" (#252). `None`
+/// when the script says nothing at all.
+///
+/// Fenced code is skipped — a script that opens with a code block is not
+/// named after its first line of code.
+pub fn title_from_source(source: &str) -> Option<String> {
+    const MAX_CHARS: usize = 80;
+    let options = SpokenTextOptions {
+        read_headings: true,
+        read_image_alt_text: false,
+        read_inline_code: true,
+    };
+    let mut fence: Option<&str> = None;
+    for line in super::without_bom(source).lines() {
+        let trimmed = line.trim_start();
+        if let Some(marker) = fence {
+            if trimmed.starts_with(marker) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(marker) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
+            fence = Some(marker);
+            continue;
+        }
+        let text = collapse_whitespace(&spoken_text(line, options).plain);
+        if text.is_empty() {
+            continue;
+        }
+        if text.chars().count() <= MAX_CHARS {
+            return Some(text);
+        }
+        // Cut on a word where there is one, like the Library's preview.
+        let head: String = text.chars().take(MAX_CHARS).collect();
+        let cut = head.rfind(char::is_whitespace).map_or(head.as_str(), |at| &head[..at]);
+        return Some(format!("{}…", cut.trim_end()));
+    }
+    None
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn write_report(paths: &DataPaths, report: &RecoveryReport) -> Result<(), AppError> {
@@ -296,5 +442,41 @@ impl StartupFindings {
     /// second reader is a second window showing the same one-time notice.
     pub fn take(&self) -> Option<RecoveryReport> {
         self.report.lock().ok().and_then(|mut held| held.take())
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::title_from_source;
+
+    #[test]
+    fn a_script_is_named_after_its_first_spoken_line() {
+        assert_eq!(title_from_source("# Launch video\n\nHello.").as_deref(), Some("Launch video"));
+        assert_eq!(
+            title_from_source("\n\n**Hello** there,   world.\nMore.").as_deref(),
+            Some("Hello there, world.")
+        );
+        // A byte-order mark is not a character of the title (#247).
+        assert_eq!(title_from_source("\u{feff}# Marked").as_deref(), Some("Marked"));
+    }
+
+    #[test]
+    fn code_and_images_are_not_a_title() {
+        let source = "```\nlet x = 1;\n```\n![Logo](assets/logo.png)\n\nIntro line.";
+        assert_eq!(title_from_source(source).as_deref(), Some("Intro line."));
+    }
+
+    #[test]
+    fn a_long_first_line_is_cut_on_a_word() {
+        let source = "word ".repeat(40);
+        let title = title_from_source(&source).expect("title");
+        assert!(title.chars().count() <= 81, "{title}");
+        assert!(title.ends_with("word…"), "{title}");
+    }
+
+    #[test]
+    fn a_script_that_says_nothing_has_no_title_to_give() {
+        assert_eq!(title_from_source(""), None);
+        assert_eq!(title_from_source("\n   \n```\ncode only\n```\n"), None);
     }
 }
