@@ -488,7 +488,9 @@ impl<'a> AssetMentions<'a> {
 }
 
 /// `source` with numeric character references decoded, whitespace and
-/// control characters removed, and ASCII in lower case.
+/// control characters removed, and ASCII in lower case. `&Tab;` and
+/// `&NewLine;` are the named references that decode to a character this then
+/// drops, so they are dropped too; no named reference spells a hex digit.
 fn as_a_url_reads(source: &str) -> String {
     fn push(out: &mut String, c: char) {
         if c > '\u{20}' && c != '\u{7f}' {
@@ -497,18 +499,17 @@ fn as_a_url_reads(source: &str) -> String {
     }
     let mut out = String::with_capacity(source.len());
     let mut rest = source;
-    while let Some(at) = rest.find("&#") {
+    while let Some(at) = rest.find('&') {
         rest[..at].chars().for_each(|c| push(&mut out, c));
-        let after = &rest[at + 2..];
-        match numeric_reference(after) {
-            Some((c, len)) => {
-                push(&mut out, c);
-                rest = &after[len..];
-            }
-            None => {
-                out.push_str("&#");
-                rest = after;
-            }
+        let after = &rest[at + 1..];
+        if let Some(named) = ["Tab;", "NewLine;"].into_iter().find(|n| after.starts_with(n)) {
+            rest = &after[named.len()..];
+        } else if let Some((c, len)) = after.strip_prefix('#').and_then(numeric_reference) {
+            push(&mut out, c);
+            rest = &after[1 + len..];
+        } else {
+            out.push('&');
+            rest = after;
         }
     }
     rest.chars().for_each(|c| push(&mut out, c));
@@ -600,13 +601,15 @@ pub(crate) async fn collect_unused_script_assets(
     }
 
     // An image another script still references is not this script's to remove
-    // (and its row could not be deleted under the foreign key anyway).
+    // (and its row could not be deleted under the foreign key anyway) — under
+    // any spelling of its path, since on a case-insensitive disk two spellings
+    // are one file.
     let mut removable = Vec::with_capacity(unused.len());
     for rel_path in unused {
         let shared: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                  SELECT 1 FROM script_asset_references r JOIN assets a ON a.id = r.asset_id
-                 WHERE a.rel_path = ? AND r.script_id != ?
+                 WHERE lower(a.rel_path) = lower(?) AND r.script_id != ?
              )",
         )
         .bind(&rel_path)
@@ -648,18 +651,15 @@ pub(crate) async fn collect_unused_script_assets(
     // other order would leave files that nothing indexes any more, which no
     // later launch would ever look at again. A file that cannot be removed
     // keeps its row, for the same reason.
-    let mut removed = 0u32;
     let mut forget = Vec::with_capacity(removable.len());
+    let mut unlinked = Vec::with_capacity(removable.len());
     for rel_path in &removable {
         let absolute = paths.root().join(rel_path);
         match fs::symlink_metadata(&absolute) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => forget.push(rel_path),
             Ok(meta) if meta.is_file() && crate::util::is_within_root(&absolute, &assets_root) => {
                 match fs::remove_file(&absolute) {
-                    Ok(()) => {
-                        removed += 1;
-                        forget.push(rel_path);
-                    }
+                    Ok(()) => unlinked.push(rel_path),
                     Err(err) => tracing::warn!(
                         script_id = script_id.as_str(),
                         error = %err,
@@ -673,6 +673,13 @@ pub(crate) async fn collect_unused_script_assets(
                 "an unused image is not a plain file in its script's folder, and was left"
             ),
         }
+    }
+    // The removals must outlast a power cut before the rows that describe the
+    // files go; otherwise the commit survives and the unlink does not.
+    let removed = unlinked.len() as u32;
+    if !unlinked.is_empty() {
+        crate::util::sync_dir(&assets_root)?;
+        forget.extend(unlinked);
     }
     let mut tx = pool.begin().await?;
     for rel_path in forget {
@@ -698,13 +705,19 @@ pub(crate) async fn collect_unused_script_assets(
 /// script can be is refused rather than read into memory at startup — and, as
 /// text that could not be read, stops the sweep for that script.
 fn read_recoverable_text(path: &Path) -> Result<String, AppError> {
-    if fs::metadata(path)?.len() > crate::scripts::repo::MAX_SOURCE_BYTES as u64 {
+    use std::io::Read;
+    let limit = crate::scripts::repo::MAX_SOURCE_BYTES as u64;
+    // Through `take`, not after a size check: a file can be replaced, or grow,
+    // between looking at it and reading it.
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         return Err(AppError::Internal(format!(
             "{} is larger than a script can be",
             path.file_name().unwrap_or_default().to_string_lossy()
         )));
     }
-    Ok(String::from_utf8_lossy(&fs::read(path)?).into_owned())
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Every file holding text of `script_id` that could come back: the revisions
@@ -1030,6 +1043,8 @@ mod tests {
             format!("![Kept](assets/&#51;{}.png)", &hash[1..]),
             format!("![Kept](assets/&#x33;{}.png)", &hash[1..]),
             format!("![Kept](<assets/{} {}.png>)", &hash[..8], &hash[8..]),
+            format!("![Kept](assets/{}&Tab;{}.png)", &hash[..32], &hash[32..]),
+            format!("![Kept](assets/{}&NewLine;{}.png)", &hash[..32], &hash[32..]),
             // On a case-insensitive disk, the same file.
             format!("![Kept](assets/{}.png)", hash.to_ascii_uppercase()),
         ] {
@@ -1054,6 +1069,7 @@ mod tests {
         assert_eq!(as_a_url_reads("A&#66;c&#x44;&#X65;"), "abcde");
         assert_eq!(as_a_url_reads("&#0; &#; &#x; &#12345678; &#1"), "\u{fffd}&#;&#x;&#12345678;&#1");
         assert_eq!(as_a_url_reads("&#38;#51; x"), "&#51;x");
+        assert_eq!(as_a_url_reads("a&Tab;b&NewLine;c&tab;&amp;"), "abc&tab;&amp;");
     }
 
     #[test]
