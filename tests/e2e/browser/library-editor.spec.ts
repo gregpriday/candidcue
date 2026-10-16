@@ -535,3 +535,41 @@ test('File › Move to Trash moves an autosaved script while the Library is stil
   await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);
   await expectTrashedAtSavedRevision(page);
 });
+
+/*
+ * The other half of #255's fix. File › Move to Trash runs the navigation guard
+ * on the way out, and the guard always offers a way through. Once the author
+ * has taken it, the edits are theirs to lose — so the trash must not try to
+ * save them again and refuse, which is what a flush on every trash did.
+ */
+for (const leaving of [
+  {
+    what: 'a save that keeps failing',
+    error: { code: 'SCRIPT_SAVE_FAILED', userMessage: 'The disk is unavailable.' },
+    guard: 'Leave with unsaved changes?',
+    choice: 'Leave anyway',
+  },
+  {
+    what: 'an unresolved external change',
+    error: SCRIPT_CONFLICT_ERROR,
+    guard: 'Leave without resolving the conflict?',
+    choice: 'Discard my version',
+  },
+]) {
+  test(`File › Move to Trash still moves the script when the author leaves ${leaving.what} behind`, async ({
+    page,
+  }) => {
+    await page.goto('/control.html');
+    await openScript(page, /Launch keynote/);
+    await page.evaluate((err) => window.__E2E__.setFail('save_script', err), leaving.error);
+    await editUntilAutosaved(page);
+
+    await chooseMenuCommand(page, 'file.move-to-trash');
+    await page.getByRole('dialog', { name: 'Move to Trash?' }).getByRole('button', { name: 'Move to Trash' }).click();
+    await page.getByRole('dialog', { name: leaving.guard }).getByRole('button', { name: leaving.choice }).click();
+
+    await expect(row(page, 'Blank canvas')).toBeVisible();
+    await expect(row(page, 'Launch keynote')).toHaveCount(0);
+    await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);
+  });
+}

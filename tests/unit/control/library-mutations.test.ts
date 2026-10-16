@@ -439,6 +439,10 @@ describe('a duplicate of the open script copies what the editor shows', () => {
  * script you are looking at, with the external-change conflict for a change
  * nobody made. The fake refuses a stale revision the way `repo.rs` does, which
  * is the only reason any of these can fail.
+ *
+ * `saveEditsFirst` is the editor's own ••• › Move to Trash; without it is File ›
+ * Move to Trash and the Library row, which both arrive after the navigation
+ * guard has already dealt with the edits.
  */
 describe('trashing the open script names the revision it is really at', () => {
   const typed = 'Hello world. And a word typed since the Library loaded.';
@@ -452,6 +456,7 @@ describe('trashing the open script names the revision it is really at', () => {
   });
 
   afterEach(() => {
+    saveGate = null;
     closeScript();
   });
 
@@ -461,7 +466,7 @@ describe('trashing the open script names the revision it is really at', () => {
     // The issue's own repro: the list still says 3, the script is at 4.
     expect(get(library).scripts.find((script) => script.id === 'a')?.scriptRevision).toBe(3);
 
-    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+    await expect(moveScriptToTrash('a', { saveEditsFirst: true })).resolves.toBe(true);
 
     expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
     expect(messages('info')).toEqual(['Moved to Trash']);
@@ -494,22 +499,61 @@ describe('trashing the open script names the revision it is really at', () => {
     expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 3 }]);
   });
 
-  it('saves the edit autosave has not reached yet, then trashes past it', async () => {
+  it('borrows nothing from an editor whose script never finished opening', async () => {
+    // A failed open leaves the editor naming the script, still loading, at the
+    // blank state's revision 0 — which is no revision of anything.
+    installBackend({ get_script: new Error('Unreadable') });
+    closeScript();
+    await expect(openScript('a')).rejects.toBeDefined();
+    live = [];
+    await loadLibrary();
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(false);
+
+    expect(commands).not.toContain('trash_script');
+    expect(messages('danger')[0]).toContain('no longer in the library');
+  });
+
+  it('from the editor, saves the edit autosave has not reached yet, then trashes past it', async () => {
     setSource(typed);
     expect(disk.a?.source).toBe('Hello world.');
 
-    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+    await expect(moveScriptToTrash('a', { saveEditsFirst: true })).resolves.toBe(true);
 
     expect(disk.a?.source).toBe(typed);
     expect(commands.indexOf('save_script')).toBeLessThan(commands.indexOf('trash_script'));
     expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
   });
 
-  it('refuses the trash while the edits still cannot be saved, and says why', async () => {
+  it('from the editor, waits out an autosave on the wire and saves what came after it', async () => {
+    let release!: () => void;
+    saveGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setSource(typed);
+    const autosaving = saveNow();
+    setSource(`${typed} And one more.`);
+    const trashing = moveScriptToTrash('a', { saveEditsFirst: true });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Sent now, the trash would name 3 while the save on the wire makes it 4.
+      expect(commands).not.toContain('trash_script');
+    } finally {
+      release();
+    }
+
+    await autosaving;
+    await expect(trashing).resolves.toBe(true);
+
+    expect(disk.a?.source).toBe(`${typed} And one more.`);
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 5 }]);
+  });
+
+  it('from the editor, refuses the trash while the edits still cannot be saved, and says why', async () => {
     installBackend({ save_script: new Error('Disk unavailable') });
     setSource(typed);
 
-    await expect(moveScriptToTrash('a')).resolves.toBe(false);
+    await expect(moveScriptToTrash('a', { saveEditsFirst: true })).resolves.toBe(false);
 
     // Not trashed with the text left behind in it...
     expect(commands).not.toContain('trash_script');
@@ -521,6 +565,24 @@ describe('trashing the open script names the revision it is really at', () => {
     expect(messages('info')).toEqual([]);
     // ...and the text still in the editor, still waiting to be saved.
     expect(get(editor)).toMatchObject({ source: typed, dirty: true, saveState: 'error' });
+  });
+
+  it('once the author has left the edits behind, trashes without trying to save them again', async () => {
+    setSource(typed);
+    await saveNow();
+    installBackend({ save_script: new Error('Disk unavailable') });
+    setSource(`${typed} And a line that will not save.`);
+    await saveNow();
+    // "Leave anyway": the guard asked, the author went, and the store still
+    // holds the edit. Saving it again here refused the trash they asked for.
+    expect(get(editor)).toMatchObject({ dirty: true, saveState: 'error' });
+    commands = [];
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+
+    expect(commands).not.toContain('save_script');
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
+    expect(messages('danger')).toEqual([]);
   });
 
   it('still refuses a revision that really has moved on elsewhere', async () => {
@@ -542,7 +604,7 @@ describe('trashing the open script names the revision it is really at', () => {
   it('trashes it again after a restore, past the revision the editor kept', async () => {
     setSource(typed);
     await saveNow();
-    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+    await expect(moveScriptToTrash('a', { saveEditsFirst: true })).resolves.toBe(true);
     // Leaving the editor does not clear it, so it still holds 4 while the
     // script moves on to 5 and then 6. Preferring it would send 4 twice.
     live = [summary('a')];
@@ -563,10 +625,14 @@ describe('trashing the open script names the revision it is really at', () => {
     expect(messages('danger')).toEqual([]);
   });
 
-  it('leaves the open script alone when a different one is trashed', async () => {
+  it('saves nothing and borrows no revision for a script the editor does not hold', async () => {
+    // The open script is at 4 and dirty again; the one being trashed is at 3.
     setSource(typed);
+    await saveNow();
+    setSource(`${typed} And more.`);
+    commands = [];
 
-    await expect(moveScriptToTrash('b')).resolves.toBe(true);
+    await expect(moveScriptToTrash('b', { saveEditsFirst: true })).resolves.toBe(true);
 
     expect(commands).not.toContain('save_script');
     expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 3 }]);

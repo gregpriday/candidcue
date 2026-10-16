@@ -137,8 +137,13 @@ describe('scripts service — mock fallback (browser dev parity only, proves not
       await expect(scripts.restoreScript(created.id, loaded.scriptRevision + 1)).rejects.toMatchObject({
         code: 'SCRIPT_CONFLICT',
       });
+      // Refused before anything moved, again: still in Trash, at the same revision.
+      const trash = await scripts.listScripts({ view: 'trash' });
+      expect(trash.items.find((s) => s.id === created.id)?.scriptRevision).toBe(trashed.scriptRevision);
+
       await expect(scripts.restoreScript(created.id, trashed.scriptRevision)).resolves.toMatchObject({
         status: 'draft',
+        scriptRevision: trashed.scriptRevision + 1,
       });
     } finally {
       await scripts.permanentlyDeleteScript(created.id);

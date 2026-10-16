@@ -469,13 +469,24 @@ function revisionOf(id: string): number {
   return Math.max(found?.scriptRevision ?? 0, held ?? 0);
 }
 
-export async function moveScriptToTrash(id: string): Promise<boolean> {
+/**
+ * `saveEditsFirst` is for the one caller still inside the document. Its
+ * pending autosave goes first, for the same reason as Duplicate: what is moved
+ * should be what the editor shows, and a save landing after the trash would be
+ * refused against the revision the trash moved on. Edits that cannot be saved
+ * refuse the trash, and the author is still there to deal with them.
+ *
+ * Every other way here has already left the editor through the navigation
+ * guard, which saved the edits or was told to leave them behind — "Leave
+ * anyway", "Discard my version". Saving again there retried the very save the
+ * author had just given up on, and refused the trash they had asked for.
+ */
+export async function moveScriptToTrash(
+  id: string,
+  { saveEditsFirst = false }: { saveEditsFirst?: boolean } = {},
+): Promise<boolean> {
   const ok = await mutate('The script could not be moved to Trash.', async () => {
-    // The pending autosave first, for the same reason as Duplicate: what is
-    // moved should be what the editor shows, and the save it makes moves the
-    // revision the trash has to name. Edits that cannot be saved refuse the
-    // trash rather than leaving them behind in a script that is gone.
-    await flushEditorEdits(id);
+    if (saveEditsFirst) await flushEditorEdits(id);
     await scriptsService.trashScript(id, revisionOf(id));
   });
   if (ok) showToast('Moved to Trash', 'info');
