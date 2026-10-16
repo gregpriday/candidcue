@@ -141,9 +141,13 @@
   function deltaFor(revision: RevisionSummary): string {
     return formatWordDelta(revisionWordDelta(revision.wordCount, currentWordCount));
   }
+
+  function close(): void {
+    if (!restoring) onclose();
+  }
 </script>
 
-<Dialog {open} size="lg" title="Revision history" onclose={onclose}>
+<Dialog {open} size="lg" title="Revision history" onclose={close}>
   {#if loading}
     <p class="note">Loading revisions…</p>
   {:else if listError}
@@ -210,9 +214,9 @@
   {/if}
 
   {#snippet footer()}
-    <Button variant="ghost" onclick={onclose}>Close</Button>
+    <Button variant="ghost" disabled={restoring} onclick={close}>Close</Button>
     {#if confirming}
-      <Button bind:element={cancelButton} variant="ghost" onclick={() => void cancelRestore()}>
+      <Button bind:element={cancelButton} variant="ghost" disabled={restoring} onclick={() => void cancelRestore()}>
         Cancel
       </Button>
       <Button variant="danger-primary" disabled={restoring} onclick={() => void restore()}>

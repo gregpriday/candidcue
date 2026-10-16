@@ -15,6 +15,8 @@ import {
   openScript,
   saveNow,
   setSource,
+  setTitle,
+  flushEditorEdits,
 } from '../../../src/control/stores/editor';
 
 /** Auto-answering fake worker so compile requests resolve immediately. */
@@ -293,5 +295,69 @@ describe('compile debounce (spec §45.3)', () => {
     await vi.runAllTimersAsync();
     await saving;
     vi.useRealTimers();
+  });
+});
+
+
+describe('title persistence and file-action safety', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps a failed title save dirty and lets Save retry it', async () => {
+    vi.spyOn(scripts, 'saveScript').mockRejectedValueOnce(new Error('Disk unavailable'));
+    await setTitle('Retried title');
+    expect(get(editor)).toMatchObject({ title: 'Retried title', dirty: true, saveState: 'error' });
+    expect(editorHasUnsavedWork()).toBe(true);
+    await saveNow();
+    expect((await scripts.getScript(scriptId)).title).toBe('Retried title');
+    expect(editorHasUnsavedWork()).toBe(false);
+  });
+
+  it('serializes a title change behind the body save and persists both', async () => {
+    const save = scripts.saveScript;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(scripts, 'saveScript').mockImplementationOnce(async (...args) => {
+      await gate;
+      return save(...args);
+    });
+    setSource('# New body\n');
+    const saving = saveNow();
+    const renaming = setTitle('New title');
+    expect(editorHasUnsavedWork()).toBe(true);
+    release();
+    await Promise.all([saving, renaming]);
+    const persisted = await scripts.getScript(scriptId);
+    expect(persisted).toMatchObject({ title: 'New title', source: '# New body\n' });
+    expect(get(editor)).toMatchObject({ dirty: false, scriptRevision: persisted.scriptRevision });
+  });
+
+  it('does not stamp a late title-save answer onto another script', async () => {
+    const save = scripts.saveScript;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(scripts, 'saveScript').mockImplementationOnce(async (...args) => {
+      await gate;
+      return save(...args);
+    });
+    const other = await scripts.createScript({ title: 'Other', source: 'Other body' });
+    try {
+      const renaming = setTitle('Changed first title');
+      expect(editorHasUnsavedWork()).toBe(true);
+      await openScript(other.id);
+      const revision = get(editor).scriptRevision;
+      release();
+      await renaming;
+      expect(get(editor)).toMatchObject({ scriptId: other.id, scriptRevision: revision, title: 'Other' });
+    } finally {
+      release();
+      await scripts.permanentlyDeleteScript(other.id);
+    }
+  });
+
+  it('refuses a file action when the latest edits could not be saved', async () => {
+    setSource('Unsaved latest text');
+    vi.spyOn(scripts, 'saveScript').mockRejectedValueOnce(new Error('Disk unavailable'));
+    await expect(flushEditorEdits(scriptId)).rejects.toThrow('Disk unavailable');
+    expect(get(editor).dirty).toBe(true);
   });
 });

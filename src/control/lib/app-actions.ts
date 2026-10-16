@@ -8,6 +8,7 @@ import { markWelcomed } from '../stores/app-status';
 import { loadLibrary } from '../stores/library';
 import { navigate } from '../stores/router';
 import { showToast } from '../stores/toasts';
+import { flushEditorEdits } from '../stores/editor';
 import { NEW_SCRIPT_TITLE, SAMPLE_SCRIPT_SOURCE, SAMPLE_SCRIPT_TITLE } from './sample-script';
 import type { ExportFormat } from '../services/scripts-types';
 
@@ -89,6 +90,7 @@ export async function exportScriptToFile(
   format: ExportFormat = 'markdown',
 ): Promise<void> {
   try {
+    await flushEditorEdits(scriptId);
     const result = await scriptsService.exportScript(scriptId, {
       format,
       includeAssets: format !== 'text',
