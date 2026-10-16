@@ -135,6 +135,7 @@
       ? null
       : resolveTakeOutcome({
           mode: $session.summary.mode,
+          voiceFollowingAvailable: $session.summary.voiceFollowingAvailable,
           wordsHeard: $session.summary.wordsHeard,
           wordsInFlight: $session.summary.wordsInFlight,
           followingShare: $session.summary.followingShare,

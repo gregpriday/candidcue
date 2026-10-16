@@ -458,6 +458,19 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
 });
 
 /**
+ * #286 — a stop with no session to stop claims no refused speech model.
+ *
+ * `emptySummary` is the shape-complete zero, and with no take there was no
+ * start for a model to be refused on.
+ */
+describe('#286 — the empty summary does not report voice following as unavailable', () => {
+  it('reports voice following available for a stop that had no session to stop', () => {
+    const summary = stopSession();
+    expect(summary.voiceFollowingAvailable).toBe(true);
+  });
+});
+
+/**
  * §115 — the ending location is presenter-facing copy, so it may not be in
  * engine units.
  *

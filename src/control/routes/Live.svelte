@@ -1276,20 +1276,39 @@ import { onShortcut } from '../lib/shortcuts';
       <span class="status-dot {connection.tone}" aria-hidden="true"></span>
       {connection.label}
     </span>
+    <!--
+      A refused speech model leaves no capture running, so `micState` is
+      'disconnected' — but the microphone opened normally and nothing about it
+      is at fault. "Mic lost" there sent the presenter to debug working
+      hardware (#286), so the refusal is named instead, and in a neutral light:
+      the toast already said what to do about it.
+
+      A device that really was lost still says so first. The two can coexist —
+      a refused resume, then the input unplugged — and the input is the one
+      the presenter can fix from this drawer.
+    -->
     <span class="live-status">
       <span
-        class="status-dot {$session.micState === 'live'
-          ? 'success'
-          : $session.micState === 'muted'
+        class="status-dot {$session.inputDeviceLost
+          ? 'danger'
+          : !$session.voiceFollowingAvailable
             ? 'neutral'
-            : 'danger'}"
+            : $session.micState === 'live'
+              ? 'success'
+              : $session.micState === 'muted'
+                ? 'neutral'
+                : 'danger'}"
         aria-hidden="true"
       ></span>
-      {$session.micState === 'live'
-        ? 'Mic live'
-        : $session.micState === 'muted'
-          ? 'Mic off'
-          : 'Mic lost'}
+      {$session.inputDeviceLost
+        ? 'Mic lost'
+        : !$session.voiceFollowingAvailable
+          ? 'Voice unavailable'
+          : $session.micState === 'live'
+            ? 'Mic live'
+            : $session.micState === 'muted'
+              ? 'Mic off'
+              : 'Mic lost'}
     </span>
   {:else}
     <span class="live-status">

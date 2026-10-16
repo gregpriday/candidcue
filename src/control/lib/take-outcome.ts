@@ -39,8 +39,9 @@ export interface TakeOutcomeInput {
    *
    * False when the take was started past a missing speech model — which
    * readiness deliberately allows, because a take can still roll at a pace and
-   * be driven by hand. Without this the summary told those presenters to go and
-   * test their microphone, which was never the problem.
+   * be driven by hand — or its model was found but would not load. Without this
+   * the summary told those presenters to go and test their microphone, which
+   * was never the problem. Fed from `SessionSummary.voiceFollowingAvailable`.
    */
   voiceFollowingAvailable?: boolean;
   /** Words the recogniser FINALISED. Zero with none in flight means silence. */
@@ -137,12 +138,18 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
    * A voice take that never had a recogniser is not a microphone failure, and
    * must not be reported as one. The presenter was told before they started and
    * chose to go ahead.
+   *
+   * One answer for all three refusals — not installed, files missing, failed to
+   * load. "Install a language" was right for only the first: a model that will
+   * not load may be installed already, or be a bundled copy with nothing to
+   * install. The take's own toast carried the specific remedy; this points at
+   * the screen where every one of them is.
    */
   if (input.voiceFollowingAvailable === false) {
     return {
       headline: 'Take finished without voice following',
-      detail: `No speech model was available, so CandidCue did not follow your voice. You ended in ${input.endingLocation}.`,
-      suggestion: 'Install a language in Settings to follow your voice on the next take.',
+      detail: `No usable speech model was available, so CandidCue did not follow your voice. You ended in ${input.endingLocation}.`,
+      suggestion: 'Check the speech model in Settings → Speech before the next take.',
       health: 'no_tracking',
       tone: 'neutral',
     };
