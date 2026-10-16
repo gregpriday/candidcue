@@ -210,7 +210,6 @@ mod keys {
     pub const LIBRARY: &str = "CmdOrCtrl+Shift+L";
     pub const TOGGLE_SIDEBAR: &str = "CmdOrCtrl+Alt+S";
     pub const TOGGLE_OUTLINE: &str = "CmdOrCtrl+Alt+O";
-    pub const TOGGLE_DIAGNOSTICS: &str = "CmdOrCtrl+Alt+D";
     pub const EDIT_MODE: &str = "CmdOrCtrl+1";
     pub const PREVIEW_MODE: &str = "CmdOrCtrl+2";
     pub const SPLIT_MODE: &str = "CmdOrCtrl+3";
@@ -543,7 +542,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &sep()?,
             &check("view.toggle-sidebar", "Show Sidebar", Some(keys::TOGGLE_SIDEBAR))?,
             &check("view.toggle-outline", "Show Outline", Some(keys::TOGGLE_OUTLINE))?,
-            &check("view.toggle-diagnostics", "Show Diagnostics", Some(keys::TOGGLE_DIAGNOSTICS))?,
             &sep()?,
             &check("view.edit-mode", "Edit", Some(keys::EDIT_MODE))?,
             &check("view.preview-mode", "Preview", Some(keys::PREVIEW_MODE))?,

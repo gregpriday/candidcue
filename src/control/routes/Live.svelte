@@ -1444,7 +1444,6 @@ import { onShortcut } from '../lib/shortcuts';
 
   <!-- Main three-region area (§15.1) -->
   <div class="main">
-    {#if $workspace.outlineVisible}
     <aside class="outline" aria-label="Sections" style="width: {$workspace.liveOutlineWidth}px">
       <p class="region-label">Sections</p>
       {#if flatOutline.length > 0}
@@ -1477,7 +1476,6 @@ import { onShortcut } from '../lib/shortcuts';
       defaultValue={PANE_LIMITS.liveOutline.default}
       onresize={(w) => setPaneWidth('liveOutline', w)}
     />
-    {/if}
 
     <section class="preview" aria-label="Stage preview">
       {#if $session.stageBlanked}
@@ -1526,7 +1524,6 @@ import { onShortcut } from '../lib/shortcuts';
       {/if}
     </section>
 
-    {#if $workspace.diagnosticsVisible}
     <!--
       A real divider on both rails (§12.2).
 
@@ -1644,7 +1641,6 @@ import { onShortcut } from '../lib/shortcuts';
         the pace. Its starting speed is under Settings → Teleprompter.
       </p>
     </aside>
-    {/if}
   </div>
 
   <!-- Bottom transport (§15.1) — always visible -->
@@ -1846,6 +1842,19 @@ import { onShortcut } from '../lib/shortcuts';
 
     <p class="region-label">Following</p>
     <FollowControls follow={$smoothFollow} />
+
+    <!--
+      "Why did it move?" and Copy diagnostics, HERE because this is the only
+      place a take can reach them. They used to live only in the console's
+      Tracking rail, which a take replaces with the stage — so the explanation
+      of an odd movement, and the export written for a bug report, were on a
+      panel nobody could open while the movement was happening. Collapsed by
+      its own disclosure; nothing about it is in the presenter's way.
+    -->
+    <FollowDiagnostics
+      follow={$smoothFollow}
+      developerMode={$settings.following.developerDiagnostics}
+    />
 
     {@render stageFaultNotice()}
 

@@ -36,7 +36,6 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     libraryInTrash: false,
     sidebarVisible: true,
     outlineVisible: true,
-    diagnosticsVisible: true,
     editorLayout: 'edit',
     takeStarting: false,
     ...overrides,
@@ -124,11 +123,6 @@ describe('availability during a take', () => {
     'session.identify-displays',
     'session.end-take',
     'view.stage-appearance',
-    'view.toggle-outline',
-    // Both panes live on the OPERATOR plane, not the presenter's. Showing or
-    // hiding them mid-take changes nothing the presenter can see, and hunting a
-    // fault is exactly when an operator reaches for diagnostics.
-    'view.toggle-diagnostics',
     'window.main',
     /*
      * Window › Stage names a window that may exist during a take (the
@@ -286,13 +280,31 @@ describe('availability by route', () => {
     ).toBe(false);
   });
 
-  it('confines Diagnostics to Live and the outline to Live and the editor', () => {
-    expect(COMMANDS['view.toggle-diagnostics'].available(context())).toBe(false);
-    expect(COMMANDS['view.toggle-diagnostics'].available(LIVE)).toBe(true);
+  it('offers Show Outline only over an editor that is showing one', () => {
+    const editor = context({ route: { name: 'editor', scriptId: 'a' }, scriptOpen: true });
+    expect(COMMANDS['view.toggle-outline'].available(editor)).toBe(true);
+    // The editor route before its document arrives has no outline yet.
+    expect(COMMANDS['view.toggle-outline'].available({ ...editor, scriptOpen: false })).toBe(false);
     expect(COMMANDS['view.toggle-outline'].available(context())).toBe(false);
-    expect(
-      COMMANDS['view.toggle-outline'].available(context({ route: { name: 'editor', scriptId: 'a' } })),
-    ).toBe(true);
+    /*
+     * Live, with or without a take. A take replaces the console's outline rail
+     * with the stage, so the only outline this could flip is the editor's —
+     * which nobody is looking at, and which they would find changed afterwards.
+     */
+    expect(COMMANDS['view.toggle-outline'].available(LIVE)).toBe(false);
+    expect(COMMANDS['view.toggle-outline'].available({ ...LIVE, sessionActive: false })).toBe(false);
+    expect(COMMANDS['view.toggle-outline'].available({ ...editor, takeStarting: true })).toBe(false);
+  });
+
+  it('does not run Show Outline from its accelerator while it is unavailable', () => {
+    const { calls, actions } = recordingActions();
+    expect(runCommand('view.toggle-outline', actions, LIVE)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('offers no Show Diagnostics: the panel it toggled is never on screen', () => {
+    expect((COMMAND_IDS as readonly string[]).includes('view.toggle-diagnostics')).toBe(false);
+    expect(Object.keys(COMMANDS)).not.toContain('view.toggle-diagnostics');
   });
 
   it('does not start a new script from inside the calibration wizard', () => {

@@ -117,7 +117,6 @@ export const COMMAND_IDS = [
   'view.library',
   'view.toggle-sidebar',
   'view.toggle-outline',
-  'view.toggle-diagnostics',
   'view.edit-mode',
   'view.preview-mode',
   'view.split-mode',

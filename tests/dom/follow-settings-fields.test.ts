@@ -16,7 +16,7 @@
  * because documents written by older builds carry it and Rust validates it
  * against a closed vocabulary. Removing the control must not remove the value.
  */
-import { render } from '@testing-library/svelte';
+import { fireEvent, render } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import FollowSettingsFields from '../../src/control/components/FollowSettingsFields.svelte';
 import {
@@ -93,9 +93,23 @@ describe('the controls that are still real', () => {
     expect(view.container.textContent).toContain('Follow feel');
   });
 
-  it('keeps Developer diagnostics interactive', () => {
+  it('keeps Developer diagnostics interactive', async () => {
+    const { view, patches } = mount();
+    const toggle = view.container.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Developer diagnostics"]',
+    );
+    expect(toggle).not.toBeNull();
+    await fireEvent.click(toggle!);
+    expect(patches).toContainEqual({ developerDiagnostics: true });
+  });
+
+  it('points Developer diagnostics at a panel a take can actually open', () => {
+    // The timeline lived only in Live's console, which a take replaces with the
+    // stage, so "in Live" named a place nobody could reach (#236).
     const { view } = mount();
-    expect(view.container.textContent).toContain('Developer diagnostics');
+    const text = view.container.textContent ?? '';
+    expect(text).toContain('Take controls → Why did it move?');
+    expect(text).not.toContain('timeline in Live');
   });
 
   it('shows neither in the compact Preflight subset', () => {

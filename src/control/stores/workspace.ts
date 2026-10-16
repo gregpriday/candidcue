@@ -72,7 +72,6 @@ export interface WorkspaceState {
   /** The Library's selection inspector. Off by default — see §10.3. */
   inspectorVisible: boolean;
   inspectorWidth: number;
-  diagnosticsVisible: boolean;
   diagnosticsWidth: number;
   liveOutlineWidth: number;
   editorLayout: EditorLayout;
@@ -108,7 +107,6 @@ export const DEFAULT_WORKSPACE: WorkspaceState = {
   outlineWidth: PANE_LIMITS.editorOutline.default,
   inspectorVisible: false,
   inspectorWidth: PANE_LIMITS.librarySidebar.default,
-  diagnosticsVisible: true,
   diagnosticsWidth: PANE_LIMITS.liveDiagnostics.default,
   liveOutlineWidth: PANE_LIMITS.liveOutline.default,
   editorLayout: 'edit',
@@ -179,11 +177,6 @@ export function parseWorkspace(raw: string | null): WorkspaceState {
       'inspectorWidth',
       PANE_LIMITS.librarySidebar,
       DEFAULT_WORKSPACE.inspectorWidth,
-    ),
-    diagnosticsVisible: readBoolean(
-      source,
-      'diagnosticsVisible',
-      DEFAULT_WORKSPACE.diagnosticsVisible,
     ),
     diagnosticsWidth: readNumber(
       source,

@@ -284,7 +284,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     libraryInTrash: false,
     sidebarVisible: false,
     outlineVisible: false,
-    diagnosticsVisible: false,
     editorLayout: 'edit',
     takeStarting: false,
   };
@@ -843,7 +842,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     libraryInTrash: $library.view === 'trash',
     sidebarVisible: $workspace.sidebarVisible,
     outlineVisible: $workspace.outlineVisible,
-    diagnosticsVisible: $workspace.diagnosticsVisible,
     editorLayout: $workspace.editorLayout,
     takeStarting: $takeStarting,
   });
@@ -911,8 +909,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     showLibrary: () => void navigate({ name: 'library', view: get(library).view }),
     toggleSidebar: () => updateWorkspace({ sidebarVisible: !get(workspace).sidebarVisible }),
     toggleOutline: () => updateWorkspace({ outlineVisible: !get(workspace).outlineVisible }),
-    toggleDiagnostics: () =>
-      updateWorkspace({ diagnosticsVisible: !get(workspace).diagnosticsVisible }),
     setEditorLayout: (layout: EditorLayout) => updateWorkspace({ editorLayout: layout }),
     /*
      * ⌘+ / ⌘− / ⌘0 mean "text size HERE" — and here is not always the editor.
