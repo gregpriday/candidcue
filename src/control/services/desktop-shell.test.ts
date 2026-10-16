@@ -105,10 +105,12 @@ describe('composeWindowTitle', () => {
  * `MenuItem<Wry>` handles that no mock runtime has). Both are exercised only by
  * running the packaged app.
  *
- * Nor is the ROUTING covered. That a menu command reaches the focused window
- * rather than control (`menu.rs::focused_command_window`) needs two real
- * windows and a real menu bar; what is asserted here is the list that decides
- * what the Settings window answers once one arrives.
+ * Nor is the ROUTING covered here. Which window `menu.rs::command_target`
+ * picks needs two real windows and a real menu bar; what is asserted here is
+ * the list that decides what the Settings window answers once one arrives.
+ * That each window hears only the commands addressed to it is asserted in
+ * `desktop-shell-menu.test.ts`, against Tauri's delivery rule rather than a
+ * real runtime.
  */
 describe('pushing state outside a Tauri runtime', () => {
   let calls: Array<{ command: string }> = [];

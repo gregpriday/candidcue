@@ -243,18 +243,26 @@ export const PREFERENCES_COMMANDS = [
 ] as const satisfies readonly CommandId[];
 
 /**
- * Answer native menu commands in a window that is not the document window.
+ * Receive the native menu commands addressed to THIS window, and no others.
  *
- * `installMenuCommands` runs the command registry, which needs the whole
- * application context; this one takes a plain map and ignores every id that is
- * not in it. That difference matters now that Rust delivers a menu command to
- * the FOCUSED window (`menu.rs::focused_command_window`): the Settings window
- * really does receive Insert › Link when it is in front, and the right response
- * is to do nothing rather than to reach into a hidden editor.
+ * `menu.rs::command_target` decides which window a command is for and delivers
+ * it with `emit_to(label, …)`. Listening with the global `listen()` from
+ * `@tauri-apps/api/event` undid that: with no target it registers as
+ * `{ kind: 'Any' }`, and Tauri hands an `emit_to` to every `Any` listener
+ * whatever label it named. Both windows then ran every command — ⌘W over
+ * Settings closed Settings AND the script in the editor behind it.
+ *
+ * Listening on the current webview window registers
+ * `{ kind: 'WebviewWindow', label }`, which an `emit_to` matches only when it
+ * names this window. The fallback over the stage still arrives, because Rust
+ * addresses those commands to `control` by name.
+ *
+ * One subscription for both installers so the choice is made once. Do not copy
+ * the global-`listen` pattern of the other inbound events here: several of
+ * those (the Settings window's model-download progress among them) rely on
+ * hearing events addressed to another window.
  */
-export function installWindowMenuCommands(
-  handlers: Partial<Record<CommandId, () => void>>,
-): () => void {
+function listenForMenuCommands(onId: (id: unknown) => void): () => void {
   if (!isTauriRuntime()) return () => {};
 
   let disposed = false;
@@ -262,12 +270,11 @@ export function installWindowMenuCommands(
 
   void (async () => {
     try {
-      const { listen } = await import('@tauri-apps/api/event');
-      const stop = await listen<{ id: string }>(MENU_COMMAND_EVENT, (event) => {
-        const id = event.payload?.id;
-        if (typeof id !== 'string') return;
-        handlers[id as CommandId]?.();
-      });
+      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const stop = await getCurrentWebviewWindow().listen<{ id: string }>(
+        MENU_COMMAND_EVENT,
+        (event) => onId(event.payload?.id),
+      );
       if (disposed) stop();
       else unlisten = stop;
     } catch (err) {
@@ -279,6 +286,25 @@ export function installWindowMenuCommands(
     disposed = true;
     unlisten?.();
   };
+}
+
+/**
+ * Answer native menu commands in a window that is not the document window.
+ *
+ * `installMenuCommands` runs the command registry, which needs the whole
+ * application context; this one takes a plain map and ignores every id that is
+ * not in it. That difference matters because Rust delivers a menu command to
+ * the FOCUSED window (`menu.rs::command_target`): the Settings window really
+ * does receive Insert › Link when it is in front, and the right response is to
+ * do nothing rather than to reach into a hidden editor.
+ */
+export function installWindowMenuCommands(
+  handlers: Partial<Record<CommandId, () => void>>,
+): () => void {
+  return listenForMenuCommands((id) => {
+    if (typeof id !== 'string') return;
+    handlers[id as CommandId]?.();
+  });
 }
 
 /**
@@ -556,7 +582,7 @@ export function installDragDrop(handlers: {
 }
 
 /**
- * Listen for native menu commands.
+ * Listen for the native menu commands addressed to the document window.
  *
  * `context()` and `actions()` are read at DISPATCH TIME rather than captured, so
  * the handler always acts on the application as it is when the item was clicked
@@ -567,34 +593,14 @@ export function installMenuCommands(
   context: () => CommandContext,
   actions: () => CommandActions,
 ): () => void {
-  if (!isTauriRuntime()) return () => {};
-
-  let disposed = false;
-  let unlisten: (() => void) | null = null;
-
-  void (async () => {
-    try {
-      const { listen } = await import('@tauri-apps/api/event');
-      const stop = await listen<{ id: string }>(MENU_COMMAND_EVENT, (event) => {
-        const id = event.payload?.id;
-        if (typeof id !== 'string' || !(id in COMMANDS)) {
-          // A menu carrying an id this build does not know is a version skew
-          // between the packaged binary and the bundled frontend. Logged, not
-          // toasted: the user did nothing wrong and can do nothing about it.
-          console.warn('a native menu sent an unknown command', id);
-          return;
-        }
-        runCommand(id as CommandId, actions(), context());
-      });
-      if (disposed) stop();
-      else unlisten = stop;
-    } catch (err) {
-      console.warn('native menu commands are not connected', err);
+  return listenForMenuCommands((id) => {
+    if (typeof id !== 'string' || !(id in COMMANDS)) {
+      // A menu carrying an id this build does not know is a version skew
+      // between the packaged binary and the bundled frontend. Logged, not
+      // toasted: the user did nothing wrong and can do nothing about it.
+      console.warn('a native menu sent an unknown command', id);
+      return;
     }
-  })();
-
-  return () => {
-    disposed = true;
-    unlisten?.();
-  };
+    runCommand(id as CommandId, actions(), context());
+  });
 }
