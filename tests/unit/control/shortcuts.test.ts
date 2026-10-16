@@ -382,10 +382,12 @@ describe('installShortcuts — what actually reaches the focused control', () =>
 
   /*
    * The native menu binds ⌘= (View › Larger Editor Text) and ⌘⇧↩ (File ›
-   * Practise), and WKWebView hands the page a ⌘-chord first: a key the page
-   * prevents never reaches the menu item. Where no screen here answers these
-   * chords the listener must leave them alone, or the menu items go dead in
-   * exactly the places they are the only way in (#269).
+   * Practise). A manual WKWebView probe (#269) found the page gets a ⌘-chord
+   * before the menu, and that a chord the page prevents never fires the menu
+   * item. Nothing here can drive WKWebView; what this pins is the window
+   * listener's half of that: where no screen answers these chords it leaves them
+   * unprevented, so the menu items are not killed in exactly the places they are
+   * the only way in.
    */
   it('leaves the menu the chords no screen here answers', () => {
     installWithSubscriber();
@@ -394,14 +396,14 @@ describe('installShortcuts — what actually reaches the focused control', () =>
     expect(zoom.action).toBeNull();
     expect(zoom.defaultPrevented).toBe(false);
 
-    for (const screen of ['library', 'editor', 'live'] as const) {
+    for (const screen of ['welcome', 'library', 'editor', 'live', 'settings', 'calibrate'] as const) {
       onScreen(screen);
       const practise = press('Enter', { metaKey: true, shiftKey: true });
       expect(practise.action).toBeNull();
       expect(practise.defaultPrevented).toBe(false);
     }
 
-    // A take keeps ⌘= for its own type size; the menu never sees it there.
+    // A take keeps ⌘= for its own type size, and prevents it.
     onScreen('live');
     const live = press('=', { metaKey: true });
     expect(live.action).toBe('stage-text-up');

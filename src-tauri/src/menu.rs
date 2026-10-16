@@ -730,17 +730,24 @@ mod tests {
     /// Read from this file's source, as the id tests below are, but from the
     /// production half only — the tests' own string literals are not menu items
     /// — and from anywhere on the line, so a call wrapped in `file.append(…)` is
-    /// seen too. A `keys::` name the scan cannot resolve is a failure rather than
-    /// a skip: a binding the scan drops is one no test checks.
+    /// seen too. A call the scan cannot read (one split across lines, say) and a
+    /// `keys::` name it cannot resolve are failures rather than skips: a binding
+    /// the scan drops is one no test checks.
     fn menu_accelerators() -> Vec<(String, String)> {
         let rs = include_str!("menu.rs");
         let production = &rs[..rs.find("#[cfg(test)]").expect("menu.rs has a test module")];
 
         let mut found = Vec::new();
         for line in production.lines() {
-            for call in ["item(\"", "check(\""] {
+            for call in ["item(", "check("] {
                 let Some(at) = line.find(call) else { continue };
-                let rest = &line[at + call.len()..];
+                // `insert_item(`, `refresh_stage_item(`: another function's name.
+                if line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let Some(rest) = line[at + call.len()..].strip_prefix('"') else {
+                    panic!("a `{call}…)` call the scan cannot read: `{}`", line.trim());
+                };
                 let Some(quote) = rest.find('"') else { continue };
                 let id = rest[..quote].to_string();
                 // `Some(keys::NAME)` or `Some("Literal")`, else `None`.
