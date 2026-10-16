@@ -1113,3 +1113,190 @@ describe('compile: a leading byte-order mark (#247)', () => {
     }
   });
 });
+
+describe('compile: words past the first line of a quote or wrapped list item (#251)', () => {
+  // remark strips each continuation line's `> ` or indent out of the text it
+  // hands over, and the mapping back onto the source used to give up there and
+  // guess: every word after line one landed early by the prefix width, more so
+  // on every line, and From here picked the wrong sentence.
+
+  /** Every spoken word must read back out of the source at the range it claims. */
+  function expectWordsAt(source: string, words: string[]): CompiledScript {
+    const script = compile(source, OPTS);
+    expect(normalizedWords(script)).toEqual(words);
+    for (const token of script.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+    return script;
+  }
+
+  const CASES: [string, string, string[]][] = [
+    ['a two-line quote', '> First line here,\n> second line two.\n', ['first', 'line', 'here', 'second', 'line', 'two']],
+    ['a three-line quote', '> Then we go.\n> On and on.\n> Until we finish.\n', ['then', 'we', 'go', 'on', 'and', 'on', 'until', 'we', 'finish']],
+    ['a wrapped list item', '- This item wraps\n  onto two lines.\n', ['this', 'item', 'wraps', 'onto', 'two', 'lines']],
+    ['a wrapped ordered item', '1. One item\n   wraps here.\n', ['one', 'item', 'wraps', 'here']],
+    ['a deeper continuation indent', '- Deep item\n    continues.\n', ['deep', 'item', 'continues']],
+    ['a quote inside a list item', '- > Quoted in\n  > a list item.\n', ['quoted', 'in', 'a', 'list', 'item']],
+    ['a list inside a quote', '> - Listed in\n>   a quote.\n', ['listed', 'in', 'a', 'quote']],
+    ['a nested quote', '> > Deeply quoted\n> > words here.\n', ['deeply', 'quoted', 'words', 'here']],
+    ['loosely spaced nested markers', '>  > Loose nested\n>  > markers.\n', ['loose', 'nested', 'markers']],
+    ['a quote without the space', '>Tight quote\n>marker here.\n', ['tight', 'quote', 'marker', 'here']],
+    ['a tab after the marker', '>\tTabbed quote\n>\tcontinues.\n', ['tabbed', 'quote', 'continues']],
+    ['a tab-indented list item', '-\tTabbed item\n\tcontinues.\n', ['tabbed', 'item', 'continues']],
+    ['a lazy continuation', '> Lazy quote\ncontinues bare.\n', ['lazy', 'quote', 'continues', 'bare']],
+    ['blanks before a soft break', 'Trailing space \nthen a tab\t\nthen more.\n', ['trailing', 'space', 'then', 'a', 'tab', 'then', 'more']],
+    ['an indented plain continuation', 'Indented\n   continuation\n\t lines.\n', ['indented', 'continuation', 'lines']],
+    ['formatting across a quoted line', '> One *two\n> three* four.\n', ['one', 'two', 'three', 'four']],
+    ['a link across a quoted line', '> See [the two\n> docs](https://example.com) now.\n', ['see', 'the', 'two', 'docs', 'now']],
+    ['an indented line that keeps a marker', '> Plain\n>     >kept marker.\n', ['plain', 'kept', 'marker']],
+    ['an unquoted line that keeps a marker', 'Plain\n    > kept marker.\n', ['plain', 'kept', 'marker']],
+    ['an entity for a leading space', '> One\n> &#32; two.\n', ['one', 'two']],
+    ['an entity for a newline', '> One&#10;\n> two.\n', ['one', 'two']],
+  ];
+
+  it.each(CASES)('maps every word of %s onto its own characters', (_name, source, words) => {
+    expectWordsAt(source, words);
+  });
+
+  it.each(['\r\n', '\r'])('keeps the same mapping with %j line endings', (ending) => {
+    for (const [, source, words] of CASES) {
+      expectWordsAt(source.replace(/\n/g, ending), words);
+    }
+  });
+
+  it('maps a quote that opens on a byte-order mark', () => {
+    expectWordsAt('﻿> Quoted first\n> and second.\n', ['quoted', 'first', 'and', 'second']);
+  });
+
+  it('starts every sentence of a long quote on its own first word', () => {
+    // The issue's script: From here with the caret on line nine offered
+    // sentence ten.
+    const numbers = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const lines = numbers.map((n) => `Sentence number ${n} of the quoted testimonial.`);
+    const source = lines.map((line) => `> ${line}\n`).join('');
+    const script = compile(source, OPTS);
+    expect(script.sentences).toHaveLength(10);
+    script.sentences.forEach((sentence, i) => {
+      const { utf16Start, utf16End } = sentence.source;
+      expect(utf16Start).toBe(source.indexOf(lines[i]!));
+      expect(source.slice(utf16Start, utf16End)).toBe(lines[i]!.slice(0, -1));
+    });
+    const caret = source.indexOf('testimonial', source.indexOf('number nine'));
+    const picked = script.sentences.filter((s) => s.source.utf16Start <= caret).at(-1)!;
+    expect(picked.normalizedText).toContain('number nine');
+  });
+
+  it('compiles a directive on a later line, at its own range', () => {
+    for (const source of ['> First line.\n> [Pause] Then the next.\n', '- First line\n  [Pause] then the next.\n']) {
+      const script = compile(source, OPTS);
+      expect(script.cues.map((c) => c.cueType)).toEqual(['pause']);
+      const [cue] = script.cues;
+      expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Pause]');
+      expect(script.spokenTokens[cue!.anchorTokenIndex]!.normalized).toBe('then');
+      expect(normalizedWords(script)).not.toContain('pause');
+    }
+  });
+
+  it('ends a directive before the blanks a soft break drops', () => {
+    const source = '> First [Beat] \n> next line.\n';
+    const [cue] = compile(source, OPTS).cues;
+    expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Beat]');
+  });
+
+  it('keeps an escaped or entity bracket on a later line as text', () => {
+    // The real [Breathe] beside them proves the line mapped: a failed map
+    // would suppress every directive and pass the escapes for the wrong reason.
+    const source = '> First line.\n> \\[Pause] and &#91;Beat&#93; stay, [Breathe] next.\n';
+    const script = compile(source, OPTS);
+    expect(script.cues.map((c) => c.cueType)).toEqual(['breathe']);
+    const [cue] = script.cues;
+    expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Breathe]');
+    expect(script.spokenTokens[cue!.anchorTokenIndex]!.normalized).toBe('next');
+    expect(normalizedWords(script)).toEqual(expect.arrayContaining(['pause', 'beat']));
+  });
+
+  it('reads an escaped backslash before a bracket as literal syntax', () => {
+    // `\\[Pause]` is an escaped backslash and then a real directive; a third
+    // backslash escapes the bracket again.
+    for (const prefix of ['', '> First line.\n> ']) {
+      const real = `${prefix}\\\\[Pause] then on.\n`;
+      const [cue] = compile(real, OPTS).cues;
+      expect(cue?.cueType).toBe('pause');
+      expect(real.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Pause]');
+      expect(compile(`${prefix}\\\\\\[Pause] then on.\n`, OPTS).cues).toHaveLength(0);
+    }
+  });
+
+  it('ends a lone carriage-return line even when an entity newline follows', () => {
+    // The value reads "One\r\n[Pause] two." and looks like CRLF; the source
+    // says the `\r` ended the line and the `\n` came from `&#10;`.
+    const source = '> One\r> &#10;[Pause] two.\r';
+    const script = expectWordsAt(source, ['one', 'two']);
+    const [cue] = script.cues;
+    expect(cue?.cueType).toBe('pause');
+    expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Pause]');
+  });
+
+  it('maps a take marker after an escaped marker on a later line', () => {
+    const source = '> First\n> \\>kept [Take: Intro] next.\n';
+    const script = expectWordsAt(source, ['first', 'kept', 'next']);
+    const take = script.cues.find((c) => c.cueType === 'take')!;
+    expect(source.slice(take.source.utf16Start, take.source.utf16End)).toBe('[Take: Intro]');
+    expect(script.spokenTokens[take.anchorTokenIndex]!.normalized).toBe('next');
+    expect(script.navigationTargets.some((t) => t.type === 'take' && t.label === 'Intro')).toBe(true);
+  });
+
+  it('maps a quoted heading that spans lines when headings are read', () => {
+    const source = '> Title first\n> title second\n> ---\n';
+    const script = compile(source, { ...OPTS, readHeadings: true });
+    expect(normalizedWords(script)).toEqual(['title', 'first', 'title', 'second']);
+    for (const token of script.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+  });
+
+  it('stays linear on a continuation line that keeps a long run of markers', () => {
+    // Trying every start inside the run, longest first, re-matched the run
+    // once per start: quadratic in its length. Spaced, so the run is many
+    // short words rather than one huge one, which is slow for other reasons.
+    const line = `>     ${'> '.repeat(10_000)}last word.\n`;
+    const source = `> First\n${line}${line}${line}`;
+    const run = bestOf(() => compile(source, OPTS));
+    expect(normalizedWords(run.value)).toEqual(['first', 'last', 'word', 'last', 'word', 'last', 'word']);
+    for (const token of run.value.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+    expect(run.elapsedMs, budgetMessage('long kept-marker run', run, 250)).toBeLessThan(250);
+  });
+
+  it.each([
+    ['entities', `${'&amp; '.repeat(8_000)}last word.`],
+    ['dropped trailing blanks', `last word.${'\t'.repeat(8_000)}`],
+  ])('stays fast when %s leave a long kept-marker run room to retry', (_name, tail) => {
+    // Both make the source line longer than the text it decodes to, so the
+    // length bound alone leaves every marker in the run as a candidate start.
+    const source = `> First\n>     ${'> '.repeat(8_000)}${tail}\n> after.\n`;
+    const run = bestOf(() => compile(source, OPTS));
+    expect(normalizedWords(run.value)).toEqual(expect.arrayContaining(['last', 'word', 'after']));
+    expect(run.elapsedMs, budgetMessage('long kept-marker run with slack', run, 250)).toBeLessThan(250);
+  });
+
+  it('maps a spoken alias on a later line onto its visual word', () => {
+    const source = '> Our new\n> API{say="a p i"} ships.\n';
+    const script = compile(source, OPTS);
+    const overrides = script.spokenTokens.filter((t) => t.overrideVisual === 'API');
+    expect(overrides.map((t) => t.normalized)).toEqual(['a', 'p', 'i']);
+    for (const token of overrides) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe('API');
+    }
+  });
+
+  it('joins a word across formatting on a later line, as on the first', () => {
+    // `Candid` ends a text node that started on line one; only an exact map
+    // lets it join the bold `Cue` after it.
+    const quoted = compile('> One line\n> and Candid**Cue** today.\n', OPTS);
+    const single = compile('and Candid**Cue** today.\n', OPTS);
+    expect(normalizedWords(quoted).slice(2)).toEqual(normalizedWords(single));
+    expect(normalizedWords(quoted)).toContain('candidcue');
+  });
+});
