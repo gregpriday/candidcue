@@ -20,7 +20,7 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
   // Into Settings, then the Stage display section — mirroring describes the
   // rig, not the type, so it lives with the panel it is a property of.
   await openPreferences(page);
-  await page.getByRole('button', { name: 'Stage display', exact: true }).click();
+  await page.getByRole('button', { name: 'Prompter display and rigs', exact: true }).click();
 
   const mirror = page.getByRole('switch', { name: 'Horizontal mirror' });
   await expect(mirror).toBeVisible();
@@ -436,7 +436,7 @@ test('a rig with every step answered but no measured scale does not read as done
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: false });
   await page.goto('/control.html');
-  await openSettingsSection(page, 'Stage display');
+  await openSettingsSection(page, 'Prompter display and rigs');
 
   // This used to render "8 of 8 steps" — finished, with the one measurement
   // every angular result is multiplied by never taken.
@@ -448,7 +448,7 @@ test('the prominent calibrate action re-measures the applied rig instead of star
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: true });
   await page.goto('/control.html');
-  await openSettingsSection(page, 'Stage display');
+  await openSettingsSection(page, 'Prompter display and rigs');
 
   // It names the rig it will change. Pressing the most prominent button on the
   // panel used to mint "Desk hood 2" and leave the applied rig untouched.
@@ -470,7 +470,7 @@ test('measuring another rig opens the wizard on a new name, not the applied one'
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: true });
   await page.goto('/control.html');
-  await openSettingsSection(page, 'Stage display');
+  await openSettingsSection(page, 'Prompter display and rigs');
 
   // The other half of the same rule: the store keys on (panel, name), so this
   // path must NOT reuse "Desk hood" — that would silently replace the
@@ -537,7 +537,7 @@ test('searching settings hides the rows that do not match, and says how many did
 }) => {
   await installTauriShim(page, { welcomed: true });
   await openPreferences(page);
-  await gotoSection(page, 'Stage display');
+  await gotoSection(page, 'Prompter display and rigs');
 
   // Wait for the section to render before counting — the window shows
   // "Loading settings…" until `get_settings` answers.

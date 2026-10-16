@@ -45,7 +45,7 @@ async function openStageDisplay(page: Page): Promise<void> {
   await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
-    .getByRole('button', { name: 'Stage display', exact: true })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
     .click();
 }
 
@@ -198,7 +198,7 @@ test('a mirror tried out in the wizard reaches the glass but not the settings, a
   expect(await settingsWrites(page)).toEqual([]);
 
   // Back out, and take the Discard the wizard offers.
-  await page.getByRole('button', { name: 'Stage display' }).first().click();
+  await page.getByRole('button', { name: 'Prompter display and rigs' }).first().click();
   await page.getByRole('button', { name: 'Discard' }).click();
 
   /*
@@ -454,7 +454,7 @@ test('a mirror write that fails is reported, not silently half-applied', async (
    * asserted: this test never turns vertical mirroring on, so a `false` there
    * would pass whether the code rolled back or did nothing at all.
    */
-  await page.getByRole('button', { name: 'Stage display' }).first().click();
+  await page.getByRole('button', { name: 'Prompter display and rigs' }).first().click();
   await page.getByRole('button', { name: 'Discard' }).click();
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
 });

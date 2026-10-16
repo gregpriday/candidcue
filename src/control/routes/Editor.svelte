@@ -65,6 +65,7 @@ import type { PresentationMode } from '../services/settings-types';
   import {
     conflictCopyTitle,
     editor,
+    flushEditorEdits,
     keepEditorVersion,
     openScript,
     saveNow,
@@ -1249,8 +1250,12 @@ import type { PresentationMode } from '../services/settings-types';
    * therefore snapshottable) before a restore replaces it.
    */
   async function openRevisions(): Promise<void> {
-    await saveNow();
-    revisionsOpen = true;
+    try {
+      await flushEditorEdits(scriptId);
+      revisionsOpen = true;
+    } catch (err) {
+      showToast(`Could not open revision history. ${describeError(err)}`, 'danger');
+    }
   }
 
   async function afterRestore(): Promise<void> {

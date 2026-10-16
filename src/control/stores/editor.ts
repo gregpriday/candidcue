@@ -177,16 +177,13 @@ export function setSource(source: string): void {
 
 export async function setTitle(title: string): Promise<void> {
   const s = get(state);
-  if (s.scriptId === null || title.trim() === '' || title === s.title) return;
-  state.update((prev) => ({ ...prev, title }));
-  try {
-    // Rename bumps the revision server-side; adopting it keeps the next body
-    // save from failing with a stale expectation (M4).
-    const renamed = await scriptsService.renameScript(s.scriptId, title, s.scriptRevision);
-    state.update((prev) => ({ ...prev, scriptRevision: renamed.scriptRevision }));
-  } catch (err) {
-    state.update((prev) => ({ ...prev, saveState: 'error', lastError: describeError(err) }));
-  }
+  const next = title.trim();
+  if (s.scriptId === null || next === '' || next === s.title) return;
+  // Title and body share one revision and one save queue. A separate rename
+  // raced autosave, was invisible to the leave guard, and could stamp its
+  // revision onto a different script after navigation.
+  state.update((prev) => ({ ...prev, title: next, dirty: true }));
+  await saveNow();
 }
 
 /** Immediate save (autosave flush and Cmd/Ctrl+S). */
@@ -228,6 +225,7 @@ export async function saveNow(): Promise<void> {
 async function performSave(scriptId: string, s: EditorState): Promise<void> {
   state.update((prev) => ({ ...prev, saveState: 'saving' }));
   const savedSource = s.source;
+  const savedTitle = s.title;
   /*
    * The document this answer belongs to. Close the editor, or open another
    * script, while the write is on the wire and the answer would otherwise
@@ -251,7 +249,7 @@ async function performSave(scriptId: string, s: EditorState): Promise<void> {
       ...prev,
       scriptRevision: result.scriptRevision,
       // Still dirty if the user kept typing while the save was in flight.
-      dirty: prev.source !== savedSource,
+      dirty: prev.source !== savedSource || prev.title !== savedTitle,
       saveState: 'saved',
       lastError: null,
     }));
@@ -299,6 +297,24 @@ async function performSave(scriptId: string, s: EditorState): Promise<void> {
       return;
     }
     state.update((prev) => ({ ...prev, saveState: 'error', lastError: describeError(err) }));
+  }
+}
+
+/** Flush the open document before an action that reads or replaces its file. */
+export async function flushEditorEdits(scriptId: string): Promise<void> {
+  if (get(state).scriptId !== scriptId) return;
+  const generation = openGeneration;
+  await saveNow();
+  if (generation !== openGeneration) {
+    throw new Error('The open script changed. Try again from the script you want to use.');
+  }
+  const current = get(state);
+  if (editorStateHasUnsavedWork(current)) {
+    throw new Error(
+      current.saveState === 'conflict'
+        ? 'Resolve the external change in the editor first. Your edits have not been saved.'
+        : current.lastError ?? 'Your latest edits have not finished saving. Try again once they are saved.',
+    );
   }
 }
 

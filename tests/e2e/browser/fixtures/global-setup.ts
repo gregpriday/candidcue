@@ -67,7 +67,7 @@ async function compileOnce(browser: Browser): Promise<void> {
       .getByRole('listbox')
       .getByRole('button', { name: /Dependency warm-up/ })
       .first()
-      .click();
+      .dblclick();
     // The worker's own result line: it appears only once the compile chain has
     // loaded and returned, which is the thing being waited for.
     await expect(page.getByText('Ready to present.')).toBeVisible({ timeout: 30_000 });

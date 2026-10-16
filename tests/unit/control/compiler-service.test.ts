@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   compileScript,
+  COMPILE_TIMEOUT_MS,
   disposeCompilerWorker,
   setCompilerWorkerFactoryForTesting,
   type WorkerLike,
@@ -46,6 +47,8 @@ function makeScript(scriptId: string, spokenWordCount = 12): CompiledScript {
 
 /** Fake worker that records requests and lets the test answer manually. */
 class FakeWorker implements WorkerLike {
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
   requests: Array<Record<string, unknown>> = [];
   private listener: ((event: MessageEvent) => void) | null = null;
 
@@ -84,9 +87,52 @@ class FakeWorker implements WorkerLike {
 afterEach(() => {
   setCompilerWorkerFactoryForTesting(null);
   disposeCompilerWorker();
+  vi.useRealTimers();
 });
 
 describe('compiler service', () => {
+  it('rejects pending work on a worker crash and recreates the worker on retry', async () => {
+    const workers: FakeWorker[] = [];
+    setCompilerWorkerFactoryForTesting(() => {
+      const next = new FakeWorker();
+      workers.push(next);
+      return next;
+    });
+    const failed = compileScript('s1', 'first');
+    const rejection = expect(failed).rejects.toThrow('stopped unexpectedly');
+    workers[0]!.onerror?.({} as ErrorEvent);
+    await rejection;
+    const retry = compileScript('s1', 'second');
+    workers[1]!.respondResult(workers[1]!.requests[0]!['requestId'] as number);
+    expect((await retry).stale).toBe(false);
+  });
+
+  it('rejects an unreadable worker message rather than leaving the editor loading', async () => {
+    const fake = new FakeWorker();
+    setCompilerWorkerFactoryForTesting(() => fake);
+    const result = compileScript('s1', 'text');
+    const rejection = expect(result).rejects.toThrow('unreadable result');
+    fake.onmessageerror?.({} as MessageEvent);
+    await rejection;
+  });
+
+  it('bounds a compile whose worker never answers', async () => {
+    vi.useFakeTimers();
+    setCompilerWorkerFactoryForTesting(() => new FakeWorker());
+    const result = compileScript('s1', 'text');
+    const rejection = expect(result).rejects.toThrow('took too long');
+    await vi.advanceTimersByTimeAsync(COMPILE_TIMEOUT_MS);
+    await rejection;
+  });
+
+  it('settles outstanding requests when the worker is disposed', async () => {
+    setCompilerWorkerFactoryForTesting(() => new FakeWorker());
+    const result = compileScript('s1', 'text');
+    const rejection = expect(result).rejects.toThrow('closed before it finished');
+    disposeCompilerWorker();
+    await rejection;
+  });
+
   it('carries the script parts through to the UI result (§parts)', async () => {
     /*
      * The service RESHAPES the compiled script into `CompileOutput`, field by
