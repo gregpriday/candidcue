@@ -226,6 +226,10 @@ pub async fn rebuild_database_index(
 pub struct ScriptRescueResult {
     pub path: String,
     pub scripts_copied: u32,
+    /// The file in the copy that lists each folder's script by name, when it
+    /// could be written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub names_file: Option<String>,
 }
 
 /// Copy the canonical script files somewhere safe, WITHOUT the database.
@@ -252,10 +256,11 @@ pub async fn rescue_scripts<R: tauri::Runtime>(
         "CandidCue-scripts-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     ));
-    let scripts_copied = backup::rescue_scripts_to(&paths, &target).await?;
+    let rescued = backup::rescue_scripts_to(&paths, &target).await?;
 
     Ok(Some(ScriptRescueResult {
-        scripts_copied,
+        scripts_copied: rescued.scripts_copied,
+        names_file: rescued.names_file,
         path: target.to_string_lossy().to_string(),
     }))
 }

@@ -108,7 +108,9 @@
         void run('rescue', async () => {
           const result = await recovery.rescueScripts();
           if (result === null) return null; // cancelled picker
-          return `Saved ${result.scriptsCopied} scripts to ${result.path}. The README.txt there lists them by name.`;
+          const names =
+            result.namesFile === undefined ? '' : ` ${result.namesFile} there lists them by name.`;
+          return `Saved ${result.scriptsCopied} scripts to ${result.path}.${names}`;
         })}
     >
       {busy === 'rescue' ? 'Saving…' : 'Save my scripts somewhere else'}
@@ -207,12 +209,13 @@
   <p class="muted">
     Your scripts are Markdown files, and those files are the authority for what a script
     says. Rebuilding sets the current database aside and, when you reopen CandidCue, builds
-    a new index from them — text, saved versions and images included. Names, the Trash and
-    each script's settings are only in the database, so they are read back out of the old
-    one where it can still be read; a script it cannot name is named after its first line,
-    and comes back out of the Trash if it was in it. Saved versions keep their dates but
-    not why they were saved. Session and take history are not rebuilt this way — the old
-    database is kept, not deleted, so they are still there if you need them.
+    a new index from them — their text, and the saved versions and images that are intact.
+    Names, the Trash and each script's reading settings are only in the database, so they
+    are read back out of the old one where it can still be read; a script it cannot name is
+    named after its first line, and comes back out of the Trash if it was in it. Saved
+    versions keep their dates but not why they were saved. Session and take history are not
+    rebuilt this way — the old database is kept, not deleted, so they are still there if you
+    need them.
   </p>
   <Button
     variant="ghost"

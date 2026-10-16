@@ -505,13 +505,15 @@ pub(crate) struct RecoveredAsset {
 pub(crate) fn scan_asset_files(
     paths: &DataPaths,
     script_id: &ScriptId,
-) -> (Vec<RecoveredAsset>, Vec<String>) {
+) -> Result<(Vec<RecoveredAsset>, Vec<String>), AppError> {
     let mut found = Vec::new();
     let mut skipped = Vec::new();
-    let Ok(entries) = fs::read_dir(paths.assets_dir(script_id)) else {
-        return (found, skipped);
+    let Some(entries) = crate::util::read_owned_dir(&paths.assets_dir(script_id), &mut skipped)?
+    else {
+        return Ok((found, skipped));
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         // Finder's `.DS_Store` and an interrupted write's temporary file are
         // not images anybody placed, and not worth a note each.
@@ -524,7 +526,7 @@ pub(crate) fn scan_asset_files(
         }
     }
     found.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    (found, skipped)
+    Ok((found, skipped))
 }
 
 fn recover_asset_file(
@@ -596,10 +598,14 @@ pub(crate) async fn register_recovered_assets(
         .bind(&now)
         .execute(&mut *conn)
         .await?;
-        let asset_id: String = sqlx::query_scalar("SELECT id FROM assets WHERE rel_path = ? LIMIT 1")
-            .bind(&asset.rel_path)
-            .fetch_one(&mut *conn)
-            .await?;
+        // By hash AND path: the schema allows two rows for one path, and the
+        // reference must protect the row describing these bytes.
+        let asset_id: String =
+            sqlx::query_scalar("SELECT id FROM assets WHERE sha256 = ? AND rel_path = ?")
+                .bind(&asset.sha256)
+                .bind(&asset.rel_path)
+                .fetch_one(&mut *conn)
+                .await?;
         sqlx::query(
             "INSERT INTO script_asset_references (script_id, asset_id, role, created_at)
              SELECT ?, ?, 'image', ?

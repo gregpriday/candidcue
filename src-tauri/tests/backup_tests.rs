@@ -746,8 +746,15 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
     )
     .await
     .expect("save");
+    // More than one, so the order they come back in means something.
+    for take in ["Take two.", "Take three."] {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        repo::create_revision_snapshot(&h.pool, &h.paths, &launch_id, take, "pre_session", 2)
+            .await
+            .expect("snapshot");
+    }
     let revisions_before = repo::list_revisions(&h.pool, &launch_id).await.expect("revisions");
-    assert!(!revisions_before.is_empty(), "the save must have kept a revision");
+    assert_eq!(revisions_before.len(), 3);
 
     let old = repo::create_script(&h.pool, &h.paths, create_input("Old draft", "Gone soon."))
         .await
@@ -755,8 +762,16 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
     repo::trash_script(&h.pool, &locks, &script_id(&old.id), old.script_revision)
         .await
         .expect("trash");
-    let trashed_before = trashed_at(&h.pool, &old.id).await;
-    assert!(trashed_before.is_some());
+    // Trashed long enough ago that an ordinary launch purges it, which is
+    // what makes the recovery launch's deferral observable.
+    let forty_days_ago = (chrono::Utc::now() - chrono::Duration::days(40))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    sqlx::query("UPDATE scripts SET trashed_at = ? WHERE id = ?")
+        .bind(&forty_days_ago)
+        .bind(&old.id)
+        .execute(&h.pool)
+        .await
+        .expect("age the trash");
     h.pool.close().await;
 
     backup::rebuild_database_index(&h.paths).await.expect("rebuild");
@@ -782,8 +797,8 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
     assert_eq!(old_after.title, "Old draft");
     assert_eq!(old_after.status, ScriptStatus::Trash, "Trash stays Trash");
     assert_eq!(
-        trashed_at(&pool, &old.id).await,
-        trashed_before,
+        trashed_at(&pool, &old.id).await.as_deref(),
+        Some(forty_days_ago.as_str()),
         "and its 30 days run from when it was trashed, not from the rebuild"
     );
 
@@ -826,15 +841,94 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
         "applied once and gone, so a later rename is never overruled by it"
     );
 
-    // And a second launch changes nothing.
+    // The next launch adopts nothing again, and only now purges the script
+    // whose 30 days ran out — the recovery launch left it to be seen first.
     let again = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
         .await
         .expect("reconciliation");
     assert!(again.orphan_files_recovered.is_empty());
+    assert_eq!(again.trash_purged, 1);
     assert_eq!(
         repo::list_revisions(&pool, &launch_id).await.expect("revisions").len(),
         revisions_before.len()
     );
+}
+
+#[tokio::test]
+async fn a_rebuild_interrupted_before_reading_names_reads_them_on_the_next_launch() {
+    /*
+     * The window between moving the database aside and reading its names:
+     * a crash there used to leave the names unread in quarantine and every
+     * script named after its first line. The record written before the move
+     * points the next launch at them. Simulated by doing the rebuild's own
+     * steps and stopping before the read.
+     */
+    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+
+    let h = harness().await;
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Interrupted", "Body."))
+        .await
+        .expect("create");
+    h.pool.close().await;
+
+    let quarantine = h.paths.quarantine_dir().join("pre-rebuild-interrupted");
+    let database = quarantine.join("candidcue.sqlite3");
+    backup::salvage::record_pending_salvage(h.dir.path(), &database).expect("record");
+    backup::quarantine_database_files(h.dir.path(), &quarantine, &database).expect("move");
+
+    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &ScriptLocks::default())
+        .await
+        .expect("reconciliation");
+    assert_eq!(report.titles_restored, 1);
+    let after = repo::get_summary(&pool, &script_id(&created.id)).await.expect("summary");
+    assert_eq!(after.title, "Interrupted");
+    assert!(!h.dir.path().join("rebuild-script-index.json").exists());
+}
+
+#[tokio::test]
+async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
+    /*
+     * A script whose text cannot be read this launch is not adopted. Its name
+     * must survive to the launch that can read it, rather than being dropped
+     * with the rest of the index once the other folders are adopted.
+     */
+    use candidcue_lib::scripts::{reconcile, ScriptLocks};
+
+    let h = harness().await;
+    let readable = repo::create_script(&h.pool, &h.paths, create_input("Readable", "Fine."))
+        .await
+        .expect("create");
+    let stuck = repo::create_script(&h.pool, &h.paths, create_input("Stuck for now", "Later."))
+        .await
+        .expect("create");
+    h.pool.close().await;
+    backup::rebuild_database_index(&h.paths).await.expect("rebuild");
+
+    let canonical = h.paths.canonical_file(&script_id(&stuck.id));
+    let text = fs::read(&canonical).expect("text");
+    fs::write(&canonical, [0xFF, 0xFE, 0xFD]).expect("not UTF-8");
+
+    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+    let locks = ScriptLocks::default();
+    let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
+        .await
+        .expect("reconciliation");
+    assert_eq!(report.orphan_files_recovered, vec![readable.id.clone()]);
+    assert!(
+        h.dir.path().join("rebuild-script-index.json").exists(),
+        "the stuck folder's name is still waiting"
+    );
+
+    fs::write(&canonical, text).expect("readable again");
+    let report = reconcile::run_startup_reconciliation(&pool, &h.paths, &locks)
+        .await
+        .expect("reconciliation");
+    assert_eq!(report.orphan_files_recovered, vec![stuck.id.clone()]);
+    assert_eq!(report.titles_restored, 1);
+    let after = repo::get_summary(&pool, &script_id(&stuck.id)).await.expect("summary");
+    assert_eq!(after.title, "Stuck for now");
+    assert!(!h.dir.path().join("rebuild-script-index.json").exists());
 }
 
 #[tokio::test]
@@ -945,23 +1039,35 @@ async fn a_rescued_copy_says_which_folder_is_which_script() {
     h.pool.close().await;
 
     let dest = tempfile::tempdir().expect("dest");
-    let target = dest.path().join("rescued");
-    let copied = backup::rescue_scripts_to(&h.paths, &target).await.expect("rescue");
-    assert_eq!(copied, 2, "scripts, not every entry in the folder");
-    assert!(target.join(&launch.id).join("script.md").exists());
-    let readme = fs::read_to_string(target.join("README.txt")).expect("a README names them");
+    let rescue = |name: &str| dest.path().join(name);
+    let readme_of = |target: &Path, file: &Option<String>| {
+        fs::read_to_string(target.join(file.as_deref().expect("a list of names was written")))
+            .expect("names file")
+    };
+
+    // From the database, when it can be read.
+    let rescued = backup::rescue_scripts_to(&h.paths, &rescue("one")).await.expect("rescue");
+    assert_eq!(rescued.scripts_copied, 2, "scripts, not every entry in the folder");
+    assert_eq!(rescued.names_file.as_deref(), Some("README.txt"));
+    assert!(rescue("one").join(&launch.id).join("script.md").exists());
+    let readme = readme_of(&rescue("one"), &rescued.names_file);
     assert!(readme.contains(&format!("Launch video\n    {}/script.md", launch.id)), "{readme}");
     assert!(readme.contains(&format!("Old draft  (in the Trash)\n    {}/script.md", old.id)), "{readme}");
 
-    // The action exists for a database that will not open, and still names
-    // each script — from its own first line — when there is none to read.
-    for suffix in ["-wal", "-shm"] {
-        let _ = fs::remove_file(h.dir.path().join(format!("candidcue.sqlite3{suffix}")));
-    }
+    // After a rebuild and before the relaunch there is no live database, but
+    // the names the rebuild read are still waiting to be applied.
+    backup::rebuild_database_index(&h.paths).await.expect("rebuild");
+    let rescued = backup::rescue_scripts_to(&h.paths, &rescue("two")).await.expect("rescue");
+    let readme = readme_of(&rescue("two"), &rescued.names_file);
+    assert!(readme.contains(&format!("Launch video\n    {}/script.md", launch.id)), "{readme}");
+    assert!(readme.contains(&format!("Old draft  (in the Trash)\n    {}/script.md", old.id)), "{readme}");
+
+    // With nothing to read the names from, each script's own first line.
+    backup::salvage::clear_pending_index(h.dir.path());
     fs::write(h.dir.path().join("candidcue.sqlite3"), b"not really a database").expect("db");
-    let target = dest.path().join("rescued-again");
-    assert_eq!(backup::rescue_scripts_to(&h.paths, &target).await.expect("rescue"), 2);
-    let readme = fs::read_to_string(target.join("README.txt")).expect("README");
+    let rescued = backup::rescue_scripts_to(&h.paths, &rescue("three")).await.expect("rescue");
+    assert_eq!(rescued.scripts_copied, 2);
+    let readme = readme_of(&rescue("three"), &rescued.names_file);
     assert!(readme.contains(&format!("Opening line\n    {}/script.md", launch.id)), "{readme}");
     assert!(readme.contains(&format!("Gone soon.\n    {}/script.md", old.id)), "{readme}");
 }

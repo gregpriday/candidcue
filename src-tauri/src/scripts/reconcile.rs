@@ -93,15 +93,29 @@ pub async fn run_startup_reconciliation(
     // script — its name, its Trash, its settings — because none of that is in
     // any file (#252). Applied here, by id, to the folders that rebuild left
     // without rows; a folder it did not describe is named from its own text.
-    let salvaged = salvage::read_pending_index(paths.root());
-    let mut adoption_failed = false;
+    //
+    // An index that exists and cannot be read stops adoption for this launch:
+    // adopting without it would make the fallback names permanent, and the
+    // folders are still there to adopt once it can be read.
+    let (salvaged, adopt) =
+        match salvage::load_pending_index(paths.root(), &paths.cache_dir()).await {
+            Ok(index) => (index, true),
+            Err(err) => {
+                report.notes.push(format!(
+                    "the script names a rebuild saved could not be read, so no folder was adopted this launch: {err}"
+                ));
+                (None, false)
+            }
+        };
+    // Folders that are not adopted this launch, whose salvaged names must wait.
+    let mut waiting = std::collections::HashSet::new();
     let known: std::collections::HashSet<String> = repo::all_script_ids_and_paths(pool)
         .await?
         .into_iter()
         .map(|(id, _)| id)
         .collect();
     let scripts_dir = paths.scripts_dir();
-    if scripts_dir.exists() {
+    if adopt && scripts_dir.exists() {
         for entry in fs::read_dir(&scripts_dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -122,15 +136,16 @@ pub async fn run_startup_reconciliation(
             };
             let canonical = entry.path().join("script.md");
             if !canonical.exists() {
+                waiting.insert(dir_name);
                 continue;
             }
             match fs::read_to_string(&canonical) {
                 Ok(source) => {
                     let previous = salvaged.as_ref().and_then(|index| index.get(&dir_name));
-                    let script = adoption_for(&script_id, &source, previous);
+                    let (script, title_restored) = adoption_for(&script_id, &source, previous);
                     match repo::adopt_script_folder(pool, paths, &script_id, &source, &script).await {
                         Ok(adoption) => {
-                            if previous.is_some() {
+                            if title_restored {
                                 report.titles_restored += 1;
                             }
                             report.revisions_recovered += adoption.revisions;
@@ -141,8 +156,8 @@ pub async fn run_startup_reconciliation(
                             report.orphan_files_recovered.push(dir_name);
                         }
                         Err(err) => {
-                            adoption_failed = true;
                             report.notes.push(format!("adopt orphan {dir_name}: {err}"));
+                            waiting.insert(dir_name);
                         }
                     }
                 }
@@ -150,17 +165,18 @@ pub async fn run_startup_reconciliation(
                     report
                         .notes
                         .push(format!("unreadable orphan {dir_name}: {err}"));
+                    waiting.insert(dir_name);
                 }
             }
         }
     }
 
-    // The rebuild's index has done its job once every folder it could describe
-    // has a row. Kept while one failed, so the retry next launch still has the
-    // name to give it; never applied to anything after that, so a script
-    // renamed or restored from the Trash later is not overruled by it.
-    if salvaged.is_some() && !adoption_failed {
-        salvage::clear_pending_index(paths.root());
+    // The rebuild's index has done its job for every folder that now has a
+    // row. What it says about a folder still waiting is kept for the retry
+    // next launch; the rest goes, so it is never applied to anything later and
+    // a script renamed or restored from the Trash is not overruled by it.
+    if salvaged.is_some() {
+        salvage::retain_pending_index(paths.root(), &waiting);
     }
 
     // 4. Every row is checked against its canonical file: missing files are
@@ -256,16 +272,19 @@ pub async fn run_startup_reconciliation(
 /// rebuild could still read that, and otherwise as a draft named after its own
 /// first line. Every value from the old database is checked before it is
 /// trusted, and one that fails falls back on its own without costing the
-/// script the others.
+/// script the others. The flag says whether the name is the one it had.
 fn adoption_for(
     script_id: &ScriptId,
     source: &str,
     previous: Option<&SalvagedScript>,
-) -> repo::AdoptedScript {
+) -> (repo::AdoptedScript, bool) {
     let now = now_iso();
-    let title = previous
-        .map(|p| collapse_whitespace(&p.title))
-        .filter(|title| !title.is_empty())
+    let saved_title = previous
+        .and_then(|p| p.title.as_deref())
+        .map(collapse_whitespace)
+        .filter(|title| !title.is_empty());
+    let title_restored = saved_title.is_some();
+    let title = saved_title
         .or_else(|| title_from_source(source))
         .unwrap_or_else(|| format!("Recovered script {}", &script_id.as_str()[..8]));
     let status = previous
@@ -290,7 +309,7 @@ fn adoption_for(
     let trashed_at = (status == "trash").then(|| {
         timestamp(previous.and_then(|p| p.trashed_at.as_ref())).unwrap_or_else(|| now.clone())
     });
-    repo::AdoptedScript {
+    let script = repo::AdoptedScript {
         title,
         status,
         language: previous
@@ -302,7 +321,8 @@ fn adoption_for(
         updated_at: timestamp(previous.and_then(|p| p.updated_at.as_ref()))
             .unwrap_or_else(|| now.clone()),
         trashed_at,
-    }
+    };
+    (script, title_restored)
 }
 
 /// A name for a script nothing remembers the name of: its first line of
@@ -310,41 +330,53 @@ fn adoption_for(
 /// "Launch video" and `**Hello** [there](…)` is "Hello there" (#252). `None`
 /// when the script says nothing at all.
 ///
-/// Fenced code is skipped — a script that opens with a code block is not
-/// named after its first line of code.
+/// Read in the context of the whole document, not line by line: a line inside
+/// a comment, a code block, `:::silent` or coach front matter says nothing,
+/// and which of those a line is in depends on the lines around it. So the
+/// first line that speaks is found by growing a prefix of the script until it
+/// says something that the WHOLE script also opens with — a prefix that cuts
+/// a construct short (a comment not yet closed) says something the whole
+/// script does not, and is passed over. A script that opens with nothing
+/// found that way within its first lines is named after the head of its
+/// spoken text instead.
 pub fn title_from_source(source: &str) -> Option<String> {
     const MAX_CHARS: usize = 80;
+    // Bounds the prefix search, which re-reads the prefix each time.
+    const MAX_PREFIX_LINES: usize = 200;
+    const MAX_PREFIX_BYTES: usize = 64 * 1024;
     let options = SpokenTextOptions {
         read_headings: true,
         read_image_alt_text: false,
         read_inline_code: true,
     };
-    let mut fence: Option<&str> = None;
-    for line in super::without_bom(source).lines() {
-        let trimmed = line.trim_start();
-        if let Some(marker) = fence {
-            if trimmed.starts_with(marker) {
-                fence = None;
-            }
-            continue;
-        }
-        if let Some(marker) = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m)) {
-            fence = Some(marker);
-            continue;
-        }
-        let text = collapse_whitespace(&spoken_text(line, options).plain);
-        if text.is_empty() {
-            continue;
-        }
-        if text.chars().count() <= MAX_CHARS {
-            return Some(text);
-        }
-        // Cut on a word where there is one, like the Library's preview.
-        let head: String = text.chars().take(MAX_CHARS).collect();
-        let cut = head.rfind(char::is_whitespace).map_or(head.as_str(), |at| &head[..at]);
-        return Some(format!("{}…", cut.trim_end()));
+    let source = super::without_bom(source);
+    let whole = collapse_whitespace(&spoken_text(source, options).plain);
+    if whole.is_empty() {
+        return None;
     }
-    None
+
+    let mut first_line = None;
+    let mut end = 0;
+    for line in source.split_inclusive('\n').take(MAX_PREFIX_LINES) {
+        end += line.len();
+        if end > MAX_PREFIX_BYTES {
+            break;
+        }
+        let said = collapse_whitespace(&spoken_text(&source[..end], options).plain);
+        if !said.is_empty() && whole.starts_with(&said) {
+            first_line = Some(said);
+            break;
+        }
+    }
+    let text = first_line.unwrap_or(whole);
+
+    if text.chars().count() <= MAX_CHARS {
+        return Some(text);
+    }
+    // Cut on a word where there is one, like the Library's preview.
+    let head: String = text.chars().take(MAX_CHARS).collect();
+    let cut = head.rfind(char::is_whitespace).map_or(head.as_str(), |at| &head[..at]);
+    Some(format!("{}…", cut.trim_end()))
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -472,6 +504,18 @@ mod title_tests {
         let title = title_from_source(&source).expect("title");
         assert!(title.chars().count() <= 81, "{title}");
         assert!(title.ends_with("word…"), "{title}");
+    }
+
+    #[test]
+    fn a_line_says_nothing_inside_what_the_document_keeps_silent() {
+        // Only the whole document knows the comment, the silent block and
+        // the four-backtick fence are closed where they are.
+        let source = "<!--\nPrivate production note\n-->\n# The real opening";
+        assert_eq!(title_from_source(source).as_deref(), Some("The real opening"));
+        let source = ":::silent\nStage direction only\n:::\n\nSpoken first.";
+        assert_eq!(title_from_source(source).as_deref(), Some("Spoken first."));
+        let source = "````\n```\nstill code\n````\nAfter the code.";
+        assert_eq!(title_from_source(source).as_deref(), Some("After the code."));
     }
 
     #[test]

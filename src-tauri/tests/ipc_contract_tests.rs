@@ -460,13 +460,17 @@ fn revision_reasons_are_exactly_the_ones_the_ui_labels() {
     }
 
     // Direction 2 — nothing Rust writes may be missing from the UI's list.
-    // Every literal reason reaches the column through one of these two call
-    // shapes, and both put the string on the same line as the marker.
+    // Every literal reason reaches the column through one of these call
+    // shapes, and each puts the string on the same line as the marker. The
+    // third is a named reason bound straight into an INSERT, which is how a
+    // rebuild's recovered revisions are written (#252).
     for line in sources.lines() {
         let marker = if line.contains("create_revision_snapshot(") {
             "create_revision_snapshot("
         } else if line.contains("revision_reason: Some(") {
             "revision_reason: Some("
+        } else if line.contains("_REVISION_REASON: &str = ") {
+            "_REVISION_REASON: &str = "
         } else {
             continue;
         };

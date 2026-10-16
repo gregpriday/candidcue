@@ -23,6 +23,9 @@ const REVISION_INTERVAL_SECONDS: i64 = 5 * 60;
 const MAX_REVISIONS_PER_SCRIPT: i64 = 100;
 /// Spec Appendix A.10: Markdown source hard limit.
 pub const MAX_SOURCE_BYTES: usize = 10 * 1024 * 1024;
+/// The reason on a revision indexed again from its file after a rebuild
+/// (#252). Why it was originally taken was only ever in the database.
+const RECOVERED_REVISION_REASON: &str = "recovered";
 
 pub fn file_missing_error(script_id: &ScriptId) -> AppError {
     AppError::structured(
@@ -1461,6 +1464,10 @@ pub(crate) struct Adoption {
 ///
 /// The files are read and checked BEFORE the transaction opens: an image is
 /// decoded to be trusted, and that is no work to do holding the write lock.
+/// A `revisions/` or `assets/` folder that exists and cannot be listed fails
+/// the adoption rather than adopting the script without its history: the row
+/// is what stops the folder being looked at again, so the retry has to be the
+/// whole adoption.
 pub(crate) async fn adopt_script_folder(
     pool: &SqlitePool,
     paths: &DataPaths,
@@ -1480,8 +1487,8 @@ pub(crate) async fn adopt_script_folder(
         .ok_or_else(|| AppError::Internal("canonical path outside data root".into()))?;
     let fingerprint = file_fingerprint(&canonical)?;
 
-    let (revisions, mut skipped) = scan_revision_files(paths, id, &settings);
-    let (assets, skipped_assets) = crate::assets::scan_asset_files(paths, id);
+    let (revisions, mut skipped) = scan_revision_files(paths, id, &settings)?;
+    let (assets, skipped_assets) = crate::assets::scan_asset_files(paths, id)?;
     skipped.extend(skipped_assets);
 
     let mut tx = pool.begin().await?;
@@ -1524,7 +1531,7 @@ pub(crate) async fn adopt_script_folder(
         .bind(index as i64 + 1)
         .bind(&revision.source_hash)
         .bind(&revision.rel_path)
-        .bind("recovered")
+        .bind(RECOVERED_REVISION_REASON)
         .bind(revision.word_count as i64)
         .bind(&revision.created_at)
         .execute(&mut *tx)
@@ -1557,17 +1564,21 @@ struct RecoveredRevision {
 /// SHA-256>.md`, which carries everything but the reason: when it was taken,
 /// and a check that the bytes are the ones it was named for. A file whose
 /// contents do not match its name is not indexed as that revision.
+///
+/// Two snapshots taken in the same millisecond sort by hash, which may not be
+/// the order they were taken in; nothing on disk records a finer order.
 fn scan_revision_files(
     paths: &DataPaths,
     id: &ScriptId,
     settings: &ScriptSettings,
-) -> (Vec<RecoveredRevision>, Vec<String>) {
+) -> Result<(Vec<RecoveredRevision>, Vec<String>), AppError> {
     let mut found = Vec::new();
     let mut skipped = Vec::new();
-    let Ok(entries) = fs::read_dir(paths.revisions_dir(id)) else {
-        return (found, skipped);
+    let Some(entries) = crate::util::read_owned_dir(&paths.revisions_dir(id), &mut skipped)? else {
+        return Ok((found, skipped));
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         let Some((created_at, short_hash)) = parse_revision_file_name(&name) else {
             continue;
@@ -1575,6 +1586,13 @@ fn scan_revision_files(
         let note = |reason: &str| format!("revision {name} was not indexed: {reason}");
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             skipped.push(note("not a regular file"));
+            continue;
+        }
+        // A snapshot is a script, and a script has a size limit; a file that
+        // claims to be one and is larger is not read whole into memory at
+        // startup to find out.
+        if entry.metadata().map(|m| m.len() > MAX_SOURCE_BYTES as u64).unwrap_or(true) {
+            skipped.push(note("larger than a script can be"));
             continue;
         }
         let Ok(bytes) = fs::read(entry.path()) else {
@@ -1603,7 +1621,7 @@ fn scan_revision_files(
         });
     }
     found.sort_by(|a, b| a.file_name.cmp(&b.file_name));
-    (found, skipped)
+    Ok((found, skipped))
 }
 
 /// `20261016T093000123Z-0123456789ab.md` → (`2026-10-16T09:30:00.123Z`,
