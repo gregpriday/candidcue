@@ -4,7 +4,7 @@
   Kept behind a disclosure so the calm default UI is untouched. The movement
   records are always available — they are the answer to the only question a
   presenter asks about a teleprompter that moved oddly. The full timeline
-  (motion acks, assist dispositions, budget breaches) appears when developer
+  (assist dispositions, budget breaches) appears when developer
   diagnostics are switched on in Settings, per primary §15.2.
 
   Text is redacted by default (§57.3): records carry ids, scores, states, and

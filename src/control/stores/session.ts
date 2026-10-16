@@ -943,7 +943,7 @@ export function startLiveSession(input: StartSessionInput): string {
       // §28.4: the slider had no reader at all. The saved value is the default
       // so every caller of `startLiveSession` gets it, not only Preflight.
       vadSensitivity: input.vadSensitivity ?? currentVadSensitivity(),
-      // §29.2 steps 1–3, enforced by the controller that specifies them rather
+      // §29.2 steps 1–2, enforced by the controller that specifies them rather
       // than by whichever screen happened to run first.
       startSequence: buildStartSequenceGate(input),
       // §29.2 step 9, the half that lives above the pipeline.

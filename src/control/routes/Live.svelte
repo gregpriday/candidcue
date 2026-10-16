@@ -721,11 +721,8 @@ import { onShortcut } from '../lib/shortcuts';
   /*
    * The embedded stage's intents, handled here rather than on the event bus.
    *
-   * Deliberately the same set as the Rust-relayed listener in the session store
-   * — the two are one contract with two transports, and an intent that only one
-   * of them answers is a control that works in a separate-window session and
-   * silently does nothing in single-window presentation, which is the
-   * configuration most takes actually run in.
+   * This is the only handler a take has: the stage renders in this window, so
+   * an intent it raises that is not answered here does nothing at all.
    */
   function handleEmbeddedStageIntent(intent: StageIntent): void {
     if (intent.kind === 'toggle_pause') {

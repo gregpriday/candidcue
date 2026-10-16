@@ -234,12 +234,9 @@
     {/if}
 
     <!--
-      EVERY ORIGINAL ROW, INTACT (CCUX-007).
+      THE MEASUREMENTS, COLLAPSED (CCUX-007).
 
-      Collapsed, not culled. These are the numbers that separate "the aligner
-      lost you" from "the aligner followed you and the glass discarded every
-      update" — unrelated faults with one symptom — and a support request is
-      unanswerable without them.
+      Collapsed, not culled: a support request is unanswerable without them.
     -->
     <Disclosure label="Take details">
     <dl class="summary-grid">
