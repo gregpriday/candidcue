@@ -1005,53 +1005,61 @@ fn verify_staged(
 // The whole sequence
 // ---------------------------------------------------------------------------
 
-/// Download, verify, unpack and install a model. Returns its directory.
-///
-/// Cancellation is checked between every chunk and every file, and is honoured
-/// everywhere EXCEPT the remove-then-rename that installs the staged directory:
-/// that window is the one place where stopping halfway could leave the model
-/// directory missing with nothing to replace it, so it is allowed to finish.
-/// Refuse an install the disk cannot hold, BEFORE anything is transferred.
+/// Headroom over the arithmetic in [`required_free_bytes`]. Space is not ours
+/// alone — Spotlight, Time Machine snapshots and the user's own work move
+/// underneath us — and a commit that fails on the last megabyte is the
+/// expensive failure.
+const FREE_SPACE_MARGIN_BYTES: u64 = 256 * 1024 * 1024;
+
+/// What has to be FREE for an install of `model` to reach its peak.
 ///
 /// ## What has to fit at once
 ///
-/// An install is not "the size of the model". At its peak the volume holds:
+/// An install is not "the size of the model". At its peak the volume holds,
+/// beyond what is already on it:
 ///
-/// * the **archive**, downloaded whole before it is verified;
+/// * the **archive**, downloaded whole before it is verified and removed only
+///   after the install returns;
 /// * the **staging** tree, every file extracted and checked while the archive
-///   is still there;
-/// * the **current install**, which is not removed until the new one commits;
-/// * the **backup** of that install, which is how an interrupted commit is
-///   recoverable at all.
+///   is still there.
 ///
-/// So the requirement is archive + 2 × installed + a margin — and for the
-/// shipped model that is roughly 380 MB, not the 161 MB a user would guess
-/// from the model's size, or the ~57 MB they see downloading.
+/// Nothing else costs space. A previous install — there is none on a first
+/// install, which is the normal case — is already on the volume, so `statvfs`
+/// has counted it as used; the commit then moves it aside with a `rename`,
+/// which takes no bytes, and the staged tree becomes the new install the same
+/// way. Counting that previous install again, as this once did for its
+/// "backup", asked for a whole model more than any install holds, and refused
+/// first installs that would have fitted.
+///
+/// So the requirement is archive + installed + a margin. That is neither the
+/// model's size, which is what a user would guess, nor the download they
+/// watch, which is why it is checked rather than assumed. No figure is quoted
+/// here because a catalogue change would make it wrong; the tests hold the
+/// shipped one.
+///
+/// Deliberately conservative in two ways that only ever ask for MORE than the
+/// install needs: a resumed download's partial archive is already on disk and
+/// is counted again here, and so is anything the stale-file sweep in
+/// [`install`] is about to remove, because the check runs before it.
+fn required_free_bytes(model: &ModelEntry) -> u64 {
+    model
+        .archive
+        .bytes
+        .saturating_add(model.installed_bytes())
+        .saturating_add(FREE_SPACE_MARGIN_BYTES)
+}
+
+/// Refuse an install the disk cannot hold, BEFORE anything is transferred.
 ///
 /// ## Why it is worth refusing rather than discovering
 ///
 /// Without this, running out of space is found somewhere in the middle: after
-/// a 57 MB download on a hotel connection, or — worse — during the commit,
+/// the whole download on a hotel connection, or — worse — during the commit,
 /// where the recovery path exists precisely because that is survivable but
 /// unpleasant. The failure message then blamed the disk *after* the fact, and
 /// the readiness review noted that installation errors "advise the user to
 /// check disk space only after failure".
-///
-/// The numbers are stated in the error because "not enough space" without them
-/// is not actionable: the user has to know how much to clear.
 fn check_free_space(root: &Path, model: &ModelEntry) -> Result<(), AppError> {
-    /// Headroom over the arithmetic. Space is not ours alone — Spotlight,
-    /// Time Machine snapshots and the user's own work move underneath us —
-    /// and a commit that fails on the last megabyte is the expensive failure.
-    const MARGIN_BYTES: u64 = 256 * 1024 * 1024;
-
-    let installed = model.installed_bytes();
-    let required = model
-        .archive
-        .bytes
-        .saturating_add(installed.saturating_mul(2))
-        .saturating_add(MARGIN_BYTES);
-
     let Some(available) = available_bytes(root) else {
         // A volume that will not report its free space is not grounds to
         // refuse. The install will fail honestly if it runs out; refusing on a
@@ -1059,7 +1067,16 @@ fn check_free_space(root: &Path, model: &ModelEntry) -> Result<(), AppError> {
         tracing::warn!(path = %root.display(), "could not read free space; skipping the preflight");
         return Ok(());
     };
+    free_space_verdict(model, available)
+}
 
+/// [`check_free_space`] once the volume has answered, apart from the syscall
+/// so the arithmetic and the refusal can be tested without filling a disk.
+///
+/// The numbers are stated in the error because "not enough space" without them
+/// is not actionable: the user has to know how much to clear.
+fn free_space_verdict(model: &ModelEntry, available: u64) -> Result<(), AppError> {
+    let required = required_free_bytes(model);
     if available >= required {
         return Ok(());
     }
@@ -1070,8 +1087,8 @@ fn check_free_space(root: &Path, model: &ModelEntry) -> Result<(), AppError> {
         crate::errors::ErrorCategory::Storage,
         format!(
             "There is not enough free space to install this language. It needs about {} \
-             while it installs — the download, the files it unpacks into, and a backup of \
-             any version already here — and {} is free. Nothing was downloaded.",
+             while it installs — the download and the files it unpacks into — and {} is \
+             free. Nothing was downloaded.",
             gb(required),
             gb(available)
         ),
@@ -1127,6 +1144,12 @@ fn available_bytes(_path: &Path) -> Option<u64> {
     None
 }
 
+/// Download, verify, unpack and install a model. Returns its directory.
+///
+/// Cancellation is checked between every chunk and every file, and is honoured
+/// everywhere EXCEPT the swap that installs the staged directory: that window
+/// is the one place where stopping halfway could leave the model directory
+/// missing with nothing to replace it, so it is allowed to finish.
 pub async fn install(
     app_data_dir: &Path,
     catalogue: &Catalogue,
@@ -3809,5 +3832,94 @@ mod tests {
             archive_urls(&catalogue, &catalogue.models[0]),
             vec![model.archive.upstream_url]
         );
+    }
+
+    /// A fixture entry whose sizes are stated rather than measured, so the
+    /// space arithmetic can be checked at production scale.
+    fn sized_entry(archive_bytes: u64, file_bytes: &[u64]) -> ModelEntry {
+        let files = fixture_files();
+        let archive = build_archive("root", &files);
+        let mut model = fixture_entry(&archive, &files, "root");
+        model.archive.bytes = archive_bytes;
+        for (file, bytes) in model.files.iter_mut().zip(file_bytes) {
+            file.bytes = *bytes;
+        }
+        model
+    }
+
+    /// The sizes of `x-asr-480ms` when issue #263 was filed — the last file
+    /// standing in for the small ones — held here rather than read from the
+    /// catalogue so the regression stays pinned to the numbers it was
+    /// reported in.
+    fn issue_263_entry() -> ModelEntry {
+        sized_entry(133_895_136, &[155_278_641, 11_309_084, 2_581_422, 178_071])
+    }
+
+    /// The peak is the archive beside its staged tree. A previous install is
+    /// already counted as used by the volume and is set aside by a rename, so
+    /// it is not asked for again — with or without one present.
+    #[test]
+    fn free_space_needed_is_one_archive_and_one_staged_install_plus_the_margin() {
+        let model = issue_263_entry();
+        assert_eq!(model.installed_bytes(), 169_347_218);
+        // Not 741,025,028: that counted the install a second time.
+        assert_eq!(required_free_bytes(&model), 571_677_810);
+    }
+
+    /// Whatever the catalogue ships, the same arithmetic — so a model update
+    /// moves the requirement without anyone editing a test.
+    #[test]
+    fn free_space_needed_for_the_shipped_model_follows_its_catalogue_sizes() {
+        let model = crate::speech::catalogue::default_model();
+        assert_eq!(
+            required_free_bytes(model),
+            model.archive.bytes + model.installed_bytes() + FREE_SPACE_MARGIN_BYTES
+        );
+    }
+
+    #[test]
+    fn free_space_of_exactly_the_requirement_is_enough_and_a_byte_less_is_not() {
+        let model = issue_263_entry();
+        let required = required_free_bytes(&model);
+        assert!(free_space_verdict(&model, required).is_ok());
+        assert!(free_space_verdict(&model, u64::MAX).is_ok());
+        // Inside the band the double count refused.
+        assert!(free_space_verdict(&model, 600_000_000).is_ok());
+        assert!(free_space_verdict(&model, required - 1).is_err());
+    }
+
+    #[test]
+    fn free_space_refusal_states_the_numbers_and_offers_the_folder() {
+        let model = issue_263_entry();
+        let required = required_free_bytes(&model);
+        let err = free_space_verdict(&model, 500_000_000).unwrap_err();
+        assert_eq!(err.code(), "STT_MODEL_INSUFFICIENT_SPACE", "{err:?}");
+        assert_eq!(err.category(), crate::errors::ErrorCategory::Storage);
+        assert!(err.recoverable());
+
+        let payload = err.to_payload();
+        assert_eq!(payload.action, Some(crate::errors::RecoveryAction::RevealFolder));
+        let details = payload.details.expect("the numbers travel as details");
+        assert_eq!(details["requiredBytes"], required.to_string());
+        assert_eq!(details["availableBytes"], "500000000");
+
+        let message = err.user_message();
+        assert!(message.contains("about 0.6 GB"), "{message}");
+        assert!(message.contains("0.5 GB is free"), "{message}");
+        assert!(message.contains("Nothing was downloaded"), "{message}");
+        // There is no second copy, so the copy must not claim one.
+        assert!(!message.contains("backup"), "{message}");
+    }
+
+    #[test]
+    fn free_space_arithmetic_saturates_rather_than_wrapping_into_a_pass() {
+        // Overflowing archive + installed…
+        let model = sized_entry(u64::MAX - 1, &[10, 0, 0, 0]);
+        assert_eq!(required_free_bytes(&model), u64::MAX);
+        assert!(free_space_verdict(&model, u64::MAX - 1).is_err());
+
+        // …and overflowing only once the margin is added.
+        let model = sized_entry(u64::MAX - FREE_SPACE_MARGIN_BYTES, &[1, 0, 0, 0]);
+        assert_eq!(required_free_bytes(&model), u64::MAX);
     }
 }
