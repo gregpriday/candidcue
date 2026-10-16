@@ -103,7 +103,7 @@ export async function trashScript(
   expectedRevision: number,
 ): Promise<ScriptSummary> {
   return invokeOrMock<ScriptSummary>('trash_script', { scriptId, expectedRevision }, () =>
-    mockScripts.trash(scriptId),
+    mockScripts.trash(scriptId, expectedRevision),
   );
 }
 
@@ -112,7 +112,7 @@ export async function restoreScript(
   expectedRevision: number,
 ): Promise<ScriptSummary> {
   return invokeOrMock<ScriptSummary>('restore_script', { scriptId, expectedRevision }, () =>
-    mockScripts.restore(scriptId),
+    mockScripts.restore(scriptId, expectedRevision),
   );
 }
 

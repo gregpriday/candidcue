@@ -1254,7 +1254,7 @@ import type { PresentationMode } from '../services/settings-types';
     // failure itself; navigating away regardless would add a second wrong thing
     // on top of the first — the script still here, and the author no longer in
     // it. That is what the mutator's boolean is for.
-    if (!(await moveScriptToTrash(scriptId))) return;
+    if (!(await moveScriptToTrash(scriptId, { saveEditsFirst: true }))) return;
     await navigate({ name: 'library', view: 'all' });
   }
 

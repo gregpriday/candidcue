@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim, SCRIPT_CONFLICT_ERROR } from './fixtures/tauri-shim';
 import { openScript, row } from './fixtures/library';
 
@@ -454,3 +454,122 @@ test('reveals the editor anyway when the compile worker never answers', async ({
   await expect(page.locator('footer')).toHaveCount(1);
   await expect(page.locator('footer')).not.toHaveText('');
 });
+
+/*
+ * Issue #255. The trash named the revision the Library had loaded, every
+ * autosave since had moved the script past it, and Rust refused the delete as
+ * an external change nobody made. The shim now refuses a stale revision the way
+ * `repo.rs` does — it used to answer any revision at all, which is the only
+ * reason no browser run ever saw this.
+ */
+
+/** Choose an item from the native menu, once the window is listening for it. */
+async function chooseMenuCommand(page: Page, id: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (commandId) => window.__E2E__.emit('menu://command', { id: commandId }),
+        id,
+      ),
+    )
+    .toBeGreaterThan(0);
+}
+
+/** Type into the open script and wait for autosave's answer to land. */
+async function editUntilAutosaved(page: Page): Promise<void> {
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+  await editorSurface.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' A word typed since the Library loaded.');
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__E2E__.settled.filter((command) => command === 'save_script').length),
+    )
+    .toBeGreaterThan(0);
+}
+
+/** The trash went out against the revision the last save left the script at. */
+async function expectTrashedAtSavedRevision(page: Page): Promise<void> {
+  const [save, trash] = await page.evaluate(() => [
+    window.__E2E__.lastCall('save_script')?.args as { expectedRevision: number } | undefined,
+    window.__E2E__.lastCall('trash_script')?.args as { expectedRevision: number } | undefined,
+  ]);
+  expect(save).toBeDefined();
+  expect(trash?.expectedRevision).toBe((save?.expectedRevision ?? 0) + 1);
+}
+
+test('the script actions menu moves an autosaved script to Trash', async ({ page }) => {
+  await page.goto('/control.html');
+  await openScript(page, /Launch keynote/);
+  await editUntilAutosaved(page);
+
+  await page.getByRole('button', { name: 'Script actions' }).click();
+  await page.getByRole('menuitem', { name: 'Move to Trash' }).click();
+  await page.getByRole('dialog', { name: 'Delete script?' }).getByRole('button', { name: 'Move to Trash' }).click();
+
+  // Back in the Library, with the script gone from it — not left in the editor
+  // under a toast about a change made outside CandidCue.
+  await expect(row(page, 'Blank canvas')).toBeVisible();
+  await expect(row(page, 'Launch keynote')).toHaveCount(0);
+  await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);
+  await expectTrashedAtSavedRevision(page);
+});
+
+test('File › Move to Trash moves an autosaved script while the Library is still reloading', async ({
+  page,
+}) => {
+  await page.goto('/control.html');
+  await openScript(page, /Launch keynote/);
+  await editUntilAutosaved(page);
+  // The command leaves for the Library first, whose mount reloads the list
+  // without waiting for it. Held open, that reload cannot hand the trash a
+  // fresh row by luck of timing.
+  await page.evaluate(() => window.__E2E__.setDelay('list_scripts', 600));
+
+  await chooseMenuCommand(page, 'file.move-to-trash');
+  await page.getByRole('dialog', { name: 'Move to Trash?' }).getByRole('button', { name: 'Move to Trash' }).click();
+
+  await expect(row(page, 'Blank canvas')).toBeVisible();
+  await expect(row(page, 'Launch keynote')).toHaveCount(0);
+  await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);
+  await expectTrashedAtSavedRevision(page);
+});
+
+/*
+ * The other half of #255's fix. File › Move to Trash runs the navigation guard
+ * on the way out, and the guard always offers a way through. Once the author
+ * has taken it, the edits are theirs to lose — so the trash must not try to
+ * save them again and refuse, which is what a flush on every trash did.
+ */
+for (const leaving of [
+  {
+    what: 'a save that keeps failing',
+    error: { code: 'SCRIPT_SAVE_FAILED', userMessage: 'The disk is unavailable.' },
+    guard: 'Leave with unsaved changes?',
+    choice: 'Leave anyway',
+  },
+  {
+    what: 'an unresolved external change',
+    error: SCRIPT_CONFLICT_ERROR,
+    guard: 'Leave without resolving the conflict?',
+    choice: 'Discard my version',
+  },
+]) {
+  test(`File › Move to Trash still moves the script when the author leaves ${leaving.what} behind`, async ({
+    page,
+  }) => {
+    await page.goto('/control.html');
+    await openScript(page, /Launch keynote/);
+    await page.evaluate((err) => window.__E2E__.setFail('save_script', err), leaving.error);
+    await editUntilAutosaved(page);
+
+    await chooseMenuCommand(page, 'file.move-to-trash');
+    await page.getByRole('dialog', { name: 'Move to Trash?' }).getByRole('button', { name: 'Move to Trash' }).click();
+    await page.getByRole('dialog', { name: leaving.guard }).getByRole('button', { name: leaving.choice }).click();
+
+    await expect(row(page, 'Blank canvas')).toBeVisible();
+    await expect(row(page, 'Launch keynote')).toHaveCount(0);
+    await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);
+  });
+}

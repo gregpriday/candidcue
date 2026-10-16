@@ -114,6 +114,20 @@ function toSummary(doc: ScriptDocument): ScriptSummary {
   };
 }
 
+/**
+ * Refuse a transition sent against a revision the script has moved past, the
+ * way Rust's `AppError::stale_revision` does: by rejecting, because trash and
+ * restore have no `SaveResult` to carry a conflict by value. This mock used to
+ * ignore the revision, which is why no browser run ever saw #255.
+ */
+function expectRevision(doc: ScriptDocument, expectedRevision: number): void {
+  if (doc.scriptRevision === expectedRevision) return;
+  throw {
+    code: 'SCRIPT_CONFLICT',
+    userMessage: 'This document changed elsewhere. Reload before saving.',
+  };
+}
+
 /* ---------------------------------------------------------------- scripts */
 
 export const mockScripts = {
@@ -219,10 +233,11 @@ export const mockScripts = {
     return toSummary(copy);
   },
 
-  trash(scriptId: string): ScriptSummary {
+  trash(scriptId: string, expectedRevision: number): ScriptSummary {
     state.load();
     const record = state.scripts.get(scriptId);
     if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    expectRevision(record.doc, expectedRevision);
     record.doc.status = 'trash';
     record.doc.scriptRevision += 1;
     record.trashedAt = nowIso();
@@ -230,10 +245,11 @@ export const mockScripts = {
     return toSummary(record.doc);
   },
 
-  restore(scriptId: string): ScriptSummary {
+  restore(scriptId: string, expectedRevision: number): ScriptSummary {
     state.load();
     const record = state.scripts.get(scriptId);
     if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    expectRevision(record.doc, expectedRevision);
     record.doc.status = 'draft';
     record.doc.scriptRevision += 1;
     delete record.trashedAt;

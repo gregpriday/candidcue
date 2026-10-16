@@ -1038,8 +1038,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * Trashing the open script and staying put leaves the editor holding a
      * document whose canonical file has moved — every subsequent autosave then
      * fails against a path that is gone, and the conflict sheet appears for a
-     * conflict nobody caused. Navigation runs the save guard on the way out, so
-     * the last edits are flushed before the move.
+     * conflict nobody caused. Navigation runs the save guard on the way out,
+     * which either saves the last edits or has the author agree to leave them
+     * behind — so the trash below must not try to save them again (#255).
      */
     if (get(route).name === 'editor' && get(editor).scriptId === scriptId) {
       const left = await navigate({ name: 'library', view: get(library).view });

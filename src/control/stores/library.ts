@@ -14,7 +14,7 @@ import type { ScriptSummary } from '../../shared/contracts';
 import { describeError } from '../services/errors';
 import * as scriptsService from '../services/scripts';
 import type { LibraryView, ScriptPage, ScriptSort } from '../services/scripts-types';
-import { flushEditorEdits } from './editor';
+import { editor, flushEditorEdits } from './editor';
 import { showToast } from './toasts';
 
 /**
@@ -446,17 +446,47 @@ export async function duplicateScript(id: string): Promise<boolean> {
   return ok;
 }
 
-/** Look up the revision the library currently believes a script is at. */
+/**
+ * The newest revision this side has seen for a script.
+ *
+ * The Library's row is the revision the script had when the list last loaded,
+ * and every autosave since has moved it on — so for the open script it was
+ * stale by construction, and Rust refused the trash with the external-change
+ * conflict for a change nobody made (#255). The editor adopts the revision of
+ * every save it makes, so it is current for the script it holds; but it is not
+ * cleared when the editor is left, and a trash or restore made after that moves
+ * the row past it. Revisions only ever go up, so each copy is a lower bound on
+ * what Rust holds and the larger is the freshest one known. A write neither has
+ * seen still conflicts, which is the point of sending one at all.
+ */
 function revisionOf(id: string): number {
   const found = get(state).scripts.find((script) => script.id === id);
-  if (found === undefined) {
+  const open = get(editor);
+  const held = open.scriptId === id && !open.loading ? open.scriptRevision : undefined;
+  if (found === undefined && held === undefined) {
     throw new Error('That script is no longer in the library. Refresh the list, then try again.');
   }
-  return found.scriptRevision;
+  return Math.max(found?.scriptRevision ?? 0, held ?? 0);
 }
 
-export async function moveScriptToTrash(id: string): Promise<boolean> {
+/**
+ * `saveEditsFirst` is for the one caller still inside the document. Its
+ * pending autosave goes first, for the same reason as Duplicate: what is moved
+ * should be what the editor shows, and a save landing after the trash would be
+ * refused against the revision the trash moved on. Edits that cannot be saved
+ * refuse the trash, and the author is still there to deal with them.
+ *
+ * Every other way here has already left the editor through the navigation
+ * guard, which saved the edits or was told to leave them behind — "Leave
+ * anyway", "Discard my version". Saving again there retried the very save the
+ * author had just given up on, and refused the trash they had asked for.
+ */
+export async function moveScriptToTrash(
+  id: string,
+  { saveEditsFirst = false }: { saveEditsFirst?: boolean } = {},
+): Promise<boolean> {
   const ok = await mutate('The script could not be moved to Trash.', async () => {
+    if (saveEditsFirst) await flushEditorEdits(id);
     await scriptsService.trashScript(id, revisionOf(id));
   });
   if (ok) showToast('Moved to Trash', 'info');

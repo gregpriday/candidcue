@@ -115,6 +115,41 @@ describe('scripts service — mock fallback (browser dev parity only, proves not
     expect(finalList.items.some((s) => s.id === created.id)).toBe(false);
   });
 
+  it('refuses a trash or restore sent against a stale revision, as Rust does', async () => {
+    // MOCK ONLY. The mock answered any revision at all, which is why the
+    // browser build never showed #255; that Rust refuses one is proven by the
+    // compare-and-swap in `repo.rs` and its own tests.
+    const created = await scripts.createScript({ title: 'Stale', source: '# One\n\nHello.\n' });
+    try {
+      const loaded = await scripts.getScript(created.id);
+      await scripts.saveScript(created.id, loaded.scriptRevision, '# One\n\nEdited.\n');
+
+      await expect(scripts.trashScript(created.id, loaded.scriptRevision)).rejects.toMatchObject({
+        code: 'SCRIPT_CONFLICT',
+      });
+      // Refused before anything moved: still live, still at the saved revision.
+      const live = await scripts.listScripts({ view: 'all' });
+      const row = live.items.find((s) => s.id === created.id);
+      expect(row?.status).not.toBe('trash');
+      expect(row?.scriptRevision).toBe(loaded.scriptRevision + 1);
+
+      const trashed = await scripts.trashScript(created.id, loaded.scriptRevision + 1);
+      await expect(scripts.restoreScript(created.id, loaded.scriptRevision + 1)).rejects.toMatchObject({
+        code: 'SCRIPT_CONFLICT',
+      });
+      // Refused before anything moved, again: still in Trash, at the same revision.
+      const trash = await scripts.listScripts({ view: 'trash' });
+      expect(trash.items.find((s) => s.id === created.id)?.scriptRevision).toBe(trashed.scriptRevision);
+
+      await expect(scripts.restoreScript(created.id, trashed.scriptRevision)).resolves.toMatchObject({
+        status: 'draft',
+        scriptRevision: trashed.scriptRevision + 1,
+      });
+    } finally {
+      await scripts.permanentlyDeleteScript(created.id);
+    }
+  });
+
   it('search filters by title and source text', async () => {
     const created = await scripts.createScript({
       title: 'Quarterly review',
