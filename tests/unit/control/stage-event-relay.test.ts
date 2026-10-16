@@ -55,7 +55,7 @@ function keysEmittedByStage(): StageEventKey[] {
 
 /**
  * Keys the control window subscribes to, following one level of aliasing
- * (`const STAGE_MOTION_ACK_EVENT = STAGE_EVENT.motionAck`).
+ * (`const ALIAS = STAGE_EVENT.key`).
  */
 function keysListenedByControl(): StageEventKey[] {
   const aliases = new Map<string, StageEventKey>();
@@ -106,9 +106,9 @@ describe('stage → control event relay (S1)', () => {
     expect(keysEmittedByStage()).toContain('motionReport');
     // S6: the §62 stage-layout error is the third pair to follow this rule.
     expect(keysEmittedByStage()).toContain('layoutError');
+    // Settings and Calibrate still listen for the relayed Escape from the
+    // separate stage window they open.
     expect(keysListenedByControl()).toContain('escapeRequested');
-    expect(keysListenedByControl()).toContain('motionAck');
-    expect(keysListenedByControl()).toContain('layoutFailed');
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.escapeRequested);
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.motionAck);
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.layoutFailed);
@@ -116,9 +116,8 @@ describe('stage → control event relay (S1)', () => {
 
   it('nothing Rust relays to control is also broadcast by the stage', () => {
     /*
-     * `stage://intent` is deliberately absent from the relay: control listens
-     * for it directly and Rust never re-emits it, so it is delivered exactly
-     * once. The defect is the OVERLAP — a name that arrives both ways.
+     * `stage://intent` is deliberately absent from the relay: Rust never
+     * re-emits it. The defect is the OVERLAP — a name that arrives both ways.
      */
     const relayed = new Set(namesRelayedToControl());
     const collisions = keysEmittedByStage()

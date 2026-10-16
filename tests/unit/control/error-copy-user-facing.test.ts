@@ -24,8 +24,6 @@ import type { CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
@@ -86,12 +84,8 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
-const { clearSession, setStageEmitterForTesting, startLiveSession } = await import(
+const { clearSession, startLiveSession } = await import(
   '../../../src/control/stores/session'
 );
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
@@ -150,7 +144,6 @@ function start(): void {
     totalTokens: 200,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: 4,
     sessionGeneration: 7,
   });
 }
@@ -175,13 +168,11 @@ beforeEach(() => {
   clearErrorDiagnostics();
   pipeline.captured.deps = null;
   pipeline.control.startRejection = null;
-  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(() => {
   clearSession();
   clearToasts();
-  setStageEmitterForTesting(null);
   vi.useRealTimers();
 });
 

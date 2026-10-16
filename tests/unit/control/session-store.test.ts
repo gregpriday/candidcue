@@ -14,6 +14,7 @@ import {
   startLiveSession,
   startPrompting,
   stopSession,
+  toggleBlankStage,
   togglePlayPause,
 } from '../../../src/control/stores/session';
 import type { SessionMode } from '../../../src/control/services/settings-types';
@@ -180,6 +181,20 @@ describe('live session store', () => {
     expect(connectionPill('connected')).toEqual({ tone: 'success', label: 'Connected' });
     expect(connectionPill('reconnecting')).toEqual({ tone: 'warning', label: 'Reconnecting' });
     expect(connectionPill('offline')).toEqual({ tone: 'danger', label: 'Disconnected' });
+  });
+
+  /*
+   * §16.6, §108: the embedded `StageApp` reads `stageBlanked` through its
+   * `blanked` prop, so the flag flipping IS the blank reaching the glass —
+   * there is no stage window for a directive to travel to.
+   */
+  it('flips stageBlanked both ways, which is the whole blank', () => {
+    start();
+    expect(get(session).stageBlanked).toBe(false);
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(true);
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(false);
   });
 
   it('clearSession resets to the initial state', () => {

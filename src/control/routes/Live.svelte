@@ -20,7 +20,6 @@
   import IconButton from '../components/IconButton.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
   import StageAppearanceSheet from '../components/StageAppearanceSheet.svelte';
-  import StatusPill from '../components/StatusPill.svelte';
   import Slider from '../components/Slider.svelte';
   import {
     readStageAppearance,
@@ -67,10 +66,8 @@ import { onShortcut } from '../lib/shortcuts';
     canSwitchMicrophone,
     clearSession,
     connectionPill,
-    dismissStageWindowFault,
     goToToken,
     hardPause,
-    identifyStageDisplays,
     liveStatusLabel,
     moveSentences,
     pauseListening,
@@ -98,8 +95,6 @@ import { onShortcut } from '../lib/shortcuts';
   let { sessionId, scriptId }: Props = $props();
 
   const stageFontSize = $derived($session.stageFontSizePx);
-  /** §62: the stage window is gone; its quick-controls have nothing to talk to. */
-  const stageAlive = $derived($session.stageAlive);
   const connection = $derived(connectionPill($session.connection));
 
   const snapshot = $derived($session.snapshot);
@@ -726,11 +721,8 @@ import { onShortcut } from '../lib/shortcuts';
   /*
    * The embedded stage's intents, handled here rather than on the event bus.
    *
-   * Deliberately the same set as the Rust-relayed listener in the session store
-   * — the two are one contract with two transports, and an intent that only one
-   * of them answers is a control that works in a separate-window session and
-   * silently does nothing in single-window presentation, which is the
-   * configuration most takes actually run in.
+   * This is the only handler a take has: the stage renders in this window, so
+   * an intent it raises that is not answered here does nothing at all.
    */
   function handleEmbeddedStageIntent(intent: StageIntent): void {
     if (intent.kind === 'toggle_pause') {
@@ -1108,9 +1100,7 @@ import { onShortcut } from '../lib/shortcuts';
 
   /** Something needs the operator, and the drawer is the only place it shows. */
   const takeControlsAttention = $derived(
-    micRecoveryOffered ||
-      $session.stageWindowFault !== null ||
-      $smoothFollow.notices.some((notice) => notice.action),
+    micRecoveryOffered || $smoothFollow.notices.some((notice) => notice.action),
   );
 
   function closeTakeControls(restoreFocus = true): void {
@@ -1240,9 +1230,7 @@ import { onShortcut } from '../lib/shortcuts';
   like "Mic live". §12.3 asks for a small coloured light plus text for
   continuous states, with pills reserved for the exceptional and the actionable.
 
-  So: a dot and a word for each, and a pill kept for the one state that is
-  neither continuous nor healthy — a stage that has closed, which is a fault
-  with an action behind it.
+  So: a dot and a word for each.
 
   Colour is never the whole signal. Each light is accompanied by its own words
   ("Mic live", "Mic lost"), so the state survives a monochrome display and a
@@ -1311,14 +1299,6 @@ import { onShortcut } from '../lib/shortcuts';
       No microphone
     </span>
   {/if}
-  <!--
-    A pill, and the only one: the stage closing is exceptional, it is a fault,
-    and there is something to do about it. That is exactly §9.4's remaining
-    case for the shape.
-  -->
-  {#if !stageAlive}
-    <StatusPill tone="danger" label="Stage closed" />
-  {/if}
 {/snippet}
 
 <!--
@@ -1355,14 +1335,6 @@ import { onShortcut } from '../lib/shortcuts';
   {/if}
 {/snippet}
 
-<!--
-  §52.7. The window layer verified which monitor the stage actually opened
-  on and it was not the one that was picked. Nothing is broken — the
-  script is prompting correctly, at the wrong wall — so this is a notice
-  with the one affordance that answers "which panel is which": numbered
-  cards on every display (identify.html, §52.4). The picker itself lives
-  in Preflight and labels its tiles with the same numbers.
--->
 {#snippet stageFaultNotice()}
   <!--
     THE TAKE MOVED PANELS AFTER IT OPENED (CCUX-010).
@@ -1379,28 +1351,13 @@ import { onShortcut } from '../lib/shortcuts';
     the stage document under a presenter who is reading from it.
   -->
   {#if $session.displayChangedTo}
-    <div class="stage-window-fault soft" role="status">
+    <div class="stage-window-fault" role="status">
       <p class="lf-title">This window moved to {$session.displayChangedTo}</p>
       <p class="lf-note">
         Text sizing still matches the display this take started on, so it may look larger or smaller
         than usual. The take is otherwise unaffected — end and present again to size it for this
         display.
       </p>
-    </div>
-  {/if}
-  {#if $session.stageWindowFault}
-    {@const fault = $session.stageWindowFault}
-    <div class="stage-window-fault" role="alert">
-      <p class="lf-title">
-        {fault.code === 'STAGE_DISPLAY_MISMATCH'
-          ? 'The stage is on the wrong display'
-          : 'The stage window reported a problem'}
-      </p>
-      <p class="lf-note">{fault.message}</p>
-      <div class="lf-actions">
-        <Button size="sm" onclick={() => void identifyStageDisplays()}>Number the displays</Button>
-        <Button size="sm" onclick={() => dismissStageWindowFault()}>Dismiss</Button>
-      </div>
     </div>
   {/if}
 {/snippet}
@@ -1645,25 +1602,17 @@ import { onShortcut } from '../lib/shortcuts';
           <IconButton
             icon="chevron-down"
             label="Decrease stage text"
-            disabled={!stageAlive}
             onclick={() => adjustFontSize(-2)}
           />
           <span class="font-value">{stageFontSize} px</span>
           <IconButton
             icon="chevron-up"
             label="Increase stage text"
-            disabled={!stageAlive}
             onclick={() => adjustFontSize(2)}
           />
         </div>
-        <Button size="sm" disabled={!stageAlive} onclick={() => toggleMirror()}>Mirror text</Button>
+        <Button size="sm" onclick={() => toggleMirror()}>Mirror text</Button>
       </div>
-      {#if !stageAlive}
-        <p class="region-empty" role="status">
-          The stage window closed. End this take and present again to reopen it — until then
-          these controls have nothing to talk to.
-        </p>
-      {/if}
 
       <!--
         THE FIXED-SPEED SLIDER IS GONE FROM HERE, AND NOT BECAUSE IT STOPPED
@@ -1780,13 +1729,8 @@ import { onShortcut } from '../lib/shortcuts';
       />
       <IconButton
         icon="eye-off"
-        label={stageAlive
-          ? $session.stageBlanked
-            ? 'Unblank stage'
-            : 'Blank stage'
-          : 'Blank stage — the stage window is closed'}
+        label={$session.stageBlanked ? 'Unblank stage' : 'Blank stage'}
         active={$session.stageBlanked}
-        disabled={!stageAlive}
         onclick={() => toggleBlankStage()}
       />
     </div>
@@ -2088,14 +2032,7 @@ import { onShortcut } from '../lib/shortcuts';
     color: var(--text-muted);
     line-height: 1.45;
   }
-  .lf-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
-    margin-top: var(--space-2);
-  }
-
-  /* --- §52.7 stage on the wrong display --- */
+  /* --- CCUX-010 the take moved panels --- */
   .stage-window-fault {
     position: relative;
     margin-bottom: var(--space-3);
@@ -2112,15 +2049,10 @@ import { onShortcut } from '../lib/shortcuts';
     bottom: var(--space-3);
     width: 3px;
     border-radius: var(--radius-pill);
-    background: var(--danger);
-  }
-  /*
-   * A statement, not an alarm. The display-change notice shares the box so it
-   * sits in the same place operators already look, and swaps the danger rule
-   * for the accent one — nothing has failed, and colouring it as though
-   * something had would teach people to ignore the bar that matters.
-   */
-  .stage-window-fault.soft::before {
+    /*
+     * A statement, not an alarm: nothing has failed, and colouring it as though
+     * something had would teach people to ignore the bars that matter.
+     */
     background: var(--accent);
   }
 

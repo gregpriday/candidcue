@@ -25,12 +25,6 @@ import type { CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
-  /* §64: the heartbeat compares what control sent against what the stage
-     applied. `exists: false` means "no stage to compare with", which is the
-     right answer for a mock that is not modelling a stage window. */
-  getStageStatus: vi.fn(async () => ({ exists: false })),
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
@@ -77,10 +71,6 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 const { clearSession, startLiveSession, stopSession } = await import(
   '../../../src/control/stores/session'
@@ -112,7 +102,6 @@ function start(vadSensitivity?: number): void {
     sessionId: '11111111-1111-4111-8111-111111111111',
     compiled: compiledStub(),
     sessionGeneration: 4,
-    stageGeneration: 2,
     ...(vadSensitivity === undefined ? {} : { vadSensitivity }),
   });
 }

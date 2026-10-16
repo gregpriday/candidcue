@@ -21,12 +21,6 @@ import { STAGE_EVENT } from '../../../src/shared/contracts';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
-  /* §64: the heartbeat compares what control sent against what the stage
-     applied. `exists: false` means "no stage to compare with", which is the
-     right answer for a mock that is not modelling a stage window. */
-  getStageStatus: vi.fn(async () => ({ exists: false })),
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
@@ -113,16 +107,11 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
     },
   };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
 const {
   clearSession,
   session,
-  setStageEmitterForTesting,
   startLiveSession,
   startPrompting,
   stopSession,
@@ -149,8 +138,6 @@ interface StartOverrides {
   sessionGeneration?: number;
   transcriptRetained?: boolean;
   mode?: 'voice' | 'manual';
-  /** 0 is single-window presentation: no separate stage window, no bridge. */
-  stageGeneration?: number;
   sentences?: Array<{
     id: string;
     blockId: string;
@@ -171,13 +158,10 @@ function start(overrides: StartOverrides = {}): string {
     totalTokens: 200,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: overrides.stageGeneration ?? 4,
     sessionGeneration: overrides.sessionGeneration ?? 7,
     transcriptRetained: overrides.transcriptRetained ?? false,
   });
 }
-
-const emitted: Array<{ target: string; event: string; payload: unknown }> = [];
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -190,19 +174,14 @@ beforeEach(() => {
     invoked.push({ command, args });
     return undefined as never;
   });
-  emitted.length = 0;
   records.appendSessionTranscript.mockClear();
   records.endSessionRecord.mockClear();
   pipeline.captured.deps = null;
   pipeline.captured.instance = null;
-  setStageEmitterForTesting(async (target, event, payload) => {
-    emitted.push({ target, event, payload });
-  });
 });
 
 afterEach(() => {
   clearSession();
-  setStageEmitterForTesting(null);
   setInvokeForTesting(null);
   vi.useRealTimers();
 });
@@ -468,52 +447,6 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
     expect(typeof summary.endTokenIndex).toBe('number');
     expect(summary.metrics?.sectionsReached).toBeGreaterThan(0);
   });
-});
-
-/**
- * §115 — the summary has to know whether silence on the stage bridge was
- * EXPECTED.
- *
- * Stage updates, document travel and the transcript relay are all measured
- * across the control→stage window boundary, and `startStageBridge` returns
- * immediately at generation 0 — single-window presentation, which is the
- * configuration most takes run in. Every one of those counters therefore reads
- * empty on a perfectly healthy embedded take, and the summary reported all
- * three as faults. On revert, this flag goes back to being unavailable and the
- * dialog resumes accusing the app of three failures per take.
- */
-describe('§115 — stage telemetry is only expected when a stage window exists', () => {
-  it('does not expect telemetry in single-window presentation (generation 0)', () => {
-    start({ stageGeneration: 0 });
-    startPrompting();
-    const summary = stopSession();
-    expect(summary.stageTelemetryExpected).toBe(false);
-    /*
-     * And the counters really are empty — this is the state that used to read
-     * as three separate faults, so it is worth pinning that the flag is
-     * describing the real situation rather than papering over a live bridge.
-     */
-    expect(summary.stageApplied).toBeNull();
-    expect(summary.documentTravelPx).toBeNull();
-  });
-
-  it('expects telemetry when the stage has its own window', () => {
-    start({ stageGeneration: 4 });
-    startPrompting();
-    const summary = stopSession();
-    expect(summary.stageTelemetryExpected).toBe(true);
-  });
-
-  it('reports no telemetry for a stop that had no session to stop', () => {
-    // `emptySummary` — the shape-complete zero. A missing field here would make
-    // the summary render the separate-window rows against zeroed counters.
-    const summary = stopSession();
-    expect(summary.stageTelemetryExpected).toBe(false);
-  });
-
-  // The "a separate stage that DIED mid-take still expects telemetry" case
-  // needs the bridge's real `stage://closed` listener, so it lives in
-  // `session-stage-bridge.test.ts` where that harness already exists.
 });
 
 /**

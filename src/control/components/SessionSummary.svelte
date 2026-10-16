@@ -234,12 +234,9 @@
     {/if}
 
     <!--
-      EVERY ORIGINAL ROW, INTACT (CCUX-007).
+      THE MEASUREMENTS, COLLAPSED (CCUX-007).
 
-      Collapsed, not culled. These are the numbers that separate "the aligner
-      lost you" from "the aligner followed you and the glass discarded every
-      update" — unrelated faults with one symptom — and a support request is
-      unanswerable without them.
+      Collapsed, not culled: a support request is unanswerable without them.
     -->
     <Disclosure label="Take details">
     <dl class="summary-grid">
@@ -273,81 +270,6 @@
           ({Math.round((summary.wordsFollowed / summary.scriptWords) * 100)}%)
         {/if}
       </dd>
-      <!--
-        THE NEXT THREE ROWS ONLY MEAN ANYTHING ACROSS A WINDOW BOUNDARY.
-        ---------------------------------------------------------------------
-        Stage updates, document travel and the transcript relay are all measured
-        over the control→stage bridge, and that bridge is only built when the
-        stage has its own window. Single-window presentation runs at stage
-        generation 0, where `startStageBridge` returns immediately: directives
-        are a documented no-op, no motion acks come back, no transcript taps are
-        emitted. So on the configuration most takes actually run in, all three
-        read empty — and the summary accused the app of three separate failures
-        ("the stage did not report back", "the stage did not report a position",
-        "words were heard but never offered to the stage") on every single
-        healthy embedded take.
-
-        Standing false alarms are worse than no diagnostic: they train the
-        presenter to ignore the rows that would matter on the rig where these
-        numbers are real. One honest line instead, and the real rows are kept
-        intact for the case they were written for.
-      -->
-      {#if !summary.stageTelemetryExpected}
-        <dt>Stage diagnostics</dt>
-        <dd>Not applicable — the stage shared this window</dd>
-      {:else}
-        <!--
-          The row that tells a lost aligner apart from a stage that ignored it.
-          Both of the rows above are measured on the control side and agreed
-          perfectly through a take where the script never moved.
-        -->
-        <dt>Stage updates</dt>
-        <dd>
-          {#if summary.stageApplied === null}
-            {summary.updatesSent} sent — the stage did not report back
-          {:else}
-            {summary.stageApplied} of {summary.updatesSent} applied
-            {#if summary.updatesSent - summary.stageApplied >= 4}
-              <span class="summary-warn">— the stage was not following control</span>
-            {/if}
-          {/if}
-        </dd>
-        <!--
-          The only row measured on the GLASS. Everything above it is control's own
-          bookkeeping, which is how a take reported words heard, words followed
-          and snapshots applied — all healthy — while the script never moved.
-        -->
-        <dt>Script moved</dt>
-        <dd>
-          {#if summary.documentTravelPx === null}
-            the stage did not report a position
-          {:else}
-            {Math.round(summary.documentTravelPx)} px
-            {#if summary.targetTravelPx !== null}
-              (aimed at {Math.round(summary.targetTravelPx)} px)
-            {/if}
-            {#if summary.documentTravelPx < 20 && (summary.targetTravelPx ?? 0) >= 20}
-              <span class="summary-warn">— the document never followed its target</span>
-            {:else if summary.documentTravelPx < 20 && summary.wordsFollowed > 5}
-              <span class="summary-warn">— the script did not move</span>
-            {/if}
-          {/if}
-        </dd>
-        <!--
-          Whether the recogniser's own words reached the stage's transcript bar.
-          The bar read "listening — no words yet" through a take that heard
-          eleven, and nothing anywhere said which side dropped them.
-        -->
-        <dt>Transcript to stage</dt>
-        <dd>
-          {summary.transcriptTapsEmitted} of {summary.transcriptTapsSeen} sent
-          {#if summary.transcriptTapFault !== null}
-            <span class="summary-warn">— dropped: {summary.transcriptTapFault}</span>
-          {:else if summary.transcriptTapsSeen === 0 && summary.wordsHeard > 0}
-            <span class="summary-warn">— words were heard but never offered to the stage</span>
-          {/if}
-        </dd>
-      {/if}
       <!--
         How hard following actually worked.
 

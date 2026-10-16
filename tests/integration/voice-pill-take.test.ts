@@ -24,8 +24,9 @@
  *   • the Tauri IPC boundary and the `stt://event` channel Rust emits on.
  *
  * Everything the app then does is its own code. The assertions are made on the
- * payloads that actually reach the stage window, because that is the only thing
- * a presenter can see.
+ * payloads that actually reach the stage — `SessionState.voicePill`, which Live
+ * hands to the embedded stage's `voicePill` prop — because that is the only
+ * thing a presenter can see.
  *
  * The clock is faked, and `vi.useFakeTimers()` fakes `performance.now()` too —
  * which matters, because every window in the pill (stale frames, the unheard
@@ -35,11 +36,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STT_SAMPLE_RATE_HZ } from '../../src/control/services/stt/local';
-import type {
-  CompiledScript,
-  StageDirective,
-  StageVoicePillPayload,
-} from '../../src/shared/contracts';
+import type { CompiledScript, StageVoicePillPayload } from '../../src/shared/contracts';
 
 /* ---------------------------------------------------------------------------
  * The operating system, faked
@@ -205,17 +202,7 @@ async function emitStt(payload: Record<string, unknown>): Promise<void> {
 }
 
 const stage = vi.hoisted(() => ({
-  publishStageDirective: vi.fn(
-    async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
-  ),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
-  // The §29.2 gate the store re-checks before anything billable opens.
-  getStageStatus: vi.fn(async () => ({
-    stageGeneration: 4,
-    hydrated: true,
-    layoutReady: true,
-  })),
 }));
 
 const records = vi.hoisted(() => ({
@@ -247,27 +234,26 @@ vi.mock('../../src/control/services/alignment', async (orig) => {
   const actual = await orig<typeof import('../../src/control/services/alignment')>();
   return { ...actual, subscribeAlignmentSnapshots: () => () => {} };
 });
-vi.mock('../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 const { setInvokeForTesting } = await import('../../src/control/services/ipc');
-const { clearSession, setStageEmitterForTesting, startLiveSession, restartParagraph, session } =
-  await import('../../src/control/stores/session');
+const { clearSession, startLiveSession, restartParagraph, session } = await import(
+  '../../src/control/stores/session'
+);
 
 /* ---------------------------------------------------------------------------
  * Harness
  * ------------------------------------------------------------------------- */
 
+/**
+ * Every pill payload handed to the stage, in order — recorded off the session
+ * store, whose `voicePill` is the embedded stage's prop. Only NEW payloads
+ * count: every other session update notifies subscribers too.
+ */
+let published: StageVoicePillPayload[] = [];
+let stopRecording: (() => void) | null = null;
+
 function pills(): StageVoicePillPayload[] {
-  return stage.publishStageDirective.mock.calls
-    .map(([, , directive]) => directive)
-    .filter(
-      (directive): directive is Extract<StageDirective, { kind: 'voicePill' }> =>
-        directive.kind === 'voicePill',
-    )
-    .map((directive) => directive.pill);
+  return published;
 }
 
 function latest(): StageVoicePillPayload {
@@ -302,7 +288,6 @@ function start(overrides: { micDeviceId?: string } = {}): void {
     totalTokens: 200,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: 4,
     sessionGeneration: 7,
     transcriptRetained: false,
     ...overrides,
@@ -400,7 +385,10 @@ beforeEach(async () => {
    */
   await import('@tauri-apps/api/event');
   vi.useFakeTimers();
-  stage.publishStageDirective.mockClear();
+  published = [];
+  stopRecording = session.subscribe((s) => {
+    if (s.voicePill !== null && s.voicePill !== published.at(-1)) published.push(s.voicePill);
+  });
   listeners.clear();
   amplitude = 0;
   refusals = 0;
@@ -427,7 +415,6 @@ beforeEach(async () => {
     if (command === 'start_transcription') return 1 as never;
     return undefined as never;
   });
-  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(async () => {
@@ -449,7 +436,8 @@ afterEach(async () => {
     });
   }
   await vi.runOnlyPendingTimersAsync();
-  setStageEmitterForTesting(null);
+  stopRecording?.();
+  stopRecording = null;
   setInvokeForTesting(null);
   vi.useRealTimers();
 });

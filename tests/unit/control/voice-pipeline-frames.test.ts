@@ -262,15 +262,12 @@ describe('teardown', () => {
           order.push('compile');
           throw new Error('COMPILE_BLOCKED');
         },
-        awaitStageAck: async () => {
-          order.push('stage');
-        },
       },
     });
 
     await expect(h.pipeline.start()).rejects.toThrow('COMPILE_BLOCKED');
-    // The stage step never runs, and — the point of the ordering — nothing
-    // billable was opened on a session whose compile was not ready.
+    // The point of the ordering: nothing billable was opened on a session whose
+    // compile was not ready.
     expect(order).toEqual(['flush', 'compile']);
   });
 });

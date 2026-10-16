@@ -55,22 +55,20 @@ export interface PipelineTimers {
 }
 
 /**
- * §29.2 steps 1–3, as the *caller's* half of the start sequence.
+ * §29.2 steps 1–2, as the *caller's* half of the start sequence.
  *
  * Each is a PRECONDITION CHECK rather than a second performance of the step:
  * flushing an already-flushed save is a no-op, and asking whether the compile
- * is current and the stage has acked is cheap and idempotent. Any of them
- * rejecting aborts the start before the microphone is opened or a session is
- * billed, and it lives here rather than in the screen that happens to precede
- * a take so a retake or a resume gets the same ordering.
+ * is current is cheap and idempotent. Either rejecting aborts the start before
+ * the microphone is opened or a session is billed, and it lives here rather
+ * than in the screen that happens to precede a take so a retake or a resume
+ * gets the same ordering.
  */
 export interface StartSequenceGate {
   /** §29.2 step 1 — the script's pending save must be on disk. */
   flushScriptSave(): Promise<void>;
   /** §29.2 step 2 — a current compile with no blocking diagnostics. */
   ensureCompiled(): Promise<void>;
-  /** §29.2 step 3 — the stage has hydrated and reported its layout ready. */
-  awaitStageAck(): Promise<void>;
 }
 
 /** One finalized transcript item, ready for §36.2 retention. */
@@ -110,7 +108,7 @@ export interface VoicePipelineDeps {
   vadSensitivity?: number;
   /** Auto-disconnect after this long soft-paused (A.6). */
   softPauseAutoDisconnectMs?: number;
-  /** §29.2 steps 1–3; optional only so a unit test can stand up a bare pipeline. */
+  /** §29.2 steps 1–2; optional only so a unit test can stand up a bare pipeline. */
   startSequence?: StartSequenceGate;
   /** §29.2 step 9 — transcript state above this layer goes too. */
   onResetTranscriptState?(): void;
@@ -300,12 +298,11 @@ export class VoiceSessionPipeline {
   /** §29.2 start sequence. Billable streaming begins here. */
   async start(): Promise<void> {
     if (this.stopped) throw new Error('SESSION_STOPPED');
-    // Steps 1–3 first: nothing billable begins on a session whose script,
-    // compile or stage was not ready.
+    // Steps 1–2 first: nothing billable begins on a session whose script or
+    // compile was not ready.
     if (this.deps.startSequence) {
       await this.deps.startSequence.flushScriptSave();
       await this.deps.startSequence.ensureCompiled();
-      await this.deps.startSequence.awaitStageAck();
     }
     // Step 4, passive: only an explicit `denied` stops the sequence. Plenty of
     // WebViews do not answer the query at all, and `getUserMedia` resolves

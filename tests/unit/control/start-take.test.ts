@@ -252,7 +252,6 @@ describe('single-window Present', () => {
     expect(calls.startLiveSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'session-1',
-        stageGeneration: 0,
         displayLabel: 'This window',
         compiled: expect.objectContaining({ scriptId: SCRIPT.id }),
         stageEnvelope: expect.objectContaining({

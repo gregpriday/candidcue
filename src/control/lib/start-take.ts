@@ -743,8 +743,7 @@ export async function startTake(
     });
 
     // There is no stage window. Alignment, transcription and rendering all
-    // live in this one webview, so generation zero deliberately disables every
-    // cross-window bridge in the session store.
+    // live in this one webview; the stage reads the session through its props.
     startLiveSession({
       scriptId,
       scriptTitle: doc.title,
@@ -760,7 +759,6 @@ export async function startTake(
       compiled: compiled.script,
       scriptRevision: doc.scriptRevision,
       sessionGeneration: record.sessionGeneration,
-      stageGeneration: 0,
       transcriptRetained: record.transcriptRetained,
       stageSettings,
       stageEnvelope,
