@@ -50,6 +50,8 @@ export interface WorkerLike {
   postMessage(message: unknown): void;
   addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
   terminate(): void;
+  onerror?: ((event: ErrorEvent) => void) | null;
+  onmessageerror?: ((event: MessageEvent) => void) | null;
 }
 
 type WorkerFactory = () => WorkerLike;
@@ -76,8 +78,22 @@ interface Pending {
   scriptId: string;
   resolve(result: CompileOutput): void;
   reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
 }
 const pending = new Map<number, Pending>();
+
+export const COMPILE_TIMEOUT_MS = 30_000;
+
+function failWorker(failed: WorkerLike, message: string): void {
+  if (worker !== failed) return;
+  worker = null;
+  failed.terminate();
+  for (const entry of pending.values()) {
+    clearTimeout(entry.timer);
+    entry.reject(new Error(message));
+  }
+  pending.clear();
+}
 
 function supersededOutput(requestId: number, scriptId: string): CompileOutput {
   return {
@@ -100,6 +116,7 @@ function supersededOutput(requestId: number, scriptId: string): CompileOutput {
 function handleResponse(data: CompilerWorkerResponse): void {
   const entry = pending.get(data.requestId);
   if (!entry) return;
+  clearTimeout(entry.timer);
   pending.delete(data.requestId);
   if (data.type === 'compile_result') {
     const script = data.script;
@@ -133,6 +150,9 @@ function handleResponse(data: CompilerWorkerResponse): void {
 function ensureWorker(): WorkerLike {
   if (worker) return worker;
   worker = workerFactory();
+  const current = worker;
+  current.onerror = () => failWorker(current, 'The script compiler stopped unexpectedly. Try opening the script again.');
+  current.onmessageerror = () => failWorker(current, 'The script compiler returned an unreadable result. Try again.');
   worker.addEventListener('message', (event: MessageEvent) => {
     const data = event.data as CompilerWorkerResponse | null;
     if (!data || typeof data !== 'object' || !('type' in data)) return;
@@ -172,14 +192,19 @@ export function compileScript(
     operation: 'full',
   };
   return new Promise<CompileOutput>((resolve, reject) => {
-    pending.set(requestId, { scriptId, resolve, reject });
-    w.postMessage(request);
+    const timer = setTimeout(() => {
+      failWorker(w, 'Reading this script took too long. Try again, or split a very large script into smaller parts.');
+    }, COMPILE_TIMEOUT_MS);
+    pending.set(requestId, { scriptId, resolve, reject, timer });
+    try {
+      w.postMessage(request);
+    } catch {
+      failWorker(w, 'The script could not be sent to the compiler. Try again.');
+    }
   });
 }
 
 /** Terminate the worker (editor teardown / tests). */
 export function disposeCompilerWorker(): void {
-  if (worker) worker.terminate();
-  worker = null;
-  pending.clear();
+  if (worker) failWorker(worker, 'The script compiler was closed before it finished.');
 }
