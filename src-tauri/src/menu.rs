@@ -193,16 +193,22 @@ pub fn refresh_stage_item<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 /// `resolveShortcut` applies in `control/lib/shortcuts.ts`. They are written out
 /// here rather than derived from that file because they cross a language
 /// boundary; `commands.ts` carries the same strings and a test compares them.
+///
+/// The key names are muda's, which is not the browser's vocabulary: `Enter`,
+/// never `Return`, and `=` for the zoom key, never `Plus`. Tauri drops a string
+/// muda cannot parse without a word and builds the item with no shortcut, so
+/// a misspelling here fails nowhere but in
+/// `every_menu_accelerator_parses_the_way_tauri_parses_it` (#269).
 mod keys {
     pub const NEW_SCRIPT: &str = "CmdOrCtrl+N";
     pub const IMPORT: &str = "CmdOrCtrl+Shift+I";
     pub const SAVE: &str = "CmdOrCtrl+S";
     pub const DUPLICATE: &str = "CmdOrCtrl+D";
     pub const CLOSE: &str = "CmdOrCtrl+W";
-    pub const PRESENT: &str = "CmdOrCtrl+Return";
+    pub const PRESENT: &str = "CmdOrCtrl+Enter";
     /// Rehearse rather than take. Shift over Present, because it is the same
     /// gesture with the same precondition and a different consequence.
-    pub const PRACTISE: &str = "CmdOrCtrl+Shift+Return";
+    pub const PRACTISE: &str = "CmdOrCtrl+Shift+Enter";
     pub const FIND: &str = "CmdOrCtrl+F";
     pub const FIND_NEXT: &str = "CmdOrCtrl+G";
     pub const FIND_PREVIOUS: &str = "CmdOrCtrl+Shift+G";
@@ -213,7 +219,7 @@ mod keys {
     pub const EDIT_MODE: &str = "CmdOrCtrl+1";
     pub const PREVIEW_MODE: &str = "CmdOrCtrl+2";
     pub const SPLIT_MODE: &str = "CmdOrCtrl+3";
-    pub const ZOOM_IN: &str = "CmdOrCtrl+Plus";
+    pub const ZOOM_IN: &str = "CmdOrCtrl+=";
     pub const ZOOM_OUT: &str = "CmdOrCtrl+-";
     pub const ACTUAL_SIZE: &str = "CmdOrCtrl+0";
     pub const END_TAKE: &str = "CmdOrCtrl+.";
@@ -719,6 +725,103 @@ const fn reveal_label() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// Every accelerator `build` hands to Tauri, as `(command id, spelling)`.
+    ///
+    /// Read from this file's source, as the id tests below are, but from the
+    /// production half only — the tests' own string literals are not menu items
+    /// — and from anywhere on the line, so a call wrapped in `file.append(…)` is
+    /// seen too. A `keys::` name the scan cannot resolve is a failure rather than
+    /// a skip: a binding the scan drops is one no test checks.
+    fn menu_accelerators() -> Vec<(String, String)> {
+        let rs = include_str!("menu.rs");
+        let production = &rs[..rs.find("#[cfg(test)]").expect("menu.rs has a test module")];
+
+        let mut found = Vec::new();
+        for line in production.lines() {
+            for call in ["item(\"", "check(\""] {
+                let Some(at) = line.find(call) else { continue };
+                let rest = &line[at + call.len()..];
+                let Some(quote) = rest.find('"') else { continue };
+                let id = rest[..quote].to_string();
+                // `Some(keys::NAME)` or `Some("Literal")`, else `None`.
+                if let Some(start) = rest.find("Some(keys::") {
+                    let name = rest[start + "Some(keys::".len()..]
+                        .split(')')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    found.push((id, key_constant(name)));
+                } else if let Some(start) = rest.find("Some(\"") {
+                    let value = rest[start + "Some(\"".len()..].split('"').next().unwrap_or("");
+                    found.push((id, value.to_string()));
+                }
+                break;
+            }
+        }
+        found
+    }
+
+    /// The value of `keys::NAME`, read from the `keys` module.
+    fn key_constant(name: &str) -> String {
+        let rs = include_str!("menu.rs");
+        let needle = format!("pub const {name}: &str = \"");
+        let at = rs
+            .find(&needle)
+            .unwrap_or_else(|| panic!("`keys::{name}` is not a constant the scan can read"));
+        rs[at + needle.len()..].split('"').next().unwrap_or("").to_string()
+    }
+
+    /// Every accelerator this file hands to Tauri must survive Tauri's parse.
+    ///
+    /// Tauri builds a menu item with `accelerator.and_then(|s| s.parse().ok())`
+    /// into muda's `Accelerator`, so a spelling muda does not know is an error
+    /// nowhere: the item is built with no key, nothing is logged, and the menu
+    /// simply shows none. Present, Practise and Larger Editor Text shipped that
+    /// way — `Return` and `Plus` are not muda key names — while the Shortcuts
+    /// dialog advertised all three and the registry test below passed (#269).
+    /// This parses every string exactly as Tauri does, so the failure that
+    /// cannot happen at runtime happens here.
+    #[test]
+    fn every_menu_accelerator_parses_the_way_tauri_parses_it() {
+        let rs = include_str!("menu.rs");
+
+        // Every constant in `keys`, whether or not a menu item is found using
+        // it, and then every accelerator the items are actually built with.
+        let mut accelerators: Vec<(String, String)> = Vec::new();
+        let start = rs.find("mod keys {").expect("the `keys` module");
+        let end = start + rs[start..].find("\n}").expect("the end of the `keys` module");
+        for line in rs[start..end].lines() {
+            let Some(rest) = line.trim_start().strip_prefix("pub const ") else {
+                continue;
+            };
+            let name = rest.split(':').next().unwrap_or("");
+            accelerators.push((format!("keys::{name}"), key_constant(name)));
+        }
+        let constants = accelerators.len();
+        assert!(constants > 20, "found only {constants} `keys` constants; the parser is broken");
+        let bound = menu_accelerators();
+        assert!(
+            bound.len() > 25,
+            "found only {} menu accelerators; the parser is broken",
+            bound.len()
+        );
+        accelerators.extend(bound);
+
+        let dropped: Vec<String> = accelerators
+            .iter()
+            .filter_map(|(owner, spec)| {
+                spec.parse::<muda::accelerator::Accelerator>()
+                    .err()
+                    .map(|error| format!("{owner}: `{spec}` ({error})"))
+            })
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "Tauri would build these menu items with NO shortcut, and say nothing:\n  {}",
+            dropped.join("\n  ")
+        );
+    }
+
     /// Every id this menu builds must exist in the TypeScript command contract.
     ///
     /// The same `include_str!` discipline the stage event names use
@@ -815,16 +918,18 @@ mod tests {
     #[test]
     fn menu_accelerators_match_the_typescript_registry() {
         let ts = include_str!("../../src/control/lib/commands.ts");
-        let rs = include_str!("menu.rs");
 
         /// `CmdOrCtrl+Shift+G` / `Mod+Shift+G` → `mod+shift+g`.
+        ///
+        /// Only the modifier is translated; the key is compared as spelled. This
+        /// used to fold `Plus` into `=` and `Return` into `Enter` too, which
+        /// proved that two spellings named one chord and so passed three that
+        /// the menu library cannot parse (#269).
         fn canonical(spec: &str) -> String {
             let mut parts: Vec<String> = spec
                 .split('+')
                 .map(|part| match part.to_ascii_lowercase().as_str() {
                     "cmdorctrl" | "mod" => "mod".to_string(),
-                    "plus" | "=" => "+".to_string(),
-                    "return" | "enter" => "return".to_string(),
                     other => other.to_string(),
                 })
                 .collect();
@@ -836,39 +941,22 @@ mod tests {
             parts.join("+")
         }
 
-        // Rust: the `keys` module's constants, paired with where they are used.
-        let mut rust_accelerators: Vec<(String, String)> = Vec::new();
-        for line in rs.lines() {
-            let trimmed = line.trim_start();
-            for prefix in ["&item(\"", "&check(\"", "item(\"", "check(\""] {
-                let Some(rest) = trimmed.strip_prefix(prefix) else {
-                    continue;
-                };
-                let Some(quote) = rest.find('"') else { continue };
-                let id = rest[..quote].to_string();
-                // `Some(keys::NAME)` or `Some("Literal")`, else `None`.
-                if let Some(start) = rest.find("Some(keys::") {
-                    let name = rest[start + "Some(keys::".len()..]
-                        .split(')')
-                        .next()
-                        .unwrap_or("")
-                        .trim();
-                    // Resolve the constant from the `keys` module above.
-                    let needle = format!("pub const {name}: &str = \"");
-                    if let Some(at) = rs.find(&needle) {
-                        let value = rs[at + needle.len()..].split('"').next().unwrap_or("");
-                        rust_accelerators.push((id, canonical(value)));
-                    }
-                } else if let Some(start) = rest.find("Some(\"") {
-                    let value = rs_literal(&rest[start + "Some(\"".len()..]);
-                    rust_accelerators.push((id, canonical(&value)));
-                }
-                break;
-            }
-        }
+        // Rust: every accelerator the menu items are built with.
+        let rust_accelerators: Vec<(String, String)> = menu_accelerators()
+            .into_iter()
+            .map(|(id, spec)| (id, canonical(&spec)))
+            .collect();
 
-        fn rs_literal(rest: &str) -> String {
-            rest.split('"').next().unwrap_or("").to_string()
+        /// A registry accelerator in the menu library's spelling. One key name
+        /// differs, deliberately and on the TypeScript side only: `commands.ts`
+        /// calls it `Return`, the word `formatAccelerator` turns into ⏎, and
+        /// muda knows it only as `Enter`. Translating it here rather than in
+        /// `canonical` is what keeps a Rust `Return` failing.
+        fn menu_spelling(declared: &str) -> String {
+            match declared.rsplit_once('+') {
+                Some((modifiers, "Return")) => format!("{modifiers}+Enter"),
+                _ => declared.to_string(),
+            }
         }
 
         assert!(
@@ -899,7 +987,7 @@ mod tests {
                 .nth(1)
                 .unwrap_or_else(|| panic!("could not read the accelerator for `{id}`"));
             assert_eq!(
-                canonical(declared),
+                canonical(&menu_spelling(declared)),
                 accelerator,
                 "`{id}`: the menu binds `{accelerator}` and the registry advertises \
                  `{declared}`"

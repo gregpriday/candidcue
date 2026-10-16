@@ -379,6 +379,34 @@ describe('installShortcuts — what actually reaches the focused control', () =>
       'present',
     );
   });
+
+  /*
+   * The native menu binds ⌘= (View › Larger Editor Text) and ⌘⇧↩ (File ›
+   * Practise), and WKWebView hands the page a ⌘-chord first: a key the page
+   * prevents never reaches the menu item. Where no screen here answers these
+   * chords the listener must leave them alone, or the menu items go dead in
+   * exactly the places they are the only way in (#269).
+   */
+  it('leaves the menu the chords no screen here answers', () => {
+    installWithSubscriber();
+    onScreen('editor');
+    const zoom = press('=', { metaKey: true });
+    expect(zoom.action).toBeNull();
+    expect(zoom.defaultPrevented).toBe(false);
+
+    for (const screen of ['library', 'editor', 'live'] as const) {
+      onScreen(screen);
+      const practise = press('Enter', { metaKey: true, shiftKey: true });
+      expect(practise.action).toBeNull();
+      expect(practise.defaultPrevented).toBe(false);
+    }
+
+    // A take keeps ⌘= for its own type size; the menu never sees it there.
+    onScreen('live');
+    const live = press('=', { metaKey: true });
+    expect(live.action).toBe('stage-text-up');
+    expect(live.defaultPrevented).toBe(true);
+  });
 });
 
 describe('target classification', () => {
