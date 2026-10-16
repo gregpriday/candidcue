@@ -17,13 +17,12 @@
 //! seconds.
 //!
 //! ---------------------------------------------------------------------------
-//! THE ORIGIN IS A BUSINESS FACT
+//! ONE ORIGIN
 //! ---------------------------------------------------------------------------
-//! The legal documents leave the site as `@@LEGAL_WEBSITE_ORIGIN@@` because a
-//! guessed domain in a licence agreement is worse than a visible blank. The
-//! application does not have that luxury — a Help menu that opens nothing is not
-//! a menu — so the origin is here, and `legal/PLACEHOLDERS.md` records that the
-//! two move together. If the domain changes, it changes in both places.
+//! `WEBSITE_ORIGIN` is the only place the application names its own domain, and
+//! every destination is a fixed path under it. If the domain changes, it changes
+//! here — and in `docs/network-inventory.md`, which tells a reader where the
+//! Help menu sends them.
 //!
 //! Nothing here reaches the network. `open_url` hands the string to macOS, which
 //! launches the user's browser; CandidCue makes no request of its own
@@ -141,30 +140,6 @@ mod tests {
             "the WebDestination union has {declared} names and this table has {}; a \
              name on one side only is a call that fails at runtime",
             DESTINATIONS.len()
-        );
-    }
-
-    /// The origin is a business fact this file duplicates, so say where.
-    ///
-    /// `legal/PLACEHOLDERS.md` is the register of facts the documents are still
-    /// waiting on, and `LEGAL_WEBSITE_ORIGIN` is one of them. The application
-    /// cannot wait — a Help menu that opens nothing is not a menu — so it holds
-    /// the value, and the register has to record that the two move together.
-    /// Otherwise the domain gets settled in the licence agreement and the app
-    /// keeps opening the old one.
-    #[test]
-    fn the_placeholder_register_knows_the_app_hard_codes_the_origin() {
-        let register = include_str!("../../legal/PLACEHOLDERS.md");
-        assert!(
-            register.contains(WEBSITE_ORIGIN),
-            "legal/PLACEHOLDERS.md does not mention {WEBSITE_ORIGIN}, which this \
-             file compiles into the binary"
-        );
-        assert!(
-            register.contains("src-tauri/src/web.rs"),
-            "legal/PLACEHOLDERS.md does not point at src-tauri/src/web.rs, so \
-             nobody resolving LEGAL_WEBSITE_ORIGIN will know the app already \
-             carries a copy of the answer"
         );
     }
 

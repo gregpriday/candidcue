@@ -655,7 +655,6 @@ describe('claims the inventory bans', () => {
     'docs/updates.md',
     'CHANGELOG.md',
     'legal/PRIVACY_POLICY.md',
-    'legal/EULA.md',
     'src/control/routes/Settings.svelte',
     'src/control/routes/Welcome.svelte',
     'src/control/components/SpeechLanguagePicker.svelte',
