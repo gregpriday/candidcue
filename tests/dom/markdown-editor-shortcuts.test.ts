@@ -63,7 +63,11 @@ function editorWith(doc: string, select: string) {
  * legacy `keyCode` as well, because the search panel's own handler reads that
  * and nothing else.
  */
-function press(target: EventTarget, key: string, primary = true): KeyboardEvent {
+function press(
+  target: EventTarget,
+  key: string,
+  { primary = true, repeat = false } = {},
+): KeyboardEvent {
   const mac = isMacPlatform();
   const enter = key === 'Enter';
   const event = new KeyboardEvent('keydown', {
@@ -72,6 +76,7 @@ function press(target: EventTarget, key: string, primary = true): KeyboardEvent 
     keyCode: enter ? 13 : 0,
     metaKey: primary && mac,
     ctrlKey: primary && !mac,
+    repeat,
     bubbles: true,
     cancelable: true,
   });
@@ -127,14 +132,16 @@ describe('the markdown editor leaves the primary modifier + Enter to Present', (
    * The report, exactly. `insertBlankLine` put an empty line under "Welcome
    * everyone" — a paragraph break in Markdown — and the autosave that followed
    * is what `changes` stands in for. Pressed more than once because each press
-   * used to add another.
+   * used to add another, and then held, because a held key arrives as repeats.
    */
   it('does not split the paragraph under the caret, however often it is pressed', () => {
     const { view, changes } = mount(script);
     const caret = script.indexOf('everyone');
     view.dispatch({ selection: { anchor: caret } });
 
-    const events = [1, 2, 3].map(() => press(view.contentDOM, 'Enter'));
+    const events = [false, true, true].map((repeat) =>
+      press(view.contentDOM, 'Enter', { repeat }),
+    );
 
     expect(view.state.doc.toString()).toBe(script);
     expect(view.state.selection.main.head).toBe(caret);
@@ -193,8 +200,9 @@ describe('the markdown editor leaves the primary modifier + Enter to Present', (
 
     expect(view.state.selection.main.head).toBe(0);
     expect(event.defaultPrevented).toBe(true);
+    expect(bubbled).toEqual([event]);
     // The control: plain Enter in the same field still finds the match.
-    press(field, 'Enter', false);
+    press(field, 'Enter', { primary: false });
     expect(view.state.selection.main.from).toBe(script.indexOf('show'));
   });
 
@@ -202,9 +210,9 @@ describe('the markdown editor leaves the primary modifier + Enter to Present', (
     const { view, changes } = mount(script);
     view.dispatch({ selection: { anchor: script.indexOf('to the show') } });
 
-    press(view.contentDOM, 'Enter', false);
+    press(view.contentDOM, 'Enter', { primary: false });
 
-    expect(view.state.doc.toString()).not.toBe(script);
+    expect(view.state.doc.toString()).toBe(script.replace('\nto the show', '\n\nto the show'));
     expect(changes).toHaveLength(1);
   });
 

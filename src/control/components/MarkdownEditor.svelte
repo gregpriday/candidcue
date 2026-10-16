@@ -89,8 +89,8 @@
    * what stops the default and makes CodeMirror prevent the event; it does NOT
    * stop propagation, and must not — the window listener is what actually
    * presents, through the same readiness check as the Present button. Emitting
-   * Present from here instead would launch twice. The `search-panel` scope is
-   * what reaches the panel's fields: they sit outside `contentDOM`, and the
+   * Present from here instead would dispatch it twice. The `search-panel` scope
+   * is what reaches the panel's fields: they sit outside `contentDOM`, and the
    * panel runs that scope's bindings before its own Enter fallback.
    */
   const presentReservationKeymap = [
