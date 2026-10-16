@@ -590,6 +590,10 @@ test('searching settings hides the rows that do not match, and says how many did
   // Wait for the section to render before counting — the window shows
   // "Loading settings…" until `get_settings` answers.
   await expect(page.getByRole('switch', { name: 'Horizontal mirror' })).toBeVisible();
+  // And for the rig rows, which arrive only once `list_displays` answers.
+  // Counted before them, the section looks three rows long and two late rows
+  // can make a correct filter fail `toBeLessThan(rowsBefore)`.
+  await expect(page.getByLabel('How you are framed')).toBeVisible();
   const rows = page.locator('.content .field, .content .toggle-row');
   const rowsBefore = await rows.count();
   expect(rowsBefore).toBeGreaterThan(1);
@@ -612,4 +616,31 @@ test('searching settings hides the rows that do not match, and says how many did
   // a field they may not remember typing in.
   await page.getByRole('button', { name: 'Show all' }).click();
   await expect(page.locator('.content [data-settings-search-miss]')).toHaveCount(0);
+});
+
+/**
+ * A row that renders after the search ran is filtered too.
+ *
+ * Searching first and then opening the section is the ordinary way to use the
+ * search, and the rig rows in Prompter display and rigs render only once
+ * `list_displays` answers — after the pass that marked the rows already there.
+ * They used to stay visible, unmarked, under a note counting fewer rows.
+ */
+test('rows that render after the search ran are filtered too', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('prompter');
+  await gotoSection(page, 'Prompter display and rigs');
+
+  const framing = page.locator('.content .field', { has: page.getByLabel('How you are framed') });
+  await expect(framing).toBeAttached();
+  await expect(framing).toHaveAttribute('data-settings-search-miss');
+
+  // And the note counts what is actually left on screen.
+  const visible = page.locator(
+    '.content .field:not([data-settings-search-miss]), .content .toggle-row:not([data-settings-search-miss])',
+  );
+  const visibleCount = await visible.count();
+  expect(visibleCount).toBeGreaterThan(0);
+  await expect(page.locator('p[role="status"]')).toContainText(`${visibleCount} setting`);
 });

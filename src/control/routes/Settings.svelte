@@ -283,14 +283,18 @@
      * `section` covers switching sections. `$settings` covers the rows that
      * appear and disappear inside one — the model list once a language is
      * chosen, the advanced following controls behind a toggle, the calibration
-     * rows that depend on a resolved rig. A row created after this last ran
+     * rows that depend on a resolved rig. `displays` covers the rig form, which
+     * renders only once `list_displays` answers — after the section switch that
+     * asked for it, so a query typed before opening the section left those rows
+     * unmarked while the note counted fewer. A row created after this last ran
      * would otherwise carry no mark and stay visible through a filter.
      *
      * Under-filtering is the safe direction to fail, but it still reads as a
-     * search that missed something, and these two reads cost nothing.
+     * search that missed something, and these reads cost nothing.
      */
     void section;
     void $settings;
+    void displays;
     if (!root) return;
     let matched = 0;
     for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
