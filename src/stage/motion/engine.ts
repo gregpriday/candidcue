@@ -1557,6 +1557,23 @@ export function createStageMotionEngine(
   }
 
   /** Scroll position that places a transition's destination at the reading line. */
+  /**
+   * Is the line a directive lands on the one under the reading mark already?
+   *
+   * The same question `readingAnchorToken` answers on the renderer side, and
+   * answered the same way — the line the mark is on, or the next one down — so
+   * a token the renderer reported from the reading line is recognised here as
+   * being on it.
+   */
+  function alreadyOnReadingLine(directive: StageTransitionDirective): boolean {
+    if (!map || !map.valid) return false;
+    const target = map.lineForToken(directive.destinationTokenIndex);
+    if (!target) return false;
+    const readingY = controller.state.q + map.readingLineStartY;
+    const reading = map.lines.find((line) => line.bottomY >= readingY);
+    return reading !== undefined && reading.lineId === target.lineId;
+  }
+
   function destinationScrollPx(
     destinationTokenIndex: number,
     destinationUnit: number,
@@ -1753,7 +1770,10 @@ export function createStageMotionEngine(
     },
 
     releaseAlignment() {
-      receiver.reset();
+      // The lock goes; the `seq` high-water mark stays. Same session, same
+      // feed — a copy of a snapshot already consumed is still a copy, and the
+      // separate stage window is handed one on every live-sync revision.
+      receiver.release();
       // The same for a guided rewind, and more so: it is the one directive that
       // stays live for ten seconds or more. Cancelled BEFORE the controller is
       // reset, so the fallback's own disposition is cleared with it.
@@ -1895,7 +1915,21 @@ export function createStageMotionEngine(
       let fadeHold = false;
       /** True on the one frame that spends a re-anchor while obscured. */
       let reanchorApplied = false;
-      if (overwrite && paused && overwrite.authority !== 'manual') {
+      if (overwrite && paused && overwrite.authority === 'manual' && alreadyOnReadingLine(overwrite)) {
+        /*
+         * The move's line is the one the presenter is already reading, so
+         * there is nothing to do — and doing it anyway is worse than nothing.
+         *
+         * This is what a hand scroll's own echo looks like. A wheel gesture
+         * that relocates the reader reports the token on the reading line, the
+         * engine answers with a `manualAnchor` there, and spending that would
+         * snap the document from where the presenter's hand left it to the
+         * start of the same line — a twitch after every gesture, in the one
+         * mode where they are driving by hand. Completed rather than parked, so
+         * nothing about it is left to spend later.
+         */
+        transitions.complete(overwrite.id);
+      } else if (overwrite && paused && overwrite.authority !== 'manual') {
         /*
          * §48. Following is off, and a re-anchor is automatic motion.
          *

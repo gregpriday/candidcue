@@ -746,6 +746,20 @@ describe('#275 — manual moves while the take is paused or not following', () =
     expect(recorded.endTokenIndex).toBe(last);
   });
 
+  it('ends where the presenter last put it, not the furthest place it went', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    pauseListening();
+
+    goToToken(compiled.sentences.at(-1)!.startTokenIndex);
+    await vi.advanceTimersByTimeAsync(0);
+    const back = compiled.sentences[2]!.startTokenIndex;
+    goToToken(back);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(stopSession().endTokenIndex).toBe(back);
+  });
+
   it('steps one sentence further on every press while paused', async () => {
     const compiled = startScript();
     await vi.advanceTimersByTimeAsync(0);

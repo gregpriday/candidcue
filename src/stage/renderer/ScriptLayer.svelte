@@ -3090,17 +3090,10 @@
      * section jump is spent while following is off (#275); without this the
      * goal is still back where the document was, and the roll drags the script
      * straight back to it. Move, and carry on rolling from here.
-     *
-     * And give the document back, the way starting the roll did. The move
-     * arrived as an accepted alignment snapshot, and one of those outranks the
-     * transport for fifteen seconds — the roll would stop dead after every
-     * step. Released only now, once the re-anchor has landed: releasing on
-     * receipt would revoke the very directive that carries the move.
      */
     if (result.reanchored && autoTargetPx !== null) {
       autoTargetPx = result.scrollPx;
       autoEndReported = false;
-      engine.releaseAlignment();
     }
     /*
      * The script becomes visible on the frame it is in the RIGHT PLACE, never
@@ -3290,6 +3283,19 @@
      * nothing at all and must not hand anything over.
      */
     if (accepted) handOverOpening();
+    /*
+     * While the transport runs it owns the document, and a snapshot does not
+     * take it back. An accepted one outranks the transport's target for
+     * fifteen seconds — which is why starting the roll releases the lock — and
+     * a sentence step or section jump is answered with one while following is
+     * off (#275), so every step stopped the roll dead.
+     *
+     * Only the lock is let go. Whatever the snapshot asked for has already been
+     * submitted as a directive, so a manual move is still spent on the next
+     * frame; and the receiver remembers how far the feed got, so a copy of this
+     * snapshot arriving again is still refused.
+     */
+    if (accepted && autoTargetPx !== null) engine.receiver.release();
     return accepted;
   }
 

@@ -115,9 +115,36 @@ describe('alignment driver', () => {
    */
   it('ignores snapshots until prompting starts', () => {
     const { driver, snapshots } = makeDriver();
+    const voice = (seq: number) => ({
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: 3,
+      observedToken: 3,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: 10,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 10,
+      observedAtom: 3,
+      confirmedAtom: 3,
+    });
+    feed.push?.(voice(1));
     expect(snapshots).toHaveLength(0);
     driver.start();
-    expect(snapshots).toHaveLength(0);
+    feed.push?.(voice(2));
+    expect(snapshots.map((s) => s.seq)).toEqual([2]);
     driver.dispose();
   });
 

@@ -193,24 +193,38 @@ test('following off: sentence steps still land on the glass', async ({ page }) =
   errors.expectClean();
 });
 
-/** Where the document is painted on every frame for `overMs`. */
-function sampleScroll(page: Page, overMs: number): Promise<number[]> {
-  return page.evaluate(
-    (ms) =>
-      new Promise<number[]>((resolve) => {
-        const out: number[] = [];
-        const startedAt = performance.now();
-        const tick = () => {
-          const el = document.querySelector('.scroll-plane') as HTMLElement | null;
-          const m = el ? /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform) : null;
-          out.push(m?.[1] === undefined ? 0 : -Number(m[1]));
-          if (performance.now() - startedAt < ms) requestAnimationFrame(tick);
-          else resolve(out);
-        };
-        requestAnimationFrame(tick);
-      }),
-    overMs,
-  );
+interface ScrollSample {
+  atMs: number;
+  y: number;
+}
+
+/**
+ * Start recording where the document is painted, every frame, until
+ * `stopRecording`. Started BEFORE the key is pressed, so a move that lands in
+ * the time a key press takes to come back is in the trace.
+ */
+async function startRecording(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
+    w.__ROLL__ = [];
+    w.__ROLL_ON__ = true;
+    const tick = () => {
+      if (!w.__ROLL_ON__) return;
+      const el = document.querySelector('.scroll-plane') as HTMLElement | null;
+      const m = el ? /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform) : null;
+      w.__ROLL__.push({ atMs: performance.now(), y: m?.[1] === undefined ? 0 : -Number(m[1]) });
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+function stopRecording(page: Page): Promise<ScrollSample[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
+    w.__ROLL_ON__ = false;
+    return w.__ROLL__;
+  });
 }
 
 test('during a roll: a sentence step lands, and the roll carries on from there', async ({
@@ -225,23 +239,40 @@ test('during a roll: a sentence step lands, and the roll carries on from there',
    */
   const errors = watchPageErrors(page);
   await present(page);
+  // The opening placement has finished: the roll is measured from rest.
+  await expect
+    .poll(async () => {
+      const from = await scrollPx(page);
+      await page.waitForTimeout(300);
+      return (await scrollPx(page)) - from;
+    })
+    .toBe(0);
+  const opening = await scrollPx(page);
 
   await page.keyboard.press('a');
+  // Rolling, by its own motion — and pressed straight away, while the roll is
+  // still a sentence short of the step's target (sentence two, twelve words on).
   await expect
-    .poll(() => scrollPx(page), { timeout: 15_000, intervals: [250] })
-    .toBeGreaterThan(5);
+    .poll(() => scrollPx(page), { timeout: 15_000, intervals: [50] })
+    .toBeGreaterThan(opening + 2);
 
+  await startRecording(page);
   await page.keyboard.press('Alt+ArrowRight');
-  const trace = await sampleScroll(page, 4000);
+  await page.waitForTimeout(4000);
+  const trace = await stopRecording(page);
   expect(await moves(page)).toHaveLength(1);
+  const target = (await moves(page))[0]!;
+  await expect(page.locator('.diagnostics')).toContainText(`token: ${target.toFixed(1)}`);
 
-  const steps = trace.slice(1).map((y, i) => y - trace[i]!);
+  const steps = trace.slice(1).map((s, i) => s.y - trace[i]!.y);
   // The step was spent as a jump, not parked behind the roll...
   expect(Math.max(...steps)).toBeGreaterThan(15);
   // ...nothing pulled the document back over it afterwards...
   expect(Math.min(...steps)).toBeGreaterThan(-1);
-  // ...and the roll is still rolling at the end of the window.
-  expect(trace.at(-1)!).toBeGreaterThan(trace[Math.floor(trace.length * 0.75)]!);
+  // ...and the roll is still rolling in the last second of the window.
+  const end = trace.at(-1)!;
+  const secondBefore = trace.find((s) => s.atMs >= end.atMs - 1000)!;
+  expect(end.y).toBeGreaterThan(secondBefore.y);
   errors.expectClean();
 });
 

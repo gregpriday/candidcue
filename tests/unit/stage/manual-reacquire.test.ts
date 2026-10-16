@@ -499,6 +499,65 @@ describe('switching following off holds the document', () => {
     expect(engine.controller.state.q).toBeCloseTo(landed, 1);
   });
 
+  it('leaves a hand-scrolled document where the hand left it when the echo comes back', () => {
+    /*
+     * A wheel gesture far enough to relocate the reader reports the token on
+     * the reading line, and the engine answers with a `manualAnchor` there.
+     * Spending that answer would snap the document from where the presenter
+     * stopped to the start of the same line — after every gesture, in the
+     * mode where they are driving by hand.
+     */
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    // Stopped partway down a line, as a wheel does.
+    const handPx = (map.sampleMotionPath(60)?.scrollPx ?? 0) + map.linePitchPx * 0.4;
+    const readingY = handPx + map.readingLineStartY;
+    const onMark = map.lines.find((line) => line.bottomY >= readingY)!;
+    engine.manualOverride(handPx, 12_100, onMark.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+
+    engine.receiveSnapshot(
+      snapshotAt(onMark.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: onMark.firstTokenIndex,
+      }),
+      12_400,
+    );
+    const trace = coast(engine, 12_400, 13_400);
+    expect(trace.some((f) => f.reanchored)).toBe(false);
+    expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
+    // Spent, not parked: nothing is left over to land when following returns.
+    expect(engine.transitions.active).toBeNull();
+  });
+
+  it('does not take a move back once the transport has taken the document again', () => {
+    /*
+     * The separate stage window is handed the same alignment snapshot on every
+     * live-sync revision. Releasing the lock after a move used to forget how
+     * far the feed had got, so the next copy of the move was accepted as new
+     * and spent again — a roll pulled back to the landing point twice a second.
+     */
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+
+    const move = snapshotAt(120, 12_100, { decision: 'manualAnchor', confirmedToken: 120 });
+    expect(engine.receiveSnapshot(move, 12_100)).toBe(true);
+    expect(coast(engine, 12_100, 13_000).some((f) => f.reanchored)).toBe(true);
+
+    engine.releaseAlignment();
+    expect(engine.receiveSnapshot(move, 13_000)).toBe(false);
+    expect(coast(engine, 13_000, 14_000).some((f) => f.reanchored)).toBe(false);
+    // A genuinely newer snapshot is still welcome.
+    expect(
+      engine.receiveSnapshot(snapshotAt(130, 14_000, { decision: 'manualAnchor' }), 14_000),
+    ).toBe(true);
+  });
+
   it('keeps the aligner’s own relocations parked while following is off', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
