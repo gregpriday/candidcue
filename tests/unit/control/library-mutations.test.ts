@@ -316,7 +316,7 @@ describe('a duplicate of the open script copies what the editor shows', () => {
     setSource(typed);
     // Straight away: the autosave debounce has not fired, so the disk still
     // holds the text the script was opened with.
-    expect(disk.a.source).toBe('Hello world.');
+    expect(disk.a?.source).toBe('Hello world.');
 
     await expect(duplicateScript('a')).resolves.toBe(true);
 
