@@ -263,6 +263,14 @@ function shimBody(config: ShimConfig): void {
     };
   }
 
+  /** Rust's `AppError::stale_revision`, as the rejection it arrives as. */
+  function staleRevision() {
+    return {
+      code: 'SCRIPT_CONFLICT',
+      userMessage: 'This document changed elsewhere. Reload before saving.',
+    };
+  }
+
   /**
    * Session rows, exactly as `sessions::start_session` mints them: RUST
    * ASSIGNS the id and the session generation, control adopts. Getting this
@@ -682,10 +690,14 @@ function shimBody(config: ShimConfig): void {
         return toSummary(copy);
       }
 
+      // Both transitions are compare-and-swaps in Rust (`repo.rs`), refused with
+      // `stale_revision` when the revision sent is not the row's. Answering any
+      // revision at all is what kept the editor's stale one invisible (#255).
       case 'trash_script': {
         const id = args?.['scriptId'] as string;
         const doc = store.get(id);
         if (!doc) throw { code: 'NOT_FOUND', userMessage: 'Script not found.' };
+        if (args?.['expectedRevision'] !== doc.scriptRevision) throw staleRevision();
         doc.status = 'trash';
         doc.scriptRevision += 1;
         return toSummary(doc);
@@ -695,6 +707,7 @@ function shimBody(config: ShimConfig): void {
         const id = args?.['scriptId'] as string;
         const doc = store.get(id);
         if (!doc) throw { code: 'NOT_FOUND', userMessage: 'Script not found.' };
+        if (args?.['expectedRevision'] !== doc.scriptRevision) throw staleRevision();
         doc.status = 'draft';
         doc.scriptRevision += 1;
         return toSummary(doc);
