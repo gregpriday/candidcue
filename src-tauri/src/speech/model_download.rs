@@ -77,11 +77,25 @@ pub const MODEL_HOP_LABELS: net::HopLabels = net::HopLabels {
     insecure_code: "STT_MODEL_URL_INSECURE",
     insecure_message: "Speech models can only be downloaded over https.",
     blocked_code: "STT_MODEL_URL_BLOCKED",
-    blocked_message: "That model address is not publicly reachable and was refused.",
+    // Not the release: the url is compiled in, and fake-IP and NAT64 answers
+    // are accepted. Mostly what is left is a network pointing the name
+    // somewhere private, but a malformed or endless redirect chain is refused
+    // under this code too, so the copy names no single cause.
+    blocked_message: "CandidCue could not safely follow the speech model's download address, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.",
     unreachable_code: "STT_MODEL_DOWNLOAD_FAILED",
     unreachable_message:
         "The speech model could not be downloaded. Check your connection and try again.",
 };
+
+/// The guard every model download goes through.
+///
+/// Digest-pinned, because it is: every candidate is checked against the
+/// catalogue's SHA-256 before anything is unpacked. That is what makes it safe
+/// to accept the addresses a fake-IP proxy or a DNS64 resolver synthesises,
+/// and refusing them leaves those machines with no way to get a model at all.
+pub fn hop_policy() -> HopPolicy {
+    HopPolicy::digest_pinned(MODEL_HOP_LABELS)
+}
 
 /// How long a transfer may sit with NO bytes arriving before it is abandoned.
 ///
@@ -1848,8 +1862,8 @@ mod tests {
 
         fn policy(&self) -> HopPolicy {
             HopPolicy {
-                labels: MODEL_HOP_LABELS,
                 exempt_authority: Some(format!("127.0.0.1:{}", self.port)),
+                ..hop_policy()
             }
         }
     }
@@ -2002,13 +2016,62 @@ mod tests {
             temp.path(),
             &catalogue,
             &catalogue.models[0],
-            &HopPolicy::strict(MODEL_HOP_LABELS),
+            &hop_policy(),
             &CancelFlag::new(),
             &no_progress(),
         )
         .await
         .expect_err("plaintext loopback must be refused in production");
         assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+    }
+
+    /// Accepting what a fake-IP proxy or a DNS64 resolver synthesises for the
+    /// model's NAME is not accepting those ranges anywhere: written into a url
+    /// they are refused like any private address, before a socket is opened.
+    #[tokio::test]
+    async fn the_production_policy_still_refuses_a_private_address_in_the_url() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+
+        for url in [
+            "https://127.0.0.1/archive",
+            "https://198.18.0.5/archive",
+            "https://[64:ff9b::7f00:1]/archive",
+            "https://[64:ff9b::8c52:7004]/archive",
+        ] {
+            let model = aimed_at(
+                fixture_entry(&archive, &files, "bundle-root"),
+                url.to_string(),
+            );
+            let catalogue = fixture_catalogue(model);
+            let temp = tempfile::tempdir().unwrap();
+
+            let err = install(
+                temp.path(),
+                &catalogue,
+                &catalogue.models[0],
+                &hop_policy(),
+                &CancelFlag::new(),
+                &no_progress(),
+            )
+            .await
+            .expect_err("a private address in the url must be refused");
+            assert_eq!(err.code(), MODEL_HOP_LABELS.blocked_code, "{url} → {err:?}");
+            // Settings › Speech shows this Rust copy verbatim. With the url
+            // compiled in, the release is not what pointed it somewhere private.
+            let message = err.user_message();
+            assert!(message.contains("network settings"), "{message}");
+            assert!(!message.contains("release"), "{message}");
+        }
+    }
+
+    #[test]
+    fn the_model_hop_policy_is_digest_pinned() {
+        // The relaxed address rule is only sound because `install` verifies
+        // every candidate against the catalogue digest. The model manager's
+        // use of this policy is held by its own tripwire.
+        assert_eq!(hop_policy().addresses, net::AddressRule::PublicOrSynthesised);
+        assert_eq!(hop_policy().labels.blocked_code, "STT_MODEL_URL_BLOCKED");
     }
 
     /// Offline, the lookup is the first thing to fail. That must read as a
@@ -2767,8 +2830,8 @@ mod tests {
         );
         catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", mirror.port));
         let policy = HopPolicy {
-            labels: MODEL_HOP_LABELS,
             exempt_authority: Some(format!("127.0.0.1:{}", mirror.port)),
+            ..hop_policy()
         };
         let _ = &upstream;
         let temp = tempfile::tempdir().unwrap();
@@ -3564,8 +3627,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
 
         let policy = HopPolicy {
-            labels: MODEL_HOP_LABELS,
             exempt_authority: Some(format!("127.0.0.1:{}", mirror.port)),
+            ..hop_policy()
         };
 
         let err = install(
@@ -3613,8 +3676,8 @@ mod tests {
         let corrupt = MockOrigin::start(vec![0x5Au8; archive.len()], Behaviour::Corrupt);
         catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", corrupt.port));
         let policy = HopPolicy {
-            labels: MODEL_HOP_LABELS,
             exempt_authority: Some(format!("127.0.0.1:{}", corrupt.port)),
+            ..hop_policy()
         };
         let _ = &upstream;
 

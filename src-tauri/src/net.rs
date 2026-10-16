@@ -19,7 +19,9 @@
 //!     each `Location` is revalidated from scratch through [`check_hop`];
 //!   * the host is resolved first, every resolved address must be publicly
 //!     routable, and the connection is then PINNED to those addresses so a DNS
-//!     rebind between check and connect cannot move the target.
+//!     rebind between check and connect cannot move the target. A digest-pinned
+//!     download also accepts the addresses a fake-IP proxy or a DNS64 resolver
+//!     synthesises for a name ([`AddressRule::PublicOrSynthesised`]).
 //!
 //! Bounding the BODY is the caller's job and deliberately not done here: an
 //! image is capped at a constant, and a model archive is capped at the exact
@@ -60,8 +62,8 @@ pub enum Deadline {
 /// Parameterised rather than fixed because an error code is a contract: images
 /// have reported `ASSET_URL_BLOCKED` since spec §24.2, that code reaches a
 /// support bundle and the Settings error list, and a shared guard is not a
-/// reason to renumber it. The checks are identical for every caller; only the
-/// label on the way out differs.
+/// reason to renumber it. The checks are identical for every caller but the
+/// [`AddressRule`]; only the label on the way out differs.
 ///
 /// `unreachable_*` is not a refusal. A lookup that fails is what a machine with
 /// no network sees first, and telling that user the address was refused (or
@@ -76,12 +78,33 @@ pub struct HopLabels {
     pub unreachable_message: &'static str,
 }
 
+/// Which resolved addresses a hop may connect to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressRule {
+    /// Every resolved address must be publicly routable. The rule for any url
+    /// a user or a document supplied.
+    Public,
+    /// [`AddressRule::Public`], plus the two answers a local network
+    /// synthesises for a public name: a fake-IP proxy's 198.18.0.0/15 (Surge
+    /// Enhanced Mode, Clash/mihomo `fake-ip`) and a DNS64 resolver's
+    /// 64:ff9b::/96 (IPv6-only and IPv6-mostly networks). Refusing them makes a
+    /// download impossible on those machines, with nothing the user can change.
+    ///
+    /// Only for bytes checked against a digest the binary compiles in: an
+    /// address the proxy or the NAT64 gateway forwards could otherwise serve
+    /// anything at all. It applies to RESOLVED names only. Neither mechanism
+    /// ever puts one of these addresses in a url, so an IP-literal host — the
+    /// first url or any `Location` — is still held to `Public`.
+    PublicOrSynthesised,
+}
+
 /// Per-hop policy. Production carries no exemption at all; the only variation
 /// is a test-only allowance for a local mock server, which is `#[cfg(test)]` so
 /// no production code path can construct one.
 #[derive(Debug, Clone)]
 pub struct HopPolicy {
     pub labels: HopLabels,
+    pub addresses: AddressRule,
     /// Test seam: the single `host:port` allowed to be plaintext http on a
     /// non-public address. Compiled out of release builds entirely.
     #[cfg(test)]
@@ -92,8 +115,19 @@ impl HopPolicy {
     pub fn strict(labels: HopLabels) -> Self {
         Self {
             labels,
+            addresses: AddressRule::Public,
             #[cfg(test)]
             exempt_authority: None,
+        }
+    }
+
+    /// [`HopPolicy::strict`] in every respect but [`AddressRule`]. The caller
+    /// takes on the obligation that rule names: nothing it fetches is trusted
+    /// until it matches a digest compiled into the binary.
+    pub fn digest_pinned(labels: HopLabels) -> Self {
+        Self {
+            addresses: AddressRule::PublicOrSynthesised,
+            ..Self::strict(labels)
         }
     }
 }
@@ -232,6 +266,38 @@ fn ipv6_is_public(ip: Ipv6Addr) -> bool {
     true
 }
 
+/// Is this address one `rule` allows a resolved name to connect to?
+fn is_allowed_answer(ip: IpAddr, rule: AddressRule) -> bool {
+    if is_publicly_routable(ip) {
+        return true;
+    }
+    if rule == AddressRule::Public {
+        return false;
+    }
+    match ip {
+        // 198.18.0.0/15 — a fake-IP proxy's pool. Native IPv4 only: a mapped
+        // or compatible spelling of it is not what any proxy hands out.
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            o[0] == 198 && (o[1] & 0xFE) == 18
+        }
+        // 64:ff9b::/96 exactly, the RFC 6052 well-known prefix. It may only
+        // carry a global IPv4 (§3.1), so the last 32 bits must pass the strict
+        // test: a DNS64 that answers `64:ff9b::7f00:1` is pointing at
+        // loopback through the gateway. The rest of 64:ff9b::/32 — including
+        // the local-use 64:ff9b:1::/48 of RFC 8215, whose embedded address
+        // sits wherever its operator's prefix length puts it — stays refused.
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            let o = v6.octets();
+            s[0] == 0x0064
+                && s[1] == 0xFF9B
+                && s[2..6].iter().all(|&x| x == 0)
+                && ipv4_is_public(Ipv4Addr::new(o[12], o[13], o[14], o[15]))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-hop validation
 // ---------------------------------------------------------------------------
@@ -303,16 +369,12 @@ where
         .to_string();
     let port = url.port_or_known_default().unwrap_or(443);
 
-    let resolved: std::io::Result<Vec<SocketAddr>> = match host.parse::<IpAddr>() {
-        Ok(ip) => Ok(vec![SocketAddr::new(ip, port)]),
-        Err(_) => {
-            // Strip the brackets an IPv6 literal carries in a url authority.
-            let bare = host.trim_start_matches('[').trim_end_matches(']');
-            match bare.parse::<IpAddr>() {
-                Ok(ip) => Ok(vec![SocketAddr::new(ip, port)]),
-                Err(_) => lookup(bare.to_string(), port).await,
-            }
-        }
+    // Strip the brackets an IPv6 literal carries in a url authority.
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let literal = bare.parse::<IpAddr>().ok();
+    let resolved: std::io::Result<Vec<SocketAddr>> = match literal {
+        Some(ip) => Ok(vec![SocketAddr::new(ip, port)]),
+        None => lookup(bare.to_string(), port).await,
     };
     // A lookup that fails is a connection problem, not a refusal: it is the
     // first thing a machine with no network hits, and the guard has nothing to
@@ -325,11 +387,16 @@ where
         Err(e) => return Err(unreachable_host(labels, format!("dns lookup failed: {e}"))),
     };
     if !exempt {
-        // ALL resolved addresses must be public. A host that answers with one
+        // Synthesised answers come from a resolver, never from a url.
+        let rule = match literal {
+            Some(_) => AddressRule::Public,
+            None => policy.addresses,
+        };
+        // ALL resolved addresses must be allowed. A host that answers with one
         // public and one loopback address is a rebinding attempt, not a
         // multi-homed CDN.
         for addr in &addrs {
-            if !is_publicly_routable(addr.ip()) {
+            if !is_allowed_answer(addr.ip(), rule) {
                 return Err(blocked_url(
                     labels,
                     format!("{host} resolves to non-public address {}", addr.ip()),
@@ -339,11 +406,10 @@ where
     }
 
     // Pin only for DNS names: an IP-literal host needs no override, and reqwest
-    // would reject one anyway.
-    let pin = host.parse::<IpAddr>().is_err();
+    // never consults one for it anyway.
     Ok(Hop {
         url: url.clone(),
-        addrs: if pin { addrs } else { Vec::new() },
+        addrs: if literal.is_none() { addrs } else { Vec::new() },
     })
 }
 
@@ -423,6 +489,80 @@ mod tests {
         }
     }
 
+    /// What Surge / Clash hand out for github.com, and what a DNS64 resolver
+    /// synthesises for it (140.82.112.4 behind the well-known prefix).
+    const SYNTHESISED: [&str; 5] = [
+        "198.18.0.0",
+        "198.18.0.5",
+        "198.19.255.255",
+        "64:ff9b::8c52:7004",
+        "64:ff9b::808:808",
+    ];
+
+    #[test]
+    fn the_public_rule_refuses_what_a_local_network_synthesises() {
+        for raw in SYNTHESISED {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(!is_publicly_routable(ip), "{raw} is not publicly routable");
+            assert!(!is_allowed_answer(ip, AddressRule::Public), "{raw} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_digest_pinned_download_accepts_what_a_local_network_synthesises() {
+        for raw in SYNTHESISED {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(
+                is_allowed_answer(ip, AddressRule::PublicOrSynthesised),
+                "{raw} must be allowed"
+            );
+        }
+        // Either side of the fake-IP pool is ordinary public space, under both.
+        for raw in ["198.17.255.255", "198.20.0.0", "1.1.1.1", "2606:4700:4700::1111"] {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(is_allowed_answer(ip, AddressRule::Public), "{raw}");
+            assert!(is_allowed_answer(ip, AddressRule::PublicOrSynthesised), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_digest_pinned_download_refuses_everything_else() {
+        for raw in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            // A mapped spelling of a fake IP is not what any proxy hands out.
+            "::ffff:198.18.0.1",
+            // The well-known prefix around a non-global IPv4: loopback, cloud
+            // metadata, private, CGNAT, unspecified, and a fake IP.
+            "64:ff9b::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::a00:1",
+            "64:ff9b::c0a8:101",
+            "64:ff9b::6440:1",
+            "64:ff9b::",
+            "64:ff9b::c612:5",
+            // Outside the exact /96: RFC 8215 local-use, and a near miss in
+            // each of the other segments the prefix requires to be zero.
+            "64:ff9b:1::808:808",
+            "64:ff9b:1:abcd::808:808",
+            "64:ff9b:0:1::808:808",
+            "64:ff9b::1:0:808:808",
+            "64:ff9b::1:808:808",
+        ] {
+            let ip: IpAddr = raw.parse().unwrap();
+            assert!(
+                !is_allowed_answer(ip, AddressRule::PublicOrSynthesised),
+                "{raw} must be refused"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn credentials_in_the_url_are_refused() {
         let url = reqwest::Url::parse("https://user:secret@example.com/a.png").unwrap();
@@ -475,12 +615,26 @@ mod tests {
         raw: &str,
         answer: std::io::Result<Vec<SocketAddr>>,
     ) -> Result<Hop, AppError> {
+        hop_under(&HopPolicy::strict(TEST_LABELS), raw, answer).await
+    }
+
+    async fn hop_under(
+        policy: &HopPolicy,
+        raw: &str,
+        answer: std::io::Result<Vec<SocketAddr>>,
+    ) -> Result<Hop, AppError> {
         let url = reqwest::Url::parse(raw).unwrap();
-        check_hop_resolving(&url, &HopPolicy::strict(TEST_LABELS), |host, port| async move {
+        check_hop_resolving(&url, policy, |host, port| async move {
             assert_eq!((host.as_str(), port), ("models.example.com", 443));
             answer
         })
         .await
+    }
+
+    fn socket_addrs(raw: &[&str]) -> Vec<SocketAddr> {
+        raw.iter()
+            .map(|ip| SocketAddr::new(ip.parse().unwrap(), 443))
+            .collect()
     }
 
     #[tokio::test]
@@ -536,6 +690,76 @@ mod tests {
             .await
             .expect("a public answer is allowed");
         assert_eq!(hop.addrs, vec![public]);
+    }
+
+    #[tokio::test]
+    async fn a_synthesised_answer_is_pinned_as_it_was_answered() {
+        // The connection goes to the address the proxy or the NAT64 gateway is
+        // listening on — never to the IPv4 inside a 64:ff9b:: answer, which this
+        // machine has no route to.
+        for answer in [
+            vec!["198.18.0.5"],
+            vec!["64:ff9b::8c52:7004"],
+            vec!["140.82.112.4", "198.18.0.5", "64:ff9b::8c52:7004"],
+        ] {
+            let addrs = socket_addrs(&answer);
+            let hop = hop_under(
+                &HopPolicy::digest_pinned(TEST_LABELS),
+                "https://models.example.com/a.tar.bz2",
+                Ok(addrs.clone()),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{answer:?} must be allowed: {e:?}"));
+            assert_eq!(hop.addrs, addrs);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_synthesised_answer_is_refused_under_the_strict_policy() {
+        for answer in [vec!["198.18.0.5"], vec!["64:ff9b::8c52:7004"]] {
+            let err = hop_resolving_to(
+                "https://models.example.com/a.tar.bz2",
+                Ok(socket_addrs(&answer)),
+            )
+            .await
+            .expect_err("only a digest-pinned download accepts a synthesised answer");
+            assert_eq!(err.code(), "URL_BLOCKED", "{answer:?} → {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn one_bad_answer_still_refuses_a_digest_pinned_name() {
+        for answer in [
+            vec!["198.18.0.5", "127.0.0.1"],
+            vec!["64:ff9b::8c52:7004", "64:ff9b::7f00:1"],
+            vec!["64:ff9b:1::8c52:7004"],
+        ] {
+            let err = hop_under(
+                &HopPolicy::digest_pinned(TEST_LABELS),
+                "https://models.example.com/a.tar.bz2",
+                Ok(socket_addrs(&answer)),
+            )
+            .await
+            .expect_err("a disallowed answer must be refused");
+            assert_eq!(err.code(), "URL_BLOCKED", "{answer:?} → {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ip_literal_is_held_to_the_public_rule_even_when_digest_pinned() {
+        // No resolver synthesised these: somebody wrote them into a url.
+        for raw in ["https://198.18.0.5/a", "https://[64:ff9b::8c52:7004]/a"] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            let asked = std::cell::Cell::new(false);
+            let err = check_hop_resolving(&url, &HopPolicy::digest_pinned(TEST_LABELS), |_, _| {
+                asked.set(true);
+                async { Ok(Vec::new()) }
+            })
+            .await
+            .expect_err("a synthesised range in a url must be refused");
+            assert!(!asked.get(), "{raw} was sent to the resolver");
+            assert_eq!(err.code(), "URL_BLOCKED", "{raw} → {err:?}");
+        }
     }
 
     #[tokio::test]

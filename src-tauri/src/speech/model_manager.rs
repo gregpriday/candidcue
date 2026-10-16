@@ -510,7 +510,7 @@ async fn run_install<R: tauri::Runtime>(
         &data_dir,
         catalogue(),
         entry,
-        &crate::net::HopPolicy::strict(model_download::MODEL_HOP_LABELS),
+        &model_download::hop_policy(),
         &cancel,
         &progress,
     )
@@ -578,5 +578,20 @@ mod tests {
     fn an_unknown_id_is_still_refused() {
         let err = entry_for("not-a-model").expect_err("unknown id");
         assert_eq!(err.code(), "STT_MODEL_UNKNOWN");
+    }
+
+    /// A tripwire, not a proof: `run_install` needs a live app to call, and
+    /// handing it `HopPolicy::strict` again would bring #261 back — no model on
+    /// a NAT64 network or behind a fake-IP proxy — with every downloader test
+    /// still green, because those build their own policy.
+    #[test]
+    fn installs_use_the_digest_pinned_model_policy() {
+        // Split on the attribute alone, so a CRLF checkout cannot miss the
+        // boundary and hand back the whole file, test literals and all.
+        let (production, _) = include_str!("model_manager.rs")
+            .split_once("#[cfg(test)]")
+            .expect("the test module's attribute");
+        assert!(production.contains("model_download::hop_policy()"));
+        assert!(!production.contains("HopPolicy::"), "a policy built here bypasses hop_policy()");
     }
 }
