@@ -29,7 +29,7 @@ import { tick } from 'svelte';
 import { readable } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting, type InvokeFn } from '../../src/control/services/ipc';
-import { closeScript, setSource } from '../../src/control/stores/editor';
+import { closeScript, saveNow, setSource } from '../../src/control/stores/editor';
 import { loadLibrary, setLibraryQuery, setLibraryView } from '../../src/control/stores/library';
 import { showToast } from '../../src/control/stores/toasts';
 import { navigate } from '../../src/control/stores/router';
@@ -139,6 +139,9 @@ let commands: string[] = [];
 /** The source of every save that reached the backend, in order. */
 let saved: string[] = [];
 
+/** The revision the script is at. Every save and every trash moves it on. */
+let revision = 3;
+
 function installBackend(fail: Record<string, unknown> = {}): void {
   const fake: InvokeFn = async <T,>(
     command: string,
@@ -146,13 +149,28 @@ function installBackend(fail: Record<string, unknown> = {}): void {
   ): Promise<T> => {
     commands.push(command);
     if (command in fail) throw fail[command];
-    if (command === 'list_scripts') return { items: [summary(SCRIPT_ID)], total: 1 } as T;
-    if (command === 'get_script') return scriptDocument(SCRIPT_ID) as T;
+    if (command === 'list_scripts') {
+      return { items: [{ ...summary(SCRIPT_ID), scriptRevision: revision }], total: 1 } as T;
+    }
+    if (command === 'get_script') {
+      return { ...scriptDocument(SCRIPT_ID), scriptRevision: revision } as T;
+    }
     if (command === 'save_script') {
       saved.push(args?.source as string);
-      return { status: 'saved', scriptRevision: 4, savedAt: '2026-07-30T10:00:01.000Z' } as T;
+      revision += 1;
+      return {
+        status: 'saved',
+        scriptRevision: revision,
+        savedAt: '2026-07-30T10:00:01.000Z',
+      } as T;
     }
-    if (command === 'trash_script') return summary(args?.scriptId as string) as T;
+    if (command === 'trash_script') {
+      // A compare-and-swap, as `repo.rs` makes it: a revision the script has
+      // moved past is refused, which is how #255 reached the author.
+      if (args?.expectedRevision !== revision) throw conflict;
+      revision += 1;
+      return { ...summary(args?.scriptId as string), scriptRevision: revision } as T;
+    }
     if (command === 'duplicate_script') return summary('copy') as T;
     throw new Error(`unexpected command ${command}`);
   };
@@ -206,6 +224,7 @@ async function chooseOverflowItem(label: string): Promise<void> {
 beforeEach(async () => {
   commands = [];
   saved = [];
+  revision = 3;
   installBackend();
   setLibraryQuery('');
   setLibraryView('all');
@@ -272,6 +291,60 @@ describe('a trash that failed leaves the author in the script', () => {
 
     expect(navigated).not.toHaveBeenCalled();
     expect(messages('danger')).toEqual([]);
+  });
+});
+
+/*
+ * Issue #255. Once autosave had moved the revision on, the trash named the one
+ * the Library loaded, and Rust refused it as an external change: the author was
+ * left in the script they had just deleted, reading about an edit made outside
+ * CandidCue that never happened. The fake refuses a stale revision, so these
+ * fail exactly the way the app did.
+ */
+describe('Move to Trash works on a script that has been edited', () => {
+  const typed = '# Keynote\n\nSome narration.\n\nAnd a word typed since it opened.\n';
+
+  afterEach(() => {
+    closeScript();
+  });
+
+  it('trashes it after an autosave, and leaves for the library', async () => {
+    await mountEditor();
+    setSource(typed);
+    await saveNow();
+
+    await chooseOverflowItem('Move to Trash');
+
+    expect(messages('danger')).toEqual([]);
+    expect(messages('info')).toContain('Moved to Trash');
+    expect(navigated).toHaveBeenCalledWith({ name: 'library', view: 'all' });
+  });
+
+  it('saves what was just typed before it trashes', async () => {
+    await mountEditor();
+    setSource(typed);
+
+    await chooseOverflowItem('Move to Trash');
+
+    expect(saved).toEqual([typed]);
+    expect(commands.indexOf('save_script')).toBeLessThan(commands.indexOf('trash_script'));
+    expect(messages('danger')).toEqual([]);
+    expect(navigated).toHaveBeenCalledWith({ name: 'library', view: 'all' });
+  });
+
+  it('stays in the script, and says why, when the edits cannot be saved', async () => {
+    installBackend({ save_script: new Error('Disk unavailable') });
+    await mountEditor();
+    setSource(typed);
+
+    await chooseOverflowItem('Move to Trash');
+
+    expect(commands).not.toContain('trash_script');
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be moved to Trash.');
+    expect(shown[0]).toContain('Disk unavailable');
+    expect(navigated).not.toHaveBeenCalled();
   });
 });
 

@@ -106,6 +106,9 @@ let commands: string[] = [];
 /** While set, `save_script` holds here before anything reaches the disk. */
 let saveGate: Promise<void> | null = null;
 
+/** The revision every trash and restore was sent against, in order. */
+let transitions: { command: string; expectedRevision: unknown }[] = [];
+
 function scriptDocument(id: string): Record<string, unknown> {
   const file = disk[id];
   if (file === undefined) throw new Error(`no such script ${id}`);
@@ -133,7 +136,13 @@ function pageOf(args: Record<string, unknown> | undefined): {
   const page = args?.page as { page: number; pageSize: number } | undefined;
   const size = page?.pageSize ?? 100;
   const offset = (page?.page ?? 0) * size;
-  return { items: live.slice(offset, offset + size), total: live.length };
+  // A row reads the revision the script is at NOW, as Rust's does — copied, so
+  // what the store loaded stays what it loaded when the disk moves on.
+  const items = live.slice(offset, offset + size).map((script) => ({
+    ...script,
+    scriptRevision: disk[script.id]?.scriptRevision ?? script.scriptRevision,
+  }));
+  return { items, total: live.length };
 }
 
 /** A backend where a delete really does shorten the next `list_scripts`. */
@@ -166,8 +175,16 @@ function installBackend(fail: Record<string, unknown> = {}): void {
     }
     if (command === 'trash_script' || command === 'restore_script') {
       const id = args?.scriptId as string;
+      transitions.push({ command, expectedRevision: args?.expectedRevision });
+      // As `repo.rs` does it: a compare-and-swap on the row's revision, which
+      // the transition then moves on by one.
+      const file = disk[id];
+      if (file !== undefined) {
+        if (args?.expectedRevision !== file.scriptRevision) throw conflict;
+        file.scriptRevision += 1;
+      }
       live = live.filter((script) => script.id !== id);
-      return summary(id) as T;
+      return { ...summary(id), scriptRevision: file?.scriptRevision ?? 3 } as T;
     }
     if (command === 'duplicate_script') {
       // As Rust does it: the stored title and the canonical file, never the
@@ -202,6 +219,7 @@ beforeEach(async () => {
   };
   commands = [];
   saveGate = null;
+  transitions = [];
   installBackend();
   // The store is a module singleton, so each test normalises it rather than
   // inheriting whatever view and query the last one left behind.
@@ -410,6 +428,148 @@ describe('a duplicate of the open script copies what the editor shows', () => {
 
     expect(commands).not.toContain('save_script');
     expect(disk.copy?.source).toBe('Something else.');
+    expect(get(editor).dirty).toBe(true);
+  });
+});
+
+/*
+ * Issue #255. The trash named the revision from the Library's list, which is
+ * whatever the script was at when the list last loaded — and every autosave
+ * since had moved it on, so Rust refused the commonest delete there is, the
+ * script you are looking at, with the external-change conflict for a change
+ * nobody made. The fake refuses a stale revision the way `repo.rs` does, which
+ * is the only reason any of these can fail.
+ */
+describe('trashing the open script names the revision it is really at', () => {
+  const typed = 'Hello world. And a word typed since the Library loaded.';
+
+  beforeEach(async () => {
+    closeScript();
+    await openScript('a');
+    commands = [];
+    transitions = [];
+    toast.mockClear();
+  });
+
+  afterEach(() => {
+    closeScript();
+  });
+
+  it('moves it to Trash after an autosave has moved its revision on', async () => {
+    setSource(typed);
+    await saveNow();
+    // The issue's own repro: the list still says 3, the script is at 4.
+    expect(get(library).scripts.find((script) => script.id === 'a')?.scriptRevision).toBe(3);
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
+    expect(messages('info')).toEqual(['Moved to Trash']);
+    expect(messages('danger')).toEqual([]);
+  });
+
+  it('does not depend on the reload the Library starts as it mounts', async () => {
+    setSource(typed);
+    await saveNow();
+    // File › Move to Trash leaves for the Library first, and the Library's
+    // mount reloads the list without waiting for it; the trash goes out
+    // behind that reload, not after it.
+    const reloading = loadLibrary();
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+    await reloading;
+
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
+    expect(messages('danger')).toEqual([]);
+  });
+
+  it('trashes the open script when the list on screen does not hold it', async () => {
+    // The Library left showing Trash, or a list that has not loaded: the row
+    // is missing, and the editor still knows exactly what it has open.
+    live = [];
+    await loadLibrary();
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 3 }]);
+  });
+
+  it('saves the edit autosave has not reached yet, then trashes past it', async () => {
+    setSource(typed);
+    expect(disk.a?.source).toBe('Hello world.');
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+
+    expect(disk.a?.source).toBe(typed);
+    expect(commands.indexOf('save_script')).toBeLessThan(commands.indexOf('trash_script'));
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
+  });
+
+  it('refuses the trash while the edits still cannot be saved, and says why', async () => {
+    installBackend({ save_script: new Error('Disk unavailable') });
+    setSource(typed);
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(false);
+
+    // Not trashed with the text left behind in it...
+    expect(commands).not.toContain('trash_script');
+    // ...the failure said once, in words, with no claim that it worked...
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be moved to Trash.');
+    expect(shown[0]).toContain('Disk unavailable');
+    expect(messages('info')).toEqual([]);
+    // ...and the text still in the editor, still waiting to be saved.
+    expect(get(editor)).toMatchObject({ source: typed, dirty: true, saveState: 'error' });
+  });
+
+  it('still refuses a revision that really has moved on elsewhere', async () => {
+    setSource(typed);
+    await saveNow();
+    // A write neither the list nor the editor has seen. The compare-and-swap
+    // is there for exactly this, and the fix must not route around it.
+    disk = { ...disk, a: { title: 'Keynote', source: 'Changed elsewhere.', scriptRevision: 9 } };
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(false);
+
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 4 }]);
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be moved to Trash.');
+    expect(messages('info')).toEqual([]);
+  });
+
+  it('trashes it again after a restore, past the revision the editor kept', async () => {
+    setSource(typed);
+    await saveNow();
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+    // Leaving the editor does not clear it, so it still holds 4 while the
+    // script moves on to 5 and then 6. Preferring it would send 4 twice.
+    live = [summary('a')];
+    setLibraryView('trash');
+    await loadLibrary();
+    await expect(restoreScriptFromTrash('a')).resolves.toBe(true);
+    live = [summary('a'), summary('b')];
+    setLibraryView('all');
+    await loadLibrary();
+
+    await expect(moveScriptToTrash('a')).resolves.toBe(true);
+
+    expect(transitions).toEqual([
+      { command: 'trash_script', expectedRevision: 4 },
+      { command: 'restore_script', expectedRevision: 5 },
+      { command: 'trash_script', expectedRevision: 6 },
+    ]);
+    expect(messages('danger')).toEqual([]);
+  });
+
+  it('leaves the open script alone when a different one is trashed', async () => {
+    setSource(typed);
+
+    await expect(moveScriptToTrash('b')).resolves.toBe(true);
+
+    expect(commands).not.toContain('save_script');
+    expect(transitions).toEqual([{ command: 'trash_script', expectedRevision: 3 }]);
     expect(get(editor).dirty).toBe(true);
   });
 });
