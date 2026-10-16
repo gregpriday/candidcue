@@ -347,10 +347,10 @@ describe('#214 — a take keeps its summary and its session row without the hist
     alignmentFeed.push?.(heardAt(ended));
 
     stopSession();
+    expect(get(session).summary, 'a practice opens no report').toBeNull();
     stopSession();
     clearSession();
 
-    expect(get(session).summary, 'a practice opens no report').toBeNull();
     expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
     const [, recorded] = records.endSessionRecord.mock.calls[0] as unknown as [
       string,
