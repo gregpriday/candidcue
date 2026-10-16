@@ -634,7 +634,7 @@ mod tests {
         let root = models_root(temp.path());
         std::fs::create_dir_all(&root).unwrap();
         let mine = root.join(format!("{STAGING_PREFIX}x-asr-480ms-abc"));
-        let theirs = root.join(format!("{STAGING_PREFIX}kroko-fr-def"));
+        let theirs = root.join(format!("{STAGING_PREFIX}another-model-def"));
         std::fs::create_dir_all(&mine).unwrap();
         std::fs::create_dir_all(&theirs).unwrap();
 

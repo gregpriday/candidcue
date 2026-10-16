@@ -139,12 +139,13 @@ src-tauri/icons/**
 src-tauri/gen/**
 
 # ── Legal, licensing and release prose ───────────────────────────────────────
-# ~117 KB of text that ships WITH the product but describes none of it. The
+# ~90 KB of text that ships WITH the product but describes none of it. The
 # EULA, privacy and refund policies are contract language; PLACEHOLDERS.md is
 # the @@LEGAL_*@@ token inventory the `pnpm legal:check` gate reads, which is
-# a release process, not a code path. licenses/ holds two verbatim upstream
-# licence texts (Apache-2.0, CC-BY-SA-4.0) and THIRD_PARTY_NOTICES.md is
-# generated wholesale by scripts/generate-notices.mjs, already excluded above.
+# a release process, not a code path. licenses/ holds the verbatim upstream
+# licence text the downloadable model ships under (Apache-2.0), and
+# THIRD_PARTY_NOTICES.md is generated wholesale by scripts/generate-notices.mjs,
+# already excluded above.
 #
 # Bring the whole lot back for a licensing or store-submission task:
 #   copytree --scope legal --scope-include-ignored -S

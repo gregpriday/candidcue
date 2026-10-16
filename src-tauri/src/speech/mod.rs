@@ -92,8 +92,8 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 /// That one is a FETCH manifest — URLs, digests, sizes, licences for everything
 /// `pnpm models:fetch` can download. This one is a BUNDLE manifest: the models
 /// this build actually ships and the tuning each was measured with. The fetch
-/// catalogue is deliberately the longer list, so the two are asserted equal only
-/// where they overlap, at the default.
+/// catalogue may be the longer list, so the two are asserted equal only where
+/// they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
 
 /// The recogniser resident in memory, and which one it is.
@@ -535,8 +535,8 @@ mod tests {
     /// The guard that replaces the bundling one, and the same failure it was
     /// really about: a model registered in `cc_stt` with no way to obtain it
     /// is offered in the UI and can never be installed. The catalogue is
-    /// allowed to be the longer list — it describes models this build cannot
-    /// yet decode with — but not the shorter one.
+    /// allowed to be the longer list — it may describe models this build
+    /// cannot yet decode with — but not the shorter one.
     #[test]
     fn every_loadable_model_can_be_downloaded() {
         for model in bundled_models() {

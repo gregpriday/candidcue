@@ -165,8 +165,8 @@ pub fn entry_for(model_id: &str) -> Result<&'static ModelEntry, AppError> {
 ///
 /// The catalogue lists every model that can be DOWNLOADED; `cc_stt::models`
 /// lists the ones this build knows how to decode with, because tuning is
-/// measured rather than discovered. The catalogue is deliberately the longer
-/// list, so an entry with no profile is honestly reported as unsupported
+/// measured rather than discovered. The catalogue may be the longer list, and
+/// then an entry with no profile is honestly reported as unsupported
 /// rather than offered and then failing at the top of a take.
 pub fn loadable_model(entry: &ModelEntry) -> Option<&'static cc_stt::models::BundledModel> {
     cc_stt::models::model_by_id(&entry.model_name)

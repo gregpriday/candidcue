@@ -8,7 +8,7 @@
  * that never shows up in a green suite — the app builds, installs, and
  * mistranscribes, or does not transcribe at all.
  *
- * The real archives are 57–161 MB, so these tests build a tiny `.tar.bz2` and a
+ * The real archive is ~128 MB, so these tests build a tiny `.tar.bz2` and a
  * throwaway catalogue, then run the ACTUAL shipping script against them with a
  * fake `curl` early on `PATH`. The script and the catalogue reader therefore
  * take exactly the production code path — there is no test-only branch inside
@@ -161,14 +161,14 @@ function catalogueFor(
           /*
            * A real SPDX id, because the fetch script now copies
            * `legal/licenses/<id>.txt` beside the weights and refuses when
-           * there is none. `CC-BY-SA` (no version) was never a licence
-           * anybody could ship under, so the fixture was quietly asserting
-           * that an unshippable model installs fine.
+           * there is none. A bare licence family with no version was never a
+           * licence anybody could ship under, so the fixture was quietly
+           * asserting that an unshippable model installs fine.
            */
           license: {
-            id: 'CC-BY-SA-4.0',
-            name: 'Creative Commons Attribution-ShareAlike 4.0 International',
-            url: 'https://creativecommons.org/licenses/by-sa/4.0/legalcode',
+            id: 'Apache-2.0',
+            name: 'Apache License 2.0',
+            url: 'https://www.apache.org/licenses/LICENSE-2.0',
           },
           licenseNote: null,
           modified: false,
@@ -387,24 +387,24 @@ describe('fetch-stt-model.sh', () => {
   });
 
   /*
-   * CC-BY-SA-4.0 §3(a)(1) and Apache-2.0 §4(a) both want a COPY of the licence
-   * to travel with the work. ATTRIBUTION.md said so and then linked to it,
-   * which leaves a user holding the weights offline with the thing the licence
-   * covers and not the licence. The text is written beside the weights now, by
-   * this script and by the in-app installer alike.
+   * Apache-2.0 §4(a) wants a COPY of the licence to travel with the work.
+   * ATTRIBUTION.md said so and then linked to it, which leaves a user holding
+   * the weights offline with the thing the licence covers and not the
+   * licence. The text is written beside the weights now, by this script and
+   * by the in-app installer alike.
    */
   it('writes the licence text beside the weights, not only a link to it', () => {
     const dir = freshModelsDir();
     expect(runFetch(catalogueFor(), dir).ok).toBe(true);
 
-    const licence = join(dir, 'test-model', 'LICENSE-CC-BY-SA-4.0.txt');
+    const licence = join(dir, 'test-model', 'LICENSE-Apache-2.0.txt');
     const text = readFileSync(licence, 'utf8');
-    expect(text).toContain('Attribution-ShareAlike 4.0 International');
+    expect(text).toContain('Apache License');
     expect(text.length, 'the committed licence text, not a stub').toBeGreaterThan(2000);
 
     // And the notice points at the file that is actually there.
     expect(readFileSync(join(dir, 'test-model', 'ATTRIBUTION.md'), 'utf8')).toContain(
-      'LICENSE-CC-BY-SA-4.0.txt',
+      'LICENSE-Apache-2.0.txt',
     );
   });
 

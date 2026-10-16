@@ -1308,7 +1308,7 @@ mod tests {
     /// asserts that difference rather than assuming it.
     ///
     /// The "spoken" side here is what the NORMALISER does with French written
-    /// the way French is written. It is not a claim about what the Kroko
+    /// the way French is written. It is not a claim about what any French
     /// recogniser emits — no French corpus exists yet to say.
     #[test]
     fn the_french_currency_sequence_is_a_known_gap() {

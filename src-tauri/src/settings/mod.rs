@@ -598,10 +598,10 @@ fn migrate_in_place(settings: &mut AppSettings) {
     //   segmentation means anything. Keeping the tag would buy a true claim
     //   about the transcript and a false one about the glass.
     // * `fr-FR`, `de-DE`, `es-ES` — the mirror image. The engine has profiles
-    //   for all three, and no recogniser this build can LOAD speaks them: the
-    //   Kroko bundles are in the download catalogue but have no entry in
-    //   `cc_stt::models`, because that table's tuning is measured and no
-    //   `blank_penalty` sweep has been run for them. Keeping one of these tags
+    //   for all three, and no recogniser this build can LOAD speaks them: no
+    //   entry in `cc_stt::models` serves them, because that table's tuning is
+    //   measured and no `blank_penalty` sweep has been run for a recogniser in
+    //   any of them. Keeping one of these tags
     //   would claim a French take from a recogniser with no French in it.
     //
     // Each stops biting on its own terms — Chinese when it earns a profile, the
@@ -822,8 +822,10 @@ mod tests {
     /// The half of the conjunction #157 put weight on. `fr-FR` used to be
     /// rejected because `from_bcp47` returned `None`; it now resolves to a real
     /// French profile, and it must STILL be rejected — for the other reason.
-    /// If someone adds a Kroko `BundledModel` before its `blank_penalty` sweep
-    /// exists, this test is what fails.
+    /// This pins the repair for the default recogniser; that no recogniser
+    /// this build can load serves these languages at all is pinned by
+    /// `a_normalisable_language_is_not_thereby_an_offered_one` in
+    /// `speech::catalogue`.
     #[test]
     fn a_language_the_engine_can_normalise_is_not_thereby_offered() {
         for tag in ["fr-FR", "de-DE", "es-ES", "fr", "de", "es"] {

@@ -79,30 +79,6 @@ the full text of its licence in its own directory.
 - Licence: Apache License 2.0 (`Apache-2.0`) — <https://www.apache.org/licenses/LICENSE-2.0>
 - Redistributed **unmodified**
 
-### Kroko ASR streaming Zipformer (French)
-
-- Catalogue id: `kroko-fr`
-- Authors: Banafo
-- Source: <https://huggingface.co/Banafo/Kroko-ASR>
-- Licence: Creative Commons Attribution-ShareAlike 4.0 International (`CC-BY-SA-4.0`) — <https://creativecommons.org/licenses/by-sa/4.0/legalcode>
-- Redistributed **unmodified**
-
-### Kroko ASR streaming Zipformer (German)
-
-- Catalogue id: `kroko-de`
-- Authors: Banafo
-- Source: <https://huggingface.co/Banafo/Kroko-ASR>
-- Licence: Creative Commons Attribution-ShareAlike 4.0 International (`CC-BY-SA-4.0`) — <https://creativecommons.org/licenses/by-sa/4.0/legalcode>
-- Redistributed **unmodified**
-
-### Kroko ASR streaming Zipformer (Spanish)
-
-- Catalogue id: `kroko-es`
-- Authors: Banafo
-- Source: <https://huggingface.co/Banafo/Kroko-ASR>
-- Licence: Creative Commons Attribution-ShareAlike 4.0 International (`CC-BY-SA-4.0`) — <https://creativecommons.org/licenses/by-sa/4.0/legalcode>
-- Redistributed **unmodified**
-
 ## Rust crates
 
 322 crates across both workspaces, with the SPDX expression each

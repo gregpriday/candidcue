@@ -80,8 +80,8 @@ pub struct ModelFile {
 
 /// Title, author, source, licence — plus whether we changed anything.
 ///
-/// Not display metadata. Mirroring is redistribution, and both Apache-2.0 and
-/// CC-BY-SA require the notice to travel with the files, which is why
+/// Not display metadata. Mirroring is redistribution, and Apache-2.0 requires
+/// the notice to travel with the files, which is why
 /// `ATTRIBUTION.md` is written beside the model at unpack time from exactly
 /// these fields rather than being maintained by hand somewhere else.
 #[derive(Debug, Clone, Deserialize)]
@@ -231,10 +231,6 @@ const LICENCE_TEXTS: &[(&str, &str)] = &[
         "Apache-2.0",
         include_str!("../../../legal/licenses/Apache-2.0.txt"),
     ),
-    (
-        "CC-BY-SA-4.0",
-        include_str!("../../../legal/licenses/CC-BY-SA-4.0.txt"),
-    ),
 ];
 
 /// The full text of a licence by SPDX id, or `None` if none was committed.
@@ -347,11 +343,10 @@ mod tests {
     ///
     /// Two lists, deliberately: `cc_stt::models` is compiled in and describes
     /// what this build actually ships and how each entry was tuned, while
-    /// `models/catalogue.json` describes everything `pnpm models:fetch` can
-    /// download — four models against the one `tauri.conf.json` bundles. They
-    /// are only required to agree about the default, which is what the tests
-    /// below pin. Aliased rather than glob-imported so that neither name can
-    /// quietly shadow the other.
+    /// `models/catalogue.json` describes everything `pnpm models:fetch` and the
+    /// in-app installer can download. They are only required to agree about
+    /// the default, which is what the tests below pin. Aliased rather than
+    /// glob-imported so that neither name can quietly shadow the other.
     use cc_stt::models::default_model as bundled_default;
 
     /// A name that stays inside the model directory. Mirrors the same check in
@@ -491,8 +486,9 @@ mod tests {
                 "{}: licence URL must be https",
                 model.id
             );
-            // Saying the files were changed without saying what changed does
-            // not satisfy either licence's modification clause.
+            // Apache-2.0 §4(b) wants a notice that the files were changed; this
+            // catalogue also wants it to say WHAT changed, because "modified"
+            // alone tells whoever reads the notice nothing they can act on.
             if a.modified {
                 assert!(
                     a.license_note
@@ -536,70 +532,25 @@ mod tests {
         assert_eq!(bundled_default().resource_dir, default_model().resource_dir());
     }
 
-    /// The Kroko models are downloadable and NOT loadable, and that is the
-    /// whole of #157's shipping decision.
+    /// A language the engine can normalise is not thereby one this build offers.
     ///
-    /// `cc_align` gained French, German and Spanish normalisation profiles, so
-    /// the engine can compile a script in those languages — the precondition
-    /// for ever scoring a corpus in one, since a corpus cannot be judged in a
-    /// language the normaliser does not have. (Selecting one from `cc-bench`'s
-    /// command line is still to do; `CompileOptions` carries the language, but
-    /// every call site there passes `default()`.) Nothing else changed here,
-    /// because nothing else may:
-    /// a `BundledModel` entry is a claim that the tuning beside it was
-    /// MEASURED, and no `blank_penalty` sweep has been run for any of these
-    /// three. The English 3.0 cannot be borrowed — it was swept against the
+    /// `cc_align` has French, German and Spanish normalisation profiles (#157),
+    /// so the engine can compile a script in those languages — the precondition
+    /// for ever scoring a corpus in one. Nothing else may follow from that: a
+    /// `BundledModel` entry is a claim that the tuning beside it was MEASURED,
+    /// and no `blank_penalty` sweep has been run for a recogniser in any of
+    /// them. The English 3.0 cannot be borrowed — it was swept against the
     /// English corpus, where following quality and word error rate moved in
-    /// OPPOSITE directions, so carrying it across would be picking a number by
-    /// coincidence and calling it evidence.
+    /// OPPOSITE directions.
     ///
-    /// So `loadable_model` answers `None` for them, the model manager reports
-    /// them unsupported and refuses the download, and
-    /// `settings::migrate_in_place` refuses a `fr-FR` because no loadable
-    /// recogniser serves French. Deleting this test to make a language work is
-    /// the mistake it exists to catch.
-    ///
-    /// What the fix actually is, stated in full so nobody plans on half of it:
-    /// a corpus in the language, a `blank_penalty` sweep, a passing run of
-    /// `cc-bench gate-language`, and then a `BundledModel` entry carrying the
-    /// measured numbers. That list is now the whole of it. The speech commands
-    /// used to owe a debt here as well — `start_transcription` and
-    /// `preload_speech_engine` both called `default_model()` and never read the
-    /// setting — but §153 gave them a `selected_model` helper that resolves the
-    /// persisted choice through `settings::selected_model` on every call, so
-    /// whichever recogniser the user picked is the one that listens. Which
-    /// makes this test load-bearing rather than merely tidy: a `BundledModel`
-    /// entry is now by itself enough to put an unmeasured recogniser in front
-    /// of a live take, with no second piece of wiring left to forget.
-    #[test]
-    fn the_kroko_models_download_but_do_not_load_until_they_are_measured() {
-        for id in ["kroko-fr", "kroko-de", "kroko-es"] {
-            let entry = catalogue()
-                .get(id)
-                .unwrap_or_else(|| panic!("{id} must stay in the catalogue"));
-            assert!(
-                crate::speech::model_manager::loadable_model(entry).is_none(),
-                "{id} has a BundledModel, so this build would offer a language \
-                 nobody has measured. See bench/README.md, \"What supporting a \
-                 language requires\"."
-            );
-
-            // The alignment half IS ready, and saying so here is the point:
-            // these two facts are meant to be separable, and a reader who finds
-            // only the refusal above should be able to see that the profile
-            // exists and is waiting on a measurement rather than on more code.
-            let tag = entry.languages.first().expect("a language");
-            assert!(
-                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
-                "{id} serves {tag}, which the alignment engine cannot normalise"
-            );
-        }
-    }
-
-    /// The other half of the gate, from the settings side: a language the
-    /// engine can normalise is still refused while no loadable model serves it.
-    ///
-    /// This is what makes the profiles safe to land ahead of the measurement.
+    /// This is what makes the profiles safe to land ahead of the measurement,
+    /// and it is load-bearing: the speech commands load whichever recogniser
+    /// the persisted setting selects (§153), so a `BundledModel` entry is by
+    /// itself enough to put an unmeasured recogniser in front of a live take.
+    /// What supporting one of these languages takes, stated in full so nobody
+    /// plans on half of it: a corpus in the language, a `blank_penalty` sweep,
+    /// a passing run of `cc-bench gate-language`, a catalogue entry for the
+    /// weights, and then a `BundledModel` entry carrying the measured numbers.
     #[test]
     fn a_normalisable_language_is_not_thereby_an_offered_one() {
         for tag in ["fr-FR", "de-DE", "es-ES"] {
@@ -618,146 +569,13 @@ mod tests {
         }
     }
 
-    /// A CC-BY-SA claim is only as good as the archive it was checked against.
-    ///
-    /// Banafo ships Kroko in two tiers. The Hugging Face community weights are
-    /// the free one; Banafo also sells Commercial & OEM models through
-    /// `kroko.ai` — different weights, separate terms, no relation to the
-    /// licence recorded here beyond sharing an author. The failure this guards
-    /// against is quiet: someone adds a Kroko model and copies the
-    /// `attribution` block off the entry above because every other field is
-    /// right, and the catalogue now records a CC-BY-SA licence over weights
-    /// nobody checked. That claim then travels — into `ATTRIBUTION.md` on the
-    /// user's disk and into the licence line in Settings › Speech — looking
-    /// exactly like one that was checked.
-    ///
-    /// So the guard keys off the archive digest, which names the actual bytes,
-    /// rather than the author or the source URL, which are prose someone can
-    /// edit in the same keystroke as the mistake. Copying an attribution block
-    /// onto a new model does not copy its digest, so the copy fails here.
-    ///
-    /// It does NOT say every Banafo entry must be CC-BY-SA-4.0. A paid model
-    /// recorded under its own real terms is a perfectly good catalogue entry
-    /// and this test must not stand in its way. It says the reverse: an entry
-    /// *claiming* CC-BY-SA — any version, hence the prefix match — has to be one
-    /// of the archives below, and adding one means a person went and read the
-    /// terms for those bytes.
-    ///
-    /// **On the version.** Upstream does not name one. As of 2026-08-05 the
-    /// Hugging Face card carries `license: other` with an empty LICENSE file,
-    /// and the model card, `kroko-onnx` and `kroko.ai` all write a bare
-    /// "CC-BY-SA" (§197). Recording 4.0 is this project's reading, not a
-    /// quotation, and `licenseNote` is where that is said out loud.
-    ///
-    /// Picking 4.0 is picking the *more permissive* candidate, which is worth
-    /// being deliberate about: 2.0 and 3.0 require the work's title in the
-    /// attribution and forbid applying technical protection measures, where 4.0
-    /// relaxes both. It is safe here only because the notice CandidCue renders
-    /// satisfies the stricter versions anyway — `render_attribution` states the
-    /// title, the author, the source and that the weights are unmodified, and
-    /// nothing in the app puts a TPM near them. Keep that true and the version
-    /// question stays academic. Stop stating the title, and it stops being.
-    #[test]
-    fn a_cc_by_sa_claim_stays_with_the_archive_it_was_checked_against() {
-        // The archives someone actually read the terms for, by id and digest.
-        const REVIEWED_COMMUNITY_WEIGHTS: [(&str, &str); 3] = [
-            (
-                "kroko-fr",
-                "e6ffd3dc43725cd6c8137b05c739f15607d0df946b9b90eb141e10059efca024",
-            ),
-            (
-                "kroko-de",
-                "9e27b783c20e67b0d0f13a258c1861fce199917c969d9176a438bee38df64962",
-            ),
-            (
-                "kroko-es",
-                "31b2230a95d23290b308b393da930015a4b2105cb3abb9367aed35f7fcf29cf1",
-            ),
-        ];
-        const COMMUNITY_SOURCE: &str = "https://huggingface.co/Banafo/Kroko-ASR";
-        const COMMUNITY_LICENSE_ID: &str = "CC-BY-SA-4.0";
-        const COMMUNITY_LICENSE_NAME: &str =
-            "Creative Commons Attribution-ShareAlike 4.0 International";
-        const COMMUNITY_LICENSE_URL: &str =
-            "https://creativecommons.org/licenses/by-sa/4.0/legalcode";
-
-        for (id, sha256) in REVIEWED_COMMUNITY_WEIGHTS {
-            let entry = catalogue()
-                .get(id)
-                .unwrap_or_else(|| panic!("{id} must stay in the catalogue"));
-            assert_eq!(
-                entry.archive.sha256, sha256,
-                "{id}: the archive changed, so the licence recorded for the old \
-                 bytes does not carry over — read the terms for the new ones"
-            );
-            let a = &entry.attribution;
-            assert_eq!(a.author, "Banafo", "{id}: unexpected author");
-            assert_eq!(a.source_url, COMMUNITY_SOURCE, "{id}: unexpected source");
-            // Pinned explicitly, because the sweep below only inspects entries
-            // that already claim CC-BY-SA. An entry quietly reverted to the
-            // unversioned form §197 replaced would match the prefix — but one
-            // relicensed to something else entirely would slip past it, and
-            // these three are not free to be relicensed.
-            assert_eq!(
-                a.license.id, COMMUNITY_LICENSE_ID,
-                "{id}: the version is pinned. Unversioned, the attribution and \
-                 termination terms that apply are unresolved — commercial use \
-                 is permitted under every CC-BY-SA version, so that was never \
-                 the open question."
-            );
-            // The version is inferred, so the note has to say so, and it has to
-            // keep the tier boundary the licence depends on. Rendered verbatim
-            // into ATTRIBUTION.md and into Settings › Speech.
-            let note = a
-                .license_note
-                .as_deref()
-                .unwrap_or_else(|| panic!("{id}: an inferred version needs a licenseNote"));
-            assert!(
-                note.contains("Commercial and OEM"),
-                "{id}: the note must keep saying this licence does not reach \
-                 Banafo's paid tier"
-            );
-        }
-
-        for model in &catalogue().models {
-            let a = &model.attribution;
-            if !a.license.id.starts_with("CC-BY-SA") {
-                continue;
-            }
-            assert!(
-                REVIEWED_COMMUNITY_WEIGHTS
-                    .iter()
-                    .any(|(id, sha256)| model.id == *id && model.archive.sha256 == *sha256),
-                "{}: a CC-BY-SA claim needs an archive somebody read the terms \
-                 for. Copying an attribution block does not make its licence \
-                 true of different bytes — Commercial & OEM weights need their \
-                 own terms recorded. Add the digest above once it is checked.",
-                model.id
-            );
-            assert_eq!(
-                a.license.name, COMMUNITY_LICENSE_NAME,
-                "{}: use the canonical CC-BY-SA-4.0 name",
-                model.id
-            );
-            // `render_attribution` writes "The full text of the {name} is at
-            // {url}", so this URL has to be somewhere that text actually is. It
-            // pointed at the Hugging Face page until §197, which made that
-            // sentence false; `sourceUrl` is where provenance belongs.
-            assert_eq!(
-                a.license.url, COMMUNITY_LICENSE_URL,
-                "{}: the licence URL must reach the licence text",
-                model.id
-            );
-        }
-    }
-
     /// Every licence the catalogue can distribute under has its text committed.
     ///
     /// The obligation this closes: `ATTRIBUTION.md` said "a distributed build
     /// must include that text" and then linked to it, which is a notice that
-    /// states its own obligation and does not meet it. Apache-2.0 §4(a) and
-    /// CC-BY-SA-4.0 §3(a)(1) both want a COPY to travel with the work, and a
-    /// user holding the weights offline has the work and not the licence.
+    /// states its own obligation and does not meet it. Apache-2.0 §4(a) wants
+    /// a COPY to travel with the work, and a user holding the weights offline
+    /// has the work and not the licence.
     ///
     /// Checked over the WHOLE catalogue rather than the default model, because
     /// `start_speech_model_download` takes any catalogue id: a model no picker
@@ -785,7 +603,6 @@ mod tests {
             assert!(
                 text.contains(match id.as_str() {
                     "Apache-2.0" => "Apache License",
-                    "CC-BY-SA-4.0" => "Attribution-ShareAlike 4.0 International",
                     other => panic!("no identifying phrase known for {other}"),
                 }),
                 "{}: legal/licenses/{id}.txt does not read like {id}",
