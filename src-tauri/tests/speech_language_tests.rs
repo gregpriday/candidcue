@@ -3,11 +3,12 @@
 //! Three things are worth pinning here, and they are the three that would fail
 //! silently:
 //!
-//!   1. **Only followable languages are offered.** The catalogue lists four
-//!      models and this build can follow one language. A picker that offered
-//!      the other three would be promising something no benchmark has measured
-//!      (§156), and the failure would not show up until somebody spoke French
-//!      at it.
+//!   1. **Only followable languages are offered.** The catalogue lists one
+//!      bilingual model and this build can follow one language. Chinese has
+//!      no alignment profile; French, German and Spanish have profiles and no
+//!      recogniser. A picker that offered any of them would be promising
+//!      something no benchmark has measured (§156), and the failure would not
+//!      show up until somebody spoke French at it.
 //!   2. **The language and the recogniser move together.** They are one choice
 //!      stored in two fields, and a write that sets one without the other is
 //!      how the settings screen ends up disagreeing with the live session.

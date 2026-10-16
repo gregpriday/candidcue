@@ -8,7 +8,7 @@
  * that never shows up in a green suite — the app builds, installs, and
  * mistranscribes, or does not transcribe at all.
  *
- * The real archives are 57–161 MB, so these tests build a tiny `.tar.bz2` and a
+ * The real archive is ~128 MB, so these tests build a tiny `.tar.bz2` and a
  * throwaway catalogue, then run the ACTUAL shipping script against them with a
  * fake `curl` early on `PATH`. The script and the catalogue reader therefore
  * take exactly the production code path — there is no test-only branch inside

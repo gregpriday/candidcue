@@ -822,8 +822,10 @@ mod tests {
     /// The half of the conjunction #157 put weight on. `fr-FR` used to be
     /// rejected because `from_bcp47` returned `None`; it now resolves to a real
     /// French profile, and it must STILL be rejected — for the other reason.
-    /// If someone adds a French, German or Spanish `BundledModel` before its
-    /// `blank_penalty` sweep exists, this test is what fails.
+    /// This pins the repair for the default recogniser; that no recogniser
+    /// this build can load serves these languages at all is pinned by
+    /// `a_normalisable_language_is_not_thereby_an_offered_one` in
+    /// `speech::catalogue`.
     #[test]
     fn a_language_the_engine_can_normalise_is_not_thereby_offered() {
         for tag in ["fr-FR", "de-DE", "es-ES", "fr", "de", "es"] {

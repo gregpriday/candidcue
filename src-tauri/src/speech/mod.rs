@@ -535,8 +535,8 @@ mod tests {
     /// The guard that replaces the bundling one, and the same failure it was
     /// really about: a model registered in `cc_stt` with no way to obtain it
     /// is offered in the UI and can never be installed. The catalogue is
-    /// allowed to be the longer list — it describes models this build cannot
-    /// yet decode with — but not the shorter one.
+    /// allowed to be the longer list — it may describe models this build
+    /// cannot yet decode with — but not the shorter one.
     #[test]
     fn every_loadable_model_can_be_downloaded() {
         for model in bundled_models() {

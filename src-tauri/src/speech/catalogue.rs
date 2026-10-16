@@ -486,8 +486,9 @@ mod tests {
                 "{}: licence URL must be https",
                 model.id
             );
-            // Saying the files were changed without saying what changed does
-            // not satisfy the licence's modification clause.
+            // Apache-2.0 §4(b) wants a notice that the files were changed; this
+            // catalogue also wants it to say WHAT changed, because "modified"
+            // alone tells whoever reads the notice nothing they can act on.
             if a.modified {
                 assert!(
                     a.license_note
