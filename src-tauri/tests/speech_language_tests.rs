@@ -530,6 +530,39 @@ fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
     assert_eq!(alignment.bound_stream(), Some(take), "and its alignment binding");
 }
 
+/// The race the up-front check alone left open: Settings asks before the take
+/// opens, so it is admitted, then waits out a cold load during which the take
+/// does open. Asked again after the load, it yields.
+///
+/// Timing-dependent in one direction only: the take must open inside the
+/// load, which takes over a second. A load faster than the pause below fails
+/// loudly at `expect_err` rather than passing by accident.
+#[test]
+#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+fn transcription_a_settings_test_queued_behind_a_load_yields_to_the_take() {
+    require_model();
+    let h = harness();
+    let preferences = h.preferences.clone();
+    let pending = std::thread::spawn(move || {
+        invoke_from(&preferences, "start_transcription", json!({ "options": {} }))
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    h.begin_take();
+
+    let err = pending
+        .join()
+        .expect("the Settings request completes")
+        .expect_err("a test whose load outlasted the take's opening must be refused");
+    assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
+    let speech = h.app.state::<SpeechEngine>();
+    assert!(
+        speech.is_loaded(),
+        "refused AFTER the load — the up-front check alone would not have loaded it"
+    );
+    assert_eq!(speech.active_generation(), None, "and nothing was bound or replaced");
+}
+
 #[test]
 #[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
 fn transcription_a_take_still_replaces_a_running_settings_test() {

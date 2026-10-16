@@ -236,23 +236,21 @@ pub async fn start_transcription<R: tauri::Runtime>(
     // a session to it that nothing needs.
     off_the_runtime(app, move |app, speech| {
         /*
-         * And again once the model is resident, for anyone but control.
+         * And again once the model is in hand, just before anything is bound.
          *
-         * A load takes seconds and a take can open inside it: Settings passed
-         * the check above, then waited on the same load the take's preload
-         * started, and whichever reached `start_stream` second would win.
-         * Asked after the load, the question is answered microseconds before
-         * the binding instead. Still a check against a moving target rather
-         * than an admission under one lock, but the take has to open AND reach
-         * its own stream inside that gap, and it has an IPC round trip and a
-         * microphone to open first. The take's own path is untouched.
+         * A load takes seconds and a take can open inside it: `startTake`
+         * preloads before it opens its session, so Settings can pass the check
+         * above, wait on that same load, and — asked only up front — reach
+         * `start_stream` after the take did and win. Asked after the load, the
+         * take has to open its session AND get its own stream started between
+         * this question and the binding, behind an IPC round trip and a
+         * microphone. Narrower, not closed: closing it means admitting
+         * ownership under the coordinator's lock. Control always passes.
          */
-        if caller != CONTROL_LABEL {
+        speech.start_stream(app.clone(), model, || {
             use tauri::Manager as _;
-            speech.ensure_loaded(app, model)?;
-            refuse_test_during_take(&caller, &app.state::<AppCoordinator>())?;
-        }
-        speech.start_stream(app.clone(), model)
+            refuse_test_during_take(&caller, &app.state::<AppCoordinator>())
+        })
     })
     .await
 }
