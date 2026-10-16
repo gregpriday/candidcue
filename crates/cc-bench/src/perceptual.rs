@@ -205,74 +205,130 @@ pub struct PerceptualSamples {
 
 /// Per-run perceptual summary. Flat and named so the suite can pour it straight
 /// into the benchmark table.
+// JSON represents a non-finite measurement as null. Keep that meaning on
+// read: a run with no pauses has no after-pause percentile, rather than a
+// measured latency of zero. Saved Tier C results must remain gate inputs.
+fn nullable_metric<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerceptualMetrics {
     pub run: String,
     pub scenario: String,
     pub layout: String,
     pub frames: usize,
+    #[serde(deserialize_with = "nullable_metric")]
     pub take_ms: f64,
 
     // ---- §5 temporal synchronisation ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub temporal_lag_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub temporal_lag_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub temporal_lead_p05: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub temporal_lead_p01: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub temporal_mad: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub late_250_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub late_500_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub early_100_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub worst_lag_episode_ms: f64,
     /// The same lag, sliced by context (§5, conditional slices).
+    #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_opening: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_steady: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_after_pause: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub lag_p50_after_retake: f64,
 
     // ---- §4.3 multi-threshold dim latency ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub first_response_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub first_response_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub half_dim_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub half_dim_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub committed_dim_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub committed_dim_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub dim_latency_mad: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub dim_spread_p95_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub premature_dim_p05: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub premature_dim_p01: f64,
     pub dim_never: usize,
 
     // ---- §4.1/§4.2 ink ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub uie_mean: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub uie_incident_p95: f64,
     pub uie_incidents: u32,
     pub uie_max_tokens: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub uie_max_darkness: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub uie_max_duration_ms: f64,
     /// The same integral against the EVER-spoken frontier: text that has never
     /// been said at all. This is the hard-gate row.
+    #[serde(deserialize_with = "nullable_metric")]
     pub unread_never_spoken: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub sir_mean: f64,
 
     // ---- §4.4/§4.5 retake & corrections ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub retake_legibility_loss: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub retake_anchor_bright_p95_ms: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub retake_reread_max_darkness: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub corrections_per_1k_words: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub correction_depth_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub correction_duration_p95_ms: f64,
 
     // ---- §6 reading band ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub band_occupancy_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub band_err_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub band_err_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub out_half_line_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub out_full_line_pct: f64,
     pub out_of_band_episodes: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub out_of_band_max_ms: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub future_reserve_p05: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub future_reserve_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub future_reserve_min: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub below_1_future_line_pct: f64,
     pub future_starvation_events: u32,
 
@@ -281,87 +337,140 @@ pub struct PerceptualMetrics {
     // such key, and refusing to open them would strand every archived run.
     /// Milliseconds of legible reading ahead of the mouth, bad tail.
     #[serde(default)]
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_ahead_p05_ms: f64,
     /// % of scored frames with less than `READABLE_AHEAD_MIN_MS` in front of
     /// the reader. The headline; the two rows below split it by cause.
     #[serde(default)]
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_ahead_deficit_pct: f64,
     /// …because the dim ramp had already taken a word they had not said.
     #[serde(default)]
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_ahead_opacity_deficit_pct: f64,
     /// …because the corridor ran off the bottom of the glass.
     #[serde(default)]
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_ahead_viewport_deficit_pct: f64,
     /// Frames excluded because the PASS ran out, not the display. An audit
     /// count, not a quality number: it has no better direction.
     #[serde(default)]
     pub readable_ahead_material_end_frames: u32,
 
+    #[serde(deserialize_with = "nullable_metric")]
     pub handoff_err_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub handoff_err_p95: f64,
 
     // ---- §7 motion comfort ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub plant_err_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub plant_err_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub plant_err_max: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub plant_behind_quarter_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub snapshot_pulse_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub snapshot_pulse_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub snapshot_pulse_max: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub pulses_per_min: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub cadence_ripple: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub motion_correction_effort: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub silent_motion_breath_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub silent_motion_sentence_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub silent_motion_paragraph_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub silent_motion_long_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub silent_travel_max_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub rest_travel_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub rest_rms_v: f64,
     pub rest_reversals: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub visible_relocation_lines: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub relocation_max_opacity: f64,
     pub fade_count: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub blur_exposure_s: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub max_line_speed: f64,
 
     // ---- §8 honest uncertainty ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub fce_3_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub fce_5_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub fce_10_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub fce_max_episode_ms: f64,
     pub fce_episodes: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub hold_precision: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub hold_recall: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub unnecessary_hold_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub hold_release_p95_ms: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub state_transitions_per_min: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub brier: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub ece: f64,
 
     // ---- §3 holistic ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_availability: f64,
     pub disruptions: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub disruptions_per_10min: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub disruption_p95_ms: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub disruption_max_ms: f64,
     pub first_disruption_ms: Option<f64>,
+    #[serde(deserialize_with = "nullable_metric")]
     pub longest_clean_ms: f64,
 
     // ---- §9 readable recovery ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_recovery_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub readable_recovery_p95: f64,
     pub readable_recovery_failures: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub recovery_regret: f64,
     pub recovery_snapbacks: u32,
+    #[serde(deserialize_with = "nullable_metric")]
     pub recovered_within_5_words_pct: f64,
 
     // ---- §10 reliability ----
+    #[serde(deserialize_with = "nullable_metric")]
     pub freshness_p50: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub freshness_p95: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub freshness_max: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub stale_500_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub stale_1000_pct: f64,
+    #[serde(deserialize_with = "nullable_metric")]
     pub follow_availability: f64,
 
     pub disruption_log: Vec<Disruption>,
@@ -2096,5 +2205,26 @@ mod tests {
         // inventing a corridor out of material the pass never covered.
         assert!(measure_readable_ahead(&gold, 0, 18.0, &stage.glass(&drawn)).is_none());
         assert!(measure_readable_ahead(&gold, 9, 5.0, &stage.glass(&drawn)).is_none());
+    }
+}
+
+
+#[cfg(test)]
+mod metric_json_tests {
+    use super::PerceptualMetrics;
+
+    #[test]
+    fn undefined_context_metrics_survive_saved_result_round_trip() {
+        let metrics = PerceptualMetrics {
+            lag_p50_after_pause: f64::NAN,
+            temporal_lag_p50: 705.342,
+            ..PerceptualMetrics::default()
+        };
+        let saved = serde_json::to_value(&metrics).unwrap();
+        assert!(saved["lag_p50_after_pause"].is_null());
+        let loaded: PerceptualMetrics = serde_json::from_value(saved).unwrap();
+        assert!(loaded.lag_p50_after_pause.is_nan());
+        assert_eq!(loaded.temporal_lag_p50, 705.342);
+        assert!(serde_json::to_value(loaded).unwrap()["lag_p50_after_pause"].is_null());
     }
 }
