@@ -192,8 +192,9 @@ mod tests {
             );
             assert!(
                 !path.starts_with("//"),
-                "{name}'s path {path:?} starts a protocol-relative URL, which names \
-                 another host"
+                "{name}'s path {path:?} starts with `//`, which is a protocol-relative \
+                 URL naming another host the moment this table is ever joined as a \
+                 URL instead of concatenated"
             );
             assert!(
                 !path.contains(".."),
