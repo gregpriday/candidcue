@@ -3,9 +3,6 @@
  * Kept dependency-free so they are trivially unit-testable.
  */
 
-/** Words-per-minute used for speaking-duration estimates (spec §21 metadata). */
-export const DEFAULT_WPM = 150;
-
 /** Rough spoken word count of a Markdown source (informational only). */
 export function countWords(source: string): number {
   const stripped = source
@@ -19,7 +16,15 @@ export function countWords(source: string): number {
   return words.length;
 }
 
-export function estimateDurationSeconds(words: number, wpm: number = DEFAULT_WPM): number {
+/**
+ * Whole seconds to say `words` at `wpm` — the compiler's and Rust's arithmetic.
+ *
+ * The rate is required. It had a default of its own (150), so the editor
+ * estimated at a pace nothing else in the app used and the same script showed
+ * two lengths (#246). The rate comes from the compile, or from the script's
+ * settings; `shared/speaking-rate.ts` holds the default both start from.
+ */
+export function estimateDurationSeconds(words: number, wpm: number): number {
   if (words <= 0) return 0;
   return Math.round((words / wpm) * 60);
 }

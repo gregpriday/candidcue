@@ -7,6 +7,8 @@ import { get, writable } from 'svelte/store';
 import type { ScriptDocument } from '../../shared/contracts';
 import { describeError, errorCode } from '../services/errors';
 import * as scriptsService from '../services/scripts';
+import type { CompileOverrides } from '../services/compiler';
+import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
 import { requestCompile, resetCompiled } from './compiled';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
@@ -18,6 +20,12 @@ export interface EditorState {
   scriptRevision: number;
   /** Monotonic local revision; compile requests are tagged with it. */
   editorRevision: number;
+  /**
+   * The script's own speaking rate (`settings.wordsPerMinuteEstimate`), which
+   * every compile is made at so the editor's length estimates use the same
+   * rate as Rust's Library row for the same script (#246).
+   */
+  wordsPerMinuteEstimate: number;
   saveState: SaveState;
   dirty: boolean;
   loading: boolean;
@@ -42,6 +50,7 @@ const initial: EditorState = {
   source: '',
   scriptRevision: 0,
   editorRevision: 0,
+  wordsPerMinuteEstimate: DEFAULT_WORDS_PER_MINUTE,
   saveState: 'idle',
   dirty: false,
   loading: false,
@@ -130,6 +139,7 @@ function adoptDocument(doc: ScriptDocument): void {
     title: doc.title,
     source: doc.source,
     scriptRevision: doc.scriptRevision,
+    wordsPerMinuteEstimate: doc.settings?.wordsPerMinuteEstimate ?? DEFAULT_WORDS_PER_MINUTE,
     loading: false,
     /*
      * `idle`, not `saved`.
@@ -144,7 +154,12 @@ function adoptDocument(doc: ScriptDocument): void {
      */
     saveState: 'idle',
   });
-  void requestCompile(doc.id, doc.source, 0);
+  void requestCompile(doc.id, doc.source, 0, compileOptions(get(state)));
+}
+
+/** What every editor compile is made with: the open script's own speaking rate. */
+function compileOptions(s: EditorState): CompileOverrides {
+  return { wordsPerMinute: s.wordsPerMinuteEstimate };
 }
 
 export function closeScript(): void {
@@ -163,10 +178,11 @@ export function setSource(source: string): void {
   const editorRevision = s.editorRevision + 1;
   state.update((prev) => ({ ...prev, source, editorRevision, dirty: true }));
   const scriptId = s.scriptId;
+  const options = compileOptions(s);
   if (compileTimer) clearTimeout(compileTimer);
   compileTimer = setTimeout(() => {
     compileTimer = null;
-    void requestCompile(scriptId, source, editorRevision);
+    void requestCompile(scriptId, source, editorRevision, options);
   }, COMPILE_DEBOUNCE_MS);
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
@@ -475,7 +491,7 @@ function flushPendingCompile(): void {
   compileTimer = null;
   const s = get(state);
   if (s.scriptId === null) return;
-  void requestCompile(s.scriptId, s.source, s.editorRevision);
+  void requestCompile(s.scriptId, s.source, s.editorRevision, compileOptions(s));
 }
 
 function cancelTimers(): void {

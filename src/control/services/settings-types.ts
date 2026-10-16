@@ -947,8 +947,9 @@ export const DEFAULT_STAGE_APPEARANCE = {
  *
  * Still deliberately NOT the two similarly-named constants elsewhere:
  *
- *   - `lib/format.ts`'s `DEFAULT_WPM` (150) is a SPEAKING rate, for estimating
- *     how long a script takes to read aloud. Different question entirely.
+ *   - `shared/speaking-rate.ts`'s `DEFAULT_WORDS_PER_MINUTE` is a SPEAKING
+ *     rate, for estimating how long a script takes to read aloud. Different
+ *     question entirely, though it is also 130 today.
  *   - `stage/renderer/autoscroll.ts`'s `AUTO_SCROLL_DEFAULT_WPM` is the
  *     renderer's repair for a value that arrived missing or invalid, not a
  *     preference. It agrees at 130 today, and does not have to.

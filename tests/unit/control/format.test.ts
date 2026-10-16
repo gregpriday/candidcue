@@ -23,9 +23,20 @@ describe('countWords', () => {
 });
 
 describe('durations', () => {
-  it('estimates duration from words at the default pace', () => {
-    expect(estimateDurationSeconds(150)).toBe(60);
-    expect(estimateDurationSeconds(0)).toBe(0);
+  it('estimates duration at the rate it is given', () => {
+    expect(estimateDurationSeconds(130, 130)).toBe(60);
+    expect(estimateDurationSeconds(150, 150)).toBe(60);
+    expect(estimateDurationSeconds(0, 130)).toBe(0);
+  });
+
+  it('does the arithmetic the compiler and Rust do', () => {
+    // #246's own numbers: 1,000 words is 462 s at 130 wpm everywhere else in
+    // the app, and the editor's old 150 made it 400 s — a minute shorter.
+    expect(estimateDurationSeconds(1000, 130)).toBe(462);
+    expect(formatSpeakingDuration(estimateDurationSeconds(1000, 130))).toBe('≈ 8 min');
+    // Whole seconds, rounded half up like Rust's `f64::round` on positives.
+    expect(estimateDurationSeconds(13, 130)).toBe(6);
+    expect(estimateDurationSeconds(1, 130)).toBe(0);
   });
 
   it('formats speaking durations', () => {
@@ -65,7 +76,7 @@ describe('formatScriptMeta', () => {
     // here hides the row again — the bug this function exists to prevent.
     for (let wordCount = 0; wordCount <= 3; wordCount += 1) {
       for (let cueCount = 0; cueCount <= 3; cueCount += 1) {
-        const durationSeconds = estimateDurationSeconds(wordCount);
+        const durationSeconds = estimateDurationSeconds(wordCount, 130);
         expect(formatScriptMeta({ wordCount, durationSeconds, cueCount })).not.toBe('');
       }
     }

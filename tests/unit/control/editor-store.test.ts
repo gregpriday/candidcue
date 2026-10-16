@@ -22,7 +22,7 @@ import {
 /** Auto-answering fake worker so compile requests resolve immediately. */
 class AutoWorker implements WorkerLike {
   /** Every compile request that crossed the worker boundary. */
-  static requests: Array<{ source: string }> = [];
+  static requests: Array<{ source: string; wordsPerMinute?: number }> = [];
   private listener: ((event: MessageEvent) => void) | null = null;
   postMessage(message: unknown): void {
     const request = message as {
@@ -30,8 +30,12 @@ class AutoWorker implements WorkerLike {
       editorRevision: number;
       scriptId: string;
       source: string;
+      options?: { wordsPerMinute?: number };
     };
-    AutoWorker.requests.push({ source: request.source });
+    AutoWorker.requests.push({
+      source: request.source,
+      wordsPerMinute: request.options?.wordsPerMinute,
+    });
     queueMicrotask(() => {
       this.listener?.({
         data: {
@@ -295,6 +299,74 @@ describe('compile debounce (spec §45.3)', () => {
     await vi.runAllTimersAsync();
     await saving;
     vi.useRealTimers();
+  });
+});
+
+/*
+ * #246. The editor estimated speaking time at a rate of its own while the
+ * Library's came from Rust at the script's `wordsPerMinuteEstimate`. Every
+ * editor compile is now made at that same per-script rate — the open, the
+ * debounced keystroke and the flush before a save alike, since a path that
+ * forgot it would put the editor's own default back on screen.
+ */
+describe('compile speaking rate (#246)', () => {
+  beforeEach(() => {
+    closeScript();
+    AutoWorker.requests = [];
+  });
+
+  it('compiles a new script at the default rate of 130', async () => {
+    await openScript(scriptId);
+    expect(get(editor).wordsPerMinuteEstimate).toBe(130);
+    expect(AutoWorker.requests.map((r) => r.wordsPerMinute)).toEqual([130]);
+  });
+
+  it('compiles at the script’s own rate on every compile path', async () => {
+    const read = scripts.getScript;
+    const spy = vi.spyOn(scripts, 'getScript').mockImplementation(async (id) => {
+      const doc = await read(id);
+      return { ...doc, settings: { ...doc.settings, wordsPerMinuteEstimate: 150 } };
+    });
+    try {
+      await openScript(scriptId);
+      expect(get(editor).wordsPerMinuteEstimate).toBe(150);
+
+      vi.useFakeTimers();
+      setSource('# Start\n\nDebounced.\n');
+      await vi.advanceTimersByTimeAsync(COMPILE_DEBOUNCE_MS + 10);
+      setSource('# Start\n\nDebounced. Flushed.\n');
+      const saving = saveNow();
+      await vi.runAllTimersAsync();
+      await saving;
+      vi.useRealTimers();
+
+      // Open, debounce, flush — in that order, every one at the script's rate.
+      expect(AutoWorker.requests.map((r) => r.source)).toEqual([
+        '# Start\n',
+        '# Start\n\nDebounced.\n',
+        '# Start\n\nDebounced. Flushed.\n',
+      ]);
+      expect(AutoWorker.requests.map((r) => r.wordsPerMinute)).toEqual([150, 150, 150]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('goes back to the default for the next script opened', async () => {
+    const read = scripts.getScript;
+    const spy = vi.spyOn(scripts, 'getScript').mockImplementationOnce(async (id) => {
+      const doc = await read(id);
+      return { ...doc, settings: { ...doc.settings, wordsPerMinuteEstimate: 180 } };
+    });
+    try {
+      await openScript(scriptId);
+      expect(get(editor).wordsPerMinuteEstimate).toBe(180);
+      await openScript(scriptId);
+      expect(get(editor).wordsPerMinuteEstimate).toBe(130);
+      expect(AutoWorker.requests.map((r) => r.wordsPerMinute)).toEqual([180, 130]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

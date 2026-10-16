@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting } from '../../../src/control/services/ipc';
 import * as scripts from '../../../src/control/services/scripts';
+import { DEFAULT_WORDS_PER_MINUTE } from '../../../src/shared/speaking-rate';
 
 afterEach(() => {
   setInvokeForTesting(null);
@@ -126,5 +127,23 @@ describe('scripts service — mock fallback (browser dev parity only, proves not
     const miss = await scripts.listScripts({ view: 'all', query: 'zebra unicorns' });
     expect(miss.items.some((s) => s.id === created.id)).toBe(false);
     await scripts.permanentlyDeleteScript(created.id);
+  });
+
+  it('estimates a new script at the rate Rust gives one (#246)', async () => {
+    // MOCK ONLY. The mock gave new scripts 150 wpm, so in `pnpm dev:vite` the
+    // Library agreed with the editor's old 150 and hid that a real install
+    // disagreed. Rust's default is pinned by `shared/speaking-rate.test.ts`.
+    const created = await scripts.createScript({
+      title: 'Pace',
+      source: `${Array.from({ length: 130 }, () => 'word').join(' ')}\n`,
+    });
+    try {
+      expect(created.spokenWordCount).toBe(130);
+      expect(created.estimatedDurationSeconds).toBe(60);
+      const loaded = await scripts.getScript(created.id);
+      expect(loaded.settings.wordsPerMinuteEstimate).toBe(DEFAULT_WORDS_PER_MINUTE);
+    } finally {
+      await scripts.permanentlyDeleteScript(created.id);
+    }
   });
 });

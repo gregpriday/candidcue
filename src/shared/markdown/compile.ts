@@ -30,6 +30,7 @@ import type {
   SpokenTokenRange,
 } from '../contracts';
 import { hashString, shortHash } from './hash';
+import { DEFAULT_WORDS_PER_MINUTE } from '../speaking-rate';
 import {
   ContainerIndex,
   classifyBracketDirective,
@@ -59,7 +60,7 @@ import { deriveParts } from './parts';
  */
 export const COMPILER_VERSION = '1.2.0';
 export const SCHEMA_VERSION = 1;
-export const DEFAULT_WORDS_PER_MINUTE = 130;
+export { DEFAULT_WORDS_PER_MINUTE };
 const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
 
 /* ------------------------------------------------------------------ */
