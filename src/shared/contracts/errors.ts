@@ -102,6 +102,18 @@ export const APP_ERROR_CODES = [
    */
   'WINDOW_FOCUS_FAILED',
   /*
+   * File › Close Window could not close the document window (#266) — raised
+   * for the same reason as the one above: that menu item used to fail without
+   * a word, and a quit that silently did not happen is the defect it fixed.
+   */
+  'WINDOW_CLOSE_FAILED',
+  /*
+   * `close_control_window` invoked from a window that is not control. No
+   * screen does that — Settings closes itself with `close_preferences` — so
+   * this is the shared command grant being used for something it must not do.
+   */
+  'WINDOW_CLOSE_REFUSED',
+  /*
    * Single-window presentation could not reshape THIS window (§52.7).
    *
    * Distinct from `STAGE_OPEN_FAILED` because they are different failures with

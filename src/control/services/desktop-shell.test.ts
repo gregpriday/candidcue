@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting, type InvokeFn } from './ipc';
 import {
   PREFERENCES_COMMANDS,
+  closeControlWindow,
   composeWindowTitle,
   pushMenuState,
   pushWindowTitle,
@@ -190,5 +191,63 @@ describe('the Settings window names what it can do', () => {
     for (const id of forbidden) {
       expect(PREFERENCES_COMMANDS as readonly string[]).not.toContain(id);
     }
+  });
+});
+
+/**
+ * File › Close Window (#266).
+ *
+ * The call it replaced, `getCurrentWindow().close()`, was refused by the ACL
+ * inside a `try` that read the refusal as "browser dev", so ⌘W off the editor
+ * did nothing. What is asserted here is that the browser no-op is now decided
+ * by the runtime check and nothing else: inside Tauri the command is sent, and
+ * a refusal reaches the caller instead of vanishing.
+ *
+ * `setInvokeForTesting` does not make `isTauriRuntime()` true, so the runtime
+ * marker is stubbed separately — without it every case below would pass by
+ * sending nothing.
+ */
+describe('closeControlWindow', () => {
+  let calls: Array<{ command: string; args: unknown }> = [];
+  let answer: () => Promise<unknown> = async () => null;
+
+  beforeEach(() => {
+    calls = [];
+    answer = async () => null;
+    const record: InvokeFn = async <T,>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      calls.push({ command, args });
+      return (await answer()) as T;
+    };
+    setInvokeForTesting(record);
+  });
+
+  afterEach(() => {
+    setInvokeForTesting(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('sends nothing outside a Tauri runtime', async () => {
+    await closeControlWindow();
+    expect(calls).toEqual([]);
+  });
+
+  it('asks Rust to close the window, and names no window', async () => {
+    // No label travels: Rust closes the CALLER, and refuses one that is not
+    // control. A renderer that could name the window could name the stage.
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    await closeControlWindow();
+    expect(calls).toEqual([{ command: 'close_control_window', args: undefined }]);
+  });
+
+  it('lets a refusal reach the caller', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+    const refusal = { code: 'WINDOW_CLOSE_FAILED', userMessage: 'The window could not be closed.' };
+    answer = async () => {
+      throw refusal;
+    };
+    await expect(closeControlWindow()).rejects.toBe(refusal);
   });
 });

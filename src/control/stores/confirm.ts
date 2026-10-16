@@ -20,9 +20,23 @@ interface PendingConfirm {
 const store = writable<PendingConfirm | null>(null);
 export const pendingConfirm: Readable<PendingConfirm | null> = { subscribe: store.subscribe };
 
+/**
+ * Ask, and resolve with the answer.
+ *
+ * There is one sheet, so a second request REPLACES the first — and the first is
+ * answered "no" on the way out rather than left pending. It used to be
+ * dropped: nothing would ever resolve it, so whoever awaited it stayed
+ * suspended for the life of the window. File › Close Window made that a dead
+ * key — ⌘W, then ⌘. raising End Take's own question over it, and every later
+ * ⌘W was refused as "a close is already in flight". Declining is the only safe
+ * answer to a question that is no longer on screen: nobody agreed to it.
+ */
 export function requestConfirm(request: ConfirmRequest): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    store.set({ request, resolve });
+    store.update((pending) => {
+      pending?.resolve(false);
+      return { request, resolve };
+    });
   });
 }
 

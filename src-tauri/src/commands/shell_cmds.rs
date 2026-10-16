@@ -265,6 +265,49 @@ pub fn close_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<
     Ok(())
 }
 
+/// Close the document window — File › Close Window, ⌘W off the editor.
+///
+/// A command for the reason `focus_app_window` gives: the renderer's
+/// `getCurrentWindow().close()` needs `core:window:allow-close`, which the
+/// control capability does not grant, and the `try` around it read the ACL's
+/// refusal as "browser dev". Close Window did nothing at all. Granting the
+/// permission instead would hand the renderer `close` on the stage mid-take.
+///
+/// `close()`, NEVER `destroy()`. `close()` raises `CloseRequested` exactly as
+/// the red close button does, so `install_close_coordinator` intercepts it and
+/// the shutdown handshake flushes the editor and finishes the take before the
+/// app exits. `destroy()` raises nothing, and would quit with all of that
+/// skipped.
+///
+/// The window is the CALLER, not an argument, and only control may ask.
+/// Settings holds the same application-command grant (`preferences.json` says
+/// why), so a command that found control by label and closed it would let the
+/// Settings window quit the app — and Settings' own ⌘W closing Settings is the
+/// whole of what #265 secured.
+#[tauri::command]
+pub fn close_control_window<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+) -> Result<(), AppError> {
+    if window.label() != CONTROL_LABEL {
+        return Err(AppError::structured(
+            "WINDOW_CLOSE_REFUSED",
+            crate::errors::ErrorCategory::Permission,
+            "Only the document window can close itself this way.",
+            false,
+        )
+        .with_log(format!("close_control_window invoked from `{}`", window.label())));
+    }
+    window.close().map_err(|err| {
+        AppError::structured(
+            "WINDOW_CLOSE_FAILED",
+            crate::errors::ErrorCategory::Internal,
+            "The window could not be closed.",
+            true,
+        )
+        .with_log(format!("close on {CONTROL_LABEL}: {err}"))
+    })
+}
+
 /// Open the log directory in the platform file browser (Help › Reveal Logs).
 ///
 /// Points at the logs directory specifically rather than the data root, which

@@ -244,6 +244,10 @@ const ERROR_COPY: Record<string, string> = {
   // still there — it simply would not come forward.
   WINDOW_FOCUS_FAILED:
     'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
+  // File › Close Window. The window is still open and nothing was lost, so the
+  // copy names the other way out rather than an error to investigate.
+  WINDOW_CLOSE_FAILED: 'The window could not be closed. Quit CandidCue instead.',
+  WINDOW_CLOSE_REFUSED: 'Only the main window can close itself this way.',
   // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
   // post-show check (§52.7).
 

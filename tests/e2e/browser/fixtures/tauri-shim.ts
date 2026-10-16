@@ -888,6 +888,16 @@ function shimBody(config: ShimConfig): void {
       case 'publish_stage_snapshot':
         return null;
 
+      /*
+       * File › Close Window (#266). Answered and NOT acted on: in Rust this
+       * raises `CloseRequested`, and the shutdown handshake hanging off that
+       * event — then the exit — has no representation in a browser. A spec can
+       * prove the close was asked for, once and only after any question it
+       * owed; that the app then quits cleanly is a packaged-app check.
+       */
+      case 'close_control_window':
+        return null;
+
       case 'get_stage_status':
         return {
           exists: control.stage.exists,

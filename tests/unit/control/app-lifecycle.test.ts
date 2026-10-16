@@ -15,7 +15,12 @@ import {
   initialRouteForBoot,
   isFatalBootCode,
   recentScriptIdForBoot,
+  sessionEndConfirmation,
 } from '../../../src/control/lib/app-lifecycle';
+import {
+  FINISH_PRACTICE_CONFIRM_TITLE,
+  FINISH_PRACTICE_LABEL,
+} from '../../../src/shared/take-vocabulary';
 
 describe('isFatalBootCode', () => {
   it('treats an unmigratable database as fatal', () => {
@@ -263,5 +268,33 @@ describe('stop-session confirmation copy', () => {
     expect(STOP_PRACTICE_CONFIRM_BODY).toContain('nothing is reported');
     expect(STOP_PRACTICE_CONFIRM_BODY).not.toMatch(/take/i);
     expect(STOP_PRACTICE_CONFIRM_BODY).not.toBe(STOP_SESSION_CONFIRM_BODY);
+  });
+});
+
+/*
+ * The whole question, not just its body (#266).
+ *
+ * Three callers raise it now — Live's End, App's navigation guard and File ›
+ * Close Window — and Close Window quits the app, so it is the worst place for a
+ * copy that said less. Asserted field by field against the vocabulary the dock
+ * already uses, so a caller cannot be handed a softer variant.
+ */
+describe('sessionEndConfirmation', () => {
+  it('asks a take to end, in the words every other exit uses', () => {
+    expect(sessionEndConfirmation(false)).toEqual({
+      title: 'End this take?',
+      body: STOP_SESSION_CONFIRM_BODY,
+      confirmLabel: 'End take',
+      danger: true,
+    });
+  });
+
+  it('asks a rehearsal to finish, and never calls it a take', () => {
+    expect(sessionEndConfirmation(true)).toEqual({
+      title: FINISH_PRACTICE_CONFIRM_TITLE,
+      body: STOP_PRACTICE_CONFIRM_BODY,
+      confirmLabel: FINISH_PRACTICE_LABEL,
+      danger: true,
+    });
   });
 });

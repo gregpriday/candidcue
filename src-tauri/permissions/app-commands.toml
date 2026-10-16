@@ -114,6 +114,10 @@ commands.allow = [
   # window neither reads nor writes anything the caller could not already see.
   "open_preferences",
   "close_preferences",
+  # File › Close Window. Takes no argument: Rust closes the CALLING window and
+  # refuses any caller but control, so the shared grant does not let Settings
+  # quit the app (shell_cmds.rs).
+  "close_control_window",
   "focus_app_window",
   "reveal_logs",
   # Opens a file this build shipped, resolved by Rust. Takes no argument.

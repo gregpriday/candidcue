@@ -9,7 +9,9 @@
  * and every global host the shell renders. The shell keeps the I/O and the
  * rendering; the judgement calls are here.
  */
+import { FINISH_PRACTICE_CONFIRM_TITLE, FINISH_PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import type { LaunchBehavior } from '../services/settings-types';
+import type { ConfirmRequest } from '../stores/confirm';
 import type { Route } from '../stores/router';
 
 /**
@@ -61,7 +63,20 @@ const FATAL_BOOT_CODES: ReadonlySet<string> = new Set([
  * which clears the session on its way to somewhere that is not Live. A shared
  * body that promised a summary would therefore be false on exactly one of the
  * two paths this constant exists to keep honest, which is the class of defect
- * it was extracted to prevent rather than a wording preference.
+ * it was extracted to prevent rather than a wording preference. File › Close
+ * Window is a third caller now, and it does not show a summary either.
+ *
+ * What it must never say is "your script keeps its place". There is no
+ * resume-at-position anywhere: the store's `snapshot` starts null, and
+ * `presentAgain` clears the session and calls `startTake` for a brand new one —
+ * which opens at the beginning. That promise mattered because it is the exact
+ * fear the dialog is asked about, so answering it wrongly is worse than not
+ * answering it.
+ *
+ * Its last clause is conditional on purpose ("presenting again starts a new
+ * take"). Ending does not start anything; presenting again is a separate choice
+ * made from the summary, and phrasing it as "a new take starts" implied one
+ * would begin on its own.
  */
 export const STOP_SESSION_CONFIRM_BODY =
   'Ending the session leaves presentation mode. Your script is unchanged, and ' +
@@ -84,6 +99,28 @@ export const STOP_SESSION_CONFIRM_BODY =
 export const STOP_PRACTICE_CONFIRM_BODY =
   'Finishing leaves presentation mode. Your script is unchanged, and nothing ' +
   'is reported.';
+
+/**
+ * The whole question every dialog-shaped way out of a running take asks.
+ *
+ * The bodies above were extracted so the callers could not drift; the title,
+ * the button and the danger styling were still written out at each one, which
+ * is the same defect one level up. There are three callers now — Live's own
+ * End, App's navigation guard and File › Close Window — and Close Window is the
+ * one that quits, so a copy that said less there would be the worst place for
+ * it to drift.
+ *
+ * `practice` swaps all three words (§practice): over a rehearsal "End this
+ * take?" names neither the thing that is running nor what this does to it.
+ */
+export function sessionEndConfirmation(practice: boolean): ConfirmRequest {
+  return {
+    title: practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End this take?',
+    body: practice ? STOP_PRACTICE_CONFIRM_BODY : STOP_SESSION_CONFIRM_BODY,
+    confirmLabel: practice ? FINISH_PRACTICE_LABEL : 'End take',
+    danger: true,
+  };
+}
 
 /** Is this the kind of startup failure that must not be papered over? */
 export function isFatalBootCode(code: string | null): boolean {
