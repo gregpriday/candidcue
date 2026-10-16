@@ -1310,13 +1310,30 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
         .await
         .expect("migrations");
     assert_eq!(applied, vec![1, 2]);
-    assert!(
-        fs::read_dir(dir.path().join("backups"))
-            .expect("a pending migration takes a backup first")
-            .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().starts_with("pre-migration-")),
-        "the upgrade must be preceded by a verified snapshot"
-    );
+    // The snapshot taken first is of the database as the baseline left it.
+    let snapshot = fs::read_dir(dir.path().join("backups"))
+        .expect("a pending migration takes a backup first")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with("pre-migration-") && name.ends_with(".sqlite3")
+        })
+        .expect("a pre-migration snapshot");
+    let snapshot_pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&snapshot)
+            .read_only(true),
+    )
+    .await
+    .expect("open snapshot");
+    let snapshot_applied: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&snapshot_pool)
+            .await
+            .expect("snapshot migrations");
+    snapshot_pool.close().await;
+    assert_eq!(snapshot_applied, vec![1], "the snapshot predates the upgrade");
     let leftovers: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE 'script_search_v1%'")
             .fetch_one(&pool)

@@ -229,7 +229,7 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
     let canonical = h.paths.canonical_file(&script_id);
 
     // Simulate an external editor.
-    fs::write(&canonical, "Edited outside CandidCue.").unwrap();
+    fs::write(&canonical, "# Outline\n\nEdited outside CandidCue.").unwrap();
 
     // Saving over it with a stale in-memory copy is refused (spec §21.3).
     let err = repo::save_script(
@@ -250,8 +250,10 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
         .await
         .expect("get");
     assert!(doc.externally_changed);
-    assert_eq!(doc.source, "Edited outside CandidCue.");
+    assert_eq!(doc.source, "# Outline\n\nEdited outside CandidCue.");
     assert!(doc.summary.script_revision > 1);
+    // The search entry is the adopted page's, heading and all (#254).
+    assert_eq!(search_total(&h, "outline").await, 1);
 
     // After adoption, saving with the new revision works again.
     let save = repo::save_script(
