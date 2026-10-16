@@ -467,3 +467,76 @@ fn resolve_entry(model_id: Option<&str>) -> Result<&'static ModelEntry, AppError
         None => Ok(catalogue::default_model()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::Manager as _;
+
+    fn app() -> tauri::App<tauri::test::MockRuntime> {
+        let app = tauri::test::mock_app();
+        app.manage(SpeechEngine::new());
+        app
+    }
+
+    /// The whole point of the helper (#256). Run inline, the work would be on
+    /// the thread polling the command — an async worker, for a real command.
+    #[test]
+    fn the_work_runs_off_the_thread_that_awaits_it() {
+        let app = app();
+        let handle = app.handle().clone();
+        let (awaiting, working) = tauri::async_runtime::block_on(async move {
+            let awaiting = std::thread::current().id();
+            let working =
+                off_the_runtime(handle, |_, _| Ok(std::thread::current().id())).await;
+            (awaiting, working)
+        });
+        assert_ne!(awaiting, working.expect("the work succeeds"));
+    }
+
+    #[test]
+    fn the_works_own_error_comes_back_unchanged() {
+        let app = app();
+        let err = tauri::async_runtime::block_on(off_the_runtime(
+            app.handle().clone(),
+            |_, _| -> Result<(), AppError> {
+                Err(AppError::structured(
+                    "STT_MODEL_NOT_INSTALLED",
+                    ErrorCategory::Validation,
+                    "not on this machine",
+                    true,
+                ))
+            },
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Structured { code: "STT_MODEL_NOT_INSTALLED", .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// A task that never finished is the recogniser failing to start, and says
+    /// so in a code the frontend has copy for, rather than as a window error.
+    #[test]
+    fn a_task_that_never_finishes_is_reported_as_the_recogniser_failing() {
+        let app = app();
+        let err = tauri::async_runtime::block_on(off_the_runtime(
+            app.handle().clone(),
+            |_, _| -> Result<(), AppError> { panic!("the C library fell over") },
+        ))
+        .unwrap_err();
+        match err {
+            AppError::Structured {
+                code,
+                category,
+                recoverable,
+                ..
+            } => {
+                assert_eq!(code, "STT_WORKER_FAILED");
+                assert_eq!(category, ErrorCategory::Internal);
+                assert!(!recoverable);
+            }
+            other => panic!("expected a structured error, got {other:?}"),
+        }
+    }
+}

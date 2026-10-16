@@ -111,9 +111,10 @@ impl<T> Resident<T> {
     ///   does have exactly where it was: evicting first would answer "you asked
     ///   for a model that isn't here" by also throwing the working one away,
     ///   and the next take would pay a cold load for nothing.
-    /// - `load` runs after it has been dropped, so two ~161 MB graph sets never
-    ///   sit in memory together. A take already running keeps its own `Arc`
-    ///   and finishes on the model it started with.
+    /// - `load` runs after the cache has let go of it, so the cache never holds
+    ///   two ~161 MB graph sets at once. A take already running keeps its own
+    ///   `Arc` — and with it the old graphs, until the take ends — and finishes
+    ///   on the model it started with.
     pub(crate) fn get_or_load<P, E>(
         &self,
         id: &'static str,
@@ -178,7 +179,7 @@ fn cached_as<T>(slot: &Slot<T>, id: &str) -> Option<Arc<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -186,47 +187,115 @@ mod tests {
     /// the test instead of hanging the suite.
     const PATIENCE: Duration = Duration::from_secs(5);
 
+    /// How long a test waits after starting a second request before letting the
+    /// first one finish.
+    ///
+    /// Not synchronisation: no assertion depends on the second request arriving
+    /// in time. It only makes it likely that the second is queued on the gate
+    /// mid-load — the case worth testing — rather than arriving once the first
+    /// has finished.
+    const HEAD_START: Duration = Duration::from_millis(50);
+
+    /// Run `work` on its own thread. The answer comes back over a channel
+    /// rather than through `join`, so that a regression which deadlocks fails
+    /// the test after `PATIENCE` instead of hanging it.
+    fn spawn<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<T> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(work());
+        });
+        rx
+    }
+
+    fn finish<T>(rx: &mpsc::Receiver<T>, what: &str) -> T {
+        rx.recv_timeout(PATIENCE)
+            .unwrap_or_else(|err| panic!("{what} did not finish: {err}"))
+    }
+
+    /// Run `query` on another thread and insist it answers while a load is
+    /// still held open. On the old single mutex this is where it hung.
+    fn answers_during_load<Q: Send + 'static>(query: impl FnOnce() -> Q + Send + 'static) -> Q {
+        finish(&spawn(query), "the query, while a load was held open,")
+    }
+
+    /// The closure's half of a handshake that holds a load open in the middle:
+    /// it says it has got there, then waits to be let go.
+    struct Held {
+        reached: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Held {
+        fn here(self) {
+            self.reached.send(()).unwrap();
+            self.release.recv_timeout(PATIENCE).expect("released");
+        }
+    }
+
+    /// The test's half.
+    struct Holder {
+        reached: mpsc::Receiver<()>,
+        release: mpsc::Sender<()>,
+    }
+
+    impl Holder {
+        fn reached(&self) {
+            self.reached
+                .recv_timeout(PATIENCE)
+                .expect("the load reached the point it is held at");
+        }
+
+        fn release(&self) {
+            self.release.send(()).unwrap();
+        }
+    }
+
+    fn hold() -> (Held, Holder) {
+        let (reached_tx, reached) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        (
+            Held {
+                reached: reached_tx,
+                release: release_rx,
+            },
+            Holder { reached, release },
+        )
+    }
+
+    type Loaded = Result<Arc<String>, String>;
+
     fn ready(resident: &Resident<String>, id: &'static str) -> Arc<String> {
         resident
             .get_or_load(id, || Ok::<_, String>(()), |()| Ok(id.to_string()))
             .expect("load")
     }
 
-    /// A load that announces it has started and then waits to be released,
-    /// which is how a test holds one open in the middle.
+    /// A load of `id`, started on another thread and held open while it builds.
     fn held_load(
-        resident: Arc<Resident<String>>,
+        resident: &Arc<Resident<String>>,
         id: &'static str,
-        builds: Arc<AtomicUsize>,
-    ) -> (
-        mpsc::Receiver<()>,
-        mpsc::Sender<()>,
-        std::thread::JoinHandle<Result<Arc<String>, String>>,
-    ) {
-        let (started_tx, started) = mpsc::channel();
-        let (release, release_rx) = mpsc::channel::<()>();
-        let thread = std::thread::spawn(move || {
+        builds: &Arc<AtomicUsize>,
+    ) -> (Holder, mpsc::Receiver<Loaded>) {
+        let (held, holder) = hold();
+        let resident = Arc::clone(resident);
+        let builds = Arc::clone(builds);
+        let done = spawn(move || {
             resident.get_or_load(
                 id,
                 || Ok(()),
                 move |()| {
                     builds.fetch_add(1, Ordering::SeqCst);
-                    started_tx.send(()).unwrap();
-                    release_rx.recv_timeout(PATIENCE).expect("released");
+                    held.here();
                     Ok(id.to_string())
                 },
             )
         });
-        (started, release, thread)
+        holder.reached();
+        (holder, done)
     }
 
-    /// Run `query` on another thread and insist it answers while the load is
-    /// still held open. On the old single mutex this is where it hung.
-    fn answers_during_load<Q: Send + 'static>(query: impl FnOnce() -> Q + Send + 'static) -> Q {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || tx.send(query()).unwrap());
-        rx.recv_timeout(PATIENCE)
-            .expect("the query waited for the load to finish")
+    fn no_builds() -> Arc<AtomicUsize> {
+        Arc::new(AtomicUsize::new(0))
     }
 
     #[test]
@@ -251,30 +320,26 @@ mod tests {
         // A held load is past `prepare`, so "a" has already been dropped: for
         // the length of the load nothing is resident, and the answer has to
         // say so now rather than "b" a second later.
-        let (started, release, thread) =
-            held_load(Arc::clone(&resident), "b", Arc::new(AtomicUsize::new(0)));
-        started.recv_timeout(PATIENCE).unwrap();
+        let (holder, done) = held_load(&resident, "b", &no_builds());
 
         let probe = Arc::clone(&resident);
         assert_eq!(answers_during_load(move || probe.loaded_id()), None);
 
-        release.send(()).unwrap();
-        thread.join().unwrap().unwrap();
+        holder.release();
+        finish(&done, "the load").unwrap();
         assert_eq!(resident.loaded_id(), Some("b"));
     }
 
     #[test]
     fn eviction_does_not_wait_for_a_load_in_progress() {
         let resident = Arc::new(Resident::new());
-        let (started, release, thread) =
-            held_load(Arc::clone(&resident), "a", Arc::new(AtomicUsize::new(0)));
-        started.recv_timeout(PATIENCE).unwrap();
+        let (holder, done) = held_load(&resident, "a", &no_builds());
 
         let probe = Arc::clone(&resident);
         answers_during_load(move || probe.evict("a"));
 
-        release.send(()).unwrap();
-        thread.join().unwrap().unwrap();
+        holder.release();
+        finish(&done, "the load").unwrap();
     }
 
     /// Preload and the start of a take, arriving together: one build, and both
@@ -282,14 +347,13 @@ mod tests {
     #[test]
     fn concurrent_requests_for_one_model_build_it_once() {
         let resident = Arc::new(Resident::new());
-        let builds = Arc::new(AtomicUsize::new(0));
-        let (started, release, first) = held_load(Arc::clone(&resident), "a", Arc::clone(&builds));
-        started.recv_timeout(PATIENCE).unwrap();
+        let builds = no_builds();
+        let (holder, first) = held_load(&resident, "a", &builds);
 
         let queued = {
             let resident = Arc::clone(&resident);
             let builds = Arc::clone(&builds);
-            std::thread::spawn(move || {
+            spawn(move || {
                 resident.get_or_load(
                     "a",
                     || Ok::<_, String>(()),
@@ -300,17 +364,66 @@ mod tests {
                 )
             })
         };
-        // Not synchronisation: the assertions hold whether or not the second
-        // request arrives in time. This only makes it likely that it is queued
-        // on the gate mid-load — the case worth testing — rather than arriving
-        // after the first has finished and taking the cached copy.
-        std::thread::sleep(Duration::from_millis(50));
-        release.send(()).unwrap();
+        std::thread::sleep(HEAD_START);
+        holder.release();
 
-        let first = first.join().unwrap().unwrap();
-        let queued = queued.join().unwrap().unwrap();
+        let first = finish(&first, "the first request").unwrap();
+        let queued = finish(&queued, "the queued request").unwrap();
         assert!(Arc::ptr_eq(&first, &queued));
         assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
+
+    /// Two different models still load one at a time: the gate is about
+    /// memory and the C library, not about which model is asked for.
+    #[test]
+    fn loads_of_different_models_never_overlap() {
+        let resident = Arc::new(Resident::new());
+        let first_finished = Arc::new(AtomicBool::new(false));
+        let (held, holder) = hold();
+        let first = {
+            let resident = Arc::clone(&resident);
+            let first_finished = Arc::clone(&first_finished);
+            spawn(move || {
+                resident.get_or_load(
+                    "a",
+                    || Ok::<_, String>(()),
+                    move |()| {
+                        held.here();
+                        first_finished.store(true, Ordering::SeqCst);
+                        Ok("a".to_string())
+                    },
+                )
+            })
+        };
+        holder.reached();
+
+        let second = {
+            let resident = Arc::clone(&resident);
+            let first_finished = Arc::clone(&first_finished);
+            spawn(move || {
+                resident.get_or_load(
+                    "b",
+                    || Ok::<_, String>(()),
+                    move |()| {
+                        Ok(format!(
+                            "b, built after a: {}",
+                            first_finished.load(Ordering::SeqCst)
+                        ))
+                    },
+                )
+            })
+        };
+        std::thread::sleep(HEAD_START);
+        // Had "b" not waited, it would be resident by now.
+        assert_eq!(resident.loaded_id(), None);
+        holder.release();
+
+        finish(&first, "the first load").unwrap();
+        assert_eq!(
+            *finish(&second, "the second load").unwrap(),
+            "b, built after a: true"
+        );
+        assert_eq!(resident.loaded_id(), Some("b"));
     }
 
     /// Installed or deleted while it loaded: the files it read are not the
@@ -318,16 +431,14 @@ mod tests {
     #[test]
     fn a_model_evicted_mid_load_is_not_left_resident() {
         let resident = Arc::new(Resident::new());
-        let (started, release, thread) =
-            held_load(Arc::clone(&resident), "a", Arc::new(AtomicUsize::new(0)));
-        started.recv_timeout(PATIENCE).unwrap();
+        let (holder, done) = held_load(&resident, "a", &no_builds());
 
         resident.evict("a");
-        release.send(()).unwrap();
+        holder.release();
 
         // The caller that asked still gets what it asked for — a take arming on
         // it finishes on the weights it started with — but nothing is cached.
-        let handed_back = thread.join().unwrap().unwrap();
+        let handed_back = finish(&done, "the load").unwrap();
         assert_eq!(*handed_back, "a");
         assert_eq!(resident.loaded_id(), None);
 
@@ -336,17 +447,56 @@ mod tests {
         assert!(!Arc::ptr_eq(&handed_back, &fresh));
     }
 
+    /// The same, earlier: evicted while its directory was being resolved and
+    /// checked. The files `prepare` found are the ones being replaced.
+    #[test]
+    fn a_model_evicted_while_it_is_prepared_is_not_left_resident() {
+        let resident = Arc::new(Resident::new());
+        ready(&resident, "a");
+        let (held, holder) = hold();
+        let done = {
+            let resident = Arc::clone(&resident);
+            spawn(move || {
+                resident.get_or_load(
+                    "b",
+                    move || {
+                        held.here();
+                        Ok::<_, String>(())
+                    },
+                    |()| Ok("b".to_string()),
+                )
+            })
+        };
+        holder.reached();
+
+        // Still resident: nothing is dropped until `prepare` has passed.
+        let probe = Arc::clone(&resident);
+        assert_eq!(answers_during_load(move || probe.loaded_id()), Some("a"));
+
+        resident.evict("b");
+        holder.release();
+        assert_eq!(*finish(&done, "the load").unwrap(), "b");
+        assert_eq!(resident.loaded_id(), None);
+    }
+
     #[test]
     fn evicting_a_different_model_leaves_a_load_in_progress_alone() {
         let resident = Arc::new(Resident::new());
-        let (started, release, thread) =
-            held_load(Arc::clone(&resident), "a", Arc::new(AtomicUsize::new(0)));
-        started.recv_timeout(PATIENCE).unwrap();
+        let (holder, done) = held_load(&resident, "a", &no_builds());
 
         resident.evict("b");
-        release.send(()).unwrap();
-        thread.join().unwrap().unwrap();
+        holder.release();
+        finish(&done, "the load").unwrap();
         assert_eq!(resident.loaded_id(), Some("a"));
+    }
+
+    #[test]
+    fn evicting_a_different_model_leaves_the_resident_one_alone() {
+        let resident = Resident::new();
+        let working = ready(&resident, "a");
+        resident.evict("b");
+        assert_eq!(resident.loaded_id(), Some("a"));
+        assert!(Arc::ptr_eq(&working, &ready(&resident, "a")));
     }
 
     #[test]
@@ -426,7 +576,7 @@ mod tests {
 
         let acting = {
             let resident = Arc::clone(&resident);
-            std::thread::spawn(move || action(&resident))
+            spawn(move || action(&resident))
         };
         dropping
             .recv_timeout(PATIENCE)
@@ -436,7 +586,7 @@ mod tests {
         assert_eq!(answers_during_load(move || probe.loaded_id()), None);
 
         release.send(()).unwrap();
-        acting.join().unwrap();
+        finish(&acting, "the action");
     }
 
     #[test]
@@ -466,6 +616,8 @@ mod tests {
         });
     }
 
+    /// Unwinding out of the load poisons the gate — its guard drops during the
+    /// panic — so this is the recovery path, not a gate that was never touched.
     #[test]
     fn a_load_that_panics_does_not_lock_out_the_next_one() {
         let resident = Resident::new();
@@ -477,6 +629,7 @@ mod tests {
             )
         }));
         assert!(panicked.is_err());
+        assert!(resident.load_gate.is_poisoned());
         assert_eq!(*ready(&resident, "a"), "a");
     }
 }
