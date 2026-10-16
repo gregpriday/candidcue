@@ -538,12 +538,21 @@ export function createSmoothFollowStore(
         // moved through.
         if (snapshot.seq <= s.seq && s.seq !== 0) return s;
 
-        const stateChanged = snapshot.state !== s.state;
+        /*
+         * A paused take stays paused. The one snapshot that reaches this store
+         * while following is off is the operator's own move coming back
+         * (`manualAnchor`, #275), and the engine reports it as `following`
+         * because it was told where the reader is — but nothing is following
+         * anyone, and a panel that said so would describe a document tracking
+         * the presenter's voice while it sits exactly where they put it.
+         */
+        const nextState = s.followingPaused ? 'paused' : snapshot.state;
+        const stateChanged = nextState !== s.state;
         let timeline = stateChanged
           ? push(
               s,
               'state',
-              `${FOLLOW_STATE_LABELS[s.state]} → ${FOLLOW_STATE_LABELS[snapshot.state]}`,
+              `${FOLLOW_STATE_LABELS[s.state]} → ${FOLLOW_STATE_LABELS[nextState]}`,
               `${snapshot.decision}, confidence ${snapshot.confidence.toFixed(2)}`,
             )
           : s.timeline;
@@ -606,7 +615,7 @@ export function createSmoothFollowStore(
           ...s,
           receivingFrames: true,
           lastFrameAtMs: now(),
-          state: snapshot.state,
+          state: nextState,
           decision: snapshot.decision,
           confidence: snapshot.confidence,
           band: confidenceBand(snapshot.confidence),

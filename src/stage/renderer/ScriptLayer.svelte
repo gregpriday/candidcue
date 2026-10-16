@@ -3084,6 +3084,25 @@
     const result = engine.frame(now);
     setScroll(restingSnap(result.scrollPx, result.velocityPxS));
     /*
+     * A re-anchor moved the document out from under the transport, so the
+     * transport moves with it — the same carry `manualScrollBy` gives a wheel
+     * gesture. Starting a roll switches following off, and a sentence step or
+     * section jump is spent while following is off (#275); without this the
+     * goal is still back where the document was, and the roll drags the script
+     * straight back to it. Move, and carry on rolling from here.
+     *
+     * And give the document back, the way starting the roll did. The move
+     * arrived as an accepted alignment snapshot, and one of those outranks the
+     * transport for fifteen seconds — the roll would stop dead after every
+     * step. Released only now, once the re-anchor has landed: releasing on
+     * receipt would revoke the very directive that carries the move.
+     */
+    if (result.reanchored && autoTargetPx !== null) {
+      autoTargetPx = result.scrollPx;
+      autoEndReported = false;
+      engine.releaseAlignment();
+    }
+    /*
      * The script becomes visible on the frame it is in the RIGHT PLACE, never
      * before — and "the right place" is read off the engine rather than from
      * anything this file remembers, so it is true of the opening, of an aligner

@@ -465,6 +465,56 @@ describe('switching following off holds the document', () => {
     const peak = Math.max(...trace.map((f) => Math.abs(f.velocityPxS)));
     expect(peak).toBeLessThanOrEqual(REACQUIRE_LINES_PER_SECOND * map.linePitchPx * 1.05);
   });
+
+  /*
+   * #275. Following off is the state a presenter picks to drive the script by
+   * hand, and the pause parked EVERY re-anchor — including the operator's own
+   * sentence step or section jump coming back from the engine as
+   * `manualAnchor`. It sat there until its TTL ran out, so those keys moved the
+   * engine and never the glass.
+   */
+  it.each([
+    ['forward', 120],
+    ['back', 4],
+  ])('still goes where a manual move sends it (%s), and holds there', (_label, unit) => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+
+    // The answer to a move carries a rate — the engine reports `following` at
+    // the place it was told — and a paused document must not run on it.
+    engine.receiveSnapshot(
+      snapshotAt(unit, 12_100, { decision: 'manualAnchor', confirmedToken: unit }),
+      12_100,
+    );
+    const trace = coast(engine, 12_100, 13_000);
+    expect(trace.some((f) => f.reanchored)).toBe(true);
+
+    const destination = map.sampleMotionPath(unit)?.scrollPx ?? 0;
+    expect(Math.abs(engine.controller.state.q - destination)).toBeLessThan(map.linePitchPx);
+
+    const landed = engine.controller.state.q;
+    coast(engine, 13_000, 16_000);
+    expect(engine.controller.state.q).toBeCloseTo(landed, 1);
+  });
+
+  it('keeps the aligner’s own relocations parked while following is off', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+    const parked = engine.controller.state.q;
+
+    let t = 12_100;
+    for (const decision of ['relocationAccepted', 'jumpForwardAccepted'] as const) {
+      engine.receiveSnapshot(snapshotAt(140, t, { decision, rateTokensPerSecond: 0 }), t);
+      const trace = coast(engine, t, t + 2000);
+      expect(trace.some((f) => f.reanchored)).toBe(false);
+      expect(engine.controller.state.q).toBeCloseTo(parked, 1);
+      t += 2000;
+    }
+  });
 });
 
 describe('the limits themselves (§30.6)', () => {

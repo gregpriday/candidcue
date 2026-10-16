@@ -399,8 +399,13 @@ function shimBody(config: ShimConfig): void {
    * look exactly like no alignment feed at all (src/shared/contracts/
    * alignment.ts explains why it is that strict — one NaN poisons the stage's
    * motion plant for the life of the session).
+   *
+   * `lenTokens` is the script handed to `start_alignment`, which is what Rust
+   * reports as `scriptLenTokens`. It used to be a literal 0, and the display
+   * position is clamped to it, so every manual move put the glass at token 0
+   * whatever the snapshot said — no spec could see a step land.
    */
-  const alignment = { generation: 0, seq: 0, token: 0 };
+  const alignment = { generation: 0, seq: 0, token: 0, lenTokens: 0 };
 
   function publishAlignment(): void {
     if (alignment.generation === 0) return;
@@ -428,7 +433,7 @@ function shimBody(config: ShimConfig): void {
       displayLimitToken: alignment.token,
       confidence: 1,
       suggestionToken: null,
-      scriptLenTokens: 0,
+      scriptLenTokens: alignment.lenTokens,
       observedAtom: alignment.token,
       confirmedAtom: alignment.token,
     });
@@ -995,6 +1000,10 @@ function shimBody(config: ShimConfig): void {
         alignment.generation = control.sessionGeneration;
         alignment.seq = 0;
         alignment.token = 0;
+        {
+          const tokens = args?.['tokens'];
+          alignment.lenTokens = Array.isArray(tokens) ? tokens.length : 0;
+        }
         return null;
 
       case 'stop_alignment':

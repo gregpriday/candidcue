@@ -1587,8 +1587,20 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
      * evidence of anything and is credited to nothing. Time is never invented
      * either way: uncredited time still counts in the denominator, which is
      * exactly what "not following then" should look like.
+     *
+     * A move made while the take is paused or following is off is neither
+     * end of a following interval (#275). The engine reports it as
+     * `following` because it was told where the reader is, and crediting the
+     * gaps either side of it would book a paused presenter stepping through
+     * the script by hand as time spent following them. (`voiceFollow` is false
+     * from the start of a take with no voice, which is not a pause.)
      */
+    const current = get(state);
+    const heldMove =
+      snapshot.decision === 'manualAnchor' &&
+      (current.paused !== 'none' || (current.mode === 'voice' && !current.voiceFollow));
     if (
+      !heldMove &&
       activeTake.lastSnapshotAtMs !== null &&
       activeTake.lastState === 'following' &&
       nowMs - activeTake.lastSnapshotAtMs <= FOLLOWING_CREDIT_MAX_GAP_MS
@@ -1596,7 +1608,7 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
       activeTake.followingMs += nowMs - activeTake.lastSnapshotAtMs;
     }
     activeTake.lastSnapshotAtMs = nowMs;
-    activeTake.lastState = snapshot.state;
+    activeTake.lastState = heldMove ? null : snapshot.state;
     // §36.3 recovery events, from the decision codes that describe one: the
     // engine concluded the presenter went back and re-read, or relocated. A
     // manual retake opens a new pass instead, so the two are never conflated.

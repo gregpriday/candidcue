@@ -109,12 +109,18 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
+const { compile } = await import('../../../src/shared/markdown');
 const {
   clearSession,
+  goToToken,
+  hardPause,
+  moveSentences,
+  pauseListening,
   session,
   startLiveSession,
   startPrompting,
   stopSession,
+  toggleVoiceFollow,
 } = await import('../../../src/control/stores/session');
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
 
@@ -138,6 +144,8 @@ interface StartOverrides {
   sessionGeneration?: number;
   transcriptRetained?: boolean;
   mode?: 'voice' | 'manual';
+  /** A real compile, for tests that navigate by sentence. */
+  compiled?: CompiledScript;
   sentences?: Array<{
     id: string;
     blockId: string;
@@ -157,7 +165,7 @@ function start(overrides: StartOverrides = {}): string {
     sentences: (overrides.sentences ?? []) as never,
     totalTokens: 200,
     sessionId: 'session-uuid-1',
-    compiled: compiledStub(),
+    compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
     transcriptRetained: overrides.transcriptRetained ?? false,
   });
@@ -630,5 +638,159 @@ describe('§115 — the fallback-input notice is followable', () => {
     expect(get(session).usingFallbackInput).toBe(true);
     expect(get(session).micState).toBe('live');
     expect(get(toasts)).toHaveLength(1);
+  });
+});
+
+/**
+ * #275 — a paused take still goes where the presenter sends it.
+ *
+ * Space, a hard pause and switching following off all stop the driver
+ * prompting, and the driver used to drop every snapshot while it was not —
+ * including the `manualAnchor` Rust publishes in answer to a move. The engine
+ * moved; `$session.snapshot` did not, so the embedded stage (fed from it) never
+ * moved, and the take ended where following had been paused: "expected 3 to be
+ * 47". Pausing must still stop the VOICE, and that half is pinned here too.
+ */
+describe('#275 — manual moves while the take is paused or not following', () => {
+  const SOURCE =
+    '# Opening\n\nFirst sentence of the opening. Second sentence of the opening.\n\n' +
+    '## Middle\n\nThird sentence in the middle. Fourth sentence in the middle.\n\n' +
+    '## Close\n\nFifth sentence near the close. Sixth and final sentence of the close.\n';
+
+  let seq = 0;
+
+  function manualAnchorAt(token: number): Record<string, unknown> {
+    seq += 1;
+    return {
+      sessionGeneration: 7,
+      seq,
+      // What `Engine::set_manual_position` reports: following, at the place it
+      // was given — which is exactly why it must not be taken for the voice.
+      state: 'following',
+      decision: 'manualAnchor',
+      confirmedToken: token,
+      observedToken: token,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: token,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: token,
+      confirmedAtom: token,
+    };
+  }
+
+  function voiceAt(token: number): Record<string, unknown> {
+    return { ...manualAnchorAt(token), decision: 'localConfirmed' };
+  }
+
+  /** Answer every move the way Rust does: publish where it was put. */
+  function answerMovesLikeRust(): void {
+    setInvokeForTesting(async (command, args) => {
+      invoked.push({ command, args });
+      if (command === 'set_alignment_position') {
+        alignmentFeed.push?.(manualAnchorAt(args?.token as number));
+      }
+      return undefined as never;
+    });
+  }
+
+  function startScript() {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    return compiled;
+  }
+
+  const positionMoves = () =>
+    invoked.filter((c) => c.command === 'set_alignment_position').map((c) => c.args?.token);
+
+  beforeEach(() => {
+    seq = 0;
+    answerMovesLikeRust();
+  });
+
+  it.each([
+    ['paused with Space', () => pauseListening()],
+    ['hard-paused', () => hardPause()],
+    ['following off', () => toggleVoiceFollow()],
+  ])('ends a take %s where the presenter moved it, not where it paused', async (_label, pause) => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    // Following got as far as the second sentence before the pause.
+    const second = compiled.sentences[1]!.startTokenIndex;
+    alignmentFeed.push?.(voiceAt(second));
+    expect(get(session).snapshot?.confirmedToken).toBe(second);
+
+    pause();
+    const last = compiled.sentences.at(-1)!.startTokenIndex;
+    goToToken(last);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(get(session).snapshot?.confirmedToken).toBe(last);
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(last);
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
+      string,
+      { endTokenIndex?: number },
+    ];
+    expect(recorded.endTokenIndex).toBe(last);
+  });
+
+  it('steps one sentence further on every press while paused', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    pauseListening();
+
+    for (let press = 0; press < 3; press += 1) {
+      moveSentences(1);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(positionMoves()).toEqual(
+      compiled.sentences.slice(1, 4).map((s) => s.startTokenIndex),
+    );
+    expect(get(session).snapshot?.confirmedToken).toBe(compiled.sentences[3]!.startTokenIndex);
+  });
+
+  it('keeps the voice out while paused, before and after a manual move', async () => {
+    const compiled = startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    toggleVoiceFollow();
+
+    alignmentFeed.push?.(voiceAt(compiled.sentences[4]!.startTokenIndex));
+    expect(get(session).snapshot).toBeNull();
+
+    const target = compiled.sentences[2]!.startTokenIndex;
+    goToToken(target);
+    await vi.advanceTimersByTimeAsync(0);
+    alignmentFeed.push?.(voiceAt(compiled.sentences[4]!.startTokenIndex));
+
+    expect(get(session).snapshot?.confirmedToken).toBe(target);
+    expect(stopSession().endTokenIndex).toBe(target);
+  });
+
+  it('does not book a paused presenter stepping by hand as time spent following', async () => {
+    startScript();
+    await vi.advanceTimersByTimeAsync(0);
+    pauseListening();
+
+    // A step a second for four seconds: every gap is under the credit cap, and
+    // every answer says `following`.
+    for (let press = 0; press < 4; press += 1) {
+      moveSentences(1);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    expect(stopSession().followingShare).toBe(0);
   });
 });

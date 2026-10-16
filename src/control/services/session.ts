@@ -91,11 +91,21 @@ export function createEngineTrackingDriver(options: TrackingDriverOptions): Trac
    * so pausing means not giving it any. Gating on this side rather than asking
    * Rust for a pause switch keeps the engine's contract as small as it is
    * honest — there is no state in it that a "paused" flag could describe.
+   *
+   * What the gate holds back is the VOICE. A `manualAnchor` is the engine's
+   * answer to a move the operator made — a sentence step, a section jump, a
+   * hand scroll — and it passes whether or not following is on. Dropping it
+   * here is what made ⌥→ dead while paused: the engine moved, the glass and
+   * the take's ending did not, and `currentSentenceIndex` kept counting from
+   * the stale snapshot, so every press aimed at the same sentence. Following
+   * off is the state a presenter picks to drive the script by hand, which
+   * made it the worst place for those keys to stop working.
    */
   let prompting = false;
 
   const stopSnapshots = subscribeAlignmentSnapshots((snapshot) => {
-    if (disposed || !prompting) return;
+    if (disposed) return;
+    if (!prompting && snapshot.decision !== 'manualAnchor') return;
     if (snapshot.sessionGeneration !== generation) return;
     const previous = lastSnapshot;
     lastSnapshot = snapshot;

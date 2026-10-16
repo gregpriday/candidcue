@@ -197,6 +197,13 @@ export interface StageMotionFrameResult {
    * update, or the guarantee that the document moves while obscured is lost.
    */
   documentOpacity: number;
+  /**
+   * True on the one frame a re-anchor wrote the plant directly. Anything that
+   * holds its own goal in document pixels — the auto-scroll transport — has
+   * to adopt the new position on this frame, or it drags the document back
+   * to where it was before the jump.
+   */
+  reanchored: boolean;
 }
 
 export interface StageMotionEngineOptions {
@@ -1888,7 +1895,7 @@ export function createStageMotionEngine(
       let fadeHold = false;
       /** True on the one frame that spends a re-anchor while obscured. */
       let reanchorApplied = false;
-      if (overwrite && paused) {
+      if (overwrite && paused && overwrite.authority !== 'manual') {
         /*
          * §48. Following is off, and a re-anchor is automatic motion.
          *
@@ -1903,6 +1910,14 @@ export function createStageMotionEngine(
          * fade: parking keeps it revocable, so it dies with its own TTL if
          * following stays off, and is there to be spent if it is still live
          * when following comes back.
+         *
+         * A MANUAL re-anchor is not automatic motion, and it is exempt. It is
+         * the operator's own sentence step or section jump coming back from
+         * the engine, and following off is the state a presenter chooses
+         * precisely to drive the script by hand — parking those keys until
+         * their TTL ran out made every one of them dead there (#275). It takes
+         * the ordinary road below, fade and all, and the hold resumes on the
+         * far side of it: the plant lands and nothing automatic moves it on.
          */
         transitions.deferPlantOverwrite(overwrite);
       } else if (overwrite) {
@@ -2820,6 +2835,7 @@ export function createStageMotionEngine(
         degraded: diagnostics.degraded,
         hitch,
         documentOpacity,
+        reanchored: reanchorApplied,
       };
     },
 
