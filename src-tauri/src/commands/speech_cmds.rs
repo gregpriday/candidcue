@@ -119,19 +119,54 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     })
 }
 
+/// Run speech-engine work that may load the model, off the async runtime.
+///
+/// A load is a blocking C++ call that takes over a second — five on a slow
+/// start — and a second caller waits out the first one's. On an async worker
+/// that is a worker lost for the duration, and every other command queued
+/// behind it, which is the rule `speech::session` already states for
+/// inference.
+///
+/// The engine is looked up again on the blocking thread because `State` is a
+/// borrow of the command's invocation and cannot travel there.
+///
+/// The work's own error comes back unchanged. Only a task that never finished
+/// — it panicked, or the runtime is shutting down — is reported here, and as
+/// the recogniser failing to start rather than through `From<tauri::Error>`,
+/// which would call it a window error.
+async fn off_the_runtime<R: tauri::Runtime, T: Send + 'static>(
+    app: tauri::AppHandle<R>,
+    work: impl FnOnce(&tauri::AppHandle<R>, &SpeechEngine) -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
+    use tauri::Manager as _;
+    tauri::async_runtime::spawn_blocking(move || {
+        let speech = app.state::<SpeechEngine>();
+        work(&app, &speech)
+    })
+    .await
+    .map_err(|err| {
+        AppError::structured(
+            "STT_WORKER_FAILED",
+            ErrorCategory::Internal,
+            "The speech recogniser could not be started.",
+            false,
+        )
+        .with_log(format!("speech engine task did not complete: {err}"))
+    })?
+}
+
 /// Load the model without starting a take.
 ///
-/// Worth calling when the presenter opens the live view: loading costs ~200 ms
-/// and belongs anywhere except the top of a take, where the presenter has
-/// already started talking. Idempotent.
+/// Worth calling when the presenter opens the live view: loading takes over a
+/// second and belongs anywhere except the top of a take, where the presenter
+/// has already started talking. Idempotent.
 #[tauri::command]
 pub async fn preload_speech_engine<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
-    speech: State<'_, SpeechEngine>,
 ) -> Result<(), AppError> {
     let model = selected_model(&db).await?;
-    speech.ensure_loaded(&app, model).map(|_| ())
+    off_the_runtime(app, move |app, speech| speech.ensure_loaded(app, model).map(|_| ())).await
 }
 
 /// What the renderer may choose about a session.
@@ -168,13 +203,15 @@ pub async fn start_transcription<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
-    speech: State<'_, SpeechEngine>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
     let model = selected_model(&db).await?;
-    speech.start_stream(app, model)
+    // All of `start_stream`, not just its load: the rest is microseconds, and
+    // splitting it would open a gap between loading a recogniser and binding
+    // a session to it that nothing needs.
+    off_the_runtime(app, move |app, speech| speech.start_stream(app.clone(), model)).await
 }
 
 /// Forward one frame of PCM16 audio, base64-encoded.

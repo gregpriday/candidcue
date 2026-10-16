@@ -51,6 +51,8 @@ fn harness() -> Harness {
             commands::select_speech_language,
             commands::get_settings,
             commands::update_settings,
+            commands::preload_speech_engine,
+            commands::start_transcription,
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
@@ -346,6 +348,43 @@ fn ending_the_take_unblocks_the_change() {
         json!({ "input": { "expectedRevision": 1, "languageTag": "en-US" } }),
     );
     assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+}
+
+// ---------------------------------------------------------------------------
+// Loading, off the async runtime (#256)
+// ---------------------------------------------------------------------------
+
+/// Preload and the start of a take load the model on a blocking thread rather
+/// than on the async worker the command arrived on. What that move can break
+/// is the plumbing around it: the engine is looked up again on the far side,
+/// and the load's own error has to come back as itself rather than as "the
+/// task failed". A machine with no model installed is the one load outcome a
+/// test can reach without ~161 MB of weights.
+///
+/// Says nothing about a SUCCESSFUL load, which needs the real model. The
+/// locking that makes overlapping loads safe is `speech::resident`'s to test.
+#[test]
+fn preload_reports_a_missing_model_as_itself() {
+    let h = harness();
+    let err = h.expect_err("preload_speech_engine", json!({}));
+    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+    assert_eq!(
+        err.get("recoverable").and_then(Value::as_bool),
+        Some(true),
+        "downloading the model is a remedy the user can take"
+    );
+}
+
+#[test]
+fn starting_a_take_reports_a_missing_model_as_itself() {
+    let h = harness();
+    let err = h.expect_err("start_transcription", json!({}));
+    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+    assert_eq!(
+        h.app.state::<SpeechEngine>().active_generation(),
+        None,
+        "no session is armed on a model that is not there"
+    );
 }
 
 // ---------------------------------------------------------------------------

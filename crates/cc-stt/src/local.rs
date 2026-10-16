@@ -408,7 +408,7 @@ impl LocalSttConfig {
     }
 }
 
-/// A loaded model. Expensive to build (~200 ms), cheap to create streams from,
+/// A loaded model. Expensive to build (over a second), cheap to create streams from,
 /// and `Send + Sync`, so the app loads it once and keeps it resident.
 pub struct LocalRecognizer {
     inner: OnlineRecognizer,

@@ -102,9 +102,9 @@ export async function getSpeechEngineStatus(): Promise<SpeechEngineStatus> {
 /**
  * Load the model without starting a take.
  *
- * Worth calling when the presenter opens the live view: loading costs ~200 ms,
- * and the one moment it must not be spent is the top of a take, when they have
- * already started talking.
+ * Worth calling when the presenter opens the live view: loading takes over a
+ * second, and the one moment it must not be spent is the top of a take, when
+ * they have already started talking.
  */
 export async function preloadSpeechEngine(): Promise<void> {
   await ipcInvoke<void>('preload_speech_engine');
