@@ -19,15 +19,45 @@ function wrapSelection(view: EditorView, before: string, after: string, placehol
   view.focus();
 }
 
+/**
+ * A blank line as CommonMark defines one: spaces and tabs and nothing else.
+ * Not `\s` — that also matches a no-break space, which Markdown reads as text,
+ * and treating such a line as blank would delete it.
+ */
+const BLANK_LINE = /^[ \t]*$/;
+
+/**
+ * Insert Markdown as a block of its own, a blank line away from its neighbours.
+ *
+ * An image line or a `[Take: …]` marker cannot interrupt a paragraph: written
+ * directly under a line of text it is a lazy continuation, and the compiler
+ * reads it as the tail of the paragraph above — an inline image in spoken
+ * text, a cue chip at the end of a sentence. The blank line between two
+ * paragraphs is the obvious place to put one, and it was exactly where this
+ * went wrong: only a caret line WITH text earned a leading blank line, so on
+ * the empty line under a paragraph the block was glued straight onto it.
+ *
+ * On a blank caret line the block takes the line's place (stray spaces and
+ * tabs with it) and gains a leading break only when the line above has text.
+ * The caret line's own line break is left where it was, so whatever followed
+ * is still a blank line away from the block's closing newline.
+ */
 function insertBlock(view: EditorView, block: string): void {
   const { state } = view;
   const range = state.selection.main;
   const line = state.doc.lineAt(range.from);
-  const needsLeadingBreak = line.length > 0;
-  const insert = `${needsLeadingBreak ? '\n\n' : ''}${block}\n`;
-  const from = line.to;
+  let from: number;
+  let insert: string;
+  if (BLANK_LINE.test(line.text)) {
+    const above = line.number > 1 ? state.doc.line(line.number - 1).text : '';
+    from = line.from;
+    insert = `${BLANK_LINE.test(above) ? '' : '\n'}${block}\n`;
+  } else {
+    from = line.to;
+    insert = `\n\n${block}\n`;
+  }
   view.dispatch({
-    changes: { from, to: from, insert },
+    changes: { from, to: line.to, insert },
     selection: { anchor: from + insert.length },
   });
   view.focus();

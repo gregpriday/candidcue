@@ -1,10 +1,14 @@
 /**
- * The insert toolbar's heading control (spec §13.6).
+ * The insert toolbar (spec §13.6).
  *
- * It could only ever produce an H1: on a line that already began with `#` the
- * old `insertHeading` focused the editor and returned, so the button did
- * nothing and explained nothing. Every level below the top had to be typed by
- * hand.
+ * The heading control could only ever produce an H1: on a line that already
+ * began with `#` the old `insertHeading` focused the editor and returned, so
+ * the button did nothing and explained nothing. Every level below the top had
+ * to be typed by hand.
+ *
+ * The block inserts — image, dropped images, diagram, part break — glued their
+ * block onto the paragraph above when the caret sat on the blank line under
+ * it, and Markdown then read the image or marker as part of that paragraph.
  *
  * Driven through a real `EditorState` with a minimal view — CodeMirror's
  * `EditorView` needs a DOM, and none of what is asserted here is about one.
@@ -12,7 +16,14 @@
 import { describe, expect, it } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
-import { cycleHeading } from '../../../src/control/lib/markdown-insert';
+import {
+  cycleHeading,
+  insertDiagram,
+  insertImage,
+  insertMarkdownBlocks,
+  insertTakeMarker,
+} from '../../../src/control/lib/markdown-insert';
+import { compile } from '../../../src/shared/markdown/compile';
 
 /**
  * Enough of an `EditorView` for the insert helpers: they read `state` and call
@@ -162,5 +173,98 @@ describe('cycleHeading', () => {
     cycleHeading(view);
     expect(text()).toBe('# First\nSecond\nThird');
     expect(text().slice(selection().head)).toBe('hird');
+  });
+});
+
+/**
+ * A document with its caret drawn in as `|`, so a case reads as a picture of
+ * the editor rather than as offset arithmetic.
+ */
+function caretView(marked: string) {
+  const caret = marked.indexOf('|');
+  return fakeView(marked.slice(0, caret) + marked.slice(caret + 1), caret);
+}
+
+/** The document and its (collapsed) caret, drawn back in as `|`. */
+function drawn(text: string, caret: { anchor: number; head: number }): string {
+  expect(caret.head).toBe(caret.anchor);
+  return text.slice(0, caret.anchor) + '|' + text.slice(caret.anchor);
+}
+
+/** What the compiler makes of a document, block by block. */
+function blockKinds(source: string): string[] {
+  return compile(source, { scriptId: 'test-script' }).blocks.map((block) => block.kind);
+}
+
+const IMAGE = '![a](assets/x.png)';
+
+describe('block inserts', () => {
+  /* Every row asserts the compiled shape as well as the text: the bug was
+     invisible as a string unless you knew the Markdown rule, and plain on the
+     glass, where the image became part of the paragraph above it. */
+  it.each([
+    // The reported case: the blank line between two paragraphs.
+    ['P\n|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n \t|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n| \t\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    // Four spaces left in front of the block would make it indented code.
+    ['P\n    |\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    // Already a blank line away from the paragraph: no second one.
+    ['P\n\n|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n \t\n|\nQ', `P\n \t\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n|\n\nQ', `P\n\n${IMAGE}\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    // Document edges.
+    ['|\nQ', `${IMAGE}\n|\nQ`, ['image', 'paragraph']],
+    ['|', `${IMAGE}\n|`, ['image']],
+    ['P\n|', `P\n\n${IMAGE}\n|`, ['paragraph', 'image']],
+    // A caret line with text keeps its behaviour: the block goes after it.
+    ['P|Q\nR', `PQ\n\n${IMAGE}\n|\nR`, ['paragraph', 'image', 'paragraph']],
+    ['P|', `P\n\n${IMAGE}\n|`, ['paragraph', 'image']],
+    // A no-break space is text to Markdown, so the line is not blank.
+    ['P\n |\nQ', `P\n \n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+  ])('inserts an image into %j as a block of its own', (before, after, kinds) => {
+    const { view, text, selection } = caretView(before);
+    insertImage(view, 'assets/x.png', 'a');
+    expect(drawn(text(), selection())).toBe(after);
+    expect(blockKinds(text())).toEqual(kinds);
+  });
+
+  it('makes a part break between two paragraphs a cue of its own', () => {
+    const { view, text, selection } = caretView('P\n|\nQ');
+    insertTakeMarker(view);
+    expect(drawn(text(), selection())).toBe('P\n\n[Take: name this part]\n|\nQ');
+    expect(blockKinds(text())).toEqual(['paragraph', 'cue', 'paragraph']);
+  });
+
+  it('keeps several dropped images apart from the paragraph and each other', () => {
+    const { view, text, selection } = caretView('P\n|\nQ');
+    insertMarkdownBlocks(view, [IMAGE, '![b](assets/y.png)']);
+    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n![b](assets/y.png)\n|\nQ`);
+    expect(blockKinds(text())).toEqual(['paragraph', 'image', 'image', 'paragraph']);
+  });
+
+  it('leaves the document alone when nothing was dropped', () => {
+    const { view, text, selection } = caretView('P\n|\nQ');
+    insertMarkdownBlocks(view, []);
+    expect(drawn(text(), selection())).toBe('P\n|\nQ');
+  });
+
+  /* A fence interrupts a paragraph anyway; it takes the same spacing all the
+     same, so every insert leaves the source looking alike. */
+  it('spaces a diagram like every other block', () => {
+    const { view, text, selection } = caretView('P\n|\nQ');
+    insertDiagram(view);
+    expect(drawn(text(), selection())).toBe('P\n\n```mermaid\nflowchart LR\n  A --> B\n```\n|\nQ');
+    expect(blockKinds(text())).toEqual(['paragraph', 'diagram', 'paragraph']);
+  });
+
+  /* The caret ends on the empty line under the block it just wrote, so the
+     second of two inserts in a row starts in exactly the reported position. */
+  it('keeps consecutive inserts at the end of a document apart', () => {
+    const { view, text, selection } = caretView('P|');
+    insertImage(view, 'assets/x.png', 'a');
+    insertTakeMarker(view);
+    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n[Take: name this part]\n|`);
+    expect(blockKinds(text())).toEqual(['paragraph', 'image', 'cue']);
   });
 });
