@@ -18,7 +18,7 @@
  *     keeps it honest is `menu_accelerators_match_the_typescript_registry`,
  *     which now compares the two sets in BOTH directions: a chord Rust binds
  *     must be the chord declared here, and a chord declared here must be bound;
- *   - the transport keys — Space, B, T, `[`, `]` — are resolved by
+ *   - the transport keys — Space, B, A, `[`, `]` — are resolved by
  *     `lib/shortcuts.ts`, which is a different mechanism rather than a second
  *     copy: they are unmodified keys owned by whichever screen is up, and they
  *     have no menu item to be an accelerator for.
@@ -163,7 +163,6 @@ export interface CommandActions {
   moveChapter(delta: -1 | 1): void;
   blankStage(): void;
   toggleMirror(): void;
-  takeMarker(): void;
   identifyDisplays(): void;
   endTake(): void;
   showMainWindow(): void;
@@ -692,12 +691,6 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     checked: (c) => c.stageMirrored,
     available: (c) => c.sessionActive,
     run: (a) => a.toggleMirror(),
-  },
-  'session.take-marker': {
-    id: 'session.take-marker',
-    label: 'Add Take Marker',
-    available: (c) => c.sessionActive,
-    run: (a) => a.takeMarker(),
   },
   'session.identify-displays': {
     id: 'session.identify-displays',

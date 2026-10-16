@@ -121,9 +121,8 @@
       mirrors: ['view.zoom-in', 'view.zoom-out'],
     },
     { label: 'Toggle horizontal mirror', keys: `${mod}Shift+M`, actions: ['toggle-mirror'] },
-    // The "(during Live)" these four used to carry is the group caption now.
+    // The "(during Live)" these rows used to carry is the group caption now.
     { label: 'Blank stage', keys: 'B', actions: ['blank-stage'] },
-    { label: 'Add take marker', keys: 'T', actions: ['take-marker'] },
     { label: 'Auto-scroll on / off', keys: 'A', actions: ['toggle-auto-scroll'] },
     {
       label: 'Auto-scroll slower / faster',
@@ -240,7 +239,7 @@
    * compares the accelerator sets in both directions.
    *
    * The transport table below is still hand-written, and still necessary: Space,
-   * B, T, A and the bracket keys have no menu item and no command id — they are
+   * B, A and the bracket keys have no menu item and no command id — they are
    * plain keys owned by the screen that is up, which is exactly what
    * `SHORTCUT_OWNERSHIP` describes. Folding those into the registry is the
    * remaining half of §6.1.

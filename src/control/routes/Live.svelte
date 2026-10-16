@@ -49,7 +49,6 @@ import { onShortcut } from '../lib/shortcuts';
   import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import {
-    addTakeMarker,
     adjustStageFontSize,
     adoptPresentationMode,
     anchorManualScroll,
@@ -819,10 +818,6 @@ import { onShortcut } from '../lib/shortcuts';
         case 'blank-stage':
           toggleBlankStage();
           break;
-        case 'take-marker':
-          addTakeMarker();
-          showToast('Take marker added', 'info', { durationMs: 1600 });
-          break;
         case 'toggle-presentation-mode':
           void togglePresentationMode();
           break;
@@ -880,7 +875,7 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * Through `formatAccelerator` — the same function the native menu and the
    * Shortcuts dialog use — so a key advertised on a tooltip cannot be one the
-   * app does not answer. Plain keys (`Space`, `T`) have no modifiers to
+   * app does not answer. Plain keys (`Space`, `B`) have no modifiers to
    * translate and pass through unchanged, which is what makes one helper serve
    * both kinds.
    */
@@ -1736,14 +1731,6 @@ import { onShortcut } from '../lib/shortcuts';
         onclick={() => moveSentences(1)}
       />
       <IconButton icon="restore" label="Restart paragraph" onclick={() => restartParagraph()} />
-      <IconButton
-        icon="flag"
-        label={`Add take marker (${transportKey('T')})`}
-        onclick={() => {
-          addTakeMarker();
-          showToast('Take marker added', 'info', { durationMs: 1600 });
-        }}
-      />
       <IconButton
         icon="eye-off"
         label={$session.stageBlanked ? 'Unblank stage' : 'Blank stage'}

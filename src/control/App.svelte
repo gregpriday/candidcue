@@ -969,7 +969,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     moveChapter: (delta) => void emitShortcut(delta < 0 ? 'prev-chapter' : 'next-chapter'),
     blankStage: () => void emitShortcut('blank-stage'),
     toggleMirror: () => void emitShortcut('toggle-mirror'),
-    takeMarker: () => void emitShortcut('take-marker'),
     identifyDisplays: () => void identifyStageDisplays(),
     endTake: () => void emitShortcut('stop-session'),
     showMainWindow: () => void focusMainWindow(),

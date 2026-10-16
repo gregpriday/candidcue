@@ -49,13 +49,13 @@ describe('a keyed notice replaces rather than stacks', () => {
   });
 
   it('leaves unkeyed notices alone — they are events, not states', () => {
-    showToast('Take marker added', 'info');
-    showToast('Take marker added', 'info');
+    showToast('Auto-scroll 160 wpm', 'info');
+    showToast('Auto-scroll 160 wpm', 'info');
     showToast('No sound is reaching the microphone.', 'danger', { key: 'input' });
     showToast('No sound is reaching the microphone.', 'danger', { key: 'input' });
     expect(messages()).toEqual([
-      'Take marker added',
-      'Take marker added',
+      'Auto-scroll 160 wpm',
+      'Auto-scroll 160 wpm',
       'No sound is reaching the microphone.',
     ]);
   });

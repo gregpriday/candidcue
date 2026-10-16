@@ -135,7 +135,6 @@ export const COMMAND_IDS = [
   'session.next-chapter',
   'session.blank-stage',
   'session.toggle-mirror',
-  'session.take-marker',
   'session.identify-displays',
   'session.end-take',
 

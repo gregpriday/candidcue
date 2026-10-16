@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import {
-  addTakeMarker,
   clearSession,
   connectionPill,
   hardPause,
@@ -143,7 +142,6 @@ describe('live session store', () => {
     moveSentences(1);
     moveSentences(-1);
     restartParagraph();
-    addTakeMarker();
     vi.advanceTimersByTime(60_000);
 
     const summary = stopSession();
