@@ -109,7 +109,7 @@ impl Harness {
     }
 
     /// The same call, made by Settings rather than by control.
-    fn from_settings(&self, command: &str, args: Value) -> Result<Value, Value> {
+    fn invoke_from_settings(&self, command: &str, args: Value) -> Result<Value, Value> {
         invoke_from(&self.preferences, command, args)
     }
 
@@ -431,7 +431,7 @@ fn settings_cannot_test_transcription_while_a_take_is_open() {
     h.begin_take();
 
     let err = h
-        .from_settings("start_transcription", json!({ "options": {} }))
+        .invoke_from_settings("start_transcription", json!({ "options": {} }))
         .expect_err("a test started mid-take must be refused");
     assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
     assert_eq!(
@@ -459,11 +459,11 @@ fn the_take_is_not_refused_by_its_own_session() {
 #[test]
 fn settings_can_test_transcription_when_no_take_is_open() {
     let h = harness();
-    assert_admitted(&h, h.from_settings("start_transcription", json!({ "options": {} })));
+    assert_admitted(&h, h.invoke_from_settings("start_transcription", json!({ "options": {} })));
 
     h.begin_take();
     h.app.state::<AppCoordinator>().end_session("session-under-test");
-    assert_admitted(&h, h.from_settings("start_transcription", json!({ "options": {} })));
+    assert_admitted(&h, h.invoke_from_settings("start_transcription", json!({ "options": {} })));
 }
 
 /// A start the guard let through: it reached the model. Without one that is
@@ -523,7 +523,7 @@ fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
     assert_eq!(alignment.bound_stream(), Some(take));
 
     let err = h
-        .from_settings("start_transcription", json!({ "options": {} }))
+        .invoke_from_settings("start_transcription", json!({ "options": {} }))
         .expect_err("a test started mid-take must be refused");
     assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
     assert_eq!(speech.active_generation(), Some(take), "the take keeps its stream");
@@ -569,7 +569,7 @@ fn transcription_a_take_still_replaces_a_running_settings_test() {
     require_model();
     let h = harness();
     let test = generation_of(
-        h.from_settings("start_transcription", json!({ "options": {} }))
+        h.invoke_from_settings("start_transcription", json!({ "options": {} }))
             .expect("with no take open, Settings may test"),
     );
 
@@ -583,7 +583,7 @@ fn transcription_a_take_still_replaces_a_running_settings_test() {
 
     // The test's own Stop, landing late, names its own generation and cannot
     // end the take that replaced it.
-    h.from_settings("stop_transcription", json!({ "generation": test }))
+    h.invoke_from_settings("stop_transcription", json!({ "generation": test }))
         .expect("a stale stop is accepted and ignored");
     assert_eq!(speech.active_generation(), Some(take));
 }
