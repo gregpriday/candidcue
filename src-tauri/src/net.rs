@@ -138,24 +138,6 @@ pub fn unreachable_host(labels: &HopLabels, reason: impl Into<String>) -> AppErr
     .with_log(reason.into())
 }
 
-/// The outcome of resolving a hop, classified.
-///
-/// A resolver error and an empty answer are both "could not reach", whatever
-/// the cause. `getaddrinfo` reports no-network and no-such-host alike as an
-/// uncategorised error whose only detail is platform text, so no attempt is
-/// made to tell them apart — that text goes to the log, never to the user.
-fn resolved_addresses(
-    labels: &HopLabels,
-    resolved: std::io::Result<Vec<SocketAddr>>,
-) -> Result<Vec<SocketAddr>, AppError> {
-    let addrs = resolved
-        .map_err(|e| unreachable_host(labels, format!("dns lookup failed: {e}")))?;
-    if addrs.is_empty() {
-        return Err(unreachable_host(labels, "host resolved to no addresses"));
-    }
-    Ok(addrs)
-}
-
 // ---------------------------------------------------------------------------
 // Address classification
 // ---------------------------------------------------------------------------
@@ -271,6 +253,26 @@ fn authority_of(url: &reqwest::Url) -> Option<String> {
 /// Validate one hop and resolve it. Every check that matters happens here, so
 /// the initial url and every `Location` go through exactly the same gate.
 pub async fn check_hop(url: &reqwest::Url, policy: &HopPolicy) -> Result<Hop, AppError> {
+    check_hop_resolving(url, policy, |host, port| async move {
+        tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map(|addrs| addrs.collect())
+    })
+    .await
+}
+
+/// [`check_hop`] with the name lookup handed in, so a test can stand in for a
+/// resolver that fails. A real lookup of an unresolvable name is no substitute:
+/// a captive portal or a hijacking resolver will happily answer for `.invalid`.
+async fn check_hop_resolving<F, Fut>(
+    url: &reqwest::Url,
+    policy: &HopPolicy,
+    lookup: F,
+) -> Result<Hop, AppError>
+where
+    F: FnOnce(String, u16) -> Fut,
+    Fut: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>>,
+{
     let labels = &policy.labels;
     let authority = authority_of(url)
         .ok_or_else(|| blocked_url(labels, "url has no host or usable port"))?;
@@ -308,13 +310,20 @@ pub async fn check_hop(url: &reqwest::Url, policy: &HopPolicy) -> Result<Hop, Ap
             let bare = host.trim_start_matches('[').trim_end_matches(']');
             match bare.parse::<IpAddr>() {
                 Ok(ip) => Ok(vec![SocketAddr::new(ip, port)]),
-                Err(_) => tokio::net::lookup_host((bare, port))
-                    .await
-                    .map(|addrs| addrs.collect()),
+                Err(_) => lookup(bare.to_string(), port).await,
             }
         }
     };
-    let addrs = resolved_addresses(labels, resolved)?;
+    // A lookup that fails is a connection problem, not a refusal: it is the
+    // first thing a machine with no network hits, and the guard has nothing to
+    // judge yet. `getaddrinfo` reports no-network and no-such-host alike, as
+    // platform text with no usable kind, so no attempt is made to tell them
+    // apart — that text goes to the log, never to the user.
+    let addrs = match resolved {
+        Ok(addrs) if !addrs.is_empty() => addrs,
+        Ok(_) => return Err(unreachable_host(labels, "host resolved to no addresses")),
+        Err(e) => return Err(unreachable_host(labels, format!("dns lookup failed: {e}"))),
+    };
     if !exempt {
         // ALL resolved addresses must be public. A host that answers with one
         // public and one loopback address is a rebinding attempt, not a
@@ -459,15 +468,29 @@ mod tests {
         assert_eq!(err.code(), "URL_BLOCKED", "{err:?}");
     }
 
-    // A real lookup of an unresolvable name is not deterministic — a captive
-    // portal or a hijacking resolver will answer for `.invalid` — so the
-    // classification is driven with the resolver outcome it would see.
-    #[test]
-    fn a_failed_dns_lookup_is_a_connection_problem_not_a_refusal() {
+    /// The real gate, with a resolver that gives `answer` for any name — the
+    /// stand-in for a lookup that a real network would not answer
+    /// deterministically (see [`check_hop_resolving`]).
+    async fn hop_resolving_to(
+        raw: &str,
+        answer: std::io::Result<Vec<SocketAddr>>,
+    ) -> Result<Hop, AppError> {
+        let url = reqwest::Url::parse(raw).unwrap();
+        check_hop_resolving(&url, &HopPolicy::strict(TEST_LABELS), |host, port| async move {
+            assert_eq!((host.as_str(), port), ("models.example.com", 443));
+            answer
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_failed_dns_lookup_is_a_connection_problem_not_a_refusal() {
+        // What macOS returns with Wi-Fi off.
         let offline = std::io::Error::other(
             "failed to lookup address information: nodename nor servname provided, or not known",
         );
-        let err = resolved_addresses(&TEST_LABELS, Err(offline))
+        let err = hop_resolving_to("https://models.example.com/a.tar.bz2", Err(offline))
+            .await
             .expect_err("a failed lookup must not resolve");
 
         assert_eq!(err.code(), "URL_UNREACHABLE", "{err:?}");
@@ -481,23 +504,51 @@ mod tests {
         assert!(!err.to_payload().user_message.contains("nodename"));
     }
 
-    #[test]
-    fn an_empty_dns_answer_is_a_connection_problem_not_a_refusal() {
-        let err = resolved_addresses(&TEST_LABELS, Ok(Vec::new()))
+    #[tokio::test]
+    async fn an_empty_dns_answer_is_a_connection_problem_not_a_refusal() {
+        let err = hop_resolving_to("https://models.example.com/a.tar.bz2", Ok(Vec::new()))
+            .await
             .expect_err("no address means nothing to connect to");
         assert_eq!(err.code(), "URL_UNREACHABLE", "{err:?}");
         assert!(err.to_string().contains("no addresses"), "{err}");
     }
 
-    #[test]
-    fn a_resolved_answer_is_passed_on_for_the_public_address_check() {
-        // Resolution only says "something answered"; whether it is allowed is
-        // decided after, by the same guard that refuses private literals.
-        let addrs: Vec<SocketAddr> = vec![
-            "93.184.216.34:443".parse().unwrap(),
-            "127.0.0.1:443".parse().unwrap(),
-        ];
-        let out = resolved_addresses(&TEST_LABELS, Ok(addrs.clone())).unwrap();
-        assert_eq!(out, addrs);
+    #[tokio::test]
+    async fn a_name_that_resolves_to_any_non_public_address_is_still_refused() {
+        // Resolving is only "something answered". One loopback address beside a
+        // public one is a rebinding attempt, and it is refused, not reached.
+        for answer in [
+            vec!["93.184.216.34:443", "127.0.0.1:443"],
+            vec!["10.0.0.1:443"],
+        ] {
+            let addrs: Vec<SocketAddr> = answer.iter().map(|a| a.parse().unwrap()).collect();
+            let err = hop_resolving_to("https://models.example.com/a.tar.bz2", Ok(addrs))
+                .await
+                .expect_err("a non-public answer must be refused");
+            assert_eq!(err.code(), "URL_BLOCKED", "{answer:?} → {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_name_that_resolves_publicly_is_pinned_to_what_was_checked() {
+        let public: SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let hop = hop_resolving_to("https://models.example.com/a.tar.bz2", Ok(vec![public]))
+            .await
+            .expect("a public answer is allowed");
+        assert_eq!(hop.addrs, vec![public]);
+    }
+
+    #[tokio::test]
+    async fn an_ip_literal_is_never_looked_up() {
+        let url = reqwest::Url::parse("https://1.1.1.1/a").unwrap();
+        let asked = std::cell::Cell::new(false);
+        let hop = check_hop_resolving(&url, &HopPolicy::strict(TEST_LABELS), |_, _| {
+            asked.set(true);
+            async { Ok(Vec::new()) }
+        })
+        .await
+        .expect("a public literal is allowed");
+        assert!(!asked.get(), "an ip literal was sent to the resolver");
+        assert!(hop.addrs.is_empty(), "an ip-literal hop needs no pin");
     }
 }

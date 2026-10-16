@@ -592,7 +592,9 @@ mod tests {
         assert_ne!(unreachable.code(), IMAGE_HOP_LABELS.blocked_code);
         assert_eq!(unreachable.category(), dropped.category());
         assert_eq!(unreachable.recoverable(), dropped.recoverable());
-        assert!(!unreachable.user_message().contains("refused"));
+        let message = unreachable.user_message();
+        assert!(message.contains("Check your connection"), "{message}");
+        assert!(!message.contains("refused"), "{message}");
     }
 
     #[tokio::test]
