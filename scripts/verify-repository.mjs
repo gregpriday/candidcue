@@ -105,6 +105,7 @@ requireNonEmpty('src-tauri/Cargo.lock', 'the app workspace must build with --loc
 requireNonEmpty('crates/Cargo.lock', 'the alignment workspace must build with --locked');
 require_('.nvmrc', 'the Node version used for a release has to be recorded');
 require_('rust-toolchain.toml', 'the Rust compiler used for a release has to be recorded');
+requireNonEmpty('sbom/native-components.json', 'the native licence gates and notices require the reviewed component inventory');
 
 const nvmrc = has('.nvmrc') ? read('.nvmrc') : null;
 if (nvmrc !== null) {
