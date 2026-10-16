@@ -465,6 +465,191 @@ describe('switching following off holds the document', () => {
     const peak = Math.max(...trace.map((f) => Math.abs(f.velocityPxS)));
     expect(peak).toBeLessThanOrEqual(REACQUIRE_LINES_PER_SECOND * map.linePitchPx * 1.05);
   });
+
+  /*
+   * #275. Following off is the state a presenter picks to drive the script by
+   * hand, and the pause parked EVERY re-anchor — including the operator's own
+   * sentence step or section jump coming back from the engine as
+   * `manualAnchor`. It sat there until its TTL ran out, so those keys moved the
+   * engine and never the glass.
+   */
+  it.each([
+    ['forward', 120],
+    ['back', 4],
+  ])('still goes where a manual move sends it (%s), and holds there', (_label, unit) => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+
+    // The answer to a move carries a rate — the engine reports `following` at
+    // the place it was told — and a paused document must not run on it.
+    engine.receiveSnapshot(
+      snapshotAt(unit, 12_100, { decision: 'manualAnchor', confirmedToken: unit }),
+      12_100,
+    );
+    const trace = coast(engine, 12_100, 13_000);
+    const landing = trace.find((f) => f.reanchored);
+    expect(landing).toBeDefined();
+
+    const destination = map.sampleMotionPath(unit)?.scrollPx ?? 0;
+    expect(Math.abs(engine.controller.state.q - destination)).toBeLessThan(map.linePitchPx);
+
+    // From the landing frame on, through the whole of the snapshot's
+    // prediction window: the display path creeps, the document does not.
+    coast(engine, 13_000, 16_000);
+    expect(engine.controller.state.q).toBeCloseTo(landing!.scrollPx, 1);
+  });
+
+  it('leaves a hand-scrolled document where the hand left it when the echo comes back', () => {
+    /*
+     * A wheel gesture far enough to relocate the reader reports the token on
+     * the reading line, and the engine answers with a `manualAnchor` there.
+     * Spending that answer would snap the document from where the presenter
+     * stopped to the start of the same line — after every gesture, in the
+     * mode where they are driving by hand.
+     */
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    // Stopped partway down a line, as a wheel does.
+    const handPx = (map.sampleMotionPath(60)?.scrollPx ?? 0) + map.linePitchPx * 0.4;
+    const readingY = handPx + map.readingLineStartY;
+    const onMark = map.lines.find((line) => line.bottomY >= readingY)!;
+    engine.manualOverride(handPx, 12_100, onMark.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+
+    engine.receiveSnapshot(
+      snapshotAt(onMark.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: onMark.firstTokenIndex,
+      }),
+      12_400,
+    );
+    const trace = coast(engine, 12_400, 13_400);
+    expect(trace.some((f) => f.reanchored)).toBe(false);
+    expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
+    // Spent, not parked: nothing is left over to land when following returns.
+    expect(engine.transitions.active).toBeNull();
+  });
+
+  it('recognises the echo by the line the hand reported, whatever the pixels say', () => {
+    // The renderer reads the reading line off the PAINTED position, which is
+    // snapped to the pixel grid; the plant is not. Half a pixel past a line's
+    // bottom, the two name neighbouring lines — so the echo is matched against
+    // the token the gesture reported, not against a measurement.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    const reported = map.lines.find((line) => line.firstTokenIndex >= 60)!;
+    const handPx = reported.bottomY + 0.5 - map.readingLineStartY;
+    engine.manualOverride(handPx, 12_100, reported.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+    engine.receiveSnapshot(
+      snapshotAt(reported.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: reported.firstTokenIndex,
+      }),
+      12_400,
+    );
+
+    const trace = coast(engine, 12_400, 13_400);
+    expect(trace.some((f) => f.reanchored)).toBe(false);
+    expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
+  });
+
+  it('still steps to the next line from a line boundary after a hand scroll', () => {
+    // The mark resting on the bottom edge of the hand's line is not the next
+    // line, and a sentence step there is a move — a paragraph gap below would
+    // otherwise leave the next line short of the mark.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    const index = map.lines.findIndex((line) => line.firstTokenIndex >= 60);
+    const hand = map.lines[index]!;
+    const next = map.lines[index + 1]!;
+    engine.manualOverride(hand.bottomY + 0.25 - map.readingLineStartY, 12_100, hand.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+    engine.receiveSnapshot(
+      snapshotAt(next.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: next.firstTokenIndex,
+      }),
+      12_400,
+    );
+
+    expect(coast(engine, 12_400, 13_400).some((f) => f.reanchored)).toBe(true);
+  });
+
+  it('still moves to the first measured line when the reading mark is above it', () => {
+    // Above the measured window is not "on its first line". Taking it for one
+    // swallowed a jump to that line entirely.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    engine.setPaused(true, 0);
+    const first = map.lines[0]!;
+    expect(engine.controller.state.q + map.readingLineStartY).toBeLessThan(first.topY);
+
+    engine.receiveSnapshot(
+      snapshotAt(first.firstTokenIndex, 100, {
+        decision: 'manualAnchor',
+        confirmedToken: first.firstTokenIndex,
+      }),
+      100,
+    );
+    const trace = coast(engine, 100, 1100);
+    expect(trace.some((f) => f.reanchored)).toBe(true);
+    const destination = map.sampleMotionPath(first.spokenUnitStart)?.scrollPx ?? 0;
+    expect(Math.abs(engine.controller.state.q - destination)).toBeLessThan(map.linePitchPx);
+  });
+
+  it('does not take a move back once the transport has taken the document again', () => {
+    /*
+     * The separate stage window is handed the same alignment snapshot on every
+     * live-sync revision. Releasing the lock after a move used to forget how
+     * far the feed had got, so the next copy of the move was accepted as new
+     * and spent again — a roll pulled back to the landing point twice a second.
+     */
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+
+    const move = snapshotAt(120, 12_100, { decision: 'manualAnchor', confirmedToken: 120 });
+    expect(engine.receiveSnapshot(move, 12_100)).toBe(true);
+    expect(coast(engine, 12_100, 13_000).some((f) => f.reanchored)).toBe(true);
+
+    engine.releaseAlignment();
+    expect(engine.receiveSnapshot(move, 13_000)).toBe(false);
+    expect(coast(engine, 13_000, 14_000).some((f) => f.reanchored)).toBe(false);
+    // A genuinely newer snapshot is still welcome.
+    expect(
+      engine.receiveSnapshot(snapshotAt(130, 14_000, { decision: 'manualAnchor' }), 14_000),
+    ).toBe(true);
+  });
+
+  it('keeps the aligner’s own relocations parked while following is off', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 40);
+    engine.setPaused(true, 12_000);
+    const parked = engine.controller.state.q;
+
+    let t = 12_100;
+    for (const decision of ['relocationAccepted', 'jumpForwardAccepted'] as const) {
+      engine.receiveSnapshot(snapshotAt(140, t, { decision, rateTokensPerSecond: 0 }), t);
+      const trace = coast(engine, t, t + 2000);
+      expect(trace.some((f) => f.reanchored)).toBe(false);
+      expect(engine.controller.state.q).toBeCloseTo(parked, 1);
+      t += 2000;
+    }
+  });
 });
 
 describe('the limits themselves (§30.6)', () => {

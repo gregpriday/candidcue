@@ -197,6 +197,13 @@ export interface StageMotionFrameResult {
    * update, or the guarantee that the document moves while obscured is lost.
    */
   documentOpacity: number;
+  /**
+   * True on the one frame a re-anchor wrote the plant directly. Anything that
+   * holds its own goal in document pixels — the auto-scroll transport — has
+   * to adopt the new position on this frame, or it drags the document back
+   * to where it was before the jump.
+   */
+  reanchored: boolean;
 }
 
 export interface StageMotionEngineOptions {
@@ -1035,6 +1042,15 @@ export function createStageMotionEngine(
    */
   let manualAnchorUnit: number | null = null;
   /**
+   * The token the presenter's hand last put on the reading line, kept until
+   * the engine's answer to it comes back — see `echoesTheHand`.
+   *
+   * Not `manualAnchorUnit`: that one is cleared the moment the answer is
+   * RECEIVED, because the answer ends the manual hold, and the question this
+   * one answers is asked a frame later, when the answer is spent.
+   */
+  let handAnchorToken: number | null = null;
+  /**
    * When the presenter last took the script off automatic control, on the
    * stage's own clock. `Number.NEGATIVE_INFINITY` means they never have.
    *
@@ -1550,6 +1566,23 @@ export function createStageMotionEngine(
   }
 
   /** Scroll position that places a transition's destination at the reading line. */
+  /**
+   * Is this directive the echo of the presenter's own hand?
+   *
+   * A wheel gesture that relocates the reader reports the token on the reading
+   * line, and the engine answers with a `manualAnchor` there. The renderer
+   * handed that same token to `manualOverride` when the gesture landed, so the
+   * echo is recognised by LINE against it — not by measuring pixels, which the
+   * renderer reads off the painted position and this engine does not, and
+   * which on a line boundary disagree about which line the mark is on.
+   */
+  function echoesTheHand(directive: StageTransitionDirective): boolean {
+    if (handAnchorToken === null || !map || !map.valid) return false;
+    const hand = map.lineForToken(Math.round(handAnchorToken));
+    const target = map.lineForToken(directive.destinationTokenIndex);
+    return hand !== null && target !== null && hand.lineId === target.lineId;
+  }
+
   function destinationScrollPx(
     destinationTokenIndex: number,
     destinationUnit: number,
@@ -1642,6 +1675,7 @@ export function createStageMotionEngine(
        */
       manualAwaitingEvidence = false;
       manualAnchorUnit = null;
+      handAnchorToken = null;
       manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
       manualUntilMs = Number.NEGATIVE_INFINITY;
       reacquireOwed = false;
@@ -1746,7 +1780,10 @@ export function createStageMotionEngine(
     },
 
     releaseAlignment() {
-      receiver.reset();
+      // The lock goes; the `seq` high-water mark stays. Same session, same
+      // feed — a copy of a snapshot already consumed is still a copy, and the
+      // separate stage window is handed one on every live-sync revision.
+      receiver.release();
       // The same for a guided rewind, and more so: it is the one directive that
       // stays live for ten seconds or more. Cancelled BEFORE the controller is
       // reset, so the fallback's own disposition is cleared with it.
@@ -1888,7 +1925,21 @@ export function createStageMotionEngine(
       let fadeHold = false;
       /** True on the one frame that spends a re-anchor while obscured. */
       let reanchorApplied = false;
-      if (overwrite && paused) {
+      if (overwrite && paused && overwrite.authority === 'manual' && echoesTheHand(overwrite)) {
+        /*
+         * The presenter's hand already put the document here, so there is
+         * nothing to do — and doing it anyway is worse than nothing.
+         *
+         * Spending a hand scroll's own echo would snap the document from where
+         * the presenter stopped to the start of the same line: a twitch after
+         * every gesture, in the one mode where they are driving by hand.
+         * Completed rather than parked, so nothing is left to spend later, and
+         * the hand's token is used up with it — the next move on that line is
+         * a move.
+         */
+        transitions.complete(overwrite.id);
+        handAnchorToken = null;
+      } else if (overwrite && paused && overwrite.authority !== 'manual') {
         /*
          * §48. Following is off, and a re-anchor is automatic motion.
          *
@@ -1903,6 +1954,14 @@ export function createStageMotionEngine(
          * fade: parking keeps it revocable, so it dies with its own TTL if
          * following stays off, and is there to be spent if it is still live
          * when following comes back.
+         *
+         * A MANUAL re-anchor is not automatic motion, and it is exempt. It is
+         * the operator's own sentence step or section jump coming back from
+         * the engine, and following off is the state a presenter chooses
+         * precisely to drive the script by hand — parking those keys until
+         * their TTL ran out made every one of them dead there (#275). It takes
+         * the ordinary road below, fade and all, and the hold resumes on the
+         * far side of it: the plant lands and nothing automatic moves it on.
          */
         transitions.deferPlantOverwrite(overwrite);
       } else if (overwrite) {
@@ -2671,10 +2730,22 @@ export function createStageMotionEngine(
       const realizedTargetPxS = dtMs > 0 ? ((targetPx - lastTarget) * 1000) / dtMs : 0;
       const boundedFeedForward = Math.max(0, Math.min(feedForward, realizedTargetPxS));
 
+      /*
+       * §48, the hold made whole. Zeroed velocity limits stop the plant being
+       * DRIVEN toward an alignment target, but not §29.3's rest deadband from
+       * snapping it onto one that is creeping past — and a fresh snapshot's
+       * display path creeps for as long as its prediction runs. Every manual
+       * move answered while following is off is such a snapshot (#275), so the
+       * document crept on a third of a line after each one. Paused, the plant
+       * aims where it already is; the operator's own transport is the one
+       * target that still drives it. The reported `targetPx` is left alone: it
+       * is how the renderer tells a look from a move after a wheel gesture.
+       */
+      const held = frozen || (paused && !operatorMandate);
       const step = controller.step({
         dtMs,
-        targetPx: frozen ? controller.state.q : targetPx,
-        feedForwardVelocityPxS: frozen ? 0 : boundedFeedForward,
+        targetPx: held ? controller.state.q : targetPx,
+        feedForwardVelocityPxS: held ? 0 : boundedFeedForward,
         limits,
         allowRest: true,
       });
@@ -2820,6 +2891,7 @@ export function createStageMotionEngine(
         degraded: diagnostics.degraded,
         hitch,
         documentOpacity,
+        reanchored: reanchorApplied,
       };
     },
 
@@ -2830,6 +2902,7 @@ export function createStageMotionEngine(
       manualUntilMs = nowMs + manualGraceMs;
       manualAwaitingEvidence = true;
       manualAnchorUnit = Number.isFinite(anchorUnit as number) ? anchorUnit : null;
+      handAnchorToken = manualAnchorUnit;
       // Everything the aligner decided before this instant was decided about a
       // document the presenter has since moved. See `supersededTransition`.
       manualAuthorityAtMs = nowMs;
@@ -2917,6 +2990,7 @@ export function createStageMotionEngine(
       catchUpCapExpiries = 0;
       manualAwaitingEvidence = false;
       manualAnchorUnit = null;
+      handAnchorToken = null;
       manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
       manualUntilMs = Number.NEGATIVE_INFINITY;
       reacquireOwed = false;

@@ -14,6 +14,26 @@ import { createTrackingDriver } from '../../../src/control/services/session';
 import { alignTokensFor } from '../../../src/control/services/alignment';
 import type { AlignmentSnapshot } from '../../../src/shared/contracts';
 
+/*
+ * The snapshot feed is a Tauri event channel, which node does not have — the
+ * real subscription returns a no-op outside the runtime. Capturing the handler
+ * lets a test play Rust's part: publish what the engine would publish, and see
+ * what the driver lets through. Everything else in the module stays real.
+ */
+const feed = vi.hoisted(() => ({ push: null as ((snapshot: unknown) => void) | null }));
+vi.mock('../../../src/control/services/alignment', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/alignment')>();
+  return {
+    ...actual,
+    subscribeAlignmentSnapshots: (handler: (snapshot: never) => void) => {
+      feed.push = handler as (snapshot: unknown) => void;
+      return () => {
+        feed.push = null;
+      };
+    },
+  };
+});
+
 const SOURCE = `# One
 
 First paragraph sentence here. Another sentence in the same block.
@@ -95,9 +115,36 @@ describe('alignment driver', () => {
    */
   it('ignores snapshots until prompting starts', () => {
     const { driver, snapshots } = makeDriver();
+    const voice = (seq: number) => ({
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: 3,
+      observedToken: 3,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: 10,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 10,
+      observedAtom: 3,
+      confirmedAtom: 3,
+    });
+    feed.push?.(voice(1));
     expect(snapshots).toHaveLength(0);
     driver.start();
-    expect(snapshots).toHaveLength(0);
+    feed.push?.(voice(2));
+    expect(snapshots.map((s) => s.seq)).toEqual([2]);
     driver.dispose();
   });
 
@@ -142,5 +189,184 @@ describe('alignment driver', () => {
     expect(snapshots.length).toBeGreaterThan(0);
     expect(snapshots[0]?.state).toBe('following');
     driver.dispose();
+  });
+});
+
+/*
+ * #275 — a pause holds the VOICE, not the operator.
+ *
+ * Pausing (Space) and switching following off both stop the driver prompting,
+ * and the gate used to drop every snapshot while it was not — including the
+ * `manualAnchor` Rust publishes in answer to `set_alignment_position`. So a
+ * sentence step while paused moved the engine and nothing else: the glass and
+ * the take's ending stayed put, and the next step was computed from the same
+ * stale snapshot, so three presses aimed at the same sentence three times.
+ */
+describe('manual moves while not prompting (#275)', () => {
+  const LONG = `# One
+
+First sentence here. Second sentence here. Third sentence here. Fourth sentence here.
+
+Fifth sentence in another paragraph.
+`;
+
+  function snapshotAt(
+    token: number,
+    seq: number,
+    overrides: Partial<AlignmentSnapshot> = {},
+  ): AlignmentSnapshot {
+    return {
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'manualAnchor',
+      confirmedToken: token,
+      observedToken: token,
+      rateTokensPerSecond: 0,
+      evidenceAudioMs: 0,
+      atAudioMs: 0,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: 200,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: token,
+      confirmedAtom: token,
+      ...overrides,
+    };
+  }
+
+  /**
+   * A driver whose IPC answers a move the way Rust does: by publishing a
+   * `manualAnchor` at the token it was given, whether or not anybody is
+   * following.
+   */
+  function makeAnsweringDriver(source = LONG) {
+    const compiled = compile(source, { scriptId: 'script-1' });
+    const moves: number[] = [];
+    let seq = 0;
+    setInvokeForTesting(async (command, args) => {
+      if (command === 'set_alignment_position') {
+        const token = args?.token as number;
+        moves.push(token);
+        seq += 1;
+        feed.push?.(snapshotAt(token, seq));
+      }
+      return undefined as never;
+    });
+    const snapshots: AlignmentSnapshot[] = [];
+    const driver = createTrackingDriver({
+      sessionId: 'session-1',
+      scriptId: 'script-1',
+      sentences: compiled.sentences,
+      totalTokens: compiled.spokenTokens.length,
+      compiled,
+      sessionGeneration: 7,
+      onSnapshot: (s) => snapshots.push(s),
+      onTranscript: () => {},
+    });
+    return { compiled, driver, moves, snapshots };
+  }
+
+  type Driver = ReturnType<typeof makeAnsweringDriver>['driver'];
+  it.each([
+    [
+      'paused',
+      (d: Driver) => {
+        d.start();
+        d.pause();
+      },
+    ],
+    ['never started', (_d: Driver) => {}],
+  ])('forwards the manual anchor when %s', async (_label, hold) => {
+    const { compiled, driver, moves, snapshots } = makeAnsweringDriver();
+    hold(driver);
+
+    const target = compiled.sentences[3]!.startTokenIndex;
+    driver.moveToToken(target);
+    await vi.waitFor(() => expect(moves).toHaveLength(1));
+
+    expect(snapshots.map((s) => s.confirmedToken)).toEqual([target]);
+    expect(snapshots[0]?.decision).toBe('manualAnchor');
+    driver.dispose();
+  });
+
+  it('steps one sentence further on every press while paused', async () => {
+    const { compiled, driver, moves } = makeAnsweringDriver();
+    driver.start();
+    driver.pause();
+
+    // Each press waits for the answer, which is what a presenter does: the
+    // next step is measured from where the last one landed.
+    for (let press = 1; press <= 3; press += 1) {
+      driver.moveSentences(1);
+      await vi.waitFor(() => expect(moves).toHaveLength(press));
+    }
+
+    expect(moves).toEqual(compiled.sentences.slice(1, 4).map((s) => s.startTokenIndex));
+    driver.dispose();
+  });
+
+  it('restarts the paragraph the presenter stepped into while paused', async () => {
+    const { compiled, driver, moves } = makeAnsweringDriver();
+    driver.start();
+    driver.pause();
+
+    const fifth = compiled.sentences[4]!;
+    driver.moveToToken(fifth.startTokenIndex + 1);
+    await vi.waitFor(() => expect(moves).toHaveLength(1));
+    driver.restartParagraph();
+    await vi.waitFor(() => expect(moves).toHaveLength(2));
+
+    const first = compiled.sentences.find((s) => s.blockId === fifth.blockId)!;
+    expect(moves[1]).toBe(first.startTokenIndex);
+    driver.dispose();
+  });
+
+  it('still drops the voice while paused', () => {
+    const { driver, snapshots } = makeAnsweringDriver();
+    driver.start();
+    driver.pause();
+
+    // Rust keeps publishing while the take is paused — transcription stays
+    // connected — and none of it may move anything.
+    for (const decision of [
+      'localConfirmed',
+      'localObserved',
+      'relocationAccepted',
+      'jumpForwardAccepted',
+      'retakeAccepted',
+      'holdLowEvidence',
+    ] as const) {
+      feed.push?.(snapshotAt(40, snapshots.length + 1, { decision }));
+    }
+    expect(snapshots).toHaveLength(0);
+
+    driver.resume();
+    feed.push?.(snapshotAt(40, 99, { decision: 'localConfirmed' }));
+    expect(snapshots).toHaveLength(1);
+    driver.dispose();
+  });
+
+  it('keeps the generation and disposal guards for a manual anchor', () => {
+    const { driver, snapshots } = makeAnsweringDriver();
+    driver.start();
+    driver.pause();
+
+    // The tail of a superseded take is not this take's position.
+    feed.push?.(snapshotAt(12, 1, { sessionGeneration: 6 }));
+    expect(snapshots).toHaveLength(0);
+
+    const push = feed.push;
+    driver.dispose();
+    push?.(snapshotAt(12, 2));
+    expect(snapshots).toHaveLength(0);
   });
 });

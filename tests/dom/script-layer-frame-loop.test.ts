@@ -104,6 +104,7 @@ vi.mock('../../src/stage/motion', async (importOriginal) => {
             degraded: false,
             hitch: false,
             documentOpacity: 1,
+            reanchored: false,
           };
         },
       });

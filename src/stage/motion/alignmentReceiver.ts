@@ -88,6 +88,16 @@ export interface AlignmentReceiver {
   ageMs(nowMs: number): number;
   setSession(sessionGeneration: number): void;
   reset(): void;
+  /**
+   * Let go of the current snapshot WITHOUT forgetting how far the feed got.
+   *
+   * `reset` also clears the `seq` high-water mark, which re-opens the door to a
+   * snapshot this receiver has already consumed — and the separate stage window
+   * is handed the same alignment snapshot again on every live-sync revision.
+   * Released with `reset`, that copy was accepted as new, so a move the stage
+   * had already spent came back and was spent again.
+   */
+  release(): void;
 }
 
 function emptyStats(): AlignmentReceiverStats {
@@ -225,6 +235,12 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
       receivedAtMs = null;
       offsetSamples = [];
       stats.lastSeq = null;
+    },
+
+    release() {
+      current = null;
+      receivedAtMs = null;
+      offsetSamples = [];
     },
   };
 }

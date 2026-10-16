@@ -83,3 +83,54 @@ describe('pausing following says whether anybody decided to', () => {
     expect(store.snapshot().state).toBe('paused');
   });
 });
+
+describe('a manual move while paused (#275)', () => {
+  const move = (seq: number, token: number) => ({
+    sessionGeneration: 1,
+    seq,
+    // The engine says `following` after a move: it was told where the reader is.
+    state: 'following' as const,
+    decision: 'manualAnchor' as const,
+    confirmedToken: token,
+    observedToken: token,
+    rateTokensPerSecond: 2,
+    evidenceAudioMs: 0,
+    atAudioMs: 0,
+    maxPredictionMs: 900,
+    pauseOnsetMs: 1800,
+    leadFloorMs: 550,
+    maxLeadTokens: 2.5,
+    leadMarginTokens: 1.2,
+    leadEaseMs: 450,
+    leadHoldMs: 0,
+    leadDecayMs: 1200,
+    displayLimitToken: token,
+    confidence: 0.9,
+    suggestionToken: null,
+    scriptLenTokens: 200,
+    observedAtom: token,
+    confirmedAtom: token,
+  });
+
+  it('moves the position and leaves the take paused', () => {
+    const { store, setFollowingPaused } = storeWithSpy();
+    store.toggleFollowingPaused();
+    store.ingestSnapshot(move(1, 24));
+
+    const s = store.snapshot();
+    expect(s.confirmedToken).toBe(24);
+    expect(s.followingPaused).toBe(true);
+    expect(s.state).toBe('paused');
+    // And nothing was resumed on the way through.
+    expect(setFollowingPaused.mock.calls).toEqual([[true, true]]);
+  });
+
+  it('takes the engine’s state again once following is back', () => {
+    const { store } = storeWithSpy();
+    store.toggleFollowingPaused();
+    store.ingestSnapshot(move(1, 24));
+    store.toggleFollowingPaused();
+    store.ingestSnapshot(move(2, 36));
+    expect(store.snapshot().state).toBe('following');
+  });
+});
