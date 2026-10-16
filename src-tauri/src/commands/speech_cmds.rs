@@ -204,11 +204,8 @@ pub struct TranscriptionOptions {}
 /// emits carries this generation. It is what keeps a frame captured before a
 /// take ended out of the next take's audio.
 ///
-/// Refused from any window but control while a take is open (#264). There is
-/// one stream at a time and `start_stream` hands the alignment engine to
-/// whichever started last, so Settings' "Test transcription" accepted mid-take
-/// took the take's recogniser away for good: the take's stream closed, its
-/// audio was dropped, and following never came back.
+/// Refused from any window but control while a take is open
+/// ([`refuse_test_during_take`]).
 #[tauri::command]
 pub async fn start_transcription<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
@@ -230,30 +227,31 @@ pub async fn start_transcription<R: tauri::Runtime>(
      * to supply rather than the renderer's to claim. A take started while a
      * test is running still replaces it, which is the order that was always
      * safe.
-     *
-     * A check against a moving target, as `take_is_running` says. Unlike the
-     * language change it is not benign: a test admitted just before a take
-     * opens can still land its stream after the take's, most plausibly while
-     * a first load is in flight. Closing that means admitting stream ownership
-     * inside `SpeechEngine` under one lock, which this command cannot do.
      */
-    if window.label() != CONTROL_LABEL && take_is_running(&coordinator) {
-        return Err(AppError::structured(
-            "STT_TEST_BLOCKED_BY_TAKE",
-            ErrorCategory::Validation,
-            "End the current take before testing transcription.",
-            true,
-        )
-        .with_log(format!(
-            "start_transcription from `{}` refused while a session was open",
-            window.label()
-        )));
-    }
+    let caller = window.label().to_string();
+    refuse_test_during_take(&caller, &coordinator)?;
     let model = selected_model(&db).await?;
     // All of `start_stream`, not just its load: the rest is microseconds, and
     // splitting it would open a gap between loading a recogniser and binding
     // a session to it that nothing needs.
     off_the_runtime(app, move |app, speech| {
+        /*
+         * And again once the model is resident, for anyone but control.
+         *
+         * A load takes seconds and a take can open inside it: Settings passed
+         * the check above, then waited on the same load the take's preload
+         * started, and whichever reached `start_stream` second would win.
+         * Asked after the load, the question is answered microseconds before
+         * the binding instead. Still a check against a moving target rather
+         * than an admission under one lock, but the take has to open AND reach
+         * its own stream inside that gap, and it has an IPC round trip and a
+         * microphone to open first. The take's own path is untouched.
+         */
+        if caller != CONTROL_LABEL {
+            use tauri::Manager as _;
+            speech.ensure_loaded(app, model)?;
+            refuse_test_during_take(&caller, &app.state::<AppCoordinator>())?;
+        }
         speech.start_stream(app.clone(), model)
     })
     .await
@@ -478,6 +476,25 @@ pub async fn select_speech_language<R: tauri::Runtime>(
      */
     crate::commands::settings_cmds::broadcast_settings(&app, &updated);
     Ok(updated)
+}
+
+/// Settings' "Test transcription" is refused while a take is open (#264).
+///
+/// It makes the same call a take does, and there is one stream at a time:
+/// `start_stream` hands the alignment engine to whichever started last, so a
+/// test accepted mid-take took the take's recogniser away for good. Only
+/// control runs takes, so control is never refused here.
+fn refuse_test_during_take(caller: &str, coordinator: &AppCoordinator) -> Result<(), AppError> {
+    if caller == CONTROL_LABEL || !take_is_running(coordinator) {
+        return Ok(());
+    }
+    Err(AppError::structured(
+        "STT_TEST_BLOCKED_BY_TAKE",
+        ErrorCategory::Validation,
+        "End the current take before testing transcription.",
+        true,
+    )
+    .with_log(format!("start_transcription from `{caller}` refused while a session was open")))
 }
 
 /// Whether a take is open, as Rust sees it.

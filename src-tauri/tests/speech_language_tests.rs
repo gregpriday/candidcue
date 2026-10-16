@@ -126,6 +126,17 @@ impl Harness {
     }
 }
 
+/// A model-backed test that fails part-way must not leave a decoder running
+/// for the rest of the binary: stop whatever stream is still live.
+impl Drop for Harness {
+    fn drop(&mut self) {
+        let speech = self.app.state::<SpeechEngine>();
+        if let Some(generation) = speech.active_generation() {
+            speech.stop_stream(generation);
+        }
+    }
+}
+
 fn invoke_from(
     from: &WebviewWindow<MockRuntime>,
     command: &str,
@@ -440,8 +451,7 @@ fn the_take_is_not_refused_by_its_own_session() {
     let h = harness();
     h.begin_take();
 
-    let err = h.expect_err("start_transcription", json!({ "options": {} }));
-    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+    assert_admitted(&h, h.invoke("start_transcription", json!({ "options": {} })));
 }
 
 /// With no take open, Settings' test is an ordinary start — and ending a take
@@ -449,17 +459,25 @@ fn the_take_is_not_refused_by_its_own_session() {
 #[test]
 fn settings_can_test_transcription_when_no_take_is_open() {
     let h = harness();
-    let err = h
-        .from_settings("start_transcription", json!({ "options": {} }))
-        .expect_err("no model is installed in this harness");
-    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+    assert_admitted(&h, h.from_settings("start_transcription", json!({ "options": {} })));
 
     h.begin_take();
     h.app.state::<AppCoordinator>().end_session("session-under-test");
-    let err = h
-        .from_settings("start_transcription", json!({ "options": {} }))
-        .expect_err("no model is installed in this harness");
-    assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED");
+    assert_admitted(&h, h.from_settings("start_transcription", json!({ "options": {} })));
+}
+
+/// A start the guard let through: it reached the model. Without one that is
+/// exactly `STT_MODEL_NOT_INSTALLED`; with `CANDIDCUE_MODELS_DIR` exported it
+/// is a stream, stopped again here. Anything else — an argument that failed to
+/// bind, say — is not admission, which "not the refusal code" would miss.
+fn assert_admitted(h: &Harness, result: Result<Value, Value>) {
+    match result {
+        Ok(generation) => {
+            let generation = generation_of(generation);
+            h.app.state::<SpeechEngine>().stop_stream(generation);
+        }
+        Err(err) => assert_eq!(code_of(&err), "STT_MODEL_NOT_INSTALLED", "{err}"),
+    }
 }
 
 /// The two halves only a real recogniser can show: the take's stream and its
@@ -510,8 +528,6 @@ fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
     assert_eq!(code_of(&err), "STT_TEST_BLOCKED_BY_TAKE");
     assert_eq!(speech.active_generation(), Some(take), "the take keeps its stream");
     assert_eq!(alignment.bound_stream(), Some(take), "and its alignment binding");
-
-    h.expect_ok("stop_transcription", json!({ "generation": take }));
 }
 
 #[test]
@@ -537,8 +553,6 @@ fn transcription_a_take_still_replaces_a_running_settings_test() {
     h.from_settings("stop_transcription", json!({ "generation": test }))
         .expect("a stale stop is accepted and ignored");
     assert_eq!(speech.active_generation(), Some(take));
-
-    h.expect_ok("stop_transcription", json!({ "generation": take }));
 }
 
 // ---------------------------------------------------------------------------
