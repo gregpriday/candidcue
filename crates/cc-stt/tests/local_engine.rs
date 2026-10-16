@@ -333,7 +333,10 @@ fn a_damaged_copy_of_the_shipped_bundle_is_refused_rather_than_loaded() {
         .collect();
 
     for (label, damaged) in [("cut", &decoder[..decoder.len() / 2]), ("noise", &noise[..])] {
-        let copy = std::env::temp_dir().join(format!("cc-stt-damaged-shipped-{label}"));
+        // Per process, so two checkouts running the suite at once cannot
+        // delete each other's copy.
+        let copy = std::env::temp_dir()
+            .join(format!("cc-stt-damaged-shipped-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&copy);
         std::fs::create_dir_all(&copy).unwrap();
         for entry in std::fs::read_dir(&dir).unwrap().flatten() {

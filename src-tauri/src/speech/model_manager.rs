@@ -43,7 +43,9 @@ pub struct SpeechModelStatus {
     pub model_name: String,
     pub languages: Vec<String>,
     pub phase: StatusPhase,
-    /// Where the usable copy came from, when there is one.
+    /// Where the usable copy came from, when there is one — or `Downloaded`
+    /// for a download that is on disk and damaged (#258), which is not usable
+    /// and is still this app's to remove. `installed` is what says "usable".
     pub source: Option<ModelSource>,
     /// Whether a take could run on this model right now.
     pub installed: bool,
@@ -198,6 +200,15 @@ impl SpeechModelManager {
         let resolved = resolve_for(app, entry);
         let installed = resolved.is_some();
 
+        // Looked for only when nothing usable was found and nothing is being
+        // done to it: damage beneath a working fallback is not something the
+        // user has to act on, and a running download is already the repair.
+        let damage = if installed || running.is_some() {
+            None
+        } else {
+            damaged_for(app, entry)
+        };
+
         let (phase, operation_id, progress_bytes, progress_total, error) = match running {
             // A failure that has since been superseded by a working install is
             // not news. Only reported while the model is actually unusable.
@@ -205,17 +216,18 @@ impl SpeechModelManager {
                 (phase, Some(id), done, total, failure.filter(|_| !installed))
             }
             None => {
-                // Looked for only when nothing usable was found: damage beneath
-                // a working fallback is not something the user has to act on.
-                let damage = if installed {
-                    None
-                } else {
-                    damaged_for(app, entry)
-                        .map(|detail| status_error(&super::model_damaged(&detail)))
-                };
+                let damage = damage
+                    .as_deref()
+                    .map(|detail| status_error(&super::model_damaged(detail)));
                 let (phase, error) = at_rest(installed, failure, damage);
                 (phase, None, 0, 0, error)
             }
+        };
+        // A damaged download is still a download: on disk, and removable.
+        let source = match &resolved {
+            Some(found) => Some(found.source),
+            None if damage.is_some() => Some(ModelSource::Downloaded),
+            None => None,
         };
 
         SpeechModelStatus {
@@ -223,7 +235,7 @@ impl SpeechModelManager {
             model_name: entry.model_name.clone(),
             languages: entry.languages.clone(),
             phase,
-            source: resolved.as_ref().map(|found| found.source),
+            source,
             installed,
             supported: loadable_model(entry).is_some(),
             download_bytes: entry.archive.bytes,

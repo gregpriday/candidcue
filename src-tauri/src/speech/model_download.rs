@@ -3411,6 +3411,9 @@ mod tests {
         );
         // Still the model the resolver would pick — the property that
         // actually matters to a presenter about to start a take.
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
             .expect("the previous model must still resolve after a failed replacement");
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
@@ -3473,6 +3476,9 @@ mod tests {
         .expect_err("a model that cannot load must not install");
         assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
 
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
             .expect("the previous model must be restored");
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
@@ -3487,6 +3493,9 @@ mod tests {
     /// leaves no model and a full backup. Startup puts it back.
     #[test]
     fn an_interrupted_commit_is_recovered_on_the_next_launch() {
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let model = fixture_entry(&archive, &files, "bundle-root");
@@ -3541,6 +3550,9 @@ mod tests {
     /// when the target is absent" did, and why the seal is the test.
     #[test]
     fn an_unsealed_target_beside_a_sealed_backup_is_repaired() {
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let model = fixture_entry(&archive, &files, "bundle-root");

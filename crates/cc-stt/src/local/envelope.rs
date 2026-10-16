@@ -36,7 +36,10 @@
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// `ModelProto.graph` in `onnx.proto`.
+/// `ModelProto.ir_version` in `onnx.proto`.
+const IR_VERSION_FIELD: u64 = 1;
+
+/// `ModelProto.graph`.
 const GRAPH_FIELD: u64 = 7;
 
 /// `ModelProto.opset_import`, which the ONNX spec requires of every model
@@ -48,12 +51,47 @@ const OPSET_FIELD: u64 = 8;
 /// The largest field number protobuf allows.
 const MAX_FIELD: u64 = (1 << 29) - 1;
 
-/// More top-level fields than any real model has, by two orders of magnitude.
+/// More top-level fields than any real model has, by three orders of
+/// magnitude — the shipping graphs have 7 to 19, nearly all `metadata_props`.
 ///
 /// Bounds the work, not the file. A corrupt file whose bytes happen to decode
 /// as a run of two-byte varint fields would otherwise turn a check of a few
-/// reads into one read per pair of bytes across 150 MB.
-const FIELD_BUDGET: usize = 4096;
+/// reads into one read per pair of bytes across 150 MB. With [`SCAN_BUFFER`]
+/// the worst case this allows is a few megabytes of reading, which is the
+/// price of not refusing a legitimate model that carries a lot of metadata.
+const FIELD_BUDGET: usize = 1 << 16;
+
+/// The read buffer for the walk, deliberately tiny.
+///
+/// Every length-delimited field ends in a seek, and a seek empties a
+/// `BufReader`. The default 8 KiB buffer would refill — 8 KiB of reading — at
+/// every top-level field to use a dozen bytes of it. Sixty-four bytes holds a
+/// tag and a length many times over.
+const SCAN_BUFFER: usize = 64;
+
+/// An `opset_import` entry is a domain name and a version number. One larger
+/// than this is not an `OperatorSetIdProto`, and is not read into memory to
+/// find that out.
+const OPSET_ENTRY_LIMIT: u64 = 1024;
+
+/// The wire type `onnx.proto` gives each `ModelProto` field it defines.
+///
+/// A single flipped bit in a tag can keep a field's length and change its
+/// type: `opset_import` read as a varint is a model with no opset, which
+/// onnxruntime refuses by throwing. So a KNOWN field of the wrong type is
+/// refused rather than skipped. An unknown field is skipped whatever its type —
+/// a newer exporter is allowed fields this walk has never heard of.
+fn expected_wire(field: u64) -> Option<u64> {
+    match field {
+        // ir_version, model_version.
+        1 | 5 => Some(0),
+        // producer_name, producer_version, domain, doc_string, graph,
+        // opset_import, metadata_props, training_info, functions,
+        // configuration.
+        2 | 3 | 4 | 6 | 7 | 8 | 14 | 20 | 25 | 26 => Some(2),
+        _ => None,
+    }
+}
 
 /// Check that `path` is a whole ONNX model envelope.
 ///
@@ -66,7 +104,7 @@ pub fn check_onnx_envelope(path: &Path) -> Result<(), String> {
         .metadata()
         .map_err(|err| format!("could not read the size of {}: {err}", path.display()))?
         .len();
-    walk(&mut io::BufReader::new(file), len)
+    walk(&mut io::BufReader::with_capacity(SCAN_BUFFER, file), len)
         .map_err(|reason| format!("{} is not a readable ONNX model: {reason}", path.display()))
 }
 
@@ -77,6 +115,7 @@ pub fn check_onnx_envelope(path: &Path) -> Result<(), String> {
 fn walk<R: Read + Seek>(reader: &mut R, len: u64) -> Result<(), String> {
     let mut at: u64 = 0;
     let mut fields = 0usize;
+    let mut saw_ir_version = false;
     let mut saw_graph = false;
     let mut saw_opset = false;
     while at < len {
@@ -104,6 +143,14 @@ fn walk<R: Read + Seek>(reader: &mut R, len: u64) -> Result<(), String> {
             // uses; 6 and 7 are not wire types at all.
             other => return Err(format!("wire type {other} at byte {start}")),
         };
+        if let Some(expected) = expected_wire(field) {
+            if wire != expected {
+                return Err(format!(
+                    "field {field} at byte {start} has wire type {wire} where onnx.proto \
+                     gives it {expected}"
+                ));
+            }
+        }
         // Bounds BEFORE the seek: seeking past the end of a file succeeds, so
         // the seek cannot be what notices a truncated field.
         let end = at
@@ -116,11 +163,31 @@ fn walk<R: Read + Seek>(reader: &mut R, len: u64) -> Result<(), String> {
                 )
             })?;
         match field {
-            GRAPH_FIELD if wire != 2 || payload == 0 => {
-                return Err(format!("the graph field at byte {start} is not a message"));
+            IR_VERSION_FIELD => saw_ir_version = true,
+            GRAPH_FIELD if payload == 0 => {
+                return Err(format!("the graph field at byte {start} is empty"));
             }
             GRAPH_FIELD => saw_graph = true,
-            OPSET_FIELD => saw_opset = true,
+            OPSET_FIELD => {
+                // Small enough to read, and read rather than skipped: an opset
+                // entry that is not a domain and a version is an opset
+                // onnxruntime cannot resolve.
+                if payload == 0 || payload > OPSET_ENTRY_LIMIT {
+                    return Err(format!(
+                        "the opset entry at byte {start} is {payload} bytes, which is not \
+                         an opset"
+                    ));
+                }
+                let mut entry = vec![0u8; payload as usize];
+                reader
+                    .read_exact(&mut entry)
+                    .map_err(|err| format!("could not read byte {at}: {err}"))?;
+                check_opset_entry(&entry)
+                    .map_err(|reason| format!("the opset entry at byte {start} {reason}"))?;
+                saw_opset = true;
+                at = end;
+                continue;
+            }
             _ => {}
         }
         if payload > 0 {
@@ -130,11 +197,50 @@ fn walk<R: Read + Seek>(reader: &mut R, len: u64) -> Result<(), String> {
         }
         at = end;
     }
+    if !saw_ir_version {
+        return Err("it declares no IR version".to_string());
+    }
     if !saw_graph {
         return Err("it holds no graph".to_string());
     }
     if !saw_opset {
         return Err("it declares no opset".to_string());
+    }
+    Ok(())
+}
+
+/// Check one `opset_import` entry: an `OperatorSetIdProto`, which is a domain
+/// (field 1, a string) and a version (field 2, a varint) and nothing else.
+///
+/// The version is required. The domain is not: the default domain is the
+/// empty string, which protobuf does not write at all.
+fn check_opset_entry(entry: &[u8]) -> Result<(), String> {
+    let len = entry.len() as u64;
+    let mut reader = io::Cursor::new(entry);
+    let mut at: u64 = 0;
+    let mut saw_version = false;
+    while at < len {
+        let tag = read_varint(&mut reader, &mut at)?;
+        match (tag >> 3, tag & 7) {
+            (2, 0) => {
+                read_varint(&mut reader, &mut at)?;
+                saw_version = true;
+            }
+            (1, 2) => {
+                let name = read_varint(&mut reader, &mut at)?;
+                at = at
+                    .checked_add(name)
+                    .filter(|end| *end <= len)
+                    .ok_or_else(|| "names a domain longer than itself".to_string())?;
+                reader.set_position(at);
+            }
+            (field, wire) => {
+                return Err(format!("holds field {field} with wire type {wire}"));
+            }
+        }
+    }
+    if !saw_version {
+        return Err("has no version".to_string());
     }
     Ok(())
 }
@@ -231,20 +337,93 @@ mod tests {
         check(&model(&[0x0a, 0x03, b'a', b'd', b'd'])).unwrap();
     }
 
-    /// Every wire type `onnx.proto` can put at the top level, in any order —
-    /// a serialiser is not obliged to write fields in field-number order.
+    /// Fields in any order — a serialiser is not obliged to write them in
+    /// field-number order — and fields `onnx.proto` does not define, of every
+    /// wire type, skipped: a newer exporter may add fields this has never seen.
     #[test]
-    fn every_wire_type_and_any_field_order_is_accepted() {
+    fn any_field_order_and_unknown_fields_of_every_wire_type_are_accepted() {
         let bytes = [
-            bytes_field(OPSET_FIELD, &varint_field(2, 13)),
-            [tag(20, 1), vec![0; 8]].concat(),
+            bytes_field(OPSET_FIELD, &[bytes_field(1, b"com.microsoft"), varint_field(2, 1)].concat()),
+            [tag(100, 1), vec![0; 8]].concat(),
             bytes_field(GRAPH_FIELD, b"graph"),
-            [tag(21, 5), vec![0; 4]].concat(),
+            [tag(101, 5), vec![0; 4]].concat(),
+            varint_field(102, 7),
+            bytes_field(103, b"future"),
             varint_field(1, u64::MAX),
             bytes_field(14, b"metadata"),
+            bytes_field(OPSET_FIELD, &varint_field(2, 13)),
         ]
         .concat();
         check(&bytes).unwrap();
+    }
+
+    /// One flipped bit in a tag can keep a field's length and change its type.
+    /// `42 02 10 0d` is `opset_import { version: 13 }`; `40 02 10 0d` is the
+    /// same four bytes read as two varints, which is a model with no opset —
+    /// and onnxruntime refuses one of those by throwing.
+    #[test]
+    fn an_opset_whose_tag_lost_a_bit_is_refused() {
+        let mut bytes = model(b"graph");
+        let opset = bytes.len() - 4;
+        assert_eq!(bytes[opset..], [0x42, 0x02, 0x10, 0x0d]);
+        bytes[opset] = 0x40;
+        let error = check(&bytes).unwrap_err();
+        assert!(error.contains("field 8"), "{error}");
+    }
+
+    /// Every field `onnx.proto` defines is held to its declared type.
+    #[test]
+    fn a_known_field_of_the_wrong_type_is_refused() {
+        for wrong in [
+            bytes_field(1, b"7"),
+            varint_field(2, 1),
+            [tag(14, 5), vec![0; 4]].concat(),
+        ] {
+            let bytes = [wrong, model(b"graph")].concat();
+            let error = check(&bytes).unwrap_err();
+            assert!(error.contains("where onnx.proto gives it"), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_opset_entry_that_is_not_a_domain_and_a_version_is_refused() {
+        for (entry, reason) in [
+            (bytes_field(1, b"ai.onnx"), "no version"),
+            (bytes_field(2, b"13"), "field 2 with wire type 2"),
+            (varint_field(3, 1), "field 3"),
+            ([tag(1, 2), varint(40), b"short".to_vec(), varint_field(2, 13)].concat(), "longer"),
+            (vec![0x10], "ends inside a field"),
+        ] {
+            let bytes = [
+                varint_field(1, 7),
+                bytes_field(GRAPH_FIELD, b"graph"),
+                bytes_field(OPSET_FIELD, &entry),
+            ]
+            .concat();
+            let error = check(&bytes).unwrap_err();
+            assert!(error.contains("opset entry"), "{reason}: {error}");
+            assert!(error.contains(reason), "{reason}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_opset_entry_too_large_to_be_one_is_refused_without_being_read() {
+        let bytes = [
+            varint_field(1, 7),
+            bytes_field(GRAPH_FIELD, b"graph"),
+            bytes_field(OPSET_FIELD, &vec![0x10; OPSET_ENTRY_LIMIT as usize + 1]),
+        ]
+        .concat();
+        let error = check(&bytes).unwrap_err();
+        assert!(error.contains("not an opset"), "{error}");
+    }
+
+    #[test]
+    fn a_model_without_an_ir_version_is_refused() {
+        let bytes = [bytes_field(GRAPH_FIELD, b"graph"), bytes_field(OPSET_FIELD, &varint_field(2, 13))]
+            .concat();
+        let error = check(&bytes).unwrap_err();
+        assert!(error.contains("no IR version"), "{error}");
     }
 
     /// The truncated encoder from #258, in miniature. A cut anywhere is
@@ -286,7 +465,7 @@ mod tests {
     #[test]
     fn an_empty_file_is_refused() {
         let error = check(&[]).unwrap_err();
-        assert!(error.contains("no graph"), "{error}");
+        assert!(error.contains("no IR version"), "{error}");
     }
 
     #[test]
@@ -312,14 +491,14 @@ mod tests {
 
     #[test]
     fn a_graph_that_is_not_a_message_is_refused() {
-        for graph in [
-            varint_field(GRAPH_FIELD, 1),
-            bytes_field(GRAPH_FIELD, b""),
-        ] {
-            let bytes = [graph, bytes_field(OPSET_FIELD, b"x")].concat();
-            let error = check(&bytes).unwrap_err();
-            assert!(error.contains("graph field"), "{error}");
-        }
+        let opset = bytes_field(OPSET_FIELD, &varint_field(2, 13));
+        let as_varint = [varint_field(GRAPH_FIELD, 1), opset.clone()].concat();
+        let error = check(&as_varint).unwrap_err();
+        assert!(error.contains("field 7"), "{error}");
+
+        let empty = [bytes_field(GRAPH_FIELD, b""), opset].concat();
+        let error = check(&empty).unwrap_err();
+        assert!(error.contains("graph field") && error.contains("empty"), "{error}");
     }
 
     #[test]
@@ -359,8 +538,7 @@ mod tests {
     /// tiny fields.
     #[test]
     fn a_file_of_endless_tiny_fields_runs_out_of_budget() {
-        let bytes: Vec<u8> = std::iter::repeat(varint_field(1, 0))
-            .take(FIELD_BUDGET + 1)
+        let bytes: Vec<u8> = std::iter::repeat_n(varint_field(1, 0), FIELD_BUDGET + 1)
             .flatten()
             .collect();
         let error = check(&bytes).unwrap_err();
@@ -387,17 +565,29 @@ mod tests {
         }
     }
 
-    /// The point of the design: a megabyte of graph costs a few bytes of
-    /// reading, because the payload is seeked past rather than read.
+    /// The point of the design: a megabyte of graph costs a few hundred bytes
+    /// of reading, because the payload is seeked past rather than read.
+    ///
+    /// Counted UNDER the same small `BufReader` `check_onnx_envelope` uses,
+    /// because that is where the cost is: every seek empties the buffer, and
+    /// what it refills with is what the check actually reads from disk.
     #[test]
     fn the_graph_payload_is_skipped_not_read() {
         let bytes = model(&vec![0u8; 1 << 20]);
-        let mut reader = Counting {
-            inner: Cursor::new(&bytes),
-            read: 0,
-        };
+        let mut reader = io::BufReader::with_capacity(
+            SCAN_BUFFER,
+            Counting {
+                inner: Cursor::new(&bytes),
+                read: 0,
+            },
+        );
         walk(&mut reader, bytes.len() as u64).unwrap();
-        assert!(reader.read < 64, "read {} bytes of a {}-byte model", reader.read, bytes.len());
+        let read = reader.get_ref().read;
+        assert!(
+            read <= 4 * SCAN_BUFFER as u64,
+            "read {read} bytes of a {}-byte model",
+            bytes.len()
+        );
     }
 
     #[test]
@@ -409,7 +599,9 @@ mod tests {
     /// Through the real file API, not only a cursor.
     #[test]
     fn a_file_on_disk_is_checked_the_same_way() {
-        let dir = std::env::temp_dir().join("cc-stt-envelope-on-disk");
+        // Per process, so two checkouts running the suite at once cannot
+        // delete each other's fixture.
+        let dir = std::env::temp_dir().join(format!("cc-stt-envelope-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("good.onnx");

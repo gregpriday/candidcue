@@ -353,7 +353,10 @@ pub fn build<R: tauri::Runtime>(
         .iter()
         .filter(|entry| !languages.iter().any(|option| option.model_id == entry.id))
         .map(|entry| models.status(app, entry))
-        .filter(|status| status.installed)
+        // `source` rather than `installed`: a download damaged after install
+        // (#258) is not installed, and is still disk the user can reclaim.
+        // `source` is set for exactly the usable copies and that one case.
+        .filter(|status| status.source.is_some())
         .collect();
 
     let active_model_id = languages

@@ -98,6 +98,26 @@ describe('resolveReadiness', () => {
     expect(verdict.blocked).toBe(false);
   });
 
+  /*
+   * #258: a download damaged after install is not "no model installed" — the
+   * person reading this downloaded one — and its remedy is to download it
+   * again. Still a warning: the take rolls without voice following.
+   */
+  it('names a damaged model as damaged, not missing, and does not block', () => {
+    const verdict = resolveReadiness(ready({ modelInstalled: false, modelDamaged: true }));
+    expect(verdict.blocked).toBe(false);
+    expect(verdict.findings.map((f) => f.id)).toEqual(['model_damaged']);
+    const [finding] = verdict.findings;
+    expect(finding?.detail).toMatch(/damaged/);
+    expect(finding?.detail).not.toMatch(/No speech model is installed/);
+    expect(finding?.action?.settingsSection).toBe('speech');
+  });
+
+  it('keeps the missing-model wording when damage is not known', () => {
+    const verdict = resolveReadiness(ready({ modelInstalled: false, modelDamaged: false }));
+    expect(verdict.findings.map((f) => f.id)).toEqual(['model_missing']);
+  });
+
   it('warns about an unloadable model without blocking the take', () => {
     /*
      * This blocked at first, reasoning that no user action fixes it in place.

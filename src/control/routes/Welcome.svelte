@@ -38,6 +38,7 @@
   import * as stageService from '../services/stage';
   import {
     isBusy as isModelBusy,
+    isDamaged as isModelDamaged,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
@@ -206,6 +207,18 @@
         detail: 'Voice following is ready. Transcription happens on this machine.',
         emphasis: 'quiet',
         action: 'Manage languages',
+      };
+    }
+    if (isModelDamaged(modelStatus)) {
+      // Not "Set up": this machine DID download it, and calling it a one-time
+      // download not yet done would be wrong on both counts (#258).
+      return {
+        tone: 'accent',
+        pill: 'Damaged',
+        detail:
+          'The speech data on this machine is damaged. Download it again to restore voice following; everything else works without it.',
+        emphasis: 'setup',
+        action: 'Open speech settings',
       };
     }
     return {

@@ -48,6 +48,8 @@ fn harness() -> Harness {
     let app = mock_builder()
         .invoke_handler(tauri::generate_handler![
             commands::get_speech_model_status,
+            commands::get_speech_engine_status,
+            commands::delete_speech_model,
             commands::get_speech_language_options,
             commands::preload_speech_engine,
             commands::start_transcription,
@@ -144,6 +146,25 @@ fn plant_whole_download(dir: &Path, model: &ModelEntry) {
     model_store::write_seal(dir, model).unwrap();
 }
 
+/// The encoder cut to 50 MB, as #258 measured.
+fn cut_encoder(dir: &Path) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("encoder.int8.onnx"))
+        .unwrap()
+        .set_len(50 * 1024 * 1024)
+        .unwrap();
+}
+
+/// The decoder at its right length, holding bytes that are not a graph.
+fn garbage_decoder(dir: &Path) {
+    let path = dir.join("decoder.onnx");
+    let len = std::fs::metadata(&path).unwrap().len();
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(b"<!DOCTYPE html><html>not a graph</html>").unwrap();
+    file.set_len(len).unwrap();
+}
+
 fn code_of(err: &Value) -> &str {
     err.get("code").and_then(Value::as_str).unwrap_or_default()
 }
@@ -167,25 +188,10 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
 
     // The two damages #258 measured: an encoder cut short, and a decoder of
     // the right length whose bytes are not a graph.
-    let cut_encoder = |dir: &Path| {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(dir.join("encoder.int8.onnx"))
-            .unwrap()
-            .set_len(50 * 1024 * 1024)
-            .unwrap();
-    };
-    let garbage_decoder = |dir: &Path| {
-        let path = dir.join("decoder.onnx");
-        let len = std::fs::metadata(&path).unwrap().len();
-        let mut file = std::fs::File::create(&path).unwrap();
-        file.write_all(b"<!DOCTYPE html><html>not a graph</html>").unwrap();
-        file.set_len(len).unwrap();
-    };
-    let damages: [(&str, &dyn Fn(&Path)); 2] =
-        [("cut encoder", &cut_encoder), ("garbage decoder", &garbage_decoder)];
-
-    for (label, damage) in damages {
+    for (label, damage) in [
+        ("cut encoder", cut_encoder as fn(&Path)),
+        ("garbage decoder", garbage_decoder),
+    ] {
         let _ = std::fs::remove_dir_all(&dir);
         plant_whole_download(&dir, model);
         damage(&dir);
@@ -197,6 +203,8 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
         assert_eq!(status["installed"], false, "{label}: {status}");
         assert_eq!(status["phase"], "failed", "{label}: {status}");
         assert_eq!(status["error"]["code"], "STT_MODEL_DAMAGED", "{label}: {status}");
+        // Still a download on disk, so Settings can offer to remove it.
+        assert_eq!(status["source"], "downloaded", "{label}: {status}");
         let message = status["error"]["message"].as_str().unwrap_or_default();
         assert!(
             !message.contains(&app_data.display().to_string()),
@@ -211,6 +219,18 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
             options["languages"][0]["status"]["error"]["code"],
             "STT_MODEL_DAMAGED",
             "{label}: {options}"
+        );
+
+        // "Can I transcribe?" answers no, with nothing private in the answer:
+        // the damage detail names a path, and that is for the log.
+        let engine = h
+            .invoke("get_speech_engine_status", json!({}))
+            .unwrap_or_else(|e| panic!("{label}: engine status never fails, got {e}"));
+        assert_eq!(engine["available"], false, "{label}: {engine}");
+        let detail = engine["detail"].as_str().unwrap_or_default();
+        assert!(
+            !detail.contains(&app_data.display().to_string()) && !detail.contains(".onnx"),
+            "{label}: diagnostic detail reached the frontend: {detail}"
         );
 
         // The issue's reproduction: this call used to abort the process.
@@ -238,6 +258,20 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
             "{label}: nothing was loaded"
         );
     }
+
+    // A damaged download is still the user's to remove — the way out when a
+    // repair has no room to run — and removing it leaves an honest "not
+    // installed", not a remembered damage.
+    let _ = std::fs::remove_dir_all(&dir);
+    plant_whole_download(&dir, model);
+    garbage_decoder(&dir);
+    let status = h
+        .invoke("delete_speech_model", json!({}))
+        .expect("a damaged download must be removable");
+    assert!(!dir.exists(), "the damaged files must be gone");
+    assert_eq!(status["phase"], "notInstalled", "{status}");
+    assert_eq!(status["source"], Value::Null, "{status}");
+    assert_eq!(status["error"], Value::Null, "{status}");
 
     // And the whole download, undamaged, reads as installed — so the check is
     // not simply refusing everything at the real catalogue's lengths. (Not
