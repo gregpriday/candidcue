@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, devices, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
 import { openScript } from './fixtures/library';
@@ -802,105 +802,224 @@ test('the take controls are reachable during a take and do not remount the stage
 });
 
 /*
- * The session dock, on the surface it actually ships on.
+ * A MAC'S CHROME, AND THE CHORD A MAC ANSWERS TO.
  *
- * Three claims that only a real browser can settle: that the routine controls
- * are all in one corner and the other three are empty in a Clean Take; that the
- * appearance panel rises from the button that raised it and fits; and that
- * turning the text mirror on does not move a single mouse target — a CSS
- * transform carries hit-testing with it, so a control inside the mirror plane
- * is clickable exactly where it appears, on the opposite side of the screen
- * from where it was a moment ago.
+ * The mirror shortcut's modifier is the PAGE's primary modifier — Cmd where the
+ * page identifies as macOS, Ctrl everywhere else (`isMacPlatform` in
+ * `src/control/lib/shortcuts.ts`) — and the page decides that from the browser
+ * it runs in, never from the machine running the suite. The chromium project's
+ * `devices['Desktop Chrome']` reports a WINDOWS platform through
+ * `navigator.userAgentData`, so the journey that used to choose its chord from
+ * `process.platform` pressed Cmd on a Mac host into a page waiting for Ctrl,
+ * and nothing mirrored.
+ *
+ * So the page is made a Mac, on every host, and the chord is pressed literally.
+ * That is the one that ships: the packaged app runs WKWebView, and the native
+ * "Mirror Stage" menu item carries no accelerator to cover for a key that went
+ * nowhere. Playwright derives the client hints from the user agent string, so
+ * `userAgentData.platform` follows it; deriving the string from the descriptor
+ * keeps its Chrome version the one Playwright actually launches. If that
+ * derivation ever stops producing a Mac, the `data-platform` assertion in each
+ * test says so before any key is pressed.
+ *
+ * Scoped to this block, not the file: every other test here runs as the
+ * descriptor says, and the file's `beforeEach` shim still applies to both.
  */
-test('the session dock is the only routine control surface, and mirroring does not move it', async ({
-  page,
-}) => {
-  const errors = watchPageErrors(page);
+const MAC_CHROME_USER_AGENT = devices['Desktop Chrome'].userAgent.replace(
+  'Windows NT 10.0; Win64; x64',
+  'Macintosh; Intel Mac OS X 10_15_7',
+);
+
+test.describe('on a page that identifies as macOS', () => {
+  test.use({ userAgent: MAC_CHROME_USER_AGENT });
+
   /*
-   * The Elgato Prompter's own geometry, not the default 1280x720.
+   * The session dock, on the surface it actually ships on.
    *
-   * Everything this test asserts about fit is only interesting on the panel the
-   * product is judged on — a 9-inch, 1024x600, non-Retina display behind glass.
-   * At 720 tall the appearance panel has room to spare and the assertions below
-   * pass whether or not the layout is right, which is worse than not having
-   * them.
-   */
-  await page.setViewportSize({ width: 1024, height: 600 });
-  await present(page);
-
-  const dock = page.locator('.stage-dock');
-  await expect(dock).toBeVisible();
-  const before = await dock.boundingBox();
-  expect(before).not.toBeNull();
-
-  // Bottom left of the window, not merely somewhere.
-  const viewport = page.viewportSize()!;
-  expect(before!.x).toBeLessThan(viewport.width / 2);
-  expect(before!.y).toBeGreaterThan(viewport.height / 2);
-
-  // Cmd/Ctrl+Shift+M is the mirror shortcut; the script flips, the dock does not.
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+M' : 'Control+Shift+M');
-  await expect(page.locator('.stage-talent-plane')).toHaveAttribute('data-mirror-x', 'true');
-  const after = await dock.boundingBox();
-  expect(after!.x).toBeCloseTo(before!.x, 0);
-  expect(after!.y).toBeCloseTo(before!.y, 0);
-
-  /*
-   * LEVEL ONE FITS TOO, AND IS CLICKABLE.
+   * Three claims that only a real browser can settle: that the routine controls
+   * are all in one corner and the other three are empty in a Clean Take; that the
+   * appearance panel rises from the button that raised it and fits; and that
+   * turning the text mirror on does not move a single mouse target — a CSS
+   * transform carries hit-testing with it, so a control inside the mirror plane
+   * is clickable exactly where it appears, on the opposite side of the screen
+   * from where it was a moment ago.
    *
-   * The same claim already made for the appearance sheet below, made one level
-   * earlier: the menu is the only route to every routine control now, so a menu
-   * that ran off the top of a 9-inch panel or needed scrolling to reach its
-   * last row would put those controls out of reach entirely. jsdom cannot see
-   * any of this — it resolves no stylesheets and measures nothing — so the
-   * geometry has to be judged in a real engine at the Prompter's own size.
+   * It is also the only browser coverage of the mirror shortcut reaching the
+   * glass, and in single-window presentation that is a specific path: the take
+   * runs at stage generation 0, where `sendDirective` is a silent no-op, so the
+   * flip has to travel through the recomposed `stageEnvelope`. Pressing the key
+   * — not calling the store — is what keeps that path under test.
    */
-  await page.locator('.stage-root').hover();
-  await page.locator('.stage-dock .dock-button.menu-trigger').click();
-  const menu = page.locator('.stage-dock .menu-popover');
-  await expect(menu).toBeVisible();
-  const menuBox = await menu.boundingBox();
-  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
-  expect(menuBox!.y, 'the menu must not run off the top of a 1024x600 Prompter').toBeGreaterThanOrEqual(0);
-  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(before!.y + 1);
-  expect(
-    await menu.evaluate((el) => el.scrollHeight - el.clientHeight),
-    'and no row of it may need scrolling to reach',
-  ).toBe(0);
-  // Painted AND hit-testable: the operator plane above this dock is
-  // `pointer-events: none`, so a row that inherited it would look perfect and
-  // do nothing. `.hover()` fails if anything else is on top of it.
-  await menu.locator('[data-menu-row="follow"]').hover();
-  await page.keyboard.press('Escape');
-  await expect(menu).toHaveCount(0);
+  test('the session dock is the only routine control surface, and mirroring does not move it', async ({
+    page,
+  }) => {
+    const errors = watchPageErrors(page);
+    /*
+     * The Elgato Prompter's own geometry, not the default 1280x720.
+     *
+     * Everything this test asserts about fit is only interesting on the panel the
+     * product is judged on — a 9-inch, 1024x600, non-Retina display behind glass.
+     * At 720 tall the appearance panel has room to spare and the assertions below
+     * pass whether or not the layout is right, which is worse than not having
+     * them.
+     */
+    await page.setViewportSize({ width: 1024, height: 600 });
+    await present(page);
+    await expect(page.locator('html'), 'the page must identify as macOS').toHaveAttribute(
+      'data-platform',
+      'macos',
+    );
 
-  // The appearance panel opens upward from the dock and stays on screen.
-  await openAppearancePanel(page);
-  const panel = page.locator('.stage-dock .appearance-popover');
-  await expect(panel).toBeVisible();
-  const panelBox = await panel.boundingBox();
-  expect(panelBox!.y).toBeGreaterThanOrEqual(0);
-  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(before!.y + 1);
+    const dock = page.locator('.stage-dock');
+    await expect(dock).toBeVisible();
+    const before = await dock.boundingBox();
+    expect(before).not.toBeNull();
+
+    // Bottom left of the window, not merely somewhere.
+    const viewport = page.viewportSize()!;
+    expect(before!.x).toBeLessThan(viewport.width / 2);
+    expect(before!.y).toBeGreaterThan(viewport.height / 2);
+
+    /*
+     * Cmd+Shift+M is the mirror shortcut; the script flips, the dock does not.
+     *
+     * One press, and the plane reads mirrored after it — a key handled twice
+     * would toggle there and back and read `false`, which is the other way this
+     * step can be wrong.
+     */
+    const plane = page.locator('.stage-talent-plane');
+    await expect(plane).toHaveAttribute('data-mirror-x', 'false');
+    await page.keyboard.press('Meta+Shift+M');
+    await expect(plane).toHaveAttribute('data-mirror-x', 'true');
+    const after = await dock.boundingBox();
+    expect(after!.x).toBeCloseTo(before!.x, 0);
+    expect(after!.y).toBeCloseTo(before!.y, 0);
+
+    /*
+     * LEVEL ONE FITS TOO, AND IS CLICKABLE.
+     *
+     * The same claim already made for the appearance sheet below, made one level
+     * earlier: the menu is the only route to every routine control now, so a menu
+     * that ran off the top of a 9-inch panel or needed scrolling to reach its
+     * last row would put those controls out of reach entirely. jsdom cannot see
+     * any of this — it resolves no stylesheets and measures nothing — so the
+     * geometry has to be judged in a real engine at the Prompter's own size.
+     */
+    await page.locator('.stage-root').hover();
+    await page.locator('.stage-dock .dock-button.menu-trigger').click();
+    const menu = page.locator('.stage-dock .menu-popover');
+    await expect(menu).toBeVisible();
+    const menuBox = await menu.boundingBox();
+    expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+    expect(menuBox!.y, 'the menu must not run off the top of a 1024x600 Prompter').toBeGreaterThanOrEqual(0);
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(before!.y + 1);
+    expect(
+      await menu.evaluate((el) => el.scrollHeight - el.clientHeight),
+      'and no row of it may need scrolling to reach',
+    ).toBe(0);
+    // Painted AND hit-testable: the operator plane above this dock is
+    // `pointer-events: none`, so a row that inherited it would look perfect and
+    // do nothing. `.hover()` fails if anything else is on top of it.
+    await menu.locator('[data-menu-row="follow"]').hover();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+
+    // The appearance panel opens upward from the dock and stays on screen.
+    await openAppearancePanel(page);
+    const panel = page.locator('.stage-dock .appearance-popover');
+    await expect(panel).toBeVisible();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox!.y).toBeGreaterThanOrEqual(0);
+    expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(before!.y + 1);
+
+    /*
+     * ...and every control in it is REACHABLE without discovering that the panel
+     * scrolls. A control below the fold of a scrimless popover somebody is
+     * operating mid-take, with a presenter waiting, is a control that is not
+     * there. Asserted at the Prompter's own 1024x600 rather than at whatever the
+     * developer's display happens to be.
+     */
+    const overflow = await panel
+      .locator('.sheet .body')
+      .evaluate((el) => el.scrollHeight - el.clientHeight);
+    expect(overflow, 'the appearance panel must fit on a 1024x600 Prompter').toBe(0);
+
+    // Escape closes the panel and does NOT begin ending the take.
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
+    await expect(page.locator('.escape-hint')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+
+    /*
+     * And it is a toggle. Pressed again only now, after everything above has
+     * been checked against the MIRRORED plane — the hit-testing claims are the
+     * ones a transform could break — so the text comes back the right way round
+     * and the dock still has not moved.
+     */
+    await page.keyboard.press('Meta+Shift+M');
+    await expect(plane).toHaveAttribute('data-mirror-x', 'false');
+    const restored = await dock.boundingBox();
+    expect(restored!.x).toBeCloseTo(before!.x, 0);
+    expect(restored!.y).toBeCloseTo(before!.y, 0);
+
+    errors.expectClean();
+  });
 
   /*
-   * ...and every control in it is REACHABLE without discovering that the panel
-   * scrolls. A control below the fold of a scrimless popover somebody is
-   * operating mid-take, with a presenter waiting, is a control that is not
-   * there. Asserted at the Prompter's own 1024x600 rather than at whatever the
-   * developer's display happens to be.
+   * A READING WINDOW IS NEVER MIRRORED, AND THE CHORD DOES NOT CHANGE THAT.
+   *
+   * The mirror describes a beamsplitter; a reading window has no glass in the
+   * optical path, so `stageSettingsFromSettings` forces both axes off in reader
+   * mode whatever the take holds (`src/control/services/stage-envelope.ts`).
+   * The unit suite proves the forcing; this proves it survives the real key on
+   * the real surface, where the toggle is still ACCEPTED — Live flips the take's
+   * own mirror — and only the composed envelope refuses it.
+   *
+   * An unmirrored plane is also exactly what a key that went nowhere looks
+   * like, so the toast is waited for first: `toggleMirror` raises it only after
+   * `toggleStageMirror` has recomposed and written the envelope, synchronously.
+   * Once it is up, the plane below is the answer and not a race.
    */
-  const overflow = await panel
-    .locator('.sheet .body')
-    .evaluate((el) => el.scrollHeight - el.clientHeight);
-  expect(overflow, 'the appearance panel must fit on a 1024x600 Prompter').toBe(0);
+  test('a reading window stays unmirrored when the mirror chord is pressed', async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await page.goto('/control.html');
+    // Double click: the collection selects on a single click (§10.2).
+    await openScript(page, /Single-window walkthrough/);
+    await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
 
-  // Escape closes the panel and does NOT begin ending the take.
-  await page.keyboard.press('Escape');
-  await expect(panel).toHaveCount(0);
-  await expect(page.locator('.escape-hint')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+    await page.getByRole('button', { name: 'How to present' }).click();
+    await page
+      .getByRole('menu', { name: 'How to present' })
+      .getByRole('menuitemradio', { name: /Present in a window/ })
+      .click();
+    await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+      timeout: 20_000,
+    });
 
-  errors.expectClean();
+    // A reading window, or the assertion at the end is about the wrong mode.
+    const modes = await page.evaluate(() =>
+      window.__E2E__.calls
+        .filter((c) => c.command === 'set_control_presenting')
+        .map((c) => c.args as { enabled?: boolean; mode?: string } | null)
+        .filter((args) => args?.enabled === true)
+        .map((args) => args?.mode ?? null),
+    );
+    expect(modes[0]).toBe('reader');
+    await expect(page.locator('html'), 'the page must identify as macOS').toHaveAttribute(
+      'data-platform',
+      'macos',
+    );
+
+    const plane = page.locator('.stage-talent-plane');
+    await expect(plane).toHaveAttribute('data-mirror-x', 'false');
+
+    await page.keyboard.press('Meta+Shift+M');
+    await expect(page.getByRole('status').getByText('Text mirrored')).toBeVisible();
+    await expect(plane).toHaveAttribute('data-mirror-x', 'false');
+    await expect(plane).toHaveAttribute('data-mirror-y', 'false');
+
+    errors.expectClean();
+  });
 });
 
 /*
