@@ -155,7 +155,7 @@ function shimBody(config: ShimConfig): void {
     readInlineCode: false,
     cueVisibility: 'subtle',
     silentBlockVisibility: 'dim',
-    wordsPerMinuteEstimate: 150,
+    wordsPerMinuteEstimate: 130,
   });
 
   function makeDoc(id: string, title: string, source: string, status = 'draft', rev = 1): Doc {
@@ -166,7 +166,7 @@ function shimBody(config: ShimConfig): void {
       status,
       language: 'en',
       spokenWordCount: w,
-      estimatedDurationSeconds: Math.round((w / 150) * 60),
+      estimatedDurationSeconds: Math.round((w / 130) * 60),
       updatedAt: nowIso(),
       previewText: excerpt(source),
       hasWarnings: false,

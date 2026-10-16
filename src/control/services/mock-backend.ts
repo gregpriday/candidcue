@@ -13,6 +13,7 @@
  */
 import type { ScriptDocument, ScriptSummary, StageStatus } from '../../shared/contracts';
 import { BUNDLED_MODEL_NAME } from '../../shared/contracts';
+import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
 import {
   countWords,
   estimateDurationSeconds,
@@ -56,7 +57,8 @@ function defaultScriptSettings(): ScriptDocument['settings'] {
     readInlineCode: false,
     cueVisibility: 'subtle',
     silentBlockVisibility: 'dim',
-    wordsPerMinuteEstimate: 150,
+    // Rust's default, so `pnpm dev:vite` shows the lengths a real install does.
+    wordsPerMinuteEstimate: DEFAULT_WORDS_PER_MINUTE,
   };
 }
 

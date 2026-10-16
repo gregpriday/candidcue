@@ -52,6 +52,8 @@ import { startTake, takeStarting } from '../lib/start-take';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
+  import { sectionWordCounts } from '../lib/outline-words';
+  import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
@@ -363,7 +365,18 @@ import type { PresentationMode } from '../services/settings-types';
    */
   const parts = $derived(result?.parts ?? []);
   const wordCount = $derived(result?.spokenWordCount ?? 0);
-  const durationSeconds = $derived(estimateDurationSeconds(wordCount));
+  /*
+   * The compiler's estimate, not one worked out here. Re-deriving it from the
+   * word count with a rate of the editor's own is how this line came to read
+   * 150 wpm while the Library, the compiler and the spec said 130 (#246). The
+   * compile is made at the script's own rate, the same one Rust estimates the
+   * Library row at, so the two can only differ if the counts do.
+   */
+  const durationSeconds = $derived(result?.estimatedDurationSeconds ?? 0);
+  const speakingRate = $derived(
+    result?.script?.statistics.wordsPerMinute ?? DEFAULT_WORDS_PER_MINUTE,
+  );
+  const sectionWords = $derived(sectionWordCounts(outline, wordCount));
 
   /*
    * A compile that FAILED, as opposed to a document with nothing in it.
@@ -1154,9 +1167,11 @@ import type { PresentationMode } from '../services/settings-types';
     goToOffset(block.source.utf16Start);
   }
 
+  /** A section's length at the rate the whole script was estimated at. */
   function sectionDuration(node: OutlineNode): string {
-    const tokens = Math.max(0, node.endTokenIndex - node.startTokenIndex);
-    return formatSpeakingDuration(estimateDurationSeconds(tokens));
+    return formatSpeakingDuration(
+      estimateDurationSeconds(sectionWords.get(node.id) ?? 0, speakingRate),
+    );
   }
 
   function flattenOutline(nodes: OutlineNode[], depth = 0): Array<{ node: OutlineNode; depth: number }> {
