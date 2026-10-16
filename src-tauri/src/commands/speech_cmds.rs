@@ -166,7 +166,10 @@ pub async fn preload_speech_engine<R: tauri::Runtime>(
     db: State<'_, Database>,
 ) -> Result<(), AppError> {
     let model = selected_model(&db).await?;
-    off_the_runtime(app, move |app, speech| speech.ensure_loaded(app, model).map(|_| ())).await
+    off_the_runtime(app, move |app, speech| {
+        speech.ensure_loaded(app, model).map(|_| ())
+    })
+    .await
 }
 
 /// What the renderer may choose about a session.
@@ -211,7 +214,10 @@ pub async fn start_transcription<R: tauri::Runtime>(
     // All of `start_stream`, not just its load: the rest is microseconds, and
     // splitting it would open a gap between loading a recogniser and binding
     // a session to it that nothing needs.
-    off_the_runtime(app, move |app, speech| speech.start_stream(app.clone(), model)).await
+    off_the_runtime(app, move |app, speech| {
+        speech.start_stream(app.clone(), model)
+    })
+    .await
 }
 
 /// Forward one frame of PCM16 audio, base64-encoded.
@@ -487,8 +493,7 @@ mod tests {
         let handle = app.handle().clone();
         let (awaiting, working) = tauri::async_runtime::block_on(async move {
             let awaiting = std::thread::current().id();
-            let working =
-                off_the_runtime(handle, |_, _| Ok(std::thread::current().id())).await;
+            let working = off_the_runtime(handle, |_, _| Ok(std::thread::current().id())).await;
             (awaiting, working)
         });
         assert_ne!(awaiting, working.expect("the work succeeds"));
@@ -510,7 +515,13 @@ mod tests {
         ))
         .unwrap_err();
         assert!(
-            matches!(err, AppError::Structured { code: "STT_MODEL_NOT_INSTALLED", .. }),
+            matches!(
+                err,
+                AppError::Structured {
+                    code: "STT_MODEL_NOT_INSTALLED",
+                    ..
+                }
+            ),
             "got {err:?}"
         );
     }
