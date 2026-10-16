@@ -1105,8 +1105,8 @@ describe('compile: a leading byte-order mark (#247)', () => {
     const body = ['---', 'coach:', '  mode: minimal', '---', '', 'All good here.', ''].join('\n');
     const plain = compile(body, OPTS);
     const marked = compile(BOM + body, OPTS);
-    expect(marked.coaching.frontMatter).toEqual(plain.coaching.frontMatter);
-    expect(marked.coaching.frontMatter?.mode).toBe('minimal');
+    expect(marked.coaching?.frontMatter).toEqual(plain.coaching?.frontMatter);
+    expect(marked.coaching?.frontMatter?.mode).toBe('minimal');
     expect(normalizedWords(marked)).toEqual(normalizedWords(plain));
     for (const token of marked.spokenTokens) {
       expect((BOM + body).slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
