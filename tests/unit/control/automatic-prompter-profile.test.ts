@@ -142,10 +142,22 @@ describe('stageSettingsFromSettings on an unrigged panel', () => {
     expect(settings.readingCue).toBe('wash');
   });
 
-  it('still takes the mirror from Settings, as every rig does', () => {
+  it("takes the mirror from the panel's own entry, with no rig to carry it", () => {
+    /*
+     * The automatic profile is never stored, so it has no `flips` of its own —
+     * which is exactly why mirroring lives beside the rigs rather than inside
+     * one (#206). The glass's entry mirrors it, and only it.
+     */
     const s = prompterSettings();
-    const mirrored = { ...s, teleprompter: { ...s.teleprompter, mirrorX: true } };
+    const mirrored = {
+      ...s,
+      optical: {
+        ...s.optical,
+        panelMirror: { [elgato.fingerprint]: { horizontal: true, vertical: false } },
+      },
+    };
     expect(stageSettingsFromSettings(mirrored, elgato).mirrorX).toBe(true);
+    expect(stageSettingsFromSettings(mirrored, monitor).mirrorX).toBe(false);
     expect(stageSettingsFromSettings(s, elgato).mirrorX).toBe(false);
   });
 

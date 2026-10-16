@@ -971,13 +971,14 @@ test.describe('on a page that identifies as macOS', () => {
    * optical path, so `stageSettingsFromSettings` forces both axes off in reader
    * mode whatever the take holds (`src/control/services/stage-envelope.ts`).
    * The unit suite proves the forcing; this proves it survives the real key on
-   * the real surface, where the toggle is still ACCEPTED — Live flips the take's
-   * own mirror — and only the composed envelope refuses it.
+   * the real surface. The toggle refuses in a reading window rather than
+   * flipping the take's mirror invisibly (#206) — a flip nobody can see is one
+   * that turns up later, on the glass, when the take is switched back.
    *
    * An unmirrored plane is also exactly what a key that went nowhere looks
    * like, so the toast is waited for first: `toggleMirror` raises it only after
-   * `toggleStageMirror` has recomposed and written the envelope, synchronously.
-   * Once it is up, the plane below is the answer and not a race.
+   * `toggleStageMirror` has answered, synchronously, and the toast names the
+   * refusal. Once it is up, the plane below is the answer and not a race.
    */
   test('a reading window stays unmirrored when the mirror chord is pressed', async ({ page }) => {
     const errors = watchPageErrors(page);
@@ -1013,7 +1014,9 @@ test.describe('on a page that identifies as macOS', () => {
     await expect(plane).toHaveAttribute('data-mirror-x', 'false');
 
     await page.keyboard.press('Meta+Shift+M');
-    await expect(page.getByRole('status').getByText('Text mirrored')).toBeVisible();
+    await expect(
+      page.getByRole('status').getByText('A reading window is never mirrored'),
+    ).toBeVisible();
     await expect(plane).toHaveAttribute('data-mirror-x', 'false');
     await expect(plane).toHaveAttribute('data-mirror-y', 'false');
 

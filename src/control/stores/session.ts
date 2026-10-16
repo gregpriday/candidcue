@@ -31,7 +31,9 @@ import {
 } from '../services/audio/voice-pill';
 import {
   DEFAULT_STAGE_APPEARANCE,
+  panelMirrorFor,
   type FollowingSettings,
+  type PanelMirror,
   type PresentationMode,
   type SessionMode,
 } from '../services/settings-types';
@@ -519,6 +521,21 @@ let takePresentationMode: PresentationMode | null = null;
  */
 let stageDisplay: DisplayDescriptor | null = null;
 /**
+ * The take's own mirroring, when the operator has flipped it from the Session
+ * menu — or null, which means "whatever the panel it is on is saved as".
+ *
+ * Mirroring belongs to the PANEL (`optical.panelMirror`, #206), so the take
+ * normally just follows the saved answer for `stageDisplay`. A live flip is a
+ * decision about the take in front of you, held here for exactly the reason
+ * `takeTeleprompter` holds a nudge: it must not follow the operator into
+ * tomorrow's take. It is dropped when the take moves to another panel, whose
+ * glass is not the one that was flipped, and when the panel's saved answer
+ * changes, so a switch thrown in Settings mid-take still reaches the glass.
+ *
+ * Null outside a take.
+ */
+let takeMirror: PanelMirror | null = null;
+/**
  * The size ceiling for THIS take, fixed when it opened.
  *
  * `typeCeilingPx` follows the value it is given so a hand-set 400px is not
@@ -799,6 +816,8 @@ export function startLiveSession(input: StartSessionInput): string {
   stageSettings = input.stageSettings ?? null;
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
+  // The panel's own mirroring until somebody flips it — see `takeMirror`.
+  takeMirror = null;
   // The take adopts the saved mode at its opening and owns it from then on.
   // `startTake` has already presented the window in this mode, so this is
   // recording what happened rather than deciding it.
@@ -2959,6 +2978,17 @@ export function installLiveSettingsFollow(): () => void {
         (patch as Record<string, unknown>)[key] = next.teleprompter[key];
       }
     }
+    /*
+     * A change to THIS panel's saved mirroring replaces a live flip, the same
+     * way a slider moved in Settings replaces a nudge of the same field. A
+     * change to another panel's leaves it alone — it says nothing about the
+     * glass this take is on. Either way the rebuild below is what applies it,
+     * since the mirror map is part of the optical section.
+     */
+    const panel = stageDisplay?.fingerprint ?? null;
+    if (!samePanelMirror(panelMirrorFor(next.optical, panel), panelMirrorFor(last.optical, panel))) {
+      takeMirror = null;
+    }
     const rigChanged = JSON.stringify(next.optical) !== JSON.stringify(last.optical);
     if (Object.keys(patch).length > 0 || rigChanged) applyStageAppearance(patch);
 
@@ -2979,8 +3009,8 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'fontFamilyId',
   'fontSizePx',
   'lineHeight',
-  'mirrorX',
-  'mirrorY',
+  // No mirror axes: mirroring is per panel and lives in `optical` (#206), which
+  // the follower compares as a whole below.
   'columnWidthPercent',
   'readingBandCenterPercent',
   'phraseHighlight',
@@ -3004,6 +3034,28 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
  * compose the SAME way — that is the whole reason a mid-take change and the next
  * take's opening frame agree — and two copies of this is how they stop agreeing.
  */
+function samePanelMirror(a: PanelMirror, b: PanelMirror): boolean {
+  return a.horizontal === b.horizontal && a.vertical === b.vertical;
+}
+
+/**
+ * The mirroring this take is running: its own live flip, or what its glass is
+ * showing now.
+ *
+ * The RENDERED axes rather than a fresh read of the panel's saved answer. The
+ * two differ when Settings changed the mirror while the take was opening —
+ * `startTake` composed from its snapshot, and the follower is not installed on
+ * a take that is not active yet — and the menu checkmark and the toggle have
+ * to describe the glass, or the first press of the shortcut changes nothing
+ * the operator can see. Callers deal with reader mode, where the rendered axes
+ * are forced off.
+ */
+function takeMirrorAxes(): PanelMirror {
+  if (takeMirror) return takeMirror;
+  if (stageSettings) return { horizontal: stageSettings.mirrorX, vertical: stageSettings.mirrorY };
+  return panelMirrorFor(getSettingsSnapshot().optical, stageDisplay?.fingerprint);
+}
+
 function recomposeStageSettings(): StageAppearance {
   const rebuilt = stageSettingsFromSettings(
     {
@@ -3027,6 +3079,8 @@ function recomposeStageSettings(): StageAppearance {
         : {}),
     },
     stageDisplay,
+    // Null leaves it to the panel's saved answer, read off the same snapshot.
+    takeMirror,
   );
   stageSettings = rebuilt;
   const appearance = liveStageAppearance();
@@ -3095,6 +3149,9 @@ export function adoptPresentationMode(
   if (takePresentationMode === mode && !movedPanel) return mode;
   takePresentationMode = mode;
   stageDisplay = nextDisplay;
+  // A flip was made at the glass the take WAS on. The panel it has landed on
+  // has its own answer, and carrying the flip across is #206 mid-take.
+  if (movedPanel) takeMirror = null;
   /*
    * The mode is recorded even when the geometry cannot be recomposed.
    *
@@ -3128,13 +3185,13 @@ export function livePresentationMode(): PresentationMode {
  * Is the take's script mirrored horizontally right now?
  *
  * Read by the native Session menu so its "Mirror Stage" checkmark reports the
- * state rather than merely offering the verb. The mirror lives in the take's own
- * teleprompter snapshot rather than in `SessionState`, because it is one of the
- * settings a saved rig can resolve — so this reads exactly what
- * `toggleStageMirror` writes and cannot answer from a stale copy.
+ * state rather than merely offering the verb. It answers what is RENDERED: the
+ * take's live flip or its panel's saved mirroring (#206), and never mirrored in
+ * a reading window, which is what the glass actually shows.
  */
 export function liveMirrorX(): boolean {
-  return (takeTeleprompter ?? currentTeleprompterSettings()).mirrorX;
+  if (livePresentationMode() === 'reader') return false;
+  return takeMirrorAxes().horizontal;
 }
 
 /**
@@ -3153,13 +3210,33 @@ export function adjustStageFontSize(deltaPx: number): number {
   return applyStageAppearance({ fontSizePx: current + deltaPx }).fontSizePx;
 }
 
-export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
-  const t = takeTeleprompter ?? currentTeleprompterSettings();
+/**
+ * Flip this take's mirroring on one axis, for this take only.
+ *
+ * Returns the horizontal mirroring now on the glass, or null when nothing was
+ * flipped: a reading window is never mirrored, so a flip there would be an
+ * invisible change waiting to surprise the operator when they switch back to
+ * the prompter — and a rig-resolved take with no panel cannot be recomposed at
+ * all (see `applyStageAppearance`).
+ *
+ * Not saved. The panel's mirroring is set in Settings, beside the display it
+ * belongs to; this is the quick "it reads backwards" fix for the take in
+ * front of you, and like every other in-take change it ends with the take.
+ */
+export function toggleStageMirror(axis: 'x' | 'y' = 'x'): boolean | null {
+  if (!get(state).active || livePresentationMode() === 'reader') return null;
+  if (stageSettings?.optics && stageDisplay === null) return null;
+  const current = takeMirrorAxes();
+  takeMirror =
+    axis === 'x'
+      ? { ...current, horizontal: !current.horizontal }
+      : { ...current, vertical: !current.vertical };
   // §7.5: the rail inherits the same mirror boundary as the script, so it must
   // learn the new mirror state too — it flips through its own snapshot, not the
   // stage transform, because it is inside the mirror plane but the boundary is
-  // decided on the control side.
-  applyStageAppearance(axis === 'x' ? { mirrorX: !t.mirrorX } : { mirrorY: !t.mirrorY });
+  // decided on the control side. The rebuild re-issues both.
+  applyStageAppearance({});
+  return takeMirror.horizontal;
 }
 
 function jumpSection(delta: number): boolean {
@@ -3438,6 +3515,7 @@ function stopInternals(): void {
    * settings again, which is where OK put anything worth keeping.
    */
   takeTeleprompter = null;
+  takeMirror = null;
   takePresentationMode = null;
   stageDisplay = null;
   driver?.dispose();

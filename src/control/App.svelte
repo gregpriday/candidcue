@@ -844,8 +844,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
     sessionPaused: $session.paused !== 'none',
     stageBlanked: $session.stageBlanked,
     // Read through a function rather than from `SessionState`, because the
-    // mirror lives in the take's teleprompter snapshot — see `liveMirrorX`.
-    // `$session` is referenced so this recomputes when the take changes.
+    // mirror is the take's own flip or its panel's saved answer — see
+    // `liveMirrorX`. `$session` is referenced so this recomputes when the take
+    // changes.
     stageMirrored: $session.active ? liveMirrorX() : false,
     scriptOpen: $editor.scriptId !== null,
     saveState: $editor.saveState,

@@ -56,7 +56,7 @@ export interface DestinationContext {
   optical: OpticalSettings;
 }
 
-const NO_OPTICAL: OpticalSettings = { profiles: {}, activeRig: {} };
+const NO_OPTICAL: OpticalSettings = { profiles: {}, activeRig: {}, panelMirror: {} };
 
 let context: DestinationContext = { mode: 'prompter', optical: NO_OPTICAL };
 /** Guards against overlapping refreshes landing out of order. */

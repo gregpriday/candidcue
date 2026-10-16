@@ -158,6 +158,7 @@ describe('a calibrated rig is not overruled by a loose preference', () => {
       optical: {
         profiles: { [opticalRigKey(display.fingerprint, rigName)]: profile },
         activeRig: { [display.fingerprint]: rigName },
+        panelMirror: {},
       },
     };
 

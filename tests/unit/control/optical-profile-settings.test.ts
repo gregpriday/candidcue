@@ -15,15 +15,17 @@
  * The service half runs against a fake `ipcInvoke` and a real in-memory
  * localStorage, so both halves of the adapter are genuinely exercised.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
 import {
   activeOpticalProfile,
   normalizeOpticalProfile,
   opticalRigKey,
   opticalRigsForDisplay,
+  panelMirrorFor,
   withOpticalProfile,
   withoutOpticalProfile,
+  withPanelMirror,
   type OpticalSettings,
 } from '../../../src/control/services/settings-types';
 
@@ -119,7 +121,7 @@ function rig(overrides: Partial<OpticalProfile> = {}): OpticalProfile {
   };
 }
 
-const EMPTY: OpticalSettings = { profiles: {}, activeRig: {} };
+const EMPTY: OpticalSettings = { profiles: {}, activeRig: {}, panelMirror: {} };
 
 /**
  * The `optical` section of the Rust document under test.
@@ -191,7 +193,7 @@ describe('one panel, several mounting arrangements', () => {
    */
   it('requires a rig to be chosen, not merely to exist', () => {
     const optical = withOpticalProfile(EMPTY, 'dsp-1', rig());
-    const orphaned: OpticalSettings = { profiles: optical.profiles, activeRig: {} };
+    const orphaned: OpticalSettings = { profiles: optical.profiles, activeRig: {}, panelMirror: {} };
     expect(opticalRigsForDisplay(orphaned, 'dsp-1')).toHaveLength(1);
     expect(activeOpticalProfile(orphaned, 'dsp-1')).toBeNull();
   });
@@ -541,7 +543,7 @@ describe('Rust is the authority for calibrated rigs', () => {
 
   it('starts uncalibrated rather than guessing at a rig', async () => {
     const loaded = await settings.getSettings();
-    expect(loaded.optical).toEqual({ profiles: {}, activeRig: {} });
+    expect(loaded.optical).toEqual({ profiles: {}, activeRig: {}, panelMirror: {} });
   });
 
   it('does not migrate an empty overlay, or write to plant a marker nobody needs', async () => {
@@ -612,7 +614,7 @@ describe('the properties the 1.0 readiness review asked for', () => {
     ipc.failUpdate = true;
     try {
       await expect(
-        settings.updateSettings(4, { teleprompter: { mirrorX: true } as never }),
+        settings.updateSettings(4, { teleprompter: { fixedSpeedWpm: 175 } as never }),
       ).rejects.toThrow();
 
       const stored = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as Record<string, unknown>;
@@ -675,5 +677,269 @@ describe('the whole migration lifecycle, through the real store', () => {
     expect(loaded.optical.profiles, 'a deleted rig must stay deleted').toEqual({});
     expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toBeNull();
     expect(settings.pendingOpticalAdoption()).toBeNull();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Per-panel mirroring (#206)
+ * ------------------------------------------------------------------------- */
+
+/** The fake document's retired global switch, for the migration cases. */
+function setLegacyHorizontalMirror(on: boolean): void {
+  (ipc.document.value.stageBehavior as { horizontalMirror: boolean }).horizontalMirror = on;
+}
+
+describe('mirroring belongs to the panel, not to every panel', () => {
+  it('reads unmirrored for a panel nobody has said anything about', () => {
+    expect(panelMirrorFor(EMPTY, 'dsp-glass')).toEqual({ horizontal: false, vertical: false });
+    expect(panelMirrorFor(EMPTY, null)).toEqual({ horizontal: false, vertical: false });
+    expect(panelMirrorFor(EMPTY, '')).toEqual({ horizontal: false, vertical: false });
+  });
+
+  it("setting one panel's mirror leaves every other panel's alone", () => {
+    let optical = withPanelMirror(EMPTY, 'dsp-glass', { horizontal: true, vertical: false });
+    optical = withPanelMirror(optical, 'dsp-desk', { horizontal: false, vertical: false });
+
+    expect(panelMirrorFor(optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
+    expect(panelMirrorFor(optical, 'dsp-desk')).toEqual({ horizontal: false, vertical: false });
+  });
+
+  it('survives storing, choosing and deleting a rig on that panel', () => {
+    /*
+     * The glass is still in front of the panel whatever rig is calibrated for
+     * it — and `withOpticalProfile` used to rebuild the section from its two
+     * rig maps alone, which would have dropped every panel's mirror on the
+     * first calibration.
+     */
+    const mirrored = withPanelMirror(EMPTY, 'dsp-glass', { horizontal: true, vertical: true });
+    const calibrated = withOpticalProfile(mirrored, 'dsp-desk', rig());
+    expect(panelMirrorFor(calibrated, 'dsp-glass')).toEqual({ horizontal: true, vertical: true });
+
+    const deleted = withoutOpticalProfile(calibrated, 'dsp-desk', 'Desk hood');
+    expect(panelMirrorFor(deleted, 'dsp-glass')).toEqual({ horizontal: true, vertical: true });
+  });
+
+  it('turns no mirror on for a malformed stored entry', async () => {
+    rustSettings.optical = {
+      migrated: true,
+      profiles: {},
+      activeRig: {},
+      panelMirror: {
+        'dsp-a': { horizontal: 'yes', vertical: 1 },
+        'dsp-b': 'mirrored',
+        'dsp-c': { horizontal: true },
+      },
+    };
+
+    const loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-a')).toEqual({ horizontal: false, vertical: false });
+    expect(panelMirrorFor(loaded.optical, 'dsp-b')).toEqual({ horizontal: false, vertical: false });
+    expect(panelMirrorFor(loaded.optical, 'dsp-c')).toEqual({ horizontal: true, vertical: false });
+  });
+
+  it('sends the whole map to Rust, and nothing to the retired global switch', async () => {
+    const optical = withPanelMirror(EMPTY, 'dsp-glass', { horizontal: true, vertical: false });
+    await settings.updateSettings(4, { optical });
+
+    const patch = (ipc.calls.find((c) => c.command === 'update_settings')?.args as {
+      patch?: Record<string, Record<string, unknown>>;
+    })?.patch;
+    expect(patch?.['optical']?.['panelMirror']).toEqual({
+      'dsp-glass': { horizontal: true, vertical: false },
+    });
+    expect(patch?.['stageBehavior']).toBeUndefined();
+  });
+
+  it('keeps the old switches off the teleprompter section', async () => {
+    store.set(OVERLAY_KEY, JSON.stringify({ teleprompter: { mirrorX: true, mirrorY: true } }));
+    const loaded = await settings.getSettings();
+    expect(loaded.teleprompter).not.toHaveProperty('mirrorX');
+    expect(loaded.teleprompter).not.toHaveProperty('mirrorY');
+  });
+});
+
+describe('carrying the retired global mirror onto the glass, once', () => {
+  afterEach(() => {
+    setLegacyHorizontalMirror(false);
+  });
+
+  it('mirrors the pinned panel the way the old switch did, on both axes', async () => {
+    /*
+     * The upgrade promise: an install that had mirroring switched on keeps
+     * its glass takes mirrored. `mirrorX` was in Rust; `mirrorY` only ever
+     * lived in the overlay.
+     */
+    setLegacyHorizontalMirror(true);
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' }, teleprompter: { mirrorY: true } }),
+    );
+
+    const loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: true });
+    // The desk or laptop screen is NOT the glass, and gets nothing.
+    expect(Object.keys(loaded.optical.panelMirror)).toEqual(['dsp-glass']);
+    expect(settings.pendingPanelMirrorAdoption()).toEqual({
+      'dsp-glass': { horizontal: true, vertical: true },
+    });
+  });
+
+  it("recovers a flipped rig's own orientation, even where the global was switched off", async () => {
+    /*
+     * The issue's second case, from the other side: calibrating a desk rig
+     * copied its unflipped orientation into the one global switch, so the
+     * glass rig's takes came up the right way round on the wrong glass. The
+     * glass rig's own record survived it, and that is evidence about its panel.
+     */
+    rustSettings.optical = {
+      migrated: true,
+      profiles: {
+        [opticalRigKey('dsp-glass', 'Hood')]: rig({
+          rigName: 'Hood',
+          flips: { horizontal: true, vertical: false },
+        }),
+        [opticalRigKey('dsp-desk', 'Desk')]: rig({ rigName: 'Desk' }),
+      },
+      activeRig: { 'dsp-glass': 'Hood', 'dsp-desk': 'Desk' },
+    };
+
+    const loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
+    expect(panelMirrorFor(loaded.optical, 'dsp-desk')).toEqual({ horizontal: false, vertical: false });
+  });
+
+  it('lets the pinned panel keep what its takes actually rendered over an older rig record', () => {
+    rustSettings.optical = {
+      migrated: true,
+      profiles: {
+        [opticalRigKey('dsp-glass', 'Hood')]: rig({
+          rigName: 'Hood',
+          flips: { horizontal: true, vertical: false },
+        }),
+      },
+      activeRig: { 'dsp-glass': 'Hood' },
+    };
+    // Pinned, with the switch OFF: the operator turned the mirror off for it.
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' } }));
+
+    return settings.getSettings().then((loaded) => {
+      expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({
+        horizontal: false,
+        vertical: false,
+      });
+      expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+    });
+  });
+
+  it('reads the old switch as it was rendered, where the overlay copy won', async () => {
+    // `mirrorX` round-tripped through both and the overlay's copy was merged
+    // over Rust's, so an overlay `false` is what every take actually showed.
+    setLegacyHorizontalMirror(true);
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' }, teleprompter: { mirrorX: false } }),
+    );
+
+    const loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: false, vertical: false });
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
+  it('guesses no panel when nothing says which one is the glass', async () => {
+    // Switch on, nothing pinned, nothing calibrated: the primary display is the
+    // desk screen on the rig this is about, and it must not be the guess.
+    setLegacyHorizontalMirror(true);
+
+    const loaded = await settings.getSettings();
+
+    expect(loaded.optical.panelMirror).toEqual({});
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
+  it('never re-seeds once Rust holds a map, even an empty one', async () => {
+    /*
+     * An empty map is somebody who switched every mirror off. Reading it as
+     * "not migrated yet" would put the old global straight back on the glass.
+     */
+    setLegacyHorizontalMirror(true);
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' } }));
+    rustSettings.optical = { migrated: true, profiles: {}, activeRig: {}, panelMirror: {} };
+
+    const loaded = await settings.getSettings();
+
+    expect(loaded.optical.panelMirror).toEqual({});
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+
+    // And a stale read from before the write, landing afterwards, cannot
+    // revive the migration: the latch only moves one way.
+    rustSettings.optical = { migrated: true, profiles: {}, activeRig: {} };
+    await settings.getSettings();
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
+  it('moves overlay-only rigs and the old mirror together, losing neither', async () => {
+    /*
+     * The ordering hazard: any optical write takes ownership of the section in
+     * Rust, so a mirror adoption that claimed it without the rigs still waiting
+     * in the overlay would strand the calibrations for good.
+     */
+    ipc.applyPatch = true;
+    setLegacyHorizontalMirror(true);
+    const key = opticalRigKey('dsp-glass', 'Hood');
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        stage: { displayFingerprint: 'dsp-glass' },
+        optical: { profiles: { [key]: rig({ rigName: 'Hood' }) }, activeRig: { 'dsp-glass': 'Hood' } },
+      }),
+    );
+
+    const settingsStore = await import('../../../src/control/stores/settings');
+    await settingsStore.loadSettings(true);
+
+    const stored = rustSettings.optical as {
+      migrated?: boolean;
+      profiles?: Record<string, unknown>;
+      activeRig?: Record<string, unknown>;
+      panelMirror?: unknown;
+    };
+    expect(stored.migrated).toBe(true);
+    expect(Object.keys(stored.profiles ?? {})).toEqual([key]);
+    expect(stored.activeRig).toEqual({ 'dsp-glass': 'Hood' });
+    expect(stored.panelMirror).toEqual({ 'dsp-glass': { horizontal: true, vertical: false } });
+
+    // And with the browser store gone, the document alone still has both.
+    store.clear();
+    const reloaded = await settings.getSettings();
+    expect(activeOpticalProfile(reloaded.optical, 'dsp-glass')?.rigName).toBe('Hood');
+    expect(panelMirrorFor(reloaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
+  });
+
+  it('writes the carried mirror through once, and then the document is the answer', async () => {
+    ipc.applyPatch = true;
+    setLegacyHorizontalMirror(true);
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' } }));
+
+    const settingsStore = await import('../../../src/control/stores/settings');
+    let loaded = await settingsStore.loadSettings(true);
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
+    expect((rustSettings.optical as { panelMirror?: unknown })?.panelMirror).toEqual({
+      'dsp-glass': { horizontal: true, vertical: false },
+    });
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+
+    // The operator then switches the glass's mirror off. A reload must not
+    // carry the old switch back on top of that choice.
+    await settingsStore.patchSettings(
+      'optical',
+      withPanelMirror(loaded.optical, 'dsp-glass', { horizontal: false, vertical: false }),
+    );
+    loaded = await settingsStore.loadSettings(true);
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: false, vertical: false });
   });
 });

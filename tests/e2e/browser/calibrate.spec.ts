@@ -7,8 +7,8 @@ import { openPreferences } from './fixtures/preferences';
  *
  * The wizard asks "Leave without saving?" and says the measurements "have not
  * been applied to this display yet". That used to be false of exactly one
- * field: a preset card and the orientation toggles wrote `teleprompter.mirrorX/
- * mirrorY` — the axes a real take renders from — the instant they were touched,
+ * field: a preset card and the orientation toggles wrote the mirror axes a real
+ * take renders from the instant they were touched,
  * and Discard reverted nothing. Somebody who tried a rig and backed out had
  * silently changed how every future take rendered, and found out mid-shoot.
  *
@@ -24,11 +24,14 @@ import { openPreferences } from './fixtures/preferences';
  * store, the real guard and the real Settings screen all run, and only the Rust
  * boundary is simulated.
  *
- * The assertions land on the Settings switches rather than on the `update_
- * settings` payload because only `mirrorX` reaches Rust (`stageBehavior.
- * horizontalMirror`); `mirrorY` lives in the local overlay. Reading the two
- * switches covers both axes the same way and is what the operator actually sees.
+ * Mirroring is per PANEL now (#206): both axes live in `optical.panelMirror`,
+ * keyed by the display, so the assertions read both the Settings switches —
+ * what the operator actually sees — and the panel's entry in the patch that
+ * reached Rust.
  */
+
+/** The display the Stage display section is about when nothing is pinned. */
+const PROMPTER_PANEL = 'dsp-e2e-prompter';
 
 const SCRIPT = {
   id: '33333333-3333-4333-8333-333333333333',
@@ -138,11 +141,8 @@ async function previewMirror(page: Page): Promise<{ mirrorX: boolean; mirrorY: b
 /**
  * Every settings patch that actually reached Rust, in order.
  *
- * These are RUST-shaped, not UI-shaped: `teleprompter.mirrorX` arrives as
- * `stageBehavior.horizontalMirror`. `mirrorY` and the whole `optical` section
- * are overlay-backed (localStorage) and never appear here at all — which is
- * why the axes are also read off the Settings switches below, where both of
- * them are visible the same way.
+ * These are RUST-shaped, not UI-shaped: a rig and a panel's mirroring both
+ * arrive inside `optical`.
  */
 async function settingsWrites(page: Page): Promise<Array<Record<string, unknown>>> {
   return await page.evaluate(() =>
@@ -155,16 +155,31 @@ async function settingsWrites(page: Page): Promise<Array<Record<string, unknown>
 /**
  * The writes that touch one section.
  *
- * Finishing the wizard now issues TWO writes, and both are the point: the rig
- * goes to Rust (`optical`) because a calibration measured with a tape measure
- * must survive a cleared browser store, and the mirror goes with it
- * (`stageBehavior`). Before that move the rig lived only in localStorage and
- * these tests could count total writes; counting them now would conflate "the
- * mirror was written once" with "how many sections finishing touches", and the
- * first is what they are about.
+ * Finishing the wizard issues ONE write: the rig, the panel's choice of it and
+ * the panel's mirroring, all in `optical`. It used to be two — the rig, then a
+ * global `stageBehavior.horizontalMirror` for every panel — and a failure
+ * between them left a rig stored without its mirror (#206).
  */
 async function writesTouching(page: Page, section: string): Promise<Array<Record<string, unknown>>> {
   return (await settingsWrites(page)).filter((patch) => patch[section] !== undefined);
+}
+
+/**
+ * A display tile by the display's own name.
+ *
+ * Matched on `.monitor-name` exactly, not on the tile's text: the Automatic
+ * tile says "Currently Teleprompter Display", so a text match finds two.
+ */
+function monitorTile(page: Page, name: string) {
+  return page.locator('.monitor-tile', {
+    has: page.locator('.monitor-name', { hasText: new RegExp(`^${name}$`) }),
+  });
+}
+
+/** One panel's mirroring, as an `optical` patch carried it. */
+function panelMirrorIn(patch: Record<string, unknown> | undefined, panel: string): unknown {
+  const optical = patch?.['optical'] as Record<string, Record<string, unknown>> | undefined;
+  return optical?.['panelMirror']?.[panel];
 }
 
 test('a mirror tried out in the wizard reaches the glass but not the settings, and Discard drops it', async ({
@@ -282,18 +297,17 @@ test('Apply cannot clear a mirror set in Settings when the orientation step was 
    * if the write had gone out as `false` and the store had somehow not caught
    * up yet.
    */
-  const writes = await writesTouching(page, 'stageBehavior');
+  const writes = await writesTouching(page, 'optical');
   expect(writes).toHaveLength(1);
-  expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
-  // And the rig itself reached Rust, which is why there are two writes now.
-  expect(await writesTouching(page, 'optical')).toHaveLength(1);
+  expect(panelMirrorIn(writes[0], PROMPTER_PANEL)).toEqual({ horizontal: true, vertical: false });
+  // Nothing to the retired global switch.
+  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(0);
 });
 
 /*
- * The re-entrancy guard, which exists because finishing is no longer a single
- * write. A second Apply landing mid-save would start a second sequence from the
- * same store revision, and the backend would reject the loser — losing the
- * mirror the same way the old per-axis writes did.
+ * The re-entrancy guard. A second Apply landing mid-save would start a second
+ * write from the same store revision, and the backend would reject the loser
+ * with a conflict the operator did nothing to cause.
  */
 test('a second Apply cannot start while the first is still saving', async ({ page }) => {
   test.slow();
@@ -319,13 +333,12 @@ test('a second Apply cannot start while the first is still saving', async ({ pag
   await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
 
   /*
-   * Still exactly ONE finish, despite Apply having been pressed during a save:
-   * one write per section, not two. Counted per section because finishing
-   * writes the rig and the mirror in sequence — a second finish would show up
-   * as a second write to each.
+   * Still exactly ONE finish, despite Apply having been pressed during a save.
+   * The rig and its mirroring are one `optical` write, so a second finish would
+   * show up as a second one.
    */
   expect(await writesTouching(page, 'optical')).toHaveLength(1);
-  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(1);
+  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(0);
 });
 
 test('finishing the wizard is what applies the mirror, both axes at once', async ({ page }) => {
@@ -354,33 +367,62 @@ test('finishing the wizard is what applies the mirror, both axes at once', async
   await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'true');
 
   /*
-   * Exactly ONE mirror write reached Rust, and it turned the mirror on.
+   * Exactly ONE write reached Rust, carrying the rig and BOTH axes for this
+   * panel.
    *
-   * The count is the real assertion. Two calls would mean the per-axis writes
-   * were back: `patchSettings` reads the store revision when it is called, so a
-   * pair fired before either lands both start from the same one and the backend
+   * The count is the real assertion. Two calls would mean split writes were
+   * back: `patchSettings` reads the store revision when it is called, so a pair
+   * fired before either lands both start from the same one and the backend
    * rejects the loser — which is how an axis used to disappear.
    *
-   * Scoped to `stageBehavior` because finishing also writes the rig itself to
-   * `optical` now (calibrations are Rust-owned; they used to live only in
-   * localStorage). The two are sequential, so they cannot collide over a
-   * revision, and each section is written once.
-   *
-   * The patch carries the whole mapped section (`patchSettings` sends the
-   * merged section, not just the changed keys), so this reads the one field it
-   * is about rather than pinning the section's entire shape.
+   * The patch carries the whole optical section, so this reads the one panel
+   * it is about rather than pinning the section's entire shape.
    */
-  const writes = await writesTouching(page, 'stageBehavior');
+  const writes = await writesTouching(page, 'optical');
   expect(writes).toHaveLength(1);
-  expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
-  expect(await writesTouching(page, 'optical')).toHaveLength(1);
+  expect(panelMirrorIn(writes[0], PROMPTER_PANEL)).toEqual({ horizontal: true, vertical: true });
+  expect(await writesTouching(page, 'stageBehavior')).toHaveLength(0);
 });
 
 /*
- * Finishing writes twice — the rig to `optical`, then the mirror to
- * `stageBehavior` — so a failing `update_settings` fails the FIRST of the two
- * and the mirror write never runs at all. What must not happen either way is
- * the wizard claiming success it did not have.
+ * The issue's second case (#206): calibrating one panel used to copy that
+ * rig's orientation into the single global switch, so a desk rig calibrated
+ * with no mirror turned the glass rig's mirror off. Each panel keeps its own.
+ */
+test("calibrating one display leaves another display's mirror alone", async ({ page }) => {
+  test.slow();
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await page.goto('/control.html');
+
+  await openStageDisplay(page);
+
+  // The glass is mirrored from Settings...
+  await toggle(page, 'Horizontal mirror').click();
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
+
+  // ...and then the laptop is pinned and calibrated, with no mirror at all.
+  await monitorTile(page, 'Built-in Display').click();
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
+  await enterWizard(page);
+  await applyRig(page);
+  await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
+
+  // The laptop is unmirrored — and the glass still is.
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
+  const writes = await writesTouching(page, 'optical');
+  expect(writes).toHaveLength(1);
+  expect(panelMirrorIn(writes[0], 'dsp-e2e-builtin')).toEqual({ horizontal: false, vertical: false });
+  expect(panelMirrorIn(writes[0], PROMPTER_PANEL)).toEqual({ horizontal: true, vertical: false });
+
+  await monitorTile(page, 'Teleprompter Display').click();
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
+});
+
+/*
+ * Finishing writes once — the rig and the panel's mirroring together, in
+ * `optical` — so a failing `update_settings` takes both down with it and
+ * neither is half-applied. What must not happen is the wizard claiming
+ * success it did not have.
  *
  * (The comment here used to say `optical` was overlay-backed and only the
  * mirror reached Rust. That was true before calibrated rigs moved into the
@@ -434,14 +476,13 @@ test('a mirror write that fails is reported, not silently half-applied', async (
   await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
 
   /*
-   * One write was attempted and it was the rig — the first of the two — and
-   * because it was rejected the mirror write never ran. Both halves are
-   * asserted: a failure that let the sequence carry on would put a flip in
-   * force for a rig the document does not have.
+   * One write was attempted, carrying the rig and its mirroring together, and
+   * nothing else followed it: a second write that went ahead anyway would put
+   * a flip in force for a rig the document does not have.
    */
   const writes = await settingsWrites(page);
   expect(writes).toHaveLength(1);
-  expect(writes[0]?.['optical']).toBeDefined();
+  expect(panelMirrorIn(writes[0], PROMPTER_PANEL)).toEqual({ horizontal: true, vertical: false });
   expect(await writesTouching(page, 'stageBehavior')).toHaveLength(0);
 
   // The guard released: a failed save must leave the wizard retryable, not
