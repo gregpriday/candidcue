@@ -1269,6 +1269,18 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
     expect(run.elapsedMs, budgetMessage('long kept-marker run', run, 250)).toBeLessThan(250);
   });
 
+  it.each([
+    ['entities', `${'&amp; '.repeat(8_000)}last word.`],
+    ['dropped trailing blanks', `last word.${'\t'.repeat(8_000)}`],
+  ])('stays fast when %s leave a long kept-marker run room to retry', (_name, tail) => {
+    // Both make the source line longer than the text it decodes to, so the
+    // length bound alone leaves every marker in the run as a candidate start.
+    const source = `> First\n>     ${'> '.repeat(8_000)}${tail}\n> after.\n`;
+    const run = bestOf(() => compile(source, OPTS));
+    expect(normalizedWords(run.value)).toEqual(expect.arrayContaining(['last', 'word', 'after']));
+    expect(run.elapsedMs, budgetMessage('long kept-marker run with slack', run, 250)).toBeLessThan(250);
+  });
+
   it('maps a spoken alias on a later line onto its visual word', () => {
     const source = '> Our new\n> API{say="a p i"} ships.\n';
     const script = compile(source, OPTS);

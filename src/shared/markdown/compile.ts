@@ -582,6 +582,9 @@ const ENTITY_AT = /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,
  */
 const LINE_PREFIX = /[ \t>]*/y;
 
+/** How many starts inside one continuation prefix are tried after the first. */
+const MAX_PREFIX_RETRIES = 64;
+
 /** What a backslash escapes (CommonMark §2.4): ASCII punctuation, nothing else. */
 const ESCAPABLE = /^[!-/:-@[-`{-~]$/;
 
@@ -604,15 +607,20 @@ function mapValueToSource(
      *
      * Decoding never lengthens text, so the line cannot resume later than its
      * own length before the source line ends. Starting there keeps a long run
-     * of kept `>` from being retried one position at a time.
+     * of kept `>` from being retried one position at a time. Entities and
+     * dropped blanks loosen that bound, so the retries are capped as well:
+     * only a line that opens on dozens of kept markers needs more, and it
+     * falls back to approximate offsets rather than a quadratic search.
      */
     LINE_PREFIX.lastIndex = at.s;
     LINE_PREFIX.exec(source);
     const lineLength = lineBreakAt(value, at.v, value.length) - at.v;
     const latest = lineBreakAt(source, at.s, end) - lineLength;
+    const first = Math.min(LINE_PREFIX.lastIndex, latest);
+    const last = Math.max(at.s, first - MAX_PREFIX_RETRIES);
     const from = at;
     at = null;
-    for (let s = Math.min(LINE_PREFIX.lastIndex, latest); s >= from.s && at === null; s--) {
+    for (let s = first; s >= last && at === null; s--) {
       at = alignLine(source, s, end, value, from.v, map);
     }
   }
