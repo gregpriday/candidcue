@@ -32,6 +32,7 @@ import type {
 import { hashString, shortHash } from './hash';
 import { DEFAULT_WORDS_PER_MINUTE } from '../speaking-rate';
 import {
+  BYTE_ORDER_MARK,
   ContainerIndex,
   classifyBracketDirective,
   classifyCoachComment,
@@ -57,8 +58,12 @@ import { deriveParts } from './parts';
  * is written and not spoken goes back to being unanchored past its first word.
  * A cache that answered with one would reinstate the bug quietly, which is
  * exactly what a version key is for.
+ *
+ * 1.2.1 is a correction, not a field: a source opening with a byte-order mark
+ * used to compile with every position one character early and its line-one
+ * directive ignored (#247). Only those documents change.
  */
-export const COMPILER_VERSION = '1.2.0';
+export const COMPILER_VERSION = '1.2.1';
 export const SCHEMA_VERSION = 1;
 export { DEFAULT_WORDS_PER_MINUTE };
 const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
@@ -98,6 +103,32 @@ function nodeStart(node: MdNode): number {
 
 function nodeEnd(node: MdNode): number {
   return node.position?.end.offset ?? 0;
+}
+
+/**
+ * micromark skips a leading byte-order mark and counts every position from the
+ * character after it, while the scanners and every `source.slice` here index
+ * the real document, mark included. Left alone, every token mapped one
+ * character early (`Hello` read as `\uFEFFHell`, #247). Points are replaced,
+ * never mutated, so a point object two nodes happen to share moves once.
+ */
+function shiftPastByteOrderMark(node: MdNode): void {
+  if (node.position) {
+    node.position = {
+      start: shiftPoint(node.position.start),
+      end: shiftPoint(node.position.end),
+    };
+  }
+  for (const child of node.children ?? []) shiftPastByteOrderMark(child);
+}
+
+function shiftPoint(point: MdPoint): MdPoint {
+  const shifted: MdPoint = {
+    line: point.line,
+    column: point.line === 1 ? point.column + 1 : point.column,
+  };
+  if (point.offset !== undefined) shifted.offset = point.offset + 1;
+  return shifted;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1509,6 +1540,8 @@ export function compile(source: string, options: CompileOptions): CompiledScript
   const scan = scanContainers(front.maskedSource);
   state.diagnostics.push(...scan.diagnostics);
   const tree = parser.parse(scan.maskedSource) as unknown as MdNode;
+  // Front matter blanks a mark it covers, so test what the parser was given.
+  if (scan.maskedSource.charCodeAt(0) === BYTE_ORDER_MARK) shiftPastByteOrderMark(tree);
   collectDefinitions(tree, state.definitions);
   const containers = new ContainerIndex(scan.regions);
 

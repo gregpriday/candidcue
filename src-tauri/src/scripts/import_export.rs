@@ -17,7 +17,7 @@ use crate::util::{atomic_write, is_safe_relative_path, new_uuid, now_iso, sha256
 
 use super::repo::{self, MAX_SOURCE_BYTES};
 use super::words::{spoken_plain_text, spoken_text, SpokenTextOptions};
-use super::{DataPaths, ScriptId, ScriptLocks, ScriptSummary};
+use super::{into_without_bom, DataPaths, ScriptId, ScriptLocks, ScriptSummary};
 
 /// Spec Appendix A.10 limits.
 const MAX_BUNDLE_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -304,6 +304,9 @@ pub async fn import_script(
             }
             let raw = fs::read_to_string(&source_path)
                 .map_err(|_| AppError::validation("The file is not valid UTF-8 text."))?;
+            // Before the `.txt` conversion, so the mark cannot ride into the
+            // stored script, its import revision or its word count (#247).
+            let raw = into_without_bom(raw);
             let source = if extension == "txt" {
                 text_to_markdown(&raw)
             } else {
@@ -422,10 +425,10 @@ async fn import_bundle(
                 if buf.len() > MAX_SOURCE_BYTES {
                     return Err(AppError::validation("The script is larger than the 10 MB limit."));
                 }
-                script_source = Some(
+                script_source = Some(into_without_bom(
                     String::from_utf8(buf)
                         .map_err(|_| AppError::validation("script.md is not valid UTF-8."))?,
-                );
+                ));
             }
             _ if name.starts_with("assets/") => {
                 if declared > MAX_BUNDLE_ASSET_BYTES {
@@ -587,7 +590,8 @@ pub async fn export_script(
     let _guard = lock.lock().await;
 
     let canonical = repo::canonical_path_checked(pool, paths, script_id).await?;
-    let source = fs::read_to_string(&canonical)?;
+    // A canonical file saved with a BOM outside CandidCue exports without it.
+    let source = into_without_bom(fs::read_to_string(&canonical)?);
     let summary = repo::get_summary(pool, script_id).await?;
 
     // Reject the format BEFORE touching the filesystem: an unknown format used

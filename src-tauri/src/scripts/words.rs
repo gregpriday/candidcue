@@ -71,6 +71,10 @@ impl SpokenText {
 
 /// Extract the spoken text and words of a Markdown script.
 pub fn spoken_text(source: &str, options: SpokenTextOptions) -> SpokenText {
+    // A leading byte-order mark is not text (#247). Left in, it is an invisible
+    // first character that turns a line-one `#` heading or `:::` fence into
+    // speech, since U+FEFF is not whitespace to any of the block line tests.
+    let source = super::without_bom(source);
     let mut collector = Collector::default();
     BlockWalker::new(source, options, &mut collector).run();
     collector.finish()
@@ -1938,6 +1942,28 @@ mod tests {
         );
         assert_eq!(plain("1. First point here\n2. Second point here\n"), "First point here Second point here");
         assert_eq!(plain("Big Title\n=========\n\nBody text here.\n"), "Body text here.");
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_does_not_change_what_is_spoken() {
+        // #247: the Library read an imported "UTF-8 with BOM" script's first
+        // heading as speech, `#` and all, and counted 8 words instead of 5.
+        let plain_source = "# Quarterly update\n\nHello everyone, thanks for coming.\n";
+        let bom_source = format!("\u{feff}{plain_source}");
+        assert_eq!(plain(&bom_source), "Hello everyone, thanks for coming.");
+        assert_eq!(words(&bom_source), 5);
+        assert_eq!(preview_text(&plain(&bom_source)), "Hello everyone, thanks for coming.");
+
+        let headings = SpokenTextOptions {
+            read_headings: true,
+            ..Default::default()
+        };
+        assert_eq!(spoken_text(&bom_source, headings), spoken_text(plain_source, headings));
+
+        // A container that opens on line one stays silent.
+        let stage = "\u{feff}:::stage\nWalk to the whiteboard.\n:::\n\nHello everyone.\n";
+        assert_eq!(plain(stage), "Hello everyone.");
+        assert_eq!(words(stage), 2);
     }
 
     #[test]

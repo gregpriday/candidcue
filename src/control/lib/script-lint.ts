@@ -27,7 +27,11 @@
  *
  * Pure: (source) -> findings. No DOM, no settings, no compiler.
  */
-import { INLINE_SAY_PATTERN, classifyBracketDirective } from '../../shared/markdown/directives';
+import {
+  BYTE_ORDER_MARK,
+  INLINE_SAY_PATTERN,
+  classifyBracketDirective,
+} from '../../shared/markdown/directives';
 import { segmentSentences } from '../../shared/markdown/segment';
 import { tokenizeText } from '../../shared/markdown/tokenize';
 
@@ -84,9 +88,11 @@ interface SourceLine {
 
 function splitLines(source: string): SourceLine[] {
   const lines: SourceLine[] = [];
-  let start = 0;
+  // As in the compiler's scanner: a leading byte-order mark is not part of
+  // line one, and offsets stay absolute (#247).
+  let start = source.charCodeAt(0) === BYTE_ORDER_MARK ? 1 : 0;
   let number = 1;
-  for (let i = 0; i <= source.length; i++) {
+  for (let i = start; i <= source.length; i++) {
     if (i === source.length || source.charAt(i) === '\n') {
       let end = i;
       if (end > start && source.charAt(end - 1) === '\r') end--;
@@ -107,7 +113,10 @@ function positionAt(lines: SourceLine[], offset: number): { line: number; column
     else hi = mid - 1;
   }
   const line = lines[lo]!;
-  return { line: line.number, column: offset - line.start + 1 };
+  // The editor's line one still begins at offset 0, BOM and all, and a column
+  // is resolved against the editor's line start — so count from there.
+  const lineStart = lo === 0 ? 0 : line.start;
+  return { line: line.number, column: offset - lineStart + 1 };
 }
 
 /* ---------------------------------------------------------------------------

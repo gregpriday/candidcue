@@ -1050,3 +1050,55 @@ describe('compile: determinism, hashes, empty input, performance', () => {
     expect(run.elapsedMs, budgetMessage('5,000-word compile', run, 400)).toBeLessThan(400);
   });
 });
+
+describe('compile: a leading byte-order mark (#247)', () => {
+  // Windows editors save "UTF-8 with BOM". remark skips the mark; the scanners
+  // and every source slice used to see it, so line one stopped meaning anything.
+  const BOM = '﻿';
+
+  it.each([':::stage', ':::silent'])('keeps a %s block that opens on line one out of speech', (fence) => {
+    const source = `${fence}\nWalk to the whiteboard.\n:::\n\nHello everyone.\n`;
+    const plain = compile(source, OPTS);
+    const marked = compile(BOM + source, OPTS);
+    expect(normalizedWords(marked)).toEqual(normalizedWords(plain));
+    expect(normalizedWords(marked)).toHaveLength(2);
+    expect(marked.blocks.map((b) => b.kind)).toEqual(plain.blocks.map((b) => b.kind));
+    expect(marked.diagnostics.map((d) => d.code)).toEqual(plain.diagnostics.map((d) => d.code));
+    expect(marked.diagnostics.map((d) => d.code)).not.toContain('directive_stray_fence');
+  });
+
+  it('maps the first token onto the real document, mark included', () => {
+    const source = `${BOM}Hello world.`;
+    const [hello] = compile(source, OPTS).spokenTokens;
+    expect(hello!.source).toEqual({ utf16Start: 1, utf16End: 6 });
+    expect(source.slice(hello!.source.utf16Start, hello!.source.utf16End)).toBe('Hello');
+  });
+
+  it('maps every token, a line-one heading included, onto the original source', () => {
+    const source = `${BOM}# Quarterly update\n\nHello everyone, thanks for **coming** today.\n`;
+    for (const readHeadings of [false, true]) {
+      const script = compile(source, { ...OPTS, readHeadings });
+      const plain = compile(source.slice(1), { ...OPTS, readHeadings });
+      expect(normalizedWords(script)).toEqual(normalizedWords(plain));
+      for (const token of script.spokenTokens) {
+        expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+      }
+      // Exactly one character later than the same script without the mark.
+      expect(script.spokenTokens.map((t) => t.source.utf16Start)).toEqual(
+        plain.spokenTokens.map((t) => t.source.utf16Start + 1),
+      );
+    }
+  });
+
+  it('does not shift twice when front matter blanks the mark with it', () => {
+    const body = ['---', 'coach:', '  mode: minimal', '---', '', 'All good here.', ''].join('\n');
+    const plain = compile(body, OPTS);
+    const marked = compile(BOM + body, OPTS);
+    expect(marked.coaching.frontMatter).toEqual(plain.coaching.frontMatter);
+    expect(marked.coaching.frontMatter?.mode).toBe('minimal');
+    expect(normalizedWords(marked)).toEqual(normalizedWords(plain));
+    for (const token of marked.spokenTokens) {
+      expect((BOM + body).slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+  });
+});

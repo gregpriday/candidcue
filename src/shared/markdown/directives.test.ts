@@ -59,6 +59,19 @@ describe('scanContainers (spec §23.4-§23.7)', () => {
     expect(regions[0]).toMatchObject({ kind: 'silent', closed: true });
   });
 
+  it('reads a fence on line one past a leading byte-order mark, offsets intact (#247)', () => {
+    const source = '\uFEFF:::stage\r\nWalk to the whiteboard.\r\n:::\r\n\r\nHello everyone.';
+    const { maskedSource, regions, diagnostics } = scanContainers(source);
+    expect(diagnostics).toEqual([]);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toMatchObject({ kind: 'stage', closed: true, start: 1 });
+    // Equal-length masking, and the mark itself is left for the parser.
+    expect(maskedSource.length).toBe(source.length);
+    expect(maskedSource.charCodeAt(0)).toBe(0xfeff);
+    expect(maskedSource).not.toContain(':::');
+    expect(maskedSource.indexOf('Hello')).toBe(source.indexOf('Hello'));
+  });
+
   it('parses spoken override fields with source ranges', () => {
     const source = ':::spoken\nvisual: CandidCue v2.0\nsay: Candid Cue version two point oh\n:::\n';
     const { regions, maskedSource } = scanContainers(source);

@@ -16,6 +16,25 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::errors::AppError;
 
+/// Script text without its leading byte-order mark.
+///
+/// Windows editors and some export tools save "UTF-8 with BOM", and decoding
+/// UTF-8 keeps the U+FEFF. Left in, it is an invisible first character that
+/// defeats every line-one check — a `:::stage` fence, a `#` heading, front
+/// matter — and shifts the compiler's source positions (#247). Only a mark at
+/// the very start is a BOM; a U+FEFF anywhere else is the author's text.
+pub(crate) fn without_bom(source: &str) -> &str {
+    source.strip_prefix('\u{feff}').unwrap_or(source)
+}
+
+/// [`without_bom`] for owned text, in place.
+pub(crate) fn into_without_bom(mut source: String) -> String {
+    if source.starts_with('\u{feff}') {
+        source.replace_range(..'\u{feff}'.len_utf8(), "");
+    }
+    source
+}
+
 /// A script identifier that has been proven to be a canonical lowercase
 /// hyphenated UUID (spec §47.1: script directories are named by UUID).
 ///
@@ -402,6 +421,25 @@ pub struct RevisionDocument {
     #[serde(flatten)]
     pub summary: RevisionSummary,
     pub source: String,
+}
+
+#[cfg(test)]
+mod bom_tests {
+    use super::*;
+
+    #[test]
+    fn strips_one_leading_mark_only() {
+        assert_eq!(without_bom("# Title"), "# Title");
+        assert_eq!(without_bom("\u{feff}# Title"), "# Title");
+        // A second mark, or one mid-text, is the author's character.
+        assert_eq!(without_bom("\u{feff}\u{feff}x"), "\u{feff}x");
+        assert_eq!(without_bom("a\u{feff}b"), "a\u{feff}b");
+        assert_eq!(without_bom("\u{feff}"), "");
+
+        assert_eq!(into_without_bom("\u{feff}# Title".into()), "# Title");
+        assert_eq!(into_without_bom("a\u{feff}b".into()), "a\u{feff}b");
+        assert_eq!(into_without_bom("\u{feff}\u{feff}x".into()), "\u{feff}x");
+    }
 }
 
 #[cfg(test)]
