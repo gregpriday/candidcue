@@ -769,6 +769,186 @@ async fn session_records_and_transcript_gating() {
 }
 
 // ---------------------------------------------------------------------------
+// Permanently deleting a script that has been presented (#216)
+// ---------------------------------------------------------------------------
+
+/// The history one presented take leaves: a session with retained
+/// transcripts, one take and one transcript item. Returns the session id.
+async fn present_once(h: &Harness, script_id: &str) -> String {
+    use candidcue_lib::sessions;
+
+    let input: sessions::StartSessionInput = serde_json::from_value(serde_json::json!({
+        "scriptId": script_id,
+        "scriptSourceHash": "abc",
+        "mode": "voice",
+        "startTokenIndex": 0,
+    }))
+    .unwrap();
+    let session = sessions::start_session(&h.pool, &input, true).await.unwrap();
+    let take: sessions::SessionTakeInput = serde_json::from_value(serde_json::json!({
+        "takePassId": "pass-1",
+        "passOrdinal": 1,
+        "startedAt": "2026-07-25T09:00:00.000Z",
+    }))
+    .unwrap();
+    sessions::record_take(&h.pool, &session.id, take).await.unwrap();
+    let items: Vec<sessions::TranscriptItemInput> = serde_json::from_value(serde_json::json!([
+        { "commitSequence": 1, "transcript": "hello", "disposition": "script" }
+    ]))
+    .unwrap();
+    sessions::append_transcript_items(&h.pool, &session.id, items)
+        .await
+        .unwrap();
+    sessions::end_session(
+        &h.pool,
+        &session.id,
+        serde_json::from_value(serde_json::json!({ "endTokenIndex": 3 })).unwrap(),
+    )
+    .await
+    .unwrap();
+    session.id
+}
+
+/// (session rows, takes, transcript items) for one session id. Counted by
+/// session id rather than through `sessions`, so an orphaned take could not
+/// hide behind its deleted parent.
+async fn session_history(pool: &sqlx::SqlitePool, session_id: &str) -> (i64, i64, i64) {
+    let count = |sql: &'static str| async move {
+        sqlx::query_scalar::<_, i64>(sql)
+            .bind(session_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    };
+    (
+        count("SELECT count(*) FROM sessions WHERE id = ?").await,
+        count("SELECT count(*) FROM session_takes WHERE session_id = ?").await,
+        count("SELECT count(*) FROM session_transcript_items WHERE session_id = ?").await,
+    )
+}
+
+/// Make deleting one script's row fail inside the permanent-delete
+/// transaction — after its sessions have already been deleted — so the
+/// rollback is what the test sees.
+async fn block_row_delete(pool: &sqlx::SqlitePool, script_id: &ScriptId) {
+    sqlx::query(&format!(
+        "CREATE TRIGGER block_script_delete BEFORE DELETE ON scripts
+         WHEN OLD.id = '{}'
+         BEGIN SELECT RAISE(ABORT, 'blocked by test'); END",
+        script_id.as_str()
+    ))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_presented_script_deletes_permanently_with_its_history_and_nothing_else() {
+    let h = harness().await;
+    let doomed = repo::create_script(&h.pool, &h.paths, create_input("Presented", "Said aloud."))
+        .await
+        .unwrap();
+    let survivor = repo::create_script(&h.pool, &h.paths, create_input("Kept", "Said again."))
+        .await
+        .unwrap();
+    let doomed_session = present_once(&h, &doomed.id).await;
+    let survivor_session = present_once(&h, &survivor.id).await;
+
+    let doomed_id = sid(&doomed.id);
+    repo::trash_script(&h.pool, &h.locks, &doomed_id, doomed.script_revision)
+        .await
+        .expect("trash");
+    // Trash on its own keeps the history: Restore must bring the takes back.
+    assert_eq!(session_history(&h.pool, &doomed_session).await, (1, 1, 1));
+
+    repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &doomed_id)
+        .await
+        .expect("a presented script must delete permanently");
+    assert!(repo::get_summary(&h.pool, &doomed_id).await.is_err());
+    assert!(!h.paths.script_dir(&doomed_id).exists());
+    assert_eq!(session_history(&h.pool, &doomed_session).await, (0, 0, 0));
+
+    // "Start where the last take ended" reads the other script's sessions.
+    assert_eq!(session_history(&h.pool, &survivor_session).await, (1, 1, 1));
+    let listed = candidcue_lib::sessions::list_sessions(&h.pool, Some(survivor.id.clone()), 10)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].end_token_index, Some(3));
+}
+
+#[tokio::test]
+async fn a_failed_permanent_delete_keeps_the_history_and_the_folder() {
+    let h = harness().await;
+    let doomed = repo::create_script(&h.pool, &h.paths, create_input("Stuck", "Cannot go."))
+        .await
+        .unwrap();
+    let session = present_once(&h, &doomed.id).await;
+    let doomed_id = sid(&doomed.id);
+    repo::trash_script(&h.pool, &h.locks, &doomed_id, doomed.script_revision)
+        .await
+        .expect("trash");
+    block_row_delete(&h.pool, &doomed_id).await;
+
+    repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &doomed_id)
+        .await
+        .expect_err("the blocked delete fails");
+    assert_eq!(
+        repo::get_summary(&h.pool, &doomed_id).await.unwrap().status,
+        ScriptStatus::Trash
+    );
+    // The session delete ran in the same transaction, so it rolled back too.
+    assert_eq!(session_history(&h.pool, &session).await, (1, 1, 1));
+    assert_eq!(
+        fs::read_to_string(h.paths.canonical_file(&doomed_id)).unwrap(),
+        "Cannot go."
+    );
+}
+
+#[tokio::test]
+async fn expired_trash_purge_deletes_presented_scripts_and_skips_one_that_fails() {
+    let h = harness().await;
+    let mut ids = Vec::new();
+    for title in ["Presented", "Never presented", "Blocked", "Trashed today"] {
+        let summary = repo::create_script(&h.pool, &h.paths, create_input(title, "Some words."))
+            .await
+            .unwrap();
+        let id = sid(&summary.id);
+        if title != "Never presented" {
+            present_once(&h, &summary.id).await;
+        }
+        repo::trash_script(&h.pool, &h.locks, &id, summary.script_revision)
+            .await
+            .expect("trash");
+        ids.push(id);
+    }
+    let [presented, never_presented, blocked, recent] = <[ScriptId; 4]>::try_from(ids).unwrap();
+    for id in [&presented, &never_presented, &blocked] {
+        sqlx::query("UPDATE scripts SET trashed_at = '2020-01-01T00:00:00.000Z' WHERE id = ?")
+            .bind(id.as_str())
+            .execute(&h.pool)
+            .await
+            .unwrap();
+    }
+    block_row_delete(&h.pool, &blocked).await;
+
+    // Whatever order the candidates come back in, the blocked script must not
+    // keep the others in the trash.
+    let purged = repo::purge_expired_trash(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("purge");
+    assert_eq!(purged, 2);
+    assert!(repo::get_summary(&h.pool, &presented).await.is_err());
+    assert!(repo::get_summary(&h.pool, &never_presented).await.is_err());
+    for kept in [&blocked, &recent] {
+        assert_eq!(
+            repo::get_summary(&h.pool, kept).await.unwrap().status,
+            ScriptStatus::Trash
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Startup reconciliation
 // ---------------------------------------------------------------------------
 

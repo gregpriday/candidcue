@@ -918,8 +918,10 @@ pub async fn restore_script(
 }
 
 /// Permanent deletion (spec §21.5): canonical source, revisions, copied
-/// assets, caches, analyses, database rows. Never touches dictionary entries,
-/// or display profiles beyond the script's own rows.
+/// assets, caches, analyses, database rows — including the script's session
+/// history (sessions, and the takes and retained transcripts that cascade from
+/// them). Never touches dictionary entries, display profiles, or another
+/// script's sessions.
 pub async fn permanently_delete_script(
     pool: &SqlitePool,
     paths: &DataPaths,
@@ -975,6 +977,14 @@ pub async fn permanently_delete_script(
         sqlx::query("DELETE FROM assets WHERE substr(rel_path, 1, ?) = ?")
             .bind(prefix.len() as i64)
             .bind(&prefix)
+            .execute(&mut *tx)
+            .await?;
+        // Sessions RESTRICT deletion of their script, so a script that was
+        // ever presented could not be deleted until they go. Takes and
+        // transcript items cascade from the session rows. This is inside the
+        // transaction so a failed delete keeps the history with the script.
+        sqlx::query("DELETE FROM sessions WHERE script_id = ?")
+            .bind(script_id.as_str())
             .execute(&mut *tx)
             .await?;
         let deleted = sqlx::query("DELETE FROM scripts WHERE id = ?")
@@ -1051,6 +1061,10 @@ pub async fn force_delete_partial_import(
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM script_revisions WHERE script_id = ?")
+        .bind(script_id.as_str())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM sessions WHERE script_id = ?")
         .bind(script_id.as_str())
         .execute(&mut *tx)
         .await?;
@@ -1326,7 +1340,9 @@ pub fn script_folder(paths: &DataPaths, script_id: &ScriptId) -> Result<std::pat
 }
 
 /// Purge scripts trashed more than 30 days ago (spec §21.5). Returns the
-/// number of scripts removed.
+/// number of scripts removed. One script that cannot be deleted is logged and
+/// skipped rather than allowed to keep every script behind it in the trash;
+/// only a failure to list the candidates is an error.
 pub async fn purge_expired_trash(
     pool: &SqlitePool,
     paths: &DataPaths,
@@ -1349,8 +1365,16 @@ pub async fn purge_expired_trash(
             tracing::error!(script_id = %id, "refusing to purge a script whose id is not a UUID");
             continue;
         };
-        permanently_delete_script(pool, paths, locks, &script_id).await?;
-        purged += 1;
+        match permanently_delete_script(pool, paths, locks, &script_id).await {
+            Ok(()) => purged += 1,
+            Err(err) => {
+                tracing::error!(
+                    script_id = %id,
+                    error = %err,
+                    "expired script could not be purged from the trash"
+                );
+            }
+        }
     }
     Ok(purged)
 }
