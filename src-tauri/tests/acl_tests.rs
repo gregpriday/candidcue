@@ -36,6 +36,7 @@ use tauri::utils::platform::Target;
 
 const CONTROL_WINDOW: &str = "control";
 const STAGE_WINDOW: &str = "stage";
+const PREFERENCES_WINDOW: &str = "preferences";
 
 fn generated(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -181,6 +182,35 @@ fn no_window_can_drive_os_fullscreen_from_javascript() {
             "`{window}` can invoke plugin:window|set_fullscreen; presentation is \
              borderless (src/windows/present.rs) and the renderer must not be \
              able to ask the OS for full-screen directly"
+        );
+    }
+}
+
+/// NO window may close a window from JavaScript.
+///
+/// File › Close Window used to call `getCurrentWindow().close()`, which this
+/// ACL refuses — and a `try` read the refusal as "browser dev", so ⌘W off the
+/// editor was a silent no-op (#266). The fix is the `close_control_window`
+/// command, NOT a grant: `core:window:allow-close` would also let the renderer
+/// close the stage in the middle of a take.
+///
+/// The positive half is what makes the negative half mean anything. A command
+/// key spelled in a shape the authority does not recognise is denied too, so
+/// without an allowed read from the same plugin this would pass vacuously.
+#[test]
+fn no_window_can_close_a_window_from_javascript() {
+    let authority = authority();
+    assert!(
+        allowed_for(&authority, "plugin:window|is_focused", CONTROL_WINDOW),
+        "control cannot even read is_focused, so the denial below proves nothing \
+         about the key format"
+    );
+    for window in [CONTROL_WINDOW, PREFERENCES_WINDOW, STAGE_WINDOW] {
+        assert!(
+            !allowed_for(&authority, "plugin:window|close", window),
+            "`{window}` can invoke plugin:window|close; closing goes through \
+             Rust (close_control_window, close_preferences) so it always raises \
+             CloseRequested and never reaches the stage"
         );
     }
 }

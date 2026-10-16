@@ -10,11 +10,7 @@
   import FollowControls from '../components/FollowControls.svelte';
   import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
   import FollowStatePanel from '../components/FollowStatePanel.svelte';
-  import {
-    FINISH_PRACTICE_CONFIRM_TITLE,
-    FINISH_PRACTICE_LABEL,
-    sessionModeLabel,
-  } from '../../shared/take-vocabulary';
+  import { sessionModeLabel } from '../../shared/take-vocabulary';
   import { isAutomaticProfile } from '../../shared/optical-discovery';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
@@ -30,7 +26,7 @@
   import type { PresentationMode } from '../../shared/contracts';
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
-  import { STOP_PRACTICE_CONFIRM_BODY, STOP_SESSION_CONFIRM_BODY } from '../lib/app-lifecycle';
+  import { sessionEndConfirmation } from '../lib/app-lifecycle';
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
@@ -50,7 +46,7 @@ import { onShortcut } from '../lib/shortcuts';
   import { describeError } from '../services/errors';
   import { preloadSpeechEngine } from '../services/stt/local';
   import { getVoiceFacade } from '../services/voice-facade';
-  import { requestConfirm } from '../stores/confirm';
+  import { pendingConfirm, requestConfirm } from '../stores/confirm';
   import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import {
@@ -358,39 +354,20 @@ import { onShortcut } from '../lib/shortcuts';
       confirmingStop = true;
       let accepted = false;
       try {
-        accepted = await requestConfirm({
-          /*
-           * §practice. The dock's exit already says this; a dialog reached from
-           * the drawer or ⌘. that still offered to end a take would be the
-           * fourth name for one action that §115 removed three of.
-           */
-          title: $session.practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End this take?',
-          /*
-           * The SHARED body, not one written out here.
-           *
-           * Both ways out of a running take ask this question — this dialog and
-           * App's navigation guard — and the copy lives in `app-lifecycle.ts`
-           * precisely so the two cannot drift apart again, which they had.
-           *
-           * What it must never say is "your script keeps its place". There is no
-           * resume-at-position anywhere: the store's `snapshot` starts null, and
-           * `presentAgain` clears the session and calls `startTake` for a brand
-           * new one — which opens at the beginning. That promise mattered
-           * because it is the exact fear the dialog is asked about, so answering
-           * it wrongly is worse than not answering it.
-           *
-           * It stops short of promising the summary even though this path does
-           * show one, because the guard's path does not — see the constant.
-           *
-           * Its last clause is conditional on purpose ("presenting again starts
-           * a new take"). Ending does not start anything; presenting again is a
-           * separate choice made from the summary, and phrasing it as "a new
-           * take starts" implied one would begin on its own.
-           */
-          body: $session.practice ? STOP_PRACTICE_CONFIRM_BODY : STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: $session.practice ? FINISH_PRACTICE_LABEL : 'End take',
-          danger: true,
-        });
+        /*
+         * The SHARED question, not one written out here.
+         *
+         * Every dialog-shaped way out of a running take asks it — this one,
+         * App's navigation guard and File › Close Window — and it lives in
+         * `app-lifecycle.ts` precisely so they cannot drift apart again, which
+         * they had. Over a practice it is the dock's words (§practice): a
+         * dialog reached from the drawer or ⌘. that still offered to end a take
+         * would be the fourth name for one action that §115 removed three of.
+         *
+         * Its body stops short of promising the summary even though this path
+         * does show one, because the other two do not — see the constant.
+         */
+        accepted = await requestConfirm(sessionEndConfirmation($session.practice));
       } finally {
         confirmingStop = false;
       }
@@ -961,8 +938,17 @@ import { onShortcut } from '../lib/shortcuts';
    * the drawer contains a `<select>` and several buttons, and a stage still
    * answering Space and Escape underneath a focused control is a prompter that
    * pauses itself when somebody types.
+   *
+   * `confirmOpen` is any confirmation on screen, including the ones Live did
+   * not raise and so cannot flag itself: App's navigation guard and File ›
+   * Close Window put "End this take?" over a running take too, through the same
+   * global host. Without it, Escape on that dialog also armed the stage's exit
+   * underneath, and Space on its Cancel toggled pause instead of pressing it.
    */
-  const stageChromeOpen = $derived(appearanceOpen || confirmingStop || takeControlsOpen);
+  const confirmOpen = $derived($pendingConfirm !== null);
+  const stageChromeOpen = $derived(
+    appearanceOpen || confirmingStop || confirmOpen || takeControlsOpen,
+  );
 
   /**
    * Open once. A second open must not re-capture the baseline.
@@ -1143,9 +1129,10 @@ import { onShortcut } from '../lib/shortcuts';
    * the drawer underneath it. Cancel-by-click was worse: the dialog's own
    * surface is "outside" the drawer, so clicking Cancel dismissed the drawer on
    * the way past. Either way, backing out of a question left the panel that
-   * asked it gone.
+   * asked it gone. A question raised from outside Live (`confirmOpen`) sits on
+   * top of the drawer the same way.
    */
-  const dismissalSuspended = $derived(confirmingStop || appearanceOpen);
+  const dismissalSuspended = $derived(confirmingStop || confirmOpen || appearanceOpen);
 
   $effect(() => {
     if (!takeControlsOpen || dismissalSuspended) return;

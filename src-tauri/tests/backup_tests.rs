@@ -975,6 +975,12 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("set_drop_target_script", "in-memory; a script id, no I/O"),
         ("open_preferences", "window management"),
         ("close_preferences", "window management"),
+        /*
+         * It requests the same native close the red button does. The recovery
+         * screen is still the control window, and closing it is still how the
+         * app quits.
+         */
+        ("close_control_window", "window management; reads no database"),
         ("focus_app_window", "window management; reads no database"),
         ("reveal_logs", "opens one named directory"),
     ];

@@ -149,6 +149,7 @@ pub fn run() {
             commands::set_drop_target_script,
             commands::open_preferences,
             commands::close_preferences,
+            commands::close_control_window,
             commands::focus_app_window,
             commands::reveal_logs,
             commands::open_third_party_notices,

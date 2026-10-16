@@ -446,6 +446,25 @@ export async function closePreferences(): Promise<void> {
   await ipcInvoke('close_preferences');
 }
 
+/**
+ * Close the document window (File › Close Window), which quits the app.
+ *
+ * RUST does it, for the reason `focusAppWindow` gives below:
+ * `getCurrentWindow().close()` needs `core:window:allow-close`, the capability
+ * does not grant it, and the call it replaced was rejected by the ACL inside a
+ * `try` that read the rejection as "browser dev". ⌘W off the editor did nothing
+ * at all.
+ *
+ * Rust's close raises `CloseRequested`, so this reaches the same shutdown
+ * handshake the red close button does. Errors PROPAGATE: unlike a window that
+ * will not come forward, a quit that silently did not happen is the defect this
+ * exists to fix, and the menu action that asked is the place to say so.
+ */
+export async function closeControlWindow(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await ipcInvoke('close_control_window');
+}
+
 
 
 /**

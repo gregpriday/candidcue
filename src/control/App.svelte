@@ -29,6 +29,7 @@
     dispatchRouteCommand,
   } from './stores/command-bus';
   import {
+    closeControlWindow,
     composeWindowTitle,
     installDragDrop,
     focusAppWindow,
@@ -51,22 +52,18 @@
     type EditorLayout,
   } from './stores/workspace';
   import {
-    STOP_PRACTICE_CONFIRM_BODY,
-    STOP_SESSION_CONFIRM_BODY,
     editorNavigationDecision,
     initialRouteForBoot,
     isFatalBootCode,
     recentScriptIdForBoot,
+    sessionEndConfirmation,
   } from './lib/app-lifecycle';
 import { rememberReaderFrame } from './lib/reader-frame';
-  import {
-    FINISH_PRACTICE_CONFIRM_TITLE,
-    FINISH_PRACTICE_LABEL,
-  } from '../shared/take-vocabulary';
   import { emitShortcut, installShortcuts, onShortcut } from './lib/shortcuts';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
   import { describeError, errorCode } from './services/errors';
+  import { isTauriRuntime } from './services/ipc';
   import {
     getBootStatus,
     getStartupFindings,
@@ -83,7 +80,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   import { listScripts } from './services/scripts';
   import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
-  import { requestConfirm } from './stores/confirm';
+  import { pendingConfirm, requestConfirm } from './stores/confirm';
   import { editor, editorHasUnsavedWork, saveNow } from './stores/editor';
   import {
     duplicateScript,
@@ -431,16 +428,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
          * complaint was one action wearing several names; this guard is the
          * fourth way out of a take and would have kept the old word alive.
          */
-        const practice = $session.practice;
-        const accepted = await requestConfirm({
-          // §practice. The third of the three exits, told the same thing the
-          // other two are: over a rehearsal, "end this take" names neither the
-          // thing that is running nor the thing this does to it.
-          title: practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End this take?',
-          body: practice ? STOP_PRACTICE_CONFIRM_BODY : STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: practice ? FINISH_PRACTICE_LABEL : 'End take',
-          danger: true,
-        });
+        const accepted = await requestConfirm(sessionEndConfirmation($session.practice));
         if (!accepted) return false;
         /*
          * The window has to come back too, and covered — this is a geometry
@@ -866,6 +854,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * unsaved-work and end-take guards registered above. That is the property
    * that makes a native menu safe to add: File › New Script from inside a take
    * asks the same question the sidebar does, because it is the same code.
+   *
+   * Close Window is the one exit that does not navigate — it quits — so it asks
+   * that question itself (`requestWindowClose`), in the same words.
    */
   const commandActions: CommandActions = {
     newScript: () => void createAndOpenScript('new'),
@@ -891,7 +882,8 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * `CloseRequested` interception in `app.rs` on some webview builds, and that
      * interception is the only thing that flushes an unsaved script and closes
      * an open session row. Asking the WINDOW to close is what raises the event
-     * the handshake hangs off.
+     * the handshake hangs off — and Rust has to do the asking, because the
+     * capability does not let the renderer (`requestWindowClose`).
      */
     closeWindow: () => void requestWindowClose(),
     present: (mode) => {
@@ -1151,15 +1143,56 @@ import { rememberReaderFrame } from './lib/reader-frame';
     showToast(`${payload.imported} scripts imported`, 'success');
   }
 
-  /** Ask the OS to close the window, so the shutdown handshake runs (§6.3). */
+  /** A Close Window between its ⌘W and Rust's answer — see `requestWindowClose`. */
+  let windowCloseInFlight = false;
+
+  /**
+   * File › Close Window: ask Rust to close this window, so the shutdown
+   * handshake runs (§6.3). Closing the document window quits the app.
+   *
+   * Through Rust. This used to call `getCurrentWindow().close()`, which the
+   * capability does not permit, inside a `catch` that read the refusal as
+   * "browser dev" — ⌘W off the editor did nothing at all (#266). The browser
+   * no-op is now an explicit runtime check, so a real failure reaches a toast.
+   *
+   * A RUNNING TAKE IS ASKED ABOUT FIRST. The handshake ends a take on its way
+   * out without a word, which is right for the red close button and ⌘Q and
+   * wrong for a menu item whose key sits next to ⌘Q's and is pressed by habit.
+   * Every other way out of a take asks "End this take?", and this one quits
+   * as well. It asks whatever `confirmEndSession` says, as the navigation
+   * guard does: that setting is about Live's own End, and a quit is not that.
+   *
+   * The question is asked BEFORE the close is requested, never from inside
+   * the handshake: once `CloseRequested` lands, shutdown has begun against a
+   * deadline that a person reading a dialog would run out.
+   *
+   * Three states decline instead of asking, and each is the safe direction —
+   * nothing ends, and pressing ⌘W again once it has passed works:
+   *   - a take opening or a presentation closing: the transition cover is up,
+   *     and a dialog behind it is a frozen screen with a question nobody can
+   *     see (`editorNavigationDecision` vetoes for the same reason);
+   *   - a question already on screen: `requestConfirm` holds one at a time,
+   *     and replacing it would strand whoever was waiting for that answer;
+   *   - a close already in flight, so a held ⌘W raises one dialog, not a
+   *     stack of them.
+   */
   async function requestWindowClose(): Promise<void> {
+    if (!isTauriRuntime() || windowCloseInFlight) return;
+    if (get(takeStarting) || coverIsUp(get(presentingPhase))) return;
+    if (get(pendingConfirm) !== null) return;
+    windowCloseInFlight = true;
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().close();
-    } catch {
-      // Not a Tauri runtime. There is no window to close in browser dev, and
-      // `window.close()` on a page the user did not open by script is ignored
-      // anyway — so this is correctly a no-op rather than a failure.
+      const current = get(session);
+      if (current.active && !(await requestConfirm(sessionEndConfirmation(current.practice)))) {
+        return;
+      }
+      // No `stopSession()` here. The handshake's `end-take` step finishes the
+      // take and awaits its writes; doing it twice would race the two.
+      await closeControlWindow();
+    } catch (err) {
+      showToast(`The window could not be closed. ${describeError(err)}`, 'danger');
+    } finally {
+      windowCloseInFlight = false;
     }
   }
 
