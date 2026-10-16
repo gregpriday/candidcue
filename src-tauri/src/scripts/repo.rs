@@ -171,8 +171,8 @@ pub async fn create_script(
     if title.is_empty() {
         return Err(AppError::invalid_input("A script needs a title."));
     }
-    // Normalized before it is written AND hashed, so the recorded hash always
-    // describes the bytes on disk (#247).
+    // A new script is never written with a byte-order mark (#247); it is
+    // stripped before the write and the hash, so both describe the same bytes.
     let source = into_without_bom(input.source.unwrap_or_default());
     if source.len() > MAX_SOURCE_BYTES {
         return Err(AppError::validation("The script is larger than the 10 MB limit."));
@@ -454,8 +454,8 @@ pub async fn save_script(
         return Err(AppError::validation("The script is larger than the 10 MB limit."));
     }
     // A mark pasted into the editor, or carried by a restored legacy revision,
-    // must not reach the disk: it would be hashed here and then read back as
-    // an external change by every later open (#247).
+    // is not written back (#247). Stripped before the hash below, so the
+    // recorded hash still describes exactly the bytes that land on disk.
     let source = into_without_bom(source);
     let lock = locks.lock_for(script_id);
     let _guard = lock.lock().await;
@@ -1516,6 +1516,54 @@ pub async fn restore_canonical_from_latest_revision(
     Ok(true)
 }
 
+/// #247: a script imported with its byte-order mark, before the importer
+/// stripped it, has a hash that matches its file but Library metadata that was
+/// extracted with the mark in place — a line-one heading counted as speech,
+/// the mark at the head of the preview. Extraction now ignores the mark, so
+/// rebuild that metadata. The file, its hash and its revision are left exactly
+/// as they are, and once the metadata agrees nothing is written at all.
+async fn refresh_metadata_extracted_with_a_bom(
+    pool: &SqlitePool,
+    script_id: &ScriptId,
+    row: &ScriptRow,
+    source: &str,
+) -> Result<(), AppError> {
+    let settings = parse_settings(&row.script_settings_json);
+    let (plain, words, duration) = stats_for(source, &settings);
+    let indexed: Option<String> =
+        sqlx::query_scalar("SELECT plain_text FROM script_search WHERE script_id = ?")
+            .bind(script_id.as_str())
+            .fetch_optional(pool)
+            .await?;
+    if indexed.as_deref() == Some(plain.as_str())
+        && row.spoken_word_count == words as i64
+        && row.estimated_duration_seconds == duration as i64
+    {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE scripts SET spoken_word_count = ?, estimated_duration_seconds = ?
+         WHERE id = ? AND revision = ?",
+    )
+    .bind(words as i64)
+    .bind(duration as i64)
+    .bind(script_id.as_str())
+    .bind(row.revision)
+    .execute(&mut *tx)
+    .await?;
+    expect_single_row(updated.rows_affected(), row.revision)?;
+    update_fts(&mut tx, script_id, &row.title, &plain).await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        script_id = script_id.as_str(),
+        "rebuilt library metadata that was extracted with a byte-order mark"
+    );
+    Ok(())
+}
+
 /// Reconciliation repair (spec §47.6, §48.1): if the canonical file's content
 /// disagrees with the hash recorded on the row, the row (and the search index)
 /// are brought up to the file. The file is the authority for source content,
@@ -1541,6 +1589,9 @@ pub async fn repair_row_from_canonical_file(
     let source = fs::read_to_string(&canonical)?;
     let disk_hash = sha256_hex(source.as_bytes());
     if disk_hash == row.source_hash {
+        if source.starts_with('\u{feff}') {
+            refresh_metadata_extracted_with_a_bom(pool, script_id, &row, &source).await?;
+        }
         return Ok(false);
     }
 

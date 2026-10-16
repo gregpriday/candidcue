@@ -21,16 +21,21 @@ use crate::errors::AppError;
 /// Windows editors and some export tools save "UTF-8 with BOM", and decoding
 /// UTF-8 keeps the U+FEFF. Left in, it is an invisible first character that
 /// defeats every line-one check — a `:::stage` fence, a `#` heading, front
-/// matter — and shifts the compiler's source positions (#247). Only a mark at
-/// the very start is a BOM; a U+FEFF anywhere else is the author's text.
+/// matter — and shifts the compiler's source positions (#247). Only marks
+/// before the first character of text go; a U+FEFF after it is the author's.
+///
+/// Every leading mark goes, not just one, so that stripping is idempotent:
+/// import strips and `create_script` strips again, and a file a tool gave a
+/// second mark must not come out of that as two different texts.
 pub(crate) fn without_bom(source: &str) -> &str {
-    source.strip_prefix('\u{feff}').unwrap_or(source)
+    source.trim_start_matches('\u{feff}')
 }
 
 /// [`without_bom`] for owned text, in place.
 pub(crate) fn into_without_bom(mut source: String) -> String {
-    if source.starts_with('\u{feff}') {
-        source.replace_range(..'\u{feff}'.len_utf8(), "");
+    let marks = source.len() - without_bom(&source).len();
+    if marks > 0 {
+        source.replace_range(..marks, "");
     }
     source
 }
@@ -428,17 +433,27 @@ mod bom_tests {
     use super::*;
 
     #[test]
-    fn strips_one_leading_mark_only() {
+    fn strips_leading_marks_only() {
         assert_eq!(without_bom("# Title"), "# Title");
         assert_eq!(without_bom("\u{feff}# Title"), "# Title");
-        // A second mark, or one mid-text, is the author's character.
-        assert_eq!(without_bom("\u{feff}\u{feff}x"), "\u{feff}x");
-        assert_eq!(without_bom("a\u{feff}b"), "a\u{feff}b");
+        assert_eq!(without_bom("\u{feff}\u{feff}x"), "x");
         assert_eq!(without_bom("\u{feff}"), "");
+        // One after the first character of text is the author's.
+        assert_eq!(without_bom("a\u{feff}b"), "a\u{feff}b");
+        assert_eq!(without_bom("\u{feff} \u{feff}x"), " \u{feff}x");
 
         assert_eq!(into_without_bom("\u{feff}# Title".into()), "# Title");
+        assert_eq!(into_without_bom("\u{feff}\u{feff}x".into()), "x");
         assert_eq!(into_without_bom("a\u{feff}b".into()), "a\u{feff}b");
-        assert_eq!(into_without_bom("\u{feff}\u{feff}x".into()), "\u{feff}x");
+        assert_eq!(into_without_bom(String::new()), "");
+    }
+
+    #[test]
+    fn stripping_twice_is_stripping_once() {
+        // Import strips, then `create_script` strips what import hands it.
+        for source in ["x", "\u{feff}x", "\u{feff}\u{feff}x", "\u{feff}\u{feff}\u{feff}"] {
+            assert_eq!(without_bom(without_bom(source)), without_bom(source));
+        }
     }
 }
 
