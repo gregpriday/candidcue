@@ -834,6 +834,21 @@ describe('carrying the retired global mirror onto the glass, once', () => {
     });
   });
 
+  it('reads the old switch as it was rendered, where the overlay copy won', async () => {
+    // `mirrorX` round-tripped through both and the overlay's copy was merged
+    // over Rust's, so an overlay `false` is what every take actually showed.
+    setLegacyHorizontalMirror(true);
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' }, teleprompter: { mirrorX: false } }),
+    );
+
+    const loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: false, vertical: false });
+    expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
   it('guesses no panel when nothing says which one is the glass', async () => {
     // Switch on, nothing pinned, nothing calibrated: the primary display is the
     // desk screen on the rig this is about, and it must not be the guess.
@@ -864,6 +879,44 @@ describe('carrying the retired global mirror onto the glass, once', () => {
     rustSettings.optical = { migrated: true, profiles: {}, activeRig: {} };
     await settings.getSettings();
     expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
+  it('moves overlay-only rigs and the old mirror together, losing neither', async () => {
+    /*
+     * The ordering hazard: any optical write takes ownership of the section in
+     * Rust, so a mirror adoption that claimed it without the rigs still waiting
+     * in the overlay would strand the calibrations for good.
+     */
+    ipc.applyPatch = true;
+    setLegacyHorizontalMirror(true);
+    const key = opticalRigKey('dsp-glass', 'Hood');
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({
+        stage: { displayFingerprint: 'dsp-glass' },
+        optical: { profiles: { [key]: rig({ rigName: 'Hood' }) }, activeRig: { 'dsp-glass': 'Hood' } },
+      }),
+    );
+
+    const settingsStore = await import('../../../src/control/stores/settings');
+    await settingsStore.loadSettings(true);
+
+    const stored = rustSettings.optical as {
+      migrated?: boolean;
+      profiles?: Record<string, unknown>;
+      activeRig?: Record<string, unknown>;
+      panelMirror?: unknown;
+    };
+    expect(stored.migrated).toBe(true);
+    expect(Object.keys(stored.profiles ?? {})).toEqual([key]);
+    expect(stored.activeRig).toEqual({ 'dsp-glass': 'Hood' });
+    expect(stored.panelMirror).toEqual({ 'dsp-glass': { horizontal: true, vertical: false } });
+
+    // And with the browser store gone, the document alone still has both.
+    store.clear();
+    const reloaded = await settings.getSettings();
+    expect(activeOpticalProfile(reloaded.optical, 'dsp-glass')?.rigName).toBe('Hood');
+    expect(panelMirrorFor(reloaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
   });
 
   it('writes the carried mirror through once, and then the document is the answer', async () => {

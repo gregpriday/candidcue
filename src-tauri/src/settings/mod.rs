@@ -1168,6 +1168,11 @@ mod tests {
         }))
         .expect("a document from before per-panel mirroring still loads");
         assert_eq!(stored.optical.panel_mirror, None, "absent reads as never written");
+        let nulled: AppSettings = serde_json::from_value(serde_json::json!({
+            "optical": { "panelMirror": null }
+        }))
+        .expect("an explicit null still loads");
+        assert_eq!(nulled.optical.panel_mirror, None, "and so does null");
 
         let mut base = serde_json::to_value(&stored).expect("serializes");
         let first = serde_json::json!({ "optical": { "panelMirror": {
@@ -1187,7 +1192,7 @@ mod tests {
         clear_replaced_maps(&mut base, &second);
         merge_json(&mut base, &second);
         let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
-        let map = merged.optical.panel_mirror.expect("written");
+        let map = merged.optical.panel_mirror.as_ref().expect("written");
         assert_eq!(map.len(), 1, "the panel the patch left out is gone");
         assert_eq!(
             map["glass"],

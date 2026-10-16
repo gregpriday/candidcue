@@ -578,12 +578,31 @@ describe('switching presentation mode mid-take', () => {
     toggleStageMirror('x');
 
     adoptPresentationMode('reader', LAPTOP);
-    // Never mirrored in a reading window...
+    // Never mirrored in a reading window, and the menu checkmark says so...
     expect(rendered().mirrorX).toBe(false);
+    expect(liveMirrorX()).toBe(false);
 
     adoptPresentationMode('prompter', LAPTOP);
     // ...and still the take's choice when it is back on the same glass.
     expect(rendered().mirrorX).toBe(true);
+    expect(liveMirrorX()).toBe(true);
+  });
+
+  it('ends a live flip with the take', () => {
+    startOnLaptop();
+    toggleStageMirror('x');
+    toggleStageMirror('y');
+    expect(rendered().mirrorX).toBe(true);
+
+    clearSession();
+    startOnLaptop();
+
+    // The panel's own answer again — nothing is mirrored for it.
+    expect(rendered().mirrorX).toBe(false);
+    expect(rendered().mirrorY).toBe(false);
+    expect(liveMirrorX()).toBe(false);
+    toggleStageMirror('x');
+    expect(rendered().mirrorY).toBe(false);
   });
 
   it('keeps the panel it already had when nobody can name the new one', () => {

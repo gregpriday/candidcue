@@ -351,9 +351,12 @@ describe("a panel's saved mirroring, mid-take", () => {
     toggleStageMirror('x');
     expect(rendered().mirrorX).toBe(true);
 
-    savePanelMirror(GLASS, false);
+    // Both axes, so this is a real change to the glass's entry whatever an
+    // earlier case left it as.
+    savePanelMirror(GLASS, true, true);
 
     expect(rendered().mirrorX).toBe(true);
+    expect(rendered().mirrorY).toBe(false);
   });
 
   it("replaces a live flip when the take's own panel is changed in Settings", () => {

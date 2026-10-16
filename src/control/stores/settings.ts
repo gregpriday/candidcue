@@ -288,8 +288,14 @@ async function adoptPanelMirrorFromLegacy(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: { ...before.optical, panelMirror: pending },
     });
-    /* A commit, like any other — see `commitCount`. */
-    commitSettings(saved);
+    /*
+     * A commit, like any other — see `commitCount` — unless a newer document
+     * already stands. The other window can save after this write and its
+     * broadcast can arrive first; adopting this older answer over it would put
+     * a mirror back that the operator had just changed. `sendPatchBatch` guards
+     * the same way.
+     */
+    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }

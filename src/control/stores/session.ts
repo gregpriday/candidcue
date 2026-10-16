@@ -3923,12 +3923,21 @@ function samePanelMirror(a: PanelMirror, b: PanelMirror): boolean {
 }
 
 /**
- * The mirroring this take is running: its own live flip, or its panel's saved
- * answer. Before reader mode is applied — see `liveMirrorX` for the rendered
- * value.
+ * The mirroring this take is running: its own live flip, or what its glass is
+ * showing now.
+ *
+ * The RENDERED axes rather than a fresh read of the panel's saved answer. The
+ * two differ when Settings changed the mirror while the take was opening —
+ * `startTake` composed from its snapshot, and the follower is not installed on
+ * a take that is not active yet — and the menu checkmark and the toggle have
+ * to describe the glass, or the first press of the shortcut changes nothing
+ * the operator can see. Callers deal with reader mode, where the rendered axes
+ * are forced off.
  */
 function takeMirrorAxes(): PanelMirror {
-  return takeMirror ?? panelMirrorFor(getSettingsSnapshot().optical, stageDisplay?.fingerprint);
+  if (takeMirror) return takeMirror;
+  if (stageSettings) return { horizontal: stageSettings.mirrorX, vertical: stageSettings.mirrorY };
+  return panelMirrorFor(getSettingsSnapshot().optical, stageDisplay?.fingerprint);
 }
 
 function recomposeStageSettings(): StageAppearance {
