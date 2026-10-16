@@ -203,17 +203,27 @@ test('a re-read overtaken by a topology change waits for the newer list instead 
   // (B), and A answers first. A's answer is never shown; B's is.
   await page.evaluate(() => {
     window.__E2E__.setFail('list_displays', null);
-    window.__E2E__.setDelay('list_displays', 800);
+    window.__E2E__.setDelay('list_displays', 1500);
   });
   const listCalls = () =>
     page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'list_displays').length);
+  const listAnswers = () =>
+    page.evaluate(() => window.__E2E__.settled.filter((c) => c === 'list_displays').length);
   const before = await listCalls();
+  const answeredBefore = await listAnswers();
   await page.getByRole('button', { name: 'Identify displays' }).click();
   await expect.poll(listCalls).toBe(before + 1);
-  const delivered = await page.evaluate(() =>
-    window.__E2E__.emit('app://device-or-display-change', { kind: 'display', displays: [] }),
-  );
+  const { delivered, answered } = await page.evaluate(() => ({
+    delivered: window.__E2E__.emit('app://device-or-display-change', {
+      kind: 'display',
+      displays: [],
+    }),
+    answered: window.__E2E__.settled.filter((c) => c === 'list_displays').length,
+  }));
   expect(delivered).toBeGreaterThan(0);
+  // A was still unanswered when B started, or this proves nothing about the
+  // overlap: a stalled runner would let A land first and the old code pass.
+  expect(answered).toBe(answeredBefore);
   await expect.poll(listCalls).toBeGreaterThanOrEqual(before + 2);
 
   // Judged against B, which matches the glass: no "the displays changed"
