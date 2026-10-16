@@ -1008,5 +1008,109 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
         fs::read_to_string(h.paths.canonical_file(&sid(&victim.id))).unwrap(),
         "Original."
     );
+    // ...and the Library describes the restored text, not the lost one: the
+    // row still counted "Recoverable content." until the restore cleared its
+    // stats stamp and the refresh re-derived it.
+    let listed = repo::list_scripts(&h.pool, ScriptFilter::default(), None, PageRequest::default())
+        .await
+        .unwrap();
+    let restored = listed.items.iter().find(|s| s.id == victim.id).expect("victim listed");
+    assert_eq!(restored.spoken_word_count, 1);
+    assert_eq!(restored.preview_text, "Original.");
+}
+
+/// #249: a library indexed by an older spoken-word extraction is re-derived at
+/// startup — count, duration, preview and search text — and the refresh is not
+/// mistaken for an edit: revision and timestamps stay put, so neither the
+/// library's order nor a pending compare-and-swap save notices it happened.
+#[tokio::test]
+async fn reconciliation_rederives_stale_library_stats_without_editing_the_script() {
+    use candidcue_lib::scripts::{reconcile, words::SPOKEN_STATS_VERSION};
+
+    let h = harness().await;
+    let source = "<!-- TODO: cut this line before Friday -->\n\nWelcome back. [Cue: smile at camera] Let's go.\n";
+    let created = repo::create_script(&h.pool, &h.paths, create_input("Stale", source))
+        .await
+        .unwrap();
+    assert_eq!(created.spoken_word_count, 4);
+    assert_eq!(created.preview_text, "Welcome back. Let's go.");
+    let version = |pool: sqlx::SqlitePool, id: String| async move {
+        sqlx::query_scalar::<_, Option<String>>("SELECT last_compile_version FROM scripts WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        version(h.pool.clone(), created.id.clone()).await.as_deref(),
+        Some(SPOKEN_STATS_VERSION),
+        "a freshly derived row is stamped, or every startup would re-derive it"
+    );
+
+    // What the old line scanner stored for this script, with no stamp.
+    sqlx::query(
+        "UPDATE scripts SET spoken_word_count = 17, estimated_duration_seconds = 8,
+             last_compile_version = NULL
+         WHERE id = ?",
+    )
+    .bind(&created.id)
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE script_search SET plain_text = ? WHERE script_id = ?")
+        .bind("<!-- TODO: cut this line before Friday --> Welcome back. Cue: smile at camera Let's go.")
+        .bind(&created.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let (revision, updated_at): (i64, String) =
+        sqlx::query_as("SELECT revision, updated_at FROM scripts WHERE id = ?")
+            .bind(&created.id)
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.hash_mismatches_repaired.is_empty(), "a stats refresh is not a repair");
+
+    let search = |query: &'static str| {
+        let pool = h.pool.clone();
+        async move {
+            repo::list_scripts(
+                &pool,
+                ScriptFilter {
+                    query: Some(query.into()),
+                    ..Default::default()
+                },
+                None,
+                PageRequest::default(),
+            )
+            .await
+            .unwrap()
+            .total
+        }
+    };
+    let listed = repo::list_scripts(&h.pool, ScriptFilter::default(), None, PageRequest::default())
+        .await
+        .unwrap();
+    let row = listed.items.iter().find(|s| s.id == created.id).expect("listed");
+    assert_eq!(row.spoken_word_count, 4);
+    assert_eq!(row.estimated_duration_seconds, 2);
+    assert_eq!(row.preview_text, "Welcome back. Let's go.");
+    assert_eq!(row.script_revision, revision);
+    assert_eq!(row.updated_at, updated_at);
+    assert_eq!(search("Friday").await, 0, "an author's note is not searchable script text");
+    assert_eq!(search("Welcome").await, 1);
+    assert_eq!(
+        version(h.pool.clone(), created.id.clone()).await.as_deref(),
+        Some(SPOKEN_STATS_VERSION)
+    );
+
+    // Idempotent: nothing is stale the second time round.
+    assert!(!repo::refresh_stale_spoken_stats(&h.pool, &h.paths, &sid(&created.id), &h.locks)
+        .await
+        .unwrap());
 }
 

@@ -1,0 +1,592 @@
+[
+  {
+    "name": "issue: cue and pause labels are not words",
+    "source": "Welcome back. [Cue: smile at camera] Today we look at one thing. [Pause] Let's go.\n",
+    "words": 10,
+    "durationSeconds": 5,
+    "tokens": ["Welcome","back","Today","we","look","at","one","thing","Let's","go"],
+    "plain": "Welcome back. Today we look at one thing. Let's go."
+  },
+  {
+    "name": "issue: take marker is not a word",
+    "source": "[Take: Opening]\n\nHello there everyone.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there","everyone"],
+    "plain": "Hello there everyone."
+  },
+  {
+    "name": "issue: say alias speaks its spoken form",
+    "source": "Our API{say=\"a p i\"} is fast.\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["Our","a","p","i","is","fast"],
+    "plain": "Our a p i is fast."
+  },
+  {
+    "name": "issue: an author note in a comment is not speech",
+    "source": "<!-- TODO: cut this line before Friday -->\n\nHello there everyone.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there","everyone"],
+    "plain": "Hello there everyone."
+  },
+  {
+    "name": "issue: a :::spoken block speaks its say line",
+    "source": ":::spoken\nvisual: 10x faster\nsay: ten times faster\n:::\n\nDone.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["ten","times","faster","Done"],
+    "plain": "ten times faster Done."
+  },
+  {
+    "name": "issue: ordered-list numbers are not words",
+    "source": "1. First point here\n2. Second point here\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["First","point","here","Second","point","here"],
+    "plain": "First point here Second point here"
+  },
+  {
+    "name": "issue: a setext underline is not a word",
+    "source": "Big Title\n=========\n\nBody text here.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Body","text","here"],
+    "plain": "Body text here."
+  },
+  {
+    "name": "comment then text on the same line",
+    "source": "<!-- note --> Hello there everyone.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there","everyone"],
+    "plain": "Hello there everyone."
+  },
+  {
+    "name": "inline comment",
+    "source": "Hello <!-- aside --> there everyone.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there","everyone"],
+    "plain": "Hello there everyone."
+  },
+  {
+    "name": "multi-line comment",
+    "source": "<!--\nTODO: rewrite\nthe intro\n-->\nHello there.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Hello","there"],
+    "plain": "Hello there."
+  },
+  {
+    "name": "unterminated comment swallows the rest",
+    "source": "Intro line.\n\n<!-- never closed\n\nThis is swallowed.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Intro","line"],
+    "plain": "Intro line."
+  },
+  {
+    "name": "comment followed by markup",
+    "source": "<!-- note --> <span>markup</span>\n\nAfter.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["After"],
+    "plain": "After."
+  },
+  {
+    "name": "cues inside list items and blockquotes",
+    "source": "- [Cue: point] First item\n- Second item [Pause]\n\n> Quoted [Beat] words.\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["First","item","Second","item","Quoted","words"],
+    "plain": "First item Second item Quoted words."
+  },
+  {
+    "name": "cue inside emphasis",
+    "source": "This is *[Cue: lean in]* important.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["This","is","important"],
+    "plain": "This is important."
+  },
+  {
+    "name": "escaped and entity brackets stay speech",
+    "source": "Say \\[Pause] and &#91;Beat&#93; out loud.\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["Say","Pause","and","Beat","out","loud"],
+    "plain": "Say [Pause] and [Beat] out loud."
+  },
+  {
+    "name": "malformed cue and take are silent",
+    "source": "Start [Cue:] middle [Take: ] end.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Start","middle","end"],
+    "plain": "Start middle end."
+  },
+  {
+    "name": "ordinary bracket text is speech",
+    "source": "See note [1] and [Note: this] here.\n",
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["See","note","1","and","Note","this","here"],
+    "plain": "See note [1] and [Note: this] here."
+  },
+  {
+    "name": "directive-like link label is speech",
+    "source": "[Cue: x](https://example.com) and more.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Cue","x","and","more"],
+    "plain": "Cue: x and more."
+  },
+  {
+    "name": "reference link label is speech",
+    "source": "Read [the guide][g] today.\n\n[g]: https://example.com\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Read","the","guide","today"],
+    "plain": "Read the guide today."
+  },
+  {
+    "name": "a defined label turns a cue into a link",
+    "source": "Hello [Cue: wave] there.\n\n[cue: wave]: https://example.com\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Hello","Cue","wave","there"],
+    "plain": "Hello Cue: wave there."
+  },
+  {
+    "name": "case-insensitive directive names",
+    "source": "One [pause] two [CUE: grin] three [take: Intro] four [BREATHE] five.\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["One","two","three","four","five"],
+    "plain": "One two three four five."
+  },
+  {
+    "name": ":::spoken nested in :::stage stays spoken",
+    "source": ":::stage\nDirection only.\n\n:::spoken\nvisual: 3x\nsay: three times\n:::\n\n:::\n\nAfter.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["three","times","After"],
+    "plain": "three times After."
+  },
+  {
+    "name": "an unclosed :::silent compiles as speech",
+    "source": ":::silent\nStill spoken here.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Still","spoken","here"],
+    "plain": "Still spoken here."
+  },
+  {
+    "name": "a malformed :::spoken is silent",
+    "source": ":::spoken\nvisual: thing\n:::\n\nAfter.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["After"],
+    "plain": "After."
+  },
+  {
+    "name": "an unknown container stays readable source",
+    "source": ":::cue\nsmile now\n:::\n\nBody.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["cue","smile","now","Body"],
+    "plain": ":::cue smile now ::: Body."
+  },
+  {
+    "name": ":::silent and :::stage are not speech",
+    "source": ":::silent\nCut to screen.\n:::\n\n:::stage\nKey result: **42% faster**\n:::\n\nSpoken.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["Spoken"],
+    "plain": "Spoken."
+  },
+  {
+    "name": "literal-command content is speech",
+    "source": ":::literal-command\nCandidCue, go to chapter one.\n:::\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["CandidCue","go","to","chapter","one"],
+    "plain": "CandidCue, go to chapter one."
+  },
+  {
+    "name": "container syntax inside a code fence",
+    "source": "```\n:::spoken\nvisual: a\nsay: b\n:::\n```\n\nText.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["Text"],
+    "plain": "Text."
+  },
+  {
+    "name": "code is not speech",
+    "source": "Run `npm install` now.\n\n```bash\necho hi\n```\n\n    indented code\n\n~~~\ntilde fence\n~~~\n\nDone.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Run","now","Done"],
+    "plain": "Run now. Done."
+  },
+  {
+    "name": "inline code is speech when enabled",
+    "source": "Run `npm install` now.\n",
+    "options": {"readInlineCode":true},
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Run","npm","install","now"],
+    "plain": "Run npm install now."
+  },
+  {
+    "name": "headings are silent by default",
+    "source": "# Welcome\n\nBody text.\n\n## Second *part* ##\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Body","text"],
+    "plain": "Body text."
+  },
+  {
+    "name": "headings are speech when enabled",
+    "source": "# Welcome\n\nBody text.\n\n## Second *part* ##\n\nSetext\n---\n",
+    "options": {"readHeadings":true},
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["Welcome","Body","text","Second","part","Setext"],
+    "plain": "Welcome Body text. Second part Setext"
+  },
+  {
+    "name": "image alt text is silent by default",
+    "source": "Look ![a red barn](assets/barn.png) here.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Look","here"],
+    "plain": "Look here."
+  },
+  {
+    "name": "image alt text is speech when enabled",
+    "source": "Look ![a red barn](assets/barn.png) here.\n",
+    "options": {"readImageAltText":true},
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["Look","a","red","barn","here"],
+    "plain": "Look a red barn here."
+  },
+  {
+    "name": "tables are not speech",
+    "source": "Intro.\n\n| A | B |\n| --- | --- |\n| one | two |\n\nOutro.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Intro","Outro"],
+    "plain": "Intro. Outro."
+  },
+  {
+    "name": "pipe table without outer pipes",
+    "source": "Intro.\n\nName | Value\n--- | ---\nalpha | beta\n\nOutro.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Intro","Outro"],
+    "plain": "Intro. Outro."
+  },
+  {
+    "name": "setext dash versus thematic break",
+    "source": "Para one\n---\n\nPara two\n\n---\n\nPara three\n\n***\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Para","two","Para","three"],
+    "plain": "Para two Para three"
+  },
+  {
+    "name": "formatting inside a word does not split it",
+    "source": "**Candid**Cue is *great*, really.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["CandidCue","is","great","really"],
+    "plain": "CandidCue is great, really."
+  },
+  {
+    "name": "intraword underscores and stray stars",
+    "source": "Use snake_case and 5*3 or a * b here.\n",
+    "words": 10,
+    "durationSeconds": 5,
+    "tokens": ["Use","snake","case","and","5","3","or","a","b","here"],
+    "plain": "Use snake_case and 5*3 or a * b here."
+  },
+  {
+    "name": "punctuation is not a word",
+    "source": "Wait — what? ... & then $5, £20 and 3.14% done -- ok.\n",
+    "words": 10,
+    "durationSeconds": 5,
+    "tokens": ["Wait","what","&","then","$5","£20","and","3.14%","done","ok"],
+    "plain": "Wait — what? ... & then $5, £20 and 3.14% done -- ok."
+  },
+  {
+    "name": "unicode words",
+    "source": "Café naïve 東京 straße déjà-vu.\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["Café","naïve","東京","straße","déjà-vu"],
+    "plain": "Café naïve 東京 straße déjà-vu."
+  },
+  {
+    "name": "task list checkboxes are not words",
+    "source": "- [ ] Buy milk\n- [x] Done it\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Buy","milk","Done","it"],
+    "plain": "Buy milk Done it"
+  },
+  {
+    "name": "blockquote with a list and lazy line",
+    "source": "> - Quoted item\n> more text\nlazy line\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["Quoted","item","more","text","lazy","line"],
+    "plain": "Quoted item more text lazy line"
+  },
+  {
+    "name": "hard breaks separate words",
+    "source": "Line one  \nline two\\\nline three\n",
+    "words": 6,
+    "durationSeconds": 3,
+    "tokens": ["Line","one","line","two","line","three"],
+    "plain": "Line one line two line three"
+  },
+  {
+    "name": "coach front matter is masked",
+    "source": "---\ncoach:\n  style: calm\n---\n\nHello world.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Hello","world"],
+    "plain": "Hello world."
+  },
+  {
+    "name": "other front matter is ordinary markdown",
+    "source": "---\ntitle: My Script\n---\n\nHello world.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Hello","world"],
+    "plain": "Hello world."
+  },
+  {
+    "name": "empty and punctuation-only aliases fall back to the visual word",
+    "source": "Our API{say=\"\"} and X{say=\"—\"} work.\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["Our","API","and","X","work"],
+    "plain": "Our API and X work."
+  },
+  {
+    "name": "escaped alias brace is literal",
+    "source": "Our API\\{say=\"a p i\"} is fast.\n",
+    "words": 8,
+    "durationSeconds": 4,
+    "tokens": ["Our","API","say","a","p","i","is","fast"],
+    "plain": "Our API{say=\"a p i\"} is fast."
+  },
+  {
+    "name": "html block is not speech",
+    "source": "<div>\nHidden markup text\n</div>\n\nVisible.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["Visible"],
+    "plain": "Visible."
+  },
+  {
+    "name": "inline html tags are silent, their text is not",
+    "source": "Some <b>bold</b> words.\n",
+    "words": 3,
+    "durationSeconds": 1,
+    "tokens": ["Some","bold","words"],
+    "plain": "Some bold words."
+  },
+  {
+    "name": "nested lists",
+    "source": "- Top item\n  - Nested item\n    1. Deep item\n- Last\n",
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["Top","item","Nested","item","Deep","item","Last"],
+    "plain": "Top item Nested item Deep item Last"
+  },
+  {
+    "name": "lists with paragraphs and code inside",
+    "source": "1. First\n\n   Continued paragraph.\n\n   ```\n   code here\n   ```\n2. Second\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["First","Continued","paragraph","Second"],
+    "plain": "First Continued paragraph. Second"
+  },
+  {
+    "name": "words per minute below the range is clamped",
+    "source": "one two three four five six seven\n",
+    "options": {"wordsPerMinute":10},
+    "words": 7,
+    "durationSeconds": 6,
+    "tokens": ["one","two","three","four","five","six","seven"],
+    "plain": "one two three four five six seven"
+  },
+  {
+    "name": "words per minute above the range is clamped",
+    "source": "one two three four five six seven\n",
+    "options": {"wordsPerMinute":1000},
+    "words": 7,
+    "durationSeconds": 2,
+    "tokens": ["one","two","three","four","five","six","seven"],
+    "plain": "one two three four five six seven"
+  },
+  {
+    "name": "crlf line endings",
+    "source": "Hello there.\r\n\r\n[Pause]\r\nNext line.\r\n\r\n- item one\r\n- item two\r\n",
+    "words": 8,
+    "durationSeconds": 4,
+    "tokens": ["Hello","there","Next","line","item","one","item","two"],
+    "plain": "Hello there. Next line. item one item two"
+  },
+  {
+    "name": "empty script",
+    "source": "",
+    "words": 0,
+    "durationSeconds": 0,
+    "tokens": [],
+    "plain": ""
+  },
+  {
+    "name": "autolinks and bare urls",
+    "source": "Visit <https://example.com/x> or www.example.org today.\n",
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["Visit","https","example.com","x","or","www.example.org","today"],
+    "plain": "Visit https://example.com/x or www.example.org today."
+  },
+  {
+    "name": "table right after a paragraph line",
+    "source": "Intro\n| A | B |\n| - | - |\n| one | two |\n\nOutro.\n",
+    "words": 2,
+    "durationSeconds": 1,
+    "tokens": ["Intro","Outro"],
+    "plain": "Intro Outro."
+  },
+  {
+    "name": "a lone tag line opens an html block",
+    "source": "<span>\nhidden words\n\nVisible.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["Visible"],
+    "plain": "Visible."
+  },
+  {
+    "name": "lists interrupting paragraphs",
+    "source": "Intro line\n- bullet item\n\nPara\n2. not a list\n",
+    "words": 9,
+    "durationSeconds": 4,
+    "tokens": ["Intro","line","bullet","item","Para","2","not","a","list"],
+    "plain": "Intro line bullet item Para 2. not a list"
+  },
+  {
+    "name": "an indented line continues a paragraph",
+    "source": "First line\n    still the paragraph\n",
+    "words": 5,
+    "durationSeconds": 2,
+    "tokens": ["First","line","still","the","paragraph"],
+    "plain": "First line still the paragraph"
+  },
+  {
+    "name": "fenced code inside a blockquote",
+    "source": "> Quote line\n> ```\n> code in quote\n> ```\n> after code\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Quote","line","after","code"],
+    "plain": "Quote line after code"
+  },
+  {
+    "name": "script and style blocks",
+    "source": "<style>\np { color: red; }\n</style>\n\nShown.\n",
+    "words": 1,
+    "durationSeconds": 0,
+    "tokens": ["Shown"],
+    "plain": "Shown."
+  },
+  {
+    "name": "a heading interrupts a paragraph",
+    "source": "Para text\n# Heading\nMore text\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Para","text","More","text"],
+    "plain": "Para text More text"
+  },
+  {
+    "name": "ampersand entities and unknown names",
+    "source": "Fish &amp; chips &hellip; done &bogus; ok.\n",
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["Fish","&","chips","done","&","bogus","ok"],
+    "plain": "Fish & chips … done &bogus; ok."
+  },
+  {
+    "name": "emphasis around an alias and a split bracket",
+    "source": "Say **API**{say=\"a p i\"} and [Cue: **bold**] now.\n",
+    "words": 10,
+    "durationSeconds": 5,
+    "tokens": ["Say","API","say","a","p","i","and","Cue","bold","now"],
+    "plain": "Say API{say=\"a p i\"} and [Cue: bold] now."
+  },
+  {
+    "name": "triple star and nested emphasis",
+    "source": "***very*** important and **bold *nested* text** end.\n",
+    "words": 7,
+    "durationSeconds": 3,
+    "tokens": ["very","important","and","bold","nested","text","end"],
+    "plain": "very important and bold nested text end."
+  },
+  {
+    "name": "fixture: basic.md",
+    "file": "basic.md",
+    "words": 98,
+    "durationSeconds": 45,
+    "tokens": ["Welcome","to","the","launch","Today","we","are","announcing","something","special","Creators","spend","hours","re-recording","takes","It","breaks","flow","and","it","wastes","energy","Some","pain","points","Losing","your","place","mid-sentence","Reading","from","static","cue","cards","Awkward","eye","lines","with","external","monitors","CandidCue","follows","your","voice","It","scrolls","when","you","speak","and","it","waits","when","you","pause","The","best","teleprompter","is","the","one","you","forget","is","there","Write","your","script","in","Markdown","Press","Present","Speak","naturally","Thanks","for","watching","Mr","Smith","said","the","price","is","42","dollars","or","about","3.14","per","month","Visit","example.com","for","details","e.g","the","FAQ","page"],
+    "plain": "Welcome to the launch. Today we are announcing something special. Creators spend hours re-recording takes. It breaks flow, and it wastes energy. Some pain points: Losing your place mid-sentence Reading from static cue cards Awkward eye lines with external monitors CandidCue follows your voice. It scrolls when you speak, and it waits when you pause. The best teleprompter is the one you forget is there. Write your script in Markdown Press Present Speak naturally Thanks for watching. Mr. Smith said the price is 42 dollars, or about 3.14 per month. Visit example.com for details, e.g. the FAQ page."
+  },
+  {
+    "name": "fixture: directives.md",
+    "file": "directives.md",
+    "words": 39,
+    "durationSeconds": 18,
+    "tokens": ["Welcome","back","to","the","channel","This","paragraph","has","a","beat","in","the","middle","then","keeps","going","Candid","Cue","version","two","point","oh","The","A","P","I","responds","in","milliseconds","CandidCue","go","to","chapter","one","That","wraps","up","the","demo"],
+    "plain": "Welcome back to the channel. This paragraph has a beat in the middle, then keeps going. Candid Cue version two point oh The A P I responds in milliseconds. CandidCue, go to chapter one. That wraps up the demo."
+  },
+  {
+    "name": "fixture: edge-cases.md",
+    "file": "edge-cases.md",
+    "words": 105,
+    "durationSeconds": 48,
+    "tokens": ["Content","before","the","first","heading","goes","into","a","synthetic","Opening","section","Some","text","with","an","empty","cue","that","is","malformed","Todo","this","is","an","unknown","bracket","note","mystery","Unknown","container","directives","stay","visible","as","source","First","results","section","Second","section","with","the","same","name","Dr","Jones","met","J","K","Rowling","at","3","p.m","and","paid","1,250","dollars","CandidCue","jump","to","the","end","please","read","this","sentence","naturally","Ship","the","recorder","Write","the","docs","An","escaped","Pause","and","an","entity","Beat","must","stay","ordinary","text","version","two","point","oh","Unicode","offsets","survive","an","emoji","and","an","accent","café","mid-sentence","The","CandidCue","brand","is","one","spoken","word"],
+    "plain": "Content before the first heading goes into a synthetic Opening section. Some text with an empty cue that is malformed. [Todo: this is an unknown bracket note] :::mystery Unknown container directives stay visible as source. ::: First results section. Second section with the same name. Dr. Jones met J. K. Rowling at 3 p.m. and paid 1,250 dollars. CandidCue, jump to the end, please read this sentence naturally. Ship the recorder Write the docs An escaped [Pause] and an entity [Beat] must stay ordinary text. version two point oh Unicode offsets survive an emoji 🎬 and an accent café mid-sentence. The CandidCue brand is one spoken word."
+  },
+  {
+    "name": "fixture: media.md",
+    "file": "media.md",
+    "words": 37,
+    "durationSeconds": 17,
+    "tokens": ["Here","is","a","local","diagram","of","the","flow","And","a","remote","image","that","must","not","auto-load","Inline","stays","visual","by","default","A","reference","image","resolves","through","its","definition","An","unsafe","image","reference","must","not","become","an","asset"],
+    "plain": "Here is a local diagram of the flow. And a remote image that must not auto-load: Inline stays visual by default. A reference image resolves through its definition: An unsafe image reference must not become an asset:"
+  },
+  {
+    "name": "fixture: media.md with alt text",
+    "file": "media.md",
+    "options": {"readImageAltText":true,"readHeadings":true},
+    "words": 45,
+    "durationSeconds": 21,
+    "tokens": ["Media","Handling","Here","is","a","local","diagram","of","the","flow","Pipeline","overview","And","a","remote","image","that","must","not","auto-load","Remote","chart","Inline","stays","visual","by","default","A","reference","image","resolves","through","its","definition","Reference","chart","An","unsafe","image","reference","must","not","become","an","asset"],
+    "plain": "Media Handling Here is a local diagram of the flow. Pipeline overview And a remote image that must not auto-load: Remote chart Inline stays visual by default. A reference image resolves through its definition: Reference chart An unsafe image reference must not become an asset:"
+  },
+  {
+    "name": "fixture: unclosed.md",
+    "file": "unclosed.md",
+    "words": 35,
+    "durationSeconds": 16,
+    "tokens": ["This","silent","block","never","closes","so","it","must","compile","as","normal","text","with","a","blocking","diagnostic","More","text","after","a","blank","line","An","unclosed","stage","block","warns","without","blocking","An","unclosed","literal-command","block","also","warns"],
+    "plain": "This silent block never closes, so it must compile as normal text with a blocking diagnostic. More text after a blank line. An unclosed stage block warns without blocking. An unclosed literal-command block also warns."
+  }
+]
