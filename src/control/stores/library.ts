@@ -14,6 +14,7 @@ import type { ScriptSummary } from '../../shared/contracts';
 import { describeError } from '../services/errors';
 import * as scriptsService from '../services/scripts';
 import type { LibraryView, ScriptPage, ScriptSort } from '../services/scripts-types';
+import { flushEditorEdits } from './editor';
 import { showToast } from './toasts';
 
 /**
@@ -429,6 +430,13 @@ async function mutate(failure: string, run: () => Promise<void>): Promise<boolea
 
 export async function duplicateScript(id: string): Promise<boolean> {
   const ok = await mutate('The script could not be duplicated.', async () => {
+    // Rust copies the file on disk, so the editor's text has to be there first.
+    // Without this the copy missed whatever autosave had not reached yet — and
+    // everything typed while saves were failing, which is exactly when a copy
+    // is what you reach for. Edits that cannot be saved refuse the copy rather
+    // than producing a stale one under a success toast. A no-op for any script
+    // the editor does not have open, so the Library row is unaffected.
+    await flushEditorEdits(id);
     await scriptsService.duplicateScript(id);
   });
   if (ok) showToast('Script duplicated', 'success');
