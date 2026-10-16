@@ -416,12 +416,16 @@ pub fn window_display<R: Runtime>(
 
 /// One hash covering the whole desktop arrangement. Used only to notice that
 /// the topology changed so control can revalidate (spec §52.5).
+///
+/// In list order, not sorted. The order IS part of the arrangement now: it is
+/// what numbers the panels for Identify displays and the tiles in Settings
+/// (`identified_displays`), so a platform that lists the same panels the other
+/// way round has renumbered them, and Settings has to hear about it.
 pub fn topology_signature(descriptors: &[DisplayDescriptor]) -> String {
-    let mut parts: Vec<String> = descriptors
+    let parts: Vec<String> = descriptors
         .iter()
         .map(|d| format!("{}:{}", d.fingerprint, d.topology_hash))
         .collect();
-    parts.sort();
     let digest = crate::util::sha256_hex(parts.join("|").as_bytes());
     digest[..16].to_string()
 }
@@ -457,8 +461,13 @@ const IDENTIFY_CARD_H: f64 = 220.0;
 /// answerable by putting a number ON each panel. A toast in the control window
 /// listing display names cannot answer it, because the operator is looking at
 /// the panels, not at the list. So this puts a short-lived, always-on-top,
-/// click-through numbered card on every connected display, and ALSO emits the
-/// session to control so the picker can label its tiles to match.
+/// click-through numbered card on every connected display.
+///
+/// The number is only half of the answer: the operator then has to find that
+/// panel among the display tiles in Settings. The tiles carry the same number,
+/// derived by the same rule (see `identified_displays`), and the session is
+/// returned so Settings can check that its list still numbers the panels the
+/// way the glass does.
 pub fn identify_displays<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<IdentificationSession, AppError> {
@@ -466,23 +475,13 @@ pub fn identify_displays<R: Runtime>(
     let session = IdentificationSession {
         session_id: new_uuid(),
         duration_ms: IDENTIFY_DURATION_MS,
-        displays: displays
-            .iter()
-            .enumerate()
-            .map(|(index, d)| IdentifiedDisplay {
-                number: index as u32 + 1,
-                fingerprint: d.fingerprint.clone(),
-                name: d.name.clone(),
-                logical_size: d.logical_size.clone(),
-                primary: d.primary,
-            })
-            .collect(),
+        displays: identified_displays(&displays),
     };
 
     close_identify_overlays(app);
     for display in &session.displays {
         if let Some(descriptor) = displays.iter().find(|d| d.fingerprint == display.fingerprint) {
-            // A failed overlay must not fail the whole command — the emitted
+            // A failed overlay must not fail the whole command — the returned
             // session is still useful.
             if let Err(error) = spawn_identify_overlay(app, display.number, descriptor) {
                 tracing::warn!(%error, "could not show a display identification overlay");
@@ -497,6 +496,26 @@ pub fn identify_displays<R: Runtime>(
      * event. See the note in `scripts_cmds::get_script`.
      */
     Ok(session)
+}
+
+/// The number each panel is shown under: its position in `list_displays`
+/// order, counting from 1.
+///
+/// Settings numbers its display tiles by this same rule (`displayNumbers` in
+/// `src/control/lib/display-numbers.ts`), over the same list, so the "2" on the
+/// glass is the "2" on the tile. Change one and the other has to follow.
+fn identified_displays(displays: &[DisplayDescriptor]) -> Vec<IdentifiedDisplay> {
+    displays
+        .iter()
+        .enumerate()
+        .map(|(index, d)| IdentifiedDisplay {
+            number: index as u32 + 1,
+            fingerprint: d.fingerprint.clone(),
+            name: d.name.clone(),
+            logical_size: d.logical_size.clone(),
+            primary: d.primary,
+        })
+        .collect()
 }
 
 fn spawn_identify_overlay<R: Runtime>(
@@ -2068,5 +2087,59 @@ mod tests {
         };
         assert_eq!(topology_signature(&[make(0)]), topology_signature(&[make(0)]));
         assert_ne!(topology_signature(&[make(0)]), topology_signature(&[make(3840)]));
+    }
+
+    #[test]
+    fn identification_numbers_follow_list_order_and_tell_twins_apart() {
+        let make = |index: usize, name: &str, ordinal: u32, x: i32| DisplayDescriptor {
+            id: format!("display-{index}"),
+            name: Some(name.into()),
+            physical_position: PhysicalPoint { x, y: 0 },
+            physical_size: PhysicalDimensions {
+                width: 1920,
+                height: 1080,
+            },
+            scale_factor: 1.0,
+            logical_size: LogicalDimensions {
+                width: 1920.0,
+                height: 1080.0,
+            },
+            primary: index == 0,
+            fingerprint: display_fingerprint(Some(name), 1920, 1080, ordinal),
+            topology_hash: display_topology_hash(Some(name), 1920, 1080, 1.0, x, 0),
+            physical_size_mm: None,
+        };
+        // Two identical monitors and a third: the tile names cannot tell the
+        // twins apart, so the number is the only thing that can.
+        let displays = vec![
+            make(0, "DELL P2419H", 0, 0),
+            make(1, "DELL P2419H", 1, 1920),
+            make(2, "Elgato Prompter", 0, 3840),
+        ];
+        let identified = identified_displays(&displays);
+
+        // Settings numbers its tiles by list position from 1; the overlays
+        // must use the same rule or the "2" on the glass names another tile.
+        let numbers: Vec<u32> = identified.iter().map(|d| d.number).collect();
+        assert_eq!(numbers, vec![1, 2, 3]);
+        for (display, numbered) in displays.iter().zip(&identified) {
+            assert_eq!(numbered.fingerprint, display.fingerprint);
+            assert_eq!(numbered.name, display.name);
+            assert_eq!(numbered.logical_size.width, display.logical_size.width);
+            assert_eq!(numbered.primary, display.primary);
+        }
+        assert_ne!(identified[0].fingerprint, identified[1].fingerprint);
+
+        // The number belongs to the position, not the panel: a reordered list
+        // renumbers, which is why Settings checks the session against its own.
+        let reversed: Vec<DisplayDescriptor> = displays.iter().rev().cloned().collect();
+        let renumbered = identified_displays(&reversed);
+        assert_eq!(renumbered[0].fingerprint, displays[2].fingerprint);
+        assert_eq!(renumbered[0].number, 1);
+        // ...so a reorder alone has to register as a topology change, or the
+        // tiles keep numbers the glass no longer shows.
+        assert_ne!(topology_signature(&displays), topology_signature(&reversed));
+
+        assert!(identified_displays(&[]).is_empty());
     }
 }

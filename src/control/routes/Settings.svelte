@@ -30,6 +30,7 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
+  import { displayNumbers, identificationMatches } from '../lib/display-numbers';
   import {
     ADVANCED_FONT_SIZE_CEILING_PX,
     APPEARANCE_LIMITS,
@@ -419,7 +420,27 @@
   let displays = $state<DisplayDescriptor[]>([]);
   let displaysError = $state<string | null>(null);
   let displaysLoading = $state(false);
+  /**
+   * Which `loadDisplays` call is the latest, and the read itself while it is
+   * in flight. A topology change, "Check again" and Identify can all be
+   * reading the list at once: the slowest answer must not replace a newer one,
+   * and Identify has to wait for the newest one before it compares anything
+   * (`displaysSettled`).
+   */
+  let displaysRequest = 0;
+  let displaysInFlight: Promise<void> | null = null;
+  let identifying = $state(false);
   let stageTesting = $state(false);
+
+  /**
+   * The number Identify displays puts on each panel, so the tile can carry it
+   * too (#237). Without it "2" on the glass named no tile: the tiles show a
+   * model name two identical monitors share, and counting them is off by one
+   * because Automatic comes first. Shown permanently, the way the operating
+   * system's own display settings number theirs, because the overlays are
+   * gone after 2.5 s and the operator is still finding the tile.
+   */
+  const numbers = $derived(displayNumbers(displays));
 
   /**
    * What "Automatic" resolves to right now, named on the tile.
@@ -690,19 +711,41 @@
     return stageService.onDisplayTopologyChange(() => void loadDisplays());
   });
 
-  async function loadDisplays(): Promise<void> {
+  function loadDisplays(): Promise<void> {
+    const load = readDisplays(++displaysRequest);
+    displaysInFlight = load;
+    return load;
+  }
+
+  /**
+   * Resolve once no read of the display list is in flight — including one
+   * that started while an earlier one was being waited for — so `displays`
+   * and `displaysError` describe the newest answer and nothing is about to
+   * replace them.
+   */
+  async function displaysSettled(): Promise<void> {
+    while (displaysInFlight !== null) await displaysInFlight;
+  }
+
+  async function readDisplays(request: number): Promise<void> {
     displaysLoading = true;
     displaysError = null;
     try {
-      displays = await stageService.listDisplays();
+      const listed = await stageService.listDisplays();
+      if (request !== displaysRequest) return;
+      displays = listed;
       if (displays.length === 0) {
         displaysError = 'No displays were detected. Connect the teleprompter display and try again.';
       }
     } catch (err) {
+      if (request !== displaysRequest) return;
       displays = [];
       displaysError = `CandidCue could not list the connected displays. ${describeError(err)}`;
     } finally {
-      displaysLoading = false;
+      if (request === displaysRequest) {
+        displaysLoading = false;
+        displaysInFlight = null;
+      }
     }
   }
 
@@ -748,21 +791,54 @@
     }
   }
 
+  /**
+   * Put a number on every panel, matching the number on its tile.
+   *
+   * Rust puts the numbered card on each physical panel; the tiles already
+   * carry the same numbers (`numbers` above), so the toast only has to say
+   * where to look. Listing display NAMES here cannot answer "which panel is
+   * number 2?", which is the whole question.
+   *
+   * The overlays come from a fresh read of the displays and the tiles from an
+   * older one. If a monitor was plugged, unplugged or rearranged in between,
+   * the glass is numbered differently from the tiles, so the list is read once
+   * more and compared again — and if it STILL disagrees the panels are
+   * changing under us, which is said rather than papered over with a tile
+   * wearing a number that another panel is showing.
+   *
+   * Every comparison waits for the newest read first. A read already in flight
+   * (the section opening, a topology change) is about to replace the tiles,
+   * so agreeing with the list it replaces proves nothing; and the re-read
+   * below can itself be overtaken by a topology change, in which case its own
+   * answer is never shown and the newer one is the list to judge.
+   */
   async function identifyDisplays(): Promise<void> {
+    if (identifying) return;
+    identifying = true;
     try {
-      // Rust puts the numbered card on each physical panel; the toast only
-      // tells the operator where to look. Listing display NAMES here cannot
-      // answer "which panel is number 2?", which is the whole question.
       const identification = await stageService.identifyDisplays();
-      const count = identification?.displays.length ?? 0;
-      if (count > 0) {
-        displaysError = null;
-        showToast(`Look for the number shown on each display (${count} connected)`, 'info', {
-          durationMs: 3000,
-        });
+      const count = identification.displays.length;
+      if (count === 0) return;
+      await displaysSettled();
+      if (!identificationMatches(identification, displays)) {
+        void loadDisplays();
+        await displaysSettled();
+        // The re-read failed and has already said why.
+        if (displaysError !== null) return;
+        if (!identificationMatches(identification, displays)) {
+          displaysError =
+            'The connected displays changed while they were being numbered. Press Identify displays again.';
+          return;
+        }
       }
+      displaysError = null;
+      showToast(`Each display shows the number on its tile here (${count} connected)`, 'info', {
+        durationMs: 3000,
+      });
     } catch (err) {
       displaysError = describeError(err);
+    } finally {
+      identifying = false;
     }
   }
 
@@ -2194,9 +2270,11 @@
             >
               <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
               <span class="monitor-name">Automatic</span>
+              <!-- Automatic is not a panel, so it carries no number of its
+                   own; it names the number of the one it resolves to. -->
               <span class="monitor-meta">
                 {automaticDisplay
-                  ? `Currently ${automaticDisplay.name ?? 'the connected display'}`
+                  ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? ` · ${automaticDisplay.name}` : ''}`
                   : 'An external display when one is connected'}
               </span>
             </button>
@@ -2208,7 +2286,17 @@
                 aria-pressed={chosenFingerprint === display.fingerprint}
                 onclick={() => void chooseDisplay(display.fingerprint)}
               >
-                <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                <!-- The number Identify displays puts on this panel. A sibling
+                     of the name, never inside it: the name is what the tile is
+                     found by, and two identical monitors share it. -->
+                <span class="monitor-head">
+                  <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                  <span class="monitor-number">
+                    <!-- An expression, because Svelte trims a literal
+                         trailing space and the name would read "Display2". -->
+                    <span class="visually-hidden">{'Display '}</span>{numbers.get(display.fingerprint)}
+                  </span>
+                </span>
                 <span class="monitor-name">{display.name ?? 'Display'}</span>
                 <span class="monitor-meta">
                   {display.physicalSize.width} × {display.physicalSize.height} · {display.scaleFactor}×
@@ -2230,7 +2318,7 @@
             </p>
           {/if}
           <div class="row-actions">
-            <Button onclick={() => void identifyDisplays()}>Identify displays</Button>
+            <Button disabled={identifying} onclick={() => void identifyDisplays()}>Identify displays</Button>
             <Button disabled={!effectiveDisplay || stageTesting} onclick={() => void runDisplayTest()}>
               {stageTesting ? 'Opening…' : 'Show test on this display'}
             </Button>
@@ -3670,6 +3758,43 @@
   }
   .monitor-glyph {
     color: var(--text-muted);
+  }
+  /* The glyph and, on a display tile, its number. The number sits at the far
+     edge, where an eye coming back from the glass lands on it before the
+     name: it is the one thing on the tile that matches what the panel showed. */
+  .monitor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    align-self: stretch;
+    gap: var(--space-2);
+  }
+  .monitor-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: var(--text-2xl);
+    font-weight: 650;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
   .monitor-tile.selected .monitor-glyph {
     color: var(--accent);

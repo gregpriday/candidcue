@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { openPreferences } from './fixtures/preferences';
 
@@ -91,4 +91,178 @@ test('the chosen display is remembered, and Automatic names what it resolves to'
   await pinned.click();
   await expect(pinned).toHaveClass(/selected/);
   await expect(automatic).not.toHaveClass(/selected/);
+});
+
+/**
+ * Identify displays puts a number on every panel (#237). These pin the other
+ * half: the tile in Settings carries the same number, so "2" on the glass
+ * names a tile without counting tiles (Automatic comes first) or reading names
+ * (two identical monitors share one).
+ */
+async function identifySession(page: Page): Promise<IdentifiedPanels> {
+  return page.evaluate(async () => {
+    const internals = (
+      window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (command: string) => Promise<unknown> };
+      }
+    ).__TAURI_INTERNALS__;
+    return (await internals.invoke('identify_displays')) as IdentifiedPanels;
+  });
+}
+
+type IdentifiedPanels = { displays: Array<{ number: number; name?: string; primary: boolean }> };
+
+function displayTile(page: Page, name: string) {
+  return page.locator('.monitor-tile', {
+    has: page.locator('.monitor-name', { hasText: new RegExp(`^${name}$`) }),
+  });
+}
+
+test('every display tile carries the number Identify displays puts on its panel', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await page.goto('/control.html');
+
+  await openPreferences(page);
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
+    .click();
+
+  // What the overlays show, asked of the backend the same way the button asks.
+  const session = await identifySession(page);
+  expect(session.displays.length).toBeGreaterThan(1);
+  for (const panel of session.displays) {
+    const tile = displayTile(page, panel.name ?? 'Display');
+    await expect(tile.locator('.monitor-number')).toHaveText(`Display ${panel.number}`);
+    // Heard first, before the model name two identical monitors share.
+    await expect(tile).toHaveAccessibleName(new RegExp(`^Display ${panel.number}(?!\\d)`));
+  }
+
+  // Automatic is not a panel: it takes no number of its own, and names the
+  // number of the panel it resolves to (the non-primary one here).
+  const automatic = page.locator('.monitor-tile', {
+    has: page.locator('.monitor-name', { hasText: 'Automatic' }),
+  });
+  await expect(automatic.locator('.monitor-number')).toHaveCount(0);
+  const external = session.displays.find((panel) => !panel.primary)!;
+  await expect(automatic).toContainText(`Currently display ${external.number} · ${external.name}`);
+
+  // The presentation-mode tiles share the tile style and are not displays.
+  await expect(page.locator('.monitor-number')).toHaveCount(session.displays.length);
+
+  await page.getByRole('button', { name: 'Identify displays' }).click();
+  await expect(
+    page.getByText(`Each display shows the number on its tile here (${session.displays.length} connected)`),
+  ).toBeVisible();
+});
+
+test('Identify re-reads a stale display list so the tiles match the glass', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], failListDisplays: true });
+  await page.goto('/control.html');
+
+  await openPreferences(page);
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
+    .click();
+  await expect(page.getByText('could not list the connected displays')).toBeVisible();
+  await expect(page.locator('.monitor-number')).toHaveCount(0);
+
+  // The panels are there now, but nothing has read the list again — so the
+  // overlays will number two panels the tiles have never heard of.
+  await page.evaluate(() => window.__E2E__.setFail('list_displays', null));
+  await page.getByRole('button', { name: 'Identify displays' }).click();
+
+  await expect(displayTile(page, 'Built-in Display').locator('.monitor-number')).toHaveText(
+    'Display 1',
+  );
+  await expect(displayTile(page, 'Teleprompter Display').locator('.monitor-number')).toHaveText(
+    'Display 2',
+  );
+  await expect(page.getByText('could not list the connected displays')).toHaveCount(0);
+  await expect(page.getByText('Each display shows the number on its tile here')).toBeVisible();
+});
+
+test('a re-read overtaken by a topology change waits for the newer list instead of crying wolf', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], failListDisplays: true });
+  await page.goto('/control.html');
+
+  await openPreferences(page);
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
+    .click();
+  await expect(page.getByText('could not list the connected displays')).toBeVisible();
+
+  // The panels are back, but every read of them is now slow — so Identify's
+  // re-read (A) is still in flight when a topology change starts a newer one
+  // (B), and A answers first. A's answer is never shown; B's is.
+  await page.evaluate(() => {
+    window.__E2E__.setFail('list_displays', null);
+    window.__E2E__.setDelay('list_displays', 1500);
+  });
+  const listCalls = () =>
+    page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'list_displays').length);
+  const listAnswers = () =>
+    page.evaluate(() => window.__E2E__.settled.filter((c) => c === 'list_displays').length);
+  const before = await listCalls();
+  const answeredBefore = await listAnswers();
+  await page.getByRole('button', { name: 'Identify displays' }).click();
+  await expect.poll(listCalls).toBe(before + 1);
+  const { delivered, answered } = await page.evaluate(() => ({
+    delivered: window.__E2E__.emit('app://device-or-display-change', {
+      kind: 'display',
+      displays: [],
+    }),
+    answered: window.__E2E__.settled.filter((c) => c === 'list_displays').length,
+  }));
+  expect(delivered).toBeGreaterThan(0);
+  // A was still unanswered when B started, or this proves nothing about the
+  // overlap: a stalled runner would let A land first and the old code pass.
+  expect(answered).toBe(answeredBefore);
+  await expect.poll(listCalls).toBeGreaterThanOrEqual(before + 2);
+
+  // Judged against B, which matches the glass: no "the displays changed"
+  // alarm, and the tiles carry the numbers.
+  await expect(page.getByText('Each display shows the number on its tile here')).toBeVisible();
+  await expect(page.getByText('changed while they were being numbered')).toHaveCount(0);
+  await expect(displayTile(page, 'Teleprompter Display').locator('.monitor-number')).toHaveText(
+    'Display 2',
+  );
+});
+
+test('a refused Identify says so, announces nothing, and can be pressed again', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await page.goto('/control.html');
+
+  await openPreferences(page);
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
+    .click();
+  await expect(displayTile(page, 'Teleprompter Display')).toBeVisible();
+  await expect(page.locator('.inline-alert')).toHaveCount(0);
+
+  await page.evaluate(() =>
+    window.__E2E__.setFail('identify_displays', {
+      code: 'HARDWARE_ERROR',
+      userMessage: 'The displays could not be numbered.',
+    }),
+  );
+  const identify = page.getByRole('button', { name: 'Identify displays' });
+  await identify.click();
+  await expect(page.locator('.inline-alert[role="alert"]')).toBeVisible();
+  await expect(page.getByText('Each display shows the number on its tile here')).toHaveCount(0);
+
+  await page.evaluate(() => window.__E2E__.setFail('identify_displays', null));
+  await expect(identify).toBeEnabled();
+  await identify.click();
+  await expect(page.getByText('Each display shows the number on its tile here')).toBeVisible();
+  await expect(page.locator('.inline-alert')).toHaveCount(0);
 });
