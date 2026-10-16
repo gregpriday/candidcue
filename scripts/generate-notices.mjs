@@ -164,6 +164,7 @@ function rustCrates() {
    */
   const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
   const seen = new Map();
+  let failedTrees = 0;
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {
     for (const target of RELEASE_TARGETS) {
     let tree;
@@ -185,6 +186,7 @@ function rustCrates() {
       problems.push(
         `could not read the crate tree for ${manifest} on ${target} — ${error.message}`,
       );
+      failedTrees += 1;
       continue;
     }
     for (const line of tree.split('\n')) {
@@ -198,10 +200,21 @@ function rustCrates() {
     }
   }
 
-  // Nothing to classify, which in practice means every tree failed and has
-  // already said why. A missing registry on top of that would only be a
-  // second, misleading account of the same failure.
-  if (seen.size === 0) return [];
+  /*
+   * Nothing to classify. When a tree failed it has already said why, and a
+   * missing registry on top of that would only be a second, misleading account
+   * of the same failure. When none failed, the empty graph IS the failure: a
+   * notices file that lists no crates reads as complete.
+   */
+  if (seen.size === 0) {
+    if (failedTrees === 0) {
+      problems.push(
+        '`cargo tree` succeeded for both workspaces and printed no third-party crates — ' +
+          'its output format may have changed under the parser in rustCrates().',
+      );
+    }
+    return [];
+  }
 
   /*
    * The registry is read AFTER the trees, not before.
@@ -210,7 +223,8 @@ function rustCrates() {
    * cargo command had unpacked a crate yet, so the gate failed on every push
    * and passed on every developer machine. The trees above do the unpacking —
    * `cargo tree` loads every manifest in the graph it prints — so by now the
-   * registry holds the crates being asked about, on any machine.
+   * registry holds the crates being asked about, whether or not anything had
+   * unpacked them before this ran.
    */
   const registryRoot = join(cargoHome(), 'registry', 'src');
   let registries = [];
@@ -223,7 +237,7 @@ function rustCrates() {
       .map((entry) => join(registryRoot, entry));
   } catch {
     // Not an early return: every crate below then reads as unknown and is
-    // named, so the failure says which crates as well as where it looked.
+    // counted and named, so the failure says what as well as where it looked.
     problems.push(
       `no unpacked cargo registry at ${registryRoot}, even after \`cargo tree\` resolved ` +
         `the release crates — is CARGO_HOME pointing somewhere cargo did not use?`,
@@ -253,9 +267,10 @@ function rustCrates() {
     problems.push(
       `${unknown.length} crate licence(s) could not be read: ${unknown.slice(0, 8).join(', ')}` +
         `${unknown.length > 8 ? ', …' : ''}. \`cargo tree\` unpacks every registry crate it ` +
-        `prints, so one missing here comes from outside the registry (a git or path ` +
-        `dependency) or declares no licence in its \`[package]\` table — a notices file may ` +
-        `not silently omit what it failed to classify.`,
+        `prints, so each of these either has no manifest under ${registryRoot} (a git or ` +
+        `path dependency, a replaced source) or declares its licence in a form ` +
+        `crateLicence() does not recognise — a notices file may not silently omit what it ` +
+        `failed to classify.`,
     );
   }
   return crates;

@@ -810,6 +810,7 @@ if [ "$FAKE_TREE" = fail ]; then
   echo 'error: failed to download from the registry' >&2
   exit 101
 fi
+[ "$FAKE_TREE" = empty ] && exit 0
 if [ "$FAKE_TREE" = unpack ]; then
   dir="$CARGO_HOME/registry/src/index.test/notices-fixture-$FAKE_CRATE_VERSION"
   mkdir -p "$dir"
@@ -848,7 +849,7 @@ echo '{}'
     repo: Repo,
     args: string[],
     fake: {
-      tree?: 'unpack' | 'print-only' | 'fail';
+      tree?: 'unpack' | 'print-only' | 'fail' | 'empty';
       version?: string;
       cargoHome?: string;
       cwd?: string;
@@ -858,6 +859,10 @@ echo '{}'
       PATH: `${repo.bin}${delimiter}${process.env.PATH ?? ''}`,
       // A new, empty CARGO_HOME for every run unless one is named: a clean runner.
       CARGO_HOME: fake.cargoHome ?? mkdtempSync(join(repo.dir, 'cargo-home-')),
+      // And a HOME with no `.cargo` in it. The old generator ignored CARGO_HOME
+      // and read `~/.cargo`, so on a developer machine — where that is full —
+      // a test of it would quietly be a test of the developer's registry.
+      HOME: mkdtempSync(join(repo.dir, 'home-')),
       FAKE_TREE: fake.tree ?? 'unpack',
       FAKE_CRATE_VERSION: fake.version ?? '1.0.0',
     });
@@ -925,6 +930,19 @@ echo '{}'
     expect(result.output).toContain('could not read the crate tree for src-tauri/Cargo.toml');
     expect(result.output).toContain('could not read the crate tree for crates/Cargo.toml');
     expect(result.output).not.toContain('no unpacked cargo registry');
+  });
+
+  it('refuses a crate tree that succeeds and lists nothing', () => {
+    /*
+     * The other way to have nothing to classify. No tree failed, so nothing
+     * has been reported — and a notices file with an empty Rust section would
+     * read as a complete disclosure of a binary built from four hundred crates.
+     */
+    const repo = scratchNotices();
+    const result = generate(repo, [], { tree: 'empty' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('printed no third-party crates');
+    expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
   });
 
   it('reads CARGO_HOME the way cargo does, relative to the directory cargo runs in', () => {
