@@ -8,17 +8,20 @@ This is the release-engineering half. The product half is
 build actually follows a voice on real glass, and no amount of green CI stands
 in for it.
 
-Three gates, and they are not the same gate. Do not collapse them into one
+Two gates, and they are not the same gate. Do not collapse them into one
 "ready to launch" feeling:
 
 | Gate | Who gets it | What it needs |
 |---|---|---|
 | **A — signed tester build** | A small invited group | Everything in §1–§5 below |
 | **B — public beta** | Anyone who finds the download page | A, plus a download page, a guide, known issues, published checksums, and a hardware matrix with more than one row |
-| **C — paid 1.0** | Customers | B, plus `pnpm legal:check` exiting 0, a Merchant of Record, and a tested purchase, receipt and refund |
 
-Nothing in this repository can clear the business half of C. `pnpm legal:check`
-exits non-zero on purpose until it can — see `legal/PLACEHOLDERS.md`.
+Every tagged build, A included, has to clear the native licence review first.
+A full `release-verify.mjs` run refuses while any statically linked native
+component in `sbom/native-components.json` is still `"reviewed": false`, and
+the release workflow runs the full plan. CI does not run that step, so a green
+CI does not mean a tag will build. Only a person can clear it, by confirming
+each licence against the build that ships.
 
 ---
 

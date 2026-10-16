@@ -2,7 +2,7 @@
  * Types for the one thing `release-verify.mjs` exports to TypeScript.
  *
  * `tests/integration/release-gates.test.ts` imports `PLAN` to assert that CI
- * claims every step in it. The runner itself is plain ESM — it has to run under
+ * claims every step in it but the release-only ones. The runner itself is plain ESM — it has to run under
  * bare `node` with no build step, because it is what proves the build works —
  * so its type surface lives here rather than in the script.
  *
@@ -17,4 +17,10 @@ export declare const PLAN: ReadonlyArray<{
   readonly name: string;
   /** What a green run of this step actually establishes. */
   readonly proves: string;
+  /**
+   * True for a step CI deliberately never names: only a full run (a tagged
+   * release) reaches it. The parity test exempts these from "CI claims every
+   * step" and asserts the opposite instead.
+   */
+  readonly releaseOnly: boolean;
 }>;

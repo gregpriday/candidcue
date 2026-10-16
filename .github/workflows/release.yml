@@ -51,12 +51,13 @@ name: Release
 # exploited in the wild. Each `uses:` below names an immutable commit with the
 # version it corresponded to in a comment. Update them deliberately.
 #
-# ## The legal gate is NOT suppressed here
+# ## The native licence review runs here, and only here
 #
-# `ci.yml` passes `--allow-legal-failure` so day-to-day pushes are not blocked
-# by placeholders only the business can fill in. This does not. A build with an
-# unresolved `@@LEGAL_*@@` in its licence agreement is the one outcome nobody
-# can undo after the fact, so the release fails until the values are supplied.
+# `release-verify.mjs` runs bare below, so it reaches `native licence review`,
+# the one step `ci.yml` deliberately never names. It refuses while any
+# statically linked native component in `sbom/native-components.json` is
+# unreviewed: a shipped binary is the one place an unconfirmed licence cannot
+# be taken back, so the release fails until somebody has checked each one.
 
 on:
   push:
@@ -143,7 +144,8 @@ jobs:
         run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}" --check
 
       - name: Verify the code is releasable
-        # No `--allow-legal-failure`. See the header.
+        # No `--only` or `--tier`: the whole plan, native licence review
+        # included. See the header.
         run: node scripts/release-verify.mjs
 
       - name: Record the exact toolchain used

@@ -19,8 +19,9 @@
     "",
     "`evidence` records what the SPDX id is based on. `reviewed` stays false",
     "until a HUMAN confirms it and accepts it for a proprietary, statically",
-    "linked, signed distribution; scripts/legal-gate.mjs refuses while any is",
-    "false, the same suppressible pre-release state as an unresolved placeholder."
+    "linked, signed distribution; scripts/verify-native-review.mjs refuses a",
+    "release while any is false. It is a step of release-verify.mjs that only a",
+    "full run reaches, so CI never runs it and a tagged release cannot skip it."
   ],
   "components": [
     {

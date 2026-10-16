@@ -12,12 +12,13 @@ name: CI
 # is claimed by some job in this file, so a step added to the plan without a
 # home here fails a test rather than quietly never running.
 #
-# The one deliberate difference from a release run is the legal gate. It is
-# expected to fail until the business fills in the `@@LEGAL_*@@` placeholders,
-# and blocking every push on that would train people to ignore a red CI — so
-# this workflow passes `--allow-legal-failure`, which suppresses ONLY the legal
-# gate's exit code 2 ("scan clean, values not supplied"). A legal gate that
-# crashed or found a damaged document exits 1 and still fails the build.
+# The one deliberate difference from a release run is the native licence
+# review, which refuses while any statically linked native component in
+# `sbom/native-components.json` is unreviewed. Confirming a licence is a job
+# for a person, and blocking every push on it would train people to ignore a
+# red CI, so no job here names that step. It is marked `releaseOnly` in the
+# plan, and the same test asserts this file keeps not naming it — a tagged
+# release runs the whole plan and cannot get past it.
 
 on:
   push:
@@ -60,10 +61,8 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Completeness, versions, legal
-        run: >
-          node scripts/release-verify.mjs --allow-legal-failure
-          --only='repository completeness,version sync,legal gate'
+      - name: Completeness and versions
+        run: node scripts/release-verify.mjs --only='repository completeness,version sync'
 
   frontend:
     name: Frontend (typecheck, node, dom)

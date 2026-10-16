@@ -19,7 +19,6 @@
     "test:all": "vitest run && vitest run --config vitest.dom.config.ts",
     "tauri": "tauri",
     "test:e2e": "playwright test --config=playwright.config.ts",
-    "legal:check": "node scripts/legal-gate.mjs",
     "verify:repo": "node scripts/verify-repository.mjs",
     "version:check": "node scripts/version.mjs check",
     "version:set": "node scripts/version.mjs set",
