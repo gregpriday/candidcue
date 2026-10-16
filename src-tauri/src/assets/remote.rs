@@ -84,6 +84,10 @@ pub(crate) const IMAGE_HOP_LABELS: net::HopLabels = net::HopLabels {
     insecure_message: "Images can only be downloaded over https.",
     blocked_code: "ASSET_URL_BLOCKED",
     blocked_message: "That image address is not publicly reachable and was refused.",
+    // Not a refusal: a host that cannot be looked up is a download failure,
+    // reported under the code a dropped connection already uses.
+    unreachable_code: "ASSET_DOWNLOAD_FAILED",
+    unreachable_message: "The image could not be downloaded. Check your connection and try again.",
 };
 
 /// Fetch policy. Production always uses [`FetchPolicy::strict`]; the only
@@ -575,6 +579,22 @@ mod tests {
             .await
             .expect_err("plaintext loopback must be refused in production");
         assert_eq!(err.code(), "ASSET_URL_INSECURE", "{err:?}");
+    }
+
+    #[test]
+    fn an_unreachable_image_host_is_a_download_failure_not_a_refusal() {
+        // Being offline is not a blocked address: same code and category as a
+        // transfer that dropped, so the user is told to check the connection.
+        let unreachable = net::unreachable_host(&IMAGE_HOP_LABELS, "dns lookup failed");
+        let dropped = download_failed("stream failed");
+
+        assert_eq!(unreachable.code(), dropped.code());
+        assert_ne!(unreachable.code(), IMAGE_HOP_LABELS.blocked_code);
+        assert_eq!(unreachable.category(), dropped.category());
+        assert_eq!(unreachable.recoverable(), dropped.recoverable());
+        let message = unreachable.user_message();
+        assert!(message.contains("Check your connection"), "{message}");
+        assert!(!message.contains("refused"), "{message}");
     }
 
     #[tokio::test]
