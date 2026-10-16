@@ -507,7 +507,6 @@ for (const [a, b] of PAIRS) {
 
 /* ------------------------------------------------------ legal documents */
 
-require_('legal/PLACEHOLDERS.md', 'the legal gate reads its placeholder set from it');
 for (const rel of globOrFail('legal/*.md', 'the legal-document scan would check nothing')) {
   requireNonEmpty(rel, 'a legal document');
 }

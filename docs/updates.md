@@ -37,10 +37,8 @@ origin in `src-tauri/src/web.rs` — not through `opener:default`, which the
 capability-minimisation work removed and which nothing should reintroduce. Help
 also carries Release Notes, so a user can read what changed before deciding.
 
-The origin is still a legal placeholder in the documents
-(`@@LEGAL_WEBSITE_ORIGIN@@` — see `legal/PLACEHOLDERS.md`), and the register
-records that the application already compiles a copy of the answer. The two move
-together.
+That origin is `WEBSITE_ORIGIN` in `src-tauri/src/web.rs`, the one place the
+application names its own domain. If the domain changes, it changes there.
 
 ## What was removed, and why it is not "reserved for later"
 

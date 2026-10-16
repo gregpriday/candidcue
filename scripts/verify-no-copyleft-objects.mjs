@@ -347,8 +347,9 @@ if (problems.length > 0) {
   console.error('Copyleft check FAILED:\n');
   for (const problem of problems) console.error(`  • ${problem}\n`);
   console.error(
-    '  The fix is to stop linking these archives, not to relabel them. See\n' +
-      '  legal/PLACEHOLDERS.md, "The statically linked native components".\n',
+    '  The fix is to stop linking these archives, not to relabel them. See the\n' +
+      '  header of scripts/verify-no-copyleft-objects.mjs and the eSpeak NG entry\n' +
+      '  in sbom/native-components.json.\n',
   );
   process.exit(1);
 }
