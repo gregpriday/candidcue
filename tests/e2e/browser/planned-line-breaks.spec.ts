@@ -89,6 +89,8 @@ interface StageSnapshot {
   /** Planned breaks anywhere in the column, not only in the blocks measured below. */
   plannedBreaks: number;
   blocks: MeasuredBlock[];
+  /** Planned-kind blocks on the glass that yielded nothing to measure. */
+  unmeasured: string[];
 }
 
 /**
@@ -152,13 +154,20 @@ async function snapshot(page: Page): Promise<StageSnapshot> {
         plannedBreaks: number;
         content: { left: number; right: number; width: number };
       }[] = [];
+      // Recorded rather than silently skipped: a block that drops out of the
+      // measured population would otherwise let the rest of the script carry
+      // every assertion below on its behalf.
+      const unmeasured: string[] = [];
       for (const block of Array.from(
         columnEl.querySelectorAll('.k-paragraph, .k-list_item, .k-blockquote'),
       )) {
+        const id = block.getAttribute('data-block-id') ?? '';
         const prose = block.querySelector('.para, .quote, .list-body');
-        if (!prose) continue;
-        const spans = Array.from(prose.querySelectorAll<HTMLElement>('[data-t]'));
-        if (spans.length === 0) continue;
+        const spans = prose ? Array.from(prose.querySelectorAll<HTMLElement>('[data-t]')) : [];
+        if (!prose || spans.length === 0) {
+          unmeasured.push(id);
+          continue;
+        }
 
         const lines: (typeof blocks)[number]['lines'] = [];
         for (const span of spans) {
@@ -188,7 +197,7 @@ async function snapshot(page: Page): Promise<StageSnapshot> {
         }
 
         blocks.push({
-          id: block.getAttribute('data-block-id') ?? '',
+          id,
           lines,
           plannedBreaks: prose.querySelectorAll('br[data-planned-break]').length,
           content: contentBounds(prose),
@@ -203,6 +212,7 @@ async function snapshot(page: Page): Promise<StageSnapshot> {
           ...b,
           lines: b.lines.map(({ words, left, right }) => ({ words, left, right })),
         })),
+        unmeasured,
       };
     },
     { sample: FONT_METRICS_PROSE_SAMPLE, marginPx: COLUMN_SAFETY_MARGIN_PX },
@@ -233,6 +243,19 @@ async function openPreview(page: Page, viewport: { width: number; height: number
     return loaded.length;
   }, FONT_METRICS_PROSE_SAMPLE);
   expect(faces, 'the stage face never loaded, so every width here would be a fallback').toBeGreaterThan(0);
+}
+
+/**
+ * Every planned-kind block on the glass was measured, and drew at least one
+ * line. Without this a paragraph that stopped rendering its tokens would leave
+ * the population quietly, and the blocks that remained would pass for it.
+ */
+function expectWholePopulation(shot: StageSnapshot, label: string) {
+  expect(shot.blocks.length, `${label}: no prose was measured`).toBeGreaterThan(0);
+  expect(shot.unmeasured, `${label}: blocks with nothing to measure`).toEqual([]);
+  for (const block of shot.blocks) {
+    expect(block.lines.length, `${label}: block ${block.id} drew no line`).toBeGreaterThan(0);
+  }
 }
 
 /** Every line of a block inside both its own prose box and the column. */
@@ -288,7 +311,7 @@ async function openPlannedColumn(page: Page): Promise<StageSnapshot> {
     .toBeGreaterThan(0);
 
   const shot = await snapshot(page);
-  expect(shot.blocks.length).toBeGreaterThan(0);
+  expectWholePopulation(shot, `${WIDE.width}x${WIDE.height}`);
   expect(shot.blocks.filter((b) => b.plannedBreaks > 0).length).toBeGreaterThan(0);
   return shot;
 }
@@ -351,7 +374,7 @@ test.describe('a column too narrow to plan', () => {
       MIN_PLANNED_COLUMN_CHARS,
     );
     expect(shot.plannedBreaks, `${label}: a narrow column plans nothing`).toBe(0);
-    expect(shot.blocks.length, `${label}: no prose was measured`).toBeGreaterThan(0);
+    expectWholePopulation(shot, label);
     expect(
       shot.blocks.some((b) => b.lines.length >= 2),
       `${label}: no block wrapped, so containment was never tested`,

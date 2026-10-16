@@ -503,6 +503,20 @@ test('a session mode stored by an older build is admitted, not papered over', as
   ).toBeVisible();
 
   await page.getByRole('button', { name: 'Switch to Follow voice', exact: true }).click();
+  // The store changes before the save is awaited, so the readout alone would
+  // pass on a way back that never reached the backend.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.some(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
+              ?.stageBehavior?.promptMode === 'voice',
+        ),
+      ),
+    )
+    .toBe(true);
   await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
   await expect(page.getByText(/takes no longer open in it/)).toHaveCount(0);
 });
