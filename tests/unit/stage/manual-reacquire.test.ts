@@ -489,14 +489,16 @@ describe('switching following off holds the document', () => {
       12_100,
     );
     const trace = coast(engine, 12_100, 13_000);
-    expect(trace.some((f) => f.reanchored)).toBe(true);
+    const landing = trace.find((f) => f.reanchored);
+    expect(landing).toBeDefined();
 
     const destination = map.sampleMotionPath(unit)?.scrollPx ?? 0;
     expect(Math.abs(engine.controller.state.q - destination)).toBeLessThan(map.linePitchPx);
 
-    const landed = engine.controller.state.q;
+    // From the landing frame on, through the whole of the snapshot's
+    // prediction window: the display path creeps, the document does not.
     coast(engine, 13_000, 16_000);
-    expect(engine.controller.state.q).toBeCloseTo(landed, 1);
+    expect(engine.controller.state.q).toBeCloseTo(landing!.scrollPx, 1);
   });
 
   it('leaves a hand-scrolled document where the hand left it when the echo comes back', () => {
@@ -531,6 +533,54 @@ describe('switching following off holds the document', () => {
     expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
     // Spent, not parked: nothing is left over to land when following returns.
     expect(engine.transitions.active).toBeNull();
+  });
+
+  it('recognises the echo across a pixel of rounding at a line boundary', () => {
+    // The renderer reads the reading line off the PAINTED position, which is
+    // snapped to the pixel grid; the plant is not. Half a pixel past a line's
+    // bottom, the two name neighbouring lines.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    const reported = map.lines.find((line) => line.firstTokenIndex >= 60)!;
+    const handPx = reported.bottomY + 0.5 - map.readingLineStartY;
+    engine.manualOverride(handPx, 12_100, reported.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+    engine.receiveSnapshot(
+      snapshotAt(reported.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: reported.firstTokenIndex,
+      }),
+      12_400,
+    );
+
+    const trace = coast(engine, 12_400, 13_400);
+    expect(trace.some((f) => f.reanchored)).toBe(false);
+    expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
+  });
+
+  it('still moves to the first measured line when the reading mark is above it', () => {
+    // Above the measured window is not "on its first line". Taking it for one
+    // swallowed a jump to that line entirely.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    engine.setPaused(true, 0);
+    const first = map.lines[0]!;
+    expect(engine.controller.state.q + map.readingLineStartY).toBeLessThan(first.topY);
+
+    engine.receiveSnapshot(
+      snapshotAt(first.firstTokenIndex, 100, {
+        decision: 'manualAnchor',
+        confirmedToken: first.firstTokenIndex,
+      }),
+      100,
+    );
+    const trace = coast(engine, 100, 1100);
+    expect(trace.some((f) => f.reanchored)).toBe(true);
+    const destination = map.sampleMotionPath(first.spokenUnitStart)?.scrollPx ?? 0;
+    expect(Math.abs(engine.controller.state.q - destination)).toBeLessThan(map.linePitchPx);
   });
 
   it('does not take a move back once the transport has taken the document again', () => {

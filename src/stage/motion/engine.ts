@@ -43,6 +43,7 @@ import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
   type AlignmentDecision,
   type AlignmentSnapshot,
+  type RenderedLine,
   type SmoothFollowProfile,
   type StageMotionAck,
   type StageMotionState,
@@ -1558,20 +1559,35 @@ export function createStageMotionEngine(
 
   /** Scroll position that places a transition's destination at the reading line. */
   /**
+   * The line under the reading mark at `scrollPx`: the line the mark is on, or
+   * the next one down.
+   *
+   * The same answer `readingAnchorToken` gives on the renderer side, guards and
+   * all. A mark above the first MEASURED line is not on that line — on a
+   * virtualized script the map only covers the rendered window — so it answers
+   * nothing rather than the nearest line it happens to have.
+   */
+  function lineUnderReadingMark(scrollPx: number): RenderedLine | null {
+    if (!map) return null;
+    const readingY = scrollPx + map.readingLineStartY;
+    const first = map.lines[0];
+    if (!first || readingY < first.topY) return null;
+    return map.lines.find((line) => line.bottomY >= readingY) ?? null;
+  }
+
+  /**
    * Is the line a directive lands on the one under the reading mark already?
    *
-   * The same question `readingAnchorToken` answers on the renderer side, and
-   * answered the same way — the line the mark is on, or the next one down — so
-   * a token the renderer reported from the reading line is recognised here as
-   * being on it.
+   * The renderer reported its token against the PAINTED position, which is the
+   * plant snapped to the device-pixel grid, so on a line boundary the two can
+   * name neighbouring lines. A pixel either side counts as the same place.
    */
   function alreadyOnReadingLine(directive: StageTransitionDirective): boolean {
     if (!map || !map.valid) return false;
     const target = map.lineForToken(directive.destinationTokenIndex);
     if (!target) return false;
-    const readingY = controller.state.q + map.readingLineStartY;
-    const reading = map.lines.find((line) => line.bottomY >= readingY);
-    return reading !== undefined && reading.lineId === target.lineId;
+    const q = controller.state.q;
+    return [q - 1, q, q + 1].some((y) => lineUnderReadingMark(y)?.lineId === target.lineId);
   }
 
   function destinationScrollPx(
@@ -2720,10 +2736,22 @@ export function createStageMotionEngine(
       const realizedTargetPxS = dtMs > 0 ? ((targetPx - lastTarget) * 1000) / dtMs : 0;
       const boundedFeedForward = Math.max(0, Math.min(feedForward, realizedTargetPxS));
 
+      /*
+       * §48, the hold made whole. Zeroed velocity limits stop the plant being
+       * DRIVEN toward an alignment target, but not §29.3's rest deadband from
+       * snapping it onto one that is creeping past — and a fresh snapshot's
+       * display path creeps for as long as its prediction runs. Every manual
+       * move answered while following is off is such a snapshot (#275), so the
+       * document crept on a third of a line after each one. Paused, the plant
+       * aims where it already is; the operator's own transport is the one
+       * target that still drives it. The reported `targetPx` is left alone: it
+       * is how the renderer tells a look from a move after a wheel gesture.
+       */
+      const held = frozen || (paused && !operatorMandate);
       const step = controller.step({
         dtMs,
-        targetPx: frozen ? controller.state.q : targetPx,
-        feedForwardVelocityPxS: frozen ? 0 : boundedFeedForward,
+        targetPx: held ? controller.state.q : targetPx,
+        feedForwardVelocityPxS: held ? 0 : boundedFeedForward,
         limits,
         allowRest: true,
       });
