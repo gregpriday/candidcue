@@ -48,6 +48,23 @@ import {
   type SttFrame,
 } from './stt/local';
 
+/**
+ * The most audio held for a recogniser that is still loading: 4 s of 100 ms
+ * frames.
+ *
+ * Bounded by the Rust session's own queue, `AUDIO_QUEUE_FRAMES` (50) in
+ * `speech/session.rs`, not by memory. The backlog is pushed in one burst the
+ * moment the session opens, and anything beyond that queue is dropped there
+ * and reported to the presenter as a stall. Forty fits even if the worker has
+ * not taken a single frame yet, with room left for live frames behind it.
+ *
+ * A load takes about 1.2 s and the worst the logs have recorded is 5.2 s, so
+ * this is only ever reached in that tail. There the OLDEST frames go: the
+ * recogniser gets a contiguous stream that runs up to the present rather than
+ * an opening with a hole torn in it.
+ */
+export const PRE_ROLL_MAX_FRAMES = 40;
+
 /** Timer seam so tests drive a virtual clock instead of waiting. */
 export interface PipelineTimers {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -269,6 +286,22 @@ export class VoiceSessionPipeline {
   }
   /** Frames handed to Rust this session; traced, not merely counted. */
   private framesSent = 0;
+  /**
+   * Frames captured while `start()` waits for the recogniser, in order.
+   *
+   * Capture opens as soon as the microphone does, and `start_transcription`
+   * can spend over a second loading the model before it returns a generation
+   * to push to. The presenter is already talking by then, and those are the
+   * words that place the first lock, so they are held here rather than
+   * dropped and handed over the moment the session exists.
+   *
+   * Only while `holdingFrames` is set, which `start()` owns: a frame arriving
+   * with no session for any other reason is still skipped, and still traced.
+   */
+  private preRoll: string[] = [];
+  private holdingFrames = false;
+  /** Oldest frames shed because the load outlasted `PRE_ROLL_MAX_FRAMES`. */
+  private preRollShed = 0;
   /** True once this session has reached `connected` at least once. */
   private hasConnected = false;
   private deviceManager: MicrophoneDeviceManager | null = null;
@@ -330,17 +363,39 @@ export class VoiceSessionPipeline {
       const stream = await this.acquireMicrophone(this.preferredDeviceId);
       trace('microphone', 'stream acquired');
 
+      /*
+       * CAPTURE FIRST, THEN THE RECOGNISER (#257).
+       *
+       * `start_transcription` loads the model when it is not resident, which
+       * takes over a second on the first take after launch and the first after
+       * a model change. Capture used to wait for it, so the microphone sat open
+       * for that second recording nothing, and the presenter's opening words —
+       * the ones that place the first lock — were never heard at all. The
+       * frames captured meanwhile are held (`preRoll`) and handed over the
+       * moment the session has a generation to stamp them with.
+       */
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       this.audioOriginMs = this.now();
+      this.holdingFrames = true;
+      await this.startCapture(stream);
+      trace('capture', `started at ${this.capture?.contextSampleRate ?? 0} Hz`);
+
+      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
+      // Assigned before the epoch check below, so a stop that landed during the
+      // load still has a generation for the catch to close.
       this.transportGeneration = await startTranscription();
       trace('session', `transport ${this.transportGeneration} on the bundled recogniser`);
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
-      await this.startCapture(stream);
-      trace('capture', `started at ${this.capture?.contextSampleRate ?? 0} Hz`);
+      // In the same turn as the assignment above, with no await between them:
+      // a frame captured after this point cannot be chained ahead of the
+      // backlog it follows.
+      this.releasePreRoll(this.transportGeneration);
     } catch (err) {
       trace('start-failed', err instanceof Error ? err.message : 'unknown');
       this.running = false;
+      // Audio held for a session that will now never open belongs to nobody.
+      this.dropPreRoll();
       // A session opened and then abandoned bills for audio nobody is reading,
       // so it is closed on every failure after it exists — including the one
       // where capture is what failed.
@@ -423,6 +478,7 @@ export class VoiceSessionPipeline {
     this.clearPauseTimer();
     this.paused = true;
     this.lifecycle += 1;
+    this.dropPreRoll();
     await this.closeSession();
     await this.teardownAudio();
     this.running = false;
@@ -434,6 +490,7 @@ export class VoiceSessionPipeline {
     this.stopped = true;
     this.running = false;
     this.lifecycle += 1;
+    this.dropPreRoll();
     this.clearPauseTimer();
     this.stopDeviceWatch?.();
     this.stopDeviceWatch = null;
@@ -771,20 +828,59 @@ export class VoiceSessionPipeline {
      */
     if (frameHasSignal(samples)) this.lastPcmSignalAtMs = Date.now();
     const generation = this.transportGeneration;
+    if (generation === null && this.holdingFrames && !this.paused && !this.stopped) {
+      this.holdFrame(encodePcm16(samples));
+      return;
+    }
     if (generation === null || this.paused || this.stopped) {
       // Silence with a cause is the thing worth naming: an unforwarded frame
       // is indistinguishable downstream from a presenter who said nothing.
       if (this.framesSent === 0 && !this.stopped) trace('frame-skipped', this.frameSkipReason());
       return;
     }
+    this.sendFrame(generation, encodePcm16(samples));
+  }
+
+  private sendFrame(generation: number, chunk: string): void {
     this.framesSent += 1;
     if (this.framesSent === 1 || this.framesSent % 50 === 0) {
       trace('audio', `${this.framesSent} frames sent (${this.framesSent / 10}s)`);
     }
-    const chunk = encodePcm16(samples);
     this.sendChain = this.sendChain
       .then(() => pushTranscriptionAudio(generation, chunk))
       .catch(() => {});
+  }
+
+  /** Keep one frame for the session `start()` is still opening. */
+  private holdFrame(chunk: string): void {
+    this.preRoll.push(chunk);
+    if (this.preRoll.length > PRE_ROLL_MAX_FRAMES) {
+      this.preRoll.shift();
+      this.preRollShed += 1;
+    }
+  }
+
+  /** Send the held frames to the session that now exists, oldest first. */
+  private releasePreRoll(generation: number): void {
+    const held = this.preRoll;
+    const shed = this.preRollShed;
+    this.dropPreRoll();
+    trace(
+      'pre-roll',
+      `${held.length} frames held for the recogniser (${held.length / 10}s)` +
+        (shed > 0 ? `, ${shed} oldest shed` : ''),
+    );
+    for (const chunk of held) this.sendFrame(generation, chunk);
+    // Audio the recogniser will never hear, which is what this callback
+    // reports whichever side of the IPC edge it was lost on.
+    if (shed > 0) this.deps.onAudioDropped?.(shed);
+  }
+
+  /** Stop holding, and forget anything held. */
+  private dropPreRoll(): void {
+    this.holdingFrames = false;
+    this.preRoll = [];
+    this.preRollShed = 0;
   }
 
   /**

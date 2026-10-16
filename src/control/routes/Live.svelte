@@ -43,7 +43,6 @@ import { onShortcut } from '../lib/shortcuts';
     switchPresentationMode,
   } from '../services/control-window';
   import { describeError } from '../services/errors';
-  import { preloadSpeechEngine } from '../services/stt/local';
   import { getVoiceFacade } from '../services/voice-facade';
   import { pendingConfirm, requestConfirm } from '../stores/confirm';
   import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
@@ -158,19 +157,6 @@ import { onShortcut } from '../lib/shortcuts';
   $effect(() => {
     if (!micRecoveryOffered) return;
     void refreshMicInputs();
-  });
-
-  /*
-   * Warm the recogniser as soon as this screen exists.
-   *
-   * Loading the model costs ~200 ms, and the one moment it must not be spent is
-   * the top of a take — the presenter has already started talking by the time a
-   * session is armed, and those are the words that place the first lock.
-   * Idempotent, and a failure here is not worth a toast: starting a take
-   * surfaces the same error where it can actually be acted on.
-   */
-  $effect(() => {
-    void preloadSpeechEngine().catch(() => {});
   });
 
   /**

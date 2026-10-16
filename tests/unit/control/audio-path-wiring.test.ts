@@ -148,6 +148,22 @@ describe('provider frames reach the aligner', () => {
     expect(acquire).toBeGreaterThan(-1);
     expect(subscribe).toBeLessThan(acquire);
   });
+
+  it('the PCM tap opens before the recogniser is asked for a session', () => {
+    /*
+     * #257. `startTranscription()` loads the model when it is not resident —
+     * over a second on the first take after launch — and capture used to wait
+     * for it, so the opening words were never recorded at all. The pipeline's
+     * own suite (`voice-pre-roll.test.ts`) proves the held frames arrive; this
+     * pins the order that makes there be any to hold.
+     */
+    const body = code(PIPELINE);
+    const capture = body.indexOf('await this.startCapture(stream)');
+    const transport = body.indexOf('await startTranscription()');
+    expect(capture).toBeGreaterThan(-1);
+    expect(transport).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(transport);
+  });
 });
 
 describe('the trace has call sites, not just a module', () => {
@@ -171,6 +187,7 @@ describe('the trace has call sites, not just a module', () => {
     ['capture start', PIPELINE, /trace\('capture'/],
     ['audio frames leaving', PIPELINE, /trace\('audio'/],
     ['frames NOT leaving', PIPELINE, /trace\('frame-skipped'/],
+    ['frames held for a loading recogniser', PIPELINE, /trace\(\s*'pre-roll'/],
     ['every inbound provider frame', PIPELINE, /trace\(\s*`rx:\$\{frame\.kind\}`/],
     ['a frame dropped by generation', PIPELINE, /trace\('rx-dropped'/],
     ['a duplicated final', PIPELINE, /trace\('final-duplicate'/],

@@ -21,6 +21,7 @@ const calls = vi.hoisted(() => ({
   setPresentingPhase: vi.fn(),
   showToast: vi.fn(),
   patchSettings: vi.fn(),
+  preloadSpeechEngine: vi.fn(),
 }));
 
 const editorState = vi.hoisted(() => ({
@@ -97,6 +98,9 @@ vi.mock('../../../src/control/stores/settings', async () => {
 });
 vi.mock('../../../src/control/services/voice-facade', () => ({
   getVoiceFacade: () => ({ listMicrophones: async () => micState.devices }),
+}));
+vi.mock('../../../src/control/services/stt/local', () => ({
+  preloadSpeechEngine: calls.preloadSpeechEngine,
 }));
 
 // Present may enumerate displays to resolve the selected panel's optical
@@ -262,6 +266,7 @@ beforeEach(() => {
   calls.awaitViewportSettled.mockResolvedValue(undefined);
   calls.painted.mockResolvedValue(undefined);
   calls.patchSettings.mockResolvedValue(undefined);
+  calls.preloadSpeechEngine.mockResolvedValue(undefined);
   stageCalls.listDisplays.mockResolvedValue([]);
 
   for (const [name, fn] of Object.entries(stageCalls)) {
@@ -299,6 +304,48 @@ describe('single-window Present', () => {
       if (name !== 'listDisplays') expect(fn).not.toHaveBeenCalled();
     }
   });
+
+  /**
+   * The recogniser starts loading while the take is still being built (#257).
+   *
+   * A cold load is over a second, and the voice pipeline is the last thing a
+   * take starts. The compile and the window taking the display are time the
+   * load can run in rather than time the presenter spends talking ahead of it.
+   */
+  it('starts loading the recogniser before the compile, not when the session goes live', async () => {
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    expect(calls.preloadSpeechEngine).toHaveBeenCalledOnce();
+    const preloadAt = calls.preloadSpeechEngine.mock.invocationCallOrder[0]!;
+    expect(preloadAt).toBeLessThan(calls.compileScript.mock.invocationCallOrder[0]!);
+    expect(preloadAt).toBeLessThan(calls.enterPresentation.mock.invocationCallOrder[0]!);
+    expect(preloadAt).toBeLessThan(calls.startLiveSession.mock.invocationCallOrder[0]!);
+  });
+
+  it('does not wait for the load', async () => {
+    calls.preloadSpeechEngine.mockReturnValue(new Promise(() => {}));
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.startLiveSession).toHaveBeenCalledOnce();
+  });
+
+  it('presents anyway when the preload fails, leaving the error to the take', async () => {
+    calls.preloadSpeechEngine.mockRejectedValue({ code: 'STT_MODEL_NOT_INSTALLED' });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.startLiveSession).toHaveBeenCalledOnce();
+    expect(calls.showToast).not.toHaveBeenCalled();
+  });
+
+  for (const mode of ['manual', 'fixed'] as const) {
+    it(`does not load a recogniser for a ${mode} take, which never starts one`, async () => {
+      const base = defaultAppSettings();
+      settingsState.value = { ...base, general: { ...base.general, defaultSessionMode: mode } };
+
+      await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+      expect(calls.startLiveSession).toHaveBeenCalledWith(expect.objectContaining({ mode }));
+      expect(calls.preloadSpeechEngine).not.toHaveBeenCalled();
+    });
+  }
 
   /**
    * THE ORDER IS THE FIX.

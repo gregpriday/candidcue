@@ -157,9 +157,10 @@ async fn off_the_runtime<R: tauri::Runtime, T: Send + 'static>(
 
 /// Load the model without starting a take.
 ///
-/// Worth calling when the presenter opens the live view: loading takes over a
-/// second and belongs anywhere except the top of a take, where the presenter
-/// has already started talking. Idempotent.
+/// `startTake` calls it while it builds a voice take, so the load runs under
+/// the compile and the window move rather than at the top of the take, where
+/// the presenter has already started talking. A load takes over a second.
+/// Idempotent.
 #[tauri::command]
 pub async fn preload_speech_engine<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
