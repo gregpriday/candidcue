@@ -1220,8 +1220,10 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
   });
 
   it('joins a word across formatting on a later line, as on the first', () => {
-    const quoted = compile('> One line\n> **Candid**Cue today.\n', OPTS);
-    const single = compile('**Candid**Cue today.\n', OPTS);
+    // `Candid` ends a text node that started on line one; only an exact map
+    // lets it join the bold `Cue` after it.
+    const quoted = compile('> One line\n> and Candid**Cue** today.\n', OPTS);
+    const single = compile('and Candid**Cue** today.\n', OPTS);
     expect(normalizedWords(quoted).slice(2)).toEqual(normalizedWords(single));
     expect(normalizedWords(quoted)).toContain('candidcue');
   });
