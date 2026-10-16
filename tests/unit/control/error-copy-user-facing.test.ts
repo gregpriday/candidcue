@@ -769,8 +769,9 @@ describe('the model download is the remedy, not a reinstall', () => {
 /**
  * #261 — a refused model address used to blame the release. The url is compiled
  * in, and the fake-IP and NAT64 answers ordinary networks give it are accepted
- * now, so the only thing left that can point it somewhere private is the
- * network: that is where the copy has to send the reader.
+ * now, so what usually trips this is the network pointing the name somewhere
+ * private: that is the remedy the copy has to offer. It names no single cause,
+ * because a broken redirect chain is refused under the same code.
  */
 describe('a refused model address points at the network, not the release', () => {
   it('advises on the network and never blames the release', () => {

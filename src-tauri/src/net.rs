@@ -406,7 +406,7 @@ where
     }
 
     // Pin only for DNS names: an IP-literal host needs no override, and reqwest
-    // would reject one anyway.
+    // never consults one for it anyway.
     Ok(Hop {
         url: url.clone(),
         addrs: if literal.is_none() { addrs } else { Vec::new() },
@@ -547,9 +547,12 @@ mod tests {
             "64:ff9b::6440:1",
             "64:ff9b::",
             "64:ff9b::c612:5",
-            // Outside the exact /96: RFC 8215 local-use, and a near miss.
+            // Outside the exact /96: RFC 8215 local-use, and a near miss in
+            // each of the other segments the prefix requires to be zero.
             "64:ff9b:1::808:808",
             "64:ff9b:1:abcd::808:808",
+            "64:ff9b:0:1::808:808",
+            "64:ff9b::1:0:808:808",
             "64:ff9b::1:808:808",
         ] {
             let ip: IpAddr = raw.parse().unwrap();

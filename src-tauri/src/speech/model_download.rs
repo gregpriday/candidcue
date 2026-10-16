@@ -79,9 +79,11 @@ pub const MODEL_HOP_LABELS: net::HopLabels = net::HopLabels {
     insecure_code: "STT_MODEL_URL_INSECURE",
     insecure_message: "Speech models can only be downloaded over https.",
     blocked_code: "STT_MODEL_URL_BLOCKED",
-    // The url is compiled in and fake-IP and NAT64 answers are accepted, so
-    // what is left to refuse is a network pointing the name somewhere private.
-    blocked_message: "The speech model's download address led somewhere other than a public server, so it was refused. Check your DNS, VPN or network settings, or try another network.",
+    // Not the release: the url is compiled in, and fake-IP and NAT64 answers
+    // are accepted. Mostly what is left is a network pointing the name
+    // somewhere private, but a malformed or endless redirect chain is refused
+    // under this code too, so the copy names no single cause.
+    blocked_message: "CandidCue could not safely follow the speech model's download address, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.",
     unreachable_code: "STT_MODEL_DOWNLOAD_FAILED",
     unreachable_message:
         "The speech model could not be downloaded. Check your connection and try again.",
@@ -1961,10 +1963,10 @@ mod tests {
     }
 
     #[test]
-    fn every_model_download_is_digest_pinned() {
+    fn the_model_hop_policy_is_digest_pinned() {
         // The relaxed address rule is only sound because `install` verifies
-        // every candidate against the catalogue digest; this is the one policy
-        // the model manager hands it.
+        // every candidate against the catalogue digest. The model manager's
+        // use of this policy is held by its own tripwire.
         assert_eq!(hop_policy().addresses, net::AddressRule::PublicOrSynthesised);
         assert_eq!(hop_policy().labels.blocked_code, "STT_MODEL_URL_BLOCKED");
     }

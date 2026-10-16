@@ -579,4 +579,19 @@ mod tests {
         let err = entry_for("not-a-model").expect_err("unknown id");
         assert_eq!(err.code(), "STT_MODEL_UNKNOWN");
     }
+
+    /// A tripwire, not a proof: `run_install` needs a live app to call, and
+    /// handing it `HopPolicy::strict` again would bring #261 back — no model on
+    /// a NAT64 network or behind a fake-IP proxy — with every downloader test
+    /// still green, because those build their own policy.
+    #[test]
+    fn installs_use_the_digest_pinned_model_policy() {
+        let source = include_str!("model_manager.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("source before the test module");
+        assert!(production.contains("model_download::hop_policy()"));
+        assert!(!production.contains("HopPolicy::"), "a policy built here bypasses hop_policy()");
+    }
 }
