@@ -586,11 +586,11 @@ mod tests {
     /// still green, because those build their own policy.
     #[test]
     fn installs_use_the_digest_pinned_model_policy() {
-        let source = include_str!("model_manager.rs");
-        let production = source
-            .split("#[cfg(test)]\nmod tests")
-            .next()
-            .expect("source before the test module");
+        // Split on the attribute alone, so a CRLF checkout cannot miss the
+        // boundary and hand back the whole file, test literals and all.
+        let (production, _) = include_str!("model_manager.rs")
+            .split_once("#[cfg(test)]")
+            .expect("the test module's attribute");
         assert!(production.contains("model_download::hop_policy()"));
         assert!(!production.contains("HopPolicy::"), "a policy built here bypasses hop_policy()");
     }
