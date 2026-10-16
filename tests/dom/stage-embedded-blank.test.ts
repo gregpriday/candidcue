@@ -4,11 +4,11 @@
  * ---------------------------------------------------------------------------
  * WHY THIS NEEDS A MOUNTED STAGE
  * ---------------------------------------------------------------------------
- * Single-window presentation mounts `StageApp` at stage generation 0, where
- * `sendDirective` is an intentional no-op — there is no separate window's IPC
- * to reach. `toggleBlankStage` kept the session store's own `stageBlanked`
- * correct regardless, but nothing carried it across the embedded bridge, so
- * the operator's own switch did nothing on the one screen most people use.
+ * Single-window presentation mounts `StageApp` inside the control window, so
+ * there is no separate window's IPC to reach. `toggleBlankStage` kept the
+ * session store's own `stageBlanked` correct, but nothing carried it across the
+ * embedded bridge, so the operator's own switch did nothing on the one screen
+ * most people use.
  *
  * `app.blanked` gates six surfaces, not one (script visibility, the
  * motion/render loop, the ack chip, hold status, the transcript tap and the

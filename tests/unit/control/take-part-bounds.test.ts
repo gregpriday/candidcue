@@ -19,9 +19,6 @@ import type { AlignmentSnapshot, CompiledScript } from '../../../src/shared/cont
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
-  getStageStatus: vi.fn(async () => ({ exists: false })),
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
@@ -88,12 +85,8 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
-const { clearSession, session, setStageEmitterForTesting, startLiveSession, stopSession } =
+const { clearSession, session, startLiveSession, stopSession } =
   await import('../../../src/control/stores/session');
 
 type TakePart = NonNullable<import('../../../src/control/stores/session').SessionState['part']>;
@@ -158,7 +151,6 @@ function present(part: TakePart | null, nextPart: TakePart | null = null): void 
     startTokenIndex: part?.startTokenIndex ?? 0,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: 4,
     sessionGeneration: 7,
     transcriptRetained: false,
     part,
@@ -202,12 +194,10 @@ beforeEach(() => {
   driverCalls.length = 0;
   deliverSnapshot = null;
   seq = 0;
-  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(() => {
   clearSession();
-  setStageEmitterForTesting(null);
   vi.useRealTimers();
 });
 

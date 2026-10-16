@@ -935,8 +935,7 @@
            * `buildStageEnvelope` omits it exactly when the payload belongs to no
            * take, and the Settings appearance preview is the only caller that
            * does so. That preview opens a REAL stage window and publishes a REAL
-           * envelope, but nothing ever heartbeats it — `startStageBridge` is a
-           * take-only path the preview never enters. Arming on any envelope
+           * envelope, but nothing ever heartbeats it. Arming on any envelope
            * therefore put "Control stopped responding" on the glass five seconds
            * into a preview that control was alive and actively driving, which is
            * the stage lying to the presenter: the one failure this disclosure

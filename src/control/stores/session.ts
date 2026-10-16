@@ -2,7 +2,7 @@
  * Live session store (spec §15, §45.2 RealtimeStore/TrackingStore facade for
  * the Live screen). Owns session identity, the alignment feed, the realtime
  * voice pipeline, §15.3 pause semantics, the elapsed clock, the transcript
- * tail, stage heartbeats (§43.5), and the F.17 summary.
+ * tail, and the F.17 summary.
  *
  * Note what this store no longer does: it does not carry motion to the stage.
  * The alignment engine publishes snapshots to the stage directly from Rust, so
@@ -16,24 +16,11 @@ import type {
   OutlineNode,
   SentenceUnit,
   StageAutoScrollPayload,
-  StageDirective,
-  StageEscapePayload,
-  StageIntentPayload,
-  StageLayoutErrorPayload,
   StageSessionEnvelope,
   StageSettings,
   TranscriptionConfig,
 } from '../../shared/contracts';
-import {
-  STAGE_EVENT,
-  CONTROL_EVENT,
-  STAGE_TRANSCRIPT_TAP_WORDS,
-} from '../../shared/contracts';
-import type {
-  AlignmentSnapshot,
-  StageTranscriptTapPayload,
-  StageVoicePillPayload,
-} from '../../shared/contracts';
+import type { AlignmentSnapshot, StageVoicePillPayload } from '../../shared/contracts';
 import {
   initialVoicePillState,
   reduceVoicePillLevel,
@@ -63,7 +50,7 @@ import { isTauriRuntime } from '../services/ipc';
 import { describeError, errorCode } from '../services/errors';
 import { trace } from '../services/audio-trace';
 import * as stageService from '../services/stage';
-import { monotonicNowMs, subscribeStageMotionAcks } from '../services/stage-acks';
+import { monotonicNowMs } from '../services/stage-acks';
 import { FIRST_TAKE_PASS_ORDINAL, takePassIdFor } from '../../shared/take-pass';
 import type { MediaStreamLike } from '../services/audio';
 import {
@@ -76,7 +63,6 @@ import {
   AUTO_SCROLL_DEFAULT_WPM,
   AUTO_SCROLL_MAX_WPM,
   AUTO_SCROLL_MIN_WPM,
-  AUTO_SCROLL_WPM_STEP,
   clampAutoScrollWpm,
 } from '../../stage/renderer/autoscroll';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
@@ -91,8 +77,6 @@ import { clearConditionToasts, dismissToastByKey, showToast } from './toasts';
  * once per stall, and cleared with the take.
  */
 const TOAST_AUDIO_DROPPED = 'audio-dropped';
-/** §64: the stage is receiving snapshots and not applying them. */
-const TOAST_STAGE_NOT_APPLYING = 'stage-not-applying';
 /**
  * §28.2: the take is running on an input the operator did not choose.
  *
@@ -107,30 +91,6 @@ import { compiled as compiledStore } from './compiled';
 import { saveNow } from './editor';
 
 export type PauseKind = 'none' | 'listening' | 'hard';
-
-
-/**
- * A window-layer failure reported on `stage://error` (§52.7).
- *
- * The one that actually happens is `STAGE_DISPLAY_MISMATCH`: the stage was
- * asked for a monitor and opened on a different one. Nothing is broken — the
- * script is prompting perfectly — it is just prompting at the wrong wall, which
- * is the single most expensive thing to discover after the take has started.
- *
- * `code` is kept as an open string on purpose. This channel has now silently
- * dropped two different classes of payload; the store must be able to surface a
- * code it has never heard of rather than discard it, so an unrecognised code
- * still becomes a notice with whatever message the window layer sent.
- */
-export interface StageWindowFault {
-  code: string;
-  message: string;
-  /** The display the operator picked, when the payload names one. */
-  requestedFingerprint: string | null;
-  /** The display the stage actually landed on, when the payload names one. */
-  actualFingerprint: string | null;
-  atMs: number;
-}
 
 export interface SessionCounts {
   jumps: number;
@@ -198,67 +158,6 @@ export interface SessionSummary {
   wordsFollowed: number;
   /** Script length, so `wordsFollowed` has something to be a fraction of. */
   scriptWords: number;
-  /**
-   * Position updates SENT to the stage, and the number it reported applying.
-   *
-   * The two numbers above are both measured on the control side, and they
-   * agreed perfectly through a take where the script never moved: the aligner
-   * followed nine words, control counted nine words, and the glass sat still.
-   * Nothing on this card could distinguish "the aligner lost you" from "the
-   * aligner followed you and the stage discarded every update", which are
-   * unrelated faults with one symptom.
-   *
-   * `stageApplied` is null when the stage never reported — a browser-dev
-   * session, or one that ended before the first heartbeat ack came back — and
-   * that is stated rather than shown as zero, which would read as a fault.
-   */
-  updatesSent: number;
-  stageApplied: number | null;
-  /**
-   * How far the document actually travelled on the glass, in CSS pixels, and
-   * how far the motion controller was aiming to travel. Null when the stage
-   * never reported a frame.
-   *
-   * These are the only numbers in the summary measured on the STAGE. Everything
-   * else is control's own bookkeeping, which is why a take could report perfect
-   * health along every row and still never have moved a pixel.
-   */
-  documentTravelPx: number | null;
-  targetTravelPx: number | null;
-  /**
-   * Recogniser text control was handed, and how much of it reached the stage.
-   *
-   * The stage's transcript bar is the instrument that answers "is it hearing
-   * me", and it read "listening — no words yet" through a take that heard
-   * eleven words. Four separate guards in `publishTranscriptTap` can drop the
-   * text before it is emitted, all silently, and an emitted tap with empty text
-   * looks identical on the glass to one that was never sent. These three
-   * numbers separate all of it: seen but not emitted is control's fault and
-   * `transcriptTapFault` names which guard; emitted but not shown is the
-   * stage's.
-   */
-  transcriptTapsSeen: number;
-  transcriptTapsEmitted: number;
-  transcriptTapFault: string | null;
-  /**
-   * Was there a separate stage WINDOW to hear back from at all?
-   *
-   * Three rows above — stage updates, document travel and the transcript relay
-   * — are measured across the control→stage window bridge, and that bridge only
-   * exists when the stage has its own window. Single-window presentation runs
-   * at stage generation 0, where `startStageBridge` returns immediately:
-   * directives are a deliberate no-op, no motion acks arrive, and no transcript
-   * taps are emitted. Every one of those counters therefore reads zero or null
-   * on a perfectly healthy embedded take, and the summary presented all three
-   * as faults — "the stage did not report back", "the stage did not report a
-   * position", "words were heard but never offered to the stage" — on the
-   * configuration most takes actually run in.
-   *
-   * So the summary needs to know whether silence on that bridge was expected.
-   * The generation number itself stays private: what the summary is entitled to
-   * ask is "should there have been telemetry", not "which window was it".
-   */
-  stageTelemetryExpected: boolean;
   /**
    * Where this take stopped, and the start of the section it stopped in
    * (CCUX-008, CCUX-016).
@@ -419,19 +318,6 @@ export interface SessionState {
    * instruction defect §115 was filed about.
    */
   usingFallbackInput: boolean;
-  /**
-   * False once the stage window is gone (§62). Everything that publishes to the
-   * stage stands down; the UI must say so rather than keep offering controls
-   * that write into the void.
-   */
-  stageAlive: boolean;
-  /**
-   * §52.7 window-layer failure — the stage on the wrong display, or any other
-   * code the window layer reports. Null until something goes wrong, and
-   * dismissable: there is no in-session repair, only "now you know, and here
-   * is how to see which panel is which".
-   */
-  stageWindowFault: StageWindowFault | null;
   snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
   /**
@@ -537,8 +423,6 @@ const initial: SessionState = {
   micState: 'live',
   inputDeviceLost: false,
   usingFallbackInput: false,
-  stageAlive: true,
-  stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
   heardAnything: false,
@@ -573,14 +457,6 @@ let driver: TrackingDriver | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
 let pipeline: VoiceSessionPipeline | null = null;
 let compiledScript: CompiledScript | null = null;
-let stageGeneration = 0;
-/**
- * Did THIS take have a separate stage window to hear back from?
- *
- * Separate from `stageGeneration` because that one is reset to 0 when the stage
- * closes; see where this is latched in `startLiveSession`.
- */
-let stageTelemetryExpected = false;
 /**
  * How many times this take has been told its chosen input was busy.
  *
@@ -654,43 +530,6 @@ let stageDisplay: DisplayDescriptor | null = null;
  * the range the operator was offered is the range they keep.
  */
 let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-let heartbeatRevision = 0;
-let stageEventUnlisteners: Array<() => void> = [];
-/**
- * The stage's CURRENT layout generation, learned from its motion acks (§7.2,
- * §54).
- *
- * Not `stageGeneration`: that counts stage *windows*, while this counts
- * *line-map rebuilds* inside one window. Motion no longer travels through
- * control, so nothing here stamps it onto a payload any more — it is kept
- * because acks are the one channel carrying the stage's own number, and the
- * §62 recovery UI needs to know which geometry the stage believes it has.
- */
-let stageLayoutGeneration = 0;
-/**
- * Monotonic token for the stage bridge. `listen()` resolves asynchronously, so
- * a stop/restart that happens before it settles must be able to prove that the
- * arriving unlisteners belong to a dead session — otherwise they are installed
- * with no disposer and keep firing into the NEXT session.
- */
-let stageBridgeToken = 0;
-/** The realtime model whose published rate the cost estimate uses. */
-
-/* Smooth-following state (companion §50.1). Fed by the alignment snapshots
- * the stage's own motion reports — see services/stage-acks.ts. */
-/**
- * Session-clock origin for the §26.1 bridge, on the MONOTONIC clock.
- *
- * This is not `startedAtMs` in the store (which is wall time, for display). A
- * frame's `sessionTimeMs` is what the stage measures evidence age against, and
- * `Date.now()` moves: an NTP step backward mid-take inflates every subsequent
- * age and pushes the predictor past its horizon into decay for no reason.
- */
-let sessionStartedAtMs = 0;
-let followProfileId = defaultFollowingSettings().motionProfileId;
-let scriptCompileHash = '';
-let stopMotionAcks: (() => void) | null = null;
 let stopSidecarFeed: (() => void) | null = null;
 
 /**
@@ -896,7 +735,6 @@ export interface StartSessionInput {
   scriptRevision?: number;
   /** From `start_session` — the Rust coordinator assigns it, control adopts. */
   sessionGeneration?: number;
-  stageGeneration?: number;
   /**
    * §36.2: whether the session row was opened with transcript retention on.
    * Fixed at session start in Rust and never re-derived here — a session
@@ -951,37 +789,12 @@ export function startLiveSession(input: StartSessionInput): string {
   stopInternals();
   const sessionId = input.sessionId ?? newSessionId();
   compiledScript = input.compiled ?? null;
-  stageGeneration = input.stageGeneration ?? 0;
-  /*
-   * Latched at the START of the take, and deliberately never updated.
-   *
-   * `stageGeneration` is mutable: `handleStageClosed` resets it to 0 when the
-   * stage window goes away. Reading it at stop time would therefore say "the
-   * stage shared this window" about a take that had a separate stage and LOST
-   * it — hiding the very telemetry that would explain what happened, on the one
-   * take where those rows are worth reading. Whether a bridge was expected is a
-   * fact about how the take was configured, so it is recorded when the take is.
-   */
-  stageTelemetryExpected = (input.stageGeneration ?? 0) !== 0;
   inputFallbackCount = 0;
   sessionGeneration = input.sessionGeneration ?? 0;
-  // Nothing is known about the new stage window's layout until it acks.
-  stageLayoutGeneration = 0;
   transcriptRetained = input.transcriptRetained === true;
   transcriptBuffer = [];
   transcriptEpoch += 1;
   wordsHeard = 0;
-  // §64: both ends of the apply comparison are per-session. `seq` restarts with
-  // the engine, so a count carried across takes would read as a huge backlog on
-  // the first beat of the next one.
-  lastSnapshotSeq = 0;
-  stageAppliedRevision = null;
-  scrollSeenMinPx = Number.POSITIVE_INFINITY;
-  scrollSeenMaxPx = Number.NEGATIVE_INFINITY;
-  targetSeenMinPx = Number.POSITIVE_INFINITY;
-  targetSeenMaxPx = Number.NEGATIVE_INFINITY;
-  stageApplyDivergedAtMs = null;
-  stageApplyReported = false;
   scriptWordCount = input.totalTokens;
   stageSettings = input.stageSettings ?? null;
   stageDisplay = input.stageDisplay ?? null;
@@ -993,10 +806,7 @@ export function startLiveSession(input: StartSessionInput): string {
   takeFontCeilingPx = typeCeilingPx(
     stageSettings?.fontSizePx ?? takeTeleprompter.fontSizePx,
   );
-  heartbeatRevision = 0;
-  resetTranscriptTap();
-  sessionStartedAtMs = monotonicNowMs();
-  scriptCompileHash = input.compiled?.sourceHash ?? '';
+  resetTranscriptCounters();
   // §60: evidence never crosses a take boundary. A fresh watcher is cheaper and
   // more obviously correct than resetting one, and it is the same lifetime as
   // every other take-scoped detector in this store.
@@ -1016,7 +826,6 @@ export function startLiveSession(input: StartSessionInput): string {
 
   // Smooth-following store (§50.1): user-visible following state + §48 actions.
   const following = input.following ?? currentFollowingSettings();
-  followProfileId = following.motionProfileId;
   smoothFollow.beginSession(sessionId, following);
   configureFollowActions(followActions);
   smoothFollow.reportTranscriptStatus(input.mode === 'voice' ? 'live' : 'idle');
@@ -1140,7 +949,7 @@ export function startLiveSession(input: StartSessionInput): string {
       // §29.2 step 9, the half that lives above the pipeline.
       onResetTranscriptState: () => {
         state.update((s) => ({ ...s, transcriptTail: [] }));
-        resetTranscriptTap();
+        resetTranscriptCounters();
       },
       /*
        * The pill's waveform, from the ONE capture the take already owns (§5.3).
@@ -1163,10 +972,6 @@ export function startLiveSession(input: StartSessionInput): string {
         voicePill = { ...voicePill, startedAtMs: monotonicNowMs(), lastFrameAtMs: null };
       },
       onTranscriptText: (text, final) => {
-        // The stage's transcript bar reads from here — straight off the wire,
-        // before anything interprets it — so it stays honest when alignment is
-        // wrong.
-        publishTranscriptTap(text, final);
         // Words coming back is the only evidence that the whole chain works,
         // and it is what turns the pill's dot into a tick. Epoch-checked: a
         // late partial from a superseded transport must not certify this take.
@@ -1575,7 +1380,6 @@ export function startLiveSession(input: StartSessionInput): string {
     }, TRANSCRIPT_FLUSH_INTERVAL_MS);
   }
 
-  startStageBridge(sessionId);
   return sessionId;
 }
 
@@ -1590,7 +1394,7 @@ export function startLiveSession(input: StartSessionInput): string {
  */
 export class StartSequenceError extends Error {
   constructor(
-    readonly step: 'script_save' | 'compile' | 'stage_ack',
+    readonly step: 'script_save' | 'compile',
     message: string,
   ) {
     super(message);
@@ -1599,7 +1403,7 @@ export class StartSequenceError extends Error {
 }
 
 /**
- * Build the §29.2 steps 1–3 gate for this take.
+ * Build the §29.2 steps 1–2 gate for this take.
  *
  * These steps were being performed in `Preflight.svelte` before
  * `startLiveSession` was ever called, which made the ordering true by accident.
@@ -1609,18 +1413,18 @@ export class StartSequenceError extends Error {
  * second entry point — inherits nothing.
  *
  * So each step is expressed as the CHECK it really is. Step 1 flushes, which is
- * a no-op when there is nothing pending. Steps 2 and 3 ask whether the compile
- * is current and the stage has acked, and refuse the start when they are not.
- * Running them a second time therefore costs nothing on the happy path and is
- * the only thing standing between a future caller and a take that starts against
- * a stale script or a stage that never hydrated.
+ * a no-op when there is nothing pending. Step 2 asks whether the compile is
+ * current, and refuses the start when it is not. Running them a second time
+ * therefore costs nothing on the happy path and is the only thing standing
+ * between a future caller and a take that starts against a stale script.
+ *
+ * Step 3, the stage's hydration ack, has no counterpart: the stage renders in
+ * this webview, so there is no second window to wait for.
  */
 function buildStartSequenceGate(input: StartSessionInput): {
   flushScriptSave(): Promise<void>;
   ensureCompiled(): Promise<void>;
-  awaitStageAck(): Promise<void>;
 } {
-  const expectedStageGeneration = input.stageGeneration ?? 0;
   return {
     async flushScriptSave(): Promise<void> {
       // Idempotent: `saveNow` returns immediately when nothing is dirty, and it
@@ -1682,24 +1486,6 @@ function buildStartSequenceGate(input: StartSessionInput): {
         );
       }
     },
-
-    async awaitStageAck(): Promise<void> {
-      // No stage window for this session (browser dev, headless tests): there is
-      // no handshake to insist on, and inventing one would make the store
-      // untestable without a Tauri runtime.
-      if (expectedStageGeneration === 0 || !isTauriRuntime()) return;
-      const status = await stageService.getStageStatus();
-      if (
-        status.stageGeneration !== expectedStageGeneration ||
-        !status.hydrated ||
-        !status.layoutReady
-      ) {
-        throw new StartSequenceError(
-          'stage_ack',
-          'The stage has not finished preparing, so the session cannot start.',
-        );
-      }
-    },
   };
 }
 
@@ -1742,9 +1528,6 @@ function blockIdForToken(token: number): string | null {
  */
 function handleSnapshot(snapshot: AlignmentSnapshot): void {
   const nowMs = monotonicNowMs();
-  // What control has been told, for the §64 comparison against what the stage
-  // has actually applied. See `checkStageApplyingSnapshots`.
-  if (snapshot.seq > lastSnapshotSeq) lastSnapshotSeq = snapshot.seq;
   const blockId = blockIdForToken(snapshot.confirmedToken);
   if (activeTake !== null) {
     // §36.3 sections traversed, per take. `blocksSeen` below is the same fact
@@ -1847,60 +1630,6 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
   smoothFollow.ingestSnapshot(snapshot);
 }
 
-/* ---------------------------------------------------------------------------
- * `stage://semantic-frame` producer (companion §26.1)
- * ------------------------------------------------------------------------- */
-
-/**
- * C2: this event had no producer outside `src/stage/preview.ts`, the in-browser
- * preview driver — so in a packaged build the stage's whole v2 motion engine
- * received nothing and the stage fell back to the degraded tracking-snapshot
- * path for the entire session.
- *
- * Like the heartbeat, this is a direct control → stage `emitTo`, not a Rust
- * command: it is a high-rate motion signal, not a validated document, and the
- * stage's frame receiver is the gate that rejects stale or foreign frames
- * (`StageApp.svelte` feeds it straight to `scriptLayer.pushSemanticFrame`).
- *
- * The `emitTo` binding is resolved once and cached — at 15–30 Hz an `import()`
- * per frame is pure overhead.
- */
-type EmitToFn = (target: string, event: string, payload?: unknown) => Promise<void>;
-let cachedEmitTo: EmitToFn | null = null;
-let emitToPending: Promise<EmitToFn> | null = null;
-
-async function resolveEmitTo(): Promise<EmitToFn> {
-  if (cachedEmitTo) return cachedEmitTo;
-  emitToPending ??= import('@tauri-apps/api/event').then((mod) => {
-    cachedEmitTo = mod.emitTo as unknown as EmitToFn;
-    return cachedEmitTo;
-  });
-  return emitToPending;
-}
-
-/** Testing seam: inject the emitter so the producer is observable in node. */
-export function setStageEmitterForTesting(fn: EmitToFn | null): void {
-  cachedEmitTo = fn;
-  emitToPending = fn ? Promise.resolve(fn) : null;
-}
-
-/**
- * The last words the recogniser returned, for the stage's transcript bar.
- *
- * Held as a rolling word list rather than the provider's utterance text so the
- * bar keeps reading across utterance boundaries — the provider ends an
- * utterance wherever its voice-activity detector decides, which is nowhere in
- * particular, and a bar that blanked at each boundary would look like a fault.
- */
-/*
- * The shared display bound, not a second opinion about it. This was 14 while
- * the stage drew the last 10, so four words crossed the wire on every tap for
- * nothing and neither number could be changed alone.
- */
-const TAP_WORDS = STAGE_TRANSCRIPT_TAP_WORDS;
-let tapCommitted: string[] = [];
-
-/** §64 tap accounting — see `publishTranscriptTap`. */
 /**
  * Has a socket ever reached `connected` this take?
  *
@@ -1910,131 +1639,11 @@ let tapCommitted: string[] = [];
 let everConnected = false;
 /** Words in the utterance still open when the take ended. See `wordsHeard`. */
 let wordsInFlight = 0;
-let transcriptTapsSeen = 0;
-let transcriptTapsEmitted = 0;
-const transcriptTapsDropped = {
-  noStageGeneration: 0,
-  noRuntime: 0,
-  noSession: 0,
-  emptyText: 0,
-  /** The emit itself rejected — the channel, not a guard. */
-  emitFailed: 0,
-};
 
-/** The first reason taps were dropped, or null when none were. */
-function transcriptTapFault(): string | null {
-  for (const [reason, count] of Object.entries(transcriptTapsDropped)) {
-    if (count > 0) return reason;
-  }
-  return null;
-}
-
-function resetTranscriptTap(): void {
-  tapCommitted = [];
+/** Per-take transcript bookkeeping, cleared with the take and by recovery. */
+function resetTranscriptCounters(): void {
   everConnected = false;
   wordsInFlight = 0;
-  transcriptTapsSeen = 0;
-  transcriptTapsEmitted = 0;
-  transcriptTapsDropped.noStageGeneration = 0;
-  transcriptTapsDropped.noRuntime = 0;
-  transcriptTapsDropped.noSession = 0;
-  transcriptTapsDropped.emitFailed = 0;
-  transcriptTapsDropped.emptyText = 0;
-}
-
-/**
- * Publish the raw recogniser text. Partials replace the open utterance rather
- * than appending to it, for the same reason the ledger does: a partial is a
- * restatement, and appending would show every revision of a sentence at once.
- */
-function publishTranscriptTap(text: string, final: boolean): void {
-  /*
-   * Every early return is COUNTED, not silent.
-   *
-   * The bar on the stage read "listening — no words yet" through a take that
-   * heard eleven words, and there was no way to tell whether control had
-   * declined to send them or the stage had failed to draw them. Four guards sit
-   * above, any of which drops the text on the floor, and none of them said so.
-   */
-  transcriptTapsSeen += 1;
-  if (stageGeneration === 0) {
-    transcriptTapsDropped.noStageGeneration += 1;
-    return;
-  }
-  if (!cachedEmitTo && !isTauriRuntime()) {
-    transcriptTapsDropped.noRuntime += 1;
-    return;
-  }
-  const s = get(state);
-  /*
-   * `stageAlive` is deliberately NOT consulted.
-   *
-   * It was, and that is the same mistake as gating the bar on `phase ===
-   * 'live'`: a DIAGNOSTIC suppressed by a flag that is only ever wrong when
-   * something has already gone wrong. `stageAlive` is set from a `stage://
-   * closed` event and cleared by nothing until the next take, so any spurious
-   * or mis-generationed close silently darkens the one readout that says
-   * whether the recogniser is hearing anything — while alignment snapshots,
-   * which travel Rust -> stage and never consult it, keep arriving. The
-   * presenter is then looking at a stage that is visibly working and a
-   * transcript bar that says "no words yet".
-   *
-   * Sending to a stage that has genuinely gone costs a rejected promise the
-   * catch below already swallows. That is strictly cheaper than being unable
-   * to see what the microphone is doing.
-   */
-  if (!s.sessionId) {
-    transcriptTapsDropped.noSession += 1;
-    return;
-  }
-
-  const words = text.trim().split(/\s+/).filter((word) => word.length > 0);
-  const shown = [...tapCommitted, ...words].slice(-TAP_WORDS);
-  if (final) tapCommitted = shown;
-
-  const payload: StageTranscriptTapPayload = {
-    stageGeneration,
-    text: shown.join(' '),
-    final,
-    sentAtMs: Date.now(),
-  };
-  // An emitted tap whose TEXT is empty renders as "listening — no words yet",
-  // which is indistinguishable on the glass from never having been sent.
-  if (payload.text.length === 0) transcriptTapsDropped.emptyText += 1;
-  /*
-   * Through RUST, not straight at the stage window.
-   *
-   * This used to be `emitTo('stage', 'stage://transcript-tap', …)` from this
-   * webview. On a real rig it delivered nothing — the bar read "listening — no
-   * words yet" for an entire take while this function counted six taps sent —
-   * and no amount of reading the two sides could explain why, when alignment
-   * snapshots reached the same window in the same seconds and moved the
-   * document to the pixel.
-   *
-   * The difference between them was the ROAD, not the payload: snapshots come
-   * from Rust (`app.emit_to(STAGE_LABEL, …)`), and everything Rust emits
-   * arrives. So the words go that way too, as a directive on the relay the
-   * stage already trusts for freeze, blank, settings and calibration. It is
-   * one IPC call a second against a channel with a proven delivery record,
-   * and it picks up Rust's generation validation on the way past, which the
-   * direct emit never had.
-   *
-   * Counted on RESOLUTION. Counting the attempt is what made "6 of 6 sent"
-   * describe six calls rather than six deliveries, and turned a dead channel
-   * into a perfect score.
-   */
-  void stageService
-    .publishStageDirective(s.sessionId, stageGeneration, {
-      kind: 'transcript',
-      text: payload.text,
-      final,
-    })
-    .then(() => {
-      transcriptTapsEmitted += 1;
-    })
-    .catch(() => {
-      transcriptTapsDropped.emitFailed += 1;
-    });
 }
 
 /* ---------------------------------------------------------------------------
@@ -2108,7 +1717,8 @@ function resetVoicePill(): void {
 }
 
 /**
- * Resolve the pill and send it.
+ * Resolve the pill and hand it to the stage, which reads `voicePill` off this
+ * store through its `voicePill` prop.
  *
  * The conditions come from the session state rather than from a second set of
  * detectors: `inputDeviceLost` is §28.6's finding, already made by the pipeline
@@ -2119,10 +1729,6 @@ function resetVoicePill(): void {
 function publishVoicePill(): void {
   if (voicePill === null) return;
   const s = get(state);
-  // Not `stageAlive` — see `publishTranscriptTap`. The pill is the readout
-  // that says whether the microphone is being heard, and a liveness flag that
-  // is only ever wrong when something is already wrong must not be able to
-  // switch it off.
   if (!s.sessionId) return;
 
   const nowMs = monotonicNowMs();
@@ -2139,7 +1745,8 @@ function publishVoicePill(): void {
   );
   const view = voicePillView(voicePill);
   const payload: StageVoicePillPayload = {
-    stageGeneration,
+    // The generation of the envelope the pill is drawn beside.
+    stageGeneration: s.stageEnvelope?.stageGeneration ?? 0,
     reading: view.reading,
     levels: view.levels,
     label: view.label,
@@ -2147,19 +1754,6 @@ function publishVoicePill(): void {
     sentAtMs: Date.now(),
   };
   state.update((current) => ({ ...current, voicePill: payload }));
-  if (stageGeneration === 0) return;
-  if (!cachedEmitTo && !isTauriRuntime()) return;
-  /*
-   * The transcript and this pill failed together on the affected real stage:
-   * both were direct control-webview → stage events, while Rust-originated
-   * snapshots continued to arrive. Keep both diagnostics on the same
-   * demonstrably working control → Rust → stage relay. At 10 Hz this is the
-   * same cadence and payload the direct event carried, just through a command
-   * Rust generation-checks before emitting.
-   */
-  void stageService
-    .publishStageDirective(s.sessionId, stageGeneration, { kind: 'voicePill', pill: payload })
-    .catch(() => {});
 }
 
 /** Snapshot token positions are fractional; persisted indexes are not. */
@@ -2666,38 +2260,28 @@ const followActions = {
     state.update((s) => ({
       ...s,
       voiceFollow: !paused,
-      // Only a decision reaches the glass. An automatic hold stops following
-      // too, and saying "Following off" over it would tell the presenter they
-      // had switched something off when what actually happened is that the
-      // transcript stopped being trustworthy.
+      /*
+       * Only a decision reaches the glass. An automatic hold stops following
+       * too, and saying "Following off" over it would tell the presenter they
+       * had switched something off when what actually happened is that the
+       * transcript stopped being trustworthy.
+       *
+       * And it has to reach the glass, which reads it through the stage's
+       * `followPaused` prop. Stopping the driver stops the snapshots, which the
+       * stage could only notice as an ABSENCE — indistinguishable from a
+       * presenter who has gone quiet until its 15 s staleness window expires,
+       * and for those fifteen seconds the script would keep drifting forward
+       * after the switch was flipped to stop it.
+       */
       ...(deliberate ? { followPausedByUser: paused } : {}),
     }));
-    if (!deliberate) return;
-    /*
-     * And tell the stage, because the stage is where the consequence is.
-     *
-     * Stopping the driver stops the snapshots, which the stage could in
-     * principle notice — but only as an ABSENCE, and it cannot tell an absence
-     * from a presenter who has gone quiet until its 15 s staleness window
-     * expires. For those fifteen seconds it would keep predicting forward from
-     * the last snapshot it had: the script would carry on drifting after the
-     * switch was flipped, which is precisely the thing the switch was flipped
-     * to stop.
-     *
-     * Single-window presentation reads this off session state instead (the
-     * `followPaused` bridge prop), because directives are a no-op at stage
-     * generation 0. Sent anyway, for the standalone window that may be open.
-     */
-    sendDirective({ kind: 'follow', paused });
   },
   /**
-   * §62 recovery. Re-publishing the current stage settings ASKS the stage to
+   * §62 recovery. Re-issuing the current stage settings ASKS the stage to
    * measure its line map again. It does not force a relayout, and the two
    * limits below are why.
    *
-   * The directive alone reaches nothing in single-window presentation — same
-   * generation-0 dead end as everywhere else — so this also re-issues
-   * `stageEnvelope` at the SAME stage generation, the identity kick
+   * It re-issues `stageEnvelope` at the SAME stage generation, the identity kick
    * `applyStageAppearance` already uses to wake the embedded stage's own
    * envelope-diff effect. Minted from the CURRENT settings rather than a
    * patch: recovery is "run this again", not a change of values.
@@ -2721,7 +2305,6 @@ const followActions = {
    * presenter can press mid-take today.
    */
   rebuildStageLayout(): void {
-    pushSettings();
     state.update((s) =>
       s.stageEnvelope === null || !stageSettings
         ? s
@@ -2732,420 +2315,10 @@ const followActions = {
 };
 
 /**
- * Adopt the stage's layout generation from its acks (§7.2).
- *
- * Exported for the layout-generation contract test: the ack subscription is set
- * up behind a Tauri-only dynamic import, and the value this tracks is worth
- * asserting without one.
- */
-export function adoptStageLayoutGeneration(generation: number): void {
-  if (!Number.isInteger(generation) || generation < 0) return;
-  if (generation === stageLayoutGeneration) return;
-  stageLayoutGeneration = generation;
-  // The worker stamps its own frames; the v1 bridge reads the module value
-  // directly in `handleSnapshot`. Both producers now carry the stage's number.
-}
-
-/** The stage layout generation control currently believes in (§7.2). */
-export function currentStageLayoutGeneration(): number {
-  return stageLayoutGeneration;
-}
-
-/**
- * Whether a second person watching the control window is even plausible.
- *
- * On a single display the stage is frameless, sized to the monitor, and
- * always-on-top (§52.7) — it covers everything, and control is not merely
- * behind it but on the SAME screen the stage owns. Nobody can be looking at
- * control who is not also looking at the stage, which already carries its own
- * on-screen hint for the same information. Defaults to `true` (an operator
- * might be watching) until the real count resolves, so a race at startup errs
- * toward showing the notice rather than silently dropping it for a genuine
- * two-display setup.
- */
-let controlOperatorPlausible = true;
-
-function refreshControlOperatorPlausible(): void {
-  void stageService
-    .listDisplays()
-    .then((displays) => {
-      controlOperatorPlausible = displays.length > 1;
-    })
-    .catch(() => {
-      // Unknown is not evidence of a solo setup; keep showing the notice.
-      controlOperatorPlausible = true;
-    });
-}
-
-/* ---------------------------------------------------------------------------
- * §64: is the stage APPLYING what control is sending?
- * ------------------------------------------------------------------------- */
-
-/**
- * The newest alignment snapshot control has been handed, by `seq`.
- *
- * Rust publishes every snapshot to BOTH windows, so this and the stage's own
- * applied revision describe the same stream from its two ends. They are the
- * only two numbers that can tell "the aligner is not following" apart from "the
- * aligner is following and the glass is not moving" — and those two have
- * identical symptoms and completely unrelated causes.
- */
-let lastSnapshotSeq = 0;
-/**
- * The stage's applied revision, as of the last beat that could read it.
- *
- * Kept so the end-of-session summary can state it. That card is the one
- * artefact anybody actually looks at after a take that went wrong, and it
- * already shows "Words heard" beside "Script followed" — two numbers that
- * agreed completely while the glass never moved, with nothing to explain the
- * gap. This is the third number that closes it.
- */
-let stageAppliedRevision: number | null = null;
-/**
- * The extremes of the document's real scroll offset, and of the offset the
- * controller was aiming at, over this take. Infinities mean the stage never
- * acked — a browser-dev session, or one that ended before the first frame.
- */
-let scrollSeenMinPx = Number.POSITIVE_INFINITY;
-let scrollSeenMaxPx = Number.NEGATIVE_INFINITY;
-let targetSeenMinPx = Number.POSITIVE_INFINITY;
-let targetSeenMaxPx = Number.NEGATIVE_INFINITY;
-
-/** Travel over the take, or null when the stage never reported a position. */
-function travelPx(minPx: number, maxPx: number): number | null {
-  return Number.isFinite(minPx) && Number.isFinite(maxPx) ? maxPx - minPx : null;
-}
-/** When the two ends first disagreed, or null while they agree. */
-let stageApplyDivergedAtMs: number | null = null;
-/** Said once per take. A stuck stage does not get more true by repetition. */
-let stageApplyReported = false;
-
-/**
- * How far apart the two ends may drift before it means anything.
- *
- * The stage's revision reaches control through its heartbeat ack and the Rust
- * relay, so it trails by up to a beat, and snapshots arrive about once a second.
- * Two is inside the ordinary lag; four is not.
- */
-const STAGE_APPLY_LAG_TOLERANCE = 4;
-/** And how long it has to stay that way. One slow beat is not a fault. */
-const STAGE_APPLY_LAG_GRACE_MS = 5000;
-
-/**
- * Compare the two ends, and say so when they part company.
- *
- * The failure this exists for looks, from the presenter's side, exactly like
- * the aligner having lost them: the script sits still while they talk. But the
- * summary afterwards says "Script followed: 9 of 131", because control received
- * every one of those snapshots and counted them. Nothing anywhere joined those
- * two facts up, so the honest diagnosis — the engine is fine, the stage is
- * discarding what it is sent — was not available from either window.
- *
- * The stage already reports its applied revision on every heartbeat ack and
- * Rust already stores it. Reading it is all that was missing.
- */
-function checkStageApplyingSnapshots(expectedGeneration: number): void {
-  if (stageApplyReported || lastSnapshotSeq === 0) return;
-  void stageService
-    .getStageStatus()
-    .then((status) => {
-      if (!status.exists || status.stageGeneration !== expectedGeneration) return;
-      const applied = status.lastTrackingRevision ?? 0;
-      stageAppliedRevision = applied;
-      const behind = lastSnapshotSeq - applied;
-      if (behind < STAGE_APPLY_LAG_TOLERANCE) {
-        stageApplyDivergedAtMs = null;
-        return;
-      }
-      const nowMs = monotonicNowMs();
-      if (stageApplyDivergedAtMs === null) {
-        stageApplyDivergedAtMs = nowMs;
-        return;
-      }
-      if (nowMs - stageApplyDivergedAtMs < STAGE_APPLY_LAG_GRACE_MS) return;
-      stageApplyReported = true;
-      showToast(
-        `Your voice is being followed, but the stage is not applying it — ${lastSnapshotSeq} updates sent, ${applied} applied. ` +
-          'The script will not move. Press "s" on the stage for its own diagnostics, which name the reason.',
-        'danger',
-        { key: TOAST_STAGE_NOT_APPLYING },
-      );
-    })
-    .catch(() => {
-      // A failed status read is not evidence about the stage. The next beat
-      // asks again, and a stage that has genuinely gone is the watchdog's job.
-    });
-}
-
-function startStageBridge(sessionId: string): void {
-  if (!isTauriRuntime() || stageGeneration === 0) return;
-
-  refreshControlOperatorPlausible();
-
-  /*
-   * Both of these are captured, never read from module scope inside the
-   * handlers. A handler that outlived its session used to re-read the CURRENT
-   * generation, pass its own `payload.stageGeneration !== stageGeneration`
-   * guard for a different session, and (for `escapeRequested`) stop it.
-   */
-  const generation = stageGeneration;
-  const token = (stageBridgeToken += 1);
-
-  // Stage motion acks (§54) feed motion health, §61 degradation, and — C1 —
-  // the layout-generation loop both frame producers depend on.
-  stopMotionAcks = subscribeStageMotionAcks((ack) => {
-    adoptStageLayoutGeneration(ack.layoutGeneration);
-    smoothFollow.ingestStageAck(ack);
-    /*
-     * §64: how far the GLASS actually travelled.
-     *
-     * Every ack has always carried the document's real scroll offset and the
-     * offset the controller was aiming at, and both were dropped on the floor
-     * after feeding the follow store. That left "the script did not move" as
-     * the one claim the app could neither confirm nor deny — a take could
-     * report words heard, words followed and snapshots applied, all healthy,
-     * and nothing anywhere knew whether a single pixel had moved.
-     *
-     * Two numbers, because they fail differently. `target` not advancing means
-     * the stage never derived a position to travel to — a snapshot, layout or
-     * line-map problem. `target` advancing while `actual` does not means the
-     * motion controller is not moving the document it was told to move. Those
-     * are unrelated faults and, from the presenter's chair, identical.
-     */
-    if (Number.isFinite(ack.actualScrollPx)) {
-      scrollSeenMinPx = Math.min(scrollSeenMinPx, ack.actualScrollPx);
-      scrollSeenMaxPx = Math.max(scrollSeenMaxPx, ack.actualScrollPx);
-    }
-    if (Number.isFinite(ack.targetScrollPx)) {
-      targetSeenMinPx = Math.min(targetSeenMinPx, ack.targetScrollPx);
-      targetSeenMaxPx = Math.max(targetSeenMaxPx, ack.targetScrollPx);
-    }
-  });
-
-  // Heartbeat: control → stage at ~1 s cadence; the stage acks to Rust.
-  heartbeatTimer = setInterval(() => {
-    heartbeatRevision += 1;
-    void (async () => {
-      const { emitTo } = await import('@tauri-apps/api/event');
-      await emitTo('stage', STAGE_EVENT.heartbeat, {
-        stageGeneration: generation,
-        revision: heartbeatRevision,
-        sentAtMs: Date.now(),
-      });
-    })().catch(() => {});
-    // The ack this beat provokes carries the stage's applied revision, which is
-    // the other half of the comparison. Checked on the same cadence.
-    checkStageApplyingSnapshots(generation);
-  }, 1000);
-
-  void (async () => {
-    const { listen } = await import('@tauri-apps/api/event');
-    const unlisteners = await Promise.all([
-      listen<StageEscapePayload>(STAGE_EVENT.escapeRequested, (event) => {
-        if (event.payload.stageGeneration !== generation) return;
-        if (event.payload.presses >= 2) {
-          stopSession();
-          /*
-           * Only when somebody else is watching this window.
-           *
-           * A solo presenter on one display pressed Escape twice, watched the
-           * stage disappear, and was then told — on the screen that stage had
-           * been covering — that the session stopped. It is an announcement of
-           * their own deliberate action, arriving underneath the F.17 summary
-           * that says the same thing better, on the one setup where it can only
-           * be read after the fact.
-           *
-           * With a second display it earns its place: an operator sat at
-           * control did NOT press the key, watched the stage go dark, and this
-           * is the line that says why.
-           */
-          if (controlOperatorPlausible) showToast('Session stopped from the stage', 'info');
-        } else if (controlOperatorPlausible) {
-          showToast('Press Escape again on the stage to end the session', 'info');
-        }
-      }),
-      listen<StageIntentPayload>(STAGE_EVENT.intent, (event) => {
-        if (event.payload.stageGeneration !== generation) return;
-        const intent = event.payload.intent;
-        if (intent.kind === 'toggle_pause') togglePlayPause();
-        else if (intent.kind === 'manual_step') {
-          moveSentences(intent.direction === 'forward' ? 1 : -1);
-        } else if (intent.kind === 'manual_scroll') {
-          // The scroll itself was applied on the stage; what travels here is
-          // where it LEFT the presenter, and only when it left them somewhere
-          // else (§16.9). See `anchorManualScroll`.
-          if (intent.anchorToken !== null) anchorManualScroll(intent.anchorToken, intent.atMs);
-        } else if (intent.kind === 'toggle_follow') {
-          toggleVoiceFollow();
-        } else if (intent.kind === 'auto_scroll_end') {
-          autoScrollReachedEnd();
-        } else if (intent.kind === 'auto_scroll_toggle') {
-          toggleAutoScroll();
-        } else if (intent.kind === 'auto_scroll_pace') {
-          nudgeAutoScrollWpm(
-            intent.direction === 'faster' ? AUTO_SCROLL_WPM_STEP : -AUTO_SCROLL_WPM_STEP,
-          );
-        }
-      }),
-      /*
-       * §62. A stage-layout failure has its own event, so this is the whole
-       * handler: the stage held its motion, and the operator — who is at this
-       * window, not at the stage — has to see it and be offered the rebuild.
-       *
-       * An EMPTY `issues` list is the recovery: a later rebuild succeeded. It
-       * matters that this exists. The notice it clears is the most serious one
-       * the Live screen can show (motion is held), so a stage that recovered
-       * silently would leave the operator staring at a red banner for a
-       * problem that is over, and eventually ignoring the banner.
-       */
-      listen<StageLayoutErrorPayload>(STAGE_EVENT.layoutFailed, (event) => {
-        if (event.payload.stageGeneration !== generation) return;
-        const issues = event.payload.issues ?? [];
-        if (issues.length === 0) smoothFollow.reportLineMapRebuilt(event.payload.layoutGeneration);
-        else smoothFollow.reportLineMapInvalid(issues.join(', '));
-      }),
-      /*
-       * `stage://error` carries the window layer's own errors.
-       *
-       * B2: this handler used to test every payload against
-       * /layout|line[-_ ]?map/ and RETURN on anything that did not match, so a
-       * payload that did not match the sniff was reported, relayed by Rust, and
-       * thrown away on arrival.
-       *
-       * That substring sniff is gone rather than merely demoted: layout
-       * failures now arrive above, typed, generation-checked, and with a
-       * recovery signal, so nothing on this channel is a §62 report any more.
-       *
-       * S7: "not this handler's business" is how the channel came to be wrong
-       * twice. EVERYTHING on this channel is a window-layer error and is
-       * surfaced, whatever its code. There is no `return` that discards a
-       * payload, because both defects here were a `return` that discarded one.
-       */
-      listen<StageErrorPayload>(CONTROL_EVENT.stageError, (event) => {
-        if (event.payload.stageGeneration !== generation) return;
-        handleStageWindowError(event.payload);
-      }),
-      listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
-        if (event.payload.stageGeneration !== generation) return;
-        handleStageClosed();
-      }),
-    ]);
-    // The session this bridge belongs to may already be gone.
-    if (token !== stageBridgeToken) {
-      for (const unlisten of unlisteners) unlisten();
-      return;
-    }
-    stageEventUnlisteners = unlisteners;
-  })().catch(() => {});
-}
-
-/**
- * §62: the stage window is gone and this session cannot reopen it. Stop
- * pretending otherwise — the heartbeat stops, directives stop being published,
- * and the UI is told so it can stand its stage controls down.
- */
-function handleStageClosed(): void {
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
-  stageGeneration = 0;
-  const s = get(state);
-  if (!s.stageAlive) return;
-  state.update((prev) => ({ ...prev, stageAlive: false }));
-  if (s.active) {
-    showToast('The stage window closed. End this take and present again to reopen it.', 'danger');
-  }
-}
-
-/* ---------------------------------------------------------------------------
- * Window-layer failures on `stage://error` (§52.7)
- * ------------------------------------------------------------------------- */
-
-/**
- * Everything that arrives on `stage://error`: `windows/mod.rs` reporting on the
- * stage window itself (`code`, `message`, the two fingerprints).
- */
-interface StageErrorPayload {
-  stageGeneration: number;
-  code?: string;
-  message?: string;
-  requestedFingerprint?: string;
-  actualFingerprint?: string;
-}
-
-const STAGE_DISPLAY_MISMATCH = 'STAGE_DISPLAY_MISMATCH';
-
-function optionalString(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-/**
- * Surface a window-layer failure rather than dropping it.
- *
- * The failure this exists for is the stage opening on the wrong physical
- * display. Rust verifies the monitor after the window is shown (§52.7) and says
- * so; until now control received that and threw it away, so the operator's only
- * signal that their script was prompting at the wrong wall was looking at the
- * wrong wall.
- *
- * A code with no local knowledge still becomes a notice — a channel that
- * discards what it does not recognise is how this handler was wrong twice.
- */
-function handleStageWindowError(payload: StageErrorPayload): void {
-  const code = optionalString(payload.code) ?? 'STAGE_WINDOW_ERROR';
-  const message =
-    optionalString(payload.message) ??
-    (code === STAGE_DISPLAY_MISMATCH
-      ? 'The stage opened on a different display than the one selected.'
-      : 'The stage window reported a problem.');
-  reportStageWindowFault({
-    code,
-    message,
-    requestedFingerprint: optionalString(payload.requestedFingerprint),
-    actualFingerprint: optionalString(payload.actualFingerprint),
-  });
-}
-
-/**
- * Raise the §52.7 notice.
- *
- * Exported because the mismatch is also detectable from the value
- * `set_stage_fullscreen` RETURNS, and that path matters more than the event
- * does: `windows::set_stage_fullscreen` emits during Preflight's start
- * sequence, one step before `startLiveSession` installs the stage bridge, so
- * control is not listening yet and the event is lost. The handler above keeps
- * the channel honest for every later re-assert; Preflight uses this directly.
- */
-export function reportStageWindowFault(fault: {
-  code: string;
-  message: string;
-  requestedFingerprint?: string | null;
-  actualFingerprint?: string | null;
-}): void {
-  state.update((s) => ({
-    ...s,
-    stageWindowFault: {
-      code: fault.code,
-      message: fault.message,
-      requestedFingerprint: fault.requestedFingerprint ?? null,
-      actualFingerprint: fault.actualFingerprint ?? null,
-      atMs: Date.now(),
-    },
-  }));
-  showToast(fault.message, 'danger');
-}
-
-/** The operator has seen it; the notice is not a modal and does not nag. */
-export function dismissStageWindowFault(): void {
-  state.update((s) => (s.stageWindowFault === null ? s : { ...s, stageWindowFault: null }));
-}
-
-/**
  * "Which panel is display 2?" — answered on the panels themselves.
  *
- * This is the affordance the notice needs: a numbered, always-on-top,
- * click-through card on every connected display (`identify.html`, spec §52.4).
- * The picker in Preflight labels its tiles with the same numbers, so the
- * operator can go back and choose the right one for the next take.
+ * A numbered, always-on-top, click-through card on every connected display
+ * (`identify.html`, spec §52.4), raised from Session › Identify Displays.
  */
 export async function identifyStageDisplays(): Promise<void> {
   try {
@@ -3153,12 +2326,6 @@ export async function identifyStageDisplays(): Promise<void> {
   } catch (err) {
     showToast(`Could not number the displays. ${describeError(err)}`, 'danger');
   }
-}
-
-function sendDirective(directive: StageDirective): void {
-  const s = get(state);
-  if (!s.sessionId || !s.stageAlive || stageGeneration === 0) return;
-  void stageService.publishStageDirective(s.sessionId, stageGeneration, directive).catch(() => {});
 }
 
 /* ---------------------------------------------------------------------------
@@ -3451,15 +2618,10 @@ export function addTakeMarker(): void {
  * WHAT THE USER DECIDES, AND WHAT THEY DO NOT.
  *
  * Blanking hides the SCRIPT; that is what the word means and it is not
- * configurable.
+ * configurable. The stage reads `stageBlanked` through its `blanked` prop.
  */
 export function toggleBlankStage(): void {
-  const s = get(state);
-  // Nothing to blank once the stage window is gone (§62).
-  if (!s.stageAlive) return;
-  const blanked = !s.stageBlanked;
-  sendDirective({ kind: 'blank', blanked });
-  state.update((prev) => ({ ...prev, stageBlanked: blanked }));
+  state.update((prev) => ({ ...prev, stageBlanked: !prev.stageBlanked }));
 }
 
 /**
@@ -3529,9 +2691,8 @@ let autoScrollPausedFollowing = false;
  * driver stops, no snapshots arrive, and the engine holds — but a fixed-pace
  * transport has no such feedback: it rolls because a pace says so, and it would
  * go on rolling straight through a pause, a hard pause and the end of the take.
- * The stage cannot notice on its own either, because the `freeze` directive that
- * would tell it stands down at stage generation 0, which is every single-window
- * take.
+ * The stage cannot notice on its own either: it reads this store through its
+ * `autoScroll` prop and rolls whenever it says so.
  *
  * So the gate lives here, where all four facts are already known, rather than
  * being bolted onto each of the five places that write `paused`. Anything that
@@ -3545,34 +2706,6 @@ export const autoScrollLive = derived(
     wordsPerMinute: s.autoScroll.wordsPerMinute,
   }),
 );
-
-/*
- * The standalone stage window hears the effective value as a directive; the
- * single-window stage reads the same derived store through its bridge. A
- * subscription rather than a call inside `publishAutoScroll`, because the value
- * changes for reasons the transport actions never see — a pause, a stop, a
- * pipeline that failed to resume.
- */
-let lastPublishedAutoScroll: StageAutoScrollPayload | null = null;
-autoScrollLive.subscribe((next) => {
-  const previous = lastPublishedAutoScroll;
-  const unchanged =
-    previous !== null &&
-    previous.running === next.running &&
-    previous.wordsPerMinute === next.wordsPerMinute;
-  /*
-   * A pace the stage is not using is not news.
-   *
-   * Without this the take's opening pace, and every later adjustment made while
-   * the transport is stopped, would each send a `running: false` directive
-   * saying nothing the stage can act on. The pace is carried on the directive
-   * that STARTS the transport, so nothing is lost by staying quiet until then.
-   */
-  const silent = !next.running && (previous === null || !previous.running);
-  lastPublishedAutoScroll = next;
-  if (unchanged || silent) return;
-  sendDirective({ kind: 'autoScroll', autoScroll: next });
-});
 
 /**
  * Start or stop rolling the script at a fixed pace.
@@ -3617,10 +2750,6 @@ export function toggleAutoScroll(): void {
     'info',
     { durationMs: 1800 },
   );
-  sendDirective({
-    kind: 'ack',
-    label: running ? `Auto-scroll ${s.autoScroll.wordsPerMinute} wpm` : 'Auto-scroll off',
-  });
 }
 
 /**
@@ -3654,18 +2783,11 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
   }
   publishAutoScroll({ ...s.autoScroll, wordsPerMinute });
   /*
-   * BOTH, and not by accident.
-   *
-   * The ack chip is the right instrument — a number means most beside the text
-   * it moves — but `sendDirective` stands down at stage generation 0, which is
-   * every single-window take, i.e. the way this app actually presents. A pace
-   * key with no feedback at all reads as a key that did not register, and the
-   * operator presses it again. So the toast is what reports in the shipped
-   * configuration, exactly as it does for the take marker and the mirror, and
-   * the chip is there for a separate stage window, where it is better.
+   * A pace key with no feedback at all reads as a key that did not register,
+   * and the operator presses it again. The toast is what reports it, exactly as
+   * it does for the take marker and the mirror.
    */
   showToast(`Auto-scroll ${wordsPerMinute} wpm`, 'info', { durationMs: 1200 });
-  sendDirective({ kind: 'ack', label: `Auto-scroll ${wordsPerMinute} wpm` });
 }
 
 /**
@@ -3697,10 +2819,6 @@ export const AUTO_SCROLL_WPM_RANGE = { min: AUTO_SCROLL_MIN_WPM, max: AUTO_SCROL
 /* ---------------------------------------------------------------------------
  * Stage appearance quick-controls (Live screen + voice commands)
  * ------------------------------------------------------------------------- */
-
-function pushSettings(): void {
-  if (stageSettings) sendDirective({ kind: 'settings', settings: { ...stageSettings } });
-}
 
 /** The saved teleprompter section, or its defaults where settings cannot be read. */
 function currentTeleprompterSettings(): TeleprompterSettings {
@@ -3747,12 +2865,10 @@ function liveStageAppearance(): StageAppearance {
  * ---------------------------------------------------------------------------
  * Presentation is one webview now (§62): the stage renderer is mounted inside
  * this window and hydrates from `stageEnvelope`, not from the cross-window
- * directive bus. The directive is still sent — a second stage window, if one is
- * ever open, is entitled to the same change — but on its own it reached
- * nothing, which is why `+`/`-` and Cmd+Shift+M appeared to do nothing at all
- * in single-window presentation. The envelope is re-issued at the SAME stage
- * generation, which `stageReducer` treats as a refresh in place: phase,
- * alignment and the compiled document all survive it.
+ * directive bus. A settings directive on its own reached nothing, which is why
+ * `+`/`-` and Cmd+Shift+M once appeared to do nothing at all. The envelope is
+ * re-issued at the SAME stage generation, which `stageReducer` treats as a
+ * refresh in place: phase, alignment and the compiled document all survive it.
  *
  * Returns the appearance the stage is now running, which is not always the one
  * asked for — a rig-resolved take works its geometry out for itself (§17.2).
@@ -3913,7 +3029,6 @@ function recomposeStageSettings(): StageAppearance {
     stageDisplay,
   );
   stageSettings = rebuilt;
-  pushSettings();
   const appearance = liveStageAppearance();
   state.update((s) => ({
     ...s,
@@ -4114,15 +3229,7 @@ export function stopSession(): SessionSummary {
     wordsHeard,
     wordsFollowed: takeWordsFollowed(),
     scriptWords: scriptWordCount,
-    updatesSent: lastSnapshotSeq,
-    stageApplied: stageAppliedRevision,
-    documentTravelPx: travelPx(scrollSeenMinPx, scrollSeenMaxPx),
-    targetTravelPx: travelPx(targetSeenMinPx, targetSeenMaxPx),
     wordsInFlight,
-    transcriptTapsSeen,
-    transcriptTapsEmitted,
-    transcriptTapFault: transcriptTapFault(),
-    stageTelemetryExpected,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -4190,9 +3297,6 @@ export function stopSession(): SessionSummary {
   }
   stopInternals();
   smoothFollow.endSession();
-  if (s.sessionId && stageGeneration !== 0) {
-    void stageService.closeStage(s.sessionId).catch(() => {});
-  }
   /*
    * A PRACTICE REPORTS NOTHING.
    *
@@ -4253,15 +3357,7 @@ function emptySummary(s: SessionState): SessionSummary {
     wordsHeard: 0,
     wordsFollowed: 0,
     scriptWords: scriptWordCount,
-    updatesSent: 0,
-    stageApplied: null,
-    documentTravelPx: null,
-    targetTravelPx: null,
     wordsInFlight: 0,
-    transcriptTapsSeen: 0,
-    transcriptTapsEmitted: 0,
-    transcriptTapFault: null,
-    stageTelemetryExpected: false,
   };
 }
 
@@ -4363,21 +3459,10 @@ function stopInternals(): void {
   // Anything still in flight belongs to the take that just ended, not to this
   // buffer or to whatever take fills it next.
   transcriptEpoch += 1;
-  if (heartbeatTimer) clearInterval(heartbeatTimer);
-  heartbeatTimer = null;
   stopVoicePill();
-  stopMotionAcks?.();
-  stopMotionAcks = null;
   stopSidecarFeed?.();
   stopSidecarFeed = null;
-  // Invalidate any bridge whose `listen()` calls have not settled yet, then
-  // dispose the ones that have.
-  stageBridgeToken += 1;
-  for (const unlisten of stageEventUnlisteners) unlisten();
-  stageEventUnlisteners = [];
   compiledScript = null;
-  stageGeneration = 0;
-  stageLayoutGeneration = 0;
   stageSettings = null;
   // §36.3: `stopSession` closes the open take first, so anything still here got
   // past the normal stop path and belongs to a session that is already gone.

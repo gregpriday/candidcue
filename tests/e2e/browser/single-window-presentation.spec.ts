@@ -636,13 +636,12 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
   await expect(page.locator('footer.transport')).toHaveCount(0);
 
   /*
-   * This was a single-window take, so there was no stage window to hear back
-   * from. The three bridge rows must be replaced by one honest line rather than
-   * reporting their empty counters as three separate failures — which is what
-   * every embedded take used to be told.
+   * There is no stage window to hear back from, so none of the old cross-window
+   * diagnostics may reappear — not even as a "not applicable" placeholder. Their
+   * empty counters once reported three separate failures on every take.
    */
-  await expect(summary).toContainText('Stage diagnostics');
-  await expect(summary).toContainText('Not applicable');
+  await expect(summary).not.toContainText('Stage diagnostics');
+  await expect(summary).not.toContainText('Not applicable');
   await expect(summary).not.toContainText('Stage updates');
   await expect(summary).not.toContainText('Script moved');
   await expect(summary).not.toContainText('Transcript to stage');
@@ -845,10 +844,10 @@ test.describe('on a page that identifies as macOS', () => {
    * from where it was a moment ago.
    *
    * It is also the only browser coverage of the mirror shortcut reaching the
-   * glass, and in single-window presentation that is a specific path: the take
-   * runs at stage generation 0, where `sendDirective` is a silent no-op, so the
-   * flip has to travel through the recomposed `stageEnvelope`. Pressing the key
-   * — not calling the store — is what keeps that path under test.
+   * glass, and in single-window presentation that is a specific path: there is
+   * no stage window to send a directive to, so the flip has to travel through
+   * the recomposed `stageEnvelope`. Pressing the key — not calling the store —
+   * is what keeps that path under test.
    */
   test('the session dock is the only routine control surface, and mirroring does not move it', async ({
     page,

@@ -4,10 +4,9 @@
  *
  * This store is the control window's single source of truth for "what is the
  * aligner doing, how sure is it, and what has quietly degraded". It is fed by
- * two producers and owns neither:
+ * a producer it does not own:
  *
  *   Rust alignment engine  ──AlignmentSnapshot──▶ ingestSnapshot
- *   stage frame loop       ──StageMotionAck─────▶ ingestStageAck
  *
  * The movement timeline is DERIVED here from consecutive snapshots rather than
  * reported: the engine states where the reader is, and "it moved from here to
@@ -29,7 +28,6 @@ import { derived, get, writable, type Readable } from 'svelte/store';
 import type {
   AlignmentDecision,
   AlignmentSnapshot,
-  StageMotionAck,
   StageMotionState,
 } from '../../shared/contracts';
 import { ALIGNMENT_RELOCATIONS } from '../../shared/contracts';
@@ -166,11 +164,6 @@ export interface SmoothFollowStoreOptions {
   timelineCapacity?: number;
   /** §65 ring buffer bound. */
   movementCapacity?: number;
-  /**
-   * Dropped frames within one ack window before §61 is reported. A display
-   * threshold only — the stage owns the real degradation policy.
-   */
-  frameDropThreshold?: number;
   actions?: Partial<FollowActions>;
 }
 
@@ -356,11 +349,8 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
    * callers hand over exactly what Rust published and nothing more.
    */
   ingestSnapshot(snapshot: AlignmentSnapshot): void;
-  ingestStageAck(ack: StageMotionAck): void;
   setCandidates(candidates: FollowCandidate[]): void;
   reportTranscriptStatus(status: TranscriptFeedStatus, detail?: string | null): void;
-  reportLineMapInvalid(detail: string): void;
-  reportLineMapRebuilt(generation: number): void;
   reportBudgetBreach(breach: Omit<BudgetBreach, 'atMs'> & { atMs?: number }): void;
   clearBudget(id: RuntimeBudgetId): void;
 
@@ -406,7 +396,6 @@ export function createSmoothFollowStore(
   const now = options.now ?? (() => Date.now());
   const timelineCapacity = Math.max(1, options.timelineCapacity ?? 200);
   const movementCapacity = Math.max(1, options.movementCapacity ?? 60);
-  const frameDropThreshold = Math.max(1, options.frameDropThreshold ?? 3);
 
   let following = defaultFollowingSettings();
   let actions: FollowActions = { ...NO_ACTIONS, ...(options.actions ?? {}) };
@@ -644,44 +633,6 @@ export function createSmoothFollowStore(
       });
     },
 
-    ingestStageAck(ack) {
-      update((s) => {
-        // Correlated by GENERATION: the stage knows which alignment session
-        // it is following and nothing about session UUIDs, so that is the only
-        // identity it can honestly stamp on a report.
-        if (s.sessionGeneration !== null && ack.sessionGeneration !== s.sessionGeneration) {
-          return s;
-        }
-        const degraded =
-          ack.droppedFrameCountWindow >= frameDropThreshold ||
-          ack.controllerState.includes('degraded');
-        const becameDegraded = degraded && !s.motion.degraded;
-        const recovered = !degraded && s.motion.degraded;
-        return {
-          ...s,
-          motion: {
-            controllerState: ack.controllerState,
-            droppedFrameCountWindow: ack.droppedFrameCountWindow,
-            trackingErrorPx: Math.round((ack.targetScrollPx - ack.actualScrollPx) * 10) / 10,
-            degraded,
-            lastAckAtMs: now(),
-          },
-          layoutGeneration: ack.layoutGeneration,
-          counts: { ...s.counts, acks: s.counts.acks + 1 },
-          timeline: becameDegraded
-            ? push(
-                s,
-                'motion',
-                'Stage reported dropped frames',
-                `${ack.droppedFrameCountWindow} dropped in the last window; controller ${ack.controllerState}`,
-              )
-            : recovered
-              ? push(s, 'motion', 'Stage frame rate recovered')
-              : s.timeline,
-        };
-      });
-    },
-
     setCandidates(candidates) {
       update((s) => ({ ...s, candidates }));
     },
@@ -695,29 +646,6 @@ export function createSmoothFollowStore(
           timeline: push(s, 'notice', `Transcript feed: ${status}`, detail ?? undefined),
         };
       });
-    },
-
-    reportLineMapInvalid(detail) {
-      update((s) =>
-        s.lineMap.valid === false && s.lineMap.detail === detail
-          ? s
-          : {
-              ...s,
-              lineMap: { ...s.lineMap, valid: false, detail },
-              timeline: push(s, 'notice', 'Stage line map invalid', detail),
-            },
-      );
-    },
-
-    reportLineMapRebuilt(generation) {
-      update((s) => ({
-        ...s,
-        lineMap: { valid: true, generation, detail: null },
-        layoutGeneration: generation,
-        timeline: s.lineMap.valid
-          ? s.timeline
-          : push(s, 'notice', `Stage line map rebuilt (generation ${generation})`),
-      }));
     },
 
     reportBudgetBreach(breach) {

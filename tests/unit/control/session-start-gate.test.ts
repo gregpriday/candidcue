@@ -29,10 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompiledScript, CompileDiagnostic } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
-  getStageStatus: vi.fn(async () => ({ stageGeneration: 0, hydrated: true, layoutReady: true })),
 }));
 
 const records = vi.hoisted(() => ({
@@ -92,10 +89,6 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/alignment')>();
   return { ...actual, subscribeAlignmentSnapshots: () => () => {} };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 /** The compiler worker never runs; the store is driven directly. */
 const compileResult = vi.hoisted(() => ({
@@ -111,7 +104,7 @@ vi.mock('../../../src/control/services/compiler', () => ({
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
 const { requestCompile, resetCompiled } = await import('../../../src/control/stores/compiled');
-const { clearSession, setStageEmitterForTesting, startLiveSession } = await import(
+const { clearSession, startLiveSession } = await import(
   '../../../src/control/stores/session'
 );
 
@@ -131,7 +124,6 @@ function gateFor(scriptId: string, sourceHash: string): { ensureCompiled(): Prom
     totalTokens: 200,
     sessionId: `session-${scriptId}`,
     compiled: compiledStub(scriptId, sourceHash),
-    stageGeneration: 0,
     sessionGeneration: 1,
     transcriptRetained: false,
   });
@@ -156,13 +148,11 @@ beforeEach(() => {
   pipeline.captured.deps = null;
   compileResult.fail = null;
   setInvokeForTesting(async () => undefined as never);
-  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(() => {
   clearSession();
   resetCompiled();
-  setStageEmitterForTesting(null);
   setInvokeForTesting(null);
 });
 

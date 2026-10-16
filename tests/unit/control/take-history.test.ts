@@ -21,18 +21,7 @@ import type { CompiledScript, AlignmentSnapshot } from '../../../src/shared/cont
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
-  publishStageDirective: vi.fn(async () => {}),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
-  getStageStatus: vi.fn(async () => ({
-    exists: true,
-    visible: true,
-    fullscreen: true,
-    stageGeneration: 2,
-    hydrated: true,
-    layoutReady: true,
-    mediaHealthy: true,
-  })),
 }));
 
 const records = vi.hoisted(() => ({
@@ -100,10 +89,6 @@ vi.mock('../../../src/control/services/voice-session', () => ({
   },
   COMMAND_TICK_INTERVAL_MS: 250,
 }));
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 const {
   addTakeMarker,
@@ -151,7 +136,6 @@ function start(): void {
     sessionId: SESSION_ID,
     compiled: compiledStub(),
     sessionGeneration: 4,
-    stageGeneration: 2,
   });
 }
 

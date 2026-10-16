@@ -253,3 +253,43 @@ describe('the voice pill on the stage', () => {
     expect(pill(container)).toBeNull();
   });
 });
+
+/*
+ * The production road. A take renders the stage inside the control window at
+ * stage generation 0, and the pill arrives as the `voicePill` prop Live feeds
+ * from `SessionState.voicePill` — not as an event from another window.
+ */
+describe('the voice pill on the embedded stage', () => {
+  function embedded(voicePill: StageVoicePillPayload | null, env: StageSessionEnvelope) {
+    return {
+      embedded: {
+        envelope: env,
+        alignment: null,
+        transcript: '',
+        voicePill,
+        onexit: vi.fn(),
+        onintent: vi.fn(),
+      },
+    };
+  }
+
+  it('draws from the prop before any alignment snapshot, and follows it', async () => {
+    const env = { ...envelope(), stageGeneration: 0 };
+    const { container, rerender } = render(StageApp, {
+      props: embedded(pillPayload({ stageGeneration: 0 }), env) as never,
+    });
+    await settle();
+
+    const drawn = pill(container);
+    expect(drawn, 'the pill must not wait for transcription to succeed').not.toBeNull();
+    expect(drawn?.getAttribute('aria-label')).toBe('Listening');
+    expect(drawn?.dataset.visible).toBe('true');
+
+    await rerender(
+      embedded(pillPayload({ stageGeneration: 0, reading: 'fault', label: 'No audio' }), env),
+    );
+    await settle();
+    expect(pill(container)?.dataset.reading).toBe('fault');
+    expect(container.querySelector('.voice-pill .label')?.textContent).toBe('No audio');
+  });
+});

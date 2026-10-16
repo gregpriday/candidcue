@@ -2,9 +2,11 @@
  * The voice pill's wiring — the half the pure reducer cannot prove.
  *
  * `services/audio/voice-pill.ts` decides what the pill says and is tested on
- * its own. What is asserted here is that the decision reaches the stage at all:
- * a take that publishes nothing leaves the presenter with no indication that
- * anything is being heard, which is the whole failure the pill exists to end.
+ * its own. What is asserted here is that the decision reaches the stage at all
+ * — `SessionState.voicePill`, which the embedded stage reads through its
+ * `voicePill` prop. A take that publishes nothing leaves the presenter with no
+ * indication that anything is being heard, which is the whole failure the pill
+ * exists to end.
  *
  * It also pins the two seams that are easy to break silently:
  *   • the waveform comes from the take's OWN capture (`onLevel` on the
@@ -17,19 +19,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AudioLevelSnapshot,
   CompiledScript,
-  StageDirective,
   StageVoicePillPayload,
 } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
-  /* §64: the heartbeat compares what control sent against what the stage
-     applied. `exists: false` means "no stage to compare with", which is the
-     right answer for a mock that is not modelling a stage window. */
-  getStageStatus: vi.fn(async () => ({ exists: false })),
-  publishStageDirective: vi.fn(
-    async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
-  ),
-  closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
@@ -103,13 +96,9 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/alignment')>();
   return { ...actual, subscribeAlignmentSnapshots: () => () => {} };
 });
-vi.mock('../../../src/control/services/stage-acks', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
-  return { ...actual, subscribeStageMotionAcks: () => () => {} };
-});
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
-const { clearSession, session, setStageEmitterForTesting, startLiveSession } = await import(
+const { clearSession, session, startLiveSession } = await import(
   '../../../src/control/stores/session'
 );
 const { get } = await import('svelte/store');
@@ -139,7 +128,6 @@ function start(mode: 'voice' | 'manual' = 'voice'): void {
     totalTokens: 200,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: 4,
     sessionGeneration: 7,
     transcriptRetained: false,
   });
@@ -158,15 +146,19 @@ function frame(overrides: Partial<AudioLevelSnapshot> = {}): AudioLevelSnapshot 
   };
 }
 
-/** Every pill payload sent to the stage, in order. */
+/**
+ * Every pill payload handed to the stage, in order.
+ *
+ * Recorded off the session store because that is the stage's input: Live hands
+ * `$session.voicePill` straight to the embedded stage's `voicePill` prop. Only
+ * NEW payloads count — every other session update notifies subscribers too, and
+ * counting those would make a silent publisher look busy.
+ */
+let published: StageVoicePillPayload[] = [];
+let stopRecording: (() => void) | null = null;
+
 function pills(): StageVoicePillPayload[] {
-  return stage.publishStageDirective.mock.calls
-    .map(([, , directive]) => directive as StageDirective)
-    .filter(
-      (directive): directive is Extract<StageDirective, { kind: 'voicePill' }> =>
-        directive.kind === 'voicePill',
-    )
-    .map((directive) => directive.pill);
+  return published;
 }
 
 function deps(): Record<string, (...args: never[]) => unknown> {
@@ -177,15 +169,18 @@ function deps(): Record<string, (...args: never[]) => unknown> {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  stage.publishStageDirective.mockClear();
   pipeline.captured.deps = null;
   setInvokeForTesting(async () => undefined as never);
-  setStageEmitterForTesting(async () => {});
+  published = [];
+  stopRecording = session.subscribe((s) => {
+    if (s.voicePill !== null && s.voicePill !== published.at(-1)) published.push(s.voicePill);
+  });
 });
 
 afterEach(() => {
   clearSession();
-  setStageEmitterForTesting(null);
+  stopRecording?.();
+  stopRecording = null;
   setInvokeForTesting(null);
   vi.useRealTimers();
 });
@@ -201,7 +196,8 @@ describe('the voice pill on a live take', () => {
     start();
     vi.advanceTimersByTime(100);
     const first = pills().at(0);
-    expect(first?.stageGeneration).toBe(4);
+    // The embedded stage's own generation: there is no stage window.
+    expect(first?.stageGeneration).toBe(0);
     expect(first?.reading).toBe('listening');
     expect(first?.visible).toBe(true);
     expect(first?.label).toBe('Listening');
@@ -344,61 +340,18 @@ describe('the voice pill on a live take', () => {
 });
 
 /**
- * The recogniser's words reach the stage by the road that works.
+ * The recogniser's words reach the stage's transcript bar.
  *
- * ---------------------------------------------------------------------------
- * THE DEFECT THIS EXISTS FOR
- * ---------------------------------------------------------------------------
- * The transcript bar used to be fed by a direct
- * `emitTo('stage', 'stage://transcript-tap', …)` from the control webview. On a
- * real rig it delivered nothing: the bar read "listening — no words yet" for an
- * entire take while control counted six taps sent, in the same seconds that
- * alignment snapshots reached the same window and moved the document to the
- * pixel. Reading both sides never produced a reason they should differ — same
- * helper, same target, same generation, subscriptions registered together.
- *
- * What differed was the ROAD. Snapshots are emitted by RUST, and everything
- * Rust emits arrives. So the words go that way too, as a `transcript`
- * directive on `publish_stage_command` — the relay the stage already trusts for
- * freeze, blank, settings and calibration.
- *
- * This pins the control end of that. The stage end is pinned by
- * `tests/dom/stage-exit-affordance.test.ts`; between them the only untested
- * link is the Rust relay itself, which every working take already exercises.
+ * Live hands `$session.transcriptTail.at(-1)` to the embedded stage's
+ * `transcript` prop, so the session's tail is the bar's only source. The bar
+ * once read "listening — no words yet" through a take that heard eleven words,
+ * because its words travelled a road to a window that was not there.
  */
-describe('transcript words travel the Rust relay', () => {
-  it('publishes them as a directive rather than emitting at the window', () => {
+describe('transcript words reach the transcript bar', () => {
+  it('lands each recogniser line on the session tail the stage reads', () => {
     start();
-    stage.publishStageDirective.mockClear();
-
-    const onTranscriptText = deps().onTranscriptText as unknown as (
-      text: string,
-      final: boolean,
-    ) => void;
-    onTranscriptText('this is a test of the transcription', false);
-
-    const calls = stage.publishStageDirective.mock.calls.filter(
-      ([, , directive]) => (directive as { kind: string }).kind === 'transcript',
-    );
-    expect(calls, 'the words were not published as a transcript directive').toHaveLength(1);
-    const directive = calls[0]![2] as { kind: string; text: string; final: boolean };
-    expect(directive.text).toContain('this is a test of the transcription');
-    expect(directive.final).toBe(false);
-  });
-
-  it('carries the words of a final the same way', () => {
-    start();
-    stage.publishStageDirective.mockClear();
-    const onTranscriptText = deps().onTranscriptText as unknown as (
-      text: string,
-      final: boolean,
-    ) => void;
-    onTranscriptText('hello there friend', true);
-
-    const directive = stage.publishStageDirective.mock.calls
-      .map(([, , d]) => d as { kind: string; text: string; final: boolean })
-      .find((d) => d.kind === 'transcript');
-    expect(directive?.final).toBe(true);
-    expect(directive?.text).toContain('hello there friend');
+    const onTranscriptLine = deps().onTranscriptLine as unknown as (line: string) => void;
+    onTranscriptLine('hello there friend');
+    expect(get(session).transcriptTail.at(-1)).toContain('hello there friend');
   });
 });
