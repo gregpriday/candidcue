@@ -47,6 +47,7 @@
     formatBytes,
     getSpeechLanguageOptions,
     isBusy as isModelBusy,
+    isDamaged,
     languageDisplayName,
     onSpeechModelProgress,
     phaseLabel,
@@ -198,9 +199,22 @@
     // Busy first: "Downloading" is what is happening, and it supersedes both
     // other labels for as long as it lasts.
     if (isModelBusy(status)) return { tone: 'neutral', label: phaseLabel(status) };
+    // Before "Needs download" and "Not downloaded", both of which would be
+    // false: it IS downloaded, and what it needs is to be downloaded AGAIN
+    // (#258). It used to read "Downloaded" here, and abort the next take.
+    if (isDamaged(status)) return { tone: 'warning', label: 'Damaged' };
     if (option.active) return { tone: 'success', label: status.installed ? 'In use' : 'Needs download' };
     if (status.installed) return { tone: 'neutral', label: 'Downloaded' };
     return { tone: 'warning', label: 'Not downloaded' };
+  }
+
+  /**
+   * What the download button says, for what actually happened: never fetched,
+   * a fetch that failed, or a download here whose files were damaged since.
+   */
+  function downloadLabel(status: SpeechModelStatus): string {
+    if (isDamaged(status)) return 'Download again';
+    return status.error ? 'Try again' : 'Download';
   }
 
   /** Whether removing this model would actually remove anything. */
@@ -481,7 +495,14 @@
           §153: a model the app expects and cannot find must fail somewhere the
           user can act on it. This is that screen, and this is that state.
         -->
-        {#if shown.active}
+        {#if shown.active && isDamaged(status)}
+          <!-- The line below says what is wrong with the files; this one says
+               what it costs, as the not-downloaded alert does. -->
+          <p class="inline-alert" role="alert">
+            {name} is selected, but its speech data on this machine is damaged. Voice following
+            cannot run until it is downloaded again.
+          </p>
+        {:else if shown.active}
           <p class="inline-alert" role="alert">
             {name} is selected, but its speech data is not on this machine. Voice following cannot
             run until it is downloaded.
@@ -496,7 +517,7 @@
             disabled={busyByModel[shown.modelId]}
             onclick={() => void runModelAction(shown.modelId, startSpeechModelDownload)}
           >
-            {status.error ? 'Try again' : 'Download'} ({formatBytes(status.downloadBytes)})
+            {downloadLabel(status)} ({formatBytes(status.downloadBytes)})
           </Button>
         </div>
       {:else}

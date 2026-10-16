@@ -126,6 +126,22 @@ export function canDownload(status: SpeechModelStatus | null): boolean {
   return status != null && status.supported && !status.installed && !isBusy(status);
 }
 
+/** A download on this machine whose files were damaged after install (#258). */
+export const MODEL_DAMAGED_CODE = 'STT_MODEL_DAMAGED';
+
+/**
+ * Whether this model was downloaded here and has since been damaged.
+ *
+ * Carried as the status's error rather than a phase of its own: Rust reports it
+ * as `failed` with this code, because the screen already offers the download
+ * beside an error's message and the download is the repair. This is how a
+ * screen tells it from "never downloaded" and from a download that failed, to
+ * word the button and the label for what actually happened.
+ */
+export function isDamaged(status: SpeechModelStatus | null): boolean {
+  return status != null && !status.installed && status.error?.code === MODEL_DAMAGED_CODE;
+}
+
 /** What the user is told is happening, per phase. */
 export function phaseLabel(status: SpeechModelStatus): string {
   switch (status.phase) {

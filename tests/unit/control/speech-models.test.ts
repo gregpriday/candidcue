@@ -23,6 +23,8 @@ import {
   formatBytes,
   getSpeechModelStatus,
   isBusy,
+  isDamaged,
+  MODEL_DAMAGED_CODE,
   phaseLabel,
   progressFraction,
   startSpeechModelDownload,
@@ -265,6 +267,37 @@ describe('what the screen offers', () => {
       canDownload(statusFixture({ phase: 'installed', installed: true, supported: true })),
       'already installed',
     ).toBe(false);
+  });
+
+  /**
+   * #258: a download damaged after install is `failed` with its own code, and
+   * that code is the only thing that tells it from a fetch that failed or a
+   * model never fetched. The download is still what is offered — it is the
+   * repair.
+   */
+  it('tells a damaged download from a failed one, and still offers the download', () => {
+    const damaged = statusFixture({
+      phase: 'failed',
+      installed: false,
+      error: { code: MODEL_DAMAGED_CODE, message: 'damaged' },
+    });
+    expect(MODEL_DAMAGED_CODE).toBe('STT_MODEL_DAMAGED');
+    expect(isDamaged(damaged)).toBe(true);
+    expect(canDownload(damaged)).toBe(true);
+    expect(
+      isDamaged(
+        statusFixture({
+          phase: 'failed',
+          installed: false,
+          error: { code: 'STT_MODEL_DOWNLOAD_FAILED', message: 'offline' },
+        }),
+      ),
+      'a failed fetch',
+    ).toBe(false);
+    expect(isDamaged(statusFixture({ phase: 'notInstalled', installed: false })), 'never fetched').toBe(
+      false,
+    );
+    expect(isDamaged(null)).toBe(false);
   });
 });
 

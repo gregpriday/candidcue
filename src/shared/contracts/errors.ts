@@ -48,8 +48,9 @@ export const APP_ERROR_CODES = [
    * `STT_MODEL_NOT_INSTALLED` is the odd one out and deliberately so: since
    * §152 the stock installer ships no weights, so "the model is not here" is an
    * ORDINARY state a first run reaches rather than a damaged installation, and
-   * it is the only one of the five the user can clear themselves — Settings →
-   * Speech has the download. Rust raises it recoverable for that reason.
+   * it is one of only two the user can clear themselves — Settings → Speech has
+   * the download. Rust raises it recoverable for that reason, and the other,
+   * `STT_MODEL_DAMAGED`, likewise.
    *
    * The other four mean something on this machine is broken. Rust raises all
    * four non-recoverable, which is a statement about the SESSION rather than
@@ -60,6 +61,14 @@ export const APP_ERROR_CODES = [
   'STT_MODEL_NOT_INSTALLED',
   'STT_MODEL_MISSING',
   'STT_MODEL_LOAD_FAILED',
+  /*
+   * A downloaded model whose files were damaged after install (#258) — found
+   * by a cheap check before the recogniser reads them, because onnxruntime
+   * asked to read a damaged graph aborts the process. Recoverable for the same
+   * reason as `STT_MODEL_NOT_INSTALLED`: the download in Settings → Speech is
+   * the repair, and it is the user's to run.
+   */
+  'STT_MODEL_DAMAGED',
   'STT_WORKER_FAILED',
   'STT_ENGINE_ERROR',
   'NETWORK_OFFLINE',

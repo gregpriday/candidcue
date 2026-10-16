@@ -304,6 +304,55 @@ fn assert_timing_is_sound(words: &[cc_stt::WordTime], item_start: f64, frame_ms:
     );
 }
 
+/// #258, against the real graphs rather than synthetic ones.
+///
+/// The shipped bundle must pass the check that stands in front of onnxruntime,
+/// and the same bundle with its decoder cut in half, or replaced by noise of
+/// the same length, must be refused by `validate` AND by `load` before the C
+/// library reads a byte of it. If the check ever lets one through, this test
+/// does not fail politely — the test process aborts, which is the bug.
+///
+/// The undamaged graphs are symlinked rather than copied: `detect` follows
+/// symlinks, and copying 150 MB of encoder per run would prove nothing extra.
+#[cfg(unix)]
+#[test]
+fn a_damaged_copy_of_the_shipped_bundle_is_refused_rather_than_loaded() {
+    let Some(dir) = require_model() else { return };
+    let files = cc_stt::local::ModelFiles::detect(&dir).unwrap();
+    files.check_graphs(&dir).expect("the shipped graphs must pass the envelope check");
+
+    let decoder = std::fs::read(dir.join(&files.decoder)).unwrap();
+    let mut state: u32 = 0x2545_f491;
+    let noise: Vec<u8> = (0..decoder.len())
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 11) as u8
+        })
+        .collect();
+
+    for (label, damaged) in [("cut", &decoder[..decoder.len() / 2]), ("noise", &noise[..])] {
+        let copy = std::env::temp_dir().join(format!("cc-stt-damaged-shipped-{label}"));
+        let _ = std::fs::remove_dir_all(&copy);
+        std::fs::create_dir_all(&copy).unwrap();
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy() != files.decoder {
+                std::os::unix::fs::symlink(entry.path(), copy.join(&name)).unwrap();
+            }
+        }
+        std::fs::write(copy.join(&files.decoder), damaged).unwrap();
+
+        let config = LocalSttConfig::for_model(default_model(), &copy);
+        let error = config.validate().expect_err(label);
+        assert!(error.contains(&files.decoder), "{label}: {error}");
+        let error = LocalRecognizer::load(&config).err().expect(label);
+        assert!(error.contains("not a readable ONNX model"), "{label}: {error}");
+        let _ = std::fs::remove_dir_all(&copy);
+    }
+}
+
 #[test]
 fn the_bundled_model_loads_and_a_session_closes_cleanly() {
     let Some(dir) = require_model() else { return };

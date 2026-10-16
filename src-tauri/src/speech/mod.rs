@@ -67,6 +67,29 @@ fn not_installed() -> AppError {
     )
 }
 
+/// The model's download is on this machine and sealed, and its files are no
+/// longer what was installed (#258).
+///
+/// Recoverable, and for the same reason as [`not_installed`]: Settings › Speech
+/// offers the download that repairs it, and it is raised BEFORE the C library
+/// is asked to read the damaged graph — which, asked, aborts the process. The
+/// detail (which file, what was wrong) is for the log; the presenter is told
+/// what to do.
+///
+/// The message is written for Settings › Speech, which renders it verbatim
+/// under the model's Download button — so it names no screen. A take never
+/// shows it: the frontend's own copy for the code replaces it there.
+pub(crate) fn model_damaged(detail: &str) -> AppError {
+    AppError::structured(
+        "STT_MODEL_DAMAGED",
+        ErrorCategory::Validation,
+        "The speech data on this computer is damaged and cannot be used. \
+         Download it again to repair it.",
+        true,
+    )
+    .with_log(detail.to_string())
+}
+
 pub mod catalogue;
 pub mod language_options;
 pub mod model_download;
@@ -170,6 +193,12 @@ impl SpeechEngine {
             if let Some(found) = model_manager::resolve_for(app, entry) {
                 return Ok(found.dir);
             }
+            // Nothing usable. Say whether that is because nothing was ever
+            // downloaded or because what was downloaded has been damaged:
+            // the remedy is the same button, and the second used to abort.
+            if let Some(detail) = model_manager::damaged_for(app, entry) {
+                return Err(model_damaged(&detail));
+            }
             return Err(not_installed());
         }
 
@@ -185,9 +214,10 @@ impl SpeechEngine {
                     false,
                 )
             })?;
-        if cc_stt::local::ModelFiles::detect(&dir).is_err() {
+        let Ok(files) = cc_stt::local::ModelFiles::detect(&dir) else {
             return Err(not_installed());
-        }
+        };
+        files.check_graphs(&dir).map_err(|detail| model_damaged(&detail))?;
         Ok(dir)
     }
 
@@ -232,9 +262,17 @@ impl SpeechEngine {
                 let config = cc_stt::LocalSttConfig::for_model(model, &dir);
                 // Checked before the C library is asked, because `create`
                 // answers a missing file with a null pointer and no reason at
-                // all. And checked while any previous model is still resident,
-                // which `get_or_load` documents.
-                config.validate().map_err(|detail| {
+                // all — and a damaged graph with no answer at all, because
+                // onnxruntime throws and the process aborts (#258). And
+                // checked while any previous model is still resident, which
+                // `get_or_load` documents.
+                //
+                // The two halves of `LocalSttConfig::validate`, asked
+                // separately because they are different faults with different
+                // codes. `model_dir` has just resolved this directory, which
+                // already asked both; this is the same question again at the
+                // last moment before the load, for a file that changed since.
+                let files = cc_stt::local::ModelFiles::detect(&dir).map_err(|detail| {
                     AppError::structured(
                         "STT_MODEL_MISSING",
                         ErrorCategory::Internal,
@@ -242,6 +280,9 @@ impl SpeechEngine {
                         false,
                     )
                 })?;
+                files
+                    .check_graphs(&dir)
+                    .map_err(|detail| model_damaged(&detail))?;
                 Ok((dir, config))
             },
             |(dir, config)| {

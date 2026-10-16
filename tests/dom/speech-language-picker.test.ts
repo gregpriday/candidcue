@@ -321,6 +321,48 @@ describe('a missing model is fixable here', () => {
     // Download once and it did not work.
     expect(buttonLabelled(view, 'Try again')).not.toBeNull();
   });
+
+  /*
+   * #258: a download whose files were damaged after install. It used to read
+   * "Downloaded" with no button to press, and abort the next take. Rust now
+   * reports it as `failed` with its own code, and this screen has to say what
+   * that means — damaged, not missing, not a failed fetch — and offer the
+   * download that repairs it.
+   */
+  it('reports a damaged download as damaged and offers to download it again', async () => {
+    const { view, calls } = await mount(
+      optionsFixture({
+        languages: [
+          optionFixture({
+            active: true,
+            status: statusFixture({
+              installed: false,
+              phase: 'failed',
+              source: null,
+              error: {
+                code: 'STT_MODEL_DAMAGED',
+                message:
+                  'The speech data on this computer is damaged and cannot be used. Download it again to repair it.',
+              },
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(text(view)).toContain('speech data on this machine is damaged');
+    expect(text(view)).toContain('Download it again to repair it.');
+    expect(text(view)).not.toContain('Downloaded to this computer');
+    expect(text(view)).not.toContain('speech data is not on this machine');
+    expect(view.container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(buttonLabelled(view, 'Try again')).toBeNull();
+
+    const repair = buttonLabelled(view, 'Download again');
+    expect(repair).not.toBeNull();
+    await fireEvent.click(repair!);
+    await waitFor(() => {
+      expect(calls.some((call) => call.command === 'start_speech_model_download')).toBe(true);
+    });
+  });
 });
 
 /**

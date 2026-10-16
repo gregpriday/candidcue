@@ -196,12 +196,26 @@ impl SpeechModelManager {
         };
 
         let resolved = resolve_for(app, entry);
+        let installed = resolved.is_some();
 
-        let (phase, operation_id, progress_bytes, progress_total) = match running {
-            Some((id, phase, done, total)) => (phase, Some(id), done, total),
-            None if resolved.is_some() => (StatusPhase::Installed, None, 0, 0),
-            None if failure.is_some() => (StatusPhase::Failed, None, 0, 0),
-            None => (StatusPhase::NotInstalled, None, 0, 0),
+        let (phase, operation_id, progress_bytes, progress_total, error) = match running {
+            // A failure that has since been superseded by a working install is
+            // not news. Only reported while the model is actually unusable.
+            Some((id, phase, done, total)) => {
+                (phase, Some(id), done, total, failure.filter(|_| !installed))
+            }
+            None => {
+                // Looked for only when nothing usable was found: damage beneath
+                // a working fallback is not something the user has to act on.
+                let damage = if installed {
+                    None
+                } else {
+                    damaged_for(app, entry)
+                        .map(|detail| status_error(&super::model_damaged(&detail)))
+                };
+                let (phase, error) = at_rest(installed, failure, damage);
+                (phase, None, 0, 0, error)
+            }
         };
 
         SpeechModelStatus {
@@ -210,16 +224,14 @@ impl SpeechModelManager {
             languages: entry.languages.clone(),
             phase,
             source: resolved.as_ref().map(|found| found.source),
-            installed: resolved.is_some(),
+            installed,
             supported: loadable_model(entry).is_some(),
             download_bytes: entry.archive.bytes,
             installed_bytes: entry.installed_bytes(),
             progress_bytes,
             progress_total,
             operation_id,
-            // A failure that has since been superseded by a working install is
-            // not news. Only reported while the model is actually unusable.
-            error: failure.filter(|_| resolved.is_none()),
+            error,
         }
     }
 
@@ -451,6 +463,41 @@ fn app_data_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf,
         .map_err(|e| AppError::Internal(format!("no app data directory: {e}")))
 }
 
+/// What a model with no operation running reports, from what is on disk and
+/// what was last remembered.
+///
+/// Pure, so the precedence can be tested without an app. A usable copy wins
+/// outright. Then the last failure, because a repair that has just failed —
+/// no network, no space — is the newest thing the user needs to hear. Then
+/// damage found on disk (#258), which is `Failed` rather than a phase of its
+/// own: the screen already offers the download beside an error's message, and
+/// the download is the repair. Then the ordinary "not installed".
+fn at_rest(
+    installed: bool,
+    failure: Option<StatusError>,
+    damage: Option<StatusError>,
+) -> (StatusPhase, Option<StatusError>) {
+    if installed {
+        return (StatusPhase::Installed, None);
+    }
+    match failure.or(damage) {
+        Some(error) => (StatusPhase::Failed, Some(error)),
+        None => (StatusPhase::NotInstalled, None),
+    }
+}
+
+/// Why this model's download is sealed and yet unusable, if it is.
+///
+/// The partner of [`resolve_for`], asked only once that has found nothing: see
+/// `model_store::damaged_download`.
+pub fn damaged_for<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    entry: &ModelEntry,
+) -> Option<String> {
+    let data_dir = app.path().app_data_dir().ok()?;
+    store::damaged_download(&data_dir, entry)
+}
+
 /// Where this model is, if anywhere.
 ///
 /// The one place that knows the bundled fallback's path, because only Tauri's
@@ -572,6 +619,56 @@ mod tests {
             assert_eq!(by_catalogue_id.id, expected.id);
             assert_eq!(by_recogniser_id.id, expected.id);
         }
+    }
+
+    fn error(code: &str) -> StatusError {
+        StatusError {
+            code: code.to_string(),
+            message: String::new(),
+        }
+    }
+
+    /// A damaged download is reported, not collapsed into "not installed" —
+    /// the screen then shows why, beside the download that repairs it.
+    #[test]
+    fn a_damaged_download_reports_as_a_failure_with_its_own_code() {
+        let (phase, reported) = at_rest(false, None, Some(error("STT_MODEL_DAMAGED")));
+        assert_eq!(phase, StatusPhase::Failed);
+        assert_eq!(reported.map(|e| e.code).as_deref(), Some("STT_MODEL_DAMAGED"));
+    }
+
+    /// A repair that failed is newer news than the damage it was repairing.
+    #[test]
+    fn a_failed_repair_outranks_the_damage_it_was_for() {
+        let (phase, reported) = at_rest(
+            false,
+            Some(error("STT_MODEL_DOWNLOAD_FAILED")),
+            Some(error("STT_MODEL_DAMAGED")),
+        );
+        assert_eq!(phase, StatusPhase::Failed);
+        assert_eq!(reported.map(|e| e.code).as_deref(), Some("STT_MODEL_DOWNLOAD_FAILED"));
+    }
+
+    #[test]
+    fn a_usable_copy_outranks_everything_and_nothing_is_not_a_failure() {
+        assert!(matches!(
+            at_rest(true, Some(error("X")), Some(error("STT_MODEL_DAMAGED"))),
+            (StatusPhase::Installed, None)
+        ));
+        assert!(matches!(at_rest(false, None, None), (StatusPhase::NotInstalled, None)));
+    }
+
+    /// The code the status carries is the one `ensure_loaded` raises, so the
+    /// screen and a refused take can never describe the same fault two ways.
+    #[test]
+    fn the_damage_status_carries_the_load_refusal_code() {
+        let reported = status_error(&super::super::model_damaged("decoder.onnx is 0 bytes"));
+        assert_eq!(reported.code, "STT_MODEL_DAMAGED");
+        assert!(
+            !reported.message.contains("decoder.onnx"),
+            "file detail is for the log, not the screen: {}",
+            reported.message
+        );
     }
 
     #[test]

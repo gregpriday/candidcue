@@ -31,6 +31,10 @@ use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 
 use crate::{CloseReason, SttFrame, WordTime};
 
+mod envelope;
+
+pub use envelope::check_onnx_envelope;
+
 /// The token table. Every sherpa transducer bundle names this the same.
 pub const TOKENS_FILE: &str = "tokens.txt";
 
@@ -208,6 +212,22 @@ impl ModelFiles {
             joiner,
             bpe_vocab,
         })
+    }
+
+    /// Check each detected graph is a whole ONNX model, before the C library
+    /// is asked to read it.
+    ///
+    /// Detection is about NAMES; this is about the bytes behind them. It is a
+    /// separate step because the two failures mean different things to the
+    /// app — a graph that is not there versus one that is there and damaged —
+    /// and because a damaged graph is the one the C library cannot survive:
+    /// see [`check_onnx_envelope`] for the abort and for what the check does
+    /// and does not prove.
+    pub fn check_graphs(&self, dir: &std::path::Path) -> Result<(), String> {
+        for graph in [&self.encoder, &self.decoder, &self.joiner] {
+            check_onnx_envelope(&dir.join(graph))?;
+        }
+        Ok(())
     }
 }
 
@@ -399,12 +419,15 @@ impl LocalSttConfig {
         Self::new(dir, model.tuning)
     }
 
-    /// Check every model file is present, returning the first that is not.
+    /// Check every model file is present and every graph is whole, returning
+    /// the first problem found.
     ///
-    /// Worth calling before a take: `OnlineRecognizer::create` answers a
-    /// missing file with a null pointer and no reason.
+    /// Worth calling before a take, for two different reasons.
+    /// `OnlineRecognizer::create` answers a MISSING file with a null pointer
+    /// and no reason. It does not answer a DAMAGED graph at all: onnxruntime
+    /// throws, and the process aborts (#258) — see [`check_onnx_envelope`].
     pub fn validate(&self) -> Result<(), String> {
-        ModelFiles::detect(&self.model_dir).map(|_| ())
+        ModelFiles::detect(&self.model_dir)?.check_graphs(&self.model_dir)
     }
 }
 
@@ -431,6 +454,9 @@ pub struct LocalRecognizer {
 impl LocalRecognizer {
     pub fn load(config: &LocalSttConfig) -> Result<Self, String> {
         let files = ModelFiles::detect(&config.model_dir)?;
+        // Here as well as in `validate`, because skipping `validate` must not
+        // be a way to hand onnxruntime a graph that takes the process down.
+        files.check_graphs(&config.model_dir)?;
         let path = |file: &str| Some(config.model_dir.join(file).to_string_lossy().into_owned());
 
         let mut sys = OnlineRecognizerConfig::default();
@@ -906,6 +932,28 @@ mod tests {
         );
         let error = ModelFiles::detect(&dir).unwrap_err();
         assert!(error.contains("enc.onnx"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A bundle whose names are right and whose bytes are not (#258).
+    ///
+    /// Detection accepts it — the names are all there — and the C library
+    /// would abort on it, so `validate` is what has to say no, and `load` must
+    /// say no even when nobody called `validate` first.
+    #[test]
+    fn a_detectable_bundle_with_a_damaged_graph_is_refused_before_loading() {
+        let dir = bundle(
+            "damaged-graph",
+            &["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", TOKENS_FILE],
+        );
+        ModelFiles::detect(&dir).expect("the names alone are a valid bundle");
+
+        let config = LocalSttConfig::new(&dir, tuning());
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("encoder.int8.onnx"), "{error}");
+        assert!(error.contains("not a readable ONNX model"), "{error}");
+        let error = LocalRecognizer::load(&config).err().expect("load must refuse it");
+        assert!(error.contains("not a readable ONNX model"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

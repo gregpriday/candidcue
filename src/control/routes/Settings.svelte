@@ -72,6 +72,7 @@
   import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
   import {
     isBusy as isModelBusy,
+    isDamaged as isModelDamaged,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
@@ -2088,6 +2089,9 @@
                 tone="success"
                 label={engineStatus?.loaded ? 'Ready' : 'Installed'}
               />
+            {:else if isModelDamaged(modelStatus)}
+              <!-- Not "Not installed": it is, and that is the surprise (#258). -->
+              <StatusPill tone="warning" label="Damaged" />
             {:else}
               <StatusPill tone="warning" label="Not installed" />
             {/if}

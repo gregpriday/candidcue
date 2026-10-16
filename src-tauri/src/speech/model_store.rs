@@ -21,14 +21,26 @@
 //! counts — not "the files are there", not "the rename succeeded".
 //!
 //! That is not belt-and-braces. The install sequence writes real files into
-//! their real home and only afterwards can prove the result loads, so there is
-//! a window in which a complete-looking directory is not yet known to work. A
-//! crash inside that window leaves exactly the thing a presence check would
+//! their real home and only afterwards can prove the result is whole, so there
+//! is a window in which a complete-looking directory is not yet known to be.
+//! A crash inside that window leaves exactly the thing a presence check would
 //! accept and a take would then fail on: `OnlineRecognizer::create` answers a
-//! wrong or half-written file with a null pointer and no reason at all. The
-//! seal is written last, after `LocalSttConfig::validate` has passed against
-//! the final path, so its presence means "this was proven here", and an
-//! unsealed directory is treated as absent and re-downloaded.
+//! MISSING file with a null pointer and no reason at all, and a half-written
+//! GRAPH with no answer whatever — onnxruntime throws, and the process aborts.
+//! The seal is written last, after [`verify_contents`] has passed against the
+//! final path, so its presence means "this was proven here", and an unsealed
+//! directory is treated as absent and re-downloaded.
+//!
+//! ---------------------------------------------------------------------------
+//! A SEAL IS NOT A GUARANTEE FOR EVER
+//! ---------------------------------------------------------------------------
+//! The seal records what was true at install. Disks fail, `~/Library` gets
+//! half-restored, cleanup tools truncate things, and none of that touches the
+//! seal. So a sealed directory is checked again every time it is judged —
+//! cheaply, by length and by graph envelope, never by hash — and one that no
+//! longer matches is reported as DAMAGED rather than installed (#258). Before
+//! that it read as "Downloaded" in Settings, offered no Download button, and
+//! took the app down at the start of every take.
 //!
 //! The seal also carries the archive digest, so a catalogue that moves to a new
 //! model version does not silently keep serving the old weights: the seal stops
@@ -155,17 +167,123 @@ pub fn write_seal(dir: &Path, model: &ModelEntry) -> std::io::Result<()> {
     std::fs::rename(&temp, dir.join(SEAL_FILE))
 }
 
-/// Is this directory a usable installation of this model?
+/// What a candidate model directory turned out to be.
+#[derive(Debug)]
+enum Inspection {
+    /// Present, sealed where a seal is required, and whole.
+    Usable,
+    /// Not an installation of this model at all: absent, unsealed, sealed for
+    /// another catalogue entry, or an unsealed directory that does not check
+    /// out. The ordinary state of a machine that has not downloaded it.
+    Absent,
+    /// Sealed — so this app installed it and proved it — and no longer what
+    /// was installed. The one state the user did not cause and cannot see
+    /// without being told, carried with what was found for the log.
+    Damaged(String),
+}
+
+/// Judge one candidate directory.
 ///
-/// Sealed AND shape-valid. `ModelFiles::detect` is asked rather than a list of
-/// filenames because upstream is not consistent about naming and detection is
-/// what the loader itself will do — checking anything else here would be
-/// checking a different question than the one that decides whether a take runs.
-fn is_usable(dir: &Path, model: &ModelEntry, require_seal: bool) -> bool {
-    if require_seal && read_seal(dir, model).is_none() {
-        return false;
+/// A SEALED directory is held to the catalogue: the seal pins the archive
+/// digest and the install extracted exactly the catalogued members, so every
+/// one of them must still be there at its catalogued length — see
+/// [`verify_contents`]. Anything less is damage that happened after the
+/// install, and is reported as such rather than as "not installed".
+///
+/// An unsealed one — the developer override, a bundled resource — gets the
+/// structural half only. It may legitimately be a variant the catalogue does
+/// not describe, so there are no lengths to hold it to; but its graphs are
+/// still walked, because a damaged one would take the process down at the
+/// next load whatever its provenance. It is skipped rather than reported:
+/// Download is not its remedy.
+fn inspect(dir: &Path, model: &ModelEntry, require_seal: bool) -> Inspection {
+    if require_seal {
+        if read_seal(dir, model).is_none() {
+            return Inspection::Absent;
+        }
+        return match verify_contents(dir, model) {
+            Ok(()) => Inspection::Usable,
+            Err(detail) => Inspection::Damaged(detail),
+        };
     }
-    cc_stt::local::ModelFiles::detect(dir).is_ok()
+    let Ok(files) = cc_stt::local::ModelFiles::detect(dir) else {
+        return Inspection::Absent;
+    };
+    match files.check_graphs(dir) {
+        Ok(()) => Inspection::Usable,
+        Err(detail) => {
+            tracing::warn!(
+                dir = %dir.display(),
+                detail = %detail,
+                "skipping an unsealed speech model whose graphs are damaged"
+            );
+            Inspection::Absent
+        }
+    }
+}
+
+/// Are the files in `dir` still the ones this catalogue entry describes?
+///
+/// Three questions, cheapest first, and none of them a hash:
+///
+///   * the names — `ModelFiles::detect`, asked rather than a list of filenames
+///     because upstream is not consistent about naming and detection is what
+///     the loader itself will do;
+///   * the lengths — every catalogued file at exactly its catalogued size,
+///     which catches a truncation of ANY member, the token table included,
+///     for the price of a `stat`;
+///   * the graphs — each one the loader will pick walked as an ONNX envelope,
+///     which catches what a length cannot: the right number of wrong bytes.
+///
+/// The full SHA-256 was checked once, at install. Repeating it here would put
+/// ~170 MB of hashing in front of every take and every status read (#257), and
+/// what it would add over these three — damage inside a graph that leaves its
+/// envelope intact — is spelled out in `cc_stt::local::check_onnx_envelope`.
+///
+/// Also what the install itself proves before it writes the seal, so a model
+/// that installs is a model this function accepts. Holding the two to
+/// different standards would be a model that downloads cleanly and then
+/// reads as damaged for ever.
+pub fn verify_contents(dir: &Path, model: &ModelEntry) -> Result<(), String> {
+    let files = cc_stt::local::ModelFiles::detect(dir)?;
+    for file in &model.files {
+        let len = std::fs::metadata(dir.join(&file.name))
+            .map_err(|err| format!("{} cannot be read: {err}", file.name))?
+            .len();
+        if len != file.bytes {
+            return Err(format!(
+                "{} is {len} bytes where this model's is {}",
+                file.name, file.bytes
+            ));
+        }
+    }
+    files.check_graphs(dir)
+}
+
+/// Is this directory a usable installation of this model?
+fn is_usable(dir: &Path, model: &ModelEntry, require_seal: bool) -> bool {
+    matches!(inspect(dir, model, require_seal), Inspection::Usable)
+}
+
+/// Why this model's download is sealed and yet unusable, if it is.
+///
+/// [`resolve`] answers one question — is there a copy a take can run on — and
+/// falls through a broken download on purpose. This is the other half, for the
+/// screens that must then say WHY there is not one. Before it existed a
+/// damaged download was indistinguishable from a model that was never
+/// fetched, except that the files were there and the next load aborted.
+///
+/// `None` for a download that is merely absent, unsealed or superseded: those
+/// are "not installed", which is the ordinary state and needs no explaining.
+pub fn damaged_download(app_data_dir: &Path, model: &ModelEntry) -> Option<String> {
+    match inspect(
+        &model.install_path(&models_root(app_data_dir)),
+        model,
+        true,
+    ) {
+        Inspection::Damaged(detail) => Some(detail),
+        Inspection::Usable | Inspection::Absent => None,
+    }
 }
 
 /// The development override, if one is set and usable.
@@ -182,8 +300,8 @@ fn is_usable(dir: &Path, model: &ModelEntry, require_seal: bool) -> bool {
 ///
 /// NOT sealed, deliberately: the files it points at were put there by the fetch
 /// script, which verified every one of them against the same catalogue. It is
-/// still shape-checked, so a stale or half-extracted directory is skipped
-/// rather than loaded.
+/// still shape-checked and its graphs walked, so a stale, half-extracted or
+/// damaged directory is skipped rather than loaded.
 fn override_dir(model: &ModelEntry) -> Option<PathBuf> {
     let root = std::env::var_os("CANDIDCUE_MODELS_DIR")?;
     let dir = model.install_path(Path::new(&root));
@@ -302,16 +420,18 @@ pub fn backup_path(root: &Path, model: &ModelEntry) -> PathBuf {
 /// preferring it over a proven backup would throw away the working model to
 /// keep an unproven one.
 ///
-/// It never touches a target that IS sealed, so it cannot disturb a finished
-/// install — including one another instance has just completed.
+/// It never touches a target that is sealed AND whole, so it cannot disturb a
+/// finished install — including one another instance has just completed. A
+/// sealed target that has since been damaged is a different thing: keeping it
+/// over a proven backup would keep the copy that aborts the app.
 pub fn recover_backup(root: &Path, model: &ModelEntry) -> std::io::Result<bool> {
     let backup = backup_path(root, model);
     let target = model.install_path(root);
     if !backup.is_dir() {
         return Ok(false);
     }
-    // A sealed target is a completed install. Nothing to recover.
-    if read_seal(&target, model).is_some() {
+    // A sealed, whole target is a completed install. Nothing to recover.
+    if is_usable(&target, model, true) {
         return Ok(false);
     }
     // Only a backup that is itself usable is worth restoring; otherwise the
@@ -371,17 +491,18 @@ pub fn clear_stale(app_data_dir: &Path, model: &ModelEntry) -> std::io::Result<(
         Err(err) => return Err(err),
     };
     // A backup is only garbage once the model it was protecting is actually
-    // installed and sealed. Deleting it on the strength of "we are about to
-    // install anyway" throws away the user's working model to make room for
-    // one that has not been downloaded yet, and if the download then fails
-    // they have neither.
-    let target_is_sealed = read_seal(&model.install_path(&root), model).is_some();
+    // installed, sealed and whole. Deleting it on the strength of "we are
+    // about to install anyway" throws away the user's working model to make
+    // room for one that has not been downloaded yet, and if the download then
+    // fails they have neither. A seal alone is not enough for the same reason:
+    // a damaged target beside a good backup is a backup worth keeping.
+    let target_is_installed = is_usable(&model.install_path(&root), model, true);
     let staging = format!("{STAGING_PREFIX}{}-", model.install_dir);
     let backup = format!("{BACKUP_PREFIX}{}", model.install_dir);
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let stale = name.starts_with(&staging) || (*name == *backup && target_is_sealed);
+        let stale = name.starts_with(&staging) || (*name == *backup && target_is_installed);
         if stale {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -433,8 +554,109 @@ pub fn write_attribution(dir: &Path, model: &ModelEntry) -> std::io::Result<()> 
     std::fs::write(dir.join(super::catalogue::licence_file_name(id)), text)
 }
 
+/// Model files this module will accept, for the tests here and in
+/// `model_download`, which judge directories through [`resolve`] too.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use std::io::{Seek as _, SeekFrom, Write as _};
+    use std::path::Path;
+
+    use crate::speech::catalogue::ModelEntry;
+
+    /// `opset_import { version: 13 }`, the field that closes every graph here.
+    const OPSET: [u8; 4] = [0x42, 0x02, 0x10, 0x0d];
+
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    /// `ir_version: 7`, then the graph's tag and the length that makes the
+    /// whole file exactly `len` bytes once the opset is appended.
+    fn header(len: u64) -> Vec<u8> {
+        for width in 1..=10u64 {
+            let Some(payload) = len.checked_sub(3 + width + OPSET.len() as u64) else {
+                break;
+            };
+            let encoded = varint(payload);
+            if encoded.len() as u64 == width {
+                return [vec![0x08, 0x07, 0x3a], encoded].concat();
+            }
+        }
+        panic!("no ONNX envelope is exactly {len} bytes");
+    }
+
+    /// A whole ONNX envelope of exactly `len` bytes, with `marker` at the start
+    /// of its graph so a test can tell one copy from another.
+    pub(crate) fn graph_bytes(len: u64, marker: &[u8]) -> Vec<u8> {
+        let mut bytes = header(len);
+        bytes.extend_from_slice(marker);
+        assert!(bytes.len() + OPSET.len() <= len as usize, "{len} bytes cannot hold the marker");
+        bytes.resize(len as usize - OPSET.len(), 0);
+        bytes.extend_from_slice(&OPSET);
+        bytes
+    }
+
+    /// [`graph_bytes`], written as a SPARSE file.
+    ///
+    /// The graph payload between the marker and the opset is a hole, so a
+    /// catalogue-length 155 MB encoder costs a few bytes of disk. The envelope
+    /// walk seeks past payloads, so a hole is exactly what it would see in a
+    /// real graph.
+    pub(crate) fn write_graph(path: &Path, len: u64, marker: &[u8]) {
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header(len)).unwrap();
+        file.write_all(marker).unwrap();
+        file.seek(SeekFrom::Start(len - OPSET.len() as u64)).unwrap();
+        file.write_all(&OPSET).unwrap();
+    }
+
+    /// A file of exactly `len` bytes that starts with `head`.
+    pub(crate) fn write_padded(path: &Path, len: u64, head: &[u8]) {
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(head).unwrap();
+        file.set_len(len).unwrap();
+    }
+
+    /// The length the catalogue gives `name`, if it lists it.
+    pub(crate) fn catalogued_len(model: &ModelEntry, name: &str) -> Option<u64> {
+        model.files.iter().find(|file| file.name == name).map(|file| file.bytes)
+    }
+
+    /// A directory that passes every check [`super::resolve`] makes for
+    /// `model`, with `marker` in each graph.
+    ///
+    /// Every catalogued file at its catalogued length, and every graph role
+    /// present whether or not the catalogue lists it, so the directory detects
+    /// even under a fixture catalogue that is deliberately short a file.
+    pub(crate) fn write_model(dir: &Path, model: &ModelEntry, marker: &[u8]) {
+        std::fs::create_dir_all(dir).unwrap();
+        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
+            let len = catalogued_len(model, name).unwrap_or(64);
+            write_graph(&dir.join(name), len, marker);
+        }
+        for file in &model.files {
+            if !file.name.ends_with(".onnx") {
+                write_padded(&dir.join(&file.name), file.bytes, b"<blk> 0\n");
+            }
+        }
+        if catalogued_len(model, cc_stt::local::TOKENS_FILE).is_none() {
+            write_padded(&dir.join(cc_stt::local::TOKENS_FILE), 8, b"<blk> 0\n");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{catalogued_len, write_graph, write_model};
     use super::*;
     use crate::speech::catalogue;
 
@@ -466,13 +688,19 @@ mod tests {
         }
     }
 
-    /// Enough of a model directory for `ModelFiles::detect` to accept it.
+    /// A whole copy of the shipping model, as far as every check can tell:
+    /// the real catalogue's names and lengths, and real graph envelopes.
     fn write_detectable_model(dir: &Path) {
-        std::fs::create_dir_all(dir).unwrap();
-        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
-            std::fs::write(dir.join(name), b"graph").unwrap();
-        }
-        std::fs::write(dir.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        write_model(dir, catalogue::default_model(), b"graph");
+    }
+
+    /// A sealed download of the shipping model, in the given temp app-data dir.
+    fn sealed_download(app_data: &Path) -> PathBuf {
+        let model = catalogue::default_model();
+        let dir = model.install_path(&models_root(app_data));
+        write_detectable_model(&dir);
+        write_seal(&dir, model).unwrap();
+        dir
     }
 
     #[test]
@@ -545,6 +773,177 @@ mod tests {
         let resolved = resolve(temp.path(), Some(&resource), model)
             .expect("the bundled model must still be found");
         assert_eq!(resolved.source, ModelSource::Bundled);
+    }
+
+    /// The truncated encoder from #258: sealed, named right, cut short.
+    ///
+    /// It used to resolve — the seal and the names were all `is_usable` looked
+    /// at — and the next load aborted the process.
+    #[test]
+    fn a_sealed_download_cut_short_is_damaged_rather_than_installed() {
+        let _env = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let dir = sealed_download(temp.path());
+        let encoder = std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("encoder.int8.onnx"))
+            .unwrap();
+        encoder.set_len(50 * 1024 * 1024).unwrap();
+
+        assert!(resolve(temp.path(), None, model).is_none());
+        let detail = damaged_download(temp.path(), model).expect("the damage must be reported");
+        assert!(detail.contains("encoder.int8.onnx"), "{detail}");
+    }
+
+    /// The other #258 case: every length right, one graph's bytes wrong. Only
+    /// the envelope walk can see it.
+    #[test]
+    fn a_sealed_download_with_the_right_number_of_wrong_bytes_is_damaged() {
+        let _env = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let dir = sealed_download(temp.path());
+        let len = catalogued_len(model, "decoder.onnx").unwrap();
+        super::fixtures::write_padded(&dir.join("decoder.onnx"), len, b"<!DOCTYPE html>");
+
+        assert!(resolve(temp.path(), None, model).is_none());
+        let detail = damaged_download(temp.path(), model).expect("the damage must be reported");
+        assert!(detail.contains("decoder.onnx"), "{detail}");
+        assert!(detail.contains("not a readable ONNX model"), "{detail}");
+    }
+
+    /// Damage is not only to graphs. A token table cut short or deleted out of
+    /// a sealed directory is the same fault, and the length check is what
+    /// sees the first.
+    #[test]
+    fn a_sealed_download_with_a_damaged_or_missing_token_table_is_damaged() {
+        let _env = env_guard();
+        let model = catalogue::default_model();
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = sealed_download(temp.path());
+        std::fs::write(dir.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        let detail = damaged_download(temp.path(), model).expect("a short token table is damage");
+        assert!(detail.contains("tokens.txt"), "{detail}");
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = sealed_download(temp.path());
+        std::fs::remove_file(dir.join("tokens.txt")).unwrap();
+        assert!(resolve(temp.path(), None, model).is_none());
+        let detail = damaged_download(temp.path(), model).expect("a missing token table is damage");
+        assert!(detail.contains("tokens.txt"), "{detail}");
+    }
+
+    /// "Damaged" is a claim about a model this app installed and proved. A
+    /// download that is merely absent, unsealed or superseded is "not
+    /// installed", and must not be described as broken.
+    #[test]
+    fn only_a_sealed_download_is_ever_called_damaged() {
+        let _env = env_guard();
+        let model = catalogue::default_model();
+
+        let nothing = tempfile::tempdir().unwrap();
+        assert!(damaged_download(nothing.path(), model).is_none());
+
+        let unsealed = tempfile::tempdir().unwrap();
+        let dir = model.install_path(&models_root(unsealed.path()));
+        write_detectable_model(&dir);
+        std::fs::write(dir.join("decoder.onnx"), b"not a graph").unwrap();
+        assert!(damaged_download(unsealed.path(), model).is_none());
+
+        let whole = tempfile::tempdir().unwrap();
+        sealed_download(whole.path());
+        assert!(damaged_download(whole.path(), model).is_none());
+        assert_eq!(
+            resolve(whole.path(), None, model).map(|found| found.source),
+            Some(ModelSource::Downloaded),
+            "a whole sealed download must still resolve at the real catalogue's lengths"
+        );
+    }
+
+    /// Damage in app data does not hide a working fallback — and the damage is
+    /// still there to report once the fallback is gone.
+    #[test]
+    fn a_damaged_download_still_falls_through_to_a_working_bundled_model() {
+        let _env = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let dir = sealed_download(temp.path());
+        std::fs::write(dir.join("joiner.int8.onnx"), b"").unwrap();
+        let resource = temp.path().join("resources").join("models/x-asr-480ms");
+        write_detectable_model(&resource);
+
+        let resolved = resolve(temp.path(), Some(&resource), model)
+            .expect("the bundled model must still be found");
+        assert_eq!(resolved.source, ModelSource::Bundled);
+        assert!(damaged_download(temp.path(), model).is_some());
+    }
+
+    /// An override is unsealed, so its lengths are not held to the catalogue,
+    /// but its graphs are still walked: a damaged one would abort the next
+    /// load whatever its provenance.
+    #[test]
+    fn a_damaged_override_falls_through_to_the_download() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let _env = env_guard();
+
+        let source_tree = temp.path().join("src-tauri/models");
+        let overridden = model.install_path(&source_tree);
+        write_detectable_model(&overridden);
+        std::fs::write(overridden.join("encoder.int8.onnx"), [0u8; 4096]).unwrap();
+        let _override = EnvOverride::set(&source_tree);
+        sealed_download(temp.path());
+
+        let resolved = resolve(temp.path(), None, model).expect("the download must be used");
+        assert_eq!(resolved.source, ModelSource::Downloaded);
+    }
+
+    /// A variant the catalogue does not describe is still a usable override:
+    /// lengths are a claim only a seal can make.
+    #[test]
+    fn an_override_is_not_held_to_the_catalogue_lengths() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let _env = env_guard();
+
+        let source_tree = temp.path().join("src-tauri/models");
+        let overridden = model.install_path(&source_tree);
+        std::fs::create_dir_all(&overridden).unwrap();
+        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
+            write_graph(&overridden.join(name), 64, b"variant");
+        }
+        std::fs::write(overridden.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        let _override = EnvOverride::set(&source_tree);
+
+        let resolved = resolve(temp.path(), None, model).expect("the override must resolve");
+        assert_eq!(resolved.source, ModelSource::Override);
+    }
+
+    /// A sealed target that has since been damaged is not a "completed
+    /// install" to protect. A proven backup beside it is put back.
+    #[test]
+    fn a_proven_backup_replaces_a_damaged_sealed_target() {
+        let _env = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let root = models_root(temp.path());
+        let target = sealed_download(temp.path());
+        std::fs::write(target.join("decoder.onnx"), b"damaged").unwrap();
+        let backup = backup_path(&root, model);
+        write_detectable_model(&backup);
+        write_seal(&backup, model).unwrap();
+
+        // The sweep must not throw the good copy away on the strength of the
+        // damaged one's seal.
+        clear_stale(temp.path(), model).unwrap();
+        assert!(backup.is_dir(), "a backup beside a damaged target is the only good copy");
+
+        assert!(recover_backup(&root, model).unwrap());
+        let resolved = resolve(temp.path(), None, model).expect("the backup must be back in place");
+        assert_eq!(resolved.dir, target);
+        assert!(damaged_download(temp.path(), model).is_none());
     }
 
     #[test]

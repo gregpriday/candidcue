@@ -706,7 +706,7 @@ export interface StartSessionInput {
 /**
  * Was the recogniser refused because of the speech model itself?
  *
- * Exactly these three, and not every `STT_MODEL_` code: download, cancel and
+ * Exactly these four, and not every `STT_MODEL_` code: download, cancel and
  * removal failures share the prefix and describe a Settings action, not a take
  * that could not start. Spelled out so each code stays grep-able against
  * `src/shared/contracts/errors.ts`.
@@ -715,7 +715,8 @@ function isSpeechModelUnavailable(code: string | null): boolean {
   return (
     code === 'STT_MODEL_NOT_INSTALLED' ||
     code === 'STT_MODEL_MISSING' ||
-    code === 'STT_MODEL_LOAD_FAILED'
+    code === 'STT_MODEL_LOAD_FAILED' ||
+    code === 'STT_MODEL_DAMAGED'
   );
 }
 
