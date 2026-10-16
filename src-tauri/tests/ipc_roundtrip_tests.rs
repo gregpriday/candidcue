@@ -963,6 +963,55 @@ fn transcript_retention_follows_the_settings_patch_the_ui_sends() {
     assert_eq!(written, json!(1));
 }
 
+/// #216 — permanently deleting a script deletes its sessions, so a take still
+/// open on it ends against a record that is gone. The refusal is right, but the
+/// take must still end in the coordinator: left there, `select_speech_language`
+/// goes on refusing because "a take is running" until the next take starts.
+#[test]
+fn ending_a_take_whose_script_was_deleted_still_ends_the_take() {
+    let h = harness();
+    let created = h.expect_ok(
+        "create_script",
+        json!({ "input": { "title": "Gone", "source": "# Gone\n" } }),
+    );
+    let script_id = created["id"].as_str().unwrap().to_string();
+    let session = h.expect_ok(
+        "start_session",
+        json!({ "input": {
+            "scriptId": script_id,
+            "scriptSourceHash": "sha256:gone",
+            "mode": "voice",
+            "startTokenIndex": 0,
+        }}),
+    );
+    let session_id = session["id"].as_str().unwrap().to_string();
+
+    let listed = h.expect_ok("list_scripts", json!({ "filter": {} }));
+    h.expect_ok(
+        "trash_script",
+        json!({
+            "scriptId": script_id,
+            "expectedRevision": listed["items"][0]["scriptRevision"].as_i64().unwrap(),
+        }),
+    );
+    h.expect_ok("permanently_delete_script", json!({ "scriptId": script_id }));
+    assert_eq!(
+        h.coordinator().snapshot().session.session_id.as_deref(),
+        Some(session_id.as_str()),
+        "the take is still open in the coordinator when its record goes"
+    );
+
+    let gone = h
+        .invoke("end_session", json!({ "sessionId": session_id, "summary": null }))
+        .expect_err("the session record was deleted with its script");
+    assert_eq!(gone["code"], json!("NOT_FOUND"), "got: {gone}");
+    assert_eq!(
+        h.coordinator().snapshot().session.session_id,
+        None,
+        "ending a take whose record is gone must still end the take"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 3. Guards on the harness itself
 // ---------------------------------------------------------------------------

@@ -397,10 +397,13 @@ pub async fn end_session(
     .execute(pool)
     .await?;
 
+    // Re-read as optional: a permanent delete of the script can remove the row
+    // between the two reads, and that is the same "gone", not a database fault.
     let row = sqlx::query("SELECT * FROM sessions WHERE id = ?")
         .bind(session_id)
-        .fetch_one(pool)
-        .await?;
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("session"))?;
     Ok(record_from_row(&row)?)
 }
 

@@ -165,7 +165,14 @@ pub async fn run_startup_reconciliation(
     }
 
     // 6. Purge trash older than 30 days (spec §21.5).
-    report.trash_purged = repo::purge_expired_trash(pool, paths, locks).await.unwrap_or(0);
+    report.trash_purged = match repo::purge_expired_trash(pool, paths, locks).await {
+        Ok(purged) => purged,
+        Err(err) => {
+            tracing::warn!(error = %err, "expired trash could not be listed for purging");
+            report.notes.push(format!("purge trash: {err}"));
+            0
+        }
+    };
 
     // Preserve evidence: write the report to the diagnostics directory.
     write_report(paths, &report)?;
