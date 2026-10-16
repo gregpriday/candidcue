@@ -72,6 +72,7 @@ pub mod language_options;
 pub mod model_download;
 pub mod model_manager;
 pub mod model_store;
+mod resident;
 pub mod session;
 
 /// The one sample rate the app captures and streams at.
@@ -96,33 +97,23 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 /// they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
 
-/// The recogniser resident in memory, and which one it is.
-///
-/// The id travels WITH the handle rather than beside it. Two mutexes holding
-/// two halves of one fact is an invitation for them to disagree, and the fact
-/// they would be disagreeing about is "what is doing the listening" — which is
-/// the question diagnostics exist to answer.
-struct CachedRecognizer {
-    model_id: &'static str,
-    recognizer: Arc<cc_stt::LocalRecognizer>,
-}
-
 /// Managed state: the loaded model, and the live session if one is running.
 ///
 /// Exactly one streaming session may exist at a time — a take owns the
 /// microphone, and a second session would be transcribing audio nobody reads.
 pub struct SpeechEngine {
-    /// Loaded once and kept resident. Loading costs ~200 ms, which is 200 ms
-    /// that must not be spent at the top of a take: the presenter has already
-    /// started talking by the time a session is armed.
+    /// Loaded once and kept resident. A load takes over a second — 1.1 s on a
+    /// warm release build, 5.2 s the worst the logs have recorded — which must
+    /// not be spent at the top of a take: the presenter has already started
+    /// talking by the time a session is armed.
     ///
     /// One slot, keyed, rather than a map from model to recogniser. A map would
     /// hold every model that had ever been used — ~161 MB of ONNX graphs each —
-    /// to save a ~200 ms load on a switch that cannot happen during a take,
-    /// since exactly one session may run at a time. Keeping the second model
+    /// to save a load on a switch that cannot happen during a take, since
+    /// exactly one session may run at a time. Keeping the second model
     /// resident buys latency nobody is waiting on with memory the presenter's
     /// machine is using for something else.
-    recognizer: std::sync::Mutex<Option<CachedRecognizer>>,
+    recognizer: resident::Resident<cc_stt::LocalRecognizer>,
     session: std::sync::Mutex<Option<session::SessionHandle>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
@@ -136,7 +127,7 @@ impl Default for SpeechEngine {
 impl SpeechEngine {
     pub fn new() -> Self {
         Self {
-            recognizer: std::sync::Mutex::new(None),
+            recognizer: resident::Resident::new(),
             session: std::sync::Mutex::new(None),
             next_generation: std::sync::atomic::AtomicU64::new(1),
         }
@@ -211,11 +202,12 @@ impl SpeechEngine {
     /// started with, which is the only safe answer: swapping a recogniser out
     /// from under a live session would change what the engine is hearing
     /// halfway through.
+    ///
+    /// A load of this model still in progress is stopped from becoming
+    /// resident, for the same reason — it is reading the files being replaced.
+    /// Never waits for that load to finish.
     pub fn evict_if_loaded(&self, model_id: &str) {
-        let mut slot = self.recognizer.lock().expect("stt model poisoned");
-        if slot.as_ref().is_some_and(|c| c.model_id == model_id) {
-            *slot = None;
-        }
+        self.recognizer.evict(model_id);
     }
 
     /// Load the requested model if it is not already resident, and hand back a
@@ -224,89 +216,70 @@ impl SpeechEngine {
     /// Idempotent and safe to call from a warm-up path as well as from the
     /// start of a take. Asking for a model other than the resident one replaces
     /// it rather than adding to it — see the field docs on `recognizer`.
+    ///
+    /// BLOCKS for the length of a load, which is over a second, and for any
+    /// load already in progress. Call it on a blocking thread, never on an
+    /// async worker: the commands go through `tauri::async_runtime::spawn_blocking`.
     pub fn ensure_loaded<R: tauri::Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
         model: &BundledModel,
     ) -> Result<Arc<cc_stt::LocalRecognizer>, AppError> {
-        // The lock is held ACROSS the load, not just across the check. Preload
-        // and the start of a take can arrive together — that is the normal
-        // case, not a race to be tolerated — and a check-then-load would let
-        // both see "not loaded" and each build a recognizer, paying the ~200 ms
-        // and the memory twice for one that is immediately dropped.
-        let mut slot = self.recognizer.lock().expect("stt model poisoned");
-        if let Some(cached) = slot.as_ref() {
-            if cached.model_id == model.id {
-                return Ok(Arc::clone(&cached.recognizer));
-            }
-        }
-
-        let dir = Self::model_dir(app, model)?;
-        let config = cc_stt::LocalSttConfig::for_model(model, &dir);
-        // Checked before the C library is asked, because `create` answers a
-        // missing file with a null pointer and no reason at all.
-        //
-        // Resolved and checked while any previous model is STILL CACHED. A
-        // request for a model this installation does not have should leave the
-        // one it does have exactly where it was — evicting first would answer
-        // "you asked for a model that isn't here" by also throwing away the
-        // working one, and the next take would pay a cold load for nothing.
-        config.validate().map_err(|detail| {
-            AppError::structured(
-                "STT_MODEL_MISSING",
-                ErrorCategory::Internal,
-                format!("The speech model is missing from this installation. {detail}"),
-                false,
-            )
-        })?;
-
-        // Dropped immediately before the replacement is built, so two ~161 MB
-        // graph sets never sit in the cache together. A take already running
-        // keeps its own `Arc` and finishes on the model it started with — the
-        // only safe answer, since swapping a recogniser out from under a
-        // session would change what the engine is hearing halfway through.
-        *slot = None;
-
-        let started = std::time::Instant::now();
-        let loaded = cc_stt::LocalRecognizer::load(&config).map_err(|detail| {
-            AppError::structured(
-                "STT_MODEL_LOAD_FAILED",
-                ErrorCategory::Internal,
-                format!("The speech model could not be loaded. {detail}"),
-                false,
-            )
-        })?;
-        tracing::info!(
-            model = model.id,
-            dir = %dir.display(),
-            blank_penalty = config.blank_penalty,
-            load_ms = started.elapsed().as_millis(),
-            "loaded on-device speech model"
-        );
-
-        let loaded = Arc::new(loaded);
-        *slot = Some(CachedRecognizer {
-            model_id: model.id,
-            recognizer: Arc::clone(&loaded),
-        });
-        Ok(loaded)
+        self.recognizer.get_or_load(
+            model.id,
+            || {
+                let dir = Self::model_dir(app, model)?;
+                let config = cc_stt::LocalSttConfig::for_model(model, &dir);
+                // Checked before the C library is asked, because `create`
+                // answers a missing file with a null pointer and no reason at
+                // all. And checked while any previous model is still resident,
+                // which `get_or_load` documents.
+                config.validate().map_err(|detail| {
+                    AppError::structured(
+                        "STT_MODEL_MISSING",
+                        ErrorCategory::Internal,
+                        format!("The speech model is missing from this installation. {detail}"),
+                        false,
+                    )
+                })?;
+                Ok((dir, config))
+            },
+            |(dir, config)| {
+                let started = std::time::Instant::now();
+                let loaded = cc_stt::LocalRecognizer::load(&config).map_err(|detail| {
+                    AppError::structured(
+                        "STT_MODEL_LOAD_FAILED",
+                        ErrorCategory::Internal,
+                        format!("The speech model could not be loaded. {detail}"),
+                        false,
+                    )
+                })?;
+                tracing::info!(
+                    model = model.id,
+                    dir = %dir.display(),
+                    blank_penalty = config.blank_penalty,
+                    load_ms = started.elapsed().as_millis(),
+                    "loaded on-device speech model"
+                );
+                Ok(loaded)
+            },
+        )
     }
 
     /// Whether a model is resident. Diagnostics and Settings.
+    ///
+    /// Never waits for a load in progress: a model still loading is not
+    /// resident yet.
     pub fn is_loaded(&self) -> bool {
-        self.recognizer
-            .lock()
-            .expect("stt model poisoned")
-            .is_some()
+        self.recognizer.loaded_id().is_some()
     }
 
     /// Which model is resident, if any. Diagnostics and Settings.
+    ///
+    /// Never waits for a load in progress, which is the point: the status line
+    /// and a model deletion both ask, and a load can take five seconds.
     pub fn loaded_model_id(&self) -> Option<&'static str> {
-        self.recognizer
-            .lock()
-            .expect("stt model poisoned")
-            .as_ref()
-            .map(|cached| cached.model_id)
+        self.recognizer.loaded_id()
     }
 
     /// The generation of the session currently running, if any.
@@ -327,6 +300,9 @@ impl SpeechEngine {
     /// every audio frame the renderer pushes. Without it, a frame in flight
     /// when a take ends would be appended to the next take's audio, and a
     /// transcript from the old session would land in the new take's ledger.
+    ///
+    /// Blocks on a cold start, because it loads the model first: see
+    /// [`Self::ensure_loaded`].
     pub fn start_stream<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,

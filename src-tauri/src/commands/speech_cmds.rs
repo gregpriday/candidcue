@@ -119,19 +119,57 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     })
 }
 
+/// Run speech-engine work that may load the model, off the async runtime.
+///
+/// A load is a blocking C++ call that takes over a second — five on a slow
+/// start — and a second caller waits out the first one's. On an async worker
+/// that is a worker lost for the duration, and every other command queued
+/// behind it, which is the rule `speech::session` already states for
+/// inference.
+///
+/// The engine is looked up again on the blocking thread because `State` is a
+/// borrow of the command's invocation and cannot travel there.
+///
+/// The work's own error comes back unchanged. Only a task that never finished
+/// — it panicked, or the runtime is shutting down — is reported here, and as
+/// the recogniser failing to start rather than through `From<tauri::Error>`,
+/// which would call it a window error.
+async fn off_the_runtime<R: tauri::Runtime, T: Send + 'static>(
+    app: tauri::AppHandle<R>,
+    work: impl FnOnce(&tauri::AppHandle<R>, &SpeechEngine) -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
+    use tauri::Manager as _;
+    tauri::async_runtime::spawn_blocking(move || {
+        let speech = app.state::<SpeechEngine>();
+        work(&app, &speech)
+    })
+    .await
+    .map_err(|err| {
+        AppError::structured(
+            "STT_WORKER_FAILED",
+            ErrorCategory::Internal,
+            "The speech recogniser could not be started.",
+            false,
+        )
+        .with_log(format!("speech engine task did not complete: {err}"))
+    })?
+}
+
 /// Load the model without starting a take.
 ///
-/// Worth calling when the presenter opens the live view: loading costs ~200 ms
-/// and belongs anywhere except the top of a take, where the presenter has
-/// already started talking. Idempotent.
+/// Worth calling when the presenter opens the live view: loading takes over a
+/// second and belongs anywhere except the top of a take, where the presenter
+/// has already started talking. Idempotent.
 #[tauri::command]
 pub async fn preload_speech_engine<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
-    speech: State<'_, SpeechEngine>,
 ) -> Result<(), AppError> {
     let model = selected_model(&db).await?;
-    speech.ensure_loaded(&app, model).map(|_| ())
+    off_the_runtime(app, move |app, speech| {
+        speech.ensure_loaded(app, model).map(|_| ())
+    })
+    .await
 }
 
 /// What the renderer may choose about a session.
@@ -168,13 +206,18 @@ pub async fn start_transcription<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
     db: State<'_, Database>,
-    speech: State<'_, SpeechEngine>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
     let model = selected_model(&db).await?;
-    speech.start_stream(app, model)
+    // All of `start_stream`, not just its load: the rest is microseconds, and
+    // splitting it would open a gap between loading a recogniser and binding
+    // a session to it that nothing needs.
+    off_the_runtime(app, move |app, speech| {
+        speech.start_stream(app.clone(), model)
+    })
+    .await
 }
 
 /// Forward one frame of PCM16 audio, base64-encoded.
@@ -428,5 +471,83 @@ fn resolve_entry(model_id: Option<&str>) -> Result<&'static ModelEntry, AppError
     match model_id {
         Some(id) => model_manager::entry_for(id),
         None => Ok(catalogue::default_model()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::Manager as _;
+
+    fn app() -> tauri::App<tauri::test::MockRuntime> {
+        let app = tauri::test::mock_app();
+        app.manage(SpeechEngine::new());
+        app
+    }
+
+    /// The whole point of the helper (#256). Run inline, the work would be on
+    /// the thread polling the command — an async worker, for a real command.
+    #[test]
+    fn the_work_runs_off_the_thread_that_awaits_it() {
+        let app = app();
+        let handle = app.handle().clone();
+        let (awaiting, working) = tauri::async_runtime::block_on(async move {
+            let awaiting = std::thread::current().id();
+            let working = off_the_runtime(handle, |_, _| Ok(std::thread::current().id())).await;
+            (awaiting, working)
+        });
+        assert_ne!(awaiting, working.expect("the work succeeds"));
+    }
+
+    #[test]
+    fn the_works_own_error_comes_back_unchanged() {
+        let app = app();
+        let err = tauri::async_runtime::block_on(off_the_runtime(
+            app.handle().clone(),
+            |_, _| -> Result<(), AppError> {
+                Err(AppError::structured(
+                    "STT_MODEL_NOT_INSTALLED",
+                    ErrorCategory::Validation,
+                    "not on this machine",
+                    true,
+                ))
+            },
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AppError::Structured {
+                    code: "STT_MODEL_NOT_INSTALLED",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// A task that never finished is the recogniser failing to start, and says
+    /// so in a code the frontend has copy for, rather than as a window error.
+    #[test]
+    fn a_task_that_never_finishes_is_reported_as_the_recogniser_failing() {
+        let app = app();
+        let err = tauri::async_runtime::block_on(off_the_runtime(
+            app.handle().clone(),
+            |_, _| -> Result<(), AppError> { panic!("the C library fell over") },
+        ))
+        .unwrap_err();
+        match err {
+            AppError::Structured {
+                code,
+                category,
+                recoverable,
+                ..
+            } => {
+                assert_eq!(code, "STT_WORKER_FAILED");
+                assert_eq!(category, ErrorCategory::Internal);
+                assert!(!recoverable);
+            }
+            other => panic!("expected a structured error, got {other:?}"),
+        }
     }
 }

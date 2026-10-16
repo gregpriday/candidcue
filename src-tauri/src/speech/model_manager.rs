@@ -315,6 +315,12 @@ impl SpeechModelManager {
         // start immediately afterwards — but `ensure_loaded` validates the
         // directory before every load, so the worst case is a take that fails
         // to arm rather than one that dies mid-sentence.
+        //
+        // Nor does it wait for a load in progress: a model still loading is
+        // not resident, so a take arming on it is not refused here. That load
+        // either fails on the missing files or finishes on graphs it has
+        // already read into memory, and the eviction below keeps it from
+        // becoming what the next take uses.
         let speech = app.state::<super::SpeechEngine>();
         if speech.active_generation().is_some()
             && loadable_model(entry).is_some_and(|m| speech.loaded_model_id() == Some(m.id))
