@@ -54,8 +54,12 @@ bench/results/
 # LFS would be the wrong home for a file nothing needs to keep.
 bench/traces/
 
-# Claude Code local state (worktrees, etc.)
-.claude/
+# Claude Code local state. Only the root .claude/ is involved, and only what is
+# machine-local inside it: everything else (skills, commands, the Daintree
+# assistant's .daintree/assistant/.claude/) is tracked. Un-ignore anything
+# below here explicitly if it ever needs to be shared.
+/.claude/worktrees/
+/.claude/settings.local.json
 # Throwaway probe tests written during code review to demonstrate a bug.
 tests/unit/probe/
 sbom/*
