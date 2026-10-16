@@ -117,6 +117,9 @@ impl FetchPolicy {
     fn hop_policy(&self) -> HopPolicy {
         HopPolicy {
             labels: IMAGE_HOP_LABELS,
+            // An image url is whatever a document says it is, and nothing pins
+            // its bytes, so a synthesised address gets no benefit of the doubt.
+            addresses: net::AddressRule::Public,
             #[cfg(test)]
             exempt_authority: self.exempt_authority.clone(),
         }
@@ -595,6 +598,13 @@ mod tests {
         let message = unreachable.user_message();
         assert!(message.contains("Check your connection"), "{message}");
         assert!(!message.contains("refused"), "{message}");
+    }
+
+    #[test]
+    fn an_image_never_accepts_a_synthesised_address() {
+        // The model download accepts fake-IP and NAT64 answers because its
+        // bytes are digest-pinned. An image's are not.
+        assert_eq!(FetchPolicy::strict().hop_policy().addresses, net::AddressRule::Public);
     }
 
     #[tokio::test]

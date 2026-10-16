@@ -510,7 +510,7 @@ async fn run_install<R: tauri::Runtime>(
         &data_dir,
         catalogue(),
         entry,
-        &crate::net::HopPolicy::strict(model_download::MODEL_HOP_LABELS),
+        &model_download::hop_policy(),
         &cancel,
         &progress,
     )

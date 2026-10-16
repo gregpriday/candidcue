@@ -765,3 +765,20 @@ describe('the model download is the remedy, not a reinstall', () => {
     expect(opener(notInstalled)).not.toBe(opener(missing));
   });
 });
+
+/**
+ * #261 — a refused model address used to blame the release. The url is compiled
+ * in, and the fake-IP and NAT64 answers ordinary networks give it are accepted
+ * now, so the only thing left that can point it somewhere private is the
+ * network: that is where the copy has to send the reader.
+ */
+describe('a refused model address points at the network, not the release', () => {
+  it('advises on the network and never blames the release', () => {
+    const copy = copyForErrorCode('STT_MODEL_URL_BLOCKED');
+    expect(copy).toMatch(/network settings/);
+    expect(copy).toMatch(/try another network/);
+    expect(copy).not.toMatch(/release/i);
+    expect(copy).not.toMatch(CODE_TOKEN);
+    expect(describeError({ code: 'STT_MODEL_URL_BLOCKED', userMessage: 'x' })).toBe(copy);
+  });
+});

@@ -292,8 +292,11 @@ const ERROR_COPY: Record<string, string> = {
     'That language is not available in this version of CandidCue.',
   STT_MODEL_URL_INSECURE:
     'The download address for that language is not secure, so CandidCue refused it. This is a problem with the release rather than with your machine.',
+  // Not the release's fault: the url is compiled in, and the fake-IP and NAT64
+  // answers ordinary networks give it are accepted (#261). What is left is a
+  // network pointing the name somewhere private.
   STT_MODEL_URL_BLOCKED:
-    'The download address for that language does not point at a public server, so CandidCue refused it. This is a problem with the release rather than with your machine.',
+    'The download address for that language led somewhere other than a public server, so CandidCue refused it. Check your DNS, VPN or network settings, or try another network.',
 
   /* -- choosing a language ------------------------------------------------ */
   STT_LANGUAGE_CHANGE_BLOCKED:

@@ -36,7 +36,9 @@ Everything below is the **current** behaviour of a stock 1.0 build, not a plan.
 
 `model_download.rs` follows redirects by hand, revalidating every hop through
 `net::check_hop` — HTTPS only, no credentials in the URL, and every resolved
-address must be publicly routable. What it does **not** have is a host
+address must be publicly routable or one a local network synthesises for the
+name: a fake-IP proxy's `198.18.0.0/15`, or a DNS64 resolver's `64:ff9b::/96`
+wrapped around a public IPv4. What it does **not** have is a host
 allow-list. A redirect from the catalogue URL can therefore land on a host this
 table does not name.
 
@@ -78,7 +80,9 @@ Both go through `src-tauri/src/net.rs`, which is the only outbound-HTTP
 discipline in the **application**: HTTPS only, no credentials in the URL, no
 proxy, no cookies, no referer, redirects disabled in the client and revalidated
 by hand, every resolved address checked as publicly routable and then pinned so
-a DNS rebind cannot move the target.
+a DNS rebind cannot move the target. The model download alone also accepts the
+fake-IP and NAT64 answers above, because its bytes are checked against a
+compiled-in digest; an image's are not, so the image path does not.
 
 | Caller | Reachable in a stock build? |
 |---|---|
