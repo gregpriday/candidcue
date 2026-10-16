@@ -1,7 +1,7 @@
 /**
  * Keyboard shortcuts (spec §19). One window-level listener translates key
  * events into named actions; screens subscribe with `onShortcut`. Cmd on
- * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, T, A, [, ]) are
+ * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, A, [, ]) are
  * suppressed while the user is typing and while the focused control activates
  * itself on the same key; nothing fires behind a modal dialog.
  */
@@ -24,7 +24,6 @@ export type ShortcutAction =
   | 'stage-text-down'
   | 'toggle-mirror'
   | 'blank-stage'
-  | 'take-marker'
   | 'command-help'
   /**
    * Pop the take out to the whole display, or back into a window (§ reader mode).
@@ -121,7 +120,6 @@ export const SHORTCUT_OWNERSHIP = {
   'stage-text-down': ['live'],
   'toggle-mirror': ['live'],
   'blank-stage': ['live'],
-  'take-marker': ['live'],
   'toggle-presentation-mode': ['live'],
   'toggle-auto-scroll': ['live'],
   'auto-scroll-faster': ['live'],
@@ -429,10 +427,8 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
         return 'play-pause';
       case 'b':
         return 'blank-stage';
-      case 't':
-        return 'take-marker';
       /*
-       * The transport, on unmodified keys, beside the other three.
+       * The transport, on unmodified keys, beside Space and B.
        *
        * `a` for the transport itself and the bracket keys for its pace: they sit
        * together under one hand, they are not something a presenter reaches for

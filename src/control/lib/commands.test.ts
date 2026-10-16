@@ -121,7 +121,6 @@ describe('availability during a take', () => {
     'session.next-chapter',
     'session.blank-stage',
     'session.toggle-mirror',
-    'session.take-marker',
     'session.identify-displays',
     'session.end-take',
     'view.stage-appearance',

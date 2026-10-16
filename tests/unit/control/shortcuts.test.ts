@@ -284,7 +284,21 @@ describe('installShortcuts — what actually reaches the focused control', () =>
   it('delivers the other plain keys from a non-interactive target', () => {
     installWithSubscriber();
     expect(press('b', { target: new FakeHTMLElement('div') }).action).toBe('blank-stage');
-    expect(press('t', { target: new FakeHTMLElement('div') }).action).toBe('take-marker');
+    expect(press('a', { target: new FakeHTMLElement('div') }).action).toBe('toggle-auto-scroll');
+  });
+
+  /*
+   * T used to drop a take marker — a checkpoint nothing ever read back. The
+   * command is gone, so the key must be left to the page rather than swallowed
+   * during a take for an action no screen answers.
+   */
+  it('leaves T unclaimed during a take', () => {
+    installWithSubscriber();
+    for (const key of ['t', 'T']) {
+      const fired = press(key, { target: new FakeHTMLElement('div') });
+      expect(fired.action).toBeNull();
+      expect(fired.defaultPrevented).toBe(false);
+    }
   });
 
   it('stops listening after teardown', () => {
@@ -319,7 +333,7 @@ describe('installShortcuts — what actually reaches the focused control', () =>
   it('leaves the take transport alone on the screens that cannot answer it', () => {
     onScreen('library');
     installWithSubscriber();
-    for (const key of [' ', 'b', 't', 'a', '[', ']', 'Escape']) {
+    for (const key of [' ', 'b', 'a', '[', ']', 'Escape']) {
       const fired = press(key, { target: new FakeHTMLElement('div') });
       expect(fired.action).toBeNull();
       expect(fired.defaultPrevented).toBe(false);
@@ -433,7 +447,8 @@ describe('resolveShortcut (spec §19)', () => {
   it('plain keys work only when not typing', () => {
     expect(resolveShortcut(event({ key: ' ' }))).toBe('play-pause');
     expect(resolveShortcut(event({ key: 'b' }))).toBe('blank-stage');
-    expect(resolveShortcut(event({ key: 't' }))).toBe('take-marker');
+    expect(resolveShortcut(event({ key: 'a' }))).toBe('toggle-auto-scroll');
+    expect(resolveShortcut(event({ key: 't' }))).toBeNull();
 
     expect(resolveShortcut(event({ key: ' ', typing: true }))).toBeNull();
     expect(resolveShortcut(event({ key: 'b', typing: true }))).toBeNull();
@@ -469,7 +484,7 @@ describe('resolveShortcut (spec §19)', () => {
 
   it('handles Caps Lock (uppercase key, no Shift) but not Shift+letter', () => {
     expect(resolveShortcut(event({ key: 'B' }))).toBe('blank-stage');
-    expect(resolveShortcut(event({ key: 'T' }))).toBe('take-marker');
+    expect(resolveShortcut(event({ key: 'A' }))).toBe('toggle-auto-scroll');
     expect(resolveShortcut(event({ key: 'B', shiftKey: true }))).toBeNull();
   });
 
@@ -543,7 +558,6 @@ describe('shortcut ownership (issue #128)', () => {
       'stage-text-down',
       'toggle-mirror',
       'blank-stage',
-      'take-marker',
       'toggle-presentation-mode',
       'toggle-auto-scroll',
       'auto-scroll-faster',

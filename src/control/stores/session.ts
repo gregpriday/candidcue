@@ -590,16 +590,14 @@ let stopSidecarFeed: (() => void) | null = null;
  * §36.3 take history
  *
  * The §36.1 session record has always been able to say "four takes happened"
- * and nothing about any of them: `retake_count` is a scalar, `sectionsReached`
- * was a single number folded into `metrics_json` at the end, and
- * `addTakeMarker` — the handler for the "mark this" voice command — incremented
- * a counter and stored no marker at all.
+ * and nothing about any of them: `retake_count` is a scalar, and
+ * `sectionsReached` was a single number folded into `metrics_json` at the end.
  *
  * This is the per-take detail on top: when each pass ran, where it started and
- * stopped, which sections it traversed, and where the presenter marked a
- * checkpoint. It reuses the sections the store was ALREADY accumulating
- * (`blocksSeen`) and is keyed by the review lane's own `takePassId`, so the two
- * are one history rather than two.
+ * stopped, which sections it traversed, and the checkpoints along the way — an
+ * outline jump and a restarted paragraph. It reuses the sections the store was
+ * ALREADY accumulating (`blocksSeen`) and is keyed by the review lane's own
+ * `takePassId`, so the two are one history rather than two.
  * ------------------------------------------------------------------------- */
 
 /** The take currently being performed. Null outside a session. */
@@ -2004,7 +2002,7 @@ function takeConfidenceMean(take: ActiveTake): number | null {
  * TAKE on the monotonic clock: a checkpoint at "02:14 into take 3" survives an
  * NTP step, and a wall-clock timestamp would not.
  */
-function noteCheckpoint(kind: TakeCheckpointInput['kind']): void {
+function noteCheckpoint(kind: 'manual' | 'paragraph_start'): void {
   const take = activeTake;
   if (take === null) return;
   if (take.checkpoints.length >= MAX_TAKE_CHECKPOINTS) return;
@@ -2719,11 +2717,6 @@ export function restartParagraph(): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
 
-/** "Mark this" (§36.3) — drop a checkpoint at the current position. */
-export function addTakeMarker(): void {
-  noteCheckpoint('take');
-}
-
 /**
  * "Blank the screen" (§16.6) — from the Live transport or the voice command.
  *
@@ -2897,7 +2890,7 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
   /*
    * A pace key with no feedback at all reads as a key that did not register,
    * and the operator presses it again. The toast is what reports it, exactly as
-   * it does for the take marker and the mirror.
+   * it does for the mirror.
    */
   showToast(`Auto-scroll ${wordsPerMinute} wpm`, 'info', { durationMs: 1200 });
 }

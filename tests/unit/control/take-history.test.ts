@@ -3,8 +3,7 @@
  *
  * Before this, `retake_count` was the whole of what a take left behind. The
  * session store already accumulated the block ids it passed through and read
- * them only as a count; `addTakeMarker` — the handler for the "mark this" voice
- * command — incremented a counter and stored no marker at all.
+ * them only as a count.
  *
  * The two assertions that matter:
  *
@@ -91,7 +90,6 @@ vi.mock('../../../src/control/services/voice-session', () => ({
 }));
 
 const {
-  addTakeMarker,
   clearSession,
   goToToken,
   restartParagraph,
@@ -200,7 +198,9 @@ describe('§36.3 take history', () => {
 
   it('round-trips a take with its times, sections and checkpoints', () => {
     snapshot('b-1', 10);
-    addTakeMarker();
+    // An outline jump to where the reader already is: the fake driver does not
+    // move, so the checkpoint lands on the reported position either way.
+    goToToken(10);
     snapshot('b-2', 40);
     snapshot('b-2', 55);
     snapshot('b-3', 90);
@@ -220,9 +220,10 @@ describe('§36.3 take history', () => {
     expect(take.sections).toEqual(['b-1', 'b-2', 'b-3']);
     const checkpoints = take.checkpoints as Array<Record<string, unknown>>;
     expect(checkpoints).toHaveLength(1);
-    expect(checkpoints[0]!.kind).toBe('take');
+    expect(checkpoints[0]!.kind).toBe('manual');
     expect(checkpoints[0]!.tokenIndex).toBe(10);
     expect(checkpoints[0]!.blockId).toBe('b-1');
+    expect(typeof checkpoints[0]!.atMs).toBe('number');
   });
 
   it('records an outline jump as a checkpoint', () => {
@@ -238,7 +239,7 @@ describe('§36.3 take history', () => {
 
   it('a second take does not overwrite the first', () => {
     snapshot('b-1', 10);
-    addTakeMarker();
+    goToToken(10);
     snapshot('b-2', 60);
 
     // A retake closes the pass that was running and opens the next.
@@ -258,9 +259,9 @@ describe('§36.3 take history', () => {
 
     // The first take kept its own sections and its own checkpoints...
     expect(first.sections).toEqual(['b-1', 'b-2']);
-    expect((first.checkpoints as unknown[]).map((c) => (c as { kind: string }).kind)).toEqual([
-      'take',
-      'paragraph_start',
+    expect(first.checkpoints).toEqual([
+      expect.objectContaining({ kind: 'manual', tokenIndex: 10, blockId: 'b-1' }),
+      expect.objectContaining({ kind: 'paragraph_start', tokenIndex: 60, blockId: 'b-2' }),
     ]);
     // ...and the second one starts empty rather than inheriting them.
     expect(second.sections).toEqual(['b-2', 'b-3']);

@@ -612,7 +612,6 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &sep()?,
             &item("session.blank-stage", "Blank Stage", None)?,
             &check("session.toggle-mirror", "Mirror Stage", None)?,
-            &item("session.take-marker", "Add Take Marker", None)?,
             &sep()?,
             &item("session.identify-displays", "Identify Displays", None)?,
             &sep()?,

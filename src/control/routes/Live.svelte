@@ -49,7 +49,6 @@ import { onShortcut } from '../lib/shortcuts';
   import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import {
-    addTakeMarker,
     adjustStageFontSize,
     adoptPresentationMode,
     anchorManualScroll,
@@ -818,10 +817,6 @@ import { onShortcut } from '../lib/shortcuts';
           break;
         case 'blank-stage':
           toggleBlankStage();
-          break;
-        case 'take-marker':
-          addTakeMarker();
-          showToast('Take marker added', 'info', { durationMs: 1600 });
           break;
         case 'toggle-presentation-mode':
           void togglePresentationMode();
@@ -1736,14 +1731,6 @@ import { onShortcut } from '../lib/shortcuts';
         onclick={() => moveSentences(1)}
       />
       <IconButton icon="restore" label="Restart paragraph" onclick={() => restartParagraph()} />
-      <IconButton
-        icon="flag"
-        label={`Add take marker (${transportKey('T')})`}
-        onclick={() => {
-          addTakeMarker();
-          showToast('Take marker added', 'info', { durationMs: 1600 });
-        }}
-      />
       <IconButton
         icon="eye-off"
         label={$session.stageBlanked ? 'Unblank stage' : 'Blank stage'}
