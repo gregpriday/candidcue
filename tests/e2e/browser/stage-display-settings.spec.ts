@@ -36,7 +36,7 @@ test('a rejecting display enumeration leaves an actionable error and a working r
   await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
-    .getByRole('button', { name: 'Stage display', exact: true })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
     .click();
 
   // The section surfaces a real error and a retry — not a stuck row.
@@ -68,7 +68,7 @@ test('the chosen display is remembered, and Automatic names what it resolves to'
   await openPreferences(page);
   await page
     .getByRole('navigation', { name: 'Settings sections' })
-    .getByRole('button', { name: 'Stage display', exact: true })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
     .click();
 
   /*

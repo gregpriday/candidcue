@@ -31,7 +31,7 @@ const SETTINGS_SECTIONS = [
   'General',
   'Speech',
   'Audio',
-  'Stage display',
+  'Prompter display and rigs',
   'Teleprompter',
   'Following',
   'Data, privacy & updates',
