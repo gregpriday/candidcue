@@ -218,7 +218,7 @@ describe('a take hears its opening words while the recogniser loads', () => {
     speak(3);
     await p.switchMicrophone('usb');
     expect(taps, 'the switch opened a second tap').toHaveLength(2);
-    expect(taps[0].stopped).toBe(true);
+    expect(taps[0]?.stopped).toBe(true);
     speak(2);
     load.resolve(5);
     await started;
@@ -321,7 +321,7 @@ describe('a take hears its opening words while the recogniser loads', () => {
     speak(4);
     load.reject({ code: 'STT_MODEL_NOT_INSTALLED', userMessage: 'No model.' });
     await expect(refused).rejects.toMatchObject({ code: 'STT_MODEL_NOT_INSTALLED' });
-    expect(taps[0].stopped, 'the tap opened for the refused start is closed').toBe(true);
+    expect(taps[0]?.stopped, 'the tap opened for the refused start is closed').toBe(true);
 
     stt.load = null;
     const retried = p.start();
