@@ -38,12 +38,22 @@ Single test file / single test:
 ./node_modules/.bin/vitest run src/shared/optics.test.ts
 ./node_modules/.bin/vitest run --config vitest.dom.config.ts tests/dom/dialog.test.ts
 ./node_modules/.bin/vitest run tests/unit/contracts.test.ts -t 'name of test'
-pnpm test:e2e -- tests/e2e/browser/stage-preview.spec.ts
+./node_modules/.bin/playwright test --config=playwright.config.ts tests/e2e/browser/stage-preview.spec.ts
 cd src-tauri && cargo test --test stage_handshake_tests
 ```
 
 Use `./node_modules/.bin/vitest`, **not** `npx vitest` — npx has resolved a
 foreign vitest/chai here and produced bogus "Invalid Chai property" failures.
+
+`pnpm test:e2e -- <spec>` does **not** filter: the `--` reaches Playwright as an
+argument and the whole suite runs. Name the spec to the Playwright binary as
+above.
+
+**In a worktree, always set `CANDIDCUE_E2E_PORT` to a free port** (for example
+`CANDIDCUE_E2E_PORT=5300 ./node_modules/.bin/playwright test ...`). Outside CI
+Playwright reuses any dev server already listening on its port, and the default
+is 1420, so with another checkout's server running there the suite silently
+tests that checkout's code instead of yours.
 
 Opt-in live tests (skip cleanly without the flag + key, so the normal suite
 never hits the network):
