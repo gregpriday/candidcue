@@ -41,7 +41,7 @@ export interface FollowingSettings {
    * no cap — CandidCue does not invent a limit on the user's own key.
    */
   semanticRequestLimit: number | null;
-  /** §15.2 / §64: reveals the full diagnostics timeline in Live. */
+  /** §15.2 / §64: reveals the diagnostics timeline in Take controls → Why did it move? */
   developerDiagnostics: boolean;
 }
 

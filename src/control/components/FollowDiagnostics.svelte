@@ -24,6 +24,40 @@
   let { follow, developerMode = false }: Props = $props();
 
   let exportNote = $state('');
+  /**
+   * The export, shown for copying by hand when the clipboard refused it.
+   *
+   * This replaced a blob download whose note said "Saved as a JSON file." on
+   * nothing more than `anchor.click()` not throwing — a click that WKWebView is
+   * free to ignore, so the note could describe a file that never existed. The
+   * record still must not be trapped in the window, and text the operator can
+   * select is the one fallback whose success they can see for themselves.
+   */
+  let manualPayload = $state<string | null>(null);
+  /**
+   * Which copy is allowed to report. Only the newest one is: a slow, older
+   * `writeText` settling after a newer one would otherwise replace its result
+   * with an older snapshot, and one settling after a session change would
+   * describe the previous take under the next.
+   */
+  let copyRequest = 0;
+
+  /*
+   * The note and the fallback describe ONE export of ONE take, so a new session
+   * clears them. A normal take mounts this afresh (ending one navigates away
+   * from Live), so this is what keeps the component honest when an instance IS
+   * handed a second session rather than the path every take takes. Keyed on a
+   * derived because the `follow` prop is a fresh object on every snapshot, and
+   * an effect reading it directly would wipe the note within a frame of writing
+   * it.
+   */
+  const sessionId = $derived(follow.sessionId);
+  $effect(() => {
+    void sessionId;
+    copyRequest += 1;
+    exportNote = '';
+    manualPayload = null;
+  });
 
   const lastExplanation = $derived(follow.lastMovement ? describeMovement(follow.lastMovement) : null);
   /** Newest first — the interesting record is always the most recent one. */
@@ -31,34 +65,30 @@
   const recentTimeline = $derived([...follow.timeline].reverse().slice(0, 40));
 
   async function copyDiagnostics(): Promise<void> {
+    const request = ++copyRequest;
+    // Cleared first so a retry that ends the same way still changes the status
+    // region — an identical string is no update, and a screen reader hears nothing.
+    exportNote = '';
     const payload = JSON.stringify(smoothFollow.exportDiagnostics(), null, 2);
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(payload);
-        exportNote = 'Copied. Paste it into a bug report — it contains no script or transcript text.';
-        return;
+      if (typeof navigator === 'undefined' || !navigator.clipboard) {
+        throw new Error('clipboard unavailable');
       }
-      throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(payload);
+      if (request !== copyRequest) return;
+      manualPayload = null;
+      exportNote = 'Copied. Paste it into a bug report — it contains no script or transcript text.';
     } catch {
-      // Fall back to a file so the record is never trapped in the window.
-      try {
-        const blob = new Blob([payload], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = `candidcue-follow-diagnostics-${Date.now()}.json`;
-        anchor.click();
-        URL.revokeObjectURL(url);
-        exportNote = 'Saved as a JSON file.';
-      } catch {
-        exportNote = 'Could not copy or save the diagnostics from this window.';
-      }
+      if (request !== copyRequest) return;
+      manualPayload = payload;
+      exportNote =
+        'Could not copy to the clipboard. Select the text below and copy it — it contains no script or transcript text.';
     }
   }
 </script>
 
 <Disclosure label="Why did it move?">
-  <div class="diagnostics">
+  <div class="follow-diagnostics">
     {#if lastExplanation}
       <div class="last">
         <p class="headline">{lastExplanation.headline}</p>
@@ -124,13 +154,24 @@
 
     <div class="actions">
       <Button size="sm" onclick={() => void copyDiagnostics()}>Copy diagnostics</Button>
-      {#if exportNote}<span class="note">{exportNote}</span>{/if}
+      <!-- Always mounted, so the result is announced: focus stays on the button. -->
+      <span class="note" role="status">{exportNote}</span>
     </div>
+    {#if manualPayload !== null}
+      <textarea
+        class="manual-export"
+        aria-label="Follow diagnostics export"
+        readonly
+        rows="6"
+        value={manualPayload}
+        onfocus={(event) => event.currentTarget.select()}
+      ></textarea>
+    {/if}
   </div>
 </Disclosure>
 
 <style>
-  .diagnostics {
+  .follow-diagnostics {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
@@ -244,5 +285,19 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+
+  .manual-export {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    padding: var(--space-2);
+    border: 1px solid var(--border-faint);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: 1.5;
   }
 </style>

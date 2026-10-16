@@ -41,6 +41,17 @@ describe('parseWorkspace', () => {
     expect(parsed.sidebarVisible).toBe(false);
   });
 
+  it('drops the retired diagnosticsVisible flag and keeps everything stored beside it', () => {
+    // Written by builds that had View › Show Diagnostics. The pane it toggled
+    // never rendered during a take, so the flag went with the menu item.
+    const parsed = parseWorkspace(
+      JSON.stringify({ diagnosticsVisible: false, outlineVisible: false, diagnosticsWidth: 320 }),
+    );
+    expect(parsed).not.toHaveProperty('diagnosticsVisible');
+    expect(parsed.outlineVisible).toBe(false);
+    expect(parsed.diagnosticsWidth).toBe(320);
+  });
+
   it('clamps a width past its pane maximum', () => {
     const parsed = parseWorkspace(JSON.stringify({ sidebarWidth: 40000 }));
     expect(parsed.sidebarWidth).toBe(PANE_LIMITS.sidebar.max);

@@ -96,7 +96,7 @@
     <Toggle
       checked={following.developerDiagnostics}
       label="Developer diagnostics"
-      description="Shows the full following timeline in Live. Records stay on this device and contain no script or transcript text."
+      description="Shows the detailed following timeline in Take controls → Why did it move? Records stay on this device and contain no script or transcript text."
       onchange={(value) => onchange({ developerDiagnostics: value })}
     />
 

@@ -100,6 +100,11 @@ export interface ShimConfig {
    * `general.defaultSessionMode` (§14.2 G).
    */
   promptMode?: 'voice' | 'manual' | 'fixed';
+  /**
+   * A `following` section for the settings document, camelCase as Rust sends
+   * it. Absent by default, so the app takes its own defaults.
+   */
+  following?: Record<string, unknown>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -195,6 +200,7 @@ function shimBody(config: ShimConfig): void {
         saveTranscript: 'off',
       },
       editor: {},
+      ...(config.following ? { following: config.following } : {}),
       stageBehavior: {
         // Written only when a spec asks for one: an absent field is what sends
         // the settings adapter to the overlay-migration path, and some specs

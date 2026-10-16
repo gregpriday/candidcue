@@ -34,7 +34,6 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     libraryInTrash: false,
     sidebarVisible: true,
     outlineVisible: true,
-    diagnosticsVisible: true,
     editorLayout: 'edit',
     takeStarting: false,
     ...overrides,

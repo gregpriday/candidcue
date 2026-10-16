@@ -122,7 +122,6 @@ export interface CommandContext {
   libraryInTrash: boolean;
   sidebarVisible: boolean;
   outlineVisible: boolean;
-  diagnosticsVisible: boolean;
   editorLayout: EditorLayout;
   /** A presentation transition is in flight; nothing may start another. */
   takeStarting: boolean;
@@ -150,7 +149,6 @@ export interface CommandActions {
   showLibrary(): void;
   toggleSidebar(): void;
   toggleOutline(): void;
-  toggleDiagnostics(): void;
   setEditorLayout(layout: EditorLayout): void;
   stepScale(direction: 1 | -1 | 0): void;
   stageAppearance(): void;
@@ -548,16 +546,12 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Show Outline',
     accelerator: 'Mod+Alt+O',
     checked: (c) => c.outlineVisible,
-    available: (c) => c.route.name === 'editor' || c.route.name === 'live',
+    // The editor's outline is the only one anybody sees. Live's console has an
+    // outline rail too, but a take replaces that console with the stage, so
+    // offering this mid-take flipped the editor's outline behind the presenter's
+    // back and they found it changed on the way out.
+    available: (c) => editing(c),
     run: (a) => a.toggleOutline(),
-  },
-  'view.toggle-diagnostics': {
-    id: 'view.toggle-diagnostics',
-    label: 'Show Diagnostics',
-    accelerator: 'Mod+Alt+D',
-    checked: (c) => c.diagnosticsVisible,
-    available: (c) => c.route.name === 'live',
-    run: (a) => a.toggleDiagnostics(),
   },
   'view.edit-mode': {
     id: 'view.edit-mode',

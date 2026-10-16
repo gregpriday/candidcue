@@ -772,6 +772,16 @@ test('the take controls are reachable during a take and do not remount the stage
   await expect(page.locator('.script-layer')).toBeVisible();
 
   /*
+   * "Why did it move?" and its export live HERE (#236). They used to be only on
+   * the console's Tracking rail, which the stage replaces for the whole take,
+   * so the menu item and the setting that pointed at them pointed at nothing.
+   * Opening the disclosure must not disturb the stage either — the instance
+   * stamp below is read after this.
+   */
+  await panel.getByText('Why did it move?').click();
+  await expect(panel.getByRole('button', { name: 'Copy diagnostics' })).toBeVisible();
+
+  /*
    * Escape closes the drawer and must NOT reach the stage's double-Escape
    * counter, or dismissing a panel would arm the teardown.
    *
