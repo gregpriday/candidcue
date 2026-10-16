@@ -102,9 +102,9 @@ export async function getSpeechEngineStatus(): Promise<SpeechEngineStatus> {
 /**
  * Load the model without starting a take.
  *
- * Worth calling when the presenter opens the live view: loading takes over a
- * second, and the one moment it must not be spent is the top of a take, when
- * they have already started talking.
+ * `startTake` calls it before anything else in a take: a cold load takes over
+ * a second, and the earlier it starts the less of it the presenter spends
+ * talking ahead of a recogniser that is not there yet.
  */
 export async function preloadSpeechEngine(): Promise<void> {
   await ipcInvoke<void>('preload_speech_engine');

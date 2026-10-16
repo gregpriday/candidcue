@@ -1232,8 +1232,9 @@ export function startLiveSession(input: StartSessionInput): string {
       /*
        * `micState` too, not just the connection.
        *
-       * A start that rejected never opened a capture — whatever it failed on,
-       * there is no microphone in this take. It stayed at its initial 'live'
+       * A start that rejected has no capture left — whatever it failed on, the
+       * pipeline closed what it had opened, and there is no microphone in this
+       * take. It stayed at its initial 'live'
        * and the status bar reported "Mic live" over a session with no input at
        * all, which is the same never-show-a-confident-state-you-do-not-have
        * defect the manual-mode pills were fixed for.

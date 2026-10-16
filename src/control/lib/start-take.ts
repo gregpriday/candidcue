@@ -55,6 +55,7 @@ import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presen
 import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
 import { getVoiceFacade } from '../services/voice-facade';
+import { preloadSpeechEngine } from '../services/stt/local';
 import { writable } from 'svelte/store';
 
 const startingStore = writable(false);
@@ -488,6 +489,24 @@ export async function startTake(
     const presentationMode: PresentationMode = options.practice
       ? 'reader'
       : s.stage.presentationMode;
+    /*
+     * Start loading the recogniser now, while the rest of the take is built
+     * (#257).
+     *
+     * A cold load is over a second — up to five — and the voice pipeline is
+     * the last thing this function starts, so the compile, the window taking
+     * the display and the viewport settling are all time the load can run in
+     * rather than time the presenter spends talking ahead of it. The pipeline
+     * holds what it hears until the load finishes either way; this is what
+     * keeps that wait short.
+     *
+     * Here rather than at the top: this is the first point the take's own
+     * settings are known, and a manual or fixed take never starts a recogniser
+     * and has no business making the machine hold one. Not awaited, and a
+     * failure is not reported here — the pipeline's own `start_transcription`
+     * surfaces the same error where it can be acted on.
+     */
+    if (s.general.defaultSessionMode === 'voice') void preloadSpeechEngine().catch(() => {});
     const compiled = await compileForTake(scriptId, doc.source, s.general.readHeadings);
 
     /*
