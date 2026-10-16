@@ -1204,9 +1204,69 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
   });
 
   it('keeps an escaped or entity bracket on a later line as text', () => {
-    const script = compile('> First line.\n> \\[Pause] and &#91;Beat&#93; stay text.\n', OPTS);
-    expect(script.cues).toHaveLength(0);
+    // The real [Breathe] beside them proves the line mapped: a failed map
+    // would suppress every directive and pass the escapes for the wrong reason.
+    const source = '> First line.\n> \\[Pause] and &#91;Beat&#93; stay, [Breathe] next.\n';
+    const script = compile(source, OPTS);
+    expect(script.cues.map((c) => c.cueType)).toEqual(['breathe']);
+    const [cue] = script.cues;
+    expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Breathe]');
+    expect(script.spokenTokens[cue!.anchorTokenIndex]!.normalized).toBe('next');
     expect(normalizedWords(script)).toEqual(expect.arrayContaining(['pause', 'beat']));
+  });
+
+  it('reads an escaped backslash before a bracket as literal syntax', () => {
+    // `\\[Pause]` is an escaped backslash and then a real directive; a third
+    // backslash escapes the bracket again.
+    for (const prefix of ['', '> First line.\n> ']) {
+      const real = `${prefix}\\\\[Pause] then on.\n`;
+      const [cue] = compile(real, OPTS).cues;
+      expect(cue?.cueType).toBe('pause');
+      expect(real.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Pause]');
+      expect(compile(`${prefix}\\\\\\[Pause] then on.\n`, OPTS).cues).toHaveLength(0);
+    }
+  });
+
+  it('ends a lone carriage-return line even when an entity newline follows', () => {
+    // The value reads "One\r\n[Pause] two." and looks like CRLF; the source
+    // says the `\r` ended the line and the `\n` came from `&#10;`.
+    const source = '> One\r> &#10;[Pause] two.\r';
+    const script = expectWordsAt(source, ['one', 'two']);
+    const [cue] = script.cues;
+    expect(cue?.cueType).toBe('pause');
+    expect(source.slice(cue!.source.utf16Start, cue!.source.utf16End)).toBe('[Pause]');
+  });
+
+  it('maps a take marker after an escaped marker on a later line', () => {
+    const source = '> First\n> \\>kept [Take: Intro] next.\n';
+    const script = expectWordsAt(source, ['first', 'kept', 'next']);
+    const take = script.cues.find((c) => c.cueType === 'take')!;
+    expect(source.slice(take.source.utf16Start, take.source.utf16End)).toBe('[Take: Intro]');
+    expect(script.spokenTokens[take.anchorTokenIndex]!.normalized).toBe('next');
+    expect(script.navigationTargets.some((t) => t.type === 'take' && t.label === 'Intro')).toBe(true);
+  });
+
+  it('maps a quoted heading that spans lines when headings are read', () => {
+    const source = '> Title first\n> title second\n> ---\n';
+    const script = compile(source, { ...OPTS, readHeadings: true });
+    expect(normalizedWords(script)).toEqual(['title', 'first', 'title', 'second']);
+    for (const token of script.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+  });
+
+  it('stays linear on a continuation line that keeps a long run of markers', () => {
+    // Trying every start inside the run, longest first, re-matched the run
+    // once per start: quadratic in its length. Spaced, so the run is many
+    // short words rather than one huge one, which is slow for other reasons.
+    const line = `>     ${'> '.repeat(10_000)}last word.\n`;
+    const source = `> First\n${line}${line}${line}`;
+    const run = bestOf(() => compile(source, OPTS));
+    expect(normalizedWords(run.value)).toEqual(['first', 'last', 'word', 'last', 'word', 'last', 'word']);
+    for (const token of run.value.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+    expect(run.elapsedMs, budgetMessage('long kept-marker run', run, 250)).toBeLessThan(250);
   });
 
   it('maps a spoken alias on a later line onto its visual word', () => {

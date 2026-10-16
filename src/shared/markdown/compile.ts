@@ -582,6 +582,9 @@ const ENTITY_AT = /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,
  */
 const LINE_PREFIX = /[ \t>]*/y;
 
+/** What a backslash escapes (CommonMark §2.4): ASCII punctuation, nothing else. */
+const ESCAPABLE = /^[!-/:-@[-`{-~]$/;
+
 function mapValueToSource(
   source: string,
   start: number,
@@ -598,12 +601,18 @@ function mapValueToSource(
      * line can keep a literal `>` (`>     >quoted` reads ">quoted"), and an
      * entity can stand for a leading space. Try the longest skip first and
      * keep the first one the whole line agrees with.
+     *
+     * Decoding never lengthens text, so the line cannot resume later than its
+     * own length before the source line ends. Starting there keeps a long run
+     * of kept `>` from being retried one position at a time.
      */
     LINE_PREFIX.lastIndex = at.s;
     LINE_PREFIX.exec(source);
+    const lineLength = lineBreakAt(value, at.v, value.length) - at.v;
+    const latest = lineBreakAt(source, at.s, end) - lineLength;
     const from = at;
     at = null;
-    for (let s = Math.min(LINE_PREFIX.lastIndex, end); s >= from.s && at === null; s--) {
+    for (let s = Math.min(LINE_PREFIX.lastIndex, latest); s >= from.s && at === null; s--) {
       at = alignLine(source, s, end, value, from.v, map);
     }
   }
@@ -639,17 +648,24 @@ function alignLine(
         continue;
       }
     }
+    if (
+      source[s] === '\\' &&
+      s + 1 < end &&
+      source[s + 1] === value[v] &&
+      ESCAPABLE.test(value[v]!)
+    ) {
+      // Before the literal comparison too: in `\\[Pause]` the first backslash
+      // escapes the second, and the bracket after them is literal syntax.
+      map[v] = s; // points at the backslash: not a literal '[' either
+      s += 2;
+      v++;
+      continue;
+    }
     if (source[s] === value[v]) {
       map[v] = s;
       s++;
       v++;
-      if (endsLine(value, v)) return { s, v };
-      continue;
-    }
-    if (source[s] === '\\' && s + 1 < end && source[s + 1] === value[v]) {
-      map[v] = s; // points at the backslash: not a literal '[' either
-      s += 2;
-      v++;
+      if (endsLine(source, s, value[v - 1]!)) return { s, v };
       continue;
     }
     if ((value[v] === '\n' || value[v] === '\r') && (source[s] === ' ' || source[s] === '\t')) {
@@ -661,7 +677,7 @@ function alignLine(
         map[v] = s;
         s = blank + 1;
         v++;
-        if (endsLine(value, v)) return { s, v };
+        if (endsLine(source, s, value[v - 1]!)) return { s, v };
         continue;
       }
     }
@@ -670,10 +686,20 @@ function alignLine(
   return { s, v };
 }
 
-/** Whether `value[v - 1]`, just matched in the source, finished a line ending. */
-function endsLine(value: string, v: number): boolean {
-  const ch = value[v - 1];
-  return ch === '\n' || (ch === '\r' && value[v] !== '\n');
+/**
+ * Whether `ch`, a source character matched just before `s`, ended a physical
+ * line. The source decides: a lone `\r` stays a line ending when the value's
+ * next character is a `\n` decoded from `&#10;`.
+ */
+function endsLine(source: string, s: number, ch: string): boolean {
+  return ch === '\n' || (ch === '\r' && source[s] !== '\n');
+}
+
+/** The first `\r` or `\n` in `text` at or after `from`, or `limit`. */
+function lineBreakAt(text: string, from: number, limit: number): number {
+  let i = from;
+  while (i < limit && text[i] !== '\n' && text[i] !== '\r') i++;
+  return i;
 }
 
 /**
