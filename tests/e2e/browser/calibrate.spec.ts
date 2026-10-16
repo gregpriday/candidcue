@@ -168,7 +168,8 @@ async function writesTouching(page: Page, section: string): Promise<Array<Record
  * A display tile by the display's own name.
  *
  * Matched on `.monitor-name` exactly, not on the tile's text: the Automatic
- * tile says "Currently Teleprompter Display", so a text match finds two.
+ * tile says "Currently display 2 · Teleprompter Display", so a text match
+ * finds two.
  */
 function monitorTile(page: Page, name: string) {
   return page.locator('.monitor-tile', {
