@@ -979,11 +979,18 @@ fn match_emphasis(items: &mut [Inline]) {
                 }
                 // Delimiters between the pair can no longer match anything.
                 openers.truncate(position + 1);
-                if opener_left == used {
+                // An opener with characters left has a new remaining length, so
+                // a search that skipped it under the rule of three may now
+                // succeed: no floor may sit above it. (It is the top of the
+                // stack now, so this re-admits one opener, not a rescan.)
+                let ceiling = if opener_left == used {
                     openers.pop();
-                }
+                    openers.len()
+                } else {
+                    position
+                };
                 for floor in bottom.values_mut() {
-                    *floor = (*floor).min(openers.len());
+                    *floor = (*floor).min(ceiling);
                 }
             }
         }
@@ -1536,6 +1543,8 @@ struct BlockWalker<'a> {
     lines: Vec<String>,
     scan: ContainerScan,
     defs: Definitions,
+    /// The first pass only records reference definitions.
+    collecting: bool,
     containers: Vec<Container>,
     leaf: Leaf,
 }
@@ -1554,30 +1563,45 @@ impl<'a> BlockWalker<'a> {
             .enumerate()
             .map(|(i, line)| if scan.masked[i] { String::new() } else { expand_leading_tabs(line) })
             .collect();
-        let defs = collect_definitions(&lines);
         Self {
             options,
             out,
             lines,
             scan,
-            defs,
+            defs: Definitions::new(),
+            collecting: true,
             containers: Vec::new(),
             leaf: Leaf::None,
         }
     }
 
+    /// Two walks over the same structure. A reference may be defined after it
+    /// is used, so every definition has to be known before any text is read —
+    /// and found with the real block structure, so one inside a list item
+    /// counts and one inside indented code does not.
     fn run(mut self) {
+        self.walk();
+        self.collecting = false;
+        self.containers.clear();
+        self.leaf = Leaf::None;
+        self.walk();
+    }
+
+    fn walk(&mut self) {
         for index in 0..self.lines.len() {
-            if let Some((visual, say)) = self.scan.spoken_at[index].take() {
-                // A :::spoken block is spoken wherever it sits, even inside a
-                // :::stage or :::silent (§23.6).
-                self.close_leaf();
-                let mut draft = Draft::default();
-                draft.append_override(&visual, &say);
-                self.out.push(draft);
+            if !self.collecting {
+                if let Some((visual, say)) = self.scan.spoken_at[index].take() {
+                    // A :::spoken block is spoken wherever it sits, even
+                    // inside a :::stage or :::silent (§23.6).
+                    self.close_leaf();
+                    let mut draft = Draft::default();
+                    draft.append_override(&visual, &say);
+                    self.out.push(draft);
+                }
             }
             let line = std::mem::take(&mut self.lines[index]);
             self.line(&line, index);
+            self.lines[index] = line;
         }
         self.close_leaf();
     }
@@ -1742,8 +1766,14 @@ impl<'a> BlockWalker<'a> {
             if html_end_reached(end, rest, true) {
                 self.close_leaf();
             }
-        } else if LINK_DEFINITION.is_match(rest) {
+        } else if let Some(caps) = LINK_DEFINITION.captures(rest) {
             // A reference definition: metadata, never rendered.
+            if self.collecting {
+                let url = caps.get(2).or_else(|| caps.get(3)).map_or("", |m| m.as_str());
+                self.defs
+                    .entry(normalize_label(&caps[1]))
+                    .or_insert_with(|| url.to_string());
+            }
         } else if self.table_starts(rest, index) {
             self.leaf = Leaf::Table;
         } else {
@@ -1778,7 +1808,11 @@ impl<'a> BlockWalker<'a> {
     }
 
     fn close_leaf(&mut self) {
-        match std::mem::replace(&mut self.leaf, Leaf::None) {
+        let leaf = std::mem::replace(&mut self.leaf, Leaf::None);
+        if self.collecting {
+            return;
+        }
+        match leaf {
             Leaf::Paragraph { lines, first } => {
                 if !self.scan.suppressed[first] {
                     self.markdown_block(&lines.join("\n"));
@@ -1794,7 +1828,7 @@ impl<'a> BlockWalker<'a> {
     }
 
     fn heading(&mut self, text: &str, first: usize) {
-        if self.options.read_headings && !self.scan.suppressed[first] {
+        if !self.collecting && self.options.read_headings && !self.scan.suppressed[first] {
             self.markdown_block(text);
         }
     }
@@ -1834,33 +1868,6 @@ impl<'a> BlockWalker<'a> {
         node.flush(&mut draft, rest);
         self.out.push(draft);
     }
-}
-
-/// Every reference definition in the document, outside code fences.
-fn collect_definitions(lines: &[String]) -> Definitions {
-    let mut defs = Definitions::new();
-    let mut fence: Option<(u8, usize)> = None;
-    for line in lines {
-        let mut content = line.as_str();
-        while let Some(inner) = strip_quote(content) {
-            content = inner;
-        }
-        if let Some((ch, len)) = fence {
-            if is_fence_close(content, ch, len) {
-                fence = None;
-            }
-            continue;
-        }
-        if let Some(open) = fence_open(content) {
-            fence = Some(open);
-            continue;
-        }
-        if let Some(caps) = LINK_DEFINITION.captures(content) {
-            let url = caps.get(2).or_else(|| caps.get(3)).map_or("", |m| m.as_str());
-            defs.entry(normalize_label(&caps[1])).or_insert_with(|| url.to_string());
-        }
-    }
-    defs
 }
 
 /*

@@ -630,6 +630,22 @@
     "plain": "Our a p i works."
   },
   {
+    "name": "a partly used opener is reconsidered",
+    "source": "a******b c*d*e**f*g\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["a","b","cd","efg"],
+    "plain": "a**b cd*efg"
+  },
+  {
+    "name": "a definition inside a list item",
+    "source": "- Notes\n\n    [Pause]: /url\n\nHello [Pause] there.\n",
+    "words": 4,
+    "durationSeconds": 2,
+    "tokens": ["Notes","Hello","Pause","there"],
+    "plain": "Notes Hello Pause there."
+  },
+  {
     "name": "fixture: basic.md",
     "file": "basic.md",
     "words": 98,
