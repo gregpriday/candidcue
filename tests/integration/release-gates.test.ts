@@ -27,6 +27,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -34,7 +35,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(__dirname, '../..');
@@ -66,11 +67,11 @@ function scratchRepo(paths: string[]): string {
   return dir;
 }
 
-function run(script: string, args: string[], cwd: string) {
+function run(script: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env },
+    env: { ...process.env, ...env },
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
@@ -775,6 +776,188 @@ describe('the installer is proven to carry no speech-model weights', () => {
         declaration,
       );
     }
+  });
+});
+
+/* --------------------------------------------------- third-party notices */
+
+/*
+ * The notices gate on a machine that has never unpacked a crate.
+ *
+ * It read crate licences out of `~/.cargo/registry/src` BEFORE running the
+ * `cargo tree` that unpacks them, so it passed on every developer machine —
+ * where that directory had long been full — and failed on every fresh CI
+ * runner, where it did not exist yet. Each run here gets a CARGO_HOME nothing
+ * has ever written to, which is the condition the old order could not survive.
+ *
+ * `cargo` and `pnpm` are stand-ins first on PATH. The fake cargo does what the
+ * real one was measured doing from an empty CARGO_HOME: `cargo tree` unpacks
+ * each crate it prints. What that proves is the generator's ORDER and its
+ * failure reporting; that real cargo unpacks is a measured fact about cargo,
+ * not something a fake can establish.
+ */
+describe('the notices gate works on a runner that has never unpacked a crate', () => {
+  const NEEDS = [
+    'scripts/generate-notices.mjs',
+    'sbom/native-inputs.json',
+    'sbom/native-components.json',
+    'src-tauri/models/catalogue.json',
+  ];
+
+  const FAKE_CARGO = `#!/bin/sh
+[ "$1" = tree ] || { echo "unexpected: cargo $*" >&2; exit 2; }
+if [ "$FAKE_TREE" = fail ]; then
+  echo 'error: failed to download from the registry' >&2
+  exit 101
+fi
+[ "$FAKE_TREE" = empty ] && exit 0
+if [ "$FAKE_TREE" = unpack ]; then
+  dir="$CARGO_HOME/registry/src/index.test/notices-fixture-$FAKE_CRATE_VERSION"
+  mkdir -p "$dir"
+  cat > "$dir/Cargo.toml" <<EOF
+[package]
+name = "notices-fixture"
+version = "$FAKE_CRATE_VERSION"
+license = "MIT"
+EOF
+fi
+echo "notices-fixture v$FAKE_CRATE_VERSION"
+`;
+
+  const FAKE_PNPM = `#!/bin/sh
+[ "$1" = licenses ] || { echo "unexpected: pnpm $*" >&2; exit 2; }
+echo '{}'
+`;
+
+  type Repo = { dir: string; script: string; bin: string; notices: string };
+
+  function scratchNotices(): Repo {
+    const dir = scratchRepo(NEEDS);
+    const bin = join(dir, 'fake-bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'cargo'), FAKE_CARGO, { mode: 0o755 });
+    writeFileSync(join(bin, 'pnpm'), FAKE_PNPM, { mode: 0o755 });
+    return {
+      dir,
+      script: join(dir, 'scripts/generate-notices.mjs'),
+      bin,
+      notices: join(dir, 'THIRD_PARTY_NOTICES.md'),
+    };
+  }
+
+  function generate(
+    repo: Repo,
+    args: string[],
+    fake: {
+      tree?: 'unpack' | 'print-only' | 'fail' | 'empty';
+      version?: string;
+      cargoHome?: string;
+      cwd?: string;
+    } = {},
+  ) {
+    return run(repo.script, args, fake.cwd ?? repo.dir, {
+      PATH: `${repo.bin}${delimiter}${process.env.PATH ?? ''}`,
+      // A new, empty CARGO_HOME for every run unless one is named: a clean runner.
+      CARGO_HOME: fake.cargoHome ?? mkdtempSync(join(repo.dir, 'cargo-home-')),
+      // And a HOME with no `.cargo` in it. The old generator ignored CARGO_HOME
+      // and read `~/.cargo`, so on a developer machine — where that is full —
+      // a test of it would quietly be a test of the developer's registry.
+      HOME: mkdtempSync(join(repo.dir, 'home-')),
+      FAKE_TREE: fake.tree ?? 'unpack',
+      FAKE_CRATE_VERSION: fake.version ?? '1.0.0',
+    });
+  }
+
+  it('writes and then checks the notices with no crate unpacked beforehand', () => {
+    const repo = scratchNotices();
+
+    const written = generate(repo, []);
+    expect(written.output, 'the clean-runner failure this gate had').not.toContain(
+      'no unpacked cargo registry',
+    );
+    expect(written.status, written.output).toBe(0);
+    expect(readFileSync(repo.notices, 'utf8')).toContain('| notices-fixture | 1.0.0 | MIT |');
+
+    // A second clean runner, checking what the first one wrote.
+    const checked = generate(repo, ['--check']);
+    expect(checked.status, checked.output).toBe(0);
+    expect(checked.output).toContain('Third-party notices OK');
+  });
+
+  it('still fails when the committed file is genuinely out of date', () => {
+    /*
+     * The fix must not have bought the clean-runner pass by weakening the
+     * check. A dependency bump the committed file does not reflect is the
+     * thing `--check` exists to catch.
+     */
+    const repo = scratchNotices();
+    const written = generate(repo, []);
+    expect(written.status, written.output).toBe(0);
+    const committed = readFileSync(repo.notices, 'utf8');
+
+    const result = generate(repo, ['--check'], { version: '1.0.1' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('out of date');
+    expect(readFileSync(repo.notices, 'utf8'), '--check must never rewrite the file').toBe(
+      committed,
+    );
+  });
+
+  it('names a crate it could not read instead of omitting it', () => {
+    /*
+     * A tree that prints a crate whose source is nowhere on disk — the shape a
+     * git dependency, or a CARGO_HOME cargo did not use, would take. The
+     * registry is still read after the tree, finds nothing, and the crate is
+     * named rather than dropped: a notices file that quietly loses what it
+     * could not classify reads as complete.
+     */
+    const repo = scratchNotices();
+    const result = generate(repo, [], { tree: 'print-only' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('could not be read: notices-fixture v1.0.0');
+    expect(result.output).toContain('no unpacked cargo registry');
+    expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
+  });
+
+  it('reports a failed crate tree as itself, not as a missing registry', () => {
+    /*
+     * On a clean runner a failed tree also leaves the registry empty. Saying
+     * so as well would send whoever reads the log after the wrong cause.
+     */
+    const repo = scratchNotices();
+    const result = generate(repo, ['--check'], { tree: 'fail' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('could not read the crate tree for src-tauri/Cargo.toml');
+    expect(result.output).toContain('could not read the crate tree for crates/Cargo.toml');
+    expect(result.output).not.toContain('no unpacked cargo registry');
+  });
+
+  it('refuses a crate tree that succeeds and lists nothing', () => {
+    /*
+     * The other way to have nothing to classify. No tree failed, so nothing
+     * has been reported — and a notices file with an empty Rust section would
+     * read as a complete disclosure of a binary built from four hundred crates.
+     */
+    const repo = scratchNotices();
+    const result = generate(repo, [], { tree: 'empty' });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('printed no third-party crates');
+    expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
+  });
+
+  it('reads CARGO_HOME the way cargo does, relative to the directory cargo runs in', () => {
+    /*
+     * The generator runs cargo from the repository root, so a relative
+     * CARGO_HOME names a directory there — not under whatever directory node
+     * happened to be launched from. Resolving it anywhere else would look for
+     * the registry in one place while cargo unpacked it into another.
+     */
+    const repo = scratchNotices();
+    const elsewhere = mkdtempSync(join(repo.dir, 'launched-from-'));
+    const result = generate(repo, [], { cargoHome: 'relative-cargo-home', cwd: elsewhere });
+    expect(result.status, result.output).toBe(0);
+    expect(existsSync(join(repo.dir, 'relative-cargo-home/registry/src'))).toBe(true);
+    expect(readFileSync(repo.notices, 'utf8')).toContain('| notices-fixture | 1.0.0 | MIT |');
   });
 });
 
