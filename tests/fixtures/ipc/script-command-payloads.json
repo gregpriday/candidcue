@@ -134,6 +134,7 @@
     "external_change_preserved",
     "before_restore",
     "pre_session",
-    "import"
+    "import",
+    "recovered"
   ]
 }

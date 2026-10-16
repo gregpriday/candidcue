@@ -1366,6 +1366,9 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
         .expect("reconciliation");
     assert!(report.integrity_ok);
     assert!(report.orphan_files_recovered.contains(&orphan_id.to_string()));
+    // With no rebuild to say what it was called, it is named after its own
+    // first line rather than its UUID (#252).
+    assert_eq!(repo::get_summary(&h.pool, &orphan).await.unwrap().title, "Orphan body.");
     assert!(report.missing_files_restored.contains(&victim.id));
     // Revisions hold preimages (H2), so the newest recoverable text after the
     // canonical file is destroyed is the body the last save replaced.
@@ -1382,6 +1385,84 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
     let restored = listed.items.iter().find(|s| s.id == victim.id).expect("victim listed");
     assert_eq!(restored.spoken_word_count, 1);
     assert_eq!(restored.preview_text, "Original.");
+}
+
+/// #252: an adopted folder's revisions and images are indexed again, but only
+/// the files that prove they are what their names say. Anything else is left
+/// exactly where it was, unindexed, with a note.
+#[tokio::test]
+async fn an_adopted_folder_indexes_only_the_files_that_prove_themselves() {
+    use candidcue_lib::scripts::reconcile;
+    use candidcue_lib::util::sha256_hex;
+
+    let h = harness().await;
+    let orphan = sid("0a651b8e-3a54-4a7e-bb6d-000000000252");
+    fs::create_dir_all(h.paths.assets_dir(&orphan)).unwrap();
+    fs::create_dir_all(h.paths.revisions_dir(&orphan)).unwrap();
+    fs::write(h.paths.canonical_file(&orphan), "```\nnot a title\n```\n\n## Second take\n").unwrap();
+
+    let png: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xF7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    let genuine = format!("{}.png", sha256_hex(&png));
+    // Named for bytes it does not hold.
+    let forged = format!("{}.png", sha256_hex(b"something else"));
+    // A real image under a name that is not its hash.
+    let renamed = "photo.png".to_string();
+    for name in [&genuine, &forged, &renamed] {
+        fs::write(h.paths.assets_dir(&orphan).join(name), &png).unwrap();
+    }
+
+    let older = "First take.";
+    let newer = "Second take.";
+    let name_for = |stamp: &str, text: &str| format!("{stamp}-{}.md", &sha256_hex(text.as_bytes())[..12]);
+    fs::write(h.paths.revisions_dir(&orphan).join(name_for("20261001T090000000Z", older)), older).unwrap();
+    fs::write(h.paths.revisions_dir(&orphan).join(name_for("20261002T090000000Z", newer)), newer).unwrap();
+    // Contents swapped out from under its name.
+    let tampered = name_for("20261003T090000000Z", "Third take.");
+    fs::write(h.paths.revisions_dir(&orphan).join(&tampered), "Not the third take.").unwrap();
+
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.orphan_files_recovered.contains(&orphan.as_str().to_string()));
+    assert_eq!(
+        repo::get_summary(&h.pool, &orphan).await.unwrap().title,
+        "Second take",
+        "fenced code is not a title; the first spoken line is"
+    );
+
+    let revisions = repo::list_revisions(&h.pool, &orphan).await.unwrap();
+    assert_eq!(revisions.len(), 2, "the tampered snapshot is not indexed as the third take");
+    assert_eq!(revisions[0].revision_number, 2);
+    assert_eq!(revisions[0].created_at, "2026-10-02T09:00:00.000Z");
+    assert_eq!(revisions[1].created_at, "2026-10-01T09:00:00.000Z");
+    assert_eq!(
+        repo::get_revision(&h.pool, &h.paths, &orphan, &revisions[0].id).await.unwrap().source,
+        newer
+    );
+    assert_eq!(report.revisions_recovered, 2);
+
+    assert_eq!(report.assets_recovered, 1);
+    let indexed: Vec<String> = sqlx::query_scalar("SELECT rel_path FROM assets")
+        .fetch_all(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(indexed, vec![format!("scripts/{}/assets/{genuine}", orphan.as_str())]);
+    for name in [&forged, &renamed] {
+        assert!(h.paths.assets_dir(&orphan).join(name).exists(), "{name} is left alone");
+        assert!(
+            report.notes.iter().any(|note| note.contains(name.as_str())),
+            "and the report says why {name} was not indexed: {:?}",
+            report.notes
+        );
+    }
+    assert!(h.paths.revisions_dir(&orphan).join(&tampered).exists());
+    assert!(report.notes.iter().any(|note| note.contains(&tampered)));
 }
 
 /// #249: a library indexed by an older spoken-word extraction is re-derived at

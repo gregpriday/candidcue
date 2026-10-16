@@ -24,6 +24,33 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// List a folder inside a script's own folder, to index what is in it again
+/// (#252).
+///
+/// `Ok(None)` when there is no such folder, or when it is a symbolic link or
+/// not a folder at all — noted, and not followed: a link's entries are files
+/// from outside the script's folder, presented as the script's own. Any other
+/// failure to list it is an error, because "could not look" is not "empty".
+pub(crate) fn read_owned_dir(
+    dir: &Path,
+    notes: &mut Vec<String>,
+) -> std::io::Result<Option<fs::ReadDir>> {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            notes.push(format!("{name}/ is a link, and was not followed"));
+            Ok(None)
+        }
+        Ok(meta) if !meta.is_dir() => {
+            notes.push(format!("{name} is not a folder, and was not read"));
+            Ok(None)
+        }
+        Ok(_) => fs::read_dir(dir).map(Some),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 /// Cheap external-change fingerprint: byte size + mtime nanos (spec §47.5).
 pub fn file_fingerprint(path: &Path) -> Result<String, AppError> {
     let meta = fs::metadata(path)?;

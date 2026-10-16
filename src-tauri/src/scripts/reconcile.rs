@@ -8,10 +8,12 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::backup::salvage::{self, SalvagedScript};
 use crate::errors::AppError;
 use crate::util::{atomic_write, now_iso};
 
 use super::repo;
+use super::words::{spoken_text, SpokenTextOptions};
 use super::{DataPaths, ScriptId};
 
 const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
@@ -23,6 +25,18 @@ pub struct RecoveryReport {
     pub integrity_ok: bool,
     pub temp_files_removed: u32,
     pub orphan_files_recovered: Vec<String>,
+    /// Of those, how many got back the name the database had for them before
+    /// a rebuild, rather than one taken from their own text (#252).
+    pub titles_restored: u32,
+    /// Saved versions and images of the recovered scripts indexed again from
+    /// the files they were always in.
+    pub revisions_recovered: u32,
+    pub assets_recovered: u32,
+    /// Script folders with text that were NOT adopted this launch — the text
+    /// could not be read, the adoption failed, or the names a rebuild saved
+    /// could not be read — so the Library is missing them until a later launch
+    /// can. A finding, because nothing else would say why they are absent.
+    pub orphan_files_waiting: Vec<String>,
     pub missing_files_restored: Vec<String>,
     pub missing_files_unrecoverable: Vec<String>,
     /// Rows whose canonical file did not match the recorded hash — the
@@ -37,6 +51,7 @@ impl RecoveryReport {
         !self.integrity_ok
             || self.temp_files_removed > 0
             || !self.orphan_files_recovered.is_empty()
+            || !self.orphan_files_waiting.is_empty()
             || !self.missing_files_restored.is_empty()
             || !self.missing_files_unrecoverable.is_empty()
             || !self.hash_mismatches_repaired.is_empty()
@@ -79,6 +94,27 @@ pub async fn run_startup_reconciliation(
     report.temp_files_removed = remove_stale_temp_files(paths)?;
 
     // 3. Canonical files on disk missing from the database → recover.
+    //
+    // A rebuild leaves behind what the old database still knew about each
+    // script — its name, its Trash, its settings — because none of that is in
+    // any file (#252). Applied here, by id, to the folders that rebuild left
+    // without rows; a folder it did not describe is named from its own text.
+    //
+    // An index that exists and cannot be read stops adoption for this launch:
+    // adopting without it would make the fallback names permanent, and the
+    // folders are still there to adopt once it can be read.
+    let (salvaged, adopt) =
+        match salvage::load_pending_index(paths.root(), &paths.cache_dir()).await {
+            Ok(index) => (index, true),
+            Err(err) => {
+                report.notes.push(format!(
+                    "the script names a rebuild saved could not be read, so no folder was adopted this launch: {err}"
+                ));
+                (None, false)
+            }
+        };
+    // Folders that are not adopted this launch, whose salvaged names must wait.
+    let mut waiting = std::collections::HashSet::new();
     let known: std::collections::HashSet<String> = repo::all_script_ids_and_paths(pool)
         .await?
         .into_iter()
@@ -106,25 +142,56 @@ pub async fn run_startup_reconciliation(
             };
             let canonical = entry.path().join("script.md");
             if !canonical.exists() {
+                // No text, no script — and no finding either: an empty
+                // leftover folder would otherwise be reported on every launch.
+                // A name salvaged for it still waits for its text.
+                waiting.insert(dir_name);
+                continue;
+            }
+            if !adopt {
+                report.orphan_files_waiting.push(dir_name);
                 continue;
             }
             match fs::read_to_string(&canonical) {
                 Ok(source) => {
-                    let title = format!("Recovered script {}", &dir_name[..8.min(dir_name.len())]);
-                    if repo::insert_script_row(pool, paths, &script_id, &title, &source, "en")
-                        .await
-                        .is_ok()
-                    {
-                        report.orphan_files_recovered.push(dir_name);
+                    let previous = salvaged.as_ref().and_then(|index| index.get(&dir_name));
+                    let (script, title_restored) = adoption_for(&script_id, &source, previous);
+                    match repo::adopt_script_folder(pool, paths, &script_id, &source, &script).await {
+                        Ok(adoption) => {
+                            if title_restored {
+                                report.titles_restored += 1;
+                            }
+                            report.revisions_recovered += adoption.revisions;
+                            report.assets_recovered += adoption.assets;
+                            report.notes.extend(
+                                adoption.skipped.into_iter().map(|note| format!("{dir_name}: {note}")),
+                            );
+                            report.orphan_files_recovered.push(dir_name);
+                        }
+                        Err(err) => {
+                            report.notes.push(format!("adopt orphan {dir_name}: {err}"));
+                            report.orphan_files_waiting.push(dir_name.clone());
+                            waiting.insert(dir_name);
+                        }
                     }
                 }
                 Err(err) => {
                     report
                         .notes
                         .push(format!("unreadable orphan {dir_name}: {err}"));
+                    report.orphan_files_waiting.push(dir_name.clone());
+                    waiting.insert(dir_name);
                 }
             }
         }
+    }
+
+    // The rebuild's index has done its job for every folder that now has a
+    // row. What it says about a folder still waiting is kept for the retry
+    // next launch; the rest goes, so it is never applied to anything later and
+    // a script renamed or restored from the Trash is not overruled by it.
+    if salvaged.is_some() {
+        salvage::retain_pending_index(paths.root(), &waiting);
     }
 
     // 4. Every row is checked against its canonical file: missing files are
@@ -189,13 +256,24 @@ pub async fn run_startup_reconciliation(
         let _ = remove_older_than(&compiled, Duration::from_secs(30 * 24 * 3600));
     }
 
-    // 6. Purge trash older than 30 days (spec §21.5).
-    report.trash_purged = match repo::purge_expired_trash(pool, paths, locks).await {
-        Ok(purged) => purged,
-        Err(err) => {
-            tracing::warn!(error = %err, "expired trash could not be listed for purging");
-            report.notes.push(format!("purge trash: {err}"));
-            0
+    // 6. Purge trash older than 30 days (spec §21.5) — but not on the launch
+    // that just recovered scripts. A rebuild brings the Trash back with the
+    // dates things were trashed, and some of those may be past 30 days; the
+    // first look at a recovered library should not be preceded by permanently
+    // deleting part of it. The next ordinary launch purges as usual.
+    report.trash_purged = if !report.orphan_files_recovered.is_empty() {
+        report
+            .notes
+            .push("trash purge deferred to the next launch: scripts were recovered".to_string());
+        0
+    } else {
+        match repo::purge_expired_trash(pool, paths, locks).await {
+            Ok(purged) => purged,
+            Err(err) => {
+                tracing::warn!(error = %err, "expired trash could not be listed for purging");
+                report.notes.push(format!("purge trash: {err}"));
+                0
+            }
         }
     };
 
@@ -203,6 +281,121 @@ pub async fn run_startup_reconciliation(
     write_report(paths, &report)?;
 
     Ok(report)
+}
+
+/// How a folder with no row comes back: as the old database had it where a
+/// rebuild could still read that, and otherwise as a draft named after its own
+/// first line. Every value from the old database is checked before it is
+/// trusted, and one that fails falls back on its own without costing the
+/// script the others. The flag says whether the name is the one it had.
+fn adoption_for(
+    script_id: &ScriptId,
+    source: &str,
+    previous: Option<&SalvagedScript>,
+) -> (repo::AdoptedScript, bool) {
+    let now = now_iso();
+    let saved_title = previous
+        .and_then(|p| p.title.as_deref())
+        .map(collapse_whitespace)
+        .filter(|title| !title.is_empty());
+    let title_restored = saved_title.is_some();
+    let title = saved_title
+        .or_else(|| title_from_source(source))
+        .unwrap_or_else(|| format!("Recovered script {}", &script_id.as_str()[..8]));
+    let status = previous
+        .and_then(|p| p.status.as_deref())
+        .and_then(|status| {
+            ["draft", "ready", "archived", "trash"]
+                .into_iter()
+                .find(|known| *known == status)
+        })
+        .unwrap_or("draft");
+    let timestamp = |value: Option<&String>| {
+        value
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+            .map(|t| {
+                t.with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            })
+    };
+    // A trashed script keeps the date it was trashed, so its 30 days run from
+    // when they always did. Without one it is trashed as of now: never earlier,
+    // which could expire it before anybody has seen it.
+    let trashed_at = (status == "trash").then(|| {
+        timestamp(previous.and_then(|p| p.trashed_at.as_ref())).unwrap_or_else(|| now.clone())
+    });
+    let script = repo::AdoptedScript {
+        title,
+        status,
+        language: previous
+            .and_then(|p| p.language.clone())
+            .unwrap_or_else(|| "en".to_string()),
+        settings_json: previous.and_then(|p| p.script_settings_json.clone()),
+        created_at: timestamp(previous.and_then(|p| p.created_at.as_ref()))
+            .unwrap_or_else(|| now.clone()),
+        updated_at: timestamp(previous.and_then(|p| p.updated_at.as_ref()))
+            .unwrap_or_else(|| now.clone()),
+        trashed_at,
+    };
+    (script, title_restored)
+}
+
+/// A name for a script nothing remembers the name of: its first line of
+/// spoken text, read the way the Library reads it, so `# Launch video` is
+/// "Launch video" and `**Hello** [there](…)` is "Hello there" (#252). `None`
+/// when the script says nothing at all.
+///
+/// Read in the context of the whole document, not line by line: a line inside
+/// a comment, a code block, `:::silent` or coach front matter says nothing,
+/// and which of those a line is in depends on the lines around it. So the
+/// first line that speaks is found by growing a prefix of the script until it
+/// says something that the WHOLE script also opens with — a prefix that cuts
+/// a construct short (a comment not yet closed) says something the whole
+/// script does not, and is passed over. A script that opens with nothing
+/// found that way within its first lines is named after the head of its
+/// spoken text instead.
+pub fn title_from_source(source: &str) -> Option<String> {
+    const MAX_CHARS: usize = 80;
+    // Bounds the prefix search, which re-reads the prefix each time.
+    const MAX_PREFIX_LINES: usize = 200;
+    const MAX_PREFIX_BYTES: usize = 64 * 1024;
+    let options = SpokenTextOptions {
+        read_headings: true,
+        read_image_alt_text: false,
+        read_inline_code: true,
+    };
+    let source = super::without_bom(source);
+    let whole = collapse_whitespace(&spoken_text(source, options).plain);
+    if whole.is_empty() {
+        return None;
+    }
+
+    let mut first_line = None;
+    let mut end = 0;
+    for line in source.split_inclusive('\n').take(MAX_PREFIX_LINES) {
+        end += line.len();
+        if end > MAX_PREFIX_BYTES {
+            break;
+        }
+        let said = collapse_whitespace(&spoken_text(&source[..end], options).plain);
+        if !said.is_empty() && whole.starts_with(&said) {
+            first_line = Some(said);
+            break;
+        }
+    }
+    let text = first_line.unwrap_or(whole);
+
+    if text.chars().count() <= MAX_CHARS {
+        return Some(text);
+    }
+    // Cut on a word where there is one, like the Library's preview.
+    let head: String = text.chars().take(MAX_CHARS).collect();
+    let cut = head.rfind(char::is_whitespace).map_or(head.as_str(), |at| &head[..at]);
+    Some(format!("{}…", cut.trim_end()))
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn write_report(paths: &DataPaths, report: &RecoveryReport) -> Result<(), AppError> {
@@ -296,5 +489,53 @@ impl StartupFindings {
     /// second reader is a second window showing the same one-time notice.
     pub fn take(&self) -> Option<RecoveryReport> {
         self.report.lock().ok().and_then(|mut held| held.take())
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::title_from_source;
+
+    #[test]
+    fn a_script_is_named_after_its_first_spoken_line() {
+        assert_eq!(title_from_source("# Launch video\n\nHello.").as_deref(), Some("Launch video"));
+        assert_eq!(
+            title_from_source("\n\n**Hello** there,   world.\nMore.").as_deref(),
+            Some("Hello there, world.")
+        );
+        // A byte-order mark is not a character of the title (#247).
+        assert_eq!(title_from_source("\u{feff}# Marked").as_deref(), Some("Marked"));
+    }
+
+    #[test]
+    fn code_and_images_are_not_a_title() {
+        let source = "```\nlet x = 1;\n```\n![Logo](assets/logo.png)\n\nIntro line.";
+        assert_eq!(title_from_source(source).as_deref(), Some("Intro line."));
+    }
+
+    #[test]
+    fn a_long_first_line_is_cut_on_a_word() {
+        let source = "word ".repeat(40);
+        let title = title_from_source(&source).expect("title");
+        assert!(title.chars().count() <= 81, "{title}");
+        assert!(title.ends_with("word…"), "{title}");
+    }
+
+    #[test]
+    fn a_line_says_nothing_inside_what_the_document_keeps_silent() {
+        // Only the whole document knows the comment, the silent block and
+        // the four-backtick fence are closed where they are.
+        let source = "<!--\nPrivate production note\n-->\n# The real opening";
+        assert_eq!(title_from_source(source).as_deref(), Some("The real opening"));
+        let source = ":::silent\nStage direction only\n:::\n\nSpoken first.";
+        assert_eq!(title_from_source(source).as_deref(), Some("Spoken first."));
+        let source = "````\n```\nstill code\n````\nAfter the code.";
+        assert_eq!(title_from_source(source).as_deref(), Some("After the code."));
+    }
+
+    #[test]
+    fn a_script_that_says_nothing_has_no_title_to_give() {
+        assert_eq!(title_from_source(""), None);
+        assert_eq!(title_from_source("\n   \n```\ncode only\n```\n"), None);
     }
 }

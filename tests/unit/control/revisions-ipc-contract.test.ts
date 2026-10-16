@@ -113,6 +113,12 @@ describe('revision labelling', () => {
     expect([...REVISION_REASONS]).toEqual(fixture.revisionReasons);
   });
 
+  it('says a revision recovered by a rebuild is one, not why it was taken', () => {
+    // A rebuild indexes snapshots again from their files, and the reason
+    // each was taken was only ever in the database (#252).
+    expect(revisionReasonLabel('recovered')).toBe('Recovered version');
+  });
+
   it('humanises an unknown reason instead of hiding the revision', () => {
     expect(revisionReasonLabel('some_future_reason')).toBe('Some future reason');
     expect(revisionReasonLabel('')).toBe('Saved version');

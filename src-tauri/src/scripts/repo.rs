@@ -23,6 +23,9 @@ const REVISION_INTERVAL_SECONDS: i64 = 5 * 60;
 const MAX_REVISIONS_PER_SCRIPT: i64 = 100;
 /// Spec Appendix A.10: Markdown source hard limit.
 pub const MAX_SOURCE_BYTES: usize = 10 * 1024 * 1024;
+/// The reason on a revision indexed again from its file after a rebuild
+/// (#252). Why it was originally taken was only ever in the database.
+const RECOVERED_REVISION_REASON: &str = "recovered";
 
 pub fn file_missing_error(script_id: &ScriptId) -> AppError {
     AppError::structured(
@@ -1425,49 +1428,228 @@ pub(crate) async fn script_exists(pool: &SqlitePool, script_id: &ScriptId) -> Re
     Ok(found.is_some())
 }
 
-/// Internal helper used by import/reconciliation to register an existing
-/// on-disk canonical file in the database.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn insert_script_row(
+/// What reconciliation decided about a script folder it is adopting: what the
+/// old database still remembered about it, or the defaults that stand in for
+/// what it did not (#252). Timestamps are already normalised and `status` is
+/// one of the values the schema allows.
+#[derive(Debug, Clone)]
+pub(crate) struct AdoptedScript {
+    pub title: String,
+    pub status: &'static str,
+    pub language: String,
+    pub settings_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub trashed_at: Option<String>,
+}
+
+/// What adopting a folder indexed besides the script itself.
+#[derive(Debug, Default)]
+pub(crate) struct Adoption {
+    pub revisions: u32,
+    pub assets: u32,
+    /// A note for each file that looked like a revision or an image and could
+    /// not be indexed. Those files are left exactly where they are.
+    pub skipped: Vec<String>,
+}
+
+/// Index a script folder the database has no row for: the script, its search
+/// entry, its saved versions and its images, in one transaction.
+///
+/// One transaction because a half-adopted script is worse than one not
+/// adopted yet. Reconciliation adopts only folders with no row, so a script
+/// whose row landed without its revisions would never be looked at again, and
+/// its history and images would stay invisible for good. All or nothing means
+/// a crash part way leaves a folder the next launch simply adopts again.
+///
+/// The files are read and checked BEFORE the transaction opens: an image is
+/// decoded to be trusted, and that is no work to do holding the write lock.
+/// A `revisions/` or `assets/` folder that exists and cannot be listed fails
+/// the adoption rather than adopting the script without its history: the row
+/// is what stops the folder being looked at again, so the retry has to be the
+/// whole adoption.
+pub(crate) async fn adopt_script_folder(
     pool: &SqlitePool,
     paths: &DataPaths,
     id: &ScriptId,
-    title: &str,
     source: &str,
-    language: &str,
-) -> Result<(), AppError> {
+    script: &AdoptedScript,
+) -> Result<Adoption, AppError> {
     let canonical = paths.canonical_file(id);
-    let settings = ScriptSettings::default();
+    let settings = script
+        .settings_json
+        .as_deref()
+        .map(parse_settings)
+        .unwrap_or_default();
     let (plain, words, duration) = stats_for(source, &settings);
-    let now = now_iso();
     let rel_path = paths
         .relative(&canonical)
         .ok_or_else(|| AppError::Internal("canonical path outside data root".into()))?;
+    let fingerprint = file_fingerprint(&canonical)?;
+
+    let (revisions, mut skipped) = scan_revision_files(paths, id, &settings)?;
+    let (assets, skipped_assets) = crate::assets::scan_asset_files(paths, id)?;
+    skipped.extend(skipped_assets);
+
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
-             last_compile_version, script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?)",
+             last_compile_version, script_settings_json, created_at, updated_at, trashed_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id.as_str())
-    .bind(title)
+    .bind(&script.title)
     .bind(&rel_path)
     .bind(sha256_hex(source.as_bytes()))
-    .bind(file_fingerprint(&canonical)?)
-    .bind(language)
+    .bind(&fingerprint)
+    .bind(script.status)
+    .bind(&script.language)
     .bind(words as i64)
     .bind(duration as i64)
     .bind(SPOKEN_STATS_VERSION)
     .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
-    .bind(&now)
-    .bind(&now)
+    .bind(&script.created_at)
+    .bind(&script.updated_at)
+    .bind(script.trashed_at.as_deref())
     .execute(&mut *tx)
     .await?;
-    update_fts(&mut tx, id, title, &plain).await?;
+    update_fts(&mut tx, id, &script.title, &plain).await?;
+
+    // Numbered in the order they were taken, which is the order of their
+    // names. Why each one was taken was only ever in the database, so they
+    // say so rather than claiming to be autosaves.
+    for (index, revision) in revisions.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO script_revisions
+                (id, script_id, revision_number, source_hash, rel_path, reason, word_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(new_uuid())
+        .bind(id.as_str())
+        .bind(index as i64 + 1)
+        .bind(&revision.source_hash)
+        .bind(&revision.rel_path)
+        .bind(RECOVERED_REVISION_REASON)
+        .bind(revision.word_count as i64)
+        .bind(&revision.created_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    crate::assets::register_recovered_assets(&mut tx, id, &assets).await?;
     tx.commit().await?;
-    Ok(())
+
+    Ok(Adoption {
+        revisions: revisions.len() as u32,
+        assets: assets.len() as u32,
+        skipped,
+    })
+}
+
+/// A revision snapshot already on disk, proved to be what its name says.
+#[derive(Debug, Clone)]
+struct RecoveredRevision {
+    file_name: String,
+    rel_path: String,
+    source_hash: String,
+    word_count: u32,
+    created_at: String,
+}
+
+/// The revision snapshots in a script's folder that can be indexed again,
+/// oldest first, and a note for each that looked like one and could not be.
+///
+/// `create_revision_snapshot` names each file `<UTC time>-<first 12 of its
+/// SHA-256>.md`, which carries everything but the reason: when it was taken,
+/// and a check that the bytes are the ones it was named for. A file whose
+/// contents do not match its name is not indexed as that revision.
+///
+/// Two snapshots taken in the same millisecond sort by hash, which may not be
+/// the order they were taken in; nothing on disk records a finer order.
+fn scan_revision_files(
+    paths: &DataPaths,
+    id: &ScriptId,
+    settings: &ScriptSettings,
+) -> Result<(Vec<RecoveredRevision>, Vec<String>), AppError> {
+    let mut found = Vec::new();
+    let mut skipped = Vec::new();
+    let Some(entries) = crate::util::read_owned_dir(&paths.revisions_dir(id), &mut skipped)? else {
+        return Ok((found, skipped));
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some((created_at, short_hash)) = parse_revision_file_name(&name) else {
+            continue;
+        };
+        let note = |reason: &str| format!("revision {name} was not indexed: {reason}");
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            skipped.push(note("not a regular file"));
+            continue;
+        }
+        // A snapshot is a script, and a script has a size limit; a file that
+        // claims to be one and is larger is not read whole into memory at
+        // startup to find out.
+        if entry.metadata().map(|m| m.len() > MAX_SOURCE_BYTES as u64).unwrap_or(true) {
+            skipped.push(note("larger than a script can be"));
+            continue;
+        }
+        let Ok(bytes) = fs::read(entry.path()) else {
+            skipped.push(note("unreadable"));
+            continue;
+        };
+        let source_hash = sha256_hex(&bytes);
+        if !source_hash.starts_with(short_hash) {
+            skipped.push(note("its contents do not match its name"));
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            skipped.push(note("not text"));
+            continue;
+        };
+        let Some(rel_path) = paths.relative(&entry.path()) else {
+            continue;
+        };
+        let (_, word_count, _) = stats_for(&text, settings);
+        found.push(RecoveredRevision {
+            file_name: name.clone(),
+            rel_path,
+            source_hash,
+            word_count,
+            created_at,
+        });
+    }
+    found.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+    Ok((found, skipped))
+}
+
+/// `20261016T093000123Z-0123456789ab.md` → (`2026-10-16T09:30:00.123Z`,
+/// `0123456789ab`). Anything not in exactly the shape
+/// `create_revision_snapshot` writes is not one of its files.
+fn parse_revision_file_name(name: &str) -> Option<(String, &str)> {
+    let (stamp, short_hash) = name.strip_suffix(".md")?.split_once('-')?;
+    if short_hash.len() != 12
+        || !short_hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    let bytes = stamp.as_bytes();
+    if stamp.len() != 19
+        || bytes[8] != b'T'
+        || bytes[18] != b'Z'
+        || !stamp[..8].bytes().chain(stamp[9..18].bytes()).all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| stamp[range].parse::<u32>().ok();
+    let date = chrono::NaiveDate::from_ymd_opt(number(0..4)? as i32, number(4..6)?, number(6..8)?)?;
+    let time = date.and_hms_milli_opt(number(9..11)?, number(11..13)?, number(13..15)?, number(15..18)?)?;
+    Some((
+        time.and_utc()
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        short_hash,
+    ))
 }
 
 /// Fetch a script summary by id (used by import/export commands).

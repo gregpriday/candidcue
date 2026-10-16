@@ -480,6 +480,150 @@ pub async fn collect_garbage(pool: &SqlitePool, paths: &DataPaths) -> Result<u32
     Ok(removed)
 }
 
+/// An image already in a script's asset folder, proved to be what its name
+/// says it is.
+#[derive(Debug, Clone)]
+pub(crate) struct RecoveredAsset {
+    sha256: String,
+    mime: &'static str,
+    extension: &'static str,
+    size: u64,
+    width: u32,
+    height: u32,
+    rel_path: String,
+}
+
+/// The images in a script's asset folder that can be indexed again, and a note
+/// for each file that looked like one and could not be (#252).
+///
+/// After a rebuild the files are all still there but nothing knows about them,
+/// and an image resolves only through its `assets` row — so every image in
+/// every script stopped rendering. Every file is held to the standard an import
+/// is: named by the SHA-256 of exactly its bytes, the extension its magic bytes
+/// call for, within the size limit, and a real decode under the dimension
+/// limits. What fails stays where it is, untouched and unindexed.
+pub(crate) fn scan_asset_files(
+    paths: &DataPaths,
+    script_id: &ScriptId,
+) -> Result<(Vec<RecoveredAsset>, Vec<String>), AppError> {
+    let mut found = Vec::new();
+    let mut skipped = Vec::new();
+    let Some(entries) = crate::util::read_owned_dir(&paths.assets_dir(script_id), &mut skipped)?
+    else {
+        return Ok((found, skipped));
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Finder's `.DS_Store` and an interrupted write's temporary file are
+        // not images anybody placed, and not worth a note each.
+        if name.starts_with('.') || name.contains(".tmp-") {
+            continue;
+        }
+        match recover_asset_file(script_id, &entry, &name) {
+            Ok(asset) => found.push(asset),
+            Err(reason) => skipped.push(format!("image assets/{name} was not indexed: {reason}")),
+        }
+    }
+    found.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok((found, skipped))
+}
+
+fn recover_asset_file(
+    script_id: &ScriptId,
+    entry: &fs::DirEntry,
+    name: &str,
+) -> Result<RecoveredAsset, &'static str> {
+    // `DirEntry::file_type` does not follow links, so a symlink is refused
+    // here rather than read through.
+    if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+        return Err("not a regular file");
+    }
+    let (stem, extension) = name.rsplit_once('.').ok_or("not named by its content")?;
+    if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err("not named by its content");
+    }
+    let size = entry.metadata().map_err(|_| "unreadable")?.len();
+    if size > MAX_IMPORTED_IMAGE_BYTES {
+        return Err("larger than an import allows");
+    }
+    let bytes = fs::read(entry.path()).map_err(|_| "unreadable")?;
+    if sha256_hex(&bytes) != stem {
+        return Err("its contents do not match its name");
+    }
+    let mime = sniff_mime(&bytes).ok_or("not a supported image")?;
+    if extension_for_mime(mime) != extension {
+        return Err("its extension does not match its contents");
+    }
+    let (width, height) =
+        validate_image_payload(&bytes, mime).map_err(|_| "not a valid image")?;
+    Ok(RecoveredAsset {
+        sha256: stem.to_string(),
+        mime,
+        extension: extension_for_mime(mime),
+        size: bytes.len() as u64,
+        width,
+        height,
+        rel_path: format!("scripts/{}/assets/{name}", script_id.as_str()),
+    })
+}
+
+/// Index recovered images for `script_id`, inside the caller's transaction.
+///
+/// The reference row is what keeps `collect_garbage` from deleting the file as
+/// unreferenced, so it is not optional. It is inserted only when absent,
+/// rather than with `INSERT OR IGNORE`: its primary key includes the nullable
+/// `source_start`, and SQLite treats every NULL as distinct, so the conflict
+/// clause never fires for a reference without a source range.
+pub(crate) async fn register_recovered_assets(
+    conn: &mut sqlx::SqliteConnection,
+    script_id: &ScriptId,
+    assets: &[RecoveredAsset],
+) -> Result<(), AppError> {
+    let now = now_iso();
+    for asset in assets {
+        sqlx::query(
+            "INSERT INTO assets (id, sha256, mime_type, extension, size_bytes, width, height, rel_path, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(sha256, rel_path) DO NOTHING",
+        )
+        .bind(new_uuid())
+        .bind(&asset.sha256)
+        .bind(asset.mime)
+        .bind(asset.extension)
+        .bind(asset.size as i64)
+        .bind(asset.width as i64)
+        .bind(asset.height as i64)
+        .bind(&asset.rel_path)
+        .bind(&now)
+        .execute(&mut *conn)
+        .await?;
+        // By hash AND path: the schema allows two rows for one path, and the
+        // reference must protect the row describing these bytes.
+        let asset_id: String =
+            sqlx::query_scalar("SELECT id FROM assets WHERE sha256 = ? AND rel_path = ?")
+                .bind(&asset.sha256)
+                .bind(&asset.rel_path)
+                .fetch_one(&mut *conn)
+                .await?;
+        sqlx::query(
+            "INSERT INTO script_asset_references (script_id, asset_id, role, created_at)
+             SELECT ?, ?, 'image', ?
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM script_asset_references WHERE script_id = ? AND asset_id = ?
+             )",
+        )
+        .bind(script_id.as_str())
+        .bind(&asset_id)
+        .bind(&now)
+        .bind(script_id.as_str())
+        .bind(&asset_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

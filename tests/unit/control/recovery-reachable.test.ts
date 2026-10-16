@@ -220,6 +220,20 @@ describe('the recovery screen offers the actions the review asked for', () => {
     // has to name the location — otherwise "Rebuilt." reads as "erased".
     expect(recoverySource).toMatch(/previousStateAt/);
   });
+
+  it('says what a rebuild cannot bring back, and that it finishes on reopening', () => {
+    /*
+     * #252: the copy warned only about session history, while names, the
+     * Trash and every image went too. Names and the Trash now come back when
+     * the old database can still be read, so the screen must say that is the
+     * condition — and the index is built on the NEXT launch, so "Rebuilt."
+     * before anything was rebuilt was a claim about work not yet done.
+     */
+    expect(recoverySource).toMatch(/where it can still be read/);
+    expect(recoverySource).toMatch(/named after its first line/);
+    expect(recoverySource).toMatch(/Quit and reopen CandidCue to finish/);
+    expect(recoverySource).not.toMatch(/`Rebuilt\./);
+  });
 });
 
 describe('an answer the shell cannot read is not an answer that it started', () => {

@@ -42,6 +42,8 @@ export interface RecoveryOutcome {
 export interface ScriptRescueResult {
   path: string;
   scriptsCopied: number;
+  /** The file in the copy naming each script's folder, when it was written. */
+  namesFile?: string;
 }
 
 /**
