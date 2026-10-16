@@ -62,8 +62,12 @@ import { deriveParts } from './parts';
  * 1.2.1 is a correction, not a field: a source opening with a byte-order mark
  * used to compile with every position one character early and its line-one
  * directive ignored (#247). Only those documents change.
+ *
+ * 1.2.2 is another: words on the second and later lines of a quote or a
+ * wrapped list item mapped early by the width of the line prefix, and a
+ * directive there was ignored (#251).
  */
-export const COMPILER_VERSION = '1.2.1';
+export const COMPILER_VERSION = '1.2.2';
 export const SCHEMA_VERSION = 1;
 export { DEFAULT_WORDS_PER_MINUTE };
 const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
@@ -572,6 +576,12 @@ function reportBlockedUrl(
  */
 const ENTITY_AT = /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});/;
 
+/**
+ * What a container can leave in front of a continuation line: `> ` markers,
+ * list-item indentation, tabs, and any mix of them (`  > `, `>   `).
+ */
+const LINE_PREFIX = /[ \t>]*/y;
+
 function mapValueToSource(
   source: string,
   start: number,
@@ -579,13 +589,48 @@ function mapValueToSource(
   value: string,
 ): number[] | null {
   const map = new Array<number>(value.length + 1);
+  let at = alignLine(source, start, end, value, 0, map);
+  while (at !== null && at.v < value.length) {
+    /*
+     * A continuation line. remark drops the line's container prefix and
+     * indentation from the value (#251), so the words resume somewhere inside
+     * that run of `>`, spaces and tabs. Not necessarily at its end: an indented
+     * line can keep a literal `>` (`>     >quoted` reads ">quoted"), and an
+     * entity can stand for a leading space. Try the longest skip first and
+     * keep the first one the whole line agrees with.
+     */
+    LINE_PREFIX.lastIndex = at.s;
+    LINE_PREFIX.exec(source);
+    const from = at;
+    at = null;
+    for (let s = Math.min(LINE_PREFIX.lastIndex, end); s >= from.s && at === null; s--) {
+      at = alignLine(source, s, end, value, from.v, map);
+    }
+  }
+  if (at === null) return null;
+  map[value.length] = at.s;
+  return map;
+}
+
+/**
+ * Align one physical line of `value`, from `v` through its line ending or the
+ * end of the value, and say where both sides stopped. Null when they disagree.
+ */
+function alignLine(
+  source: string,
+  start: number,
+  end: number,
+  value: string,
+  v: number,
+  map: number[],
+): { s: number; v: number } | null {
   let s = start;
-  let v = 0;
-  while (v < value.length && s < end) {
+  while (v < value.length) {
+    if (s >= end) return null;
     if (source[s] === '&') {
       // Entity check must precede the literal comparison: `&amp;` decodes to
       // "&", so a plain equality test would consume only the ampersand and
-      // then desynchronize on "amp;".
+      // then desynchronize on "amp;". A decoded `&#10;` is not a line ending.
       const entity = ENTITY_AT.exec(source.slice(s, Math.min(end, s + 34)));
       if (entity) {
         map[v] = s; // points at '&': not a literal '[' for directive purposes
@@ -598,6 +643,7 @@ function mapValueToSource(
       map[v] = s;
       s++;
       v++;
+      if (endsLine(value, v)) return { s, v };
       continue;
     }
     if (source[s] === '\\' && s + 1 < end && source[s + 1] === value[v]) {
@@ -606,11 +652,28 @@ function mapValueToSource(
       v++;
       continue;
     }
+    if ((value[v] === '\n' || value[v] === '\r') && (source[s] === ' ' || source[s] === '\t')) {
+      // Spaces and tabs in front of a soft line ending are not in the value.
+      // The line ending claims them, so a word before it ends where it does.
+      let blank = s;
+      while (blank < end && (source[blank] === ' ' || source[blank] === '\t')) blank++;
+      if (blank < end && source[blank] === value[v]) {
+        map[v] = s;
+        s = blank + 1;
+        v++;
+        if (endsLine(value, v)) return { s, v };
+        continue;
+      }
+    }
     return null;
   }
-  if (v !== value.length) return null;
-  map[value.length] = s;
-  return map;
+  return { s, v };
+}
+
+/** Whether `value[v - 1]`, just matched in the source, finished a line ending. */
+function endsLine(value: string, v: number): boolean {
+  const ch = value[v - 1];
+  return ch === '\n' || (ch === '\r' && value[v] !== '\n');
 }
 
 /**
