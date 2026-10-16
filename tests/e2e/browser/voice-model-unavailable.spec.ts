@@ -82,6 +82,10 @@ async function expectDrawerNamesTheRefusal(page: Page): Promise<void> {
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('Voice unavailable');
   await expect(panel).not.toContainText('Mic lost');
+  // In a neutral light: the danger dot was half of the accusation.
+  await expect(
+    panel.locator('.live-status', { hasText: 'Voice unavailable' }).locator('.status-dot'),
+  ).toHaveClass(/\bneutral\b/);
   await page.keyboard.press('Escape');
   await expect(tab).toHaveAttribute('aria-expanded', 'false');
 }
@@ -161,6 +165,25 @@ test('Start anyway past a missing model ends without microphone advice', async (
 
   await openScript(page, SCRIPT.title);
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+  /*
+   * The editor assumes a model is installed until its status call answers, so
+   * a Present clicked before then would skip the sheet this test is about.
+   * Wait for every model-status request to have been answered, not for a
+   * fixed time.
+   */
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const asked = window.__E2E__.calls.filter(
+          (call) => call.command === 'get_speech_model_status',
+        ).length;
+        const answered = window.__E2E__.settled.filter(
+          (command) => command === 'get_speech_model_status',
+        ).length;
+        return asked > 0 && answered >= asked;
+      }),
+    )
+    .toBe(true);
   await page.locator('header.toolbar').getByRole('button', { name: 'Present', exact: true }).click();
 
   const sheet = page.getByRole('dialog', { name: 'Before this take' });

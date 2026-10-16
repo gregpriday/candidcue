@@ -67,7 +67,11 @@ const pipeline = vi.hoisted(() => {
     softPause(): void {}
     async hardPause(): Promise<void> {}
     async resume(): Promise<void> {
-      if (captured.resumeError !== null) throw captured.resumeError;
+      const error = captured.resumeError;
+      if (error === null) return;
+      // A refused resume re-ran the whole start, so it answers late too.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      throw error;
     }
     estimatedCostUsd(): number {
       return 0;
@@ -114,6 +118,7 @@ const {
   stopSession,
 } = await import('../../../src/control/stores/session');
 const { get } = await import('svelte/store');
+const { toasts } = await import('../../../src/control/stores/toasts');
 
 function compiledStub(): CompiledScript {
   return {
@@ -399,6 +404,34 @@ describe('a take whose speech model was refused', () => {
     });
   }
 
+  it('does not let a stray connection from before the refusal vouch for this take', async () => {
+    /*
+     * The pipeline accepts STT frames before it knows its own transport
+     * generation, so a `connected` from a take that was still starting when it
+     * was replaced can arrive while this one waits on its recogniser. This take
+     * then had its start refused, so no transport of its own ever existed —
+     * and the summary must not report one.
+     */
+    pipeline.captured.failNextStart = true;
+    pipeline.captured.startError = refusal('STT_MODEL_NOT_INSTALLED');
+    start();
+    pipeline.captured.failNextStart = false;
+    (deps().onConnectionState as unknown as (state: string) => void)('connected');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(get(session).voiceFollowingAvailable).toBe(false);
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(stopSession().voiceFollowingAvailable).toBe(false);
+  });
+
+  it('records nothing for a start the app itself abandoned', async () => {
+    // `SESSION_STOPPED` is this app tearing the take down mid-start, not a
+    // refusal — the guard that keeps it out of the toast keeps it out of here.
+    await refusedTake('SESSION_STOPPED');
+    const s = get(session);
+    expect(s.voiceFollowingAvailable).toBe(true);
+    expect(s.connection).not.toBe('offline');
+  });
+
   it('does not treat other model codes as a refused take', async () => {
     // A failed DOWNLOAD shares the prefix and describes a Settings action.
     await refusedTake('STT_MODEL_DOWNLOAD_FAILED');
@@ -444,13 +477,46 @@ describe('a take whose speech model was refused', () => {
     expect(get(session).voiceFollowingAvailable).toBe(true);
   });
 
+  it('does not take a resume that merely resolved as proof the model loaded', async () => {
+    // `resume()` returns at once when nothing was paused, having restarted
+    // nothing. Only a recogniser that connects is evidence.
+    await refusedTake('STT_MODEL_NOT_INSTALLED');
+    resumeSession();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).voiceFollowingAvailable).toBe(false);
+  });
+
+  it('does not let a replaced take’s refused resume reach the take after it', async () => {
+    /*
+     * After a hard pause a resume re-runs the whole start, so it can still be
+     * in flight when the take is replaced. Its refusal used to pause the NEW
+     * take, mark its microphone lost and toast about a failure it never had.
+     */
+    start();
+    pipeline.captured.resumeError = refusal('STT_MODEL_MISSING');
+    resumeSession();
+    pipeline.captured.resumeError = null;
+    start();
+    const resumeToasts = () =>
+      get(toasts).filter((toast) => toast.message.startsWith('Could not resume')).length;
+    const toastsBefore = resumeToasts();
+
+    await vi.advanceTimersByTimeAsync(200);
+    const s = get(session);
+    expect(s.voiceFollowingAvailable, 'take A may not fault take B').toBe(true);
+    expect(s.paused).toBe('none');
+    expect(s.micState).toBe('live');
+    expect(s.connection).not.toBe('offline');
+    expect(resumeToasts()).toBe(toastsBefore);
+  });
+
   it('records a refusal that arrives through a resume', async () => {
     // `resume()` re-runs `start()` after a hard pause, so it meets the same
     // refusal by a second road.
     start();
     pipeline.captured.resumeError = refusal('STT_MODEL_MISSING');
     resumeSession();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(200);
     expect(get(session).voiceFollowingAvailable).toBe(false);
     expect(get(session).inputDeviceLost).toBe(false);
     await vi.advanceTimersByTimeAsync(6_000);
@@ -467,7 +533,7 @@ describe('a take whose speech model was refused', () => {
     (deps().onConnectionState as unknown as (state: string) => void)('connected');
     pipeline.captured.resumeError = refusal('STT_MODEL_LOAD_FAILED');
     resumeSession();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(200);
     expect(get(session).voiceFollowingAvailable).toBe(false);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(stopSession().voiceFollowingAvailable).toBe(true);

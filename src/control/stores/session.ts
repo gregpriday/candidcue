@@ -1382,6 +1382,16 @@ export function startLiveSession(input: StartSessionInput): string {
        * must not send the presenter to test it (#286).
        */
       const modelUnavailable = isSpeechModelUnavailable(code);
+      /*
+       * Nothing connected for this take, whatever arrived while it tried.
+       *
+       * The pipeline accepts STT frames before Rust has told it which transport
+       * generation is its own, so a `connected` from a take still starting when
+       * it was replaced can land here first. A refused start had no transport
+       * at all, so that frame was not this take's — and left standing, it
+       * would make the summary report a recogniser that never ran.
+       */
+      if (modelUnavailable) everConnected = false;
       state.update((s) => ({
         ...s,
         connection: 'offline',
@@ -2454,20 +2464,28 @@ export function resumeSession(): void {
     state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
     return;
   }
+  /*
+   * A resume reports only on the take that asked for it.
+   *
+   * After a hard pause `resume()` re-runs the whole `start()`, which can spend
+   * seconds on the microphone alone — long enough for the take to be stopped
+   * or replaced. Its answer is then about a pipeline that no longer exists,
+   * and applying it would pause the NEXT take, mark its microphone lost and
+   * raise a toast about a failure it never had.
+   */
   const resuming = pipeline;
   void pipeline
     .resume()
     .then(() => {
+      if (resuming !== pipeline) return;
       state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
     })
     .catch((err) => {
-      /*
-       * `resume()` re-runs `start()` after a hard pause, so the model can be
-       * refused here too. Recorded only while this is still the take's own
-       * pipeline: a late refusal from a replaced one may not mark the take
-       * that followed it.
-       */
-      const modelUnavailable = resuming === pipeline && isSpeechModelUnavailable(errorCode(err));
+      if (resuming !== pipeline) return;
+      // `resume()` re-runs `start()` after a hard pause, so the model can be
+      // refused here too — and that is no more a microphone fault than it was
+      // at the start of the take.
+      const modelUnavailable = isSpeechModelUnavailable(errorCode(err));
       // Stay paused and say so. Silence here is what made the failure invisible.
       state.update((s) => ({
         ...s,
