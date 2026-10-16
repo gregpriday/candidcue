@@ -153,7 +153,7 @@ pub fn run() {
             commands::focus_app_window,
             commands::reveal_logs,
             commands::open_third_party_notices,
-            // Help's website destinations. NOT an opener: the argument is a
+            // Help's web destinations. NOT an opener: the argument is a
             // name from a compile-time table (web.rs), never a url.
             commands::open_web_destination,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates

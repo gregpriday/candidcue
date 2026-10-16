@@ -174,10 +174,10 @@ export interface CommandActions {
   revealLogs(): void;
   privacy(): void;
   /**
-   * Open one of CandidCue's own pages, BY NAME.
+   * Open one of the project's pages, BY NAME.
    *
-   * The name is the whole contract. Rust maps it to a URL under one
-   * compile-time origin (`src-tauri/src/web.rs`); the control window has no
+   * The name is the whole contract. Rust maps it to a fixed page of the one
+   * compile-time repository (`src-tauri/src/web.rs`); the control window has no
    * permission to open an address it chose, and this signature is where that
    * stays true — the moment this takes a URL, the restriction is gone.
    */
@@ -784,7 +784,7 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     run: (a) => a.privacy(),
   },
   /*
-   * The website destinations, all unavailable while presenting.
+   * The web destinations, all unavailable while presenting.
    *
    * That is not tidiness. Every one of these launches a browser, which takes
    * focus, and taking focus during a take puts another application's window in
@@ -794,13 +794,13 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
    */
   'help.website': {
     id: 'help.website',
-    label: 'CandidCue Website',
+    label: 'CandidCue on GitHub',
     available: (c) => !presenting(c),
     run: (a) => a.openWebDestination('website'),
   },
   'help.guide': {
     id: 'help.guide',
-    label: 'User Guide',
+    label: 'Project README',
     available: (c) => !presenting(c),
     run: (a) => a.openWebDestination('guide'),
   },

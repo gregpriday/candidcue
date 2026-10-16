@@ -122,9 +122,9 @@ commands.allow = [
   "reveal_logs",
   # Opens a file this build shipped, resolved by Rust. Takes no argument.
   "open_third_party_notices",
-  # Help's website destinations. This is deliberately NOT `opener:default`: the
-  # argument is a NAME, and src/web.rs maps the five names it knows to paths
-  # under one compile-time origin. The webview cannot express a url.
+  # Help's web destinations. This is deliberately NOT `opener:default`: the
+  # argument is a NAME, and src/web.rs maps the five names it knows to fixed
+  # pages of one compile-time repository. The webview cannot express a url.
   "open_web_destination",
   # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
   # (docs/updates.md). Both were permitted here while always returning

@@ -26,19 +26,22 @@ available"), because the failure mode here is reassurance, not silence.
 
 ## How a user updates
 
-Download the new build from the official CandidCue website and replace the app
-in `/Applications`. Scripts, revisions, assets, settings, calibrations, the
-database and the installed speech model all live in the application data
-directory, not in the bundle, so replacing the app does not touch any of them.
+Download the new build from the latest release on the project's GitHub page
+and replace the app in `/Applications`. Scripts, revisions, assets, settings,
+calibrations, the database and the installed speech model all live in the
+application data directory, not in the bundle, so replacing the app does not
+touch any of them.
 
 **Help › Download Latest Version** opens that page. It goes through
-`open_web_destination`, which takes a NAME and maps it to a path under the one
-origin in `src-tauri/src/web.rs` — not through `opener:default`, which the
-capability-minimisation work removed and which nothing should reintroduce. Help
-also carries Release Notes, so a user can read what changed before deciding.
+`open_web_destination`, which takes a NAME and maps it to a fixed page of the
+one repository in `src-tauri/src/web.rs` — not through `opener:default`, which
+the capability-minimisation work removed and which nothing should reintroduce.
+Help also carries Release Notes, so a user can read what changed before
+deciding.
 
-That origin is `WEBSITE_ORIGIN` in `src-tauri/src/web.rs`, the one place the
-application names its own domain. If the domain changes, it changes there.
+That repository is `REPOSITORY_URL` in `src-tauri/src/web.rs`, the one place the
+application names where the project lives. If the project moves, it changes
+there.
 
 ## What was removed, and why it is not "reserved for later"
 

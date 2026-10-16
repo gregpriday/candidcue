@@ -990,7 +990,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     /*
      * Reported rather than swallowed. The browser not opening is invisible from
      * inside the app — nothing changes on screen — so a user who clicks Help ›
-     * User Guide and sees nothing has no way to tell whether they missed the
+     * Project README and sees nothing has no way to tell whether they missed the
      * click or the app failed. One toast is the difference.
      */
     openWebDestination: (destination) => {

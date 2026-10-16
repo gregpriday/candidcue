@@ -185,7 +185,7 @@ export const COMMAND_IDS = [
   'help.export-support-bundle',
   'help.reveal-logs',
   'help.privacy',
-  // The website. Each of these asks Rust for a NAMED destination, never a url —
+  // The project's pages. Each asks Rust for a NAMED destination, never a url —
   // `src-tauri/src/web.rs` owns the mapping, and the webview has no permission
   // to open an address of its own choosing.
   'help.website',
