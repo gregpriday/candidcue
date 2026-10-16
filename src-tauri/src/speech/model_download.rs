@@ -590,19 +590,26 @@ async fn fetch_archive(
         // Failing to record this transfer is survivable; leaving the PREVIOUS
         // sidecar in place is not. It names another url's validator, and now
         // that a dropped transfer is kept, a later run would resume these
-        // bytes against that url. No sidecar costs one restart instead.
-        let _ = std::fs::remove_file(resume_path);
+        // bytes against that url. No sidecar costs one restart instead — and
+        // if even that cannot be arranged, nothing written from here on could
+        // be trusted to resume, so the transfer does not start.
+        match std::fs::remove_file(resume_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(FetchFailure::Rejected(install_failed(format!(
+                    "could not replace the resume sidecar: {err}"
+                ))))
+            }
+        }
     }
 
     let mut written = from;
     let mut response = transfer.response;
-    // Whether this response claimed to be the origin's WHOLE file, length and
-    // all. Read before the body is consumed, and used only to explain a short
-    // ending — never to size anything (see the per-chunk ceiling below). A
-    // 206's length describes only its own slice, and a server may send less
-    // of a range than was asked for, so a short 206 says nothing about the
-    // file being the wrong one.
-    let whole_and_framed = transfer.start == 0 && response.content_length().is_some();
+    // Whether the response said how long it is. Read before the body is
+    // consumed, and used only to explain a short ending — never to size
+    // anything (see the per-chunk ceiling below).
+    let framed = response.content_length().is_some();
     let mut last_report = std::time::Instant::now();
     on_progress(Phase::Downloading, written, expected);
     loop {
@@ -664,13 +671,18 @@ async fn fetch_archive(
         //
         // A whole-file response that declared its length and delivered all of
         // it is the origin's entire file, and that file is not our archive:
-        // resuming past its end can only be refused. Anything else simply
-        // ended — a dropped close-delimited body looks exactly like this, and
-        // so does a 206 that served less of the range than was asked for —
-        // and is kept like any other interrupted transfer. If the origin's
-        // file really is shorter, the resume is answered 416 and dropped then.
+        // resuming past its end can only be refused. So is a framed 206 that
+        // delivered NOTHING — an empty range is a 416 spelled wrong, and
+        // keeping the partial would ask the same question, and get the same
+        // answer, on every retry. Anything else simply ended: a dropped
+        // close-delimited body looks exactly like this, and so does a 206
+        // that served less of the range than was asked for (its length
+        // describes only its own slice). That is kept like any other
+        // interrupted transfer; if the origin's file really is shorter, the
+        // resume is answered 416 and dropped then.
+        let wrong_file = framed && (from == 0 || written == from);
         let reason = format!("expected {expected} bytes, received {written}");
-        return Err(if whole_and_framed {
+        return Err(if wrong_file {
             FetchFailure::Rejected(integrity_failed(reason))
         } else {
             FetchFailure::Interrupted(download_failed(reason))
@@ -2664,6 +2676,43 @@ mod tests {
             Some(&SeenRequest::default()),
             "the next run must not ask for the refused range again"
         );
+    }
+
+    /// An origin whose file ends exactly where our partial does, and which
+    /// answers the resume with an EMPTY 206 instead of a 416. Nothing arrives,
+    /// nothing errors, and the same request would get the same answer on
+    /// every retry — so the partial must go, as it would have for the 416.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_empty_range_answer_discards_the_partial_instead_of_repeating_forever() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+        // `ShortAt(half)` asked for `bytes=half-` serves a zero-length slice:
+        // `206`, `Content-Length: 0`, `Content-Range: bytes half-(half-1)/half`.
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::ShortAt(half), Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        seed_partial(temp.path(), &model, &archive[..half], &model.archive.upstream_url);
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect_err("an empty answer does not install");
+        assert_eq!(origin.seen().first().and_then(|r| r.range_from), Some(half as u64));
+        assert!(!part.exists(), "a partial the origin has nothing past must be dropped");
+        assert!(!sidecar.exists(), "and its sidecar with it");
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("a clean start must then succeed");
+        assert_eq!(origin.seen().get(1), Some(&SeenRequest::default()));
     }
 
     /// Bytes that fail the digest never reach a decompressor.
