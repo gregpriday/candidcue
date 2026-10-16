@@ -875,7 +875,7 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * Through `formatAccelerator` — the same function the native menu and the
    * Shortcuts dialog use — so a key advertised on a tooltip cannot be one the
-   * app does not answer. Plain keys (`Space`, `T`) have no modifiers to
+   * app does not answer. Plain keys (`Space`, `B`) have no modifiers to
    * translate and pass through unchanged, which is what makes one helper serve
    * both kinds.
    */
