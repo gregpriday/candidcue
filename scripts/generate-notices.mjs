@@ -34,7 +34,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,8 +96,9 @@ function javascriptPackages() {
  *
  * Not `cargo license`: that is another build-time download, which is the exact
  * class of input the supply-chain gate exists to bound. The registry source
- * tree is already on any machine that has built this, and `cargo fetch` puts
- * it on one that has not.
+ * tree is already on any machine that has built this, and on one that has not
+ * — a fresh CI runner — the `cargo tree` in `rustCrates()` unpacks it, because
+ * resolving the graph needs every manifest in it.
  *
  * A crate whose licence cannot be read is REPORTED, never omitted. A notices
  * file that quietly drops what it could not classify is worse than one that
@@ -135,23 +136,18 @@ function crateLicence(name, version, registries) {
   return undefined; // not unpacked here, which is different from having none
 }
 
-function rustCrates() {
-  const registryRoot = join(homedir(), '.cargo', 'registry', 'src');
-  let registries = [];
-  try {
-    // Sorted: `readdirSync` order is the filesystem's, and a machine with two
-    // registry directories would otherwise resolve them in an order that is
-    // stable per-machine and not across them.
-    registries = readdirSync(registryRoot)
-      .sort()
-      .map((entry) => join(registryRoot, entry));
-  } catch {
-    problems.push(
-      `no unpacked cargo registry at ${registryRoot} — run \`cargo fetch\` before generating notices.`,
-    );
-    return [];
-  }
+/**
+ * Where cargo keeps its registry, by cargo's own rule: `CARGO_HOME` when it is
+ * set and not empty, resolved against the directory cargo runs in (ROOT, see
+ * `run`), and `~/.cargo` otherwise. Reading `~/.cargo` unconditionally would
+ * look in one place while cargo unpacked into another.
+ */
+function cargoHome() {
+  const configured = process.env.CARGO_HOME;
+  return configured ? resolve(ROOT, configured) : join(homedir(), '.cargo');
+}
 
+function rustCrates() {
   /*
    * Pinned to the RELEASE targets, and to normal dependencies.
    *
@@ -202,6 +198,38 @@ function rustCrates() {
     }
   }
 
+  // Nothing to classify, which in practice means every tree failed and has
+  // already said why. A missing registry on top of that would only be a
+  // second, misleading account of the same failure.
+  if (seen.size === 0) return [];
+
+  /*
+   * The registry is read AFTER the trees, not before.
+   *
+   * It was read first, and on a fresh CI runner there was nothing to read: no
+   * cargo command had unpacked a crate yet, so the gate failed on every push
+   * and passed on every developer machine. The trees above do the unpacking —
+   * `cargo tree` loads every manifest in the graph it prints — so by now the
+   * registry holds the crates being asked about, on any machine.
+   */
+  const registryRoot = join(cargoHome(), 'registry', 'src');
+  let registries = [];
+  try {
+    // Sorted: `readdirSync` order is the filesystem's, and a machine with two
+    // registry directories would otherwise resolve them in an order that is
+    // stable per-machine and not across them.
+    registries = readdirSync(registryRoot)
+      .sort()
+      .map((entry) => join(registryRoot, entry));
+  } catch {
+    // Not an early return: every crate below then reads as unknown and is
+    // named, so the failure says which crates as well as where it looked.
+    problems.push(
+      `no unpacked cargo registry at ${registryRoot}, even after \`cargo tree\` resolved ` +
+        `the release crates — is CARGO_HOME pointing somewhere cargo did not use?`,
+    );
+  }
+
   /*
    * A plain comparator, not `localeCompare`: collation is locale-dependent, so
    * a runner with a different ICU locale would order `_`-prefixed and
@@ -224,8 +252,10 @@ function rustCrates() {
   if (unknown.length > 0) {
     problems.push(
       `${unknown.length} crate licence(s) could not be read: ${unknown.slice(0, 8).join(', ')}` +
-        `${unknown.length > 8 ? ', …' : ''}. Run \`cargo fetch\` for both workspaces, or record ` +
-        `them by hand — a notices file may not silently omit what it failed to classify.`,
+        `${unknown.length > 8 ? ', …' : ''}. \`cargo tree\` unpacks every registry crate it ` +
+        `prints, so one missing here comes from outside the registry (a git or path ` +
+        `dependency) or declares no licence in its \`[package]\` table — a notices file may ` +
+        `not silently omit what it failed to classify.`,
     );
   }
   return crates;
