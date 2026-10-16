@@ -681,9 +681,6 @@ pub async fn apply_pending_restore(paths: &DataPaths) -> Result<Option<PathBuf>,
      * data aside and copy the export over it a second time.
      */
     if pending.completed {
-        // Its success path clears the rebuild's script names before retiring
-        // the marker; a crash between the two leaves them to clear here.
-        salvage::clear_pending_index(paths.root());
         let _ = std::fs::remove_file(&marker);
         tracing::info!("cleared the marker of a restore that had already finished");
         return Ok(None);

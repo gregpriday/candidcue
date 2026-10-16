@@ -254,9 +254,11 @@ async fn read_scripts(copy: &Path) -> Vec<SalvagedScript> {
 /// `database` — so a crash before the read finishes still leaves the next
 /// launch knowing where they are.
 ///
-/// Anything an earlier, unapplied recovery left is carried forward.
+/// Anything an earlier, unapplied recovery left is carried forward. A record
+/// that exists and cannot be read is left alone rather than replaced by one
+/// that has lost what it carried.
 pub fn record_pending_salvage(root: &Path, database: &Path) -> Result<(), AppError> {
-    let carried = read_index(root).ok().flatten().map(|index| index.scripts).unwrap_or_default();
+    let carried = read_index(root)?.map(|index| index.scripts).unwrap_or_default();
     write_index(root, database, false, carried)
 }
 
@@ -264,28 +266,7 @@ pub fn record_pending_salvage(root: &Path, database: &Path) -> Result<(), AppErr
 /// over what it already carries, and mark it complete. A record that ends up
 /// naming nothing is removed. Best effort throughout.
 pub async fn finish_pending_salvage(root: &Path, scratch_parent: &Path) {
-    let index = match read_index(root) {
-        Ok(Some(index)) if !index.complete => index,
-        _ => return,
-    };
-    let source = PathBuf::from(&index.source);
-    let salvaged = salvage_scripts(&source, scratch_parent).await;
-    let read = salvaged.len();
-
-    // Newest read wins for a script both describe.
-    let fresh: HashSet<String> = salvaged.iter().map(|s| s.id.clone()).collect();
-    let mut scripts: Vec<SalvagedScript> =
-        index.scripts.into_iter().filter(|s| !fresh.contains(&s.id)).collect();
-    scripts.extend(salvaged);
-
-    if scripts.is_empty() {
-        clear_pending_index(root);
-        return;
-    }
-    match write_index(root, &source, true, scripts) {
-        Ok(()) => tracing::info!(read, "kept the old database's script names for the rebuild"),
-        Err(err) => tracing::warn!(error = %err, "could not keep the old database's script names"),
-    }
+    let _ = settle_index(root, scratch_parent).await;
 }
 
 /// The names a rebuild salvaged, by script id, for reconciliation to apply.
@@ -300,14 +281,47 @@ pub async fn load_pending_index(
     root: &Path,
     scratch_parent: &Path,
 ) -> std::io::Result<Option<HashMap<String, SalvagedScript>>> {
-    finish_pending_salvage(root, scratch_parent).await;
-    Ok(read_index(root)?.map(|index| {
-        index
-            .scripts
+    Ok(settle_index(root, scratch_parent).await?.map(|scripts| {
+        scripts
             .into_iter()
             .map(|script| (script.id.clone(), script))
             .collect()
     }))
+}
+
+/// The record's entries, with an unfinished salvage finished first. What a
+/// salvage read is returned even when writing it back fails: the record on
+/// disk then still says the read is unfinished, so the next launch repeats it,
+/// and this one does not adopt the folders as if it had read nothing.
+async fn settle_index(
+    root: &Path,
+    scratch_parent: &Path,
+) -> std::io::Result<Option<Vec<SalvagedScript>>> {
+    let Some(index) = read_index(root)? else {
+        return Ok(None);
+    };
+    if index.complete {
+        return Ok(Some(index.scripts));
+    }
+    let source = PathBuf::from(&index.source);
+    let salvaged = salvage_scripts(&source, scratch_parent).await;
+    let read = salvaged.len();
+
+    // Newest read wins for a script both describe.
+    let fresh: HashSet<String> = salvaged.iter().map(|s| s.id.clone()).collect();
+    let mut scripts: Vec<SalvagedScript> =
+        index.scripts.into_iter().filter(|s| !fresh.contains(&s.id)).collect();
+    scripts.extend(salvaged);
+
+    if scripts.is_empty() {
+        clear_pending_index(root);
+        return Ok(Some(scripts));
+    }
+    match write_index(root, &source, true, scripts.clone()) {
+        Ok(()) => tracing::info!(read, "kept the old database's script names for the rebuild"),
+        Err(err) => tracing::warn!(error = %err, "could not keep the old database's script names"),
+    }
+    Ok(Some(scripts))
 }
 
 /// Whatever a recovery has salvaged and not yet applied, read as is. For the

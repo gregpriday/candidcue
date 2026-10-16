@@ -915,6 +915,12 @@ async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
         .await
         .expect("reconciliation");
     assert_eq!(report.orphan_files_recovered, vec![readable.id.clone()]);
+    assert_eq!(
+        report.orphan_files_waiting,
+        vec![stuck.id.clone()],
+        "a script missing from the Library is reported, not just noted"
+    );
+    assert!(report.has_findings());
     assert!(
         h.dir.path().join("rebuild-script-index.json").exists(),
         "the stuck folder's name is still waiting"

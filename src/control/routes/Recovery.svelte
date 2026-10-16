@@ -211,8 +211,8 @@
     says. Rebuilding sets the current database aside and, when you reopen CandidCue, builds
     a new index from them — their text, and the saved versions and images that are intact.
     Names, the Trash and each script's reading settings are only in the database, so they
-    are read back out of the old one where it can still be read; a script it cannot name is
-    named after its first line, and comes back out of the Trash if it was in it. Saved
+    are read back out of the old one where it can still be read. Where it cannot, a script
+    is named after its first line and comes back out of the Trash if it was in it. Saved
     versions keep their dates but not why they were saved. Session and take history are not
     rebuilt this way — the old database is kept, not deleted, so they are still there if you
     need them.

@@ -32,6 +32,11 @@ pub struct RecoveryReport {
     /// the files they were always in.
     pub revisions_recovered: u32,
     pub assets_recovered: u32,
+    /// Script folders with text that were NOT adopted this launch — the text
+    /// could not be read, the adoption failed, or the names a rebuild saved
+    /// could not be read — so the Library is missing them until a later launch
+    /// can. A finding, because nothing else would say why they are absent.
+    pub orphan_files_waiting: Vec<String>,
     pub missing_files_restored: Vec<String>,
     pub missing_files_unrecoverable: Vec<String>,
     /// Rows whose canonical file did not match the recorded hash — the
@@ -46,6 +51,7 @@ impl RecoveryReport {
         !self.integrity_ok
             || self.temp_files_removed > 0
             || !self.orphan_files_recovered.is_empty()
+            || !self.orphan_files_waiting.is_empty()
             || !self.missing_files_restored.is_empty()
             || !self.missing_files_unrecoverable.is_empty()
             || !self.hash_mismatches_repaired.is_empty()
@@ -115,7 +121,7 @@ pub async fn run_startup_reconciliation(
         .map(|(id, _)| id)
         .collect();
     let scripts_dir = paths.scripts_dir();
-    if adopt && scripts_dir.exists() {
+    if scripts_dir.exists() {
         for entry in fs::read_dir(&scripts_dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -136,7 +142,14 @@ pub async fn run_startup_reconciliation(
             };
             let canonical = entry.path().join("script.md");
             if !canonical.exists() {
+                // No text, no script — and no finding either: an empty
+                // leftover folder would otherwise be reported on every launch.
+                // A name salvaged for it still waits for its text.
                 waiting.insert(dir_name);
+                continue;
+            }
+            if !adopt {
+                report.orphan_files_waiting.push(dir_name);
                 continue;
             }
             match fs::read_to_string(&canonical) {
@@ -157,6 +170,7 @@ pub async fn run_startup_reconciliation(
                         }
                         Err(err) => {
                             report.notes.push(format!("adopt orphan {dir_name}: {err}"));
+                            report.orphan_files_waiting.push(dir_name.clone());
                             waiting.insert(dir_name);
                         }
                     }
@@ -165,6 +179,7 @@ pub async fn run_startup_reconciliation(
                     report
                         .notes
                         .push(format!("unreadable orphan {dir_name}: {err}"));
+                    report.orphan_files_waiting.push(dir_name.clone());
                     waiting.insert(dir_name);
                 }
             }
