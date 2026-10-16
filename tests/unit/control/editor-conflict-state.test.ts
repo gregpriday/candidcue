@@ -78,8 +78,11 @@ vi.mock('../../../src/control/services/scripts', () => ({
   },
 }));
 
+const compiledMock = vi.hoisted(() => ({
+  requestCompile: vi.fn(async (..._args: unknown[]) => undefined),
+}));
 vi.mock('../../../src/control/stores/compiled', () => ({
-  requestCompile: async () => undefined,
+  requestCompile: compiledMock.requestCompile,
   resetCompiled: () => undefined,
 }));
 
@@ -288,6 +291,27 @@ describe('resolving an external conflict never drops the editor text', () => {
     };
     await expect(useDiskVersion()).rejects.toBeTruthy();
     expect(get(editor).source).not.toBe(diskDocument.source);
+  });
+
+  /*
+   * #246. The disk version arrives with its own settings, and the editor's
+   * length estimates are only the Library's if it compiles at that rate rather
+   * than the one the editor was opened with.
+   */
+  it('compiles the disk version at the disk version’s own speaking rate', async () => {
+    expect(get(editor).wordsPerMinuteEstimate).toBe(150);
+    diskDocument = {
+      ...diskDocument,
+      settings: { ...diskDocument.settings, wordsPerMinuteEstimate: 180 },
+    };
+    compiledMock.requestCompile.mockClear();
+
+    await useDiskVersion();
+
+    expect(get(editor).wordsPerMinuteEstimate).toBe(180);
+    expect(compiledMock.requestCompile).toHaveBeenCalledTimes(1);
+    expect(compiledMock.requestCompile.mock.calls[0]?.[1]).toBe(diskDocument.source);
+    expect(compiledMock.requestCompile.mock.calls[0]?.[3]).toEqual({ wordsPerMinute: 180 });
   });
 
   /** No junk copy when there is nothing to preserve. */

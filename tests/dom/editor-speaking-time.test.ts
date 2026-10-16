@@ -209,10 +209,13 @@ describe('editor speaking time', () => {
   it('follows a script whose own rate says otherwise', async () => {
     // The compile is made at the script's rate (the editor store passes it),
     // and both labels take the rate from that compile rather than a default.
-    await mountEditor(150);
-    expect(statusBarLabels()).toContain('≈ 7 min');
+    // 180, not 150: at 150 these labels are the ones the old code drew anyway.
+    await mountEditor(180);
+    const labels = statusBarLabels();
+    expect(labels).toContain('≈ 6 min');
+    expect(labels).not.toContain('≈ 7 min');
     expect(outlineLabels()).toEqual([
-      ['Intro', '≈ 4 min'],
+      ['Intro', '≈ 3 min'],
       ['Detail', '≈ 10 sec'],
       ['Empty', '—'],
       ['Close', '≈ 2 min'],
