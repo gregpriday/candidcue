@@ -122,6 +122,8 @@ function shiftPastByteOrderMark(node: MdNode): void {
   for (const child of node.children ?? []) shiftPastByteOrderMark(child);
 }
 
+const LEADING_BYTE_ORDER_MARKS = /^\uFEFF+/;
+
 function shiftPoint(point: MdPoint): MdPoint {
   const shifted: MdPoint = {
     line: point.line,
@@ -2063,7 +2065,11 @@ function finalize(
     schemaVersion: SCHEMA_VERSION,
     compilerVersion: COMPILER_VERSION,
     scriptId: options.scriptId,
-    sourceHash: hashString(source),
+    // The identity of the TEXT, which a leading byte-order mark is not part of.
+    // The editor can hold a pasted one that the saved file, and so the take's
+    // compile, does not; the stale-editor gate compares these two hashes and
+    // must not call that a changed script (#247).
+    sourceHash: hashString(source.replace(LEADING_BYTE_ORDER_MARKS, '')),
     settingsHash: hashString(
       JSON.stringify({
         readHeadings: state.readHeadings,

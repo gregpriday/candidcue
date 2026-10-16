@@ -1497,7 +1497,11 @@ pub async fn restore_canonical_from_latest_revision(
     if !revision_file.exists() {
         return Ok(false);
     }
-    let source = into_without_bom(fs::read_to_string(&revision_file)?);
+    // Restored byte for byte, like every other preserved artifact: a legacy
+    // byte-order mark goes back with it, and the editor never sees it because
+    // `get_script` hands out text without one (#247). Reconciliation checks the
+    // restored file next, which rebuilds metadata the mark distorted.
+    let source = fs::read_to_string(&revision_file)?;
     let canonical = paths.canonical_file(script_id);
     atomic_write(&canonical, source.as_bytes())?;
     sqlx::query(

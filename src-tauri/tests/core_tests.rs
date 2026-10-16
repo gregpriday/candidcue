@@ -943,25 +943,19 @@ async fn a_byte_order_mark_from_the_editor_never_reaches_the_disk() {
     .expect("a later save is not refused");
 }
 
-#[tokio::test]
-async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup() {
-    let h = harness().await;
-    let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
-        .await
-        .expect("create");
-    let script_id = sid(&summary.id);
-    let canonical = h.paths.canonical_file(&script_id);
-
-    // The state an import left before #247: the file kept its mark, the row's
-    // hash matches that file, and the Library read the heading as speech.
-    let marked = format!("{BOM}{QUARTERLY}");
-    fs::write(&canonical, &marked).unwrap();
-    sqlx::query("UPDATE scripts SET source_hash = ?, spoken_word_count = 8 WHERE id = ?")
-        .bind(candidcue_lib::util::sha256_hex(marked.as_bytes()))
-        .bind(script_id.as_str())
-        .execute(&h.pool)
-        .await
-        .unwrap();
+/// Put a script into the state an import left it in before #247: the given
+/// file keeps its mark, the row's hash matches it, and the Library read the
+/// heading as speech — 8 words, a 4-second estimate, the mark in the preview.
+async fn seed_legacy_bom_metadata(h: &Harness, script_id: &ScriptId, marked: &str) {
+    sqlx::query(
+        "UPDATE scripts SET source_hash = ?, spoken_word_count = 8, estimated_duration_seconds = 4
+         WHERE id = ?",
+    )
+    .bind(candidcue_lib::util::sha256_hex(marked.as_bytes()))
+    .bind(script_id.as_str())
+    .execute(&h.pool)
+    .await
+    .unwrap();
     sqlx::query("DELETE FROM script_search WHERE script_id = ?")
         .bind(script_id.as_str())
         .execute(&h.pool)
@@ -974,28 +968,47 @@ async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup
         .execute(&h.pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup() {
+    use candidcue_lib::scripts::reconcile;
+
+    let h = harness().await;
+    let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
+        .await
+        .expect("create");
+    let clean_duration = summary.estimated_duration_seconds;
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+
+    let marked = format!("{BOM}{QUARTERLY}");
+    fs::write(&canonical, &marked).unwrap();
+    seed_legacy_bom_metadata(&h, &script_id, &marked).await;
     let before = repo::get_summary(&h.pool, &script_id).await.unwrap();
     assert_eq!(before.spoken_word_count, 8);
+    assert_ne!(before.estimated_duration_seconds, clean_duration);
     assert!(before.preview_text.starts_with(BOM));
 
-    // The hash matches, so this is not reported as a repair...
-    let repaired =
-        repo::repair_row_from_canonical_file(&h.pool, &h.paths, &script_id, &h.locks)
-            .await
-            .expect("startup repair");
-    assert!(!repaired);
+    // The hash matches, so this is not a repair...
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.hash_mismatches_repaired.is_empty());
 
     // ...but the Library now reads what the editor does, and nothing else moved.
     let after = repo::get_summary(&h.pool, &script_id).await.unwrap();
     assert_eq!(after.spoken_word_count, 5);
+    assert_eq!(after.estimated_duration_seconds, clean_duration);
     assert_eq!(after.preview_text, "Hello everyone, thanks for coming.");
     assert_eq!(after.script_revision, before.script_revision);
+    assert_eq!(after.updated_at, before.updated_at);
     assert_eq!(fs::read_to_string(&canonical).unwrap(), marked);
 
-    // Running again changes nothing, and opening finds no external change.
-    repo::repair_row_from_canonical_file(&h.pool, &h.paths, &script_id, &h.locks)
+    // A second startup leaves it be, and opening finds no external change.
+    reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
         .await
-        .expect("second startup");
+        .expect("second reconciliation");
     let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
         .await
         .expect("get");
@@ -1003,6 +1016,43 @@ async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup
     assert_eq!(doc.source, QUARTERLY);
     assert_eq!(doc.summary.spoken_word_count, 5);
     assert_eq!(doc.summary.script_revision, before.script_revision);
+}
+
+#[tokio::test]
+async fn a_legacy_marked_script_restored_from_its_revision_is_rebuilt_too() {
+    use candidcue_lib::scripts::reconcile;
+
+    let h = harness().await;
+    let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
+        .await
+        .expect("create");
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
+
+    // The legacy import's own revision is the newest one, mark and all, and
+    // the canonical file is gone.
+    let marked = format!("{BOM}{QUARTERLY}");
+    repo::create_revision_snapshot(&h.pool, &h.paths, &script_id, &marked, "import", 8)
+        .await
+        .expect("legacy import revision");
+    seed_legacy_bom_metadata(&h, &script_id, &marked).await;
+    fs::remove_file(&canonical).unwrap();
+
+    let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(report.missing_files_restored.contains(&summary.id));
+
+    // Restored byte for byte, with the metadata rebuilt in the same pass.
+    assert_eq!(fs::read_to_string(&canonical).unwrap(), marked);
+    let after = repo::get_summary(&h.pool, &script_id).await.unwrap();
+    assert_eq!(after.spoken_word_count, 5);
+    assert_eq!(after.preview_text, "Hello everyone, thanks for coming.");
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
+        .await
+        .expect("get");
+    assert!(!doc.externally_changed);
+    assert_eq!(doc.source, QUARTERLY);
 }
 
 #[tokio::test]

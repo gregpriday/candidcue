@@ -1090,6 +1090,17 @@ describe('compile: a leading byte-order mark (#247)', () => {
     }
   });
 
+  it('gives the text the same identity with or without the mark', () => {
+    // The editor can hold a pasted mark the saved file does not, and the take
+    // compiles the saved file. The stale-editor gate compares these two hashes
+    // and would otherwise refuse the take as "changed after it was prepared".
+    const body = ':::stage\nWalk to the whiteboard.\n:::\n\nHello everyone.\n';
+    const plain = compile(body, OPTS).sourceHash;
+    expect(compile(BOM + body, OPTS).sourceHash).toBe(plain);
+    expect(compile(BOM + BOM + body, OPTS).sourceHash).toBe(plain);
+    expect(compile(body.replace('Hello', 'Hullo'), OPTS).sourceHash).not.toBe(plain);
+  });
+
   it('does not shift twice when front matter blanks the mark with it', () => {
     const body = ['---', 'coach:', '  mode: minimal', '---', '', 'All good here.', ''].join('\n');
     const plain = compile(body, OPTS);
