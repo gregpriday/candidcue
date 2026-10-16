@@ -1882,11 +1882,13 @@
             READ, not asserted. `defaultSessionMode` is still a real stored
             field: `fromRustDocument` accepts a persisted 'manual' or 'fixed',
             and `startTake` passes whatever it finds straight into the session.
-            A readout hardcoded to "Voice follow" would therefore have been the
+            A readout hardcoded to "Follow voice" would therefore have been the
             same defect one layer along — a screen describing a state the app is
             not in — for anybody carrying such a document. So if an unsupported
             mode is stored, this says so and offers the way back that removing
-            the Select would otherwise have taken away.
+            the Select would otherwise have taken away. The way back names the
+            mode with the readout's own label, so the button and the value it
+            produces say the same words.
           -->
           {#if $settings.general.defaultSessionMode === 'voice'}
             <SettingReadout
@@ -1898,7 +1900,7 @@
             <SettingReadout
               label="Session mode"
               value={sessionModeLabel($settings.general.defaultSessionMode)}
-              description="This setting was stored by an earlier version and takes no longer open in it. Switch back to voice follow to prompt normally; auto-scroll still rolls the script at a set pace from inside any take."
+              description={`This setting was stored by an earlier version and takes no longer open in it. Switch back to ${SESSION_MODE_LABELS.voice} to prompt normally; auto-scroll still rolls the script at a set pace from inside any take.`}
             />
             <p class="hint-line">
               <button
@@ -1906,7 +1908,7 @@
                 class="inline-link"
                 onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
               >
-                Switch to voice follow
+                Switch to {SESSION_MODE_LABELS.voice}
               </button>
             </p>
           {/if}

@@ -482,7 +482,7 @@ test('measuring another rig opens the wizard on a new name, not the applied one'
 
 test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
   // `fromRustDocument` still accepts a persisted 'manual', and startTake passes
-  // it straight into the session — so a readout hardcoded to "Voice follow"
+  // it straight into the session — so a readout hardcoded to "Follow voice"
   // would be the same defect one layer along, and removing the Select would
   // have taken away the only way back.
   await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
@@ -490,10 +490,35 @@ test('a session mode stored by an older build is admitted, not papered over', as
   await openSettingsSection(page, 'General');
 
   await expect(page.getByText('Manual', { exact: true })).toBeVisible();
-  await expect(page.getByText(/takes no longer open in it/)).toBeVisible();
+  // The way back is named in the readout's own vocabulary, in the sentence and
+  // on the button alike: "Switch to voice follow" leading to a value that reads
+  // "Follow voice" is two names for one mode.
+  await expect(
+    page.getByText(
+      'This setting was stored by an earlier version and takes no longer open in it. ' +
+        'Switch back to Follow voice to prompt normally; auto-scroll still rolls the ' +
+        'script at a set pace from inside any take.',
+      { exact: true },
+    ),
+  ).toBeVisible();
 
-  await page.getByRole('button', { name: 'Switch to voice follow' }).click();
-  await expect(page.getByText('Voice follow', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Switch to Follow voice', exact: true }).click();
+  // The store changes before the save is awaited, so the readout alone would
+  // pass on a way back that never reached the backend.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__E2E__.calls.some(
+          (c) =>
+            c.command === 'update_settings' &&
+            (c.args as { patch?: { stageBehavior?: { promptMode?: unknown } } }).patch
+              ?.stageBehavior?.promptMode === 'voice',
+        ),
+      ),
+    )
+    .toBe(true);
+  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
+  await expect(page.getByText(/takes no longer open in it/)).toHaveCount(0);
 });
 
 test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
@@ -502,7 +527,7 @@ test('Session mode states its one value instead of offering two dead options', a
   await openSettingsSection(page, 'General');
 
   await expect(page.getByText('Session mode', { exact: true })).toBeVisible();
-  await expect(page.getByText('Voice follow', { exact: true })).toBeVisible();
+  await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
   // The dropdown is gone, and with it the two permanently disabled rows.
   await expect(page.getByLabel('Default session mode')).toHaveCount(0);
   await expect(page.getByText(/not available in this release/)).toHaveCount(0);
