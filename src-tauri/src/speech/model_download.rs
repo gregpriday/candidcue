@@ -41,6 +41,14 @@
 //! the validator no longer matches. The archive digest catches it either way;
 //! the point of `If-Range` is to catch it before spending the bandwidth.
 //!
+//! What survives a failure depends on WHAT failed, not on the fact that
+//! something did. A transfer that merely stopped — a dropped connection, a
+//! closed lid, the idle timeout, a request that never connected — has judged
+//! none of its bytes, so the partial and its sidecar are kept. Bytes that
+//! failed the digest, overran the catalogue, or that the origin refuses to
+//! continue are discarded, because resuming into them would fail the same way
+//! forever. `FetchFailure` is where each failure says which it is.
+//!
 //! Extraction is never resumed, only downloads. A half-extracted staging
 //! directory is cheap to redo and expensive to reason about.
 
@@ -158,8 +166,10 @@ fn download_failed(reason: impl Into<String>) -> AppError {
 /// The bytes are not the bytes the catalogue pinned.
 ///
 /// Retryable, and worth saying why: the overwhelmingly likely cause is a
-/// truncated or proxy-mangled transfer, not an attack, and the honest response
-/// to that is to offer another go rather than to accuse anyone.
+/// proxy-mangled transfer or a replaced upstream asset, not an attack, and the
+/// honest response to that is to offer another go rather than to accuse
+/// anyone. A transfer that merely stopped short is NOT this — see
+/// `FetchFailure::Interrupted`.
 fn integrity_failed(reason: impl Into<String>) -> AppError {
     AppError::structured(
         "STT_MODEL_CORRUPT",
@@ -178,6 +188,41 @@ fn install_failed(reason: impl Into<String>) -> AppError {
         true,
     )
     .with_log(reason.into())
+}
+
+/// Why a candidate url failed, and therefore what to do with the file it left.
+///
+/// The error a user sees and the fate of the bytes on disk are separate
+/// questions. "The connection dropped" and "the bytes were wrong" can both
+/// surface from the same transfer, and only the second is a reason to throw
+/// away what arrived — discarding on the first is what sent every closed laptop
+/// lid back to byte zero. Carried as a type rather than read back out of the
+/// error so that keeping a partial is something a failure has to SAY, not
+/// something inferred from a message.
+enum FetchFailure {
+    /// Nothing judged the bytes on disk. The transfer stopped, or never
+    /// started, so the file is still an unverified prefix of the archive and
+    /// its sidecar still describes it. Both are kept for the next run.
+    Interrupted(AppError),
+    /// The file is known to be unusable — it failed its digest, overran the
+    /// catalogue, is the wrong file, or the origin refused to continue it — or
+    /// it could not be written safely. Resuming into it would fail the same
+    /// way every time, so it is discarded.
+    Rejected(AppError),
+}
+
+impl FetchFailure {
+    fn error(&self) -> &AppError {
+        match self {
+            Self::Interrupted(err) | Self::Rejected(err) => err,
+        }
+    }
+
+    fn into_error(self) -> AppError {
+        match self {
+            Self::Interrupted(err) | Self::Rejected(err) => err,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,18 +327,30 @@ struct Transfer {
 ///
 /// `from` is where we would like to resume; the returned `Transfer.start` says
 /// where the origin actually started, which is the only one that counts.
+///
+/// Failing to open is `Interrupted` — no byte on disk has been looked at —
+/// EXCEPT when the origin answers our range in a way that makes the partial
+/// unusable. Those come back identically on every retry for as long as the
+/// partial exists, so keeping it would turn one bad answer into a download
+/// that can never finish.
 async fn open_transfer(
     url: &str,
     from: u64,
     validator: Option<&str>,
     policy: &HopPolicy,
-) -> Result<Transfer, AppError> {
+) -> Result<Transfer, FetchFailure> {
+    let interrupted = |reason: String| FetchFailure::Interrupted(download_failed(reason));
+    let rejected = |reason: String| FetchFailure::Rejected(download_failed(reason));
+
     let mut current = reqwest::Url::parse(url)
-        .map_err(|_| download_failed(format!("model url is not valid: {url}")))?;
+        .map_err(|_| interrupted(format!("model url is not valid: {url}")))?;
 
     for _ in 0..=net::MAX_REDIRECTS {
-        let hop = net::check_hop(&current, policy).await?;
-        let client = net::client_for(&hop, Deadline::Idle(IDLE_TIMEOUT))?;
+        let hop = net::check_hop(&current, policy)
+            .await
+            .map_err(FetchFailure::Interrupted)?;
+        let client = net::client_for(&hop, Deadline::Idle(IDLE_TIMEOUT))
+            .map_err(FetchFailure::Interrupted)?;
         let mut request = client.get(hop.url.clone());
         // A range is only ever asked for WITH a validator. Without one there is
         // nothing to stop a replaced asset being appended to a prefix of the
@@ -310,7 +367,7 @@ async fn open_transfer(
         let response = request
             .send()
             .await
-            .map_err(|e| download_failed(format!("request failed: {e}")))?;
+            .map_err(|e| interrupted(format!("request failed: {e}")))?;
 
         let status = response.status();
         if status.is_redirection() {
@@ -318,13 +375,13 @@ async fn open_transfer(
                 .headers()
                 .get(LOCATION)
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| download_failed(format!("{status} with no Location")))?
+                .ok_or_else(|| interrupted(format!("{status} with no Location")))?
                 .to_string();
             current = current.join(&location).map_err(|_| {
-                net::blocked_url(
+                FetchFailure::Interrupted(net::blocked_url(
                     &MODEL_HOP_LABELS,
                     format!("unusable redirect target {location:?}"),
-                )
+                ))
             })?;
             continue;
         }
@@ -352,25 +409,32 @@ async fn open_transfer(
             // to an offset chosen by the origin and write the tail of some
             // representation into a file we believe starts elsewhere.
             if !asked_for_range {
-                return Err(download_failed("origin sent 206 to a request with no Range"));
+                return Err(rejected("origin sent 206 to a request with no Range".to_string()));
             }
             let range = response
                 .headers()
                 .get(CONTENT_RANGE)
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| download_failed("206 with no Content-Range"))?;
+                .ok_or_else(|| rejected("206 with no Content-Range".to_string()))?;
             let offset = parse_content_range_start(range)
-                .ok_or_else(|| download_failed(format!("unusable Content-Range {range:?}")))?;
+                .ok_or_else(|| rejected(format!("unusable Content-Range {range:?}")))?;
             if offset != from {
-                return Err(download_failed(format!(
+                return Err(rejected(format!(
                     "asked to resume at {from}, origin answered at {offset}"
                 )));
             }
             offset
         } else if status.is_success() {
             0
+        } else if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // A range is only ever sent with `If-Range`, and a validator that
+            // no longer matched would have earned a whole 200 instead. So this
+            // is the same asset, and it ends before our partial does: nothing
+            // past this point exists to fetch, and asking again would get the
+            // same answer.
+            return Err(rejected(format!("origin refused to resume at {from}: {status}")));
         } else {
-            return Err(download_failed(format!("status {status}")));
+            return Err(interrupted(format!("status {status}")));
         };
 
         return Ok(Transfer {
@@ -381,7 +445,10 @@ async fn open_transfer(
             accepts_ranges,
         });
     }
-    Err(net::blocked_url(&MODEL_HOP_LABELS, "too many redirects"))
+    Err(FetchFailure::Interrupted(net::blocked_url(
+        &MODEL_HOP_LABELS,
+        "too many redirects",
+    )))
 }
 
 /// Make a failed download unusable, by deletion or failing that by truncation.
@@ -411,6 +478,9 @@ fn parse_content_range_start(value: &str) -> Option<u64> {
 /// It is NOT hashed here — that is a separate, named phase, because hashing
 /// 128 MB takes long enough that a progress bar sitting at 100% during it is
 /// the confusing failure this split exists to avoid.
+///
+/// Every failure says whether the file it leaves is still worth resuming; see
+/// [`FetchFailure`].
 async fn fetch_archive(
     url: &str,
     model: &ModelEntry,
@@ -419,7 +489,7 @@ async fn fetch_archive(
     policy: &HopPolicy,
     cancel: &CancelFlag,
     on_progress: &ProgressFn,
-) -> Result<(), AppError> {
+) -> Result<(), FetchFailure> {
     let expected = model.archive.bytes;
     let on_disk = std::fs::metadata(target).map(|m| m.len()).unwrap_or(0);
 
@@ -451,25 +521,47 @@ async fn fetch_archive(
         },
         _ => (0, None),
     };
-    if from == 0 {
-        // Any partial we cannot justify resuming is discarded rather than
-        // appended to.
-        let _ = std::fs::remove_file(target);
-    }
 
-    cancel.check()?;
+    // A partial we cannot resume is NOT deleted here. It is replaced only once
+    // a replacement transfer has actually been accepted (the truncating open
+    // below), because until then it is the most anyone has: with a mirror and
+    // upstream both configured, the mirror can drop mid-transfer and leave a
+    // resumable prefix, and upstream — whose url that prefix does not match —
+    // can then fail to connect for the same reason the mirror dropped.
+    // Deleting first would lose the prefix to a request that never started.
+    cancel.check().map_err(FetchFailure::Interrupted)?;
     let transfer = open_transfer(url, from, validator.as_deref(), policy).await?;
     if transfer.start == 0 {
         // The origin restarted us: it ignores ranges, or the asset changed
         // under `If-Range`. Either way the bytes on disk are not a prefix of
         // what is arriving.
         from = 0;
-        let _ = std::fs::remove_file(target);
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(from == 0)
+        .open(target)
+        .map_err(|e| {
+            FetchFailure::Rejected(install_failed(format!(
+                "could not open {}: {e}",
+                target.display()
+            )))
+        })?;
+    if from > 0 {
+        use std::io::Seek as _;
+        file.seek(std::io::SeekFrom::Start(from)).map_err(|e| {
+            FetchFailure::Rejected(install_failed(format!(
+                "could not seek the partial download: {e}"
+            )))
+        })?;
     }
 
     // Record what would let a LATER run resume this one, before spending the
     // transfer rather than after — a crash mid-download is exactly the case
-    // this is for.
+    // this is for. After the open rather than before it, so a sidecar naming
+    // this url never sits beside bytes that came from somewhere else.
     let _ = write_resume(
         resume_path,
         &ResumeState {
@@ -485,58 +577,89 @@ async fn fetch_archive(
         },
     );
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(from == 0)
-        .open(target)
-        .map_err(|e| install_failed(format!("could not open {}: {e}", target.display())))?;
-    if from > 0 {
-        use std::io::Seek as _;
-        file.seek(std::io::SeekFrom::Start(from))
-            .map_err(|e| install_failed(format!("could not seek the partial download: {e}")))?;
-    }
-
     let mut written = from;
     let mut response = transfer.response;
+    // Whether the response said how long it is. Read before the body is
+    // consumed, and used only to explain a short ending — never to size
+    // anything (see the per-chunk ceiling below).
+    let framed = response.content_length().is_some();
     let mut last_report = std::time::Instant::now();
     on_progress(Phase::Downloading, written, expected);
     loop {
-        cancel.check()?;
-        let chunk = response
-            .chunk()
-            .await
-            .map_err(|e| download_failed(format!("stream failed: {e}")))?;
+        cancel.check().map_err(FetchFailure::Interrupted)?;
+        let chunk = match response.chunk().await {
+            Ok(chunk) => chunk,
+            // The connection dropped, the laptop slept, or nothing arrived for
+            // IDLE_TIMEOUT. Every byte written so far is a byte the origin sent
+            // in order, and nothing has judged any of them — so they are kept
+            // for the next run to resume, rather than thrown away for having
+            // stopped. A torn tail after a power cut is still caught: the
+            // archive digest covers the resumed file as a whole.
+            Err(e) => {
+                return Err(keep_partial(
+                    file,
+                    download_failed(format!("stream failed: {e}")),
+                ))
+            }
+        };
         let Some(chunk) = chunk else { break };
         // The catalogue's byte count is a hard ceiling, enforced per chunk. An
         // origin that decides to stream forever fills neither memory nor disk,
         // and `Content-Length` — which is attacker-controlled — is never
         // trusted to size anything.
         if written + chunk.len() as u64 > expected {
-            return Err(integrity_failed(format!(
+            return Err(FetchFailure::Rejected(integrity_failed(format!(
                 "archive exceeded the catalogue's {expected} bytes"
-            )));
+            ))));
         }
         use std::io::Write as _;
-        file.write_all(&chunk)
-            .map_err(|e| install_failed(format!("could not write the download: {e}")))?;
+        file.write_all(&chunk).map_err(|e| {
+            FetchFailure::Rejected(install_failed(format!(
+                "could not write the download: {e}"
+            )))
+        })?;
         written += chunk.len() as u64;
         if last_report.elapsed() >= PROGRESS_INTERVAL {
             on_progress(Phase::Downloading, written, expected);
             last_report = std::time::Instant::now();
         }
     }
-    file.sync_all()
-        .map_err(|e| install_failed(format!("could not flush the download: {e}")))?;
+    file.sync_all().map_err(|e| {
+        FetchFailure::Rejected(install_failed(format!("could not flush the download: {e}")))
+    })?;
     drop(file);
     on_progress(Phase::Downloading, written, expected);
 
     if written != expected {
-        return Err(integrity_failed(format!(
-            "expected {expected} bytes, received {written}"
-        )));
+        // The per-chunk ceiling rules out MORE, so this is always fewer.
+        //
+        // A response that declared its length and delivered all of it is the
+        // origin's whole file, and that file is not our archive: resuming past
+        // its end can only be refused. One that never declared a length simply
+        // ended — a dropped close-delimited body looks exactly like this — and
+        // is kept like any other interrupted transfer.
+        let reason = format!("expected {expected} bytes, received {written}");
+        return Err(if framed {
+            FetchFailure::Rejected(integrity_failed(reason))
+        } else {
+            FetchFailure::Interrupted(download_failed(reason))
+        });
     }
     Ok(())
+}
+
+/// Flush a partial to disk before handing it back as resumable.
+///
+/// "Kept for the next run" is a claim about the disk, not the page cache. If
+/// the flush itself fails, the claim cannot be made, and the file is treated as
+/// unusable rather than reported as safely kept.
+fn keep_partial(file: std::fs::File, err: AppError) -> FetchFailure {
+    match file.sync_all() {
+        Ok(()) => FetchFailure::Interrupted(err),
+        Err(e) => FetchFailure::Rejected(install_failed(format!(
+            "could not flush the partial download: {e}"
+        ))),
+    }
 }
 
 /// Hash the archive on disk and compare it with the catalogue.
@@ -919,7 +1042,7 @@ pub async fn install(
     let mut verified = false;
     for (index, url) in urls.iter().enumerate() {
         let is_last = index + 1 == urls.len();
-        let outcome = fetch_archive(
+        let outcome = match fetch_archive(
             url,
             model,
             &archive_path,
@@ -929,12 +1052,17 @@ pub async fn install(
             on_progress,
         )
         .await
-        .and_then(|()| {
-            on_progress(Phase::VerifyingArchive, 0, model.archive.bytes);
-            tokio::task::block_in_place(|| {
-                verify_archive(&archive_path, model, cancel, on_progress)
-            })
-        });
+        {
+            Ok(()) => {
+                on_progress(Phase::VerifyingArchive, 0, model.archive.bytes);
+                // A full-length file that fails here is wrong, not unfinished.
+                tokio::task::block_in_place(|| {
+                    verify_archive(&archive_path, model, cancel, on_progress)
+                })
+                .map_err(FetchFailure::Rejected)
+            }
+            Err(failure) => Err(failure),
+        };
 
         match outcome {
             Ok(()) => {
@@ -943,8 +1071,27 @@ pub async fn install(
             }
             // A cancellation is the user's decision, not a mirror miss. Stop,
             // and keep whatever was transferred so it can be resumed.
-            Err(err) if is_cancelled_error(&err) => return Err(err),
-            Err(err) => {
+            Err(failure) if is_cancelled_error(failure.error()) => {
+                return Err(failure.into_error())
+            }
+            // The transfer stopped, or never started; nothing judged the bytes.
+            // Keep the partial AND its sidecar, which is what lets the next run
+            // send a conditional range instead of starting from zero.
+            //
+            // The next candidate is still tried. If it opens, its transfer
+            // replaces this prefix — a prefix from one url is never resumed
+            // against another — and if it cannot open, this prefix survives.
+            Err(FetchFailure::Interrupted(err)) => {
+                if !is_last {
+                    tracing::warn!(
+                        url = %url,
+                        error = %err,
+                        "model source interrupted — keeping the partial and falling back"
+                    );
+                }
+                last_error = Some(err);
+            }
+            Err(FetchFailure::Rejected(err)) => {
                 // Bytes that failed are never kept: they would be treated as a
                 // complete or resumable archive next time and fail identically
                 // forever.
@@ -1287,6 +1434,22 @@ mod tests {
         /// Serves the body in two writes with a pause between, so a transfer
         /// can be cancelled while it is genuinely in flight.
         Slow,
+        /// Promises the whole body in `Content-Length`, sends it only up to
+        /// this archive offset, then closes. A dropped connection, a closed
+        /// lid, a Wi-Fi drop — what the client sees mid-transfer.
+        DropsAt(usize),
+        /// As `DropsAt`, but with no `Content-Length` at all, so the body is
+        /// delimited only by the connection closing. The client cannot tell
+        /// this from a complete body; only the catalogue's size can.
+        UnframedDropsAt(usize),
+        /// Serves a file that ends at this offset, honestly framed: the
+        /// origin's WHOLE file is shorter than the catalogue's archive.
+        ShortAt(usize),
+        /// Answers 503 without a body.
+        Unavailable,
+        /// Answers 416 to everything, as an origin does when asked to resume
+        /// past the end of what it has.
+        RangeNotSatisfiable,
     }
 
     /// What the origin was actually asked, so a test can prove a request was
@@ -1316,6 +1479,21 @@ mod tests {
 
     impl MockOrigin {
         fn start(body: Vec<u8>, behaviour: Behaviour) -> Self {
+            Self::start_scripted(body, vec![behaviour])
+        }
+
+        /// An origin whose behaviour changes from one request to the next:
+        /// request N gets `script[N]`, and every request past the end of the
+        /// script gets its last entry.
+        ///
+        /// One listener rather than one per behaviour, because the resume
+        /// sidecar records the url it is a partial OF — "drops, then recovers"
+        /// is only a resume if both halves are the same url. It also lets a
+        /// mirror and upstream share the one authority a test policy exempts:
+        /// `install` asks the mirror first, so the script's order is the
+        /// candidates' order.
+        fn start_scripted(body: Vec<u8>, script: Vec<Behaviour>) -> Self {
+            assert!(!script.is_empty(), "a mock origin needs a behaviour");
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock origin");
             let port = listener.local_addr().unwrap().port();
             let requests = Arc::new(AtomicU64::new(0));
@@ -1330,7 +1508,8 @@ mod tests {
                     let mut buf = [0u8; 4096];
                     let read = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
                     let request = String::from_utf8_lossy(&buf[..read]).to_string();
-                    requests.fetch_add(1, Ordering::SeqCst);
+                    let attempt = requests.fetch_add(1, Ordering::SeqCst) as usize;
+                    let behaviour = script[attempt.min(script.len() - 1)];
 
                     if behaviour == Behaviour::Dead {
                         // Close without answering. A host that is down, which
@@ -1381,6 +1560,23 @@ mod tests {
                         if_range: if_range.clone(),
                     });
 
+                    let refusal = match behaviour {
+                        Behaviour::Unavailable => Some(
+                            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                .to_string(),
+                        ),
+                        Behaviour::RangeNotSatisfiable => Some(format!(
+                            "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )),
+                        _ => None,
+                    };
+                    if let Some(refusal) = refusal {
+                        let _ = stream.write_all(refusal.as_bytes());
+                        let _ = stream.flush();
+                        continue;
+                    }
+
                     // What the asset's validator is NOW. `Replaced` models an
                     // upstream release tag that was overwritten: the client's
                     // `If-Range` still names the old one.
@@ -1400,8 +1596,11 @@ mod tests {
                         _ => range_from.is_some() && validator_ok,
                     };
 
-                    let payload: &[u8] = &body;
-                    let (head, slice) = if honour_range {
+                    let payload: &[u8] = match behaviour {
+                        Behaviour::ShortAt(len) => &body[..len.min(body.len())],
+                        _ => &body,
+                    };
+                    let (head, start, slice) = if honour_range {
                         let from = (range_from.unwrap_or(0) as usize).min(payload.len());
                         let slice = &payload[from..];
                         (
@@ -1412,6 +1611,7 @@ mod tests {
                                 payload.len().saturating_sub(1),
                                 payload.len()
                             ),
+                            from,
                             slice,
                         )
                     } else {
@@ -1425,12 +1625,27 @@ mod tests {
                                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{accept}ETag: {etag}\r\nConnection: close\r\n\r\n",
                                 payload.len()
                             ),
+                            0,
                             payload,
                         )
                     };
+                    let head = match behaviour {
+                        Behaviour::UnframedDropsAt(_) => {
+                            head.replace(&format!("Content-Length: {}\r\n", slice.len()), "")
+                        }
+                        _ => head,
+                    };
+                    // What actually goes on the wire, which for a dropped
+                    // connection is less than the head promised.
+                    let sent = match behaviour {
+                        Behaviour::DropsAt(at) | Behaviour::UnframedDropsAt(at) => {
+                            &slice[..at.saturating_sub(start).min(slice.len())]
+                        }
+                        _ => slice,
+                    };
 
                     let _ = stream.write_all(head.as_bytes());
-                    if behaviour == Behaviour::Slow && slice.len() >= SLOW_PIECES {
+                    if behaviour == Behaviour::Slow && sent.len() >= SLOW_PIECES {
                         // Dripped out in pieces with gaps between, so the
                         // client sees many chunks and the throttled progress
                         // callback fires more than once BEFORE the body ends.
@@ -1438,17 +1653,27 @@ mod tests {
                         // few hundred bytes, both halves landed inside one
                         // progress interval, and a "mid-transfer" cancellation
                         // could only ever fire after the last byte.
-                        let piece = slice.len().div_ceil(SLOW_PIECES);
-                        for part in slice.chunks(piece) {
+                        let piece = sent.len().div_ceil(SLOW_PIECES);
+                        for part in sent.chunks(piece) {
                             let _ = stream.write_all(part);
                             let _ = stream.flush();
                             std::thread::sleep(Duration::from_millis(60));
                         }
                     } else {
-                        let _ = stream.write_all(slice);
+                        let _ = stream.write_all(sent);
                     }
-                    served.fetch_add(slice.len() as u64, Ordering::SeqCst);
+                    served.fetch_add(sent.len() as u64, Ordering::SeqCst);
                     let _ = stream.flush();
+                    if sent.len() < slice.len() {
+                        // Hang up cleanly and wait for the client to notice,
+                        // so what it sees is the body ending early rather than
+                        // a reset that could discard bytes it has not yet read
+                        // — which would make "kept exactly what arrived"
+                        // impossible to assert.
+                        let _ = stream.shutdown(std::net::Shutdown::Write);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let _ = std::io::Read::read(&mut stream, &mut [0u8; 1]);
+                    }
                 }
             });
             Self {
@@ -1920,6 +2145,359 @@ mod tests {
         );
     }
 
+    /// The partial archive and its resume sidecar, where `install` keeps them.
+    fn download_files(app_data: &Path, model: &ModelEntry) -> (PathBuf, PathBuf) {
+        let downloads = store::models_root(app_data).join(store::DOWNLOADS_DIR);
+        (
+            downloads.join(store::archive_part_name(model)),
+            downloads.join(store::resume_name(model)),
+        )
+    }
+
+    /// Stage a prefix of the archive exactly as an interrupted run leaves one:
+    /// the bytes, plus a sidecar saying which url they came from.
+    fn seed_partial(app_data: &Path, model: &ModelEntry, prefix: &[u8], url: &str) {
+        let (part, sidecar) = download_files(app_data, model);
+        std::fs::create_dir_all(part.parent().unwrap()).unwrap();
+        std::fs::write(&part, prefix).unwrap();
+        write_resume(
+            &sidecar,
+            &ResumeState {
+                version: RESUME_VERSION,
+                model_id: model.id.clone(),
+                archive_sha256: model.archive.sha256.clone(),
+                url: url.to_string(),
+                etag: Some(FIXTURE_ETAG.to_string()),
+                last_modified: None,
+            },
+        )
+        .unwrap();
+    }
+
+    /// One `install` of the catalogue's only model, uncancelled.
+    async fn install_once(
+        app_data: &Path,
+        catalogue: &Catalogue,
+        policy: &HopPolicy,
+        on_progress: &ProgressFn,
+    ) -> Result<PathBuf, AppError> {
+        install(
+            app_data,
+            catalogue,
+            &catalogue.models[0],
+            policy,
+            &CancelFlag::new(),
+            on_progress,
+        )
+        .await
+    }
+
+    /// A transfer that stops mid-body leaves exactly what arrived, with its
+    /// sidecar, and the next run asks for only the rest.
+    async fn assert_a_drop_is_resumed(drop: Behaviour, half: usize, archive: Vec<u8>) {
+        let files = fixture_files();
+        let origin = MockOrigin::start_scripted(archive.clone(), vec![drop, Behaviour::Ranged]);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        let phases = PhaseLog::default();
+        let err = install_once(temp.path(), &catalogue, &origin.policy(), &phases.sink())
+            .await
+            .expect_err("half an archive cannot install");
+        // A connection problem, worded as one — not a checksum failure, which
+        // would also tell the user the bytes were thrown away.
+        assert_eq!(err.code(), "STT_MODEL_DOWNLOAD_FAILED", "{err:?}");
+        assert!(
+            !phases.saw(Phase::VerifyingArchive),
+            "an unfinished transfer was hashed as if it were complete"
+        );
+        assert_eq!(
+            std::fs::read(&part).expect("the partial must survive a dropped connection"),
+            &archive[..half],
+            "the partial must be exactly the bytes that arrived"
+        );
+        let state = read_resume(&sidecar).expect("the resume sidecar must survive too");
+        assert!(state.matches(&model, &model.archive.upstream_url));
+        assert_eq!(state.validator(), Some(FIXTURE_ETAG));
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("the retry must finish the interrupted download");
+        assert_eq!(
+            origin.seen().get(1),
+            Some(&SeenRequest {
+                range_from: Some(half as u64),
+                if_range: Some(FIXTURE_ETAG.to_string()),
+            }),
+            "the retry must be a conditional range from exactly what was kept"
+        );
+        assert_eq!(
+            origin.served.load(Ordering::SeqCst),
+            archive.len() as u64,
+            "the two attempts together must transfer the archive exactly once"
+        );
+        assert!(!part.exists() && !sidecar.exists(), "a finished install leaves no download behind");
+    }
+
+    /// The issue as reported: the origin promises the whole body, sends half,
+    /// and closes. That used to delete the half and restart from byte zero.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_connection_keeps_the_partial_and_the_next_run_resumes_it() {
+        let archive = build_archive("bundle-root", &fixture_files());
+        let half = archive.len() / 2;
+        assert_a_drop_is_resumed(Behaviour::DropsAt(half), half, archive).await;
+    }
+
+    /// A body with no `Content-Length` that stops early looks complete to the
+    /// HTTP client. Only the catalogue's size says otherwise — and that is a
+    /// transfer that ended, not bytes that were wrong.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_body_with_no_length_keeps_the_partial_and_resumes() {
+        let archive = build_archive("bundle-root", &fixture_files());
+        let half = archive.len() / 2;
+        assert_a_drop_is_resumed(Behaviour::UnframedDropsAt(half), half, archive).await;
+    }
+
+    /// A request that never gets a body has judged none of the bytes already
+    /// on disk, so a refused or dead origin must not cost the partial.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_request_keeps_the_partial_it_was_resuming() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+
+        for failure in [Behaviour::Unavailable, Behaviour::Dead] {
+            let origin =
+                MockOrigin::start_scripted(archive.clone(), vec![failure, Behaviour::Ranged]);
+            let model = aimed_at(
+                fixture_entry(&archive, &files, "bundle-root"),
+                origin.url("/archive"),
+            );
+            let catalogue = fixture_catalogue(model.clone());
+            let temp = tempfile::tempdir().unwrap();
+            seed_partial(temp.path(), &model, &archive[..half], &model.archive.upstream_url);
+            let (part, sidecar) = download_files(temp.path(), &model);
+
+            let err = install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+                .await
+                .expect_err("an origin that does not answer cannot install");
+            assert_eq!(err.code(), "STT_MODEL_DOWNLOAD_FAILED", "{err:?}");
+            assert_eq!(
+                std::fs::read(&part).unwrap(),
+                &archive[..half],
+                "a failed request must leave the partial untouched"
+            );
+            assert!(read_resume(&sidecar).is_some(), "and its sidecar");
+
+            install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+                .await
+                .expect("the partial must still be resumable once the origin answers");
+            assert_eq!(
+                origin.seen().last(),
+                Some(&SeenRequest {
+                    range_from: Some(half as u64),
+                    if_range: Some(FIXTURE_ETAG.to_string()),
+                }),
+            );
+        }
+    }
+
+    /// A mirror that drops is still a source miss: upstream is tried in the
+    /// same run, and — because a prefix from one url is never resumed against
+    /// another — it starts from zero rather than appending to the mirror's
+    /// bytes. A mirror that always truncates must not be able to make a model
+    /// uninstallable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mirror_that_drops_still_falls_through_to_upstream() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::DropsAt(half), Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model.clone());
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", origin.port));
+        let temp = tempfile::tempdir().unwrap();
+
+        let dir = install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("upstream must finish what the mirror dropped");
+        assert_eq!(
+            origin.seen(),
+            vec![SeenRequest::default(), SeenRequest::default()],
+            "upstream must not be asked to continue the mirror's partial"
+        );
+        for (name, body) in &files {
+            assert_eq!(&std::fs::read(dir.join(name)).unwrap(), body, "{name}");
+        }
+    }
+
+    /// A mirror drops, and upstream cannot be reached either — the ordinary
+    /// shape of a Wi-Fi drop, which takes out both. The mirror's partial must
+    /// survive upstream's failure to connect, and the next run continues it.
+    ///
+    /// The partial used to be deleted before upstream's request was even
+    /// sent, because it is not upstream's to resume.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_upstream_keeps_the_mirror_partial() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::DropsAt(half), Behaviour::Unavailable, Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model.clone());
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", origin.port));
+        let mirror_url = archive_urls(&catalogue, &model)[0].clone();
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        let err = install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect_err("neither source finished");
+        assert_eq!(err.code(), "STT_MODEL_DOWNLOAD_FAILED", "{err:?}");
+        assert_eq!(origin.seen().len(), 2, "upstream must still have been tried");
+        assert_eq!(
+            std::fs::read(&part).expect("the mirror's partial must survive"),
+            &archive[..half]
+        );
+        assert!(
+            read_resume(&sidecar).is_some_and(|state| state.matches(&model, &mirror_url)),
+            "the sidecar must still describe the mirror's partial"
+        );
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("the mirror's partial must be resumable on the next run");
+        assert_eq!(
+            origin.seen().get(2),
+            Some(&SeenRequest {
+                range_from: Some(half as u64),
+                if_range: Some(FIXTURE_ETAG.to_string()),
+            }),
+            "the next run must continue the mirror's partial, not restart it"
+        );
+    }
+
+    /// The mirror image of the above: an upstream partial is not lost to a
+    /// mirror that cannot be reached, and upstream then continues it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_mirror_keeps_an_upstream_partial() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::Unavailable, Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let mut catalogue = fixture_catalogue(model.clone());
+        catalogue.mirror_base_url = Some(format!("http://127.0.0.1:{}", origin.port));
+        let temp = tempfile::tempdir().unwrap();
+        seed_partial(temp.path(), &model, &archive[..half], &model.archive.upstream_url);
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("upstream must resume its own partial");
+        assert_eq!(
+            origin.seen(),
+            vec![
+                // The mirror is not the partial's url, so it is asked for the
+                // whole archive — and fails before replacing anything.
+                SeenRequest::default(),
+                SeenRequest {
+                    range_from: Some(half as u64),
+                    if_range: Some(FIXTURE_ETAG.to_string()),
+                },
+            ]
+        );
+        assert_eq!(
+            origin.served.load(Ordering::SeqCst),
+            (archive.len() - half) as u64,
+            "only the tail may have been transferred"
+        );
+    }
+
+    /// A response that said how long it was and delivered all of it is the
+    /// origin's whole file. Shorter than the catalogue's archive, it is the
+    /// wrong file rather than an unfinished one, and is not kept to be resumed
+    /// past its own end.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_complete_response_shorter_than_the_catalogue_is_discarded() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::ShortAt(archive.len() / 2));
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        let err = install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect_err("a short file is not the archive");
+        assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
+        assert!(!part.exists(), "a complete wrong file must not be kept");
+        assert!(!sidecar.exists(), "nor its sidecar");
+    }
+
+    /// An origin that refuses to continue a partial will refuse it again on
+    /// every retry. Keeping the partial would make that permanent; dropping it
+    /// lets the next run start cleanly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_range_discards_the_partial_and_the_next_run_starts_clean() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let half = archive.len() / 2;
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::RangeNotSatisfiable, Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        seed_partial(temp.path(), &model, &archive[..half], &model.archive.upstream_url);
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect_err("a refused range does not install");
+        assert!(!part.exists(), "a partial the origin will not continue must be dropped");
+        assert!(!sidecar.exists(), "and its sidecar with it");
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("a clean start must then succeed");
+        assert_eq!(
+            origin.seen().get(1),
+            Some(&SeenRequest::default()),
+            "the next run must not ask for the refused range again"
+        );
+    }
+
     /// Bytes that fail the digest never reach a decompressor.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_archive_that_fails_its_digest_is_never_unpacked() {
@@ -1965,6 +2543,10 @@ mod tests {
             !downloads.join(store::archive_part_name(&model)).exists(),
             "bytes that failed the digest must be discarded, not resumed"
         );
+        assert!(
+            !downloads.join(store::resume_name(&model)).exists(),
+            "a sidecar must not outlive the bytes it describes"
+        );
     }
 
     /// A body longer than the catalogue promises is cut off mid-stream rather
@@ -2008,6 +2590,13 @@ mod tests {
             written <= archive.len() as u64,
             "wrote {written} bytes for a {}-byte archive",
             archive.len()
+        );
+        // And what did reach it is not kept: an overrun is not an interrupted
+        // transfer, and a resume would ask the same origin for the same excess.
+        assert!(!part.exists(), "bytes from an overrunning origin must be discarded");
+        assert!(
+            !part.with_file_name(store::resume_name(&model_for_paths)).exists(),
+            "and so must their sidecar"
         );
     }
 
