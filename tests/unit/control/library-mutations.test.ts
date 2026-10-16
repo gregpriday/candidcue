@@ -24,6 +24,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { setInvokeForTesting, type InvokeFn } from '../../../src/control/services/ipc';
 import {
+  closeScript,
+  editor,
+  openScript,
+  saveNow,
+  setSource,
+} from '../../../src/control/stores/editor';
+import {
   collectTrashTargets,
   deleteScriptPermanently,
   duplicateScript,
@@ -41,6 +48,13 @@ import type { ScriptSummary } from '../../../src/shared/contracts';
 // `vi.spyOn` on a statically imported ESM export throws under Vitest's native
 // ESM mode; the module has to be replaced before the store binds to it.
 vi.mock('../../../src/control/stores/toasts', () => ({ showToast: vi.fn() }));
+
+// Opening a script in the editor requests a compile, and the compiler is a Web
+// Worker that is no part of what a duplicate does.
+vi.mock('../../../src/control/stores/compiled', () => ({
+  requestCompile: vi.fn(async () => {}),
+  resetCompiled: vi.fn(),
+}));
 
 const toast = vi.mocked(showToast);
 
@@ -83,6 +97,35 @@ const conflict = { code: 'SCRIPT_CONFLICT', userMessage: 'stale revision' };
 /** The scripts the fake backend is holding. Mutations really change it. */
 let live: ScriptSummary[] = [];
 
+/** What is on disk for each script — the only thing `duplicate_script` reads. */
+let disk: Record<string, { title: string; source: string; scriptRevision: number }> = {};
+
+/** Every command the fake backend was asked to run, in order. */
+let commands: string[] = [];
+
+/** While set, `save_script` holds here before anything reaches the disk. */
+let saveGate: Promise<void> | null = null;
+
+function scriptDocument(id: string): Record<string, unknown> {
+  const file = disk[id];
+  if (file === undefined) throw new Error(`no such script ${id}`);
+  return {
+    ...summary(id, file.title),
+    scriptRevision: file.scriptRevision,
+    source: file.source,
+    sourceHash: 'hash',
+    settings: {
+      schemaVersion: 1,
+      readHeadings: false,
+      readImageAltText: false,
+      readInlineCode: false,
+      cueVisibility: 'subtle',
+      silentBlockVisibility: 'dim',
+      wordsPerMinuteEstimate: 150,
+    },
+  };
+}
+
 function pageOf(args: Record<string, unknown> | undefined): {
   items: ScriptSummary[];
   total: number;
@@ -99,8 +142,24 @@ function installBackend(fail: Record<string, unknown> = {}): void {
     command: string,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    commands.push(command);
     if (command in fail) throw fail[command];
     if (command === 'list_scripts') return pageOf(args) as T;
+    if (command === 'get_script') return scriptDocument(args?.scriptId as string) as T;
+    if (command === 'save_script') {
+      if (saveGate !== null) await saveGate;
+      const file = disk[args?.scriptId as string];
+      if (file === undefined) throw new Error('no such script');
+      const patch = args?.metadataPatch as { title?: string } | undefined;
+      file.source = args?.source as string;
+      file.title = patch?.title ?? file.title;
+      file.scriptRevision += 1;
+      return {
+        status: 'saved',
+        scriptRevision: file.scriptRevision,
+        savedAt: '2026-07-30T10:00:01.000Z',
+      } as T;
+    }
     if (command === 'permanently_delete_script') {
       live = live.filter((script) => script.id !== (args?.scriptId as string));
       return undefined as T;
@@ -110,7 +169,15 @@ function installBackend(fail: Record<string, unknown> = {}): void {
       live = live.filter((script) => script.id !== id);
       return summary(id) as T;
     }
-    if (command === 'duplicate_script') return summary('copy') as T;
+    if (command === 'duplicate_script') {
+      // As Rust does it: the stored title and the canonical file, never the
+      // editor's buffer, which the backend cannot see.
+      const file = disk[args?.scriptId as string];
+      if (file !== undefined) {
+        disk.copy = { title: `${file.title} copy`, source: file.source, scriptRevision: 1 };
+      }
+      return summary('copy') as T;
+    }
     throw new Error(`unexpected command ${command}`);
   };
   setInvokeForTesting(fake);
@@ -129,6 +196,12 @@ async function runEmptyTrash(): Promise<boolean> {
 
 beforeEach(async () => {
   live = [summary('a'), summary('b')];
+  disk = {
+    a: { title: 'Keynote', source: 'Hello world.', scriptRevision: 3 },
+    b: { title: 'Other', source: 'Something else.', scriptRevision: 3 },
+  };
+  commands = [];
+  saveGate = null;
   installBackend();
   // The store is a module singleton, so each test normalises it rather than
   // inheriting whatever view and query the last one left behind.
@@ -212,6 +285,132 @@ describe('a mutation that fails is reported once, and does not reject', () => {
     expect(shown[0]).toContain('no longer in the library');
     // The copy has to end somewhere useful, not just state the fact.
     expect(shown[0]).toContain('Refresh the list');
+  });
+});
+
+/*
+ * Issue #245. Rust's `duplicate_script` copies the file on disk, and Duplicate
+ * used to go straight to it — so the copy missed whatever autosave had not
+ * reached yet, and everything typed while saves were failing, under a toast
+ * that said "Script duplicated". The failing-save case is the one that hurts:
+ * a copy is the natural way to keep your text somewhere safe, and it was the
+ * old version.
+ */
+describe('a duplicate of the open script copies what the editor shows', () => {
+  const typed = 'Hello world. And the closing line I just typed.';
+
+  beforeEach(async () => {
+    closeScript();
+    await openScript('a');
+    commands = [];
+    toast.mockClear();
+  });
+
+  afterEach(() => {
+    // The editor is a module singleton, and a dirty buffer leaves an autosave
+    // timer armed; neither may outlive the test that made them.
+    closeScript();
+  });
+
+  it('saves the text autosave has not reached yet before copying it', async () => {
+    setSource(typed);
+    // Straight away: the autosave debounce has not fired, so the disk still
+    // holds the text the script was opened with.
+    expect(disk.a?.source).toBe('Hello world.');
+
+    await expect(duplicateScript('a')).resolves.toBe(true);
+
+    expect(disk.copy?.source).toBe(typed);
+    expect(commands).toContain('save_script');
+    expect(commands.indexOf('save_script')).toBeLessThan(commands.indexOf('duplicate_script'));
+    expect(get(editor).dirty).toBe(false);
+    expect(messages('success')).toEqual(['Script duplicated']);
+    expect(messages('danger')).toEqual([]);
+  });
+
+  it('waits for that save to land before it copies', async () => {
+    // The fake writes the disk when a save starts unless it is held, so only a
+    // held save tells "awaited the flush" apart from "started it and moved on".
+    let release!: () => void;
+    saveGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setSource(typed);
+    const duplicating = duplicateScript('a');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The save is on the wire and the disk still holds the old text; a copy
+      // made now would be the bug again.
+      expect(commands).toContain('save_script');
+      expect(commands).not.toContain('duplicate_script');
+    } finally {
+      release();
+    }
+
+    await expect(duplicating).resolves.toBe(true);
+
+    expect(disk.copy?.source).toBe(typed);
+  });
+
+  it('copies once a save that failed earlier goes through on the retry', async () => {
+    installBackend({ save_script: new Error('Disk unavailable') });
+    setSource(typed);
+    await saveNow();
+    expect(get(editor).saveState).toBe('error');
+
+    installBackend();
+    await expect(duplicateScript('a')).resolves.toBe(true);
+
+    expect(disk.copy?.source).toBe(typed);
+  });
+
+  it('refuses to copy when the edits still cannot be saved, and says why', async () => {
+    installBackend({ save_script: new Error('Disk unavailable') });
+    setSource(typed);
+
+    await expect(duplicateScript('a')).resolves.toBe(false);
+
+    // No stale copy made behind the failure...
+    expect(commands).not.toContain('duplicate_script');
+    expect(disk.copy).toBeUndefined();
+    // ...the failure said once, in words, with no claim that it worked...
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be duplicated.');
+    expect(shown[0]).toContain('Disk unavailable');
+    expect(messages('success')).toEqual([]);
+    // ...and the text still in the editor, still waiting to be saved.
+    expect(get(editor)).toMatchObject({ source: typed, dirty: true, saveState: 'error' });
+  });
+
+  it('refuses to copy while an external change is unresolved', async () => {
+    installBackend({ save_script: conflict });
+    setSource(typed);
+    await saveNow();
+    expect(get(editor).saveState).toBe('conflict');
+    commands = [];
+
+    await expect(duplicateScript('a')).resolves.toBe(false);
+
+    // A save into an open conflict would be the same stale save again, so
+    // nothing is sent: not the save, and not a copy of what the disk holds.
+    expect(commands).not.toContain('save_script');
+    expect(commands).not.toContain('duplicate_script');
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be duplicated.');
+    expect(shown[0]).toContain('Resolve the external change');
+    expect(get(editor)).toMatchObject({ source: typed, saveState: 'conflict' });
+  });
+
+  it('leaves the open script alone when a different one is duplicated', async () => {
+    setSource(typed);
+
+    await expect(duplicateScript('b')).resolves.toBe(true);
+
+    expect(commands).not.toContain('save_script');
+    expect(disk.copy?.source).toBe('Something else.');
+    expect(get(editor).dirty).toBe(true);
   });
 });
 

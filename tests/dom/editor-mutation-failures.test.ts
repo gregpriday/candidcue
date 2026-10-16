@@ -29,6 +29,7 @@ import { tick } from 'svelte';
 import { readable } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting, type InvokeFn } from '../../src/control/services/ipc';
+import { closeScript, setSource } from '../../src/control/stores/editor';
 import { loadLibrary, setLibraryQuery, setLibraryView } from '../../src/control/stores/library';
 import { showToast } from '../../src/control/stores/toasts';
 import { navigate } from '../../src/control/stores/router';
@@ -132,14 +133,25 @@ function scriptDocument(id: string): Record<string, unknown> {
   };
 }
 
+/** Every command the fake backend was asked to run, in order. */
+let commands: string[] = [];
+
+/** The source of every save that reached the backend, in order. */
+let saved: string[] = [];
+
 function installBackend(fail: Record<string, unknown> = {}): void {
   const fake: InvokeFn = async <T,>(
     command: string,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    commands.push(command);
     if (command in fail) throw fail[command];
     if (command === 'list_scripts') return { items: [summary(SCRIPT_ID)], total: 1 } as T;
     if (command === 'get_script') return scriptDocument(SCRIPT_ID) as T;
+    if (command === 'save_script') {
+      saved.push(args?.source as string);
+      return { status: 'saved', scriptRevision: 4, savedAt: '2026-07-30T10:00:01.000Z' } as T;
+    }
     if (command === 'trash_script') return summary(args?.scriptId as string) as T;
     if (command === 'duplicate_script') return summary('copy') as T;
     throw new Error(`unexpected command ${command}`);
@@ -192,6 +204,8 @@ async function chooseOverflowItem(label: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  commands = [];
+  saved = [];
   installBackend();
   setLibraryQuery('');
   setLibraryView('all');
@@ -282,5 +296,48 @@ describe('a duplicate that failed is not silent', () => {
 
     expect(messages('success')).toContain('Script duplicated');
     expect(messages('danger')).toEqual([]);
+  });
+});
+
+/*
+ * Issue #245: Duplicate copied the file on disk without saving the editor
+ * first, so the copy was the last save rather than the text on screen — and
+ * while saves were failing, it was an old version under "Script duplicated".
+ */
+describe('Duplicate copies the text on screen, not the last save', () => {
+  const typed = '# Keynote\n\nSome narration.\n\nAnd the line I just typed.\n';
+
+  afterEach(() => {
+    // Unmounting the route does not reset the editor store, and a dirty
+    // buffer leaves an autosave timer armed.
+    closeScript();
+  });
+
+  it('saves what was just typed before the copy is made', async () => {
+    await mountEditor();
+    setSource(typed);
+
+    await chooseOverflowItem('Duplicate');
+
+    expect(saved).toEqual([typed]);
+    expect(commands.indexOf('save_script')).toBeLessThan(commands.indexOf('duplicate_script'));
+    expect(messages('success')).toContain('Script duplicated');
+    expect(messages('danger')).toEqual([]);
+  });
+
+  it('makes no copy, and says why, when the edits cannot be saved', async () => {
+    installBackend({ save_script: new Error('Disk unavailable') });
+    await mountEditor();
+    setSource(typed);
+
+    await chooseOverflowItem('Duplicate');
+
+    expect(commands).not.toContain('duplicate_script');
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expectReadableFailure(shown[0], 'The script could not be duplicated.');
+    expect(shown[0]).toContain('Disk unavailable');
+    expect(messages('success')).toEqual([]);
+    expect(navigated).not.toHaveBeenCalled();
   });
 });
