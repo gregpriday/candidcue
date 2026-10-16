@@ -100,8 +100,11 @@ let live: ScriptSummary[] = [];
 /** What is on disk for each script — the only thing `duplicate_script` reads. */
 let disk: Record<string, { title: string; source: string; scriptRevision: number }> = {};
 
-/** Every command the fake backend answered, in order. */
+/** Every command the fake backend was asked to run, in order. */
 let commands: string[] = [];
+
+/** While set, `save_script` holds here before anything reaches the disk. */
+let saveGate: Promise<void> | null = null;
 
 function scriptDocument(id: string): Record<string, unknown> {
   const file = disk[id];
@@ -144,6 +147,7 @@ function installBackend(fail: Record<string, unknown> = {}): void {
     if (command === 'list_scripts') return pageOf(args) as T;
     if (command === 'get_script') return scriptDocument(args?.scriptId as string) as T;
     if (command === 'save_script') {
+      if (saveGate !== null) await saveGate;
       const file = disk[args?.scriptId as string];
       if (file === undefined) throw new Error('no such script');
       const patch = args?.metadataPatch as { title?: string } | undefined;
@@ -197,6 +201,7 @@ beforeEach(async () => {
     b: { title: 'Other', source: 'Something else.', scriptRevision: 3 },
   };
   commands = [];
+  saveGate = null;
   installBackend();
   // The store is a module singleton, so each test normalises it rather than
   // inheriting whatever view and query the last one left behind.
@@ -321,6 +326,30 @@ describe('a duplicate of the open script copies what the editor shows', () => {
     expect(get(editor).dirty).toBe(false);
     expect(messages('success')).toEqual(['Script duplicated']);
     expect(messages('danger')).toEqual([]);
+  });
+
+  it('waits for that save to land before it copies', async () => {
+    // The fake writes the disk when a save starts unless it is held, so only a
+    // held save tells "awaited the flush" apart from "started it and moved on".
+    let release!: () => void;
+    saveGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setSource(typed);
+    const duplicating = duplicateScript('a');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The save is on the wire and the disk still holds the old text; a copy
+      // made now would be the bug again.
+      expect(commands).toContain('save_script');
+      expect(commands).not.toContain('duplicate_script');
+    } finally {
+      release();
+    }
+
+    await expect(duplicating).resolves.toBe(true);
+
+    expect(disk.copy?.source).toBe(typed);
   });
 
   it('copies once a save that failed earlier goes through on the retry', async () => {
