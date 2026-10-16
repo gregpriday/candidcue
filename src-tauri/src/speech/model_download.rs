@@ -668,8 +668,21 @@ async fn fetch_archive(
             // Stopped — and not only between chunks. A stalled origin never
             // sends the next one, and a Stop that waited for it waited out the
             // whole IDLE_TIMEOUT and was then reported as a failed download.
-            // Kept and flushed exactly as a dropped connection is below.
-            Err(stopped) => return Err(keep_partial(file, stopped)),
+            //
+            // Flushed like any kept partial, but NOT through `keep_partial`:
+            // a Stop stays a stop. A flush that fails here would otherwise
+            // tell the user their own Stop failed and throw away what
+            // arrived. Bytes that never reached the disk are the archive
+            // digest's to catch, as after a power cut.
+            Err(stopped) => {
+                if let Err(err) = file.sync_all() {
+                    tracing::warn!(
+                        error = %err,
+                        "could not flush a stopped download — keeping it for the digest to judge"
+                    );
+                }
+                return Err(FetchFailure::Interrupted(stopped));
+            }
             Ok(Ok(chunk)) => chunk,
             // The connection dropped, the laptop slept, or nothing arrived for
             // IDLE_TIMEOUT. Every byte written so far is a byte the origin sent
@@ -1843,13 +1856,22 @@ mod tests {
 
     /// Keep a connection open and silent until the client hangs up.
     ///
-    /// One read, which returns the moment the client closes its end (or
-    /// resets it) and otherwise after `STALL_HOLD`. Sleeping instead would hold
-    /// the origin's only thread for the full stall even after the client had
-    /// gone, and the request that resumes the download would queue behind it.
+    /// Reads, which return the moment the client closes its end (or resets
+    /// it) and otherwise after `STALL_HOLD`. Sleeping instead would hold the
+    /// origin's only thread for the full stall even after the client had gone,
+    /// and the request that resumes the download would queue behind it. Bytes
+    /// that do arrive are the tail of a request the first read did not take
+    /// whole, and are not a hangup.
     fn hold_until_hangup(stream: &mut std::net::TcpStream) {
+        let deadline = std::time::Instant::now() + STALL_HOLD;
         let _ = stream.set_read_timeout(Some(STALL_HOLD));
-        let _ = std::io::Read::read(stream, &mut [0u8; 1]);
+        let mut scrap = [0u8; 512];
+        while std::time::Instant::now() < deadline {
+            match std::io::Read::read(stream, &mut scrap) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => continue,
+            }
+        }
     }
 
     /// Point a catalogue entry's upstream url at the mock.
@@ -2332,8 +2354,9 @@ mod tests {
     ///
     /// Keyed to what the install has DONE rather than to a bare timer, so the
     /// Stop lands in the wait under test and not before it. The short pause
-    /// after makes it the parked wait that is woken, not the one about to
-    /// begin — which the flag would catch even without being able to wake it.
+    /// after is so that, all but certainly, it is the parked wait that is
+    /// woken rather than the one about to begin — which even a flag read only
+    /// between waits would catch.
     fn stop_once(
         cancel: &CancelFlag,
         parked: impl Fn() -> bool + Send + 'static,
@@ -2349,8 +2372,11 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+            // Read before pressing, so a fast return cannot land ahead of it
+            // and understate how long the Stop took.
+            let pressed = std::time::Instant::now();
             trigger.cancel();
-            std::time::Instant::now()
+            pressed
         })
     }
 
@@ -2462,10 +2488,10 @@ mod tests {
         assert_eq!(resumed.if_range.as_deref(), Some(FIXTURE_ETAG));
     }
 
-    /// Stop while the origin has the request and has not answered — the
-    /// connect and header wait, which the chunk loop never covered — is just
-    /// as prompt, and costs nothing: the partial that request was resuming is
-    /// left exactly as it was, sidecar and all.
+    /// Stop while the origin has the request and has not answered — the wait
+    /// for headers inside `open_transfer`, which the chunk loop never covered
+    /// — is just as prompt, and costs nothing: the partial that request was
+    /// resuming is left exactly as it was, sidecar and all.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stopping_before_the_origin_answers_is_prompt_and_keeps_the_partial() {
         let files = fixture_files();
