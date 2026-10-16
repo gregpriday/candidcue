@@ -214,8 +214,11 @@ export interface AppSettings {
     fontFamilyId: string;
     fontSizePx: number;
     lineHeight: number;
-    mirrorX: boolean;
-    mirrorY: boolean;
+    /*
+     * No `mirrorX`/`mirrorY`. Mirroring was a global pair here, applied to every
+     * panel, and it belongs to the panel with the glass in front of it — it is
+     * `optical.panelMirror` now (#206).
+     */
     /** Percent of the stage width the script column occupies (§14.2 E). */
     columnWidthPercent: number;
     readingBandCenterPercent: number;
@@ -349,6 +352,71 @@ export interface OpticalSettings {
   profiles: Record<string, OpticalProfile>;
   /** The rig in force on each panel: display fingerprint → rig name. */
   activeRig: Record<string, string>;
+  /**
+   * How a prompter take on each panel is mirrored: display fingerprint → axes.
+   *
+   * Per PANEL, because the glass is in front of one panel and not the others.
+   * This used to be a single `teleprompter.mirrorX/mirrorY` pair for every
+   * display, so a take that fell back to the laptop with the Elgato unplugged
+   * read backwards, and calibrating a desk rig switched the glass rig's mirror
+   * off (#206). A panel with no entry is not mirrored — see `panelMirrorFor`.
+   *
+   * Beside the rigs rather than inside one, because an automatic panel has no
+   * stored rig to carry it, and the mirror is in force whichever rig is.
+   */
+  panelMirror: Record<string, PanelMirror>;
+}
+
+/** The two mirror axes of one panel. */
+export interface PanelMirror {
+  horizontal: boolean;
+  vertical: boolean;
+}
+
+/**
+ * How a prompter take on this panel is mirrored.
+ *
+ * Unmirrored for a panel nobody has said anything about, and for one that
+ * cannot be named. That is the whole fix for the fallback case: a take that
+ * lands on the laptop because the pinned glass is unplugged finds the
+ * laptop's own answer — or none — rather than inheriting the glass's.
+ *
+ * Read defensively because the section is rebuilt from stored JSON, and a
+ * mirror that turns on because an entry was malformed is backwards text.
+ */
+export function panelMirrorFor(
+  optical: OpticalSettings,
+  displayFingerprint: string | null | undefined,
+): PanelMirror {
+  if (displayFingerprint === null || displayFingerprint === undefined || displayFingerprint === '') {
+    return { horizontal: false, vertical: false };
+  }
+  const entry = (optical.panelMirror as Record<string, Partial<PanelMirror>> | undefined)?.[
+    displayFingerprint
+  ];
+  return { horizontal: entry?.horizontal === true, vertical: entry?.vertical === true };
+}
+
+/**
+ * Set one panel's mirroring and leave every other panel's alone.
+ *
+ * Returns the WHOLE section, rigs included, and callers write it whole: an
+ * optical write takes ownership of the section in Rust (`toRustPatch` stamps
+ * `migrated`), so a patch carrying only this map could strand rigs that are
+ * still waiting in the legacy overlay.
+ */
+export function withPanelMirror(
+  optical: OpticalSettings,
+  displayFingerprint: string,
+  mirror: PanelMirror,
+): OpticalSettings {
+  return {
+    ...optical,
+    panelMirror: {
+      ...optical.panelMirror,
+      [displayFingerprint]: { horizontal: mirror.horizontal, vertical: mirror.vertical },
+    },
+  };
 }
 
 /**
@@ -562,6 +630,8 @@ export function withOpticalProfile(
 ): OpticalSettings {
   const rigName = profile.rigName.trim();
   return {
+    // Every other panel's mirroring rides along untouched — see `withPanelMirror`.
+    ...optical,
     profiles: {
       ...optical.profiles,
       [opticalRigKey(displayFingerprint, rigName)]: { ...profile, rigName },
@@ -583,7 +653,9 @@ export function withoutOpticalProfile(
   delete profiles[opticalRigKey(displayFingerprint, name)];
   const activeRig = { ...optical.activeRig };
   if (activeRig[displayFingerprint] === name) delete activeRig[displayFingerprint];
-  return { profiles, activeRig };
+  // The panel keeps its mirroring: the glass is still in front of it whether or
+  // not a rig is calibrated for it.
+  return { ...optical, profiles, activeRig };
 }
 
 const FRAMING_PRESETS: readonly FramingPreset[] = [
@@ -936,8 +1008,6 @@ export function defaultAppSettings(): AppSettings {
       fontFamilyId: DEFAULT_STAGE_APPEARANCE.fontFamilyId,
       fontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
       lineHeight: DEFAULT_STAGE_APPEARANCE.lineHeight,
-      mirrorX: false,
-      mirrorY: false,
       columnWidthPercent: DEFAULT_STAGE_APPEARANCE.columnWidthPercent,
       readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
       phraseHighlight: true,
@@ -968,7 +1038,7 @@ export function defaultAppSettings(): AppSettings {
       sizeBias: defaultOpticalProfile().bias,
     },
     // Nothing calibrated until somebody stands at a rig and measures it.
-    optical: { profiles: {}, activeRig: {} },
+    optical: { profiles: {}, activeRig: {}, panelMirror: {} },
     following: defaultFollowingSettings(),
     privacy: {
       saveTranscript: 'off',

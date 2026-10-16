@@ -4,11 +4,14 @@ import {
   buildStageEnvelope,
   buildStageRenderDocument,
   buildStageSettings,
+  stageSettingsFromSettings,
 } from '../../../src/control/services/stage-envelope';
 import {
   DEFAULT_STAGE_APPEARANCE,
   defaultAppSettings,
+  withPanelMirror,
 } from '../../../src/control/services/settings-types';
+import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 import {
   defaultFollowingSettings,
   resolveFollowProfile,
@@ -257,15 +260,14 @@ describe('a calibrated rig reaches the stage as geometry (shared/optical-resolve
     expect(settings.readingCue).toBe('wash');
   });
 
-  it('leaves mirroring to the Settings toggles', () => {
+  it('takes mirroring as an argument, never from the rig it is drawing', () => {
     /*
      * Deliberate, and worth pinning because it looks like an omission.
-     * `profile.flips` and the mirror toggles describe the same physical fact,
-     * so honouring both double-flips a rig — and a freshly created profile
-     * flips nothing, so preferring it would quietly un-mirror an operator the
-     * first time they calibrated. `flips` rides along inside `opticalProfile`
-     * for the calibration screen; wiring it to the render has to retire the
-     * toggles in the same move.
+     * `profile.flips` and the panel's saved mirroring describe the same
+     * physical fact, so honouring both double-flips a rig — and a freshly
+     * created profile flips nothing, so preferring it would quietly un-mirror
+     * an operator the first time they calibrated. `flips` rides along inside
+     * `opticalProfile` for the calibration screen to read.
      */
     const settings = buildStageSettings({
       mirrorX: true,
@@ -483,5 +485,53 @@ describe('follow feel reaches the stage envelope (§47.1 → §55)', () => {
     expect(envelope.followProfile).toBeUndefined();
     // …and the stage answers that with its own default rather than nothing.
     expect(stageFollowProfile(envelope.followProfile)).toBe(DEFAULT_SMOOTH_FOLLOW_PROFILE);
+  });
+});
+
+/*
+ * #206: mirroring is a fact about the glass in front of ONE panel. The take
+ * composes it from the panel it landed on, and from nothing global.
+ */
+describe('the mirror a take is composed with', () => {
+  const panel = (fingerprint: string): DisplayDescriptor => ({
+    id: fingerprint,
+    name: 'Monitor',
+    primary: false,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 1920, height: 1080 },
+    logicalSize: { width: 1920, height: 1080 },
+    scaleFactor: 1,
+    fingerprint,
+    topologyHash: 'topology-1',
+  });
+  const GLASS = panel('panel-glass');
+  const LAPTOP = panel('panel-laptop');
+
+  function withGlassMirrored() {
+    const s = defaultAppSettings();
+    return {
+      ...s,
+      optical: withPanelMirror(s.optical, GLASS.fingerprint, { horizontal: true, vertical: false }),
+    };
+  }
+
+  it("mirrors a take on the glass, and not one that landed on another panel", () => {
+    const s = withGlassMirrored();
+    expect(stageSettingsFromSettings(s, GLASS).mirrorX).toBe(true);
+    // The fallback case: the glass is unplugged and the take is on the laptop.
+    expect(stageSettingsFromSettings(s, LAPTOP).mirrorX).toBe(false);
+    expect(stageSettingsFromSettings(s, LAPTOP).mirrorY).toBe(false);
+  });
+
+  it('mirrors nothing when the panel cannot be named', () => {
+    expect(stageSettingsFromSettings(withGlassMirrored()).mirrorX).toBe(false);
+    expect(stageSettingsFromSettings(withGlassMirrored(), null).mirrorX).toBe(false);
+  });
+
+  it("uses a take's own flip over the panel's saved answer", () => {
+    const s = withGlassMirrored();
+    const flipped = stageSettingsFromSettings(s, GLASS, { horizontal: false, vertical: true });
+    expect(flipped.mirrorX).toBe(false);
+    expect(flipped.mirrorY).toBe(true);
   });
 });

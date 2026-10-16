@@ -26,6 +26,7 @@ import {
   adoptPresentationMode,
   applyStageAppearance,
   clearSession,
+  liveMirrorX,
   session,
   startLiveSession,
   takeTeleprompterSettings,
@@ -289,10 +290,48 @@ describe('the quick-controls, which used to reach nothing', () => {
     start();
     expect(rendered().mirrorX).toBe(false);
 
-    toggleStageMirror('x');
+    expect(toggleStageMirror('x')).toBe(true);
 
     expect(rendered().mirrorX).toBe(true);
-    expect(takeTeleprompterSettings().mirrorX).toBe(true);
+    // The menu checkmark reads the same answer the glass shows.
+    expect(liveMirrorX()).toBe(true);
+
+    // The vertical axis is its own flip, and the horizontal one survives it.
+    toggleStageMirror('y');
+    expect(rendered().mirrorY).toBe(true);
+    expect(rendered().mirrorX).toBe(true);
+
+    // And it is a toggle.
+    expect(toggleStageMirror('x')).toBe(false);
+    expect(rendered().mirrorX).toBe(false);
+  });
+
+  it('keeps a flip through an unrelated nudge', () => {
+    start();
+    toggleStageMirror('x');
+
+    applyStageAppearance({ fontSizePx: 96 });
+
+    expect(rendered().fontSizePx).toBe(96);
+    expect(rendered().mirrorX).toBe(true);
+  });
+
+  it('refuses a flip in a reading window rather than holding one nobody can see', () => {
+    /*
+     * A reading window is never mirrored, so a flip there would change nothing
+     * on screen and then turn up — on the glass — the moment the take switched
+     * back to the prompter.
+     */
+    start();
+    adoptPresentationMode('reader');
+    const envelope = get(session).stageEnvelope;
+
+    expect(toggleStageMirror('x')).toBeNull();
+
+    expect(liveMirrorX()).toBe(false);
+    expect(get(session).stageEnvelope).toBe(envelope);
+    adoptPresentationMode('prompter');
+    expect(rendered().mirrorX).toBe(false);
   });
 });
 
@@ -434,7 +473,9 @@ describe('a rig-resolved take', () => {
     const settings = rigSettings();
     start(settings);
 
-    applyStageAppearance({ fontSizePx: 96, mirrorX: true });
+    applyStageAppearance({ fontSizePx: 96 });
+    // Not even the mirror, which would otherwise be the most innocent nudge.
+    expect(toggleStageMirror('x')).toBeNull();
 
     expect(rendered()).toEqual(settings);
     expect(get(session).stageRigResolved).toBe(true);
@@ -514,6 +555,35 @@ describe('switching presentation mode mid-take', () => {
      * the layout the reader is looking at.
      */
     expect(rendered()).not.toEqual(composedFor('reader', LAPTOP));
+  });
+
+  it("drops a live flip when the take lands on another panel's glass (#206)", () => {
+    /*
+     * The flip was made at the glass the take WAS on. Carrying it onto a panel
+     * with no glass in front of it is the bug this whole change is about,
+     * arriving mid-take instead of at the opening.
+     */
+    startOnLaptop();
+    toggleStageMirror('x');
+    expect(rendered().mirrorX).toBe(true);
+
+    adoptPresentationMode('prompter', PROMPTER);
+
+    expect(rendered().mirrorX).toBe(false);
+    expect(rendered()).toEqual(composedFor('prompter', PROMPTER));
+  });
+
+  it('keeps a live flip across a mode switch on the same panel', () => {
+    startOnLaptop();
+    toggleStageMirror('x');
+
+    adoptPresentationMode('reader', LAPTOP);
+    // Never mirrored in a reading window...
+    expect(rendered().mirrorX).toBe(false);
+
+    adoptPresentationMode('prompter', LAPTOP);
+    // ...and still the take's choice when it is back on the same glass.
+    expect(rendered().mirrorX).toBe(true);
   });
 
   it('keeps the panel it already had when nobody can name the new one', () => {

@@ -212,6 +212,31 @@ function compiled(): CompileOutput {
   };
 }
 
+/**
+ * A glass panel whose saved mirroring is on, and the only display connected —
+ * so whichever mode a take opens in, it lands here. No physical size and no
+ * prompter name, so it resolves no optics: these tests are about the mirror.
+ */
+const GLASS: DisplayDescriptor = {
+  id: 'display-glass',
+  name: 'Glass monitor',
+  primary: false,
+  physicalPosition: { x: 0, y: 0 },
+  physicalSize: { width: 1920, height: 1080 },
+  logicalSize: { width: 1920, height: 1080 },
+  scaleFactor: 1,
+  fingerprint: 'panel-glass',
+  topologyHash: 'topology-glass',
+};
+
+/** Connect only `GLASS`, mirrored horizontally the way a beamsplitter needs. */
+function presentOnMirroredGlass(): void {
+  stageCalls.listDisplays.mockResolvedValue([GLASS]);
+  settingsState.value!.optical.panelMirror = {
+    [GLASS.fingerprint]: { horizontal: true, vertical: false },
+  };
+}
+
 beforeEach(() => {
   for (const fn of Object.values(calls)) fn.mockReset();
   for (const fn of Object.values(stageCalls)) fn.mockReset();
@@ -530,7 +555,7 @@ describe('single-window Present', () => {
      * let this through: that call was always correct.
      */
     settingsState.value!.stage.presentationMode = 'prompter';
-    settingsState.value!.teleprompter.mirrorX = true;
+    presentOnMirroredGlass();
 
     await expect(startTake(SCRIPT.id, { presentationMode: 'reader' })).resolves.toBe(true);
 
@@ -552,7 +577,7 @@ describe('single-window Present', () => {
   it('composes the stage for a prompter chosen out of a reader default', async () => {
     // The same defect in the other direction: a glass rig composed as a desk.
     settingsState.value!.stage.presentationMode = 'reader';
-    settingsState.value!.teleprompter.mirrorX = true;
+    presentOnMirroredGlass();
 
     await expect(startTake(SCRIPT.id, { presentationMode: 'prompter' })).resolves.toBe(true);
 
@@ -793,6 +818,7 @@ describe('the display a take is calibrated against', () => {
         [opticalRigKey(LAPTOP.fingerprint, rigName)]: rig(rigName, 0.12, lensPlacement),
         [opticalRigKey(PROMPTER.fingerprint, rigName)]: rig(rigName, 0.48, lensPlacement),
       },
+      panelMirror: {},
     };
   }
 
@@ -843,6 +869,55 @@ describe('the display a take is calibrated against', () => {
     });
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
     expect(opened().stageSettings.fontSizePx).not.toBe(onLaptop);
+  });
+
+  it('mirrors only for the glass, so a take that falls back to the laptop reads forwards (#206)', async () => {
+    /*
+     * The issue's first case, exactly: the glass is pinned and mirrored, the
+     * operator presses Present with the window on the laptop, and Rust lands
+     * the take there. Mirroring used to be one global switch, so the laptop
+     * showed the script backwards.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = PROMPTER.fingerprint;
+    settingsState.value!.optical = {
+      ...settingsState.value!.optical,
+      panelMirror: { [PROMPTER.fingerprint]: { horizontal: true, vertical: true } },
+    };
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1728,
+      height: 1117,
+      displayFingerprint: LAPTOP.fingerprint,
+    });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    const onLaptop = calls.startLiveSession.mock.calls[0]![0] as {
+      stageSettings: { mirrorX: boolean; mirrorY: boolean };
+      stageEnvelope: { stageSettings: { mirrorX: boolean; mirrorY: boolean } };
+    };
+    expect(onLaptop.stageSettings.mirrorX).toBe(false);
+    expect(onLaptop.stageSettings.mirrorY).toBe(false);
+    // The envelope is what reaches the renderer; it must not disagree.
+    expect(onLaptop.stageEnvelope.stageSettings.mirrorX).toBe(false);
+
+    // And the glass itself is still mirrored the way that rig needs.
+    calls.startLiveSession.mockClear();
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1024,
+      height: 600,
+      displayFingerprint: PROMPTER.fingerprint,
+    });
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    const onGlass = calls.startLiveSession.mock.calls[0]![0] as {
+      stageSettings: { mirrorX: boolean; mirrorY: boolean };
+      stageEnvelope: { stageSettings: { mirrorX: boolean } };
+    };
+    expect(onGlass.stageSettings.mirrorX).toBe(true);
+    expect(onGlass.stageSettings.mirrorY).toBe(true);
+    expect(onGlass.stageEnvelope.stageSettings.mirrorX).toBe(true);
   });
 
   it('sizes a reading window from the panel it landed on', async () => {
@@ -1062,7 +1137,7 @@ describe('starting a practice', () => {
      * for them, not an edge one.
      */
     settingsState.value!.stage.presentationMode = 'prompter';
-    settingsState.value!.teleprompter.mirrorX = true;
+    presentOnMirroredGlass();
 
     await expect(startTake(SCRIPT.id, { practice: true })).resolves.toBe(true);
 

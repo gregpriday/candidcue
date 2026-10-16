@@ -774,8 +774,19 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   function toggleMirror(): void {
-    toggleStageMirror('x');
-    showToast('Text mirrored', 'info', { durationMs: 1600 });
+    // Says what the glass now shows, rather than "mirrored" for both directions
+    // — and names why nothing happened in a reading window, which has no glass
+    // to read it off.
+    const mirrored = toggleStageMirror('x');
+    showToast(
+      mirrored === null
+        ? 'A reading window is never mirrored'
+        : mirrored
+          ? 'Text mirrored for this take'
+          : 'Text unmirrored for this take',
+      'info',
+      { durationMs: 1600 },
+    );
   }
 
   $effect(() =>

@@ -200,7 +200,7 @@ function displayDescriptor(): DisplayDescriptor {
 }
 
 describe('the reading rig', () => {
-  const empty = (): OpticalSettings => ({ profiles: {}, activeRig: {} });
+  const empty = (): OpticalSettings => ({ profiles: {}, activeRig: {}, panelMirror: {} });
 
   it('answers without a calibration, unlike its prompter sibling', () => {
     /*
@@ -289,6 +289,7 @@ describe('the reading rig', () => {
     const optical: OpticalSettings = {
       profiles: { [opticalRigKey(FINGERPRINT, READER_RIG_NAME)]: impostor },
       activeRig: {},
+      panelMirror: {},
     };
     const reader = readerOpticalProfile(optical, FINGERPRINT);
     expect(reader.lensPlacement).toBe('none');
@@ -306,6 +307,7 @@ describe('the reading rig', () => {
     const optical: OpticalSettings = {
       profiles: { [opticalRigKey(FINGERPRINT, READER_RIG_NAME)]: stored },
       activeRig: {},
+      panelMirror: {},
     };
     expect(readerOpticalProfile(optical, FINGERPRINT).viewingDistanceMm).toBe(700);
   });
@@ -387,15 +389,18 @@ describe('the settings a reading window runs', () => {
     return {
       ...base,
       stage: { ...base.stage, presentationMode: mode },
-      // A glass rig's mirror, deliberately left ON, to prove reader mode does not
-      // carry it.
-      teleprompter: { ...base.teleprompter, mirrorX: true },
+      // A glass rig's mirror, deliberately left ON for this very panel on both
+      // axes, to prove reader mode does not carry it.
+      optical: {
+        ...base.optical,
+        panelMirror: { [FINGERPRINT]: { horizontal: true, vertical: true } },
+      },
     };
   }
 
-  it('never mirrors, whatever Settings says', () => {
+  it('never mirrors, whatever the panel says', () => {
     /*
-     * The mirror toggles describe a BEAMSPLITTER. A reading window has no glass
+     * A panel's mirroring describes a BEAMSPLITTER. A reading window has no glass
      * in the optical path, and carrying a glass rig's mirror into it gives
      * somebody backwards text on a bare monitor — which the `desk-webcam` preset
      * already calls "the classic first-run confusion".
@@ -406,11 +411,19 @@ describe('the settings a reading window runs', () => {
     const reader = stageSettingsFromSettings(settingsFor('reader'), displayDescriptor());
     expect(reader.mirrorX).toBe(false);
     expect(reader.mirrorY).toBe(false);
+    // Not even a take's own live flip gets through.
+    const flipped = stageSettingsFromSettings(settingsFor('reader'), displayDescriptor(), {
+      horizontal: true,
+      vertical: true,
+    });
+    expect(flipped.mirrorX).toBe(false);
+    expect(flipped.mirrorY).toBe(false);
   });
 
-  it('still mirrors a prompter take that asked for it', () => {
+  it('still mirrors a prompter take on the panel that asked for it', () => {
     const prompter = stageSettingsFromSettings(settingsFor('prompter'), displayDescriptor());
     expect(prompter.mirrorX).toBe(true);
+    expect(prompter.mirrorY).toBe(true);
   });
 
   it('tells the stage which measure band to aim at', () => {

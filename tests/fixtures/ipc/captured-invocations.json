@@ -287,11 +287,21 @@
         "expectedRevision": 3,
         "patch": {
           "stageBehavior": {
-            "horizontalMirror": true,
             "fixedSpeedWpm": 155
           },
           "general": {
             "saveTranscript": "7d"
+          },
+          "optical": {
+            "profiles": {},
+            "activeRig": {},
+            "panelMirror": {
+              "dsp-1": {
+                "horizontal": true,
+                "vertical": false
+              }
+            },
+            "migrated": true
           }
         }
       }

@@ -159,6 +159,7 @@ export async function loadSettings(force = false): Promise<AppSettings> {
    */
   await adoptStageModeFromOverlay();
   await adoptOpticalFromOverlay();
+  await adoptPanelMirrorFromLegacy();
   return get(state);
 }
 
@@ -260,6 +261,37 @@ async function adoptOpticalFromOverlay(): Promise<void> {
         `storage, so they are still only in this window's local data. ${describeError(err)}`,
       'danger',
     );
+  }
+}
+
+/**
+ * Write per-panel mirroring through once, carried from the retired global
+ * switch and the rigs' own records (#206).
+ *
+ * After the rigs, never before them: any optical write takes ownership of the
+ * section in Rust, so a mirror adoption landing first would strand rigs still
+ * waiting in the legacy overlay. And it writes the WHOLE section for the same
+ * reason — if the rig adoption above failed, this one carries those rigs too
+ * rather than claiming a section it has only half written. When the rig
+ * adoption succeeded it already carried the mirror map, and the read that
+ * committed it reports nothing left pending here.
+ *
+ * Silent on failure, like the mode. Every read carries the same answer until
+ * one write lands, so the glass stays mirrored in the meantime, and the next
+ * launch tries again.
+ */
+async function adoptPanelMirrorFromLegacy(): Promise<void> {
+  const pending = settingsService.pendingPanelMirrorAdoption();
+  if (pending === null) return;
+  const before = get(state);
+  try {
+    const saved = await settingsService.updateSettings(before.revision, {
+      optical: { ...before.optical, panelMirror: pending },
+    });
+    /* A commit, like any other — see `commitCount`. */
+    commitSettings(saved);
+  } catch {
+    // Left to the fallback, and to the next launch.
   }
 }
 

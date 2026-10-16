@@ -32,8 +32,10 @@ import { invokeOrMock } from './ipc';
 import {
   activeOpticalProfile,
   DEFAULT_STAGE_APPEARANCE,
+  panelMirrorFor,
   readerOpticalProfile,
   type AppSettings,
+  type PanelMirror,
 } from './settings-types';
 import type { DisplayDescriptor } from './stage-types';
 
@@ -249,13 +251,16 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     futureOpacity: optics ? optics.futureOpacity : UNCALIBRATED_FUTURE_OPACITY,
     currentUnderlayOpacity: overrides.phraseHighlight === false ? 0 : 0.1,
     /*
-     * Mirroring stays with the Settings toggles rather than being taken from
+     * Mirroring is an explicit argument rather than being taken from
      * `profile.flips`. Both describe the same physical fact, so applying both
      * would double-flip a rig whose glass is already accounted for — and a
      * freshly created profile flips nothing, so preferring it would quietly
      * un-mirror an operator the first time they calibrated. `flips` rides along
-     * inside `opticalProfile` for the calibration screen to read; wiring it to
-     * the render is a change that has to retire the toggles in the same move.
+     * inside `opticalProfile` for the calibration screen to read.
+     *
+     * A take passes the PANEL's mirroring (`optical.panelMirror`, resolved in
+     * `stageSettingsFromSettings`); the calibration screen passes the working
+     * profile's flips. One source each, never both.
      */
     mirrorX: overrides.mirrorX ?? false,
     mirrorY: overrides.mirrorY ?? false,
@@ -318,6 +323,11 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
 export function stageSettingsFromSettings(
   s: AppSettings,
   display?: DisplayDescriptor | null,
+  /**
+   * The mirroring to use instead of the panel's saved answer — a take that has
+   * been flipped live from the Session menu. Absent means the panel's own.
+   */
+  mirror?: PanelMirror | null,
 ): StageSettings {
   const t = s.teleprompter;
   const reader = s.stage.presentationMode === 'reader';
@@ -329,6 +339,15 @@ export function stageSettingsFromSettings(
    * branch never falls through to the uncalibrated percentage layout for want of
    * a calibration wizard nobody should have to run to read a script.
    */
+  /*
+   * The PANEL's mirroring, not a global one (#206).
+   *
+   * The glass is in front of one panel. A take that lands somewhere else — the
+   * pinned Elgato unplugged, Present falling back to the laptop the window is
+   * on — finds that panel's own answer, which for a panel nobody has mirrored
+   * is "not mirrored". It used to find the glass's, and read backwards.
+   */
+  const mirrorAxes = mirror ?? panelMirrorFor(s.optical, display?.fingerprint ?? null);
   const profile = reader
     ? readerOpticalProfile(s.optical, display?.fingerprint ?? null)
     : prompterOpticalProfile(s.optical, display, {
@@ -343,12 +362,12 @@ export function stageSettingsFromSettings(
     columnWidthPercent: t.columnWidthPercent,
     readingBandCenterPercent: t.readingBandCenterPercent,
     /*
-     * Never mirrored in a reading window, whatever Settings says.
+     * Never mirrored in a reading window, whatever the panel says.
      *
-     * The mirror toggles describe a BEAMSPLITTER — the note below on
-     * `buildStageSettings`'s own `mirrorX` explains why they live in Settings
-     * rather than being read off `profile.flips` — and a reading window has no
-     * glass in the optical path. Carrying a glass rig's mirror into it gives
+     * A panel's mirroring describes a BEAMSPLITTER — the note on
+     * `buildStageSettings`'s own `mirrorX` explains why it is passed in rather
+     * than read off `profile.flips` — and a reading window has no glass in the
+     * optical path. Carrying a glass rig's mirror into it gives
      * somebody backwards text on a bare monitor, which the `desk-webcam` preset
      * already calls "the classic first-run confusion".
      *
@@ -356,8 +375,8 @@ export function stageSettingsFromSettings(
      * wants these on, and switching modes must not make them turn a setting off
      * and back on again around it.
      */
-    mirrorX: reader ? false : t.mirrorX,
-    mirrorY: reader ? false : t.mirrorY,
+    mirrorX: reader ? false : mirrorAxes.horizontal,
+    mirrorY: reader ? false : mirrorAxes.vertical,
     pastDimming: t.pastDimming,
     phraseHighlight: t.phraseHighlight,
     semanticLineBreaks: t.semanticLineBreaks,

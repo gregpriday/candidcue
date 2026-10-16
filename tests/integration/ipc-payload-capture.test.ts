@@ -252,10 +252,17 @@ describe('captured IPC payloads (production services → wire)', () => {
     // guarded on a running take and checks the model is actually installed —
     // neither of which this command can do. Rust now REFUSES an `audio.language`
     // patch, so capturing one here would pin a payload the backend rejects.
+    // `optical` carries a panel's mirroring (#206), so the Rust replay proves
+    // the per-panel map binds to the document's typed shape.
     await capture('update_settings', () =>
       settings.updateSettings(3, {
         privacy: { saveTranscript: '7d' } as never,
-        teleprompter: { mirrorX: true, fixedSpeedWpm: 155 } as never,
+        teleprompter: { fixedSpeedWpm: 155 } as never,
+        optical: {
+          profiles: {},
+          activeRig: {},
+          panelMirror: { 'dsp-1': { horizontal: true, vertical: false } },
+        },
       }),
     );
     await capture('select_speech_language', () =>

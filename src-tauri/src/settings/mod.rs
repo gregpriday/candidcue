@@ -89,6 +89,25 @@ pub struct OpticalSettings {
     pub profiles: std::collections::BTreeMap<String, serde_json::Value>,
     /// Display fingerprint → the name of the rig in force on that panel.
     pub active_rig: std::collections::BTreeMap<String, String>,
+    /// Display fingerprint → how a prompter take on that panel is mirrored.
+    ///
+    /// Mirroring is a fact about the glass in front of ONE panel, and it used
+    /// to be a single `stageBehavior.horizontalMirror` for every panel — so a
+    /// take that fell back to the laptop when the Elgato was unplugged read
+    /// backwards, and calibrating a desk rig switched the glass rig's mirror
+    /// off. A panel with no entry is not mirrored.
+    ///
+    /// `None` is "never written", and it is a different claim from an empty
+    /// map for the same reason `migrated` exists: the frontend carries the old
+    /// global switch onto the glass exactly once, and an empty map has to read
+    /// as "the operator turned every mirror off", not "nobody has moved it
+    /// yet". Replaced rather than merged on write — see `REPLACED_MAPS`.
+    ///
+    /// Each entry is `{ horizontal, vertical }`, kept opaque for the reason the
+    /// rigs are: the frontend validates it (an axis is on only when it is
+    /// literally `true`), and a typed entry here would let one malformed pair
+    /// fail the whole document's deserialisation.
+    pub panel_mirror: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -472,7 +491,15 @@ pub fn selected_model(settings: &AppSettings) -> &'static crate::speech::Bundled
 /// So these paths are emptied before the merge runs, which makes the patch's
 /// value the whole value. Named explicitly rather than inferred from shape,
 /// because "this object is a map" is not something a JSON document says.
-const REPLACED_MAPS: [(&str, &str); 2] = [("optical", "profiles"), ("optical", "activeRig")];
+///
+/// `panelMirror` is keyed by panel for the same reason, though nothing deletes
+/// an entry today — a panel turned unmirrored is written `false`, not removed.
+/// It is here so that a map the frontend sends is the whole answer either way.
+const REPLACED_MAPS: [(&str, &str); 3] = [
+    ("optical", "profiles"),
+    ("optical", "activeRig"),
+    ("optical", "panelMirror"),
+];
 
 fn clear_replaced_maps(base: &mut serde_json::Value, patch: &serde_json::Value) {
     for (section, key) in REPLACED_MAPS {
@@ -1121,6 +1148,61 @@ mod tests {
             merged.stage_behavior.blank_color,
             StageBehaviorSettings::default().blank_color,
             "and the container default refills what the patch removed"
+        );
+    }
+
+    /// Per-panel mirroring (#206) is replaced whole, and "never written" stays
+    /// tellable from "written empty".
+    ///
+    /// A merge would keep a panel the patch no longer mentions, which is the
+    /// rig-resurrection defect `REPLACED_MAPS` exists for. And the frontend's
+    /// one-time move of the old global switch keys off `None`: if an empty map
+    /// collapsed to `None` on the round trip, an operator who switched every
+    /// panel's mirror off would have the old global carried back onto the
+    /// glass at the next launch.
+    #[test]
+    fn panel_mirror_is_replaced_whole_and_empty_is_not_absent() {
+        let stored: AppSettings = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "optical": { "migrated": true, "profiles": {}, "activeRig": {} }
+        }))
+        .expect("a document from before per-panel mirroring still loads");
+        assert_eq!(stored.optical.panel_mirror, None, "absent reads as never written");
+
+        let mut base = serde_json::to_value(&stored).expect("serializes");
+        let first = serde_json::json!({ "optical": { "panelMirror": {
+            "glass": { "horizontal": true, "vertical": false },
+            "laptop": { "horizontal": false, "vertical": false }
+        } } });
+        clear_replaced_maps(&mut base, &first);
+        merge_json(&mut base, &first);
+        let mut base = serde_json::to_value(
+            serde_json::from_value::<AppSettings>(base).expect("deserializes"),
+        )
+        .expect("serializes");
+
+        let second = serde_json::json!({ "optical": { "panelMirror": {
+            "glass": { "horizontal": true, "vertical": true }
+        } } });
+        clear_replaced_maps(&mut base, &second);
+        merge_json(&mut base, &second);
+        let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
+        let map = merged.optical.panel_mirror.expect("written");
+        assert_eq!(map.len(), 1, "the panel the patch left out is gone");
+        assert_eq!(
+            map["glass"],
+            serde_json::json!({ "horizontal": true, "vertical": true })
+        );
+
+        let mut base = serde_json::to_value(&merged).expect("serializes");
+        let emptied = serde_json::json!({ "optical": { "panelMirror": {} } });
+        clear_replaced_maps(&mut base, &emptied);
+        merge_json(&mut base, &emptied);
+        let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
+        assert_eq!(
+            merged.optical.panel_mirror,
+            Some(std::collections::BTreeMap::new()),
+            "an empty map is an answer, not an absence"
         );
     }
 

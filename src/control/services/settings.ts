@@ -29,6 +29,7 @@ import {
   type RustFollowingSettings,
 } from './settings-following';
 import {
+  activeOpticalProfile,
   defaultAppSettings,
   migrateStageMode,
   normalizeOpticalProfile,
@@ -36,6 +37,7 @@ import {
   type AppSettings,
   type ClearResult,
   type OpticalSettings,
+  type PanelMirror,
   type PresentationMode,
   type ReaderFrame,
   type SessionMode,
@@ -72,6 +74,12 @@ interface RustSettings {
     pointerHideDelaySeconds: number;
     manualMoveTrackingGraceSeconds: number;
     stageAcknowledgement: string;
+    /**
+     * The retired global mirror (#206), read once and never written again.
+     *
+     * Mirroring is per panel now (`optical.panelMirror`). This field is only the
+     * SOURCE of the one-time move onto the glass — see `carriedPanelMirror`.
+     */
     horizontalMirror: boolean;
     keepScreenAwake: boolean;
     blankColor: string;
@@ -106,6 +114,12 @@ interface RustSettings {
     migrated?: boolean;
     profiles?: Record<string, unknown>;
     activeRig?: Record<string, unknown>;
+    /**
+     * Per-panel mirroring (#206). `null`/absent means NEVER WRITTEN, which is
+     * what the one-time move of the old global switch looks for — an empty map
+     * is an operator who switched every mirror off.
+     */
+    panelMirror?: Record<string, unknown> | null;
   };
 }
 
@@ -257,7 +271,90 @@ function opticalFromStored(
     if (typeof rigName !== 'string') continue;
     if (profiles[opticalRigKey(fingerprint, rigName)]) activeRig[fingerprint] = rigName;
   }
-  return { profiles, activeRig };
+  return { profiles, activeRig, panelMirror: panelMirrorFromStored(merged.panelMirror) };
+}
+
+/**
+ * Per-panel mirroring, rebuilt from stored JSON one entry at a time.
+ *
+ * An axis is on only when it is literally `true`. Anything else — a missing
+ * axis, a string, an entry that is not an object — reads as unmirrored, because
+ * a mirror switched on by a malformed value is backwards text on the glass.
+ */
+function panelMirrorFromStored(stored: unknown): OpticalSettings['panelMirror'] {
+  const panelMirror: OpticalSettings['panelMirror'] = {};
+  if (!isPlainObject(stored)) return panelMirror;
+  for (const [fingerprint, entry] of Object.entries(stored)) {
+    if (fingerprint === '' || !isPlainObject(entry)) continue;
+    panelMirror[fingerprint] = {
+      horizontal: entry['horizontal'] === true,
+      vertical: entry['vertical'] === true,
+    };
+  }
+  return panelMirror;
+}
+
+/**
+ * The teleprompter section without the retired global mirror (#206).
+ *
+ * Every overlay that ever held the old switches still carries `mirrorX` and
+ * `mirrorY`, and `mergeSection` would spread them straight back onto a section
+ * whose type no longer has them — a value nothing should read, sitting where
+ * anything that spreads the section would pass it on.
+ */
+function withoutLegacyMirror<T extends object>(section: T): T {
+  const copy = { ...section } as Record<string, unknown>;
+  delete copy['mirrorX'];
+  delete copy['mirrorY'];
+  return copy as T;
+}
+
+/**
+ * Per-panel mirroring worked out from what an install held before it existed
+ * (#206).
+ *
+ * The old switch applied to every panel, and only some of them have glass in
+ * front of them. Carrying it onto all of them would keep the bug; carrying it
+ * onto none would turn an upgrading operator's glass takes round. So each
+ * panel gets an answer only where there is positive evidence about it:
+ *
+ *   - every panel whose rig in force RECORDS a flip gets that rig's own flips.
+ *     Somebody stood at that glass and told the wizard how it reverses, and
+ *     the record survives even where the global does not — calibrating a desk
+ *     rig afterwards switched the global off and left the glass rig's record
+ *     alone, which is the second half of the issue, undone here for every
+ *     panel the pin does not speak for;
+ *   - the PINNED panel gets the old switch, on or off. Present sends a
+ *     prompter take there, so the switch is what that panel's takes actually
+ *     rendered, and that wins over an older rig record: an operator who
+ *     switched the mirror off for their pinned rig is not overruled by a
+ *     calibration they made before.
+ *
+ * NOT the primary display, and not "every connected panel": the primary is the
+ * desk or laptop screen on the rig this is about, which is exactly the panel
+ * the issue found reading backwards. A glass panel that is neither pinned nor
+ * calibrated cannot be told from a desk monitor here, and it is left alone
+ * rather than guessed — see `panelMirrorAwaitingAdoption` for why that does
+ * not lose the old switch for good.
+ */
+function carriedPanelMirror(
+  optical: OpticalSettings,
+  pinned: unknown,
+  legacy: PanelMirror,
+): OpticalSettings['panelMirror'] {
+  const carried: OpticalSettings['panelMirror'] = {};
+  for (const fingerprint of Object.keys(optical.activeRig)) {
+    const flips = activeOpticalProfile(optical, fingerprint)?.flips;
+    if (flips && (flips.horizontal || flips.vertical)) {
+      carried[fingerprint] = { horizontal: flips.horizontal, vertical: flips.vertical };
+    }
+  }
+  if (typeof pinned === 'string' && pinned !== '') {
+    if (legacy.horizontal || legacy.vertical) carried[pinned] = { ...legacy };
+    // An unmirrored panel needs no entry — absent already reads that way.
+    else delete carried[pinned];
+  }
+  return carried;
 }
 
 /**
@@ -354,6 +451,28 @@ export function pendingOpticalAdoption(): OpticalSettings | null {
 }
 
 /**
+ * Per-panel mirroring carried over from before it existed, waiting to be
+ * written to Rust (#206).
+ *
+ * The same mechanism again, for the same reason: reading the old switch and
+ * the rigs' records as a fallback keeps an upgrading operator's glass takes
+ * mirrored, and only a write makes that outlive the fallback. Null when there
+ * is nothing to carry. See `carriedPanelMirror` for which panels get what.
+ *
+ * An install with the old switch on and NO evidence about which panel is the
+ * glass — nothing pinned, nothing calibrated with a flip — carries nothing and
+ * writes nothing. That leaves the document unowned, so the old switch is still
+ * there to be carried the moment a pin or a calibration names the glass. Any
+ * optical write takes ownership, including turning a panel's mirror on in
+ * Settings, which is the one-click answer for that operator in the meantime.
+ */
+let panelMirrorAwaitingAdoption: OpticalSettings['panelMirror'] | null = null;
+
+export function pendingPanelMirrorAdoption(): OpticalSettings['panelMirror'] | null {
+  return panelMirrorAwaitingAdoption;
+}
+
+/**
  * Drop the legacy `optical` section from the overlay.
  *
  * Called by the store once the durable write has SUCCEEDED, and not before.
@@ -413,13 +532,16 @@ function readerFrameFromRust(stored: unknown): ReaderFrame | null {
  */
 let stageModeMigrated = false;
 let opticalMigrated = false;
+let panelMirrorMigrated = false;
 
 /** Test seam: forget that a migrated document was ever seen. */
 export function resetMigrationStateForTesting(): void {
   stageModeMigrated = false;
   opticalMigrated = false;
+  panelMirrorMigrated = false;
   stageModeAwaitingAdoption = null;
   opticalAwaitingAdoption = null;
+  panelMirrorAwaitingAdoption = null;
 }
 
 export function adaptRevisionedSettings(payload: unknown): AppSettings | null {
@@ -460,7 +582,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     },
     teleprompter: {
       ...defaults.teleprompter,
-      mirrorX: rust.stageBehavior.horizontalMirror,
       fixedSpeedWpm: rust.stageBehavior.fixedSpeedWpm,
       hidePointer: rust.stageBehavior.pointerHideDelaySeconds > 0,
     },
@@ -533,9 +654,56 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   const rustOwnsOptical = rust.optical?.migrated === true;
   /* Monotonic, for the same reason as the mode above. */
   if (rustOwnsOptical) opticalMigrated = true;
-  const resolvedOptical = rustOwnsOptical
+  const storedOptical = rustOwnsOptical
     ? opticalFromStored(defaults.optical, rust.optical as Partial<OpticalSettings>)
     : opticalFromStored(defaults.optical, overlay.optical);
+
+  /*
+   * Per-panel mirroring (#206): Rust's map the moment it has written one, and
+   * until then the retired global switch carried onto the glass.
+   *
+   * PRESENCE of the map is the authority marker, not its contents — an empty
+   * map is somebody who switched every panel's mirror off, and reading it as
+   * "not migrated yet" would put the old global straight back on the glass at
+   * the next launch. Rust keeps `None` and `{}` apart for exactly this.
+   *
+   * The old switch is read the way it was RENDERED, which is the overlay's
+   * copy over Rust's: `mirrorX` used to round-trip through both and the merge
+   * below let the overlay win, and `mirrorY` never reached Rust at all.
+   */
+  const rustOwnsPanelMirror = isPlainObject(rust.optical?.panelMirror);
+  /* Monotonic, for the same reason as the mode above. */
+  if (rustOwnsPanelMirror) panelMirrorMigrated = true;
+  const overlayTeleprompter: Record<string, unknown> = isPlainObject(overlay.teleprompter)
+    ? overlay.teleprompter
+    : {};
+  const legacyMirror = {
+    horizontal:
+      typeof overlayTeleprompter['mirrorX'] === 'boolean'
+        ? overlayTeleprompter['mirrorX']
+        : rust.stageBehavior.horizontalMirror === true,
+    vertical: overlayTeleprompter['mirrorY'] === true,
+  };
+  const carriedMirror = carriedPanelMirror(
+    storedOptical,
+    isPlainObject(overlay.stage) ? overlay.stage['displayFingerprint'] : null,
+    legacyMirror,
+  );
+  const resolvedOptical: OpticalSettings = {
+    ...storedOptical,
+    panelMirror: rustOwnsPanelMirror
+      ? panelMirrorFromStored(rust.optical?.panelMirror)
+      : carriedMirror,
+  };
+  /*
+   * Latched like the two above, and NOT pending when nothing was carried: an
+   * empty adoption would plant the marker with no mirror in it, and a pin or a
+   * calibration made later — evidence about the glass that is not here yet —
+   * could then never pick the old switch up. Until something writes the map,
+   * every read carries it afresh.
+   */
+  panelMirrorAwaitingAdoption =
+    panelMirrorMigrated || Object.keys(carriedMirror).length === 0 ? null : carriedMirror;
   /*
    * BOTH guards, and they answer different questions.
    *
@@ -565,7 +733,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       ...mergeSection(mapped.audio, overlay.audio),
       vadSensitivity: mapped.audio.vadSensitivity,
     },
-    teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
+    teleprompter: withoutLegacyMirror(mergeSection(mapped.teleprompter, overlay.teleprompter)),
     // All three are UI-only sections with no Rust twin, so the overlay IS the
     // document for them. A merge that is missing here does not fail loudly —
     // the setting simply reverts on every read, which is how a control ends up
@@ -652,7 +820,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     }
   }
   if (patch.teleprompter) {
-    put('stageBehavior', 'horizontalMirror', patch.teleprompter.mirrorX);
+    // No `horizontalMirror`: mirroring is per panel now and lives in `optical`
+    // (#206). The field stays in the document only as the source of the
+    // one-time move, so writing it would change nothing anybody reads.
     put('stageBehavior', 'fixedSpeedWpm', patch.teleprompter.fixedSpeedWpm);
     if (patch.teleprompter.hidePointer !== undefined) {
       put('stageBehavior', 'pointerHideDelaySeconds', patch.teleprompter.hidePointer ? 1.5 : 0);
@@ -693,6 +863,12 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     }
     if (patch.optical.activeRig !== undefined) {
       (rust.optical ??= {}).activeRig = patch.optical.activeRig;
+    }
+    // Whole, and replaced rather than merged, for the same reason as the two
+    // maps above. Writing it at all is what takes ownership of per-panel
+    // mirroring from the retired global switch (#206).
+    if (patch.optical.panelMirror !== undefined) {
+      (rust.optical ??= {}).panelMirror = patch.optical.panelMirror;
     }
     // Any write of this section takes ownership. After this the document is
     // the answer whether or not it holds a single rig.

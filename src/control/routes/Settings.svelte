@@ -81,8 +81,10 @@
     DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
     activeOpticalProfile,
     opticalRigsForDisplay,
+    panelMirrorFor,
     withOpticalProfile,
     withoutOpticalProfile,
+    withPanelMirror,
   } from '../services/settings-types';
   import type { TranscriptRetention } from '../services/settings-types';
   import {
@@ -715,6 +717,11 @@
    * row. A memory that only sometimes remembers, and sometimes overwrites the
    * wrong thing, is worse than no memory: what is on this screen is what the
    * stage runs, always.
+   *
+   * Mirroring is the one exception, and it is not appearance: it is whether
+   * there is a beamsplitter in front of the panel, so it is stored against the
+   * panel (`optical.panelMirror`, #206) and pinning a different display shows
+   * — and edits — that display's own answer. See `setPanelMirror`.
    */
   async function chooseDisplay(fingerprint: string | null): Promise<void> {
     await patchSettings('stage', { displayFingerprint: fingerprint });
@@ -822,6 +829,36 @@
   );
   /** Rigs are stored per panel, so an unresolvable display has none. */
   const rigFingerprint = $derived(effectiveDisplay?.fingerprint ?? null);
+  /**
+   * The mirroring a prompter take on the panel above runs with (#206).
+   *
+   * Per panel, because the glass is in front of one display and not the others:
+   * a take that falls back to the laptop with the glass unplugged reads the
+   * laptop's answer, not this one. So the switches describe — and change — the
+   * same panel the preview, the display test and Calibrate are about, and an
+   * unresolvable display has nothing to switch.
+   */
+  const panelMirror = $derived(panelMirrorFor($settings.optical, rigFingerprint));
+
+  /**
+   * Set one mirror axis for the panel above, and only for it.
+   *
+   * Written as the whole optical section — see `withPanelMirror` for why a
+   * mirror write must carry the rigs with it. A take already running on this
+   * panel follows it (`installLiveSettingsFollow`); a take on another panel
+   * does not, because this is not its glass.
+   */
+  function setPanelMirror(axis: 'horizontal' | 'vertical', value: boolean): void {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null || fingerprint === '') return;
+    void patchSettings(
+      'optical',
+      withPanelMirror($settings.optical, fingerprint, {
+        ...panelMirrorFor($settings.optical, fingerprint),
+        [axis]: value,
+      }),
+    );
+  }
   const rigs = $derived(opticalRigsForDisplay($settings.optical, rigFingerprint));
   const appliedRig = $derived(activeOpticalProfile($settings.optical, rigFingerprint));
   const discovered = $derived(discoverProfile(displayShape, null));
@@ -2259,16 +2296,23 @@
                 ? 'Always on in this release — the teleprompter must sit above other windows'
                 : 'Off for a reading window, so you can work beside it'}
             />
+            <!-- Per panel (#206): these describe the glass in front of the
+                 display named above, and a take on any other display ignores
+                 them. -->
             <Toggle
-              checked={$settings.teleprompter.mirrorX}
+              checked={panelMirror.horizontal}
+              disabled={!rigFingerprint}
               label="Horizontal mirror"
-              description="For a glass rig, where the panel is reflected"
-              onchange={(value) => void patchSettings('teleprompter', { mirrorX: value })}
+              description={effectiveDisplay
+                ? `For glass in front of ${effectiveDisplay.name}, where the panel is reflected. Other displays keep their own.`
+                : 'Connect a display to set how it is mirrored'}
+              onchange={(value) => setPanelMirror('horizontal', value)}
             />
             <Toggle
-              checked={$settings.teleprompter.mirrorY}
+              checked={panelMirror.vertical}
+              disabled={!rigFingerprint}
               label="Vertical mirror"
-              onchange={(value) => void patchSettings('teleprompter', { mirrorY: value })}
+              onchange={(value) => setPanelMirror('vertical', value)}
             />
           </div>
         </Section>
@@ -2324,7 +2368,7 @@
                 Measure another rig…
               </Button>
             {:else}
-              <Button size="sm" disabled={rigFingerprint === null} onclick={() => calibrate()}>
+              <Button size="sm" disabled={!rigFingerprint} onclick={() => calibrate()}>
                 Calibrate…
               </Button>
             {/if}

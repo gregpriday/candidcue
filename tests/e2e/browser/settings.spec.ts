@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { gotoSection, openPreferences } from './fixtures/preferences';
 
@@ -6,14 +6,41 @@ import { gotoSection, openPreferences } from './fixtures/preferences';
  * Settings round-trip journey, SHIM-BACKED.
  *
  * Real behaviour asserted: flipping a UI toggle persists through the frontend's
- * settings adapter in the EXACT shape Rust's `update_settings` expects. The UI
- * exposes a flat `teleprompter.mirrorX`; Rust's document calls it
- * `stageBehavior.horizontalMirror`. This proves the adapter (settings.ts
- * toRustPatch) maps it correctly and sends the pre-edit revision — i.e. a real
- * optimistic-concurrency write, not a mock passthrough.
+ * settings adapter in the EXACT shape Rust's `update_settings` expects, with the
+ * pre-edit revision — a real optimistic-concurrency write, not a mock
+ * passthrough.
+ *
+ * Mirroring is per PANEL (#206). It used to be one global
+ * `stageBehavior.horizontalMirror` for every display, so a take that fell back
+ * to the laptop with the glass unplugged read backwards. The switches now
+ * describe the display the section is about, and write that display's entry in
+ * `optical.panelMirror` — and nothing to the retired global.
  */
 
-test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to update_settings', async ({ page }) => {
+/**
+ * A display tile by the display's own name.
+ *
+ * Matched on `.monitor-name` exactly, not on the tile's text: the Automatic
+ * tile says "Currently Teleprompter Display", so a text match finds two.
+ */
+function monitorTile(page: Page, name: string) {
+  return page.locator('.monitor-tile', {
+    has: page.locator('.monitor-name', { hasText: new RegExp(`^${name}$`) }),
+  });
+}
+
+/** The `update_settings` patches that carried a panel's mirroring, in order. */
+async function panelMirrorWrites(page: Page): Promise<Array<Record<string, unknown>>> {
+  return await page.evaluate(() =>
+    window.__E2E__.calls
+      .filter((c) => c.command === 'update_settings')
+      .map((c) => (c.args as { patch?: Record<string, Record<string, unknown>> }).patch ?? {})
+      .filter((patch) => patch['optical']?.['panelMirror'] !== undefined)
+      .map((patch) => patch['optical']!['panelMirror'] as Record<string, unknown>),
+  );
+}
+
+test('toggling "Horizontal mirror" writes that display\'s entry, and only that one', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
 
@@ -26,44 +53,39 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
   await expect(mirror).toBeVisible();
   await expect(mirror).toHaveAttribute('aria-checked', 'false');
 
+  // Nothing is pinned, so the section is about the external panel — the one
+  // a prompter take is sent to.
   await mirror.click();
   await expect(mirror).toHaveAttribute('aria-checked', 'true');
 
-  // The write reached the backend in the Rust document shape.
   /*
-   * Poll for the MIRROR write, not for any write.
-   *
-   * Settings also issues an `optical` migration write on mount, which satisfies
-   * a bare count check the moment the section opens — so this used to race the
-   * toggle and read the migration back as though it were the switch.
+   * Poll for the MIRROR write, not for any write: Settings can also issue an
+   * `optical` migration write on mount, which would satisfy a bare count the
+   * moment the section opens.
    */
   await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__E2E__.calls.some(
-          (c) =>
-            c.command === 'update_settings' &&
-            (c.args as { patch?: Record<string, unknown> }).patch?.['stageBehavior'] !== undefined,
-        ),
-      ),
-    )
-    .toBe(true);
+    .poll(async () => (await panelMirrorWrites(page)).at(-1))
+    .toEqual({ 'dsp-e2e-prompter': { horizontal: true, vertical: false } });
 
   const call = await page.evaluate(() =>
-    window.__E2E__.calls
-      .filter(
-        (c) =>
-          c.command === 'update_settings' &&
-          (c.args as { patch?: Record<string, unknown> }).patch?.['stageBehavior'] !== undefined,
-      )
-      .at(-1),
+    window.__E2E__.calls.filter((c) => c.command === 'update_settings').at(-1),
   );
   const args = call!.args as { expectedRevision: number; patch: Record<string, Record<string, unknown>> };
-  expect(args.patch.stageBehavior?.['horizontalMirror']).toBe(true);
-  // A real optimistic write carries the revision the UI was editing (get_settings -> 3).
+  // A real optimistic write carries the revision the UI was editing.
   expect(typeof args.expectedRevision).toBe('number');
-  // It must NOT leak the UI-only flat key.
+  // Nothing to the retired global switch, and no UI-only flat key.
+  expect(args.patch['stageBehavior']?.['horizontalMirror']).toBeUndefined();
   expect(JSON.stringify(args.patch)).not.toContain('mirrorX');
+
+  /*
+   * The other display keeps its own answer. Choosing the laptop shows ITS
+   * mirroring — off — and choosing the glass again shows the glass's, which is
+   * the whole point: one panel's glass is not every panel's.
+   */
+  await monitorTile(page, 'Built-in Display').click();
+  await expect(mirror).toHaveAttribute('aria-checked', 'false');
+  await monitorTile(page, 'Teleprompter Display').click();
+  await expect(mirror).toHaveAttribute('aria-checked', 'true');
 });
 
 /**

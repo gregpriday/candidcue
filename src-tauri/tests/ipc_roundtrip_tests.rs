@@ -940,6 +940,14 @@ fn transcript_retention_follows_the_settings_patch_the_ui_sends() {
         "the UI's privacy patch must reach `general.saveTranscript`; without this \
          mapping the retention setting could not be changed at all"
     );
+    // The same captured patch carries a panel's mirroring (#206). Without the
+    // field on `OpticalSettings` serde would drop it silently and every
+    // mirror the operator set would revert on the next read.
+    assert_eq!(
+        updated["value"]["optical"]["panelMirror"]["dsp-1"],
+        json!({ "horizontal": true, "vertical": false }),
+        "a panel's mirroring must survive the real command and read back"
+    );
 
     let after = h.expect_ok("start_session", start);
     assert_eq!(

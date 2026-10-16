@@ -16,13 +16,18 @@ import {
   installLiveSettingsFollow,
   session,
   startLiveSession,
+  toggleStageMirror,
 } from '../../../src/control/stores/session';
 import { adoptSettings, patchSettings, settings } from '../../../src/control/stores/settings';
 import {
   buildStageEnvelope,
   stageSettingsFromSettings,
 } from '../../../src/control/services/stage-envelope';
-import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import {
+  defaultAppSettings,
+  withPanelMirror,
+} from '../../../src/control/services/settings-types';
+import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 import type { CompiledScript, StageSessionEnvelope } from '../../../src/shared/contracts';
 
 const SETTINGS = defaultAppSettings();
@@ -66,6 +71,66 @@ function start(): void {
     stageEnvelope: envelopeFor(stageSettings),
     teleprompter: SETTINGS.teleprompter,
   });
+}
+
+/**
+ * A plain desk monitor, and the glass panel beside it. Neither reports a
+ * physical size, so neither resolves optics — these are about the mirror.
+ */
+const DESK: DisplayDescriptor = {
+  id: 'display-1',
+  name: 'Desk monitor',
+  primary: true,
+  physicalPosition: { x: 0, y: 0 },
+  physicalSize: { width: 2560, height: 1440 },
+  logicalSize: { width: 2560, height: 1440 },
+  scaleFactor: 1,
+  fingerprint: 'panel-desk',
+  topologyHash: 'topology-1',
+};
+const GLASS: DisplayDescriptor = { ...DESK, id: 'display-2', primary: false, fingerprint: 'panel-glass' };
+
+/** A prompter take, opened on `display`. */
+function startOn(display: DisplayDescriptor): void {
+  const stageSettings = stageSettingsFromSettings(get(settings), display);
+  startLiveSession({
+    scriptId: 'script-1',
+    scriptTitle: 'Launch video',
+    mode: 'manual',
+    displayLabel: 'This window',
+    outline: [],
+    sentences: [],
+    totalTokens: 200,
+    stageSettings,
+    stageEnvelope: envelopeFor(stageSettings),
+    teleprompter: SETTINGS.teleprompter,
+    presentationMode: 'prompter',
+    stageDisplay: display,
+  });
+}
+
+/**
+ * One panel's mirroring saved in the Settings window, arriving here.
+ *
+ * As a BROADCAST, which is how it reaches the take in the shipped app:
+ * Settings is its own window, so its save is Rust's document handed to this
+ * one. It is also the only route that works in this file once
+ * "follows a document adopted from the other window" has moved the store's
+ * revision past the in-memory backend's.
+ */
+function savePanelMirror(display: DisplayDescriptor, horizontal: boolean, vertical = false): void {
+  const current = get(settings);
+  const document = broadcast(current.revision + 1, current.teleprompter.fixedSpeedWpm) as {
+    value: Record<string, unknown>;
+  };
+  document.value['optical'] = {
+    migrated: true,
+    profiles: {},
+    activeRig: {},
+    panelMirror: withPanelMirror(current.optical, display.fingerprint, { horizontal, vertical })
+      .panelMirror,
+  };
+  expect(adoptSettings(document)).toBe(true);
 }
 
 /** What the embedded stage renderer is hydrated from. */
@@ -252,5 +317,63 @@ describe('saved settings follow into the running take', () => {
     await patchSettings('teleprompter', { fontSizePx: 96 });
 
     expect(rendered().fontSizePx).toBe(before);
+  });
+});
+
+/*
+ * Mirroring is per panel (#206), so a switch thrown in Settings mid-take is a
+ * statement about ONE panel's glass — it reaches the take only if that is the
+ * panel the take is on.
+ */
+describe("a panel's saved mirroring, mid-take", () => {
+  it('reaches a take running on that panel', () => {
+    startOn(GLASS);
+    teardown = installLiveSettingsFollow();
+    expect(rendered().mirrorX).toBe(false);
+
+    savePanelMirror(GLASS, true);
+
+    expect(rendered().mirrorX).toBe(true);
+  });
+
+  it("leaves a take on another panel alone — that is not this take's glass", () => {
+    startOn(DESK);
+    teardown = installLiveSettingsFollow();
+
+    savePanelMirror(GLASS, true);
+
+    expect(rendered().mirrorX).toBe(false);
+  });
+
+  it('keeps a live flip through a change to some other panel', () => {
+    startOn(DESK);
+    teardown = installLiveSettingsFollow();
+    toggleStageMirror('x');
+    expect(rendered().mirrorX).toBe(true);
+
+    savePanelMirror(GLASS, false);
+
+    expect(rendered().mirrorX).toBe(true);
+  });
+
+  it("replaces a live flip when the take's own panel is changed in Settings", () => {
+    /*
+     * The same rule as a slider: a value saved for the field the take nudged
+     * replaces the nudge. Otherwise switching the mirror on in Settings would
+     * do nothing to a take that had been flipped off on the glass.
+     */
+    savePanelMirror(GLASS, true);
+    startOn(GLASS);
+    teardown = installLiveSettingsFollow();
+    // A vertical flip on the glass: the take now runs both axes.
+    toggleStageMirror('y');
+    expect(rendered().mirrorX).toBe(true);
+    expect(rendered().mirrorY).toBe(true);
+
+    savePanelMirror(GLASS, false);
+
+    // The saved answer, not the flip laid over the old one.
+    expect(rendered().mirrorX).toBe(false);
+    expect(rendered().mirrorY).toBe(false);
   });
 });

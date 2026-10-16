@@ -420,8 +420,9 @@ export interface AutomaticProfileSeed {
  * it is one.
  *
  * Everything discovery cannot know is left at the defaults a fresh rig gets:
- * the whole panel visible, no flips (the mirror comes from Settings, as it does
- * for every rig), the lens behind the glass a little above centre. Those are
+ * the whole panel visible, no flips (the mirror is the panel's own, from
+ * Settings, as it is for every rig), the lens behind the glass a little above
+ * centre. Those are
  * the same defaults the calibration wizard opens with, so a presenter who
  * later walks the wizard starts from exactly what they have been reading off.
  *
