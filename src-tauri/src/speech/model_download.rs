@@ -54,8 +54,6 @@
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{
@@ -115,26 +113,61 @@ pub enum Phase {
 
 /// Cooperative cancellation.
 ///
-/// A flag rather than a `CancellationToken`: `tokio-util` is not in this tree
-/// and the whole requirement is one boolean read per chunk.
+/// A `watch` channel rather than a `CancellationToken`: `tokio-util` is not in
+/// this tree. It used to be a bare flag, read once per chunk — and a stalled
+/// origin never delivers the next chunk, so Stop waited out the whole
+/// `IDLE_TIMEOUT` and then surfaced as a download failure. The channel keeps
+/// the synchronous read the blocking phases poll, and adds a wait the network
+/// awaits can race (see `race`).
+///
+/// Clones share one channel, so the manager's copy stops the task's.
 #[derive(Debug, Clone, Default)]
-pub struct CancelFlag(Arc<AtomicBool>);
+pub struct CancelFlag(tokio::sync::watch::Sender<bool>);
 
 impl CancelFlag {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        // `send_replace`, not `send`: `send` stores nothing when no receiver
+        // exists, and nothing is subscribed between two network waits — a
+        // Stop pressed then would be lost.
+        self.0.send_replace(true);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        *self.0.borrow()
     }
     fn check(&self) -> Result<(), AppError> {
         if self.is_cancelled() {
             Err(cancelled())
         } else {
             Ok(())
+        }
+    }
+
+    /// Resolves once `cancel` has been called, at once if it already has.
+    async fn cancelled_wait(&self) {
+        // `wait_for` tests the current value before it waits, so a Stop that
+        // landed before this subscribed is seen rather than missed. The
+        // channel cannot close while `self` holds its sender, and the borrow
+        // it returns is dropped here rather than held.
+        let mut receiver = self.0.subscribe();
+        let _ = receiver.wait_for(|cancelled| *cancelled).await;
+    }
+
+    /// Run one network wait, unless Stop is pressed first.
+    ///
+    /// Only ever a wait: the work is dropped where it stands when Stop wins,
+    /// so it must not be holding anything half-done. A pending request or
+    /// chunk read qualifies — dropping it closes the connection and nothing
+    /// on disk moves. A file write would not, and is never raced.
+    async fn race<T>(&self, work: impl std::future::Future<Output = T>) -> Result<T, AppError> {
+        tokio::select! {
+            // Stop first, so a cancel already made beats work that happens to
+            // be ready on the same poll.
+            biased;
+            () = self.cancelled_wait() => Err(cancelled()),
+            out = work => Ok(out),
         }
     }
 }
@@ -547,8 +580,18 @@ async fn fetch_archive(
     // resumable prefix, and upstream — whose url that prefix does not match —
     // can then fail to connect for the same reason the mirror dropped.
     // Deleting first would lose the prefix to a request that never started.
+    //
+    // Raced as a whole, because every await in it can sit on a dead network
+    // for its own timeout: the DNS lookup, the connect, and the wait for
+    // headers, once per redirect hop. A Stop here is `Interrupted` like any
+    // other request that never got going, so the partial survives it.
+    let transfer = cancel
+        .race(open_transfer(url, from, validator.as_deref(), policy))
+        .await
+        .map_err(FetchFailure::Interrupted)??;
+    // The open below can truncate the partial. A Stop that landed just as the
+    // headers did must not cost it for a transfer that is not going to run.
     cancel.check().map_err(FetchFailure::Interrupted)?;
-    let transfer = open_transfer(url, from, validator.as_deref(), policy).await?;
     if transfer.start == 0 {
         // The origin restarted us: it ignores ranges, or the asset changed
         // under `If-Range`. Either way the bytes on disk are not a prefix of
@@ -621,9 +664,26 @@ async fn fetch_archive(
     let mut last_report = std::time::Instant::now();
     on_progress(Phase::Downloading, written, expected);
     loop {
-        cancel.check().map_err(FetchFailure::Interrupted)?;
-        let chunk = match response.chunk().await {
-            Ok(chunk) => chunk,
+        let chunk = match cancel.race(response.chunk()).await {
+            // Stopped — and not only between chunks. A stalled origin never
+            // sends the next one, and a Stop that waited for it waited out the
+            // whole IDLE_TIMEOUT and was then reported as a failed download.
+            //
+            // Flushed like any kept partial, but NOT through `keep_partial`:
+            // a Stop stays a stop. A flush that fails here would otherwise
+            // tell the user their own Stop failed and throw away what
+            // arrived. Bytes that never reached the disk are the archive
+            // digest's to catch, as after a power cut.
+            Err(stopped) => {
+                if let Err(err) = file.sync_all() {
+                    tracing::warn!(
+                        error = %err,
+                        "could not flush a stopped download — keeping it for the digest to judge"
+                    );
+                }
+                return Err(FetchFailure::Interrupted(stopped));
+            }
+            Ok(Ok(chunk)) => chunk,
             // The connection dropped, the laptop slept, or nothing arrived for
             // IDLE_TIMEOUT. Every byte written so far is a byte the origin sent
             // in order, and nothing has judged any of them — so they are kept
@@ -638,8 +698,8 @@ async fn fetch_archive(
             // digest there, and be discarded in a turn that never fetched — so
             // a mirror that sent the right number of wrong bytes and then
             // errored would stop upstream from ever being asked.
-            Err(_) if written == expected => break,
-            Err(e) => {
+            Ok(Err(_)) if written == expected => break,
+            Ok(Err(e)) => {
                 return Err(keep_partial(
                     file,
                     download_failed(format!("stream failed: {e}")),
@@ -1347,7 +1407,8 @@ mod tests {
     use crate::speech::catalogue::{Archive, Attribution, License, ModelFile};
     use std::io::Write as _;
     use std::net::TcpListener;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
 
     /// The four files a fixture model is made of. Small enough that a whole
     /// install runs in milliseconds, real enough that `ModelFiles::detect`
@@ -1466,6 +1527,13 @@ mod tests {
     /// How many pieces `Behaviour::Slow` dribbles a body out in.
     const SLOW_PIECES: usize = 8;
 
+    /// How long a stalled origin holds its connection open in silence.
+    ///
+    /// Past `IDLE_TIMEOUT`, so a client that cannot stop is ended by its own
+    /// read timeout — the bug — rather than by the fixture giving up first.
+    /// A client that CAN stop hangs up, which releases the hold at once.
+    const STALL_HOLD: Duration = Duration::from_secs(60);
+
     /// How the origin should behave, per test.
     #[derive(Clone, Copy, PartialEq)]
     enum Behaviour {
@@ -1501,6 +1569,12 @@ mod tests {
         /// Answers 416 to everything, as an origin does when asked to resume
         /// past the end of what it has.
         RangeNotSatisfiable,
+        /// Promises the whole body, sends it up to this archive offset, then
+        /// goes silent with the connection still open. Not a drop: nothing
+        /// ends, so only the client's idle timeout — or a Stop — can.
+        StallsAt(usize),
+        /// Takes the request and never answers it, not even with headers.
+        Silent,
     }
 
     /// What the origin was actually asked, so a test can prove a request was
@@ -1623,6 +1697,11 @@ mod tests {
                         if_range: if_range.clone(),
                     });
 
+                    if behaviour == Behaviour::Silent {
+                        hold_until_hangup(&mut stream);
+                        continue;
+                    }
+
                     let refusal = match behaviour {
                         Behaviour::Unavailable => Some(
                             "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -1704,7 +1783,9 @@ mod tests {
                     // What actually goes on the wire, which for a dropped
                     // connection is less than the head promised.
                     let sent = match behaviour {
-                        Behaviour::DropsAt(at) | Behaviour::UnframedDropsAt(at) => {
+                        Behaviour::DropsAt(at)
+                        | Behaviour::UnframedDropsAt(at)
+                        | Behaviour::StallsAt(at) => {
                             &slice[..at.saturating_sub(start).min(slice.len())]
                         }
                         _ => slice,
@@ -1730,7 +1811,9 @@ mod tests {
                     }
                     served.fetch_add(sent.len() as u64, Ordering::SeqCst);
                     let _ = stream.flush();
-                    if sent.len() < slice.len() {
+                    if matches!(behaviour, Behaviour::StallsAt(_)) {
+                        hold_until_hangup(&mut stream);
+                    } else if sent.len() < slice.len() {
                         // Hang up cleanly and wait for the client to notice,
                         // so what it sees is the body ending early rather than
                         // a reset that could discard bytes it has not yet read
@@ -1767,6 +1850,26 @@ mod tests {
             HopPolicy {
                 labels: MODEL_HOP_LABELS,
                 exempt_authority: Some(format!("127.0.0.1:{}", self.port)),
+            }
+        }
+    }
+
+    /// Keep a connection open and silent until the client hangs up.
+    ///
+    /// Reads, which return the moment the client closes its end (or resets
+    /// it) and otherwise after `STALL_HOLD`. Sleeping instead would hold the
+    /// origin's only thread for the full stall even after the client had gone,
+    /// and the request that resumes the download would queue behind it. Bytes
+    /// that do arrive are the tail of a request the first read did not take
+    /// whole, and are not a hangup.
+    fn hold_until_hangup(stream: &mut std::net::TcpStream) {
+        let deadline = std::time::Instant::now() + STALL_HOLD;
+        let _ = stream.set_read_timeout(Some(STALL_HOLD));
+        let mut scrap = [0u8; 512];
+        while std::time::Instant::now() < deadline {
+            match std::io::Read::read(stream, &mut scrap) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => continue,
             }
         }
     }
@@ -2182,7 +2285,7 @@ mod tests {
         //
         // The origin paces itself — SLOW_PIECES writes with a 60 ms gap, so
         // the body cannot arrive in under ~480 ms however fast the client is —
-        // and the chunk loop checks the flag before every read. Firing well
+        // and the chunk loop races every read against the flag. Firing well
         // inside that window therefore lands mid-transfer by construction.
         // Triggering off a progress report instead made the test depend on
         // PROGRESS_INTERVAL, which is a throttle that exists for the UI and is
@@ -2231,6 +2334,230 @@ mod tests {
             origin.seen().get(1).and_then(|r| r.range_from),
             Some(kept),
             "the second run must resume from exactly what was kept"
+        );
+    }
+
+    /// How soon after Stop a stopped install must have returned.
+    ///
+    /// "A moment", given room for a loaded test machine. What matters is that
+    /// it is far inside `IDLE_TIMEOUT`, which is what a Stop on a stalled
+    /// connection used to wait out before reporting a failure.
+    const STOP_WITHIN: Duration = Duration::from_secs(2);
+
+    /// How long a stalled-install test waits before failing outright, so a
+    /// Stop that does nothing fails in seconds rather than after the idle
+    /// timeout.
+    const STALL_WATCHDOG: Duration = Duration::from_secs(10);
+
+    /// Press Stop once `parked` says the install is waiting on the network,
+    /// and report when it was pressed.
+    ///
+    /// Keyed to what the install has DONE rather than to a bare timer, so the
+    /// Stop lands in the wait under test and not before it. The short pause
+    /// after is so that, all but certainly, it is the parked wait that is
+    /// woken rather than the one about to begin — which even a flag read only
+    /// between waits would catch.
+    fn stop_once(
+        cancel: &CancelFlag,
+        parked: impl Fn() -> bool + Send + 'static,
+    ) -> tokio::task::JoinHandle<std::time::Instant> {
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            let deadline = std::time::Instant::now() + STALL_WATCHDOG;
+            while !parked() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the install never reached the stall"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Read before pressing, so a fast return cannot land ahead of it
+            // and understate how long the Stop took.
+            let pressed = std::time::Instant::now();
+            trigger.cancel();
+            pressed
+        })
+    }
+
+    /// A Stop made while nothing is waiting for it is not lost — nothing is
+    /// subscribed between two network waits — and it beats a wait that is
+    /// already finished.
+    #[tokio::test]
+    async fn a_stop_made_before_the_wait_still_ends_it() {
+        let cancel = CancelFlag::new();
+        cancel.clone().cancel();
+        assert!(cancel.is_cancelled());
+        assert!(cancel.check().is_err_and(|err| is_cancelled_error(&err)));
+
+        let raced = tokio::time::timeout(
+            Duration::from_secs(5),
+            cancel.race(std::future::pending::<()>()),
+        )
+        .await
+        .expect("a Stop already made must end the wait at once");
+        assert!(raced.is_err_and(|err| is_cancelled_error(&err)));
+        // Ready on the same poll, and still second: a chunk that happens to
+        // be buffered must not carry a stopped transfer one more step.
+        assert!(cancel.race(std::future::ready(7)).await.is_err());
+        // And it stays made, for every wait after.
+        assert!(cancel.race(std::future::ready(7)).await.is_err());
+    }
+
+    /// A Stop wakes a wait that is already parked, which is the whole point:
+    /// a stalled origin never wakes it any other way.
+    #[tokio::test]
+    async fn a_stop_during_the_wait_ends_it() {
+        let cancel = CancelFlag::new();
+        assert_eq!(cancel.race(std::future::ready(7)).await.unwrap(), 7);
+
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            trigger.cancel();
+        });
+        let raced = tokio::time::timeout(
+            Duration::from_secs(5),
+            cancel.race(std::future::pending::<()>()),
+        )
+        .await
+        .expect("a Stop must wake a wait that nothing else will");
+        assert!(raced.is_err_and(|err| is_cancelled_error(&err)));
+    }
+
+    /// Stop on a transfer that has stalled — headers and a prefix arrived,
+    /// then silence on an open connection — ends at once, as a stop, keeping
+    /// exactly what arrived. It used to wait out `IDLE_TIMEOUT` with the
+    /// status still saying "downloading", and then report a failed download
+    /// for something the user had asked for.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stopping_a_stalled_transfer_is_prompt_and_the_next_run_resumes_it() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let at = archive.len() / 2;
+        let origin = MockOrigin::start_scripted(
+            archive.clone(),
+            vec![Behaviour::StallsAt(at), Behaviour::Ranged],
+        );
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        let (part, sidecar) = download_files(temp.path(), &model);
+
+        let cancel = CancelFlag::new();
+        let stopper = {
+            let part = part.clone();
+            stop_once(&cancel, move || {
+                std::fs::metadata(&part).is_ok_and(|m| m.len() == at as u64)
+            })
+        };
+        let phases = PhaseLog::default();
+        let err = tokio::time::timeout(
+            STALL_WATCHDOG,
+            install(
+                temp.path(),
+                &catalogue,
+                &catalogue.models[0],
+                &origin.policy(),
+                &cancel,
+                &phases.sink(),
+            ),
+        )
+        .await
+        .expect("Stop must end a stalled transfer, not leave it to the idle timeout")
+        .expect_err("a stopped install must not report success");
+        let returned = std::time::Instant::now();
+        let pressed = stopper.await.unwrap();
+
+        assert!(
+            is_cancelled_error(&err),
+            "a Stop must end as a stop: {err:?}"
+        );
+        let took = returned.duration_since(pressed);
+        assert!(took < STOP_WITHIN, "Stop took {took:?}");
+        assert!(!phases.saw(Phase::VerifyingArchive));
+        // Exactly what arrived, and the sidecar that makes it resumable.
+        assert_eq!(std::fs::read(&part).unwrap(), &archive[..at]);
+        assert!(
+            read_resume(&sidecar).is_some(),
+            "a Stop must keep the sidecar"
+        );
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("the stopped download must be resumable");
+        let resumed = origin.seen().get(1).cloned().unwrap_or_default();
+        assert_eq!(resumed.range_from, Some(at as u64));
+        assert_eq!(resumed.if_range.as_deref(), Some(FIXTURE_ETAG));
+    }
+
+    /// Stop while the origin has the request and has not answered — the wait
+    /// for headers inside `open_transfer`, which the chunk loop never covered
+    /// — is just as prompt, and costs nothing: the partial that request was
+    /// resuming is left exactly as it was, sidecar and all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stopping_before_the_origin_answers_is_prompt_and_keeps_the_partial() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let at = archive.len() / 2;
+        let origin =
+            MockOrigin::start_scripted(archive.clone(), vec![Behaviour::Silent, Behaviour::Ranged]);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+        seed_partial(temp.path(), &model, &archive[..at], &origin.url("/archive"));
+        let (part, sidecar) = download_files(temp.path(), &model);
+        let sidecar_before = std::fs::read(&sidecar).unwrap();
+
+        let cancel = CancelFlag::new();
+        let stopper = {
+            let requests = Arc::clone(&origin.requests);
+            stop_once(&cancel, move || requests.load(Ordering::SeqCst) >= 1)
+        };
+        let err = tokio::time::timeout(
+            STALL_WATCHDOG,
+            install(
+                temp.path(),
+                &catalogue,
+                &catalogue.models[0],
+                &origin.policy(),
+                &cancel,
+                &no_progress(),
+            ),
+        )
+        .await
+        .expect("Stop must end a request the origin never answers")
+        .expect_err("a stopped install must not report success");
+        let returned = std::time::Instant::now();
+        let pressed = stopper.await.unwrap();
+
+        assert!(
+            is_cancelled_error(&err),
+            "a Stop must end as a stop: {err:?}"
+        );
+        let took = returned.duration_since(pressed);
+        assert!(took < STOP_WITHIN, "Stop took {took:?}");
+        // The request held was the resume, so the stop really did land
+        // between asking and being answered.
+        assert_eq!(
+            origin.seen().first().and_then(|r| r.range_from),
+            Some(at as u64)
+        );
+        assert_eq!(std::fs::read(&part).unwrap(), &archive[..at]);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_before);
+
+        install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
+            .await
+            .expect("the partial a Stop left must still resume");
+        assert_eq!(
+            origin.seen().get(1).and_then(|r| r.range_from),
+            Some(at as u64)
         );
     }
 
