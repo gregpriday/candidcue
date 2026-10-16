@@ -280,9 +280,10 @@ describe('availability by route', () => {
     ).toBe(false);
   });
 
-  it('offers Show Outline only over an editor that is showing one', () => {
+  it('offers Show Outline only over a loaded editor, whether the outline is shown or hidden', () => {
     const editor = context({ route: { name: 'editor', scriptId: 'a' }, scriptOpen: true });
     expect(COMMANDS['view.toggle-outline'].available(editor)).toBe(true);
+    expect(COMMANDS['view.toggle-outline'].available({ ...editor, outlineVisible: false })).toBe(true);
     // The editor route before its document arrives has no outline yet.
     expect(COMMANDS['view.toggle-outline'].available({ ...editor, scriptOpen: false })).toBe(false);
     expect(COMMANDS['view.toggle-outline'].available(context())).toBe(false);
@@ -296,7 +297,7 @@ describe('availability by route', () => {
     expect(COMMANDS['view.toggle-outline'].available({ ...editor, takeStarting: true })).toBe(false);
   });
 
-  it('does not run Show Outline from its accelerator while it is unavailable', () => {
+  it('does not dispatch Show Outline while it is unavailable', () => {
     const { calls, actions } = recordingActions();
     expect(runCommand('view.toggle-outline', actions, LIVE)).toBe(false);
     expect(calls).toEqual([]);
@@ -305,6 +306,7 @@ describe('availability by route', () => {
   it('offers no Show Diagnostics: the panel it toggled is never on screen', () => {
     expect((COMMAND_IDS as readonly string[]).includes('view.toggle-diagnostics')).toBe(false);
     expect(Object.keys(COMMANDS)).not.toContain('view.toggle-diagnostics');
+    expect(menuStateFor(LIVE).map((item) => item.id)).not.toContain('view.toggle-diagnostics');
   });
 
   it('does not start a new script from inside the calibration wizard', () => {

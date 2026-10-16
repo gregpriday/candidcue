@@ -34,17 +34,27 @@
    * select is the one fallback whose success they can see for themselves.
    */
   let manualPayload = $state<string | null>(null);
+  /**
+   * Which copy is allowed to report. Only the newest one is: a slow, older
+   * `writeText` settling after a newer one would otherwise replace its result
+   * with an older snapshot, and one settling after a session change would
+   * describe the previous take under the next.
+   */
+  let copyRequest = 0;
 
   /*
-   * Both describe ONE export of ONE take. Live outlives a session ("Present
-   * again" builds the next take inside it), so without this a "Copied." from
-   * the last take would sit under the next one. Keyed on a derived because the
-   * `follow` prop is a fresh object on every snapshot, and an effect reading it
-   * directly would wipe the note within a frame of writing it.
+   * The note and the fallback describe ONE export of ONE take, so a new session
+   * clears them. A normal take mounts this afresh (ending one navigates away
+   * from Live), so this is what keeps the component honest when an instance IS
+   * handed a second session rather than the path every take takes. Keyed on a
+   * derived because the `follow` prop is a fresh object on every snapshot, and
+   * an effect reading it directly would wipe the note within a frame of writing
+   * it.
    */
   const sessionId = $derived(follow.sessionId);
   $effect(() => {
     void sessionId;
+    copyRequest += 1;
     exportNote = '';
     manualPayload = null;
   });
@@ -55,15 +65,18 @@
   const recentTimeline = $derived([...follow.timeline].reverse().slice(0, 40));
 
   async function copyDiagnostics(): Promise<void> {
+    const request = ++copyRequest;
     const payload = JSON.stringify(smoothFollow.exportDiagnostics(), null, 2);
     try {
       if (typeof navigator === 'undefined' || !navigator.clipboard) {
         throw new Error('clipboard unavailable');
       }
       await navigator.clipboard.writeText(payload);
+      if (request !== copyRequest) return;
       manualPayload = null;
       exportNote = 'Copied. Paste it into a bug report — it contains no script or transcript text.';
     } catch {
+      if (request !== copyRequest) return;
       manualPayload = payload;
       exportNote =
         'Could not copy to the clipboard. Select the text below and copy it — it contains no script or transcript text.';
@@ -138,7 +151,8 @@
 
     <div class="actions">
       <Button size="sm" onclick={() => void copyDiagnostics()}>Copy diagnostics</Button>
-      {#if exportNote}<span class="note">{exportNote}</span>{/if}
+      <!-- Always mounted, so the result is announced: focus stays on the button. -->
+      <span class="note" role="status">{exportNote}</span>
     </div>
     {#if manualPayload !== null}
       <textarea

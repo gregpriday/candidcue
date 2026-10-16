@@ -2216,10 +2216,12 @@ import { onShortcut } from '../lib/shortcuts';
    * looks like a bug the first time it happens, and there was no way to ask for
    * it back.
    *
-   * Both rails are now dragged, remembered, and toggled from View (⌥⌘O and
-   * ⌥⌘D). The stage preview keeps `flex: 1 1 auto` with `min-width: 0`, so it
-   * takes what is left and shrinks last — §12.2's rule that the least critical
-   * pane collapses before the preview stops being useful.
+   * Both rails are now dragged and remembered. They are not toggled from View:
+   * a take replaces this console with the stage, so a menu item for them would
+   * describe a pane nobody can see (#236). The stage preview keeps
+   * `flex: 1 1 auto` with `min-width: 0`, so it takes what is left and shrinks
+   * last — §12.2's rule that the least critical pane collapses before the
+   * preview stops being useful.
    */
   .main {
     flex: 1 1 auto;
