@@ -126,3 +126,90 @@ test('Close Window during a take closes the window once the take is ended', asyn
    */
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
 });
+
+test('Space on Cancel answers the dialog, not the stage underneath it', async ({ page }) => {
+  /*
+   * The stage listens for keys on the WINDOW, so it hears every keystroke in
+   * the document unless Live says chrome owns the keyboard. Live used to say so
+   * only for questions it raised itself — and this one is raised by App. Space
+   * on Cancel then toggled pause and `preventDefault()`ed the button's own
+   * activation: the dialog stayed up and the take paused underneath it.
+   */
+  await present(page);
+  await chooseMenuCommand(page, 'file.close-script');
+
+  const dialog = page.getByRole('dialog', { name: 'End this take?' });
+  await dialog.getByRole('button', { name: 'Cancel' }).focus();
+  await page.keyboard.press('Space');
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+  expect(await closeRequests(page)).toBe(0);
+});
+
+test('a refused close says so, and Close Window works again afterwards', async ({ page }) => {
+  // The whole bug was a refusal nobody heard about.
+  await page.evaluate(() =>
+    window.__E2E__.setFail('close_control_window', {
+      code: 'WINDOW_CLOSE_FAILED',
+      category: 'internal',
+      userMessage: 'The window could not be closed.',
+      recoverable: true,
+      correlationId: 'e2e-close',
+    }),
+  );
+  await chooseMenuCommand(page, 'file.close-script');
+
+  await expect(page.getByRole('alert')).toContainText(
+    'The window could not be closed. Quit CandidCue instead.',
+  );
+  await expect(collection(page)).toBeVisible();
+
+  // A failure must not leave the close "in flight" for the life of the window.
+  await page.evaluate(() => window.__E2E__.setFail('close_control_window', null));
+  await chooseMenuCommand(page, 'file.close-script');
+  await expect.poll(() => closeRequests(page)).toBe(2);
+});
+
+test('End Take raised over Close Window cancels it, and ⌘W still works', async ({ page }) => {
+  /*
+   * The native menu does not wait for a dialog to be answered, so ⌘. can put
+   * End Take's own question up over Close Window's. There is one sheet; the
+   * second question replaces the first — and the first used to be left
+   * PENDING, so the close flow never finished and every later ⌘W was refused
+   * as already in flight.
+   */
+  await present(page);
+  const dialog = page.getByRole('dialog', { name: 'End this take?' });
+  await chooseMenuCommand(page, 'file.close-script');
+  await expect(dialog).toBeVisible();
+
+  await chooseMenuCommand(page, 'session.end-take');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+  expect(await closeRequests(page)).toBe(0);
+
+  await chooseMenuCommand(page, 'file.close-script');
+  await dialog.getByRole('button', { name: 'End take' }).click();
+  await expect.poll(() => closeRequests(page)).toBe(1);
+});
+
+test('Close Window does not replace a question already on screen', async ({ page }) => {
+  /*
+   * End Take is asking. ⌘W must leave that question where it is: answering
+   * "End take" then ends the take through Live, as it says — it does not quit.
+   * Had Close Window replaced it, the same click would have closed the window
+   * with the take still up.
+   */
+  await present(page);
+  const dialog = page.getByRole('dialog', { name: 'End this take?' });
+  await chooseMenuCommand(page, 'session.end-take');
+  await expect(dialog).toBeVisible();
+
+  await chooseMenuCommand(page, 'file.close-script');
+  await dialog.getByRole('button', { name: 'End take' }).click();
+
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
+  expect(await closeRequests(page)).toBe(0);
+});

@@ -1190,7 +1190,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       // take and awaits its writes; doing it twice would race the two.
       await closeControlWindow();
     } catch (err) {
-      showToast(`The window could not be closed. ${describeError(err)}`, 'danger');
+      showToast(describeError(err), 'danger');
     } finally {
       windowCloseInFlight = false;
     }

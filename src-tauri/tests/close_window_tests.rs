@@ -17,10 +17,11 @@ use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
-use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{WebviewWindow, WebviewWindowBuilder};
 
 struct Harness {
-    app: tauri::App<MockRuntime>,
+    /// Held so the windows outlive the builder; nothing reads it.
+    _app: tauri::App<MockRuntime>,
     control: WebviewWindow<MockRuntime>,
     preferences: WebviewWindow<MockRuntime>,
 }
@@ -45,7 +46,7 @@ fn harness() -> Harness {
     .build()
     .expect("mock preferences webview");
     Harness {
-        app,
+        _app: app,
         control,
         preferences,
     }
@@ -67,6 +68,9 @@ fn invoke(from: &WebviewWindow<MockRuntime>, command: &str) -> Result<Value, Val
     .map(|body| body.deserialize::<Value>().expect("response is json"))
 }
 
+/// Binding coverage, and only that: the frontend's argument-free call reaches
+/// the command and is accepted. Whether a close was then REQUESTED is not
+/// observable here — see the note at the top of the file.
 #[test]
 fn control_can_ask_to_close_itself_with_no_arguments() {
     let h = harness();
@@ -83,15 +87,12 @@ fn settings_cannot_use_it_to_quit_the_app() {
     let h = harness();
     let error = invoke(&h.preferences, "close_control_window")
         .expect_err("a close requested from Settings must be refused");
+    // The code is the whole assertion. "Control is still there" would read as
+    // more and prove nothing: MockRuntime never processes a close, so the
+    // window would still be listed if the refusal had closed it anyway.
     assert_eq!(
         error.get("code").and_then(Value::as_str),
         Some("WINDOW_CLOSE_REFUSED"),
         "unexpected error shape: {error}"
-    );
-    assert!(
-        h.app
-            .get_webview_window(candidcue_lib::windows::CONTROL_LABEL)
-            .is_some(),
-        "the refusal must not have touched the document window"
     );
 }
