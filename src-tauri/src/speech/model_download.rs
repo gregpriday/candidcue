@@ -2472,13 +2472,19 @@ mod tests {
         let returned = std::time::Instant::now();
         let pressed = stopper.await.unwrap();
 
-        assert!(is_cancelled_error(&err), "a Stop must end as a stop: {err:?}");
+        assert!(
+            is_cancelled_error(&err),
+            "a Stop must end as a stop: {err:?}"
+        );
         let took = returned.duration_since(pressed);
         assert!(took < STOP_WITHIN, "Stop took {took:?}");
         assert!(!phases.saw(Phase::VerifyingArchive));
         // Exactly what arrived, and the sidecar that makes it resumable.
         assert_eq!(std::fs::read(&part).unwrap(), &archive[..at]);
-        assert!(read_resume(&sidecar).is_some(), "a Stop must keep the sidecar");
+        assert!(
+            read_resume(&sidecar).is_some(),
+            "a Stop must keep the sidecar"
+        );
 
         install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
             .await
@@ -2497,10 +2503,8 @@ mod tests {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let at = archive.len() / 2;
-        let origin = MockOrigin::start_scripted(
-            archive.clone(),
-            vec![Behaviour::Silent, Behaviour::Ranged],
-        );
+        let origin =
+            MockOrigin::start_scripted(archive.clone(), vec![Behaviour::Silent, Behaviour::Ranged]);
         let model = aimed_at(
             fixture_entry(&archive, &files, "bundle-root"),
             origin.url("/archive"),
@@ -2533,19 +2537,28 @@ mod tests {
         let returned = std::time::Instant::now();
         let pressed = stopper.await.unwrap();
 
-        assert!(is_cancelled_error(&err), "a Stop must end as a stop: {err:?}");
+        assert!(
+            is_cancelled_error(&err),
+            "a Stop must end as a stop: {err:?}"
+        );
         let took = returned.duration_since(pressed);
         assert!(took < STOP_WITHIN, "Stop took {took:?}");
         // The request held was the resume, so the stop really did land
         // between asking and being answered.
-        assert_eq!(origin.seen().first().and_then(|r| r.range_from), Some(at as u64));
+        assert_eq!(
+            origin.seen().first().and_then(|r| r.range_from),
+            Some(at as u64)
+        );
         assert_eq!(std::fs::read(&part).unwrap(), &archive[..at]);
         assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_before);
 
         install_once(temp.path(), &catalogue, &origin.policy(), &no_progress())
             .await
             .expect("the partial a Stop left must still resume");
-        assert_eq!(origin.seen().get(1).and_then(|r| r.range_from), Some(at as u64));
+        assert_eq!(
+            origin.seen().get(1).and_then(|r| r.range_from),
+            Some(at as u64)
+        );
     }
 
     /// The partial archive and its resume sidecar, where `install` keeps them.
