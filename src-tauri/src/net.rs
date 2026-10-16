@@ -55,19 +55,25 @@ pub enum Deadline {
     Idle(Duration),
 }
 
-/// How a caller names a refusal.
+/// How a caller names a refusal — and a host it could not reach.
 ///
 /// Parameterised rather than fixed because an error code is a contract: images
 /// have reported `ASSET_URL_BLOCKED` since spec §24.2, that code reaches a
 /// support bundle and the Settings error list, and a shared guard is not a
 /// reason to renumber it. The checks are identical for every caller; only the
 /// label on the way out differs.
+///
+/// `unreachable_*` is not a refusal. A lookup that fails is what a machine with
+/// no network sees first, and telling that user the address was refused (or
+/// that the release is broken) hides the one remedy that works: getting online.
 #[derive(Debug, Clone, Copy)]
 pub struct HopLabels {
     pub insecure_code: &'static str,
     pub insecure_message: &'static str,
     pub blocked_code: &'static str,
     pub blocked_message: &'static str,
+    pub unreachable_code: &'static str,
+    pub unreachable_message: &'static str,
 }
 
 /// Per-hop policy. Production carries no exemption at all; the only variation
@@ -116,6 +122,38 @@ pub fn blocked_url(labels: &HopLabels, reason: impl Into<String>) -> AppError {
         true,
     )
     .with_log(reason.into())
+}
+
+/// A host whose name could not be turned into an address.
+///
+/// A connection problem, not a policy decision: the guard has nothing to judge
+/// yet. It still fails closed — no address means no socket is ever opened.
+pub fn unreachable_host(labels: &HopLabels, reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        labels.unreachable_code,
+        ErrorCategory::Network,
+        labels.unreachable_message,
+        true,
+    )
+    .with_log(reason.into())
+}
+
+/// The outcome of resolving a hop, classified.
+///
+/// A resolver error and an empty answer are both "could not reach", whatever
+/// the cause. `getaddrinfo` reports no-network and no-such-host alike as an
+/// uncategorised error whose only detail is platform text, so no attempt is
+/// made to tell them apart — that text goes to the log, never to the user.
+fn resolved_addresses(
+    labels: &HopLabels,
+    resolved: std::io::Result<Vec<SocketAddr>>,
+) -> Result<Vec<SocketAddr>, AppError> {
+    let addrs = resolved
+        .map_err(|e| unreachable_host(labels, format!("dns lookup failed: {e}")))?;
+    if addrs.is_empty() {
+        return Err(unreachable_host(labels, "host resolved to no addresses"));
+    }
+    Ok(addrs)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,23 +301,20 @@ pub async fn check_hop(url: &reqwest::Url, policy: &HopPolicy) -> Result<Hop, Ap
         .to_string();
     let port = url.port_or_known_default().unwrap_or(443);
 
-    let addrs: Vec<SocketAddr> = match host.parse::<IpAddr>() {
-        Ok(ip) => vec![SocketAddr::new(ip, port)],
+    let resolved: std::io::Result<Vec<SocketAddr>> = match host.parse::<IpAddr>() {
+        Ok(ip) => Ok(vec![SocketAddr::new(ip, port)]),
         Err(_) => {
             // Strip the brackets an IPv6 literal carries in a url authority.
             let bare = host.trim_start_matches('[').trim_end_matches(']');
             match bare.parse::<IpAddr>() {
-                Ok(ip) => vec![SocketAddr::new(ip, port)],
+                Ok(ip) => Ok(vec![SocketAddr::new(ip, port)]),
                 Err(_) => tokio::net::lookup_host((bare, port))
                     .await
-                    .map_err(|e| blocked_url(labels, format!("dns lookup failed: {e}")))?
-                    .collect(),
+                    .map(|addrs| addrs.collect()),
             }
         }
     };
-    if addrs.is_empty() {
-        return Err(blocked_url(labels, "host resolved to no addresses"));
-    }
+    let addrs = resolved_addresses(labels, resolved)?;
     if !exempt {
         // ALL resolved addresses must be public. A host that answers with one
         // public and one loopback address is a rebinding attempt, not a
@@ -339,6 +374,8 @@ mod tests {
         insecure_message: "https only.",
         blocked_code: "URL_BLOCKED",
         blocked_message: "not publicly reachable.",
+        unreachable_code: "URL_UNREACHABLE",
+        unreachable_message: "check your connection.",
     };
 
     #[test]
@@ -409,5 +446,58 @@ mod tests {
             .await
             .expect_err("http must be refused");
         assert_eq!(err.code(), "URL_INSECURE", "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_url_with_no_host_is_still_refused() {
+        // Structurally unusable whatever the network is doing, so it stays a
+        // refusal rather than becoming "check your connection".
+        let url = reqwest::Url::parse("file:///tmp/model.tar.bz2").unwrap();
+        let err = check_hop(&url, &HopPolicy::strict(TEST_LABELS))
+            .await
+            .expect_err("a url with no host must be refused");
+        assert_eq!(err.code(), "URL_BLOCKED", "{err:?}");
+    }
+
+    // A real lookup of an unresolvable name is not deterministic — a captive
+    // portal or a hijacking resolver will answer for `.invalid` — so the
+    // classification is driven with the resolver outcome it would see.
+    #[test]
+    fn a_failed_dns_lookup_is_a_connection_problem_not_a_refusal() {
+        let offline = std::io::Error::other(
+            "failed to lookup address information: nodename nor servname provided, or not known",
+        );
+        let err = resolved_addresses(&TEST_LABELS, Err(offline))
+            .expect_err("a failed lookup must not resolve");
+
+        assert_eq!(err.code(), "URL_UNREACHABLE", "{err:?}");
+        assert_eq!(err.category(), ErrorCategory::Network);
+        assert!(err.recoverable(), "being offline is worth another go");
+        assert_eq!(err.user_message(), "check your connection.");
+        // The platform's wording is for the log, never for the user.
+        let logged = err.to_string();
+        assert!(logged.contains("dns lookup failed"), "{logged}");
+        assert!(logged.contains("nodename nor servname"), "{logged}");
+        assert!(!err.to_payload().user_message.contains("nodename"));
+    }
+
+    #[test]
+    fn an_empty_dns_answer_is_a_connection_problem_not_a_refusal() {
+        let err = resolved_addresses(&TEST_LABELS, Ok(Vec::new()))
+            .expect_err("no address means nothing to connect to");
+        assert_eq!(err.code(), "URL_UNREACHABLE", "{err:?}");
+        assert!(err.to_string().contains("no addresses"), "{err}");
+    }
+
+    #[test]
+    fn a_resolved_answer_is_passed_on_for_the_public_address_check() {
+        // Resolution only says "something answered"; whether it is allowed is
+        // decided after, by the same guard that refuses private literals.
+        let addrs: Vec<SocketAddr> = vec![
+            "93.184.216.34:443".parse().unwrap(),
+            "127.0.0.1:443".parse().unwrap(),
+        ];
+        let out = resolved_addresses(&TEST_LABELS, Ok(addrs.clone())).unwrap();
+        assert_eq!(out, addrs);
     }
 }

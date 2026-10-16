@@ -62,11 +62,19 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::net::{self, Deadline, HopPolicy};
 
 /// The codes the MODEL path reports a refused url under.
+///
+/// A host that cannot be reached is a download failure, not a refusal: it is
+/// what Settings › Speech shows a machine with no network, so its copy says
+/// what will fix it. The code is [`download_failed`]'s, so it reads the same as
+/// a connection dropped mid-transfer.
 pub const MODEL_HOP_LABELS: net::HopLabels = net::HopLabels {
     insecure_code: "STT_MODEL_URL_INSECURE",
     insecure_message: "Speech models can only be downloaded over https.",
     blocked_code: "STT_MODEL_URL_BLOCKED",
     blocked_message: "That model address is not publicly reachable and was refused.",
+    unreachable_code: "STT_MODEL_DOWNLOAD_FAILED",
+    unreachable_message:
+        "The speech model could not be downloaded. Check your connection and try again.",
 };
 
 /// How long a transfer may sit with NO bytes arriving before it is abandoned.
@@ -1610,6 +1618,24 @@ mod tests {
         .await
         .expect_err("plaintext loopback must be refused in production");
         assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+    }
+
+    /// Offline, the lookup is the first thing to fail. That must read as a
+    /// download failure with a remedy, never as an address the guard refused —
+    /// and its code must stay the one a dropped transfer reports.
+    #[test]
+    fn an_unreachable_model_host_is_a_download_failure_not_a_refusal() {
+        let unreachable = net::unreachable_host(&MODEL_HOP_LABELS, "dns lookup failed");
+        let dropped = download_failed("stream failed");
+
+        assert_eq!(unreachable.code(), dropped.code());
+        assert_ne!(unreachable.code(), MODEL_HOP_LABELS.blocked_code);
+        assert_eq!(unreachable.category(), dropped.category());
+        assert_eq!(unreachable.recoverable(), dropped.recoverable());
+        // Settings › Speech shows this Rust copy verbatim under "Try again".
+        let message = unreachable.user_message();
+        assert!(message.contains("Check your connection"), "{message}");
+        assert!(!message.contains("refused"), "{message}");
     }
 
     /// A partial from an interrupted run is continued, not restarted.
