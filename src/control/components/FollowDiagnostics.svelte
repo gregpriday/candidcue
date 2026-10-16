@@ -66,6 +66,9 @@
 
   async function copyDiagnostics(): Promise<void> {
     const request = ++copyRequest;
+    // Cleared first so a retry that ends the same way still changes the status
+    // region — an identical string is no update, and a screen reader hears nothing.
+    exportNote = '';
     const payload = JSON.stringify(smoothFollow.exportDiagnostics(), null, 2);
     try {
       if (typeof navigator === 'undefined' || !navigator.clipboard) {

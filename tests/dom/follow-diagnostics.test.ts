@@ -163,6 +163,43 @@ describe('Copy diagnostics', () => {
     expect(statusText(container)).toContain('Copied.');
     expect(container.querySelector('textarea')).toBeNull();
   });
+
+  it('does not let an older success paper over a newer refusal', async () => {
+    const older = deferred();
+    const writes = [older.promise, Promise.reject(new Error('NotAllowedError'))];
+    stubClipboard(() => writes.shift()!);
+    const { container } = mount();
+
+    await fireEvent.click(copyButton(container));
+    await fireEvent.click(copyButton(container));
+    await vi.waitFor(() => expect(container.querySelector('textarea')).not.toBeNull());
+
+    older.resolve();
+    await older.promise;
+    await tick();
+    expect(statusText(container)).toContain('Could not copy');
+    expect(statusText(container)).not.toContain('Copied.');
+  });
+
+  it('announces a retry that ends the same way as the copy before it', async () => {
+    stubClipboard(() => Promise.resolve());
+    const { container } = mount();
+    const status = container.querySelector('[role="status"]')!;
+    const announced: string[] = [];
+    const observer = new MutationObserver(() => {
+      const text = status.textContent?.trim() ?? '';
+      if (text) announced.push(text);
+    });
+    observer.observe(status, { childList: true, characterData: true, subtree: true });
+
+    await fireEvent.click(copyButton(container));
+    await vi.waitFor(() => expect(announced.length).toBe(1));
+    await fireEvent.click(copyButton(container));
+    await vi.waitFor(() => expect(announced.length).toBe(2));
+    observer.disconnect();
+
+    expect(announced.every((text) => text.startsWith('Copied.'))).toBe(true);
+  });
 });
 
 /*
