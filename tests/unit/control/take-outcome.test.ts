@@ -105,9 +105,55 @@ describe('resolveTakeOutcome', () => {
     const outcome = resolveTakeOutcome(
       take({ wordsHeard: 0, durationSeconds: 200, voiceFollowingAvailable: false }),
     );
+    expect(outcome.headline).toBe('Take finished without voice following');
+    expect(outcome.health).toBe('no_tracking');
+    expect(outcome.detail).not.toMatch(/microphone/i);
+    expect(outcome.detail).toContain('Call to action');
     expect(outcome.suggestion).not.toMatch(/microphone/i);
-    expect(outcome.suggestion).toMatch(/install a language/i);
     expect(outcome.tone).not.toBe('attention');
+  });
+
+  it('points a take that had no model at Settings → Speech, whatever refused it', () => {
+    /*
+     * #286. The same take is reached by three refusals — not installed, files
+     * missing, failed to load — and "Install a language" fits only the first:
+     * a model that will not load may already be installed, or be a bundled
+     * copy with nothing to install. The screen that answers all three is
+     * Settings → Speech, so that is what the summary names.
+     */
+    const outcome = resolveTakeOutcome(
+      take({ wordsHeard: 0, durationSeconds: 200, voiceFollowingAvailable: false }),
+    );
+    expect(outcome.suggestion).toContain('Settings → Speech');
+    expect(outcome.suggestion).not.toMatch(/install a language/i);
+  });
+
+  it('reports a missing model even on a take too short to judge the microphone', () => {
+    // The refusal is known the moment the take starts; it does not need five
+    // seconds of silence to be true, and "too short to tell" would hide it.
+    const outcome = resolveTakeOutcome(
+      take({ wordsHeard: 0, durationSeconds: 2, voiceFollowingAvailable: false }),
+    );
+    expect(outcome.headline).toBe('Take finished without voice following');
+  });
+
+  it('keeps the microphone advice for a take whose recogniser ran and heard nothing', () => {
+    // The other half of #286: only a refused model changes the answer. A model
+    // that loaded and still heard silence is exactly what the advice is for.
+    const outcome = resolveTakeOutcome(
+      take({ wordsHeard: 0, durationSeconds: 200, voiceFollowingAvailable: true }),
+    );
+    expect(outcome.headline).toBe('Nothing was transcribed');
+    expect(outcome.suggestion).toMatch(/microphone/i);
+  });
+
+  it('ignores voice availability on a take that never followed voice', () => {
+    for (const mode of ['manual', 'fixed'] as const) {
+      const outcome = resolveTakeOutcome(
+        take({ mode, wordsHeard: 0, followingShare: null, voiceFollowingAvailable: false }),
+      );
+      expect(outcome.headline).toBe('Take finished');
+    }
   });
 
   it('does not claim the stage stayed still when the operator moved it', () => {

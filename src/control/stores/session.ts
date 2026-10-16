@@ -161,6 +161,17 @@ export interface SessionSummary {
   /** Script length, so `wordsFollowed` has something to be a fraction of. */
   scriptWords: number;
   /**
+   * False when this voice take never had a recogniser, because the speech
+   * model was refused when the take tried to start it.
+   *
+   * Without this a take started past a missing model was indistinguishable
+   * from a working recogniser that heard silence, and the summary sent the
+   * presenter to test a microphone that had opened normally. Only the three
+   * model refusals make it false, and a recogniser that connected at any point
+   * in the take keeps it true: the summary then reports on what was heard.
+   */
+  voiceFollowingAvailable: boolean;
+  /**
    * Where this take stopped, and the start of the section it stopped in
    * (CCUX-008, CCUX-016).
    *
@@ -320,6 +331,16 @@ export interface SessionState {
    * instruction defect §115 was filed about.
    */
   usingFallbackInput: boolean;
+  /**
+   * False while the recogniser cannot run because the speech model was refused
+   * (`isSpeechModelUnavailable`), which is not a microphone fault.
+   *
+   * The refusal still leaves `micState` at 'disconnected' — there is no capture
+   * — but a status bar reading that as "Mic lost" blamed hardware that had
+   * opened normally. This is what lets it say what actually failed. A
+   * recogniser that connects later in the take sets it back.
+   */
+  voiceFollowingAvailable: boolean;
   snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
   /**
@@ -425,6 +446,7 @@ const initial: SessionState = {
   micState: 'live',
   inputDeviceLost: false,
   usingFallbackInput: false,
+  voiceFollowingAvailable: true,
   snapshot: null,
   transcriptTail: [],
   heardAnything: false,
@@ -802,6 +824,22 @@ export interface StartSessionInput {
   following?: FollowingSettings;
 }
 
+/**
+ * Was the recogniser refused because of the speech model itself?
+ *
+ * Exactly these three, and not every `STT_MODEL_` code: download, cancel and
+ * removal failures share the prefix and describe a Settings action, not a take
+ * that could not start. Spelled out so each code stays grep-able against
+ * `src/shared/contracts/errors.ts`.
+ */
+function isSpeechModelUnavailable(code: string | null): boolean {
+  return (
+    code === 'STT_MODEL_NOT_INSTALLED' ||
+    code === 'STT_MODEL_MISSING' ||
+    code === 'STT_MODEL_LOAD_FAILED'
+  );
+}
+
 export function startLiveSession(input: StartSessionInput): string {
   stopInternals();
   const sessionId = input.sessionId ?? newSessionId();
@@ -1122,7 +1160,16 @@ export function startLiveSession(input: StartSessionInput): string {
             connection === 'reconnecting' && s.connection === 'connected' && everConnected
               ? s.counts.reconnects + 1
               : s.counts.reconnects;
-          return { ...s, connection, counts: { ...s.counts, reconnects } };
+          return {
+            ...s,
+            connection,
+            counts: { ...s.counts, reconnects },
+            // A recogniser that connected is the evidence the model loaded —
+            // a resume after installing it mid-take, say. Nothing else clears
+            // a refusal: a resume that merely resolves may not have restarted
+            // anything.
+            voiceFollowingAvailable: connection === 'connected' ? true : s.voiceFollowingAvailable,
+          };
         });
         if (connection === 'connected') everConnected = true;
         // §59: an interrupted transcript is a first-class degraded state.
@@ -1328,12 +1375,19 @@ export function startLiveSession(input: StartSessionInput): string {
        * DEVICE is what failed. Swapping microphones cannot fix a refused
        * credential, and offering it there is the same unfollowable instruction
        * as advice pointing at a control that does not exist.
+       *
+       * And a refused speech model is recorded as exactly that. The microphone
+       * opened, the recogniser was turned away, and nothing about the input is
+       * at fault — so the status bar must not read "Mic lost" and the summary
+       * must not send the presenter to test it (#286).
        */
+      const modelUnavailable = isSpeechModelUnavailable(code);
       state.update((s) => ({
         ...s,
         connection: 'offline',
         micState: 'disconnected',
         inputDeviceLost: micFailure || s.inputDeviceLost,
+        voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
       showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });
@@ -2400,18 +2454,27 @@ export function resumeSession(): void {
     state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
     return;
   }
+  const resuming = pipeline;
   void pipeline
     .resume()
     .then(() => {
       state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
     })
     .catch((err) => {
+      /*
+       * `resume()` re-runs `start()` after a hard pause, so the model can be
+       * refused here too. Recorded only while this is still the take's own
+       * pipeline: a late refusal from a replaced one may not mark the take
+       * that followed it.
+       */
+      const modelUnavailable = resuming === pipeline && isSpeechModelUnavailable(errorCode(err));
       // Stay paused and say so. Silence here is what made the failure invisible.
       state.update((s) => ({
         ...s,
         paused: s.paused === 'none' ? 'listening' : s.paused,
         micState: 'disconnected',
         connection: 'offline',
+        voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
       showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
     });
@@ -3307,6 +3370,12 @@ export function stopSession(): SessionSummary {
     wordsFollowed: takeWordsFollowed(),
     scriptWords: scriptWordCount,
     wordsInFlight,
+    /*
+     * "Never had a recogniser", not "has none right now". A take that connected
+     * and was later refused on a resume DID follow for part of its length, and
+     * telling it otherwise would hide what it heard.
+     */
+    voiceFollowingAvailable: s.voiceFollowingAvailable || everConnected,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -3435,6 +3504,7 @@ function emptySummary(s: SessionState): SessionSummary {
     wordsFollowed: 0,
     scriptWords: scriptWordCount,
     wordsInFlight: 0,
+    voiceFollowingAvailable: true,
   };
 }
 
