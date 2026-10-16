@@ -43,7 +43,6 @@ import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
   type AlignmentDecision,
   type AlignmentSnapshot,
-  type RenderedLine,
   type SmoothFollowProfile,
   type StageMotionAck,
   type StageMotionState,
@@ -1043,6 +1042,15 @@ export function createStageMotionEngine(
    */
   let manualAnchorUnit: number | null = null;
   /**
+   * The token the presenter's hand last put on the reading line, kept until
+   * the engine's answer to it comes back — see `echoesTheHand`.
+   *
+   * Not `manualAnchorUnit`: that one is cleared the moment the answer is
+   * RECEIVED, because the answer ends the manual hold, and the question this
+   * one answers is asked a frame later, when the answer is spent.
+   */
+  let handAnchorToken: number | null = null;
+  /**
    * When the presenter last took the script off automatic control, on the
    * stage's own clock. `Number.NEGATIVE_INFINITY` means they never have.
    *
@@ -1559,35 +1567,20 @@ export function createStageMotionEngine(
 
   /** Scroll position that places a transition's destination at the reading line. */
   /**
-   * The line under the reading mark at `scrollPx`: the line the mark is on, or
-   * the next one down.
+   * Is this directive the echo of the presenter's own hand?
    *
-   * The same answer `readingAnchorToken` gives on the renderer side, guards and
-   * all. A mark above the first MEASURED line is not on that line — on a
-   * virtualized script the map only covers the rendered window — so it answers
-   * nothing rather than the nearest line it happens to have.
+   * A wheel gesture that relocates the reader reports the token on the reading
+   * line, and the engine answers with a `manualAnchor` there. The renderer
+   * handed that same token to `manualOverride` when the gesture landed, so the
+   * echo is recognised by LINE against it — not by measuring pixels, which the
+   * renderer reads off the painted position and this engine does not, and
+   * which on a line boundary disagree about which line the mark is on.
    */
-  function lineUnderReadingMark(scrollPx: number): RenderedLine | null {
-    if (!map) return null;
-    const readingY = scrollPx + map.readingLineStartY;
-    const first = map.lines[0];
-    if (!first || readingY < first.topY) return null;
-    return map.lines.find((line) => line.bottomY >= readingY) ?? null;
-  }
-
-  /**
-   * Is the line a directive lands on the one under the reading mark already?
-   *
-   * The renderer reported its token against the PAINTED position, which is the
-   * plant snapped to the device-pixel grid, so on a line boundary the two can
-   * name neighbouring lines. A pixel either side counts as the same place.
-   */
-  function alreadyOnReadingLine(directive: StageTransitionDirective): boolean {
-    if (!map || !map.valid) return false;
+  function echoesTheHand(directive: StageTransitionDirective): boolean {
+    if (handAnchorToken === null || !map || !map.valid) return false;
+    const hand = map.lineForToken(Math.round(handAnchorToken));
     const target = map.lineForToken(directive.destinationTokenIndex);
-    if (!target) return false;
-    const q = controller.state.q;
-    return [q - 1, q, q + 1].some((y) => lineUnderReadingMark(y)?.lineId === target.lineId);
+    return hand !== null && target !== null && hand.lineId === target.lineId;
   }
 
   function destinationScrollPx(
@@ -1682,6 +1675,7 @@ export function createStageMotionEngine(
        */
       manualAwaitingEvidence = false;
       manualAnchorUnit = null;
+      handAnchorToken = null;
       manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
       manualUntilMs = Number.NEGATIVE_INFINITY;
       reacquireOwed = false;
@@ -1931,20 +1925,20 @@ export function createStageMotionEngine(
       let fadeHold = false;
       /** True on the one frame that spends a re-anchor while obscured. */
       let reanchorApplied = false;
-      if (overwrite && paused && overwrite.authority === 'manual' && alreadyOnReadingLine(overwrite)) {
+      if (overwrite && paused && overwrite.authority === 'manual' && echoesTheHand(overwrite)) {
         /*
-         * The move's line is the one the presenter is already reading, so
-         * there is nothing to do — and doing it anyway is worse than nothing.
+         * The presenter's hand already put the document here, so there is
+         * nothing to do — and doing it anyway is worse than nothing.
          *
-         * This is what a hand scroll's own echo looks like. A wheel gesture
-         * that relocates the reader reports the token on the reading line, the
-         * engine answers with a `manualAnchor` there, and spending that would
-         * snap the document from where the presenter's hand left it to the
-         * start of the same line — a twitch after every gesture, in the one
-         * mode where they are driving by hand. Completed rather than parked, so
-         * nothing about it is left to spend later.
+         * Spending a hand scroll's own echo would snap the document from where
+         * the presenter stopped to the start of the same line: a twitch after
+         * every gesture, in the one mode where they are driving by hand.
+         * Completed rather than parked, so nothing is left to spend later, and
+         * the hand's token is used up with it — the next move on that line is
+         * a move.
          */
         transitions.complete(overwrite.id);
+        handAnchorToken = null;
       } else if (overwrite && paused && overwrite.authority !== 'manual') {
         /*
          * §48. Following is off, and a re-anchor is automatic motion.
@@ -2908,6 +2902,7 @@ export function createStageMotionEngine(
       manualUntilMs = nowMs + manualGraceMs;
       manualAwaitingEvidence = true;
       manualAnchorUnit = Number.isFinite(anchorUnit as number) ? anchorUnit : null;
+      handAnchorToken = manualAnchorUnit;
       // Everything the aligner decided before this instant was decided about a
       // document the presenter has since moved. See `supersededTransition`.
       manualAuthorityAtMs = nowMs;
@@ -2995,6 +2990,7 @@ export function createStageMotionEngine(
       catchUpCapExpiries = 0;
       manualAwaitingEvidence = false;
       manualAnchorUnit = null;
+      handAnchorToken = null;
       manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
       manualUntilMs = Number.NEGATIVE_INFINITY;
       reacquireOwed = false;

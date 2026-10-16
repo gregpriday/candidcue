@@ -535,10 +535,11 @@ describe('switching following off holds the document', () => {
     expect(engine.transitions.active).toBeNull();
   });
 
-  it('recognises the echo across a pixel of rounding at a line boundary', () => {
+  it('recognises the echo by the line the hand reported, whatever the pixels say', () => {
     // The renderer reads the reading line off the PAINTED position, which is
     // snapped to the pixel grid; the plant is not. Half a pixel past a line's
-    // bottom, the two name neighbouring lines.
+    // bottom, the two name neighbouring lines — so the echo is matched against
+    // the token the gesture reported, not against a measurement.
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     settle(engine, 12_000, 12);
@@ -559,6 +560,31 @@ describe('switching following off holds the document', () => {
     const trace = coast(engine, 12_400, 13_400);
     expect(trace.some((f) => f.reanchored)).toBe(false);
     expect(engine.controller.state.q).toBeCloseTo(handPx, 1);
+  });
+
+  it('still steps to the next line from a line boundary after a hand scroll', () => {
+    // The mark resting on the bottom edge of the hand's line is not the next
+    // line, and a sentence step there is a move — a paragraph gap below would
+    // otherwise leave the next line short of the mark.
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    settle(engine, 12_000, 12);
+    engine.setPaused(true, 12_000);
+
+    const index = map.lines.findIndex((line) => line.firstTokenIndex >= 60);
+    const hand = map.lines[index]!;
+    const next = map.lines[index + 1]!;
+    engine.manualOverride(hand.bottomY + 0.25 - map.readingLineStartY, 12_100, hand.firstTokenIndex);
+    coast(engine, 12_100, 12_400);
+    engine.receiveSnapshot(
+      snapshotAt(next.firstTokenIndex, 12_400, {
+        decision: 'manualAnchor',
+        confirmedToken: next.firstTokenIndex,
+      }),
+      12_400,
+    );
+
+    expect(coast(engine, 12_400, 13_400).some((f) => f.reanchored)).toBe(true);
   });
 
   it('still moves to the first measured line when the reading mark is above it', () => {
