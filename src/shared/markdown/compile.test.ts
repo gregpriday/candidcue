@@ -1148,6 +1148,13 @@ describe('compile: a leading `coach:` block stays hidden (#208)', () => {
     ['CRLF line endings', lines('---', 'coach:', '  mode: minimal', '---').replace(/\n/g, '\r\n')],
     ['a byte-order mark', `${BOM}${lines('---', 'coach:', '  mode: minimal', '---')}`],
     [
+      'a byte-order mark and CRLF together',
+      `${BOM}${lines('---', 'coach:', '  mode: minimal', '---').replace(/\n/g, '\r\n')}`,
+    ],
+    ['a space before the colon', lines('---', 'coach :', '  mode: minimal', '---')],
+    ['a tab before the colon', lines('---', 'coach\t:', '  mode: minimal', '---')],
+    ['a tab after the colon', lines('---', 'coach:\toff', '---')],
+    [
       'values the coaching parser used to reject',
       lines('---', 'coach:', '  mode: turbo', '  target_wpm: fast', '  filler_detection: wide', '---'),
     ],
@@ -1165,8 +1172,61 @@ describe('compile: a leading `coach:` block stays hidden (#208)', () => {
   // Headings are not spoken by default, so the words alone could not tell a
   // hidden block from one that became a heading; the block kinds can.
   const heading = ['divider', 'heading', 'paragraph'];
+  it('compiles exactly as the same script with the block blanked by hand', () => {
+    // Everything but the source hash: blocks, render nodes, token numbering,
+    // sentence ids, navigation. The block holds a container fence and an
+    // astral character, and a real container follows it.
+    const front = ['---', 'coach:', '  style: calm 🎙️', '  mode: studio', ':::silent', '---', ''].join('\n');
+    const body = [
+      '# Opening',
+      '',
+      'Hello **everyone**, and welcome. This is the *first* take.',
+      '',
+      ':::silent',
+      'Not read aloud.',
+      ':::',
+      '',
+      '- One item.',
+      '- <!-- cc:pace 150-190 --> Two items.',
+      '',
+    ].join('\n');
+    const withoutHash = ({ sourceHash: _hash, ...rest }: CompiledScript) => rest;
+    const legacy = compile(front + body, OPTS);
+    const blanked = compile(front.replace(/[^\r\n]/g, ' ') + body, OPTS);
+    expect(withoutHash(legacy)).toEqual(withoutHash(blanked));
+    expect(legacy.diagnostics).toEqual([]);
+    expect(normalizedWords(legacy).join(' ')).toBe(
+      'hello everyone and welcome this is the first take one item two items',
+    );
+  });
+
+  it.each([
+    [
+      'only the first closer ends it',
+      lines('---', 'coach: off', '---', '', 'Visible prose.', '', '---'),
+      ['paragraph', 'divider', 'paragraph'],
+      ['visible', 'prose', 'hello', 'world'],
+    ],
+    ['a document that is nothing but the block', '---\ncoach:\n---\n', [], []],
+    ['the block without a final newline', '---\ncoach:\n---', [], []],
+  ])('hides no more than the block when %s', (_name, source, expectedKinds, words) => {
+    const script = compile(source, OPTS);
+    expect(kinds(script)).toEqual(expectedKinds);
+    expect(script.diagnostics).toEqual([]);
+    expect(normalizedWords(script)).toEqual(words);
+  });
+
+  it('puts the keys of an unrecognised block on the glass, as it always did', () => {
+    const script = compile(lines('---', 'coaching_off_key:', '  mode: studio', '---'), OPTS);
+    const keys = script.blocks.find((b) => b.kind === 'heading');
+    expect(flattenText(keys?.renderNodes ?? [])).toContain('mode: studio');
+  });
+
   it.each([
     ['no `coach:` key', lines('---', 'coaching_off_key:', '  mode: studio', '---'), heading, ['hello', 'world']],
+    ['a longer key', lines('---', 'coach_x:', '  mode: studio', '---'), heading, ['hello', 'world']],
+    ['a `...` opener', lines('...', 'coach: off', '---'), ['heading', 'paragraph'], ['hello', 'world']],
+    ['a lone rule', '---\n', ['divider'], []],
     ['an indented key', lines('---', '  coach:', '    style: calm', '---'), heading, ['hello', 'world']],
     ['a capitalised key', lines('---', 'Coach:', '  style: calm', '---'), heading, ['hello', 'world']],
     ['a blank line before it', `\n${lines('---', 'coach:', '  style: calm', '---')}`, heading, ['hello', 'world']],
