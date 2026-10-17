@@ -212,7 +212,7 @@ export function scriptFollowedLabel(
 /** The "Followed" row, its warning, and the "Not counted" row beside it. */
 export interface FollowedRow {
   text: string;
-  /** Appended in the warning style, or null when there is nothing to warn of. */
+  /** A remark appended after the share, or null when there is nothing to add. */
   warning: string | null;
   /** The time left out of the share, or null to leave the row out. */
   notCounted: string | null;
@@ -250,9 +250,13 @@ export function followedLabel(
     return { text: 'No tracking this take', warning: null, notCounted };
   }
   const span = setAsideSeconds(time) > 0 ? 'the time following was on' : 'the take';
+  const percent = Math.round(summary.followingShare * 100);
   return {
-    text: `${Math.round(summary.followingShare * 100)}% of ${span}`,
-    warning: summary.followingShare < 0.6 ? '— the stage spent most of it holding' : null,
+    text: `${percent}% of ${span}`,
+    // Under half, so "most" is true of what it says, and judged on the number
+    // printed beside it so "50%" never reads as "most of it holding". At 0.6 it
+    // called a take that followed 55% of the time "mostly holding".
+    warning: percent < 50 ? '— the stage spent most of it holding' : null,
     notCounted,
   };
 }

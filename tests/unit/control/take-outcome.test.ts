@@ -31,7 +31,6 @@ function take(over: Partial<TakeOutcomeInput> = {}): TakeOutcomeInput {
     reconnects: 0,
     manualJumps: 0,
     durationSeconds: 180,
-    endingLocation: 'Call to action',
     ...over,
   };
 }
@@ -55,11 +54,10 @@ const TIMES: Array<FollowingTime | undefined> = [
 ];
 
 describe('resolveTakeOutcome', () => {
-  it('says plainly when it worked, and names where you stopped', () => {
+  it('says plainly when it worked', () => {
     const outcome = resolveTakeOutcome(take());
     expect(outcome.health).toBe('steady');
     expect(outcome.tone).toBe('good');
-    expect(outcome.detail).toContain('Call to action');
     // Nothing to do about a take that went fine.
     expect(outcome.suggestion).toBeNull();
   });
@@ -132,7 +130,6 @@ describe('resolveTakeOutcome', () => {
       const outcome = resolveTakeOutcome(take({ mode, wordsHeard: 0, followingShare: null }));
       expect(outcome.detail).not.toMatch(/you moved the script/i);
       expect(outcome.detail).not.toMatch(/rolled at your set pace/i);
-      expect(outcome.detail).toContain('Call to action');
     }
   });
 
@@ -149,7 +146,6 @@ describe('resolveTakeOutcome', () => {
     expect(outcome.headline).toBe('Take finished without voice following');
     expect(outcome.health).toBe('no_tracking');
     expect(outcome.detail).not.toMatch(/microphone/i);
-    expect(outcome.detail).toContain('Call to action');
     expect(outcome.suggestion).not.toMatch(/microphone/i);
     expect(outcome.tone).not.toBe('attention');
   });
@@ -193,7 +189,7 @@ describe('resolveTakeOutcome', () => {
       const outcome = resolveTakeOutcome(
         take({ mode, wordsHeard: 0, followingShare: null, voiceFollowingAvailable: false }),
       );
-      expect(outcome.headline).toBe('Take finished');
+      expect(outcome.headline).toBe('Voice following was off');
     }
   });
 
@@ -219,7 +215,8 @@ describe('resolveTakeOutcome', () => {
 
   it('does not contradict the detail rows in the middle band', () => {
     /*
-     * Under 0.6 the technical rows say "the stage spent most of it holding".
+     * Under 50% as displayed, the technical rows say "the stage spent most of
+     * it holding".
      * The card previously said "it followed most of the take" from 0.4 up, so
      * one dialog made two statements that cannot both be true.
      */
@@ -233,7 +230,6 @@ describe('resolveTakeOutcome', () => {
     const outcome = resolveTakeOutcome(take({ mode: 'manual', wordsHeard: 0, followingShare: null }));
     expect(outcome.tone).toBe('neutral');
     expect(outcome.headline).not.toMatch(/transcrib/i);
-    expect(outcome.detail).toContain('Call to action');
   });
 
   it('names interrupted voice following ahead of the following share it explains', () => {
@@ -396,7 +392,6 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
         expect(outcome.health).toBe('not_assessed');
         expect(outcome.tone).toBe('neutral');
         expect(outcome.suggestion).toBeNull();
-        expect(outcome.detail).toContain('Call to action');
         expect(said(input)).not.toMatch(/did not track|support bundle|microphone|ad-libs/i);
       }
     }
@@ -543,7 +538,7 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
     expect(
       resolveTakeOutcome(take({ voiceFollowingAvailable: false, followingTime: aside })).headline,
     ).toBe('Take finished without voice following');
-    expect(resolveTakeOutcome(take({ mode: 'fixed', followingTime: aside })).headline).toBe('Take finished');
+    expect(resolveTakeOutcome(take({ mode: 'fixed', followingTime: aside })).headline).toBe('Voice following was off');
   });
 
   it('gives a take with nothing set aside the answers it always had', () => {

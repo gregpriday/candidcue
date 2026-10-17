@@ -48,7 +48,7 @@
   import { formatClock } from '../lib/format';
   import Disclosure from './Disclosure.svelte';
   import { sessionModeLabel } from '../../shared/take-vocabulary';
-  import { FOLLOW_HEALTH_LABELS, resolveTakeOutcome } from '../lib/take-outcome';
+  import { resolveTakeOutcome } from '../lib/take-outcome';
 
   /*
    * Dismissal is a plain close, because the screen behind this dialog is
@@ -134,6 +134,9 @@
       nextPart: takeNextPart,
     }),
   );
+  /* The default sits with Done at the trailing edge; the rest go before it. */
+  const primary = $derived(actions.find((action) => action.primary) ?? null);
+  const alternatives = $derived(actions.filter((action) => !action.primary));
 
   /**
    * The conclusion, drawn once (CCUX-006).
@@ -159,7 +162,6 @@
           reconnects: $session.summary.reconnects,
           manualJumps: $session.summary.manualJumps,
           durationSeconds: $session.summary.durationSeconds,
-          endingLocation: $session.summary.endingLocation,
         }),
   );
 </script>
@@ -180,6 +182,7 @@
 <Dialog
   open={!$session.active && $session.summary !== null && !coverIsUp($presentingPhase)}
   title="Take complete"
+  size="wide"
   onclose={dismiss}
 >
   {#if $session.summary}
@@ -194,7 +197,12 @@
       analyses how the take went. Praise would be an invented measurement.
     -->
     {#if outcome}
-      <div class="outcome {outcome.tone}">
+      <!--
+        Focus opens here rather than on the first control. That was "Take
+        details", so Return toggled the measurements, and a screen reader
+        started below the answer it had been opened to give (APG, dialog).
+      -->
+      <div class="outcome {outcome.tone}" tabindex="-1" data-autofocus>
         <p class="outcome-headline">{outcome.headline}</p>
         <p class="outcome-detail">{outcome.detail}</p>
         {#if outcome.suggestion}
@@ -215,14 +223,13 @@
       </div>
 
       <!--
-        The five facts a presenter actually reads, in front of the disclosure.
-        Everything else is instrumentation.
+        The facts a presenter actually reads, in front of the disclosure, and
+        each of them said once. How following went is the card above; the mode
+        is a setting they chose a minute ago. Both are in the details.
       -->
       <dl class="take-facts">
         <dt>Duration</dt>
         <dd>{formatClock(summary.durationSeconds)}</dd>
-        <dt>Mode</dt>
-        <dd>{sessionModeLabel(summary.mode)}</dd>
         <dt>Ended in</dt>
         <dd>{summary.endingLocation}</dd>
         <!--
@@ -244,8 +251,6 @@
             {partOutcomeLabel(summary) ?? ''}
           </dd>
         {/if}
-        <dt>Following</dt>
-        <dd>{FOLLOW_HEALTH_LABELS[outcome.health]}</dd>
       </dl>
     {/if}
 
@@ -255,9 +260,8 @@
       Collapsed, not culled: a support request is unanswerable without them.
     -->
     <Disclosure label="Take details">
+    <!-- Duration and the ending are in the facts above, so not here again. -->
     <dl class="summary-grid">
-      <dt>Duration</dt>
-      <dd>{formatClock(summary.durationSeconds)}</dd>
       <dt>Mode</dt>
       <!-- Named from the shared vocabulary, so the take the presenter just ran
            is called what the control that ran it was called. -->
@@ -295,7 +299,10 @@
       <dd>
         {followed.text}
         {#if followed.warning}
-          <span class="summary-warn">{followed.warning}</span>
+          <!-- Holding is the system working when it is unsure, not a take
+               that failed, so it is a remark here rather than the red of
+               "nothing was transcribed". -->
+          <span class="summary-note">{followed.warning}</span>
         {/if}
       </dd>
       <!-- What the share above is NOT out of (#287): the time the presenter
@@ -312,39 +319,55 @@
       <dd>{summary.retakes}</dd>
       <dt>Voice restarts</dt>
       <dd>{summary.reconnects}</dd>
-      <dt>Ending location</dt>
-      <dd>{summary.endingLocation}</dd>
     </dl>
     </Disclosure>
   {/if}
 
   {#snippet footer()}
     <!--
-      Two destinations and a dismissal, which is one fewer than this had.
-      "Return to editor" named a place the presenter is now already standing in,
-      so it did nothing visible and read as the safe default — the worst
+      A way out at the leading edge, and the dismissal and the next takes at
+      the trailing edge with the default last, which is where a macOS sheet
+      keeps them.
+
+      "Return to editor" named a place the presenter is now already standing
+      in, so it did nothing visible and read as the safe default — the worst
       combination available for the button most people were going to press.
+      "Back to the script" had the same flaw more quietly: the script is right
+      there behind the scrim. Closing a finished report is "Done".
+
+      Done and the default are one piece and never part. Four actions do not
+      fit beside each other in every window, and a part's name can be any
+      length, so when they run out of room the pair drops to a line of its own
+      and the alternative stays up beside the way out — two rows, the default
+      still bottom-right, and no label squeezed out of its border.
     -->
-    <!--
-      Ordered by likely intent (CCUX-006): another go, another go at the part
-      that went wrong, back to the words, and the quiet way out.
-    -->
-    <Button variant="ghost" onclick={() => void returnToLibrary()}>Return to library</Button>
-    <Button onclick={dismiss}>Back to the script</Button>
-    <!--
-      The four conditional rows are DECIDED in `summary-actions.ts` rather than
-      here. They are a matrix over three facts, with one property that has to
-      hold across every combination — exactly one primary — and that is not a
-      thing a stack of `{#if}` blocks can be checked for.
-    -->
-    {#each actions as action (action.id)}
-      <Button
-        variant={action.primary ? 'primary' : 'default'}
-        onclick={() => void presentAgain(action.startTokenIndex, action.partId)}
-      >
-        {action.label}
+    <div class="summary-footer">
+      <Button variant="ghost" onclick={() => void returnToLibrary()}>
+        <span class="action-label">Return to library</span>
       </Button>
-    {/each}
+      <!--
+        The four conditional rows are DECIDED in `summary-actions.ts` rather
+        than here. They are a matrix over three facts, with one property that
+        has to hold across every combination — exactly one primary — and that
+        is not a thing a stack of `{#if}` blocks can be checked for.
+      -->
+      {#each alternatives as action (action.id)}
+        <Button onclick={() => void presentAgain(action.startTokenIndex, action.partId)}>
+          <span class="action-label">{action.label}</span>
+        </Button>
+      {/each}
+      <div class="summary-commit">
+        <Button onclick={dismiss}><span class="action-label">Done</span></Button>
+        {#if primary}
+          <Button
+            variant="primary"
+            onclick={() => void presentAgain(primary.startTokenIndex, primary.partId)}
+          >
+            <span class="action-label">{primary.label}</span>
+          </Button>
+        {/if}
+      </div>
+    </div>
   {/snippet}
 </Dialog>
 
@@ -363,11 +386,21 @@
     color: var(--danger);
     font-weight: 550;
   }
+  .summary-note {
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
 
+  /* One label column for both lists, so the values of the facts and of the
+     details line up when the details are open. */
+  .summary-grid,
+  .take-facts {
+    --label-column: 9rem;
+  }
   .summary-grid {
     display: grid;
-    grid-template-columns: auto 1fr;
-    gap: var(--space-1) var(--space-5);
+    grid-template-columns: var(--label-column) minmax(0, 1fr);
+    gap: var(--space-1) var(--space-4);
     margin: 0;
   }
   .summary-grid dt {
@@ -376,6 +409,7 @@
   }
   .summary-grid dd {
     margin: 0;
+    overflow-wrap: anywhere;
     font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-primary);
@@ -391,21 +425,27 @@
    * conditions to understand, not failures to be alarmed by, and the product's
    * whole posture is that holding is the system working.
    */
+  /*
+   * No box of its own. It sat in a bordered card inside the bordered dialog,
+   * and the frame competed with the sentence it was framing. The bar and the
+   * headline carry it.
+   */
   .outcome {
     position: relative;
-    padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
-    margin-bottom: var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
+    padding-left: var(--space-4);
+    margin-bottom: var(--space-2);
+  }
+  /* It takes focus when the dialog opens, and a surface wears no ring. */
+  .outcome:focus {
+    outline: none;
   }
   /* Inset bar, never a one-sided border on a rounded box. */
   .outcome::before {
     content: '';
     position: absolute;
-    left: 6px;
-    top: var(--space-3);
-    bottom: var(--space-3);
+    left: 0;
+    top: 2px;
+    bottom: 2px;
     width: 3px;
     border-radius: var(--radius-pill);
     background: var(--text-faint);
@@ -441,8 +481,8 @@
 
   .take-facts {
     display: grid;
-    grid-template-columns: auto 1fr;
-    gap: var(--space-1) var(--space-5);
+    grid-template-columns: var(--label-column) minmax(0, 1fr);
+    gap: var(--space-1) var(--space-4);
     margin: 0 0 var(--space-3);
   }
   .take-facts dt {
@@ -451,8 +491,45 @@
   }
   .take-facts dd {
     margin: 0;
+    overflow-wrap: anywhere;
     font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-primary);
+  }
+
+  .summary-footer {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  /* "Return to library" holds the leading edge of the first line. */
+  .summary-footer > :global(:first-child) {
+    margin-inline-end: auto;
+  }
+  /* Done and the default. `min-width: 0` lets the pair narrow to the row when
+     the default's label is longer than the row, and Done keeps its size while
+     the default's label wraps. */
+  .summary-commit {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .summary-commit > :global(:first-child) {
+    flex: none;
+  }
+  /* A part's name can be any length, unbroken included. A label longer than
+     the whole row wraps inside its button instead of running out of it. On one
+     line this stays inside the button's own 32px; only a wrapped label makes
+     it taller. */
+  .action-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+    line-height: 1.25;
+    padding-block: var(--space-1);
   }
 </style>

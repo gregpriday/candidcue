@@ -728,7 +728,7 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
    * doing nothing visible, which is the worst combination available for the
    * button most people press.
    */
-  await page.getByRole('button', { name: 'Back to the script' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('dialog', { name: 'Take complete' })).toHaveCount(0);
   await expect(
     page.locator('.cm-content').getByText('Thank you for joining me today.'),
