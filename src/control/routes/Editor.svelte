@@ -36,7 +36,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { presentMenuItems } from '../lib/present-menu';
   import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
-import { startTake, takeStarting } from '../lib/start-take';
+import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
   import { startMenuItems } from '../lib/present-menu';
   import TakeReadinessSheet from '../components/TakeReadinessSheet.svelte';
@@ -79,7 +79,7 @@ import type { PresentationMode } from '../services/settings-types';
   import { duplicateScript, loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
-  import type { CompiledBlock, OutlineNode, ScriptPart } from '../../shared/contracts';
+  import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
 
   interface Props {
     scriptId: string;
@@ -597,7 +597,7 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode;
     startTokenIndex?: number;
     practice?: boolean;
-    part?: ScriptPart;
+    part?: TakePartRequest;
   } | null = null;
 
   /**
@@ -738,7 +738,7 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
-    part?: ScriptPart,
+    part?: TakePartRequest,
   ): Promise<void> {
     const verdict = await readinessNow(false, practice ? 'reader' : mode);
     if (!verdict.show) {
@@ -769,7 +769,7 @@ import type { PresentationMode } from '../services/settings-types';
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
-    part?: ScriptPart,
+    part?: TakePartRequest,
   ): Promise<void> {
     await saveNow();
     await startTake(scriptId, {

@@ -48,7 +48,10 @@ export interface SummaryAction {
   primary: boolean;
   /**
    * Where the take it starts begins. `partId` is identity only — `startTake`
-   * re-resolves the span against the compile the new take runs on.
+   * re-resolves the span against the compile the new take runs on — and a row
+   * that carries one records the WHOLE part (`SessionSummary` says `whole`), so
+   * it opens at the part's re-measured start. Its token is then only where to
+   * open if the part can no longer be found.
    */
   startTokenIndex?: number;
   partId?: string;

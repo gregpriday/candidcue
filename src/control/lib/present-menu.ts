@@ -9,6 +9,7 @@
  */
 import type { ScriptPart } from '../../shared/contracts';
 import type { PresentationMode } from '../services/settings-types';
+import type { TakePartRequest } from './start-take';
 
 /**
  * Structurally the `SplitMenuItem` that `SplitButton.svelte` takes, declared
@@ -83,9 +84,14 @@ export interface StartMenuInput {
   parts: readonly ScriptPart[];
 }
 
+/**
+ * `present` gets a token and, on a divided script, the part to record. A part
+ * row asks for the `whole` part, so `startTake` opens it at its re-measured
+ * start; "From here" does not, so the take of that part begins at the caret.
+ */
 export function startMenuItems(
   input: StartMenuInput,
-  present: (tokenIndex: number, part?: ScriptPart) => void,
+  present: (tokenIndex: number, part?: TakePartRequest) => void,
 ): PresentMenuItem[] {
   const items: PresentMenuItem[] = [
     {
@@ -105,7 +111,11 @@ export function startMenuItems(
         input.herePart === null
           ? (input.hereLabel ?? 'Starts at the cursor, snapped to a whole sentence.')
           : `${input.hereLabel ?? 'Starts at the cursor'}. Records part ${input.herePart.ordinal}.`,
-      onselect: () => present(input.hereTokenIndex as number, input.herePart ?? undefined),
+      onselect: () =>
+        present(
+          input.hereTokenIndex as number,
+          input.herePart === null ? undefined : { id: input.herePart.id },
+        ),
     });
   }
 
@@ -127,12 +137,20 @@ export function startMenuItems(
    * other four, so the parts a creator was most likely to be recording late in
    * a project were the ones that vanished. The overflow now says so, and names
    * the route that still reaches them.
+   *
+   * "From here" starts at the cursor, so the route has to say WHERE the cursor
+   * goes for the whole part: its first spoken words. Not its heading — a
+   * heading that is not read aloud has no sentence of its own, and a caret on
+   * one resolves to the last sentence above it, in the previous part.
    */
   for (const part of input.parts.slice(0, MAX_PART_ROWS)) {
     items.push({
       label: `Part ${part.ordinal} · ${part.label}`,
       description: describePartRange(input.parts, part),
-      onselect: () => present(part.startTokenIndex, part),
+      // The token is only where to open if the part has gone by launch: it was
+      // measured against the compile the menu was drawn from, and `whole` makes
+      // `startTake` use the part's re-measured start instead.
+      onselect: () => present(part.startTokenIndex, { id: part.id, whole: true }),
     });
   }
 
@@ -140,7 +158,8 @@ export function startMenuItems(
   if (hidden > 0) {
     items.push({
       label: `${hidden} more ${hidden === 1 ? 'part' : 'parts'} below`,
-      description: 'Put the cursor in one and choose “From here” — it records that part.',
+      description:
+        'To record a whole part, put the cursor on its first spoken words and choose “From here”.',
       disabled: true,
       onselect: () => {},
     });
