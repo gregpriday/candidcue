@@ -55,6 +55,7 @@
     ResolvedOptics,
     SafeRenderNode,
     SmoothFollowProfile,
+    StageAutoScrollEndReason,
     StageAutoScrollPayload,
     StageMotionAck,
     StageRenderDocument,
@@ -238,8 +239,12 @@
      * not the renderer's decision to act on: the mount site owns the transport's
      * running flag, and a stage that quietly stopped itself would leave control
      * showing a Pause button for a document that cannot move.
+     *
+     * The reason travels with it because the two ends mean different things to
+     * the take: one is a place in the script, the other moved nothing. See
+     * `StageAutoScrollEndReason`.
      */
-    onautoscrollend?: () => void;
+    onautoscrollend?: (reason: StageAutoScrollEndReason) => void;
     /**
      * The layout settled. Carries what the stage measured about the face it
      * drew, because the window that paints the font is the only one that can
@@ -2622,6 +2627,16 @@
 
   function driveAutoScroll(now: number) {
     if (!autoScroll?.running) {
+      /*
+       * The latch is let go before the early return, not after it.
+       *
+       * A run with nowhere to go reports its end without ever seeding a target,
+       * so `autoTargetPx` is still null when control stands it down — and
+       * resetting the latch only on the path below left it set. The next press
+       * of the key then ran a transport that could never announce its end:
+       * following stayed paused for a take that had nothing to roll.
+       */
+      autoEndReported = false;
       if (autoTargetPx === null) return;
       /*
        * Stood down. Letting go of the fallback target entirely is what makes
@@ -2632,7 +2647,6 @@
        */
       autoTargetPx = null;
       autoLastFrameMs = null;
-      autoEndReported = false;
       engine.setFallbackTarget(null);
       return;
     }
@@ -2661,7 +2675,7 @@
     ) {
       if (!autoEndReported) {
         autoEndReported = true;
-        onautoscrollend?.();
+        onautoscrollend?.('nowhere_to_go');
       }
       return;
     }
@@ -2810,7 +2824,7 @@
      */
     if (!autoEndReported && autoScrollAtEnd(scrollY, maxScroll)) {
       autoEndReported = true;
-      onautoscrollend?.();
+      onautoscrollend?.('document_end');
     }
   }
 

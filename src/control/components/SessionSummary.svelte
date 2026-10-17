@@ -35,7 +35,7 @@
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
-  import { summaryActions } from '../lib/summary-actions';
+  import { partOutcomeLabel, summaryActions } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
@@ -206,16 +206,13 @@
           <dd>
             {summary.part.ordinal} of {summary.part.totalParts} · {summary.part.label}
             <!--
-              The completion claim is made only for a take that was FOLLOWING A
-              VOICE, because that is the only take it can be made about.
-              `partComplete` is raised by alignment snapshots, and a manual or
-              fixed-speed reading produces none — so a perfectly finished
-              auto-scroll take would have been reported "stopped part way",
-              which is not a cautious answer but a wrong one.
+              "Read to the end" is a claim about a voice and "carried to the
+              end by auto-scroll" is a claim about the glass; a take that was
+              neither gets no claim at all. `partOutcomeLabel` decides which,
+              because a voice take that fell back to auto-scroll is still a
+              `voice` take and the mode alone cannot tell them apart.
             -->
-            {#if summary.mode === 'voice'}
-              {summary.partComplete ? '— read to the end' : '— stopped part way'}
-            {/if}
+            {partOutcomeLabel(summary) ?? ''}
           </dd>
         {/if}
         <dt>Following</dt>

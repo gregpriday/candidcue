@@ -43,6 +43,7 @@
     STAGE_EVENT,
     STAGE_HEARTBEAT_GRACE_MS,
     type PresentationMode,
+    type StageAutoScrollEndReason,
     type StageAutoScrollPayload,
     type StageEscapePayload,
     type StageHeartbeatAckPayload,
@@ -658,9 +659,13 @@
    * itself: control owns the running flag, and a renderer that quietly stood the
    * transport down would leave the operator looking at a Pause button for a
    * document with nowhere left to go.
+   *
+   * The reason is passed through untouched: whether the end is a place in the
+   * script is the renderer's measurement and control's decision, not this
+   * component's.
    */
-  function handleAutoScrollEnd(): void {
-    sendIntent({ kind: 'auto_scroll_end' });
+  function handleAutoScrollEnd(reason: StageAutoScrollEndReason): void {
+    sendIntent({ kind: 'auto_scroll_end', reason });
   }
 
   /* ---------------------------------------------------------------------

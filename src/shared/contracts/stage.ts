@@ -319,6 +319,25 @@ export interface StageAutoScrollPayload {
 }
 
 /**
+ * Why the transport stopped having anywhere to go.
+ *
+ * Two answers, and only one of them is a place in the script:
+ *
+ *   - `document_end`: the document itself reached the bottom of its range
+ *     under the transport. Every line has passed the reading band, so the take
+ *     is at the end of the script, and that is where its ending belongs.
+ *   - `nowhere_to_go`: there was never a range to roll through — a script that
+ *     fits on the glass, or one with no words. The report arrives on the first
+ *     frame after the key, having moved nothing, and crediting it as "rolled to
+ *     the end" would record a reading that never happened.
+ *
+ * Auto-scroll pauses following, so the aligner drops every voice snapshot
+ * while it runs, and this report is the only thing control ever learns about
+ * where the transport took the document.
+ */
+export type StageAutoScrollEndReason = 'document_end' | 'nowhere_to_go';
+
+/**
  * What the stage should draw while the operator is calibrating the rig.
  *
  * The crosshair used to be the whole of calibration, and it answered exactly one
@@ -714,8 +733,11 @@ export type StageIntent =
    * the document has no further to go; only control knows whether that should
    * stand the transport down, and control is where the button that says
    * "running" lives.
+   *
+   * `reason` says which of the two ends it was, and control needs to know: see
+   * {@link StageAutoScrollEndReason}.
    */
-  | { kind: 'auto_scroll_end' }
+  | { kind: 'auto_scroll_end'; reason: StageAutoScrollEndReason }
   /**
    * The presenter asked for the transport from the glass.
    *

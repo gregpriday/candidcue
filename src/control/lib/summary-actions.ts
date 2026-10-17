@@ -20,7 +20,7 @@
  *
  * So the decision is here and the component renders what it is given.
  */
-import type { TakePart } from '../stores/session';
+import type { SessionSummary, TakePart } from '../stores/session';
 
 export interface SummaryActionsInput {
   /**
@@ -30,7 +30,11 @@ export interface SummaryActionsInput {
   retrySectionTokenIndex: number | null;
   /** The part this take was recording, or null for an unbounded take. */
   part: TakePart | null;
-  /** The presenter read to the end of that part. */
+  /**
+   * The take reached the end of that part — read there, or carried there by
+   * the auto-scroll transport. Either way it is not a part somebody abandoned,
+   * and the next one is what to offer.
+   */
   partComplete: boolean;
   /** The part after it, or null when it was the last one. */
   nextPart: TakePart | null;
@@ -127,4 +131,28 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
   }
 
   return actions;
+}
+
+/**
+ * What the summary's Part row says about how far the take got (§parts, #276).
+ *
+ * Null means say nothing, and that is the answer for a manual or fixed-speed
+ * take that the transport did not carry to the end: `partComplete` is raised
+ * by alignment snapshots and by the transport running off the end, and a take
+ * with neither has produced no evidence either way — "stopped part way" would
+ * not be a cautious answer there but a wrong one.
+ *
+ * The transport comes first, and in any mode. It is the one case the take can
+ * be described in without guessing, because the glass itself went to the end;
+ * and it is kept apart from "read to the end" because the transport moving the
+ * script past the reading band says nothing about anybody speaking it. A voice
+ * take that fell back to auto-scroll is still a `voice` take, which is exactly
+ * why this cannot be decided from the mode alone.
+ */
+export function partOutcomeLabel(
+  summary: Pick<SessionSummary, 'mode' | 'partComplete' | 'partRolledToEnd'>,
+): string | null {
+  if (summary.partRolledToEnd) return '— carried to the end by auto-scroll';
+  if (summary.mode !== 'voice') return null;
+  return summary.partComplete ? '— read to the end' : '— stopped part way';
 }
