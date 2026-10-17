@@ -105,6 +105,13 @@ No automated test can drive the packaged app (Apple ships no WebDriver for
 WKWebView), so a change to the live follow loop also needs a real take with a
 real microphone.
 
+### Branches
+
+The project uses gitflow. Branch from `develop` and open your pull request
+against `develop`; that is where all work is integrated. `main` only moves when
+a release is cut: `develop` is merged into `main` and the release is tagged
+there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
+
 ## Licence
 
 CandidCue is moving to the MIT licence

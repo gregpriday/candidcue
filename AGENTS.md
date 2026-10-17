@@ -34,6 +34,10 @@ TypeScript is strict. Use two-space indentation, single quotes, semicolons, and 
 
 Use Vitest for unit/integration tests, jsdom for components, Playwright for journeys, and Rust’s test harness. Name Vitest files `*.test.ts` and Playwright files `*.spec.ts`. Add regression coverage near the affected module. Run the narrowest suite first, then `pnpm check` and relevant broader suites. No coverage threshold is enforced.
 
+## Branching (gitflow)
+
+`develop` is the integration branch and the GitHub default. Branch `feature/*` and `bugfix/*` from `develop` and target pull requests at `develop`. `main` moves only on releases: `develop` is merged into `main` with a merge commit (never `--delete-branch`, which would delete `develop`), and a `v*` tag pushed from `main` triggers `release.yml`. See `docs/release-runbook.md`.
+
 ## Commit & Pull Request Guidelines
 
 History uses subjects such as `feat(stage): ...`, `fix(audio): ...`, and `test(control): ...`. Keep commits focused, imperative, and scoped. Pull requests should explain the user-visible effect, link the issue, list verification, and include screenshots or recordings for UI changes. Call out hardware, network, or packaged-app behavior that browser tests cannot verify.
