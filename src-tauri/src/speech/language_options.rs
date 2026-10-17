@@ -13,10 +13,10 @@
 //!   * `cc_stt::models::BUNDLED` — everything this build can DECODE with,
 //!     because tuning is measured rather than discovered. One model today.
 //!   * `cc_align::AlignmentLanguage::ALL` — everything the engine can
-//!     NORMALISE. Four today: English, French, German and Spanish. A
-//!     normalisation profile is a CAPABILITY of the engine and nothing more —
-//!     it is not a claim that the product follows that language, because
-//!     following also needs a model this build is tuned to decode with.
+//!     NORMALISE. One today: English. A normalisation profile is a
+//!     CAPABILITY of the engine and nothing more — it is not a claim that the
+//!     product follows that language, because following also needs a model
+//!     this build is tuned to decode with.
 //!     `language.rs` is emphatic that a silent fallback to English here is how
 //!     you ship a French model that passes every test and does not follow.
 //!
@@ -24,9 +24,9 @@
 //! computed HERE so that no screen has to restate it. Today it selects exactly
 //! one pair — `x-asr-480ms` × `en`, so CandidCue 1.0 follows English and
 //! nothing else. Chinese fails the third list even though the recogniser
-//! transcribes it; French, German and Spanish pass it — all three have
-//! profiles — and fail the second, because no recogniser this build can load
-//! speaks them and no measurement says it could decode with one.
+//! transcribes it; French, German and Spanish fail both the second and the
+//! third, because the engine has no profile for them, no recogniser this build
+//! can load speaks them, and no measurement says it could decode with one.
 //!
 //! ---------------------------------------------------------------------------
 //! WHY UNOFFERABLE LANGUAGES ARE NOT RETURNED AT ALL
@@ -437,10 +437,10 @@ mod tests {
     /// The whole point of the module, stated as a test: today exactly one
     /// language is offerable, and it is English on the bundled recogniser.
     ///
-    /// This will change when #157 lands profiles for French, German and
-    /// Spanish — at which point this test should be UPDATED rather than
-    /// deleted, because "which languages does this build claim to follow" is
-    /// worth one deliberate edit per language.
+    /// This changes only when a language has a profile, a measured recogniser
+    /// and a catalogue entry — at which point this test should be UPDATED
+    /// rather than deleted, because "which languages does this build claim to
+    /// follow" is worth one deliberate edit per language.
     #[test]
     fn only_english_is_offerable_in_this_build() {
         let offers = offerable_languages();
@@ -476,25 +476,6 @@ mod tests {
         assert!(!offerable_languages()
             .iter()
             .any(|offer| offer.primary_subtag == "zh"));
-    }
-
-    /// French, German and Spanish fail on the RECOGNISER half: the engine has
-    /// profiles for them and no recogniser this build can load speaks them.
-    /// §157 is what changes this.
-    #[test]
-    fn a_normalisable_language_without_a_recogniser_is_not_offerable() {
-        for subtag in ["fr", "de", "es"] {
-            assert!(
-                cc_align::AlignmentLanguage::from_bcp47(subtag).is_some(),
-                "{subtag} should normalise — the engine has the profile"
-            );
-            assert!(
-                !offerable_languages()
-                    .iter()
-                    .any(|offer| offer.primary_subtag == subtag),
-                "{subtag} must not be offered while it cannot be followed"
-            );
-        }
     }
 
     /// §153: a language we cannot follow must not appear in the list at all.

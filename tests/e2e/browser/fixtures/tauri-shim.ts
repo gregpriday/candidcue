@@ -544,10 +544,10 @@ function shimBody(config: ShimConfig): void {
    * English alone, because that is what a real build returns.
    *
    * Rust joins the catalogue against the recogniser table and the alignment
-   * engine's language table; French, German and Spanish have alignment
-   * profiles and no recogniser, so they are absent rather than disabled. A shim
-   * that offered them would let a spec assert against a screen no backend can
-   * produce.
+   * engine's language table; French, German and Spanish have neither an
+   * alignment profile nor a recogniser, so they are absent rather than
+   * disabled. A shim that offered them would let a spec assert against a
+   * screen no backend can produce.
    */
   function defaultLanguageOptions(): Record<string, unknown> {
     const status = modelStatusFor(DEFAULT_MODEL_ID);

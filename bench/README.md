@@ -552,7 +552,8 @@ Swapping the recogniser is the small part. `cc-align` was English throughout —
 not by decision, but because nothing else had ever been written — and a French
 model behind an English alignment engine produces a green test suite and a stage
 that does not follow. `crates/cc-align/src/language.rs` now holds the shape of
-the problem; this section holds the bar.
+the problem — English is still its only profile, and a second language starts
+by writing one there — and this section holds the bar.
 
 ### The normaliser, rule by rule
 
@@ -568,7 +569,7 @@ contract makes forgetting harder, not impossible.
 
 | Disposition | Rules | What it means |
 |---|---|---|
-| `SHARED` | segmentation | Assumed correct unchanged for all four target languages — asserted from the writing systems, not measured. Whitespace splitting is why the first set is Latin-script; CJK needs a real tokenizer and is a much larger job. |
+| `SHARED` | segmentation | Correct unchanged for the English profile. Another space-delimited Latin-script language may reuse it, subject to review and its own corpus — asserted from the writing systems, not measured. CJK needs a real tokenizer and is a much larger job. |
 | `MUST_REPLACE` | fillers, stopwords, ampersand, decimal syntax, currency symbols, currency order, scale words, percent, unit words | Leaving these English is not inert. |
 | `SAFE_EMPTY` | phonetics | Switches off on both sides together, so nothing that matched becomes a mismatch. |
 | `INERT_RECALL_GAP` | contractions, spelled numbers, ordinals | Fail safe — no false merges — but the equivalence they bought is gone. |
@@ -593,15 +594,14 @@ evidence for the observe/confirm/jump gates — a take whose `le`/`la`/`de` all
 carry full locating weight is a different engine, and false anchoring on a
 frequent function word is what it costs.
 
-**Phonetics starts disabled outside English.** As of #157 that is a behaviour
-rather than an intention: French, German and Spanish profiles exist and all
-three select `Disabled`, so the branch runs on real languages — though what has
-been shown is that it produces no key, not that producing none is the right
-choice for those languages. The reason is measurement
-rather than taste: Double Metaphone was tried against the in-house consonant
-skeleton and measurably lost, so there is no reason to assume a per-language
-phonetic algorithm wins either — it has to be shown on that language's own
-corpus. Folding diacritics before the existing skeleton is the obvious cheap
+**Phonetics starts disabled outside English.** A new profile should select
+`PhoneticPolicy::Disabled` until its own corpus says otherwise. No shipping
+profile selects it today, so what is tested is that an empty key is inert on
+both sides, not that producing none is right for any particular language. The
+reason is measurement rather than taste: Double Metaphone was tried against the
+in-house consonant skeleton and measurably lost, so there is no reason to
+assume a per-language phonetic algorithm wins either — it has to be shown on
+that language's own corpus. Folding diacritics before the existing skeleton is the obvious cheap
 alternative and is deliberately not done: accented *vowels* already encode
 identically to unaccented ones, so folding only moves diacritic *consonants* and
 the first-character slot — and the English corpus contains `Przemysław`,
@@ -694,9 +694,10 @@ cargo run --release -p cc-bench -- gate-language --label fr --tier-b /tmp/fr-b.j
 
 ### Known gaps, written down rather than fixed
 
-These are the things #157 will hit. They are listed because the alternative —
-building speculative machinery for a language nobody has measured — is how the
-`focus_lead_atoms` corridor ended up in the harness and not in the product.
+These are the things a first non-English profile will hit. They are listed
+because the alternative — building speculative machinery for a language nobody
+has measured — is how the `focus_lead_atoms` corridor ended up in the harness
+and not in the product.
 
 - **Currency and unit expansions are one atom each.** French says "millions
   **de** dollars", so a faithful French profile needs an atom *sequence*. The

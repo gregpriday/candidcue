@@ -870,6 +870,9 @@ mod tests {
         assert_eq!(atoms("can not"), vec!["can", "not"]);
         assert_eq!(atoms("it's we'll I'm"), vec!["it", "is", "we", "will", "i", "am"]);
         assert_eq!(atoms("don't"), vec!["do", "not"]);
+        // Only explicitly listed contractions ending in `'s` expand; an
+        // unrecognised form keeps its apostrophe rather than being rewritten.
+        assert_eq!(atoms("geht's"), vec!["geht's"]);
     }
 
     #[test]
@@ -1006,6 +1009,14 @@ mod tests {
         assert!(!is_filler("like"));
         assert!(is_stopword("the"));
         assert!(!is_stopword("teleprompter"));
+        // Other languages' hesitation sounds are not English fillers and must
+        // not become them: a filler is skipped outright.
+        for filler in ["euh", "ähm", "ehm"] {
+            assert!(
+                !is_filler(filler),
+                "{filler} is not an English filler and must not become one"
+            );
+        }
     }
 
     /// The English constants moved out of this file and into a profile, and
@@ -1106,13 +1117,11 @@ mod tests {
 
     /// Why switching the phonetic relation off is safe.
     ///
-    /// This now exercises [`PhoneticPolicy::Disabled`] end to end as well as in
-    /// the abstract: #157 added three profiles that select it, so the claim the
-    /// `SafeEmpty` disposition rests on can be tested against a real language
-    /// rather than against a hand-built empty key. The property is that an
-    /// empty key is inert in BOTH directions — script and transcript stop
-    /// producing keys together, so nothing that used to match becomes a
-    /// mismatch.
+    /// [`PhoneticPolicy::Disabled`] produces an empty key, and no shipping
+    /// profile selects it, so the claim the `SafeEmpty` disposition rests on is
+    /// tested against a hand-built empty key. The property is that an empty
+    /// key is inert in BOTH directions — script and transcript stop producing
+    /// keys together, so nothing that used to match becomes a mismatch.
     #[test]
     fn an_empty_phonetic_key_is_inert_in_both_directions() {
         let profile = AlignmentLanguage::English.profile();
@@ -1134,26 +1143,6 @@ mod tests {
         // Including against another empty one — two words the relation has
         // given up on are not thereby evidence that they sound alike.
         assert!(!empty.matches(&empty));
-
-        // A language whose policy is Disabled produces nothing at all, for any
-        // word, however meaty — which is what makes the relation switch off on
-        // both sides together.
-        for lang in [
-            AlignmentLanguage::French,
-            AlignmentLanguage::German,
-            AlignmentLanguage::Spanish,
-        ] {
-            for word in ["worcestershire", "kaiserslautern", "guadalajara"] {
-                let candidate = phonetic_key_for(lang, word);
-                assert!(
-                    candidate.is_empty(),
-                    "{lang:?} must not encode {word}: no corpus has shown the \
-                     English skeleton helps in that language"
-                );
-                assert!(!candidate.matches(&key));
-                assert!(!key.matches(&candidate));
-            }
-        }
     }
 
     /// The decimal separator is the rule the issue did not name and the one
@@ -1165,6 +1154,11 @@ mod tests {
         assert_eq!(atoms("1,000"), vec!["1000"]);
         assert_eq!(atoms("12.5"), vec!["12.5"]);
         assert_eq!(atoms("1,234.5"), vec!["1234.5"]);
+        // Read with the English convention, a comma is a thousands separator
+        // and simply dropped — so `12,5`, twelve and a half in most of Europe,
+        // is the atom `125` here. Pinned so the convention is a decision.
+        assert_eq!(atoms("12,5"), vec!["125"]);
+        assert_eq!(atoms("12,5%"), vec!["125", "percent"]);
 
         let english = AlignmentLanguage::English.profile();
         assert_eq!(english.group_separator, ',');
@@ -1172,245 +1166,5 @@ mod tests {
         // A profile that used one character for both would silently make
         // `12,5` into `125`; `supplies` refuses it.
         assert!(english.supplies(crate::language::LanguageRule::DecimalSyntax));
-    }
-
-    /* ---------------------------------------------------------------- #157
-     * The three candidate languages, exercised through the real pipeline.
-     *
-     * A profile that merely answers the `MustReplace` contract is data; these
-     * are the tests that it CHANGES SOMETHING, and that what it changes is
-     * what the profile says it should. That is the honest limit of what a
-     * table-driven test can establish: it pins the authored profile against
-     * the normaliser, and it cannot tell you the author chose the right words.
-     * Only a corpus does that. The English rows above are unchanged and must
-     * stay that way — every one of them is a measured baseline.
-     */
-
-    fn atoms_in(language: AlignmentLanguage, text: &str) -> Vec<String> {
-        canonical_atoms_for(language, text)
-    }
-
-    /// The rule that produces a WRONG NUMBER rather than a missed match.
-    ///
-    /// `12,5` is twelve and a half in all three languages. Read with the
-    /// English convention the comma is a thousands separator and simply
-    /// dropped, so the atom is `125` — a number nobody said.
-    #[test]
-    fn the_candidate_languages_point_with_a_comma() {
-        for lang in [
-            AlignmentLanguage::French,
-            AlignmentLanguage::German,
-            AlignmentLanguage::Spanish,
-        ] {
-            assert_eq!(atoms_in(lang, "12,5"), vec!["12.5"], "{lang:?}");
-            assert_eq!(atoms_in(lang, "1.000"), vec!["1000"], "{lang:?}");
-            assert_eq!(atoms_in(lang, "1.234,5"), vec!["1234.5"], "{lang:?}");
-        }
-        // The same text under the measured English profile, to show the two
-        // conventions genuinely disagree and that this is a real decision
-        // rather than a no-op.
-        assert_eq!(atoms_in(AlignmentLanguage::English, "12,5"), vec!["125"]);
-    }
-
-    /// `&` is a word, and it is not "and" outside English.
-    #[test]
-    fn the_candidate_languages_read_the_ampersand_in_their_own_words() {
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "R&D"),
-            vec!["r", "et", "d"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::German, "R&D"),
-            vec!["r", "und", "d"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::Spanish, "R&D"),
-            vec!["r", "y", "d"]
-        );
-    }
-
-    /// `%` is one atom in English and two in French and Spanish, which is the
-    /// reason the profile supplies a slice rather than a word.
-    #[test]
-    fn percent_is_read_as_the_words_that_are_spoken() {
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "50%"),
-            vec!["50", "pour", "cent"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::Spanish, "50%"),
-            vec!["50", "por", "ciento"]
-        );
-        // German is one word, like English but not the same word.
-        assert_eq!(
-            atoms_in(AlignmentLanguage::German, "50%"),
-            vec!["50", "prozent"]
-        );
-    }
-
-    /// Unit abbreviations expand to the word the reader says, not the English
-    /// one. Left unanswered this rule puts `milliseconds` into a French script.
-    #[test]
-    fn units_expand_into_the_language_of_the_script() {
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "250ms"),
-            vec!["250", "millisecondes"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::German, "250ms"),
-            vec!["250", "millisekunden"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::Spanish, "250ms"),
-            vec!["250", "milisegundos"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "24kHz"),
-            vec!["24", "kilohertz"]
-        );
-
-        // Still only after a number, in every language: `Ms Okonkwo` is a
-        // person in all four.
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "Ms Okonkwo"),
-            vec!["ms", "okonkwo"]
-        );
-    }
-
-    /// The currency symbol is spoken at the END of the amount, after the scale
-    /// word — the reordering rule, exercised in a language that is not English.
-    #[test]
-    fn currency_lands_after_the_scale_word() {
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "€2,4 millions"),
-            vec!["2.4", "millions", "euros"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::German, "€2,4 Millionen"),
-            vec!["2.4", "millionen", "euro"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::Spanish, "€2,4 millones"),
-            vec!["2.4", "millones", "euros"]
-        );
-    }
-
-    /// The known gap, asserted rather than described.
-    ///
-    /// French elides before a vowel — "millions D'EUROS" — and
-    /// `currency_units` holds ONE atom per unit, so `d'euros` is a single atom
-    /// that is not `euros`. The scale word still lands correctly, so two atoms
-    /// of three line up.
-    ///
-    /// FRENCH only, and worth keeping straight: Spanish says "millones DE
-    /// euros", which leaves `euros` intact as its own atom and merely adds an
-    /// unmatched `de`, and German says "Millionen Euro" exactly. The row below
-    /// asserts that difference rather than assuming it.
-    ///
-    /// The "spoken" side here is what the NORMALISER does with French written
-    /// the way French is written. It is not a claim about what any French
-    /// recogniser emits — no French corpus exists yet to say.
-    #[test]
-    fn the_french_currency_sequence_is_a_known_gap() {
-        let script = atoms_in(AlignmentLanguage::French, "€2,4 millions");
-        let spoken = atoms_in(AlignmentLanguage::French, "2,4 millions d'euros");
-
-        assert_eq!(script, vec!["2.4", "millions", "euros"]);
-        assert_eq!(spoken, vec!["2.4", "millions", "d'euros"]);
-        // The part that works: the number and the magnitude agree.
-        assert_eq!(script[..2], spoken[..2]);
-        // The part that does not, and is recorded as a gap rather than fixed
-        // speculatively — the right shape needs a French corpus to see.
-        assert_ne!(script[2], spoken[2]);
-
-        // Spanish keeps all three script atoms, in order, and only adds an
-        // unmatched `de`. German is exact. Neither shares French's problem.
-        let es_script = atoms_in(AlignmentLanguage::Spanish, "€2,4 millones");
-        let es_spoken = atoms_in(AlignmentLanguage::Spanish, "2,4 millones de euros");
-        assert_eq!(es_script, vec!["2.4", "millones", "euros"]);
-        assert_eq!(es_spoken, vec!["2.4", "millones", "de", "euros"]);
-
-        let de_script = atoms_in(AlignmentLanguage::German, "€2,4 Millionen");
-        let de_spoken = atoms_in(AlignmentLanguage::German, "2,4 Millionen Euro");
-        assert_eq!(de_script, de_spoken, "German needs no linking word at all");
-    }
-
-    /// Elisions pass through untouched, on BOTH sides.
-    ///
-    /// That is what makes leaving the English contraction table switched off
-    /// fail SAFE — no false merges, and a script and a recogniser that write
-    /// the same surface still match. It is not free: the rule's disposition is
-    /// `InertRecallGap` precisely because the equivalence it bought is gone,
-    /// so the case where the two sides spell it differently is now a miss.
-    #[test]
-    fn elisions_survive_because_both_sides_keep_them() {
-        for (lang, text, expected) in [
-            (AlignmentLanguage::French, "l'arbre qu'il", vec!["l'arbre", "qu'il"]),
-            (AlignmentLanguage::Spanish, "del árbol", vec!["del", "árbol"]),
-            (AlignmentLanguage::German, "geht's", vec!["geht's"]),
-        ] {
-            assert_eq!(atoms_in(lang, text), expected, "{lang:?}");
-        }
-        // The English table must NOT have run: `qu'il` is not a contraction it
-        // knows, but `geht's` ends in `'s`, which English would rewrite.
-        assert_eq!(
-            atoms_in(AlignmentLanguage::English, "geht's"),
-            vec!["geht's"],
-            "the English `'s` rule is limited to a pronoun set, so this is \
-             stable in both — asserted so the German row above means something"
-        );
-    }
-
-    /// The spelled-number grammar is English and stays switched off, so digits
-    /// and words no longer meet in the middle. Inert, not wrong: both sides
-    /// keep their own surface.
-    #[test]
-    fn the_english_number_grammar_does_not_run_on_the_candidates() {
-        // English collapses these into a digit.
-        assert_eq!(atoms_in(AlignmentLanguage::English, "forty two"), vec!["42"]);
-        // The candidates leave both surfaces alone, which is the documented
-        // InertRecallGap: a French script saying "quarante-deux" and a French
-        // recogniser writing "quarante-deux" still match each other.
-        assert_eq!(
-            atoms_in(AlignmentLanguage::French, "quarante-deux"),
-            vec!["quarante", "deux"]
-        );
-        assert_eq!(
-            atoms_in(AlignmentLanguage::German, "zweiundvierzig"),
-            vec!["zweiundvierzig"]
-        );
-    }
-
-    /// Stopword-ness decides atom weight and global-anchor eligibility, so a
-    /// candidate language running on English stopwords would be a different
-    /// engine rather than a slightly worse one.
-    #[test]
-    fn each_candidate_language_knows_its_own_function_words() {
-        for (lang, words) in [
-            (AlignmentLanguage::French, ["le", "de", "et"]),
-            (AlignmentLanguage::German, ["der", "und", "mit"]),
-            (AlignmentLanguage::Spanish, ["el", "de", "por"]),
-        ] {
-            for word in words {
-                assert!(
-                    is_stopword_for(lang, word),
-                    "{word} must be a {lang:?} stopword"
-                );
-            }
-            // English's own function words are not automatically these.
-            assert!(!is_stopword_for(lang, "the"), "{lang:?} must not take `the`");
-        }
-
-        for (lang, filler) in [
-            (AlignmentLanguage::French, "euh"),
-            (AlignmentLanguage::German, "ähm"),
-            (AlignmentLanguage::Spanish, "ehm"),
-        ] {
-            assert!(is_filler_for(lang, filler), "{filler} is a {lang:?} filler");
-            assert!(
-                !is_filler_for(AlignmentLanguage::English, filler),
-                "{filler} is not an English filler and must not become one"
-            );
-        }
     }
 }
