@@ -336,9 +336,10 @@ fn no_window_can_open_a_file_dialog_from_javascript() {
 /// defaults: the whole menu builder (`set_as_app_menu` and `set_as_window_menu`
 /// among it), tray icons, images, paths, resources, app metadata and the read
 /// halves of the webview and window plugins. The frontend called four of those
-/// commands. The menu bar is built in Rust (`src/menu.rs`) and there is no tray,
-/// so all that grant did was let a script in either window replace the
-/// application menu or put an icon in the menu bar.
+/// commands. The menu bar is built in Rust (`src/menu.rs`), so the main thing
+/// that grant did was let a script in either window replace the application
+/// menu with one of its own. (The tray commands resolved too, and only failed
+/// to run because the `tray-icon` feature happens to be off.)
 ///
 /// The universe is every command a core manifest declares, so a grant that
 /// comes back — through a capability file, a permission set, or a Tauri upgrade
@@ -378,6 +379,8 @@ fn windows_can_invoke_only_the_core_commands_their_frontends_call() {
                 "plugin:event|listen",
                 "plugin:event|unlisten",
                 "plugin:event|emit",
+                // stage.json grants it and no stage code calls `emitTo`; it
+                // predates #267, which left the stage alone.
                 "plugin:event|emit_to",
             ],
         ),

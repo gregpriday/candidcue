@@ -196,8 +196,9 @@ pub enum FocusTarget {
 /// WHY THIS IS A COMMAND AND NOT `getCurrentWindow().setFocus()`
 /// ---------------------------------------------------------------------------
 /// Because that does not work, and did not work before this: `core:window:default`,
-/// which the renderer held until #267 narrowed it to `allow-current-monitor`,
-/// granted the READ half of the window plugin — sizes, positions, `is_focused` —
+/// which control and Settings held until #267 (control now holds nothing from
+/// the window plugin, Settings only `allow-current-monitor`), granted the READ
+/// half of the window plugin — sizes, positions, `is_focused` —
 /// and neither `allow-set-focus` nor `allow-unminimize`. Window › CandidCue had
 /// therefore been a silent no-op since it was added; the renderer's call was
 /// rejected by the ACL inside a `try` that treated the rejection as "browser

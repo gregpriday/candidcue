@@ -471,9 +471,10 @@ export async function closeControlWindow(): Promise<void> {
  * Bring one of the application's windows forward (the Window menu).
  *
  * RUST does it. `getCurrentWindow().setFocus()` is the obvious call and it does
- * not work: the window plugin is not granted beyond `allow-current-monitor`
- * (#267), and even the `core:window:default` it once held was the read half,
- * with neither `allow-set-focus` nor `allow-unminimize`, so the call is rejected by
+ * not work: control holds nothing from the window plugin and Settings only
+ * `allow-current-monitor` (#267), and even the `core:window:default` both once
+ * held was the read half, with neither `allow-set-focus` nor
+ * `allow-unminimize`, so the call is rejected by
  * the ACL — inside a `try` that had been reading the rejection as "this is
  * browser dev". Window › CandidCue was a silent no-op for exactly that reason.
  *
