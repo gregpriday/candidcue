@@ -492,6 +492,16 @@ export function createSmoothFollowStore(
       if (sessionFollowing) following = sessionFollowing;
       seq = 0;
       sessionStartedAtMs = now();
+      /*
+       * A new take starts following, whatever the last one ended doing.
+       *
+       * The flag is private, so nothing else resets it. A take that ended with
+       * following switched off — or mid-roll, the transport having switched it
+       * off — left the next one refusing every automatic release: the first
+       * hold of that take stopped following for good, under a switch that
+       * still read on.
+       */
+      userPaused = false;
       const base = initialState(following);
       store.set({ ...base, sessionId, active: true });
       update((s) => ({
@@ -513,6 +523,7 @@ export function createSmoothFollowStore(
     reset() {
       seq = 0;
       sessionStartedAtMs = null;
+      userPaused = false;
       store.set(initialState(following));
     },
 
