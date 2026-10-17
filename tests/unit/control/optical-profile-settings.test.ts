@@ -833,19 +833,67 @@ describe('carrying the retired global mirror onto the glass, once', () => {
     });
   });
 
-  it('reads the old switch as it was rendered, where the overlay copy won', async () => {
-    // `mirrorX` round-tripped through both and the overlay's copy was merged
-    // over Rust's, so an overlay `false` is what every take actually showed.
+  it("reads the old horizontal switch from the document, not the overlay's copy", async () => {
+    /*
+     * #271. `mirrorX` round-tripped through both, so they only disagree when
+     * the document changed without the overlay — a Settings › Data › Restore.
+     * The overlay's copy is then the PRE-restore switch, and carrying it would
+     * put that mirror on the restored install's glass.
+     */
     setLegacyHorizontalMirror(true);
     store.set(
       OVERLAY_KEY,
       JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' }, teleprompter: { mirrorX: false } }),
     );
 
-    const loaded = await settings.getSettings();
+    let loaded = await settings.getSettings();
+
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: false });
+    expect(settings.pendingPanelMirrorAdoption()).toEqual({
+      'dsp-glass': { horizontal: true, vertical: false },
+    });
+
+    // And the other way round, which is the issue's repro: restored with the
+    // mirror off, under an overlay left behind with it on.
+    setLegacyHorizontalMirror(false);
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ stage: { displayFingerprint: 'dsp-glass' }, teleprompter: { mirrorX: true } }),
+    );
+
+    loaded = await settings.getSettings();
 
     expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: false, vertical: false });
     expect(settings.pendingPanelMirrorAdoption()).toBeNull();
+  });
+
+  it('keeps the overlay-only vertical switch through a save, until a pin can carry it', async () => {
+    /*
+     * A teleprompter save drops the overlay's `mirrorX` (#271), and must not
+     * take `mirrorY` with it: Rust never held that one, and with nothing pinned
+     * yet there is no panel to carry it onto, so the overlay is still the only
+     * record of it.
+     */
+    setLegacyHorizontalMirror(true);
+    store.set(
+      OVERLAY_KEY,
+      JSON.stringify({ teleprompter: { mirrorX: true, mirrorY: true, fontSizePx: 72 } }),
+    );
+
+    let loaded = await settings.getSettings();
+    expect(loaded.optical.panelMirror).toEqual({});
+    await settings.updateSettings(4, { teleprompter: { ...loaded.teleprompter, fontSizePx: 80 } });
+
+    const stored = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as {
+      teleprompter?: Record<string, unknown>;
+    };
+    expect(stored.teleprompter).not.toHaveProperty('mirrorX');
+    expect(stored.teleprompter).toMatchObject({ mirrorY: true, fontSizePx: 80 });
+
+    // Pinning the glass afterwards still carries both axes onto it.
+    await settings.updateSettings(4, { stage: { ...loaded.stage, displayFingerprint: 'dsp-glass' } });
+    loaded = await settings.getSettings();
+    expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: true });
   });
 
   it('guesses no panel when nothing says which one is the glass', async () => {
