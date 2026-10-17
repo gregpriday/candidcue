@@ -59,6 +59,7 @@ import {
   type AdvanceStyle,
 } from './advance';
 import { FONT_METRICS_PROSE_SAMPLE } from './fontMetrics';
+import { listInsetEm } from '../../shared/list-marker';
 
 /**
  * How much narrower than the real column the planner aims.
@@ -408,17 +409,22 @@ interface BlockLayout {
   italic: boolean;
 }
 
-/** `.list-item { gap: 0.55em }` plus `.bullet { width: 0.28em }`. */
-const LIST_INSET_EM = 0.83;
 /** `.quote { padding-left: 0.85em; font-style: italic }`. */
 const QUOTE_INSET_EM = 0.85;
 
-function layoutForKind(kind: string, fontSizePx: number): BlockLayout | null {
-  switch (kind) {
+function layoutForBlock(block: CompiledBlock, fontSizePx: number): BlockLayout | null {
+  switch (block.kind) {
     case 'paragraph':
       return { insetPx: 0, italic: false };
     case 'list_item':
-      return { insetPx: LIST_INSET_EM * fontSizePx, italic: false };
+      /*
+       * Not a constant any more: a numbered item's marker column is wider than
+       * a bullet's, a checkbox is wider again, and a nested item is indented by
+       * its depth. `BlockView` draws all four from `list-marker.ts` — the same
+       * function read here — so the inset planned against is the inset drawn,
+       * by construction rather than by two numbers that happen to agree.
+       */
+      return { insetPx: listInsetEm(block.layoutHints) * fontSizePx, italic: false };
     case 'blockquote':
       return { insetPx: QUOTE_INSET_EM * fontSizePx, italic: true };
     default:
@@ -481,7 +487,7 @@ export function planScriptBreaks(
   let unplannedBlocks = 0;
 
   for (const block of blocks) {
-    const layout = layoutForKind(block.kind, options.baseStyle.fontSizePx);
+    const layout = layoutForBlock(block, options.baseStyle.fontSizePx);
     if (!layout) continue;
     const plan = planBlockBreaks(block.renderNodes, {
       ...options,

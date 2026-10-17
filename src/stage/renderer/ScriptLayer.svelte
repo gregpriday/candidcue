@@ -480,9 +480,19 @@
    * It cannot move a spoken token — `projectForPerformance` only touches blocks
    * that carry none — which is what makes it safe to apply after the compiler
    * has assigned the indices the aligner tracks against.
+   *
+   * A reading window always shows the whole document. The chips exist for a
+   * nine-inch glass read from two metres; a reading window is read at a desk,
+   * where the table is something to read and REFER TO TABLE is a table that went
+   * missing. Practice and Diagnostic Take still select the same view on the
+   * prompter, and a prompter take is unchanged.
    */
   const performanceMode = $derived<PerformanceMode>(
-    rehearsal || (settings.stageMode ?? 'clean') === 'diagnostic' ? 'rehearsal' : 'take',
+    rehearsal ||
+      (settings.stageMode ?? 'clean') === 'diagnostic' ||
+      settings.readingContext === 'reader'
+      ? 'rehearsal'
+      : 'take',
   );
 
   /**
@@ -3684,6 +3694,7 @@
           showCues={settings.showCues}
           {gapPx}
           breakAfterTokens={wrapPlan.breakAfterTokens}
+          reader={settings.readingContext === 'reader'}
         />
       {/each}
       {#if renderWindow.trailingSpacePx > 0}

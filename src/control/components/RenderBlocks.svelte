@@ -5,6 +5,7 @@
 <script lang="ts">
   import type { CompiledBlock, SafeRenderNode } from '../../shared/contracts';
   import type { PreviewImages } from '../lib/preview-images';
+  import { listMarker, listMarkerGeometry } from '../../shared/list-marker';
   import RenderNodes from './RenderNodes.svelte';
 
   interface Props {
@@ -24,6 +25,17 @@
 
   function nodesOf(block: CompiledBlock): SafeRenderNode[] {
     return block.renderNodes;
+  }
+
+  /*
+   * The same marker the stage draws, from the same function, so the preview and
+   * the glass agree about what a list item is. Its widths are in `em` of the
+   * item's own type (`.list-item` sets it), which is what keeps the proportions
+   * the stage's line planner relies on — though nothing plans lines here.
+   */
+  function markerOf(block: CompiledBlock) {
+    const marker = listMarker(block.layoutHints);
+    return { marker, geometry: listMarkerGeometry(marker) };
   }
 </script>
 
@@ -66,6 +78,38 @@
              paragraph: it takes none of the prose size or line height. -->
         <div class="figure" class:quiet={!block.spoken}>
           <RenderNodes nodes={nodesOf(block)} {images} />
+        </div>
+      {:else if block.kind === 'list_item'}
+        {@const { marker, geometry } = markerOf(block)}
+        <!-- The marker is drawn, never read: `aria-hidden`, and outside the
+             words, as on the stage. -->
+        <div
+          class="list-item"
+          data-marker={marker.kind}
+          data-depth={marker.depth}
+          style:padding-left="{geometry.indentEm}em"
+          style:column-gap="{geometry.gapEm}em"
+        >
+          {#if marker.kind === 'number'}
+            <span class="marker number" aria-hidden="true" style:width="{geometry.markerEm}em">{marker.label}</span>
+          {:else if marker.kind === 'task'}
+            <span
+              class="marker checkbox"
+              class:checked={marker.checked}
+              aria-hidden="true"
+              data-checked={marker.checked ? 'true' : 'false'}
+              style:width="{geometry.markerEm}em"
+              style:height="{geometry.markerEm}em"
+            ></span>
+          {:else}
+            <span
+              class="marker bullet"
+              aria-hidden="true"
+              style:width="{geometry.markerEm}em"
+              style:height="{geometry.markerEm}em"
+            ></span>
+          {/if}
+          <p class="para list-body"><RenderNodes nodes={nodesOf(block)} {images} /></p>
         </div>
       {:else if block.kind === 'table'}
         <!-- Not wrapped in <p>: a table inside a paragraph is invalid HTML and
@@ -128,6 +172,63 @@
     line-height: var(--lh-transcript);
     color: var(--prose-text-warm);
     letter-spacing: var(--ls-prose);
+  }
+
+  /*
+   * A list item, drawn as the stage draws it: the marker and its widths come
+   * from `list-marker.ts`, in `em` of the prose size set here. The colours are
+   * the control window's own, because this is the control window.
+   */
+  .list-item {
+    display: flex;
+    align-items: baseline;
+    font-size: var(--text-lg);
+    line-height: var(--lh-transcript);
+  }
+  .marker {
+    flex: none;
+  }
+  .bullet {
+    border-radius: 50%;
+    background: var(--text-muted);
+    transform: translateY(-0.18em);
+  }
+  .number {
+    display: flex;
+    justify-content: flex-end;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    letter-spacing: var(--ls-prose);
+  }
+  .checkbox {
+    position: relative;
+    box-sizing: border-box;
+    border: 1.5px solid var(--text-muted);
+    border-radius: 0.16em;
+    transform: translateY(0.04em);
+  }
+  /* A ticked box in the accent, as a checked control is everywhere else in
+     the window; the tick takes the accent's own contrast colour. */
+  .checkbox.checked {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+  .checkbox.checked::after {
+    content: '';
+    position: absolute;
+    left: 33%;
+    top: 12%;
+    width: 30%;
+    height: 54%;
+    box-sizing: border-box;
+    border-style: solid;
+    border-color: var(--accent-contrast);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .list-body {
+    flex: 1;
+    min-width: 0;
   }
 
   /* Cue chip — visually distinct, clearly not spoken text (spec §23.2). */

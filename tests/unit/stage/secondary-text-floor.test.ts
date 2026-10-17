@@ -117,8 +117,14 @@ describe('readable secondary text', () => {
   it('does not drag decoration up with the text', () => {
     // The divider rule and the list bullet are drawn, not read. A floor on
     // either would grow a graphic to the size of a word for no reason.
-    for (const selector of ['.divider', '.bullet']) {
+    for (const selector of ['.divider', '.bullet', '.checkbox']) {
       expect(ruleBody(sheets.BlockView, selector)).not.toContain('font-size');
     }
+  });
+
+  it('reads a list number at the size of the words it numbers', () => {
+    // Not secondary text at all: `3.` is part of reading the item, so it sets
+    // no size of its own and cannot fall under the floor by being made one.
+    expect(ruleBody(sheets.BlockView, '.number')).not.toContain('font-size');
   });
 });
