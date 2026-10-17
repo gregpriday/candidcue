@@ -222,3 +222,71 @@ describe('a key aimed at the stage', () => {
     expect(onexit).not.toHaveBeenCalled();
   });
 });
+
+/*
+ * #284. The stage matched `event.key` alone, so a chord the app shortcut layer
+ * owns reached the plain key's case as well: ⌥↓ (next section) stepped a line,
+ * and ⌘⇧Space (hard pause) toggled pause. Control now answers both, so a stage
+ * that also acted would answer one press twice, two different ways.
+ */
+describe('a chord the app owns', () => {
+  it('is not answered as the plain key it contains', () => {
+    const { onintent } = mount();
+
+    const chords = [
+      press(window, 'ArrowDown', { altKey: true }),
+      press(window, 'ArrowUp', { altKey: true }),
+      press(window, ' ', { metaKey: true, shiftKey: true }),
+      press(window, ' ', { ctrlKey: true, shiftKey: true }),
+      press(window, 'PageDown', { altKey: true }),
+      press(window, 'a', { metaKey: true }),
+      press(window, ']', { ctrlKey: true }),
+    ];
+
+    expect(onintent).not.toHaveBeenCalled();
+    // Not claimed either, which is also the proof no case ran: every one of
+    // them — the arrows' step included — prevents default before it acts.
+    expect(chords.map((event) => event.defaultPrevented)).toEqual(chords.map(() => false));
+  });
+
+  it('leaves the plain keys answering as they did', () => {
+    const { onintent } = mount();
+
+    expect(press(window, ' ').defaultPrevented).toBe(true);
+    press(window, 'a');
+    press(window, ']');
+
+    expect(onintent.mock.calls.map(([intent]) => intent)).toEqual([
+      { kind: 'toggle_pause' },
+      { kind: 'auto_scroll_toggle' },
+      { kind: 'auto_scroll_pace', direction: 'faster' },
+    ]);
+  });
+
+  /*
+   * Option types `[` on a German Mac, and AltGr — Ctrl+Alt — types it on a
+   * German PC. Those are the same key to the person pressing them, and the
+   * stage has always answered them; a guard that read every modifier as a
+   * chord would have taken the pace keys off those keyboards.
+   */
+  it('still answers a character a layout types with Option or AltGr', () => {
+    const { onintent } = mount();
+
+    press(window, '[', { altKey: true });
+    press(window, ']', { ctrlKey: true, altKey: true });
+
+    expect(onintent.mock.calls.map(([intent]) => intent)).toEqual([
+      { kind: 'auto_scroll_pace', direction: 'slower' },
+      { kind: 'auto_scroll_pace', direction: 'faster' },
+    ]);
+  });
+
+  it('does not take Escape from a presenter holding a modifier', () => {
+    const { onexit } = mount();
+
+    press(window, 'Escape', { shiftKey: true, metaKey: true });
+    press(window, 'Escape', { altKey: true });
+
+    expect(onexit).toHaveBeenCalledTimes(1);
+  });
+});

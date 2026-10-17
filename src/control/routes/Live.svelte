@@ -229,13 +229,33 @@ import { onShortcut } from '../lib/shortcuts';
   });
 
   const flatOutline = $derived(flatten($session.outline));
-  const currentSectionIndex = $derived(
+
+  /** The last section starting at or before `token`; -1 ahead of the first. */
+  function sectionIndexAt(token: number): number {
+    return flatOutline.reduce(
+      (acc, entry, index) => (entry.node.startTokenIndex <= token ? index : acc),
+      -1,
+    );
+  }
+
+  const currentSectionIndex = $derived(snapshot ? sectionIndexAt(snapshot.confirmedToken) : -1);
+
+  /*
+   * The section a section jump is measured from (#284).
+   *
+   * Not `currentSectionIndex`, which is what the tracking panel reports and so
+   * stays "none" until the take has a position. A take from the top publishes
+   * nothing until the voice locks or a key moves it, and measured from "none"
+   * the first ⌥↓ asked for the FIRST section — the one already on the glass —
+   * and went nowhere. Before any snapshot the take is where it opened, and the
+   * envelope says where that was.
+   */
+  const navigationSectionIndex = $derived(
     snapshot
-      ? flatOutline.reduce(
-          (acc, entry, index) => (entry.node.startTokenIndex <= snapshot.confirmedToken ? index : acc),
-          -1,
-        )
-      : -1,
+      ? currentSectionIndex
+      : $session.stageEnvelope
+        ? sectionIndexAt($session.stageEnvelope.initialTokenIndex)
+        : -1,
   );
 
   const sentenceIndex = $derived(
@@ -288,23 +308,19 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /**
-   * Outline navigation. `moveSentences` is a relative move and needs a cursor,
-   * so before the first snapshot (i.e. before Start) it can express nothing —
-   * clicking a section used to do nothing at all. An absolute move to the
-   * section's first token is the honest answer for "go here before I start".
+   * Outline navigation: an absolute move to the section's first sentence.
+   *
+   * It used to be a relative `moveSentences` whenever a cursor existed, with
+   * the distance counted from this screen's `sentenceIndex` — the sentence
+   * CONTAINING the cursor, or 0 when none does. The driver applies a relative
+   * move from its own index, the last sentence STARTING at or before the
+   * cursor. A cursor between two sentences reads differently to each, and the
+   * jump landed that many sentences away from the section. A section is a
+   * place, so it is asked for as one (#284).
    */
   function jumpToSection(node: OutlineNode): void {
-    if (sentenceIndex >= 0) {
-      const targetIndex = $session.sentences.findIndex(
-        (s) => s.startTokenIndex >= node.startTokenIndex,
-      );
-      if (targetIndex >= 0) {
-        moveSentences(targetIndex - sentenceIndex);
-        showToast(node.title, 'info');
-        return;
-      }
-    }
-    goToToken(node.startTokenIndex);
+    const first = $session.sentences.find((s) => s.startTokenIndex >= node.startTokenIndex);
+    goToToken(first?.startTokenIndex ?? node.startTokenIndex);
     showToast(node.title, 'info');
   }
 
@@ -742,18 +758,25 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   $effect(() =>
-    onShortcut((action) => {
-      // These keys belong to the embedded production stage while it is
-      // mounted. Handling them again in control would turn one Space into
-      // pause-then-resume, or one Escape into two teardown attempts.
+    onShortcut((action, source) => {
+      /*
+       * These keys belong to the embedded production stage while it is
+       * mounted. Handling them again in control would turn one Space into
+       * pause-then-resume, or one Escape into two teardown attempts.
+       *
+       * Only the keys the stage ACTUALLY answers belong on this list, and only
+       * when they arrive as keys (#284). Hard pause and the section jumps used
+       * to be here too, and the stage has never had either: ⌥↓ reached its
+       * plain ArrowDown and stepped a line, ⌘⇧Space its plain Space. A menu
+       * command never reaches the stage at all, so Session › Pause stood down
+       * here for a handler that does not exist.
+       */
       if (
+        source === 'key' &&
         $session.active &&
         $session.stageEnvelope &&
         (action === 'escape' ||
           action === 'play-pause' ||
-          action === 'hard-pause' ||
-          action === 'prev-chapter' ||
-          action === 'next-chapter' ||
           // The transport keys are answered by the mounted stage too, so that
           // the hold chip's advice works on a separate-stage rig where that
           // window holds the keyboard. Handling them in both places would turn
@@ -784,11 +807,12 @@ import { onShortcut } from '../lib/shortcuts';
           moveSentences(1);
           break;
         case 'prev-chapter':
-          if (currentSectionIndex > 0) jumpToSection(flatOutline[currentSectionIndex - 1]!.node);
+          if (navigationSectionIndex > 0)
+            jumpToSection(flatOutline[navigationSectionIndex - 1]!.node);
           break;
         case 'next-chapter':
-          if (currentSectionIndex < flatOutline.length - 1)
-            jumpToSection(flatOutline[currentSectionIndex + 1]!.node);
+          if (navigationSectionIndex < flatOutline.length - 1)
+            jumpToSection(flatOutline[navigationSectionIndex + 1]!.node);
           break;
         case 'stage-text-up':
           adjustFontSize(2);
@@ -806,10 +830,11 @@ import { onShortcut } from '../lib/shortcuts';
           void togglePresentationMode();
           break;
         /*
-         * The transport keys are NOT in the delegate-to-the-stage list above.
-         * The stage renders auto-scroll but does not own it: the running flag,
-         * the pace and the mutual exclusion with voice following are all
-         * session state, and this is the window that holds it.
+         * Reached when the stage is not the one answering: off a take, or from
+         * a menu. The stage renders auto-scroll but does not own it either way:
+         * its keys raise intents that land back in this window, because the
+         * running flag, the pace and the mutual exclusion with voice following
+         * are all session state, and this is the window that holds it.
          */
         case 'toggle-auto-scroll':
           toggleAutoScroll();

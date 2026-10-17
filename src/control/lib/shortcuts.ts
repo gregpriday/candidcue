@@ -150,7 +150,19 @@ export function shortcutAppliesToRoute(action: ShortcutAction, routeName: Route[
   return ownership === 'global' || ownership.includes(routeName);
 }
 
-type Handler = (action: ShortcutAction) => void;
+/**
+ * How an action arrived: a keystroke this window heard, or a menu command.
+ *
+ * Live needs to know (#284). During a take the embedded stage listens on this
+ * same window and answers some keys itself, so Live stands down for those —
+ * but only a KEYSTROKE reaches the stage. A menu command reaches nothing but
+ * this bus, and a handler that stood down for it left Session › Pause doing
+ * nothing at all. A native accelerator is a menu command too: the menu takes
+ * the key before any webview sees it.
+ */
+export type ShortcutSource = 'key' | 'menu';
+
+type Handler = (action: ShortcutAction, source: ShortcutSource) => void;
 const handlers = new Set<Handler>();
 
 /** Subscribe to shortcut actions; returns an unsubscribe function. */
@@ -164,7 +176,7 @@ function emit(action: ShortcutAction, event: KeyboardEvent): void {
   // own handling of it for no gain.
   if (handlers.size === 0) return;
   event.preventDefault();
-  for (const handler of handlers) handler(action);
+  for (const handler of handlers) handler(action, 'key');
 }
 
 /**
@@ -172,10 +184,12 @@ function emit(action: ShortcutAction, event: KeyboardEvent): void {
  *
  * The native Session menu's entries are the same actions as the transport keys,
  * and the screens that own those actions — Live, above all — already subscribe
- * here with every guard they need (the delegate-to-the-embedded-stage list, the
- * section bounds, the rig-resolved type ceiling). Routing menu commands through
- * this bus rather than reaching into those screens means the menu and the key
- * are the SAME code path, so they cannot come to mean different things.
+ * here with every guard they need (the section bounds, the rig-resolved type
+ * ceiling). Routing menu commands through this bus rather than reaching into
+ * those screens means the menu and the key are the SAME code path, so they
+ * cannot come to mean different things. The one guard a menu command must NOT
+ * meet is the delegate-to-the-embedded-stage list, which is why it arrives as
+ * `'menu'` — see `ShortcutSource`.
  *
  * Ownership is checked exactly as `installShortcuts` checks it. A menu item for
  * a command the current screen does not own is already greyed out — but the menu
@@ -185,7 +199,7 @@ function emit(action: ShortcutAction, event: KeyboardEvent): void {
 export function emitShortcut(action: ShortcutAction): boolean {
   if (!shortcutAppliesToRoute(action, currentRoute().name)) return false;
   if (handlers.size === 0) return false;
-  for (const handler of handlers) handler(action);
+  for (const handler of handlers) handler(action, 'menu');
   return true;
 }
 
