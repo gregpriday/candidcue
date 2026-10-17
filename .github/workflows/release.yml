@@ -411,19 +411,20 @@ jobs:
       # reason nobody in this repository introduced. They run here so a new
       # advisory is news attached to the release, and the run records what it
       # found in the provenance either way.
+      #
+      # `report-advisories.mjs` sorts the findings against
+      # `docs/advisory-exceptions.json`: NEW, REVIEW OVERDUE, and ACCEPTED with
+      # the reason somebody recorded, so the report says what changed rather than
+      # repeating every known finding as if it were. It exits 1 when anything is
+      # new, overdue or failed to scan, which marks this step and nothing more.
+      # The raw scanner output is saved beside it, flat, because the publish job
+      # attaches `provenance/*` file by file.
       - name: Dependency advisories (reported, not enforced)
         continue-on-error: true
         run: |
           set -uo pipefail
-          {
-            echo "# cargo audit"
-            cargo install cargo-audit --locked --quiet 2>/dev/null || true
-            cargo audit --file src-tauri/Cargo.lock 2>&1 || true
-            cargo audit --file crates/Cargo.lock 2>&1 || true
-            echo
-            echo "# pnpm audit"
-            pnpm audit --prod 2>&1 || true
-          } | tee provenance/advisories.txt
+          cargo install cargo-audit --locked --quiet 2>/dev/null || true
+          node scripts/report-advisories.mjs --save provenance 2>&1 | tee provenance/advisories.txt
 
       - name: Checksum every artifact
         run: |

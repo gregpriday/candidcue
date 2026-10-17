@@ -1,0 +1,65 @@
+{
+  "about": "Advisories that cargo audit or pnpm audit report against this repository and that were traced and accepted: why each one does not reach the shipped app, and when to look again. node scripts/report-advisories.mjs sorts a scan against this file into NEW, ACCEPTED and REVIEW OVERDUE. An exception covers only the exact lockfile, package, version and advisory id it lists, so a version bump or a second copy arrives as NEW. reach is one of: disabled-feature (in the lockfile, compiled into no build), other-target (only on a platform the release does not build; releases are aarch64-apple-darwin and x86_64-apple-darwin), dev-only (development or test tooling, never in the app bundle), unused-api (ships, but the affected code is never called), no-vulnerability (ships; the advisory reports a maintenance status, not a flaw). recheck is how to confirm the reason still holds.",
+  "exceptions": [
+    {
+      "lockfile": "src-tauri/Cargo.lock",
+      "findings": [{ "package": "rsa", "version": "0.9.10", "id": "RUSTSEC-2023-0071" }],
+      "reach": "disabled-feature",
+      "why": "Listed by sqlx-mysql, which sqlx builds only with its mysql feature. src-tauri/Cargo.toml enables sqlite and no other database, so rsa is in the lockfile and in no build. Upstream has no fixed release.",
+      "recheck": "cargo tree --manifest-path src-tauri/Cargo.toml -i rsa --target all prints nothing.",
+      "reviewBy": "2027-01-17"
+    },
+    {
+      "lockfile": "src-tauri/Cargo.lock",
+      "findings": [
+        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0367" },
+        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0368" },
+        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0369" }
+      ],
+      "reach": "unused-api",
+      "why": "zip ships: it reads and writes script bundles in src-tauri/src/scripts/import_export.rs. All three advisories are in ZipArchive::extract and ZipStreamReader::extract, which write archive symlinks and Unix permission bits to disk. The importer calls neither: it reads each entry into memory with by_index, refuses symlink entries and writes assets itself through atomic_write. The fix is only in zip 9, a major upgrade.",
+      "recheck": "No call to ZipArchive::extract or ZipStreamReader::extract anywhere under src-tauri/src.",
+      "reviewBy": "2027-01-17",
+      "followUp": "https://github.com/gregpriday/candidcue/issues/368"
+    },
+    {
+      "lockfile": "src-tauri/Cargo.lock",
+      "findings": [
+        { "package": "glib", "version": "0.18.5", "id": "RUSTSEC-2024-0429" },
+        { "package": "proc-macro-error", "version": "1.0.4", "id": "RUSTSEC-2024-0370" }
+      ],
+      "reach": "other-target",
+      "why": "The Linux GTK stack Tauri uses on Linux (gtk, atk and glib, with proc-macro-error behind glib-macros). Neither macOS release target compiles any of it.",
+      "recheck": "cargo tree --manifest-path src-tauri/Cargo.toml -i glib --target aarch64-apple-darwin prints nothing, and the same for x86_64-apple-darwin and for proc-macro-error.",
+      "reviewBy": "2027-01-17"
+    },
+    {
+      "lockfile": "src-tauri/Cargo.lock",
+      "findings": [
+        { "package": "unic-char-property", "version": "0.9.0", "id": "RUSTSEC-2025-0081" },
+        { "package": "unic-char-range", "version": "0.9.0", "id": "RUSTSEC-2025-0075" },
+        { "package": "unic-common", "version": "0.9.0", "id": "RUSTSEC-2025-0080" },
+        { "package": "unic-ucd-ident", "version": "0.9.0", "id": "RUSTSEC-2025-0100" },
+        { "package": "unic-ucd-version", "version": "0.9.0", "id": "RUSTSEC-2025-0098" }
+      ],
+      "reach": "no-vulnerability",
+      "why": "These ship: tauri-utils depends on urlpattern 0.3, which uses them for identifier tables. The advisories say the crates are unmaintained, not that they are vulnerable, and they leave the tree only when Tauri moves off urlpattern 0.3.",
+      "recheck": "cargo tree --manifest-path src-tauri/Cargo.toml -i unic-ucd-ident --target aarch64-apple-darwin still reaches them only through urlpattern and tauri-utils.",
+      "reviewBy": "2027-01-17"
+    },
+    {
+      "lockfile": "pnpm-lock.yaml",
+      "findings": [
+        { "package": "tinypool", "version": "1.1.1", "id": "GHSA-5gmw-xhrv-c9v3" },
+        { "package": "tinypool", "version": "1.1.1", "id": "GHSA-85c8-ppgw-ccpr" },
+        { "package": "vitest", "version": "3.2.7", "id": "GHSA-82fw-gwwq-j7x9" },
+        { "package": "@vitest/mocker", "version": "3.2.7", "id": "GHSA-82fw-gwwq-j7x9" }
+      ],
+      "reach": "dev-only",
+      "why": "The test runner. vitest is a devDependency, nothing in the app bundle imports it, and pnpm audit --prod does not report it. vitest 3.2.7 requires tinypool ^1.1.1, so every fix needs Vitest 4.",
+      "recheck": "pnpm audit --prod reports none of these.",
+      "reviewBy": "2027-01-17",
+      "followUp": "https://github.com/gregpriday/candidcue/issues/367"
+    }
+  ]
+}

@@ -108,7 +108,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-322 crates across both workspaces, with the SPDX expression each
+321 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -146,7 +146,6 @@ declares in its own manifest.
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
 | color_quant | 1.1.0 | MIT |
-| concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | cookie | 0.18.1 | MIT OR Apache-2.0 |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
@@ -186,7 +185,7 @@ declares in its own manifest.
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 |
-| event-listener | 5.4.1 | Apache-2.0 OR MIT |
+| event-listener | 5.4.2 | Apache-2.0 OR MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
 | filetime | 0.2.29 | MIT/Apache-2.0 |
@@ -309,9 +308,9 @@ declares in its own manifest.
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
-| rustls | 0.23.42 | Apache-2.0 OR ISC OR MIT |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
-| rustls-webpki | 0.103.13 | ISC |
+| rustls-webpki | 0.103.15 | ISC |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
 | same-file | 1.0.6 | Unlicense/MIT |
 | schemars | 0.8.22 | MIT |
@@ -495,7 +494,7 @@ artifact and are not listed.
 | debug | 4.4.3 | MIT |
 | decode-named-character-reference | 1.3.0 | MIT |
 | dequal | 2.0.3 | MIT |
-| devalue | 5.8.2 | MIT |
+| devalue | 5.9.4 | MIT |
 | devlop | 1.1.0 | MIT |
 | escape-string-regexp | 5.0.0 | MIT |
 | esm-env | 1.2.2 | MIT |

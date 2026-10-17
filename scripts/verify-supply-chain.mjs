@@ -19,7 +19,9 @@
  * a network advisory database, so their answer changes without the repository
  * changing — which makes them the wrong shape for a gate that has to be
  * reproducible from a tag. The release workflow runs them as their own step,
- * where a new advisory is news rather than a broken build.
+ * where a new advisory is news rather than a broken build, through
+ * `scripts/report-advisories.mjs`, which sorts what they find against the
+ * exceptions accepted in `docs/advisory-exceptions.json`.
  */
 
 import { execFileSync } from 'node:child_process';
