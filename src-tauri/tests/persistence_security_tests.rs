@@ -588,9 +588,18 @@ mod zip_writer {
     }
 
     pub fn write(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let plain: Vec<(&str, Vec<u8>, Option<u32>)> =
+            entries.iter().map(|(name, data)| (*name, data.clone(), None)).collect();
+        write_with_modes(&plain)
+    }
+
+    /// Entries that carry a Unix mode, the way a zip made on macOS or Linux
+    /// does: a Unix host in "version made by" and the mode in the top half of
+    /// the external attributes. `None` writes both as `write` always has.
+    pub fn write_with_modes(entries: &[(&str, Vec<u8>, Option<u32>)]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut directory = Vec::new();
-        for (name, data) in entries {
+        for (name, data, mode) in entries {
             let offset = out.len() as u32;
             let crc = crc32(data);
             let n = name.as_bytes();
@@ -609,7 +618,8 @@ mod zip_writer {
             out.extend_from_slice(data);
 
             directory.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02]);
-            directory.extend_from_slice(&20u16.to_le_bytes()); // version made by
+            let made_by: u16 = if mode.is_some() { (3 << 8) | 20 } else { 20 };
+            directory.extend_from_slice(&made_by.to_le_bytes()); // version made by
             directory.extend_from_slice(&20u16.to_le_bytes()); // version needed
             directory.extend_from_slice(&0u16.to_le_bytes());
             directory.extend_from_slice(&0u16.to_le_bytes());
@@ -623,7 +633,7 @@ mod zip_writer {
             directory.extend_from_slice(&0u16.to_le_bytes()); // comment
             directory.extend_from_slice(&0u16.to_le_bytes()); // disk
             directory.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
-            directory.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+            directory.extend_from_slice(&(mode.unwrap_or(0) << 16).to_le_bytes()); // external attrs
             directory.extend_from_slice(&offset.to_le_bytes());
             directory.extend_from_slice(n);
         }
@@ -1144,6 +1154,59 @@ async fn a_bundle_asset_must_be_a_decodable_image() {
             .expect_err(label);
         assert_eq!(err.code(), "IMPORT_INVALID_FORMAT", "{label}: {err:?}");
     }
+}
+
+/// RUSTSEC-2026-0367 to -0369 are in `zip`'s own extraction
+/// (`ZipArchive::extract` and friends), which writes an archive's symlinks and
+/// Unix permission bits to disk. `docs/advisory-exceptions.json` accepts them
+/// because the importer never extracts: it reads entries into memory and writes
+/// assets itself. These hold it to that.
+#[tokio::test]
+async fn a_bundle_symlink_entry_is_refused() {
+    let h = harness().await;
+    let png = tiny_png();
+    let name = png_name(&png);
+    let asset = format!("assets/{name}");
+    let bundle = zip_writer::write_with_modes(&[
+        ("manifest.json", manifest_json(&[name.as_str()]), None),
+        ("script.md", b"# Bundled\n\nBody.\n".to_vec(), None),
+        // A symlink entry's data is its target.
+        (asset.as_str(), b"/etc/passwd".to_vec(), Some(0o120777)),
+    ]);
+
+    let err = import_bundle_bytes(&h, bundle)
+        .await
+        .expect_err("a symlink entry must be refused");
+    assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
+}
+
+#[tokio::test]
+async fn a_bundle_asset_lands_without_its_archive_permission_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = harness().await;
+    let png = tiny_png();
+    let name = png_name(&png);
+    let asset = format!("assets/{name}");
+    let bundle = zip_writer::write_with_modes(&[
+        ("manifest.json", manifest_json(&[name.as_str()]), None),
+        ("script.md", b"# Bundled\n\nBody.\n".to_vec(), None),
+        // setuid, setgid, sticky and executable, on a regular file.
+        (asset.as_str(), png.clone(), Some(0o107777)),
+    ]);
+    // The archive really carries the bits, or the assertion below proves nothing.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bundle[..])).unwrap();
+    assert_eq!(archive.by_name(&asset).unwrap().unix_mode(), Some(0o107777));
+    drop(archive);
+
+    let imported = import_bundle_bytes(&h, bundle).await.expect("import");
+    let path = h.paths.assets_dir(&sid(&imported.script.id)).join(&name);
+    let mode = fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o7111,
+        0,
+        "the archive's special or execute bits reached disk: {mode:o}"
+    );
 }
 
 // ---------------------------------------------------------------------------
