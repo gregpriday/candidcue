@@ -663,7 +663,7 @@ fn audio_settings_fixture() -> serde_json::Value {
 /// localStorage overlay ONLY — Rust declared no such field, so a mapping in one
 /// direction was not even possible. The whole audio section is round-tripped
 /// rather than the one key, so a patch that quietly dropped `language` or the
-/// disconnect timeout fails here too.
+/// recogniser fails here too.
 #[test]
 fn audio_settings_survive_the_round_trip_unchanged() {
     let f = audio_settings_fixture();
@@ -683,7 +683,6 @@ fn audio_settings_survive_the_round_trip_unchanged() {
     // deliberately not 0.5.
     assert_eq!(audio.vad_sensitivity, 0.72);
     assert_ne!(audio.vad_sensitivity, RustAudioSettings::default().vad_sensitivity);
-    assert_eq!(audio.soft_pause_auto_disconnect_minutes, 15);
 
     // And the whole document validates, so the round trip is not passing a
     // value the backend would reject on the next write.
@@ -734,6 +733,7 @@ fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
         // should not have to be edited every time the model changes.
         "transcriptionModel": candidcue_lib::speech::default_model().id,
         "language": "en-US",
+        // Retired with #219, and exactly what a section this old carries.
         "softPauseAutoDisconnectMinutes": 10,
     }))
     .expect("a pre-§28.4 section must load");

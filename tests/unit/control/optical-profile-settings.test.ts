@@ -37,22 +37,11 @@ const ipc = vi.hoisted(() => {
       schemaVersion: 1,
       general: {
         openTo: 'library',
-        autosaveDebounceMs: 800,
-        revisionIntervalMinutes: 10,
-        wordsPerMinuteEstimate: 150,
-        analyticsEnabled: false,
       },
-      editor: {},
       stageBehavior: {
         promptMode: 'voice',
-        manualWheelMultiplier: 1,
         fixedSpeedWpm: 140,
-        pointerHideDelaySeconds: 1.5,
-        manualMoveTrackingGraceSeconds: 2,
-        stageAcknowledgement: 'flash',
         horizontalMirror: false,
-        keepScreenAwake: true,
-        blankColor: '#000000',
       },
       audio: {
         transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',

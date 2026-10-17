@@ -21,12 +21,11 @@ import {
 /** Camel-cased twin of `settings::FollowingSettings` in Rust. */
 export interface RustFollowingSettings {
   feel: string;
-  /**
-   * Still in Rust's document and still validated there, but nothing on either
-   * side reads it (#218). The adapter neither maps it in nor sends it back, so
-   * Rust's merge keeps whatever it stored until its half of the removal lands.
+  /*
+   * No `fidelityMode`. Nothing on either side read it: this adapter stopped
+   * mapping it in and sending it back (#218), and Rust dropped the field
+   * (#219). serde ignores it on documents that still carry one.
    */
-  fidelityMode: string;
   motionProfileId: string;
   /*
    * No `semanticRequestLimit`: Rust dropped it with the hosted sidecar it

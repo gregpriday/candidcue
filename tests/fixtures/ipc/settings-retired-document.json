@@ -1,0 +1,110 @@
+{
+  "_comment": [
+    "#219: a settings document written before the twenty fields nothing read",
+    "were removed. Read by BOTH sides:",
+    "  - src-tauri/src/settings/mod.rs (unit), src-tauri/tests/ipc_roundtrip_tests.rs",
+    "    and src-tauri/tests/backup_tests.rs load it through the real struct, the",
+    "    real database row and a real export;",
+    "  - tests/unit/control/settings-retired-keys.test.ts serves it to the real",
+    "    settings service.",
+    "",
+    "`get_settings` falls back to `AppSettings::default()` when a document does",
+    "not parse, so a mistake here resets EVERY setting, calibrated rigs included,",
+    "without a word. Each side therefore asserts that this document reads exactly",
+    "as the same document with `retired` deleted, and every surviving value is",
+    "moved off its default so the comparison cannot be two copies of the defaults.",
+    "",
+    "Several retired values are ones the old validator REFUSED (a 5000 ms",
+    "debounce, a 40 px editor font, a 9x wheel, an unknown fidelity mode): a",
+    "leftover range check would turn a stale key into a document that cannot be",
+    "saved, which is the failure #217 had to guard against for `saveTranscript`.",
+    "",
+    "`retired` lists every removed path. `editor` is the whole section."
+  ],
+  "retired": [
+    "general.autosaveDebounceMs",
+    "general.revisionIntervalMinutes",
+    "general.wordsPerMinuteEstimate",
+    "general.analyticsEnabled",
+    "editor",
+    "stageBehavior.manualWheelMultiplier",
+    "stageBehavior.manualMoveTrackingGraceSeconds",
+    "stageBehavior.stageAcknowledgement",
+    "stageBehavior.blankColor",
+    "stageBehavior.keepScreenAwake",
+    "stageBehavior.pointerHideDelaySeconds",
+    "audio.softPauseAutoDisconnectMinutes",
+    "following.fidelityMode"
+  ],
+  "document": {
+    "schemaVersion": 1,
+    "general": {
+      "openTo": "last_script",
+      "autosaveDebounceMs": 5000,
+      "revisionIntervalMinutes": 45,
+      "wordsPerMinuteEstimate": 400,
+      "analyticsEnabled": true
+    },
+    "editor": {
+      "fontSizePx": 40,
+      "lineHeight": 3.0,
+      "previewPosition": "preview",
+      "wordWrap": false,
+      "readHeadings": true,
+      "readImageAltText": true,
+      "showCuesOnStage": "prominent",
+      "showSilentBlocksOnStage": "hidden"
+    },
+    "stageBehavior": {
+      "promptMode": "fixed",
+      "manualWheelMultiplier": 9.0,
+      "fixedSpeedWpm": 172,
+      "pointerHideDelaySeconds": 0,
+      "manualMoveTrackingGraceSeconds": 4.0,
+      "stageAcknowledgement": "off",
+      "horizontalMirror": true,
+      "keepScreenAwake": false,
+      "blankColor": "#101010",
+      "presentationMode": "reader",
+      "readerFrame": { "x": 120.0, "y": 90.0, "width": 860.0, "height": 600.0 },
+      "displayFingerprint": "dsp-glass",
+      "displayPinMigrated": true
+    },
+    "audio": {
+      "transcriptionModel": "x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05",
+      "language": "en-GB",
+      "softPauseAutoDisconnectMinutes": 30,
+      "vadSensitivity": 0.72
+    },
+    "following": {
+      "feel": "calm",
+      "fidelityMode": "psychic",
+      "motionProfileId": "default-v4",
+      "developerDiagnostics": true
+    },
+    "optical": {
+      "migrated": true,
+      "profiles": {
+        "dsp-glass::Glass%20rig": {
+          "schemaVersion": 1,
+          "rigName": "Glass rig",
+          "hardwareKind": "generic",
+          "scale": null,
+          "viewingDistanceMm": 900,
+          "safeArea": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
+          "lens": { "x": 0.5, "y": 0.38 },
+          "lensPlacement": "in-panel",
+          "flips": { "horizontal": false, "vertical": false },
+          "framing": "head-and-shoulders",
+          "bias": 0.4,
+          "overrides": {},
+          "intensity": "standard",
+          "readingCue": "ticks",
+          "completedSteps": []
+        }
+      },
+      "activeRig": { "dsp-glass": "Glass rig" },
+      "panelMirror": { "dsp-glass": { "horizontal": true, "vertical": false } }
+    }
+  }
+}

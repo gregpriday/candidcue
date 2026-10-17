@@ -234,12 +234,7 @@ function shimBody(config: ShimConfig): void {
       schemaVersion: 1,
       general: {
         openTo: 'library',
-        autosaveDebounceMs: 800,
-        revisionIntervalMinutes: 10,
-        wordsPerMinuteEstimate: 150,
-        analyticsEnabled: false,
       },
-      editor: {},
       ...(config.following ? { following: config.following } : {}),
       stageBehavior: {
         // Written only when a spec asks for one: an absent field is what sends
@@ -247,14 +242,8 @@ function shimBody(config: ShimConfig): void {
         // are about that path.
         ...(config.presentationMode ? { presentationMode: config.presentationMode } : {}),
         promptMode: config.promptMode ?? 'voice',
-        manualWheelMultiplier: 1,
         fixedSpeedWpm: 140,
-        pointerHideDelaySeconds: 1.5,
-        manualMoveTrackingGraceSeconds: 3,
-        stageAcknowledgement: 'required',
         horizontalMirror: false,
-        keepScreenAwake: true,
-        blankColor: '#000000',
       },
       audio: {
         transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
@@ -263,7 +252,6 @@ function shimBody(config: ShimConfig): void {
         // like one that had dropped the region.
         language: 'en-US',
         delayProfile: 'balanced',
-        softPauseAutoDisconnectMinutes: 5,
       },
     },
   };

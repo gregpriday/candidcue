@@ -555,11 +555,13 @@ async fn trash_and_recent_views_select_the_right_scripts() {
 }
 
 /// C6: "Clear logs" must clear the LOGS. It mapped onto the `all` cache kind,
-/// which empties four caches and touches nothing in `logs/`, while the toast
+/// which emptied four caches and touched nothing in `logs/`, while the toast
 /// said "Logs cleared."
 ///
-/// Reverting the `logs` arm makes the first assertion fail outright (unknown
-/// kind); reverting it to an alias for `all` makes the second fail.
+/// `logs` is the only kind left (#219): nothing ever wrote the compiled,
+/// vocabulary or thumbnail caches `all` swept, and nothing asks for them now,
+/// so each of those names is refused like any other unknown kind rather than
+/// quietly doing nothing.
 #[tokio::test]
 async fn clearing_logs_targets_the_log_directory_and_no_cache() {
     let h = harness().await;
@@ -567,19 +569,12 @@ async fn clearing_logs_targets_the_log_directory_and_no_cache() {
         .expect("`logs` must be a kind clear_cache understands");
     assert_eq!(logs, vec![h.paths.logs_dir()]);
 
-    let all = candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "all")
-        .expect("`all` targets");
-    assert!(
-        !all.contains(&h.paths.logs_dir()),
-        "logs are not a cache and must not be swept up by `all`"
-    );
-    assert!(all.iter().all(|d| d.starts_with(h.paths.cache_dir())));
-
-    assert!(
-        candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "everything")
-            .is_err(),
-        "an unknown kind must be rejected, not silently mapped onto something"
-    );
+    for kind in ["all", "compiled", "vocabulary", "thumbnails", "everything"] {
+        assert!(
+            candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, kind).is_err(),
+            "{kind:?} must be rejected, not silently mapped onto something"
+        );
+    }
 }
 
 /// §179: the support bundle has to actually carry the logs.
@@ -674,7 +669,7 @@ async fn settings_defaults_patch_and_conflict() {
 
     let initial = settings::get_settings(&h.pool).await.expect("defaults");
     assert_eq!(initial.revision, 1);
-    assert_eq!(initial.value.general.words_per_minute_estimate, 130);
+    assert_eq!(initial.value.stage_behavior.fixed_speed_wpm, 130);
     assert_eq!(
         initial.value.audio.transcription_model,
         candidcue_lib::speech::default_model().id
@@ -684,18 +679,18 @@ async fn settings_defaults_patch_and_conflict() {
     let updated = settings::update_settings(
         &h.pool,
         1,
-        serde_json::json!({ "general": { "wordsPerMinuteEstimate": 150 } }),
+        serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 150 } }),
     )
     .await
     .expect("update");
     assert_eq!(updated.revision, 2);
-    assert_eq!(updated.value.general.words_per_minute_estimate, 150);
-    assert_eq!(updated.value.editor.font_size_px, 15);
+    assert_eq!(updated.value.stage_behavior.fixed_speed_wpm, 150);
+    assert_eq!(updated.value.stage_behavior.prompt_mode, "voice");
 
     // Persistence roundtrip.
     let reloaded = settings::get_settings(&h.pool).await.unwrap();
     assert_eq!(reloaded.revision, 2);
-    assert_eq!(reloaded.value.general.words_per_minute_estimate, 150);
+    assert_eq!(reloaded.value.stage_behavior.fixed_speed_wpm, 150);
 
     // Stale revision → conflict.
     let stale = settings::update_settings(&h.pool, 1, serde_json::json!({}))
@@ -707,13 +702,13 @@ async fn settings_defaults_patch_and_conflict() {
     let invalid = settings::update_settings(
         &h.pool,
         2,
-        serde_json::json!({ "general": { "wordsPerMinuteEstimate": 1000 } }),
+        serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 1000 } }),
     )
     .await
     .expect_err("range validation");
     assert_eq!(invalid.code(), "VALIDATION_FAILED");
     assert_eq!(
-        settings::get_settings(&h.pool).await.unwrap().value.general.words_per_minute_estimate,
+        settings::get_settings(&h.pool).await.unwrap().value.stage_behavior.fixed_speed_wpm,
         150
     );
 }

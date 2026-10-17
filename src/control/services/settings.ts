@@ -2,8 +2,8 @@
  * Application settings + maintenance service (spec §46.8).
  *
  * Rust owns the persisted settings document as `Revisioned<AppSettings>`
- * ({ revision, value }) with the §47.9 schema (general / editor /
- * stageBehavior / audio / commands). The control UI consumes the
+ * ({ revision, value }) with the §47.9 schema (general / stageBehavior /
+ * audio / following / optical). The control UI consumes the
  * flatter view in `settings-types.ts`, so this service is an explicit
  * adapter:
  *
@@ -54,34 +54,38 @@ interface RustSettings {
   schemaVersion: number;
   general: {
     openTo: string;
-    autosaveDebounceMs: number;
-    revisionIntervalMinutes: number;
-    wordsPerMinuteEstimate: number;
     /*
      * No `updateCheck`. Rust dropped the field with the updater stubs; serde
      * ignores it on documents already on disk. Declaring it here would put the
      * dead contract back on the TypeScript side of the boundary.
      */
-    analyticsEnabled: boolean;
     /*
      * No `saveTranscript` either. Takes stopped writing transcripts (#214) and
      * Rust dropped the field with the storage it governed (#217). Documents
      * written before that still carry it; serde ignores it there too.
      */
+    /*
+     * Nor `autosaveDebounceMs`, `revisionIntervalMinutes`,
+     * `wordsPerMinuteEstimate` or `analyticsEnabled` (#219): nothing on either
+     * side read them. The editor debounces on its own constant, revisions are
+     * spaced by Rust's, and a script's length is estimated at its OWN rate
+     * (`ScriptSettings.wordsPerMinuteEstimate`, which stays).
+     */
   };
-  editor: Record<string, unknown>;
+  /*
+   * No `editor` section (#219). It was typed `Record<string, unknown>` here
+   * because nothing ever looked inside it.
+   */
   stageBehavior: {
     promptMode: string;
-    manualWheelMultiplier: number;
     fixedSpeedWpm: number;
-    /**
-     * Still serialised by Rust, and read by nothing on either side (#218): the
-     * stage hides the pointer after a fixed 1.5 s whatever this says, so the
-     * Settings switch that wrote it is gone and nothing sends it any more.
+    /*
+     * No `manualWheelMultiplier`, `pointerHideDelaySeconds`,
+     * `manualMoveTrackingGraceSeconds`, `stageAcknowledgement`,
+     * `keepScreenAwake` or `blankColor` (#219), none of which anything read.
+     * The stage hides the pointer after a fixed 1.5 s and keeps the display
+     * awake for every take, whatever the document said.
      */
-    pointerHideDelaySeconds: number;
-    manualMoveTrackingGraceSeconds: number;
-    stageAcknowledgement: string;
     /**
      * The retired global mirror (#206), read once and never written again.
      *
@@ -89,8 +93,6 @@ interface RustSettings {
      * SOURCE of the one-time move onto the glass — see `carriedPanelMirror`.
      */
     horizontalMirror: boolean;
-    keepScreenAwake: boolean;
-    blankColor: string;
     /**
      * The shape a take opens in — `null`/absent when it has never been chosen.
      *

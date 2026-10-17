@@ -212,7 +212,7 @@ pub async fn run_startup_reconciliation(
     // counts and durations without every script being re-saved (#249).
     let mut stats_refreshed = 0u32;
     // A restore or repair that failed part way may still have written the
-    // canonical file; step 7 treats it as one that happened.
+    // canonical file; step 6 treats it as one that happened.
     let mut repair_failed = false;
     for (id, _) in repo::all_script_ids_and_paths(pool).await? {
         let Ok(script_id) = ScriptId::parse(&id) else {
@@ -259,13 +259,10 @@ pub async fn run_startup_reconciliation(
         tracing::info!(stats_refreshed, "re-derived library word counts, previews and search entries");
     }
 
-    // 5. Clear expired compiled caches (best effort).
-    let compiled = paths.cache_dir().join("compiled");
-    if compiled.exists() {
-        let _ = remove_older_than(&compiled, Duration::from_secs(30 * 24 * 3600));
-    }
+    // No sweep of `cache/compiled` any more (#219): nothing has ever written
+    // to it.
 
-    // 6. Purge trash older than 30 days (spec §21.5) — but not on the launch
+    // 5. Purge trash older than 30 days (spec §21.5) — but not on the launch
     // that just recovered scripts. A rebuild brings the Trash back with the
     // dates things were trashed, and some of those may be past 30 days; the
     // first look at a recovered library should not be preceded by permanently
@@ -286,7 +283,7 @@ pub async fn run_startup_reconciliation(
         }
     };
 
-    // 7. Remove images nothing can show any more (#253). Here and nowhere
+    // 6. Remove images nothing can show any more (#253). Here and nowhere
     // else: this runs before the first command is dispatched, so no editor
     // holds an undo history that could bring a deleted image's line back, and
     // every revision a restore could bring back is read before anything goes.
@@ -485,21 +482,6 @@ fn remove_stale_temp_files(paths: &DataPaths) -> Result<u32, AppError> {
         }
     }
     Ok(removed)
-}
-
-fn remove_older_than(dir: &std::path::Path, age: Duration) -> std::io::Result<()> {
-    let cutoff = SystemTime::now() - age;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.modified().map(|m| m < cutoff).unwrap_or(false) {
-                    let _ = fs::remove_file(entry.path());
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Startup reconciliation findings, kept until the frontend asks for them.

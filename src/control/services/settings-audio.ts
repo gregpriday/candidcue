@@ -39,7 +39,10 @@ export interface RustAudioSettings {
   /** BCP-47 tag, e.g. `en-US`. Rust repairs a tag the selected recogniser
    * cannot transcribe; the bundled one is bilingual (`zh-en`). */
   language: string;
-  softPauseAutoDisconnectMinutes: number;
+  /*
+   * No `softPauseAutoDisconnectMinutes`: nothing ever disconnected on it, and
+   * Rust dropped it (#219).
+   */
   /** 0-1; 0.5 is the Appendix A.6 neutral (§28.4). */
   vadSensitivity: number;
 }

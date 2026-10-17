@@ -15,6 +15,7 @@
  * the overlay tests would pass for the wrong reason.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import retiredDocument from '../../fixtures/ipc/settings-retired-document.json';
 
 const ipc = vi.hoisted(() => {
   const calls: Array<{ command: string; args: unknown }> = [];
@@ -24,29 +25,17 @@ const ipc = vi.hoisted(() => {
       schemaVersion: 1,
       general: {
         openTo: 'last_script',
-        autosaveDebounceMs: 800,
-        revisionIntervalMinutes: 10,
-        wordsPerMinuteEstimate: 150,
-        analyticsEnabled: false,
         ...general,
       },
-      editor: {},
       stageBehavior: {
         promptMode: 'fixed',
-        manualWheelMultiplier: 1,
         fixedSpeedWpm: 172,
-        pointerHideDelaySeconds: 0,
-        manualMoveTrackingGraceSeconds: 2,
-        stageAcknowledgement: 'flash',
         horizontalMirror: false,
-        keepScreenAwake: true,
-        blankColor: '#000000',
       },
       audio: {
         transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         language: 'en',
         delayProfile: 'low',
-        softPauseAutoDisconnectMinutes: 10,
       },
       commands: {
         wakePhrase: 'CandidCue',
@@ -408,5 +397,84 @@ describe('#218 a document that still carries the retired following fields', () =
         developerDiagnostics: true,
       },
     });
+  });
+});
+
+/*
+ * #219 — the twenty fields nothing read, gone from Rust and from the twin.
+ *
+ * The fixture is the one the Rust tests load through the real struct, the real
+ * row and a real export: a document carrying every removed key, with every
+ * surviving value moved off its default. Here it goes through the real service,
+ * which must read it exactly as the same document without those keys, and must
+ * not send any of them back on a save of every section that has a Rust home.
+ */
+describe('#219 a document that still carries every field nothing read', () => {
+  const served = () => ({ revision: 9, value: structuredClone(retiredDocument.document) });
+  const carries = (document: Record<string, unknown>, path: string): boolean => {
+    const [section, field] = path.split('.');
+    const value = document[section!];
+    if (field === undefined) return value !== undefined;
+    return typeof value === 'object' && value !== null && Object.hasOwn(value, field);
+  };
+  function withoutRetired() {
+    const doc = served();
+    const value = doc.value as Record<string, Record<string, unknown>>;
+    for (const path of retiredDocument.retired) {
+      const [section, field] = path.split('.');
+      expect(carries(value, path), `the fixture must carry ${path}`).toBe(true);
+      if (field === undefined) delete value[section!];
+      else delete value[section!]![field];
+    }
+    return doc;
+  }
+
+  it('loads every surviving setting exactly as a document without them does', async () => {
+    ipc.serve(withoutRetired() as never);
+    const without = await settings.getSettings();
+
+    ipc.serve(served() as never);
+    const loaded = await settings.getSettings();
+    expect(loaded).toStrictEqual(without);
+    // And the survivors really arrived, so the comparison above is not two
+    // copies of `defaultAppSettings()`.
+    expect(loaded.revision).toBe(9);
+    expect(loaded.general.launchBehavior).toBe('recent');
+    expect(loaded.general.defaultSessionMode).toBe('fixed');
+    expect(loaded.teleprompter.fixedSpeedWpm).toBe(172);
+    expect(loaded.audio.vadSensitivity).toBe(0.72);
+    expect(loaded.following.feel).toBe('calm');
+    expect(loaded.following.developerDiagnostics).toBe(true);
+    expect(Object.keys(loaded.optical.profiles), 'the calibrated rig survives').toEqual([
+      'dsp-glass::Glass%20rig',
+    ]);
+  });
+
+  it('is adopted from a broadcast like any other document', () => {
+    const adopted = settings.adaptRevisionedSettings(served());
+    expect(adopted).not.toBeNull();
+    expect(adopted?.revision).toBe(9);
+  });
+
+  it('a save of every Rust-backed section sends none of them back', async () => {
+    ipc.serve(served() as never);
+    const loaded = await settings.getSettings();
+    // Whole sections, as `sendPatchBatch` sends them.
+    await settings.updateSettings(9, {
+      general: loaded.general,
+      audio: loaded.audio,
+      speech: loaded.speech,
+      stage: loaded.stage,
+      teleprompter: { ...loaded.teleprompter, fixedSpeedWpm: 150 },
+      following: loaded.following,
+      optical: loaded.optical,
+    });
+
+    const update = ipc.calls.find((call) => call.command === 'update_settings');
+    const patch = (update!.args as { patch: Record<string, unknown> }).patch;
+    expect(patch.stageBehavior).toMatchObject({ fixedSpeedWpm: 150 });
+    for (const path of retiredDocument.retired) {
+      expect(carries(patch, path), `${path} must not be sent`).toBe(false);
+    }
   });
 });

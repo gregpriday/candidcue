@@ -1478,7 +1478,7 @@ async fn a_version_two_database_with_retained_transcripts(root: &Path) {
             candidcue_lib::util::sha256_hex(source.as_bytes())
         ),
         "INSERT INTO settings (key, value_json, revision, updated_at)
-         VALUES ('app', '{\"schemaVersion\":1,\"general\":{\"wordsPerMinuteEstimate\":155,\"saveTranscript\":\"forever\"}}',
+         VALUES ('app', '{\"schemaVersion\":1,\"general\":{\"openTo\":\"last_script\",\"wordsPerMinuteEstimate\":155,\"saveTranscript\":\"forever\"}}',
                  7, '2026-01-01T00:00:00Z')"
             .to_string(),
         "INSERT INTO display_profiles (id, name, stage_settings_json, created_at, updated_at)
@@ -1635,7 +1635,7 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
     assert_eq!(script.title, "Keynote");
     let settings = candidcue_lib::settings::get_settings(pool).await.expect("settings");
     assert_eq!(settings.revision, 7);
-    assert_eq!(settings.value.general.words_per_minute_estimate, 155);
+    assert_eq!(settings.value.general.open_to, "last_script");
 }
 
 /// The one copy that is meant to keep them: the verified pre-migration backup
@@ -2147,7 +2147,27 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
         "stage": { "schemaVersion": 1 },
         "updatedAt": "2026-01-01T00:00:00Z",
     }]);
-    let bytes = serde_json::to_vec_pretty(&settings).expect("serialize");
+    forge_settings_json(export_root, &settings);
+
+    let h = harness().await;
+    backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect("a pre-#232 export still restores");
+    h.pool.close().await;
+
+    let pool = candidcue_lib::database::init(h.dir.path())
+        .await
+        .expect("the next launch applies the restore and upgrades it");
+    assert_display_profiles_removed(h.dir.path(), &pool).await;
+    pool.close().await;
+    assert_profile_rollback_copy_kept(h.dir.path()).await;
+}
+
+/// Write an older build's `settings.json` into an export, with the manifest
+/// that build would have written for it. The export is checksummed, so an old
+/// shape has to be forged whole rather than assumed.
+fn forge_settings_json(export_root: &Path, settings: &serde_json::Value) {
+    let bytes = serde_json::to_vec_pretty(settings).expect("serialize");
     fs::write(export_root.join("settings.json"), &bytes).expect("write the old shape");
     let mut manifest = manifest_of(export_root);
     for file in manifest["files"].as_array_mut().expect("files") {
@@ -2166,19 +2186,125 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
         serde_json::to_vec_pretty(&manifest).expect("manifest"),
     )
     .expect("write the manifest");
+}
 
+#[tokio::test]
+async fn an_export_made_before_the_dead_settings_went_still_restores() {
+    /*
+     * #219. An export taken before the twenty fields nothing read were removed
+     * carries them twice: in the database snapshot's settings row, and in
+     * `settings.json`. Restoring one must bring back every setting that
+     * survived — a document that failed to parse would come back as the
+     * defaults, calibrated rigs included, and nothing would say so — and the
+     * first write after it must shed the retired keys.
+     *
+     * The row is seeded raw, so the snapshot carries it exactly; this build's
+     * exporter writes `settings.json` from the typed struct, which drops the
+     * keys, so that file is forged back to the old shape.
+     */
+    let fixture: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/fixtures/ipc/settings-retired-document.json"),
+        )
+        .expect("fixture"),
+    )
+    .expect("fixture parses");
+    let document = fixture["document"].clone();
+    let carries = |stored: &serde_json::Value, path: &str| match path.split_once('.') {
+        Some((section, field)) => stored[section].get(field).is_some(),
+        None => stored.get(path).is_some(),
+    };
+    let retired: Vec<String> = fixture["retired"]
+        .as_array()
+        .expect("retired")
+        .iter()
+        .map(|p| p.as_str().expect("a path").to_string())
+        .collect();
+
+    let old = harness().await;
+    candidcue_lib::settings::get_settings(&old.pool).await.expect("settings row");
+    sqlx::query("UPDATE settings SET value_json = ?, revision = 9 WHERE key = 'app'")
+        .bind(document.to_string())
+        .execute(&old.pool)
+        .await
+        .expect("store what a pre-#219 build wrote");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&old.pool, &old.paths, dest.path())
+        .await
+        .expect("export");
+    old.pool.close().await;
+    assert!(export.complete);
+    let export_root = Path::new(&export.path);
+
+    let snapshot = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(export_root.join("candidcue.sqlite3"))
+            .read_only(true),
+    )
+    .await
+    .expect("open the snapshot");
+    let snapshot_row: String = sqlx::query_scalar("SELECT value_json FROM settings WHERE key = 'app'")
+        .fetch_one(&snapshot)
+        .await
+        .expect("the snapshot's settings row");
+    snapshot.close().await;
+    let snapshot_row: serde_json::Value = serde_json::from_str(&snapshot_row).expect("json");
+    for path in &retired {
+        assert!(carries(&snapshot_row, path), "the snapshot must carry {path} as the old build did");
+    }
+
+    let mut settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(export_root.join("settings.json")).expect("settings.json"))
+            .expect("settings.json parses");
+    settings["settings"]["value"] = document.clone();
+    forge_settings_json(export_root, &settings);
+
+    // Into an install whose own settings differ, so a restore that kept them
+    // could not pass for one that brought the export's back.
     let h = harness().await;
+    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
+    candidcue_lib::settings::update_settings(
+        &h.pool,
+        current.revision,
+        serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 99 } }),
+    )
+    .await
+    .expect("this install's own settings");
     backup::restore_all_data(&h.paths, export_root)
         .await
-        .expect("a pre-#232 export still restores");
+        .expect("a pre-#219 export still restores");
     h.pool.close().await;
 
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
-        .expect("the next launch applies the restore and upgrades it");
-    assert_display_profiles_removed(h.dir.path(), &pool).await;
+        .expect("the next launch applies the restore");
+    let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
+    assert_eq!(restored.revision, 9);
+    assert_eq!(
+        restored.value,
+        serde_json::from_value::<candidcue_lib::settings::AppSettings>(document).expect("loads"),
+        "every surviving setting comes back, not the defaults"
+    );
+    assert_eq!(restored.value.stage_behavior.fixed_speed_wpm, 172);
+    assert_eq!(restored.value.optical.profiles.len(), 1, "the calibrated rig comes back");
+
+    candidcue_lib::settings::update_settings(
+        &pool,
+        restored.revision,
+        serde_json::json!({ "stageBehavior": { "fixedSpeedWpm": 150 } }),
+    )
+    .await
+    .expect("the first write after a restore succeeds");
+    let stored: String = sqlx::query_scalar("SELECT value_json FROM settings WHERE key = 'app'")
+        .fetch_one(&pool)
+        .await
+        .expect("stored settings");
     pool.close().await;
-    assert_profile_rollback_copy_kept(h.dir.path()).await;
+    let stored: serde_json::Value = serde_json::from_str(&stored).expect("json");
+    for path in &retired {
+        assert!(!carries(&stored, path), "the write must take {path} off disk");
+    }
 }
 
 /* ------------------------------------------------- the recovery-mode guard */

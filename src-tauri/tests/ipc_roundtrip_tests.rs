@@ -956,7 +956,7 @@ fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
         sqlx::query(
             "UPDATE settings SET value_json = json_set(value_json,
                 '$.general.saveTranscript', '7d',
-                '$.general.wordsPerMinuteEstimate', 155)",
+                '$.general.openTo', 'last_script')",
         )
         .execute(&h.pool),
     )
@@ -973,8 +973,8 @@ fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
     let loaded = h.expect_ok("get_settings", Value::Null);
     assert_eq!(loaded["revision"], first["revision"]);
     assert_eq!(
-        loaded["value"]["general"]["wordsPerMinuteEstimate"],
-        json!(155),
+        loaded["value"]["general"]["openTo"],
+        json!("last_script"),
         "the settings beside the retired key must survive"
     );
     assert!(
@@ -987,12 +987,12 @@ fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
         "update_settings",
         json!({
             "expectedRevision": loaded["revision"].as_i64().unwrap(),
-            "patch": { "general": { "revisionIntervalMinutes": 12 } },
+            "patch": { "stageBehavior": { "fixedSpeedWpm": 172 } },
         }),
     );
-    assert_eq!(updated["value"]["general"]["wordsPerMinuteEstimate"], json!(155));
+    assert_eq!(updated["value"]["general"]["openTo"], json!("last_script"));
     let stored = stored_json();
-    assert_eq!(stored["general"]["revisionIntervalMinutes"], json!(12));
+    assert_eq!(stored["stageBehavior"]["fixedSpeedWpm"], json!(172));
     assert!(
         stored["general"].get("saveTranscript").is_none(),
         "the next write must drop the retired key from disk, got {}",
@@ -1012,6 +1012,106 @@ fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
         }}),
     );
     assert!(session.get("transcriptRetained").is_none(), "got {session}");
+}
+
+/// #219 — the twenty fields nothing read are gone from the struct, and a
+/// document carrying every one of them must go on loading through the REAL
+/// command over the REAL row.
+///
+/// `get_settings` falls back to the defaults when a document does not parse,
+/// so the failure this guards is silent: every setting, calibrated rigs
+/// included, quietly back to factory. The fixture
+/// (`tests/fixtures/ipc/settings-retired-document.json`) moves every survivor
+/// off its default, so a fallback cannot pass for a load. A patch still naming
+/// the retired keys — from a window an older build opened — is dropped rather
+/// than refused, and the next write takes them off disk.
+#[test]
+fn a_stored_document_carrying_every_field_removed_by_219_loads_and_sheds_them() {
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(repo_root().join("tests/fixtures/ipc/settings-retired-document.json"))
+            .expect("fixture"),
+    )
+    .expect("fixture parses");
+    let retired: Vec<&str> = fixture["retired"]
+        .as_array()
+        .expect("retired")
+        .iter()
+        .map(|p| p.as_str().expect("a path"))
+        .collect();
+    let carries = |document: &Value, path: &str| match path.split_once('.') {
+        Some((section, field)) => document[section].get(field).is_some(),
+        None => document.get(path).is_some(),
+    };
+
+    let h = harness();
+    let first = h.expect_ok("get_settings", Value::Null);
+    tauri::async_runtime::block_on(
+        sqlx::query("UPDATE settings SET value_json = ?")
+            .bind(fixture["document"].to_string())
+            .execute(&h.pool),
+    )
+    .expect("store what a pre-#219 build wrote");
+    let stored_json = || -> Value {
+        let raw: String = tauri::async_runtime::block_on(
+            sqlx::query_scalar("SELECT value_json FROM settings").fetch_one(&h.pool),
+        )
+        .expect("stored settings");
+        serde_json::from_str(&raw).expect("stored settings are json")
+    };
+
+    let loaded = h.expect_ok("get_settings", Value::Null);
+    assert_eq!(loaded["revision"], first["revision"]);
+    let expected = serde_json::to_value(
+        serde_json::from_value::<candidcue_lib::settings::AppSettings>(fixture["document"].clone())
+            .expect("the fixture loads"),
+    )
+    .expect("serializes");
+    assert_eq!(loaded["value"], expected, "every surviving value is read, not defaulted");
+    assert_eq!(loaded["value"]["stageBehavior"]["fixedSpeedWpm"], json!(172));
+    assert_eq!(loaded["value"]["following"]["feel"], json!("calm"));
+    assert_eq!(
+        loaded["value"]["optical"]["activeRig"]["dsp-glass"],
+        json!("Glass rig"),
+        "the calibrated rig survives"
+    );
+    for path in &retired {
+        assert!(!carries(&loaded["value"], path), "{path} must not reach the frontend");
+    }
+
+    // A live key beside the retired ones lands, and the write sheds them.
+    let mixed = h.expect_ok(
+        "update_settings",
+        json!({
+            "expectedRevision": loaded["revision"].as_i64().unwrap(),
+            "patch": {
+                "general": { "autosaveDebounceMs": 1, "analyticsEnabled": "yes" },
+                "editor": { "fontSizePx": 1000 },
+                "stageBehavior": { "fixedSpeedWpm": 150, "manualWheelMultiplier": 99.0 },
+                "audio": { "softPauseAutoDisconnectMinutes": -1 },
+                "following": { "fidelityMode": "psychic" },
+            },
+        }),
+    );
+    assert_eq!(mixed["value"]["stageBehavior"]["fixedSpeedWpm"], json!(150));
+    assert_eq!(mixed["value"]["general"]["openTo"], json!("last_script"));
+    let stored = stored_json();
+    assert_eq!(stored["stageBehavior"]["fixedSpeedWpm"], json!(150));
+    for path in &retired {
+        assert!(!carries(&stored, path), "the write must take {path} off disk, got {stored}");
+    }
+
+    // And a patch of NOTHING but retired keys is accepted too, not refused.
+    let retired_only = h.expect_ok(
+        "update_settings",
+        json!({
+            "expectedRevision": mixed["revision"].as_i64().unwrap(),
+            "patch": {
+                "stageBehavior": { "keepScreenAwake": false, "blankColor": "#101010" },
+                "following": { "fidelityMode": "exact" },
+            },
+        }),
+    );
+    assert_eq!(retired_only["value"], mixed["value"], "and it changes nothing that is read");
 }
 
 /// #216 — permanently deleting a script deletes its sessions, so a take still

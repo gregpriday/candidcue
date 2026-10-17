@@ -2,10 +2,10 @@
  * #218 — `fidelityMode` and `semanticRequestLimit` are read by nothing, so the
  * following adapter neither maps them in nor sends them back.
  *
- * Rust still stores `fidelityMode` until its half of the removal lands, and its
- * `merge_json` keeps a key the patch omits, so not sending it changes nothing
- * there. These pin the pure adapter; `settings-retired-keys.test.ts` drives the
- * same path through the real service.
+ * Rust dropped `fidelityMode` too (#219), and serde ignores it on a document
+ * that still carries one. These pin the pure adapter;
+ * `settings-retired-keys.test.ts` drives the same path through the real
+ * service.
  */
 import { describe, expect, it } from 'vitest';
 import {
