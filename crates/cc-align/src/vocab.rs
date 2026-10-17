@@ -228,7 +228,9 @@ pub fn spoken_surfaces(source: &str, options: CompileOptions) -> Vec<String> {
 /// a dictionary again. A word that is as often a noun, a verb or a brand as it
 /// is grammar (`even`, `next`, `mine`, `hey`) is left out on purpose: this
 /// table is consulted with no context at all, and it decides whether the first
-/// word of a sentence belongs to the name after it. Whether `Design` is
+/// word of a sentence belongs to the name after it. Even so it misreads a brand
+/// that opens on grammar — `Hello Games` starting a sentence loses `Hello` —
+/// which any table consulted without context will. Whether `Design` is
 /// ordinary is a question for the script's own evidence (see
 /// [`OrdinaryEnglish`]), not for a list.
 ///
@@ -268,8 +270,9 @@ const IRREGULAR_NEGATIVES: &[(&str, &str)] =
 /// Case-insensitive, ASCII-only by definition: a word carrying a letter outside
 /// ASCII is never ordinary for this purpose, because that letter is exactly the
 /// thing the recogniser is about to get wrong. A lone letter is never ordinary
-/// either — `A` and `I` are articles and pronouns, but in `A Smith` it is an
-/// initial, and dropping it would cost the name its first half.
+/// either — `A` and `I` are an article and a pronoun, but in `A Smith` the
+/// letter is an initial, and dropping it would cost the name its first half.
+/// `I'm` is two letters and a clitic, and is grammar.
 fn ordinary_key(word: &str) -> Option<String> {
     let lowered = word
         .trim_matches(|c: char| !c.is_alphanumeric())
@@ -284,7 +287,8 @@ fn ordinary_key(word: &str) -> Option<String> {
                 .find_map(|clitic| lowered.strip_suffix(clitic).filter(|s| !s.is_empty()))
         })
         .unwrap_or(&lowered);
-    (stem.len() >= 2 && stem.chars().all(|c| c.is_ascii_lowercase())).then(|| stem.to_string())
+    (lowered.len() >= 2 && !stem.is_empty() && stem.chars().all(|c| c.is_ascii_lowercase()))
+        .then(|| stem.to_string())
 }
 
 fn is_function_word(key: &str) -> bool {
@@ -305,18 +309,19 @@ pub fn is_ordinary_word(word: &str) -> bool {
 }
 
 /// Ordinary English for ONE script: the grammar words, plus every plain word
-/// the script itself writes in lowercase — ASCII letters and apostrophes, so
-/// never a compound, a figure or an identifier.
+/// the script itself writes in lowercase — ASCII letters and apostrophes only,
+/// so never a compound or a figure.
 ///
 /// The second half is evidence standing in for a corpus, and it speaks only to
-/// CAPITALS. `The Big Idea` is a title when the same script talks about "a big
-/// idea", and `IMPORTANT` is emphasis when it also says "important"; `Saoirse`
-/// stays a name because a script does not write `saoirse`. What a lowercase
+/// a capitalised WORD. `The Big Idea` is a title when the same script talks
+/// about "a big idea", and `Pricing` mid-sentence is a word rather than a
+/// surname when the script also says "pricing"; `Saoirse` stays a name because
+/// a script has no reason to write `saoirse`. What a lowercase
 /// word cannot vouch for is English: `onnx` is lowercase because that is how
-/// it is spelled. So the two places that ask "is this English?" rather than
-/// "is this capital a word?" — trimming the word that opens a sentence, and
-/// judging the parts of a lowercase compound — ask [`is_ordinary_word`] and
-/// never this.
+/// it is spelled. So the three places that ask "is this English?" rather than
+/// "is this capital a word?" — trimming the word that opens a sentence, judging
+/// the parts of a compound, and telling emphasis from an initialism — ask
+/// [`is_ordinary_word`] and never this.
 ///
 /// Matched on the spelling, up to case and the [`CLITICS`] above. No suffix is
 /// stripped and no spelling is folded, because both invent relationships the
@@ -325,8 +330,9 @@ pub fn is_ordinary_word(word: &str) -> bool {
 ///
 /// What it cannot see is a name the script also writes as a word (`Harvest`
 /// beside `harvest`), or an ordinary capital the script never repeats in
-/// lowercase. The first loses the name's proper-noun score, though never a
-/// spelling score — `RustLight` beside `rustlight` keeps its internal capital.
+/// lowercase. The first costs the name its proper-noun score and its rank, and
+/// a phrase whose every word is witnessed is read as a title; no spelling score
+/// is touched, so `RustLight` beside `rustlight` keeps its internal capital.
 /// The second sends a capital that a dictionary would have cleared, which is
 /// the direction a filter without one has to err in.
 struct OrdinaryEnglish {
@@ -357,10 +363,10 @@ impl OrdinaryEnglish {
 ///
 /// A script rarely writes a day, a month or a title in lowercase, so its own
 /// evidence cannot be relied on to clear one, and without this table `Monday`
-/// would look exactly like `Nkosinathi`. It is consulted for a single word —
-/// the proper-noun and initialism scores — not for a whole name phrase. Short
-/// and hand-written: every entry is here because it is a capitalised word a
-/// presenter says without needing help.
+/// would look exactly like `Nkosinathi`. It is consulted one word at a time,
+/// for the proper-noun and initialism scores, and never removes a word from a
+/// name phrase. Short and hand-written: every entry is here because it is a
+/// capitalised word a presenter says without needing help.
 const ORDINARY_CAPITALISED: &[&str] = &[
     "april", "august", "december", "dr", "february", "friday", "january", "july", "june",
     "march", "may", "miss", "monday", "mr", "mrs", "ms", "november", "october", "ok",
@@ -706,7 +712,7 @@ fn is_name_part(word: &Word<'_>) -> bool {
 /// is at least as useful as that word alone — it carries the same spelling plus
 /// the context the recogniser hears around it — and if it ranked lower, the
 /// containment rule below would keep the weaker of the two.
-fn shape_score(word: &Word<'_>, ordinary: bool) -> u32 {
+fn shape_score(word: &Word<'_>) -> u32 {
     let shape = word.shape;
     let mut score = 0;
     if shape.internal_upper {
@@ -715,9 +721,12 @@ fn shape_score(word: &Word<'_>, ordinary: bool) -> u32 {
     if shape.non_ascii_letter && shape.letters >= 3 {
         score += SCORE_NON_ASCII;
     }
+    // Grammar alone decides whether capitals are emphasis. Prose writes `onnx`
+    // and `json` in lowercase all the time, and that is the acronym's running
+    // spelling, not evidence that `ONNX` is shouting (see `OrdinaryEnglish`).
     if shape.all_upper
         && shape.letters >= MIN_INITIALISM_LEN
-        && !ordinary
+        && !is_ordinary_word(word.core)
         && !is_ordinary_capitalised(word.core)
     {
         score += SCORE_ALL_UPPER;
@@ -777,7 +786,7 @@ fn collect_name_phrases(
                 let text = span.iter().map(|w| w.core).collect::<Vec<_>>().join(" ");
                 let strongest = span
                     .iter()
-                    .map(|w| shape_score(w, english.contains(w.core)))
+                    .map(shape_score)
                     .max()
                     .unwrap_or(0);
                 // The phrase must out-score every word inside it, or the
@@ -813,7 +822,7 @@ fn collect_singletons(words: &[Word<'_>], english: &OrdinaryEnglish, out: &mut V
         }
         let shape = word.shape;
         let ordinary = english.contains(word.core);
-        let mut score = shape_score(word, ordinary);
+        let mut score = shape_score(word);
 
         // Grammar alone judges the parts: a lowercase witness says how a word
         // is spelled, not that it is English (see `OrdinaryEnglish`).
@@ -1026,7 +1035,7 @@ mod tests {
 
     #[test]
     fn grammar_is_ordinary_in_any_script_and_names_never_are() {
-        for word in ["the", "Then", "nobody", "Through", "today", "doesn't", "We're", "won't"] {
+        for word in ["the", "Then", "nobody", "Through", "today", "doesn't", "I'm", "won't"] {
             assert!(is_ordinary_word(word), "{word} should be ordinary");
         }
         // A lone letter is an initial as often as it is a word: `A Smith`.
@@ -1058,13 +1067,23 @@ mod tests {
     }
 
     #[test]
-    fn emphasis_is_not_an_initialism_when_the_script_uses_the_word() {
+    fn an_initialism_survives_its_own_lowercase_spelling() {
+        // Running prose writes `onnx` in lowercase; that is the acronym's
+        // spelling, not evidence that `ONNX` is emphasis. Shouting a grammar
+        // word is still grammar.
         let terms = extract(&[
-            "This part is IMPORTANT, so read it twice.",
-            "The important thing is that GDPR still applies.",
+            "We export the model as onnx files.",
+            "Then ONNX loads it, and NEVER twice.",
         ]);
-        assert!(!has(&terms, "IMPORTANT"), "{terms:?}");
-        assert!(has(&terms, "GDPR"), "{terms:?}");
+        assert!(has(&terms, "ONNX"), "{terms:?}");
+        assert!(!has(&terms, "NEVER"), "{terms:?}");
+    }
+
+    #[test]
+    fn a_contraction_opening_a_sentence_is_grammar() {
+        let terms = extract(&["I'm Saoirse and this is the update."]);
+        assert!(has(&terms, "Saoirse"), "{terms:?}");
+        assert!(!has(&terms, "I'm Saoirse"), "{terms:?}");
     }
 
     #[test]
