@@ -372,7 +372,7 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
           followingTime: time({ onSeconds, autoScrollSeconds: 90 }),
         });
         const outcome = resolveTakeOutcome(input);
-        expect(outcome.headline).toBe('Take finished on auto-scroll');
+        expect(outcome.headline).toBe('This take used auto-scroll');
         expect(outcome.health).toBe('not_assessed');
         expect(outcome.tone).toBe('neutral');
         expect(outcome.suggestion).toBeNull();
@@ -386,11 +386,11 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
     const headline = (over: Partial<FollowingTime>) =>
       resolveTakeOutcome(take({ followingShare: null, followingTime: time({ onSeconds: 1, ...over }) }))
         .headline;
-    expect(headline({ pausedSeconds: 60 })).toBe('Take finished while paused');
-    expect(headline({ offSeconds: 60 })).toBe('Take finished with following off');
-    expect(headline({ autoScrollSeconds: 60 })).toBe('Take finished on auto-scroll');
+    expect(headline({ pausedSeconds: 60 })).toBe('This take was paused');
+    expect(headline({ offSeconds: 60 })).toBe('Following was switched off');
+    expect(headline({ autoScrollSeconds: 60 })).toBe('This take used auto-scroll');
     expect(headline({ pausedSeconds: 10, offSeconds: 50, autoScrollSeconds: 20 })).toBe(
-      'Take finished with following off',
+      'Following was switched off',
     );
   });
 
@@ -410,10 +410,11 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
       wordsHeard: 0,
       followingShare: null,
       durationSeconds: 90,
+      listenedSeconds: 2,
       followingTime: time({ onSeconds: 2, pausedSeconds: 88 }),
     });
     const outcome = resolveTakeOutcome(input);
-    expect(outcome.headline).toBe('Take finished while paused');
+    expect(outcome.headline).toBe('This take was paused');
     expect(outcome.tone).toBe('neutral');
     expect(said(input)).not.toMatch(/microphone|nothing was transcribed/i);
   });
@@ -425,6 +426,7 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
       wordsHeard: 0,
       followingShare: null,
       durationSeconds: 90,
+      listenedSeconds: 90,
       followingTime: time({ onSeconds: 5, autoScrollSeconds: 85 }),
     });
     const outcome = resolveTakeOutcome(input);
@@ -441,10 +443,58 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
         wordsHeard: 0,
         followingShare: null,
         durationSeconds: 90,
+        listenedSeconds: 90,
         followingTime: time({ onSeconds: 0, offSeconds: 90 }),
       }),
     );
     expect(outcome.headline).toBe('Nothing was transcribed');
+  });
+
+  it('asks whether anything was heard of the listening the whole session did', () => {
+    /*
+     * Words are counted across the session and the pass's pause is not, and
+     * `durationSeconds` is whole wall-clock seconds. Setting one against the
+     * other got both directions wrong.
+     */
+    const silent = (listenedSeconds: number, pausedSeconds: number) =>
+      resolveTakeOutcome(
+        take({
+          wordsHeard: 0,
+          followingShare: null,
+          durationSeconds: 80,
+          listenedSeconds,
+          followingTime: time({ onSeconds: 80 - pausedSeconds - 0.01, pausedSeconds }),
+        }),
+      ).headline;
+    // Paused from the start, retaken while paused: the session never listened,
+    // though the last pass's pause is only the last twenty seconds of it.
+    expect(silent(0, 20)).toBe('This take was paused');
+    // A silent first pass, then a retake paused to the end: the minute of
+    // silence before it is still a minute of silence.
+    expect(silent(60, 20)).toBe('Nothing was transcribed');
+    // Five and a half seconds listened is past the threshold, whatever the
+    // floored clock says.
+    expect(
+      resolveTakeOutcome(
+        take({
+          wordsHeard: 0,
+          followingShare: null,
+          durationSeconds: 35,
+          listenedSeconds: 5.5,
+          followingTime: time({ onSeconds: 5.5, pausedSeconds: 30.2 }),
+        }),
+      ).headline,
+    ).toBe('Nothing was transcribed');
+  });
+
+  it('never says how the take finished, only what happened in it', () => {
+    // Resumed before the stop: the take did not finish paused.
+    for (const outcome of [
+      resolveTakeOutcome(take({ followingShare: 0, followingTime: time({ onSeconds: 3, pausedSeconds: 60 }) })),
+      resolveTakeOutcome(take({ followingShare: null, followingTime: time({ onSeconds: 0, autoScrollSeconds: 60 }) })),
+    ]) {
+      expect(outcome.headline).not.toMatch(/finished (while|on|with)|mostly/i);
+    }
   });
 
   it('does not blame an interruption nobody was being followed through', () => {

@@ -61,6 +61,12 @@ export interface TakeOutcomeInput {
    * the verdicts it always did.
    */
   followingTime?: FollowingTime;
+  /**
+   * Seconds the recogniser was being sent audio across the whole session, the
+   * scope `wordsHeard` is counted over (#287). Absent from an older caller,
+   * which is judged on `durationSeconds` as before.
+   */
+  listenedSeconds?: number;
   /** Times the realtime transport dropped and came back. */
   reconnects: number;
   /** Times the operator moved the script by hand. */
@@ -172,7 +178,6 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
 
   const heard = input.wordsHeard + input.wordsInFlight;
   const time = input.followingTime;
-  const pausedSeconds = time?.pausedSeconds ?? 0;
 
   if (heard === 0) {
     /*
@@ -183,9 +188,12 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
      * microphone" over it is the same false alarm as over a take ended two
      * seconds in. A roll and following switched off leave listening running,
      * so silence under those is still silence and is still reported.
+     *
+     * The stand-down answer only when the pass being reported was paused; a
+     * short silence with no pause in it is just a short take.
      */
-    if (input.durationSeconds - pausedSeconds < TOO_SHORT_SECONDS) {
-      if (time && pausedSeconds > 0) return standDownOutcome(input, time);
+    if ((input.listenedSeconds ?? input.durationSeconds) < TOO_SHORT_SECONDS) {
+      if (time && time.pausedSeconds > 0) return standDownOutcome(input, time);
       return {
         headline: 'Take ended early',
         detail: 'This take was too short to tell whether CandidCue could hear you.',
@@ -366,7 +374,10 @@ export function describeSetAside(time: FollowingTime): string | null {
  * The answer for a take following was set aside for nearly all of (#287).
  *
  * Named for the biggest of the three reasons, because that is the one the
- * presenter will recognise; the details list every one. Neutral and with
+ * presenter will recognise; the details list every one. Worded as something
+ * that HAPPENED in the take, never as how it finished or how much of it: the
+ * presenter may have resumed before stopping, and the reason may be the
+ * biggest while still the smaller part of a short take. Neutral and with
  * nothing to do, because nothing went wrong — and in particular no support
  * bundle, no microphone and no script advice, each of which is what the old
  * verdicts sent presenters off to chase.
@@ -375,10 +386,10 @@ function standDownOutcome(input: TakeOutcomeInput, time: FollowingTime): TakeOut
   const largest = Math.max(time.pausedSeconds, time.offSeconds, time.autoScrollSeconds);
   const headline =
     time.pausedSeconds === largest
-      ? 'Take finished while paused'
+      ? 'This take was paused'
       : time.autoScrollSeconds === largest
-        ? 'Take finished on auto-scroll'
-        : 'Take finished with following off';
+        ? 'This take used auto-scroll'
+        : 'Following was switched off';
   return {
     headline,
     detail: `Voice following was on for under ${TOO_SHORT_SECONDS} seconds, so there is nothing to judge it on. You ended in ${input.endingLocation}.`,

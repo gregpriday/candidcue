@@ -1373,11 +1373,11 @@ describe('#287 — time the presenter set following aside is not charged to foll
     feed(voiceAt(1));
   }
 
-  async function startScript() {
+  async function startScript({ speak = true } = {}) {
     const compiled = compile(SOURCE, { scriptId: 'script-1' });
     start({ compiled, sentences: compiled.sentences as never });
     await vi.advanceTimersByTimeAsync(0);
-    heard('first sentence of the opening second sentence of the opening');
+    if (speak) heard('first sentence of the opening second sentence of the opening');
     return compiled;
   }
 
@@ -1429,13 +1429,14 @@ describe('#287 — time the presenter set following aside is not charged to foll
     expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
     const outcome = resolveTakeOutcome(summary);
     // It was "CandidCue heard you, but did not track", with a support bundle.
-    expect(outcome.headline).toBe('Take finished on auto-scroll');
+    expect(outcome.headline).toBe('This take used auto-scroll');
     expect(outcome.suggestion).toBeNull();
   });
 
   it('gives the same answer when a snapshot landed before the roll began', async () => {
-    // A take started part way opens on an anchor, so the share is not null —
-    // and the take is still one auto-scroll carried.
+    // A take started part way gets a snapshot before the roll can begin — the
+    // answer to its opening anchor — so the share is not null, and the take is
+    // still one auto-scroll carried.
     await startScript();
     feed(voiceAt(1));
     await vi.advanceTimersByTimeAsync(500);
@@ -1444,7 +1445,9 @@ describe('#287 — time the presenter set following aside is not charged to foll
 
     const summary = stopSession();
     expect(summary.followingShare).not.toBeNull();
-    expect(resolveTakeOutcome(summary).headline).toBe('Take finished on auto-scroll');
+    expect(summary.followingTime.onSeconds).toBeCloseTo(0.5, 2);
+    expect(summary.followingTime.autoScrollSeconds).toBeCloseTo(60, 1);
+    expect(resolveTakeOutcome(summary).headline).toBe('This take used auto-scroll');
   });
 
   it('does not book the gap a pause interrupted as following straight through it', async () => {
@@ -1482,8 +1485,8 @@ describe('#287 — time the presenter set following aside is not charged to foll
   });
 
   it('opens a retake made while paused as paused', async () => {
-    // No write to the store announces it — nothing changed — so the pass has
-    // to read the pause it starts under.
+    // Nothing promises a store write after the retake to announce the pause,
+    // so the new pass reads the pause it starts under.
     await startScript();
     await follow(5);
     togglePlayPause();
@@ -1494,21 +1497,87 @@ describe('#287 — time the presenter set following aside is not charged to foll
     const summary = stopSession();
     expect(summary.followingTime.pausedSeconds).toBeCloseTo(20, 1);
     expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
-    expect(resolveTakeOutcome(summary).headline).toBe('Take finished while paused');
+    expect(resolveTakeOutcome(summary).headline).toBe('This take was paused');
   });
 
   it('starts the next take with nothing set aside after one stopped paused', async () => {
+    // Straight from the stop to the next take, as "Present again" does: the
+    // store still says paused when the next one begins.
     await startScript();
     togglePlayPause();
     await vi.advanceTimersByTimeAsync(10_000);
     stopSession();
-    clearSession();
+    expect(get(session).paused).toBe('listening');
 
     await startScript();
     await follow(10);
     const summary = stopSession();
     expect(summary.followingTime.pausedSeconds).toBe(0);
     expect(summary.followingTime.onSeconds).toBeCloseTo(10, 1);
+    expect(summary.listenedSeconds, 'the last session’s listening is not this one’s').toBeCloseTo(10, 1);
+  });
+
+  it('keeps a resume that is still reopening the recogniser out of following', async () => {
+    /*
+     * After a hard pause the driver is let go before the recogniser answers,
+     * and the take stays paused until it does. Snapshots in that window must
+     * not open following intervals: credited, they would add two seconds the
+     * denominator does not have.
+     */
+    await startScript();
+    await follow(5);
+    hardPause();
+    await vi.advanceTimersByTimeAsync(10_000);
+    let reopened!: () => void;
+    (pipeline.captured.instance as { resume: () => Promise<void> }).resume = () =>
+      new Promise<void>((resolve) => {
+        reopened = resolve;
+      });
+    togglePlayPause();
+    for (let second = 0; second < 3; second += 1) {
+      feed(voiceAt(1));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(get(session).paused).toBe('hard');
+    reopened();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).paused).toBe('none');
+    // Ten quiet seconds — past the credit cap — then five more followed.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await follow(5);
+
+    const summary = stopSession();
+    expect(summary.followingTime.pausedSeconds).toBeCloseTo(13, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(20, 1);
+    expect(summary.followingShare).toBeCloseTo(10 / 20, 2);
+  });
+
+  it('does not send a presenter who hard-paused straight away to test the microphone', async () => {
+    await startScript({ speak: false });
+    hardPause();
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    const summary = stopSession();
+    expect(summary.wordsHeard).toBe(0);
+    expect(summary.listenedSeconds).toBeCloseTo(0, 1);
+    const outcome = resolveTakeOutcome(summary);
+    expect(outcome.headline).toBe('This take was paused');
+    expect(outcome.suggestion).toBeNull();
+  });
+
+  it('still reports a silent minute that a paused retake came after', async () => {
+    // Words are counted across the session, so the listening is too: the
+    // retake's pause does not excuse the minute of silence before it.
+    await startScript({ speak: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+    togglePlayPause();
+    restartParagraph();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const summary = stopSession();
+    expect(summary.listenedSeconds).toBeCloseTo(60, 1);
+    expect(summary.followingTime.pausedSeconds).toBeCloseTo(20, 1);
+    expect(resolveTakeOutcome(summary).headline).toBe('Nothing was transcribed');
   });
 
   it('still charges an automatic hold to following', async () => {

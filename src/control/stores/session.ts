@@ -156,6 +156,16 @@ export interface SessionSummary {
   /** What the share is a fraction of, and what was left out of it (#287). */
   followingTime: FollowingTime;
   /**
+   * Seconds the recogniser was being sent audio, across the WHOLE session —
+   * every pass, minus the time the take was paused (#287).
+   *
+   * The scope `wordsHeard` is counted over, which `followingTime` is not, and
+   * measured on the monotonic clock rather than derived from
+   * `durationSeconds`: that one is whole wall-clock seconds, and taking a
+   * pass's pause off it would set two clocks over two spans against each other.
+   */
+  listenedSeconds: number;
+  /**
    * Words the recogniser FINALISED this take. Zero means nothing was heard.
    *
    * Finals only, and the summary is taken before `endTurn` closes the last
@@ -696,6 +706,15 @@ interface ActiveTake {
   suspendedSinceMs: number;
   /** Suspended time already closed, by reason. The open stretch is not in it. */
   suspendedMs: Record<Suspension, number>;
+  /**
+   * Time the recogniser was being sent audio on every EARLIER pass (#287).
+   *
+   * Words heard are counted for the whole session, not the pass, so "did it
+   * hear anything" has to be asked of the whole session's listening too — a
+   * retake must neither forget a silent minute before it nor charge the
+   * session for a pause the earlier pass spent.
+   */
+  listenedBeforeMs: number;
   /**
    * Where the auto-scroll transport left the document, when it ran it off the
    * end (#276). Null when it has not, or when something since has put the take
@@ -2030,12 +2049,17 @@ function takeEndToken(): number {
  *
  * The suspension is read from the take as it stands, not assumed clear: a
  * retake made while paused opens a pass that is paused from its first moment,
- * and no store write would announce it, because nothing changed. Which is also
- * why `startLiveSession` opens the first pass only once the session's own state
- * is in place — read any earlier, this would be the LAST take's pause.
+ * and nothing guarantees a later store write to tell `noteSuspension` so. Which
+ * is also why `startLiveSession` opens the first pass only once the session's
+ * own state is in place — read any earlier, this would be the LAST take's
+ * pause, until the next write happened to correct it.
+ *
+ * Listening is the one measurement that carries over, for the reason on
+ * `listenedBeforeMs`.
  */
 function beginTake(startTokenIndex: number): void {
   const nowMs = monotonicNowMs();
+  const previous = activeTake;
   activeTake = {
     startedAtMs: nowMs,
     startTokenIndex,
@@ -2046,8 +2070,20 @@ function beginTake(startTokenIndex: number): void {
     suspension: suspensionOf(get(state)),
     suspendedSinceMs: nowMs,
     suspendedMs: { paused: 0, autoScroll: 0, followingOff: 0 },
+    listenedBeforeMs:
+      previous === null
+        ? 0
+        : previous.listenedBeforeMs +
+          Math.max(0, nowMs - previous.startedAtMs - suspendedAt(previous, nowMs).paused),
     autoScrollEndToken: null,
   };
+}
+
+/** The pass's suspended time by reason, the stretch still open included. */
+function suspendedAt(take: ActiveTake, nowMs: number): Record<Suspension, number> {
+  const suspended = { ...take.suspendedMs };
+  if (take.suspension !== null) suspended[take.suspension] += nowMs - take.suspendedSinceMs;
+  return suspended;
 }
 
 /**
@@ -2117,13 +2153,20 @@ const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
  * Sampled at one instant, and without closing anything: the suspension still
  * open at the stop is counted, but the pass is not touched, so asking twice
  * gives the same answer.
+ *
+ * `listenedSeconds` is the odd one out: the whole session's, not the pass's,
+ * because it answers "did it hear anything" for words counted across the
+ * session — see `listenedBeforeMs`.
  */
-function takeFollowingTime(): { share: number | null; time: FollowingTime } {
+function takeFollowingTime(): {
+  share: number | null;
+  time: FollowingTime;
+  listenedSeconds: number;
+} {
   const take = activeTake;
-  if (take === null) return { share: null, time: noFollowingTime() };
+  if (take === null) return { share: null, time: noFollowingTime(), listenedSeconds: 0 };
   const nowMs = monotonicNowMs();
-  const suspended = { ...take.suspendedMs };
-  if (take.suspension !== null) suspended[take.suspension] += nowMs - take.suspendedSinceMs;
+  const suspended = suspendedAt(take, nowMs);
   const elapsedMs = Math.max(0, nowMs - take.startedAtMs);
   const onMs = Math.max(
     0,
@@ -2135,8 +2178,12 @@ function takeFollowingTime(): { share: number | null; time: FollowingTime } {
     offSeconds: suspended.followingOff / 1000,
     autoScrollSeconds: suspended.autoScroll / 1000,
   };
-  if (take.lastSnapshotAtMs === null || !(onMs > 0)) return { share: null, time };
-  return { share: Math.min(1, Math.max(0, take.followingMs / onMs)), time };
+  const listenedSeconds =
+    (take.listenedBeforeMs + Math.max(0, elapsedMs - suspended.paused)) / 1000;
+  if (take.lastSnapshotAtMs === null || !(onMs > 0)) {
+    return { share: null, time, listenedSeconds };
+  }
+  return { share: Math.min(1, Math.max(0, take.followingMs / onMs)), time, listenedSeconds };
 }
 
 function noFollowingTime(): FollowingTime {
@@ -3506,6 +3553,7 @@ export function stopSession(): SessionSummary {
     manualJumps: s.counts.jumps,
     followingShare: following.share,
     followingTime: following.time,
+    listenedSeconds: following.listenedSeconds,
     wordsHeard,
     ...takeCoverage(s),
     wordsInFlight,
@@ -3606,6 +3654,7 @@ function emptySummary(s: SessionState): SessionSummary {
     manualJumps: 0,
     followingShare: null,
     followingTime: noFollowingTime(),
+    listenedSeconds: 0,
     wordsHeard: 0,
     wordsFollowed: 0,
     // Nothing was given, so nothing is the denominator — not the length of

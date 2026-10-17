@@ -153,6 +153,7 @@
           wordsInFlight: $session.summary.wordsInFlight,
           followingShare: $session.summary.followingShare,
           followingTime: $session.summary.followingTime,
+          listenedSeconds: $session.summary.listenedSeconds,
           reconnects: $session.summary.reconnects,
           manualJumps: $session.summary.manualJumps,
           durationSeconds: $session.summary.durationSeconds,
