@@ -5,9 +5,25 @@
   Settings changes the answer afterwards, but the state machine underneath is
   identical — progress, verification, unpacking, cancel, failure, retry — and
   Welcome's own comment already warned that running it from two screens means
-  two copies of that logic drifting apart. `compact` is the only difference:
-  Welcome hides the disk inventory, because reclaiming space is not a first-run
-  concern.
+  two copies of that logic drifting apart.
+
+  TWO LAYOUTS, BECAUSE THE HOSTS ALREADY SAY DIFFERENT THINGS
+  ------------------------------------------------------------
+  Full (Settings) is an install card. Its first line answers "can it follow
+  me?" for the ACTIVE language and nothing else does: the dropdown, the costs
+  and the one button that moves things forward sit beneath it, and the licence
+  is the card's footer. Three kinds of message look different on purpose,
+  because they ask for different decisions — a problem with the language
+  (amber, in the status line), a command that just failed (red, under the
+  button that issued it), and a removal waiting for an answer (neutral ink, a
+  question with its answers under it).
+
+  Compact (Welcome) has no card and no status line. The Welcome row it sits in
+  already paints the readiness, a pill and a sentence, and a second status for
+  the same language was the panel arguing with its host. What is left is the
+  choice, the one action, its progress, why the last download failed, and the
+  same facts and licence. The disk inventory and removal are Settings'
+  business: reclaiming space is not a first-run concern.
 
   WHAT THIS SHOWS BEFORE ANYTHING DOWNLOADS
   -----------------------------------------
@@ -36,8 +52,10 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import Button from './Button.svelte';
+  import Icon from './Icon.svelte';
   import Select from './Select.svelte';
   import StatusPill from './StatusPill.svelte';
+  import type { IconName } from './icon-names';
   import { describeError } from '../services/errors';
   import { openModelLicence } from '../services/speech-models';
   import {
@@ -49,6 +67,7 @@
     isBusy as isModelBusy,
     isDamaged,
     languageDisplayName,
+    MODEL_DAMAGED_CODE,
     onSpeechModelProgress,
     phaseLabel,
     progressFraction,
@@ -61,7 +80,10 @@
   } from '../services/speech-models';
 
   interface Props {
-    /** Welcome's form: no disk inventory, tighter copy. */
+    /**
+     * Welcome's form: no status line of its own (the Welcome row paints one),
+     * no disk inventory and no removal.
+     */
     compact?: boolean;
     /**
      * The settings revision to write against. Owned by the caller because the
@@ -90,6 +112,9 @@
   }
 
   let { compact = false, revision, onlanguagechange, onactivestatus }: Props = $props();
+
+  /** Ties each removal question to its group, per instance. */
+  const uid = $props.id();
 
   let options = $state<SpeechLanguageOptions | null>(null);
   /** Per model, so one model's event cannot invalidate another's snapshot. */
@@ -194,18 +219,55 @@
       (shownStatus?.installed ?? false),
   );
 
-  function pillFor(option: SpeechLanguageOption): { tone: 'success' | 'neutral' | 'warning'; label: string } {
+  type Tone = 'success' | 'accent' | 'neutral' | 'warning';
+
+  /**
+   * The card's first line: whether the ACTIVE language can follow a take.
+   *
+   * It describes the active language whatever row the dropdown is showing,
+   * because that is the question somebody opening this screen came with — and
+   * it is the one status the panel paints. There used to be three: a sentence
+   * saying "Currently using English", "(in use)" in the menu, and a pill beside
+   * it, which on a machine without the model read "Needs download" in the
+   * success green. A reader had to assemble the answer, and the first two
+   * pieces said yes.
+   *
+   * It never says "Ready". Whether the engine has loaded is Settings' call,
+   * and its header pill makes it; this says what is on disk.
+   */
+  function summaryOf(option: SpeechLanguageOption | null): { tone: Tone; icon: IconName; title: string } {
+    if (!option) return { tone: 'neutral', icon: 'info', title: 'No speech language selected' };
     const status = statusOf(option);
-    // Busy first: "Downloading" is what is happening, and it supersedes both
-    // other labels for as long as it lasts.
-    if (isModelBusy(status)) return { tone: 'neutral', label: phaseLabel(status) };
-    // Before "Needs download" and "Not downloaded", both of which would be
-    // false: it IS downloaded, and what it needs is to be downloaded AGAIN
-    // (#258). It used to read "Downloaded" here, and abort the next take.
-    if (isDamaged(status)) return { tone: 'warning', label: 'Damaged' };
-    if (option.active) return { tone: 'success', label: status.installed ? 'In use' : 'Needs download' };
-    if (status.installed) return { tone: 'neutral', label: 'Downloaded' };
-    return { tone: 'warning', label: 'Not downloaded' };
+    const name = languageDisplayName(option.languageTag);
+    // Busy first: what is happening supersedes what was true before it.
+    if (isModelBusy(status)) return { tone: 'accent', icon: 'import', title: `Installing ${name}` };
+    // Before the not-downloaded reading, which would be false: it IS
+    // downloaded, and what it needs is to be downloaded AGAIN (#258).
+    if (isDamaged(status)) return { tone: 'warning', icon: 'alert', title: 'Speech data is damaged' };
+    if (status.error) return { tone: 'warning', icon: 'alert', title: 'The download did not finish' };
+    if (status.installed) return { tone: 'success', icon: 'check', title: 'Speech data installed' };
+    return { tone: 'accent', icon: 'import', title: 'Voice following needs a download' };
+  }
+
+  /** Where a usable copy came from, as the end of "Currently using English, …". */
+  function sourcePhrase(status: SpeechModelStatus): string {
+    if (status.source === 'bundled') return 'installed with the app';
+    if (status.source === 'override') return 'loaded from CANDIDCUE_MODELS_DIR';
+    return 'downloaded to this machine';
+  }
+
+  /**
+   * Rust's sentence for a damaged download, when it says something the panel
+   * does not already say.
+   *
+   * For STT_MODEL_DAMAGED it does not — it restates the damage — so it is
+   * dropped rather than printed under a sentence saying the same thing. A
+   * repair that then failed on its own terms (no network, no space) still
+   * reports the files as damaged, and THAT reason is worth showing.
+   */
+  function damagedReason(status: SpeechModelStatus): string | null {
+    if (!isDamaged(status) || !status.error || status.error.code === MODEL_DAMAGED_CODE) return null;
+    return status.error.message;
   }
 
   /**
@@ -243,6 +305,103 @@
     confirmingDelete = modelId;
     await tick();
     keepButton?.focus();
+  }
+
+  /**
+   * Every Remove button, by model, so declining can hand focus back.
+   *
+   * "Keep it" is destroyed by its own click, exactly as Remove was on the way
+   * in; without this a keyboard user who said no was dropped at the top of the
+   * window, one Return away from nothing.
+   */
+  let removeTriggers = $state<Record<string, HTMLButtonElement | null>>({});
+
+  async function keepIt(modelId: string): Promise<void> {
+    confirmingDelete = null;
+    await tick();
+    removeTriggers[modelId]?.focus();
+  }
+
+  /*
+   * Focus that the panel itself destroyed, put back inside it.
+   *
+   * Nearly every transition here replaces the control that was pressed:
+   * Download becomes Stop, Stop becomes Download, "Remove it" becomes nothing,
+   * "Use German" disappears once German is in use. Each of those dropped focus
+   * on the body. So the panel remembers what last had focus inside it, and
+   * when that element has left the document AND nothing else has taken focus,
+   * it moves to the next thing worth pressing — or the dropdown, when there is
+   * nothing to press. A download finishing in the background while somebody
+   * types elsewhere moves nothing: their focus is not on the body.
+   */
+  let root = $state<HTMLDivElement | null>(null);
+  let lastFocused: HTMLElement | null = null;
+
+  function noteFocus(event: FocusEvent): void {
+    if (event.target instanceof HTMLElement) lastFocused = event.target;
+  }
+
+  async function recoverFocus(): Promise<void> {
+    await tick();
+    if (!root || !lastFocused || lastFocused.isConnected) return;
+    const holder = document.activeElement;
+    if (holder !== null && holder !== document.body) return;
+    const next =
+      root.querySelector<HTMLElement>('.picker-actions button:not(:disabled)') ??
+      root.querySelector<HTMLElement>('select');
+    lastFocused = null;
+    next?.focus();
+  }
+
+  $effect(() => {
+    // Everything that swaps one control for another.
+    void [shown?.modelId, shownStatus?.phase, shownStatus?.installed, confirmingDelete, selecting];
+    void recoverFocus();
+  });
+
+  /*
+   * How a download of an INACTIVE language ended, for a screen reader.
+   *
+   * The active language's outcome is the status line changing, which is a
+   * live region. A language somebody is only looking at has no status line:
+   * its phase region disappears when the install ends and "ready to switch to"
+   * arrives as an ordinary paragraph, so somebody who started it and went back
+   * to writing heard nothing. Only the transition OUT of a busy phase speaks —
+   * opening the screen on a finished download is not news.
+   */
+  let outcome = $state('');
+  let outcomeAlert = $state('');
+  const lastPhase = new Map<string, SpeechModelStatus['phase']>();
+
+  $effect(() => {
+    if (!shown || shown.active || !shownStatus) return;
+    const before = lastPhase.get(shown.modelId);
+    lastPhase.set(shown.modelId, shownStatus.phase);
+    if (before === undefined || before === shownStatus.phase) return;
+    const wasBusy = isModelBusy({ ...shownStatus, phase: before });
+    // A new attempt empties both regions, so that the SAME outcome a second
+    // time — the same failure after a retry — is still a change, and heard.
+    if (!wasBusy && isModelBusy(shownStatus)) {
+      outcome = '';
+      outcomeAlert = '';
+      return;
+    }
+    if (!wasBusy || isModelBusy(shownStatus)) return;
+    const name = languageDisplayName(shown.languageTag);
+    if (shownStatus.installed) outcome = `${name} is downloaded and ready to switch to.`;
+    else if (shownStatus.error) outcomeAlert = `${name} did not download. ${shownStatus.error.message}`;
+  });
+
+  /** A re-check of a FIRST snapshot that failed, so the button can say so. */
+  let rechecking = $state(false);
+
+  async function recheck(): Promise<void> {
+    rechecking = true;
+    try {
+      await refresh();
+    } finally {
+      rechecking = false;
+    }
   }
 
   /**
@@ -313,9 +472,18 @@
     };
   });
 
+  /**
+   * Run one install command against one model.
+   *
+   * `failed` names the operation for when it is refused. A bare "CandidCue
+   * cannot reach the network" under a Download button reads as a fact about
+   * the language; "The download could not start" first says it was the press
+   * that failed, and that the language is exactly where it was.
+   */
   async function runModelAction(
     modelId: string,
     action: (id: string) => Promise<SpeechModelStatus>,
+    failed: string,
   ): Promise<void> {
     busyByModel = { ...busyByModel, [modelId]: true };
     errorByModel = { ...errorByModel, [modelId]: null };
@@ -331,7 +499,7 @@
     } catch (err) {
       // Tauri rejects with a serialized AppError OBJECT, not an Error, so
       // `String(err)` renders "[object Object]".
-      errorByModel = { ...errorByModel, [modelId]: describeError(err) };
+      errorByModel = { ...errorByModel, [modelId]: `${failed} ${describeError(err)}` };
     } finally {
       busyByModel = { ...busyByModel, [modelId]: false };
     }
@@ -346,7 +514,7 @@
     } catch (err) {
       // The write itself failed, so nothing changed and the revision this
       // component holds is still good.
-      selectError = describeError(err);
+      selectError = `Could not switch to ${languageDisplayName(option.languageTag)}. ${describeError(err)}`;
       selecting = false;
       await refresh();
       return;
@@ -386,319 +554,516 @@
 </script>
 
 <!--
-  Remove, behind its confirm. A snippet because two branches offer it: an
-  installed download, and a damaged one (#258) — whose files are still on disk
-  and still the user's to reclaim, and whose repair may be exactly what there
-  is no room for.
+  The one button that moves the language on screen forward, if it has one —
+  Download, Try again, Download again, or Use. A snippet because the two
+  layouts put it in different places (beside the dropdown in Welcome, under the
+  costs in Settings) and the rule for WHICH button it is must not exist twice.
+  The size rides on the button: it is the price of pressing it.
 -->
-{#snippet removeButtons(modelId: string)}
-  {#if confirmingDelete === modelId}
+{#snippet nextAction(option: SpeechLanguageOption, status: SpeechModelStatus)}
+  {#if !status.installed}
     <Button
-      variant="danger-primary"
-      onclick={() => {
-        confirmingDelete = null;
-        void runModelAction(modelId, deleteSpeechModel);
-      }}
+      variant="primary"
+      disabled={busyByModel[option.modelId]}
+      onclick={() =>
+        void runModelAction(option.modelId, startSpeechModelDownload, 'The download could not start.')}
     >
-      Remove it
+      {downloadLabel(status)}
+      <span class="button-size">{formatBytes(status.downloadBytes)}</span>
     </Button>
-    <Button bind:element={keepButton} variant="default" onclick={() => (confirmingDelete = null)}>
-      Keep it
+  {:else if !option.active}
+    <Button variant="primary" disabled={!canActivate} onclick={() => void activate(option)}>
+      Use {languageDisplayName(option.languageTag)}
     </Button>
-  {:else}
-    <Button variant="danger" onclick={() => void askToRemove(modelId)}>Remove download</Button>
   {/if}
 {/snippet}
 
-<div class="picker" class:compact>
+<!--
+  A download in flight: what it is doing, how far, and the way to stop it.
+
+  The PHASE is the live region and the byte count is not. A count changes
+  several times a second, and a polite region re-reading "59 MB of 128 MB" on
+  every event buries anything else a screen reader was about to say; a phase
+  changes four or five times in an install, which is what is worth hearing.
+  The bar carries the count as its value text instead.
+-->
+{#snippet progress(option: SpeechLanguageOption, status: SpeechModelStatus)}
+  {@const fraction = progressFraction(status)}
+  {@const counted = `${formatBytes(status.progressBytes)} of ${formatBytes(status.progressTotal)}`}
+  <div class="progress">
+    <div class="progress-main">
+      <p class="progress-line">
+        <span class="progress-phase" role="status">{phaseLabel(status)}</span>
+        <span class="progress-count">{fraction !== null ? counted : 'Download complete'}</span>
+      </p>
+      <!-- Determinate only while there is a real fraction: `installing` and
+           `validating` measure nothing, and a bar snapping back to empty there
+           reads as a restart. -->
+      <progress
+        class="model-progress"
+        max="1"
+        value={fraction ?? undefined}
+        aria-label="{languageDisplayName(option.languageTag)} speech model install progress"
+        aria-valuetext={fraction !== null ? counted : phaseLabel(status)}
+      ></progress>
+    </div>
+    <div class="picker-actions">
+      <Button
+        size="sm"
+        variant="default"
+        onclick={() =>
+          void runModelAction(option.modelId, cancelSpeechModelDownload, 'The download could not be stopped.')}
+      >
+        Stop
+      </Button>
+    </div>
+  </div>
+{/snippet}
+
+<!--
+  A problem WITH THE LANGUAGE — a download that failed, files that are
+  damaged. Amber, like the status line that leads with it.
+-->
+{#snippet trouble(message: string, announce: boolean)}
+  <p class="line trouble" role={announce ? 'alert' : undefined}>
+    <span class="line-icon" aria-hidden="true"><Icon name="alert" size={14} /></span>
+    <span>{message}</span>
+  </p>
+{/snippet}
+
+<!--
+  A COMMAND that failed — Download refused, Stop refused, Remove refused, the
+  language not saved. Red, and directly under the controls that issued it: it
+  is about what was just pressed, and says nothing new about the language.
+-->
+{#snippet failure(message: string)}
+  <p class="line failure" role="alert">
+    <span class="line-icon" aria-hidden="true"><Icon name="alert" size={14} /></span>
+    <span>{message}</span>
+  </p>
+{/snippet}
+
+<!--
+  Remove, waiting for an answer.
+
+  A QUESTION, so it looks like one: neutral ink on a sunken well, the sentence
+  first and its answers under it, the safe answer first and focused so the
+  destructive key is never the one under a waiting Return. It used to be the
+  same amber wash as "your speech data is missing", printed after the buttons
+  that answered it. Focus landing on "Keep it" inside this labelled group is
+  what announces the question, so it is not an alert.
+-->
+{#snippet confirmRemove(modelId: string, question: string, consequence: string)}
+  <div
+    class="confirm"
+    role="group"
+    aria-labelledby="{uid}-question-{modelId}"
+    aria-describedby="{uid}-consequence-{modelId}"
+  >
+    <p class="confirm-question" id="{uid}-question-{modelId}">{question}</p>
+    <p class="confirm-detail" id="{uid}-consequence-{modelId}">{consequence}</p>
+    <div class="picker-actions">
+      <Button bind:element={keepButton} variant="default" onclick={() => void keepIt(modelId)}>
+        Keep it
+      </Button>
+      <Button
+        variant="danger-primary"
+        onclick={() => {
+          confirmingDelete = null;
+          void runModelAction(modelId, deleteSpeechModel, 'The speech data could not be removed.');
+        }}
+      >
+        Remove it
+      </Button>
+    </div>
+  </div>
+{/snippet}
+
+<!--
+  The three facts §153 asks for, before any button that spends bandwidth, and
+  the disk figure afterwards — "how much disk is this using?" is as real a
+  question as "how much will this cost me to fetch?". Once the model is
+  installed the transfer size is history, so the line stops quoting it.
+-->
+{#snippet facts(option: SpeechLanguageOption, status: SpeechModelStatus)}
+  <p class="facts">
+    {#if isModelBusy(status)}
+      <!-- The transfer is the bar's to report while it runs; quoting "128 MB
+           to download" under "Download complete" read as a contradiction. -->
+      <span>{formatBytes(status.installedBytes)} once installed</span>
+      <span class="sep" aria-hidden="true">·</span> <span>from {originLine(option)}</span>
+    {:else if status.installed}
+      <span>{formatBytes(status.installedBytes)} on disk</span>
+      {#if status.source === 'downloaded'}
+        <span class="sep" aria-hidden="true">·</span> <span>from {originLine(option)}</span>
+      {/if}
+    {:else}
+      <span>{formatBytes(status.downloadBytes)} to download</span>
+      <span class="sep" aria-hidden="true">·</span>
+      <!-- "on disk" would be a false claim about a machine that does not have
+           the model; the number is the footprint it WOULD take. -->
+      <span>{formatBytes(status.installedBytes)} once installed</span>
+      <span class="sep" aria-hidden="true">·</span> <span>from {originLine(option)}</span>
+    {/if}
+  </p>
+{/snippet}
+
+<!--
+  The attribution, stated and not gated. It also travels in the model
+  directory as ATTRIBUTION.md (§157); this is the copy a user can read without
+  going to look for a file.
+-->
+{#snippet attribution(option: SpeechLanguageOption)}
+  <p class="attribution">
+    {option.attribution.title} by {option.attribution.author} —
+    <!--
+      A button, not an anchor.
+
+      An `<a target="_blank">` asks the WEBVIEW to navigate, which is a thing
+      this window must never do — and it needed `opener:default` on the control
+      capability to work at all, which is standing permission to open any url.
+      `openModelLicence` goes to Rust, which checks the url against the licence
+      urls the model catalogue itself declares.
+    -->
+    <button
+      type="button"
+      class="licence-link"
+      data-focus="control"
+      onclick={() => void openModelLicence(option.attribution.license.url)}
+      >{option.attribution.license.name}</button
+    >.
+    {#if option.attribution.licenseNote}
+      {option.attribution.licenseNote}
+    {/if}
+  </p>
+{/snippet}
+
+<!--
+  What the row on screen is, when it is NOT the active one. The status line
+  describes the active language whatever the dropdown shows, so a looked-at
+  language needs its own short answer — and only the parts the costs and the
+  button beneath it do not already give.
+-->
+{#snippet inspected(option: SpeechLanguageOption, status: SpeechModelStatus)}
+  {@const name = languageDisplayName(option.languageTag)}
+  {#if isModelBusy(status)}
+    <!-- The progress below says it. -->
+  {:else if isDamaged(status)}
+    {@render trouble(`${name}’s speech data on this machine is damaged. Download it again to repair it.`, false)}
+  {:else if status.error}
+    {@render trouble(status.error.message, false)}
+  {:else if status.installed}
+    <p class="line">{name} is downloaded and ready to switch to.</p>
+  {:else}
+    <p class="line">{name} is not downloaded yet. Downloading it does not switch to it.</p>
+  {/if}
+{/snippet}
+
+<div class="picker" class:compact bind:this={root} onfocusin={noteFocus}>
+  <!-- How a download of a language you are only LOOKING at ended. Always in
+       the document, so the change is what is heard. -->
+  <p class="sr-only" role="status">{outcome}</p>
+  <p class="sr-only" role="alert">{outcomeAlert}</p>
   {#if options === null && loadError !== null}
     <!-- The FIRST snapshot failed, so there is nothing to fall back to.
          "Checking…" for ever would be the panel lying about still trying. -->
-    <p class="inline-alert" role="alert">{loadError}</p>
-    <div class="picker-actions">
-      <Button variant="default" onclick={() => void refresh()}>Try again</Button>
-    </div>
-  {:else if options === null}
-    <p class="hint-line" role="status" aria-live="polite">Checking which languages are available…</p>
-  {:else if languages.length === 0}
-    <!--
-      Reachable only from a build whose catalogue and recogniser tables
-      disagree. Says what is wrong rather than showing an empty dropdown.
-    -->
-    <p class="inline-alert" role="alert">
-      This version of CandidCue has no speech languages available. Voice following cannot run;
-      everything else works.
-    </p>
-  {:else}
-    <!--
-      §153 asks for "a clear indication of which language is active", and that
-      has to survive the user looking at a DIFFERENT row. Without this line the
-      moment you open the dropdown to check German's size, nothing on the screen
-      says English is still the one doing the listening.
-    -->
-    <p class="active-line" role="status" aria-live="polite">
-      {#if activeOption}
-        Currently using <strong>{languageDisplayName(activeOption.languageTag)}</strong>.
-      {:else}
-        <!-- The persisted language is not one this build offers — a downgrade,
-             or a model whose profile went away. Named rather than hidden. -->
-        No language this version can follow is selected.
-      {/if}
-    </p>
-
-    <div class="language-row">
-      <Select
-        label="Language"
-        value={shown?.languageTag ?? ''}
-        options={languages.map((option) => ({
-          value: option.languageTag,
-          // The active row is marked in the menu too, so the choice is legible
-          // while it is open and not only in the line above it.
-          label: option.active
-            ? `${languageDisplayName(option.languageTag)} (in use)`
-            : languageDisplayName(option.languageTag),
-        }))}
-        onchange={(value) => {
-          // Looking is not choosing. Changing this starts no download and saves
-          // no setting — §153 wants the sizes seen before anything happens.
-          highlighted = value;
-          confirmingDelete = null;
-          selectError = null;
-        }}
-      />
-      {#if shown}
-        {@const pill = pillFor(shown)}
-        <StatusPill tone={pill.tone} label={pill.label} />
-      {/if}
-    </div>
-
-    {#if shown}
-      {@const status = statusOf(shown)}
-      {@const busy = isModelBusy(status)}
-      {@const fraction = progressFraction(status)}
-      {@const name = languageDisplayName(shown.languageTag)}
-
-      <!--
-        The three facts §153 asks for, before any button that spends bandwidth.
-        Shown whatever the state, because "how much disk is this using?" is as
-        real a question as "how much will this cost me to fetch?".
-      -->
-      <p class="hint-line">
-        {#if status.installed}
-          {formatBytes(status.downloadBytes)} to download, {formatBytes(status.installedBytes)} on disk.
-        {:else}
-          <!-- "on disk" would be a false claim about a machine that does not
-               have the model; the number is the footprint it WOULD take. -->
-          {formatBytes(status.downloadBytes)} to download, {formatBytes(status.installedBytes)} once installed.
-        {/if}
-        From {originLine(shown)}.
-      </p>
-
-      {#if busy}
-        <p class="hint-line" role="status" aria-live="polite">
-          {phaseLabel(status)}
-          {#if fraction !== null}
-            — {formatBytes(status.progressBytes)} of {formatBytes(status.progressTotal)}
-          {/if}
-        </p>
-        <!-- Determinate only while there is a real fraction: `installing` and
-             `validating` measure nothing, and a bar snapping back to empty
-             there reads as a restart. -->
-        <progress
-          class="model-progress"
-          max="1"
-          value={fraction ?? undefined}
-          aria-label="{name} speech model install progress"
-        ></progress>
+    {#if compact}
+      <div class="stack">
+        {@render trouble(`Could not check speech languages. ${loadError}`, true)}
         <div class="picker-actions">
-          <Button variant="default" onclick={() => void runModelAction(shown.modelId, cancelSpeechModelDownload)}>
-            Stop
+          <Button size="sm" variant="default" disabled={rechecking} onclick={() => void recheck()}>
+            {rechecking ? 'Checking…' : 'Check again'}
           </Button>
         </div>
-      {:else if !status.installed}
-        <!--
-          §153: a model the app expects and cannot find must fail somewhere the
-          user can act on it. This is that screen, and this is that state.
-        -->
-        {#if shown.active && isDamaged(status)}
-          <!-- The line below says what is wrong with the files; this one says
-               what it costs, as the not-downloaded alert does. -->
-          <p class="inline-alert" role="alert">
-            {name} is selected, but its speech data on this machine is damaged. Voice following
-            cannot run until it is downloaded again.
-          </p>
-        {:else if shown.active}
-          <p class="inline-alert" role="alert">
-            {name} is selected, but its speech data is not on this machine. Voice following cannot
-            run until it is downloaded.
-          </p>
-        {/if}
-        {#if status.error}
-          <p class="hint-line">{status.error.message}</p>
-        {/if}
-        <div class="picker-actions">
-          <Button
-            variant="primary"
-            disabled={busyByModel[shown.modelId]}
-            onclick={() => void runModelAction(shown.modelId, startSpeechModelDownload)}
-          >
-            {downloadLabel(status)} ({formatBytes(status.downloadBytes)})
-          </Button>
-          {#if removable(status, shown.modelId)}
-            {@render removeButtons(shown.modelId)}
-          {/if}
-        </div>
-        {#if confirmingDelete === shown.modelId}
-          <p class="inline-alert" role="alert">
-            Remove the damaged {name} speech data? Voice following will not work in {name} until it
-            is downloaded again.
-          </p>
-        {/if}
-      {:else}
-        <p class="hint-line">
-          {#if status.source === 'bundled'}
-            Installed with the app.
-          {:else if status.source === 'override'}
-            Loaded from CANDIDCUE_MODELS_DIR.
-          {:else}
-            Downloaded to this computer.
-          {/if}
-          Transcription runs here; nothing is uploaded.
-        </p>
-
-        <div class="picker-actions">
-          {#if !shown.active}
-            <Button variant="primary" disabled={!canActivate} onclick={() => void activate(shown)}>
-              Use {name}
+      </div>
+    {:else}
+      <div class="card">
+        <div class="summary tone-warning">
+          <span class="summary-icon" aria-hidden="true"><Icon name="alert" size={16} /></span>
+          <p class="summary-title">Could not check speech languages</p>
+          <p class="summary-body" role="alert">{loadError}</p>
+          <div class="summary-actions picker-actions">
+            <Button variant="default" disabled={rechecking} onclick={() => void recheck()}>
+              {rechecking ? 'Checking…' : 'Check again'}
             </Button>
-          {/if}
-          <!--
-            §153 asks for a way to remove a model that is no longer wanted, and
-            the language on screen is the commonest thing somebody wants to
-            reclaim — including the active one, which is the only model most
-            installations have. Leaving removal to the orphan inventory below
-            meant a single-language machine could never free its download at
-            all.
-
-            `canRemove` decides, not an inline condition: only a model this
-            machine DOWNLOADED is ours to delete. `bundled` lives inside the app
-            bundle, and `override` is a developer's CANDIDCUE_MODELS_DIR, where
-            Remove would delete an invisible app-data copy and leave the visible
-            model exactly where it was — a button that appears to do nothing.
-          -->
-          {#if removable(status, shown.modelId)}
-            {@render removeButtons(shown.modelId)}
-          {/if}
+          </div>
         </div>
-        {#if confirmingDelete === shown.modelId}
-          <p class="inline-alert" role="alert">
-            Remove the {name} speech data? Voice following will not work in {name} until it is
-            downloaded again.
+      </div>
+    {/if}
+  {:else if options === null}
+    <p class="checking" class:card={!compact} role="status">Checking which languages are available…</p>
+  {:else}
+    {#if languages.length === 0}
+      <!--
+        Reachable only from a build whose catalogue and recogniser tables
+        disagree. Says what is wrong rather than showing an empty dropdown.
+      -->
+      {#if compact}
+        {@render trouble(
+          'This version of CandidCue has no speech languages available. Voice following cannot run; everything else works.',
+          true,
+        )}
+      {:else}
+        <div class="card">
+          <div class="summary tone-neutral">
+            <span class="summary-icon" aria-hidden="true"><Icon name="info" size={16} /></span>
+            <p class="summary-title">Voice following is unavailable</p>
+            <p class="summary-body" role="alert">
+              This version of CandidCue has no speech languages available. Voice following cannot
+              run; everything else works.
+            </p>
+          </div>
+        </div>
+      {/if}
+    {:else}
+      {@const summary = summaryOf(activeOption)}
+      {@const status = shown ? statusOf(shown) : null}
+      {@const busy = isModelBusy(status)}
+      {@const hasNext = shown !== null && status !== null && !busy && (!status.installed || !shown.active)}
+
+      {#snippet chooser()}
+        <div class="chooser">
+          <Select
+            label="Language"
+            value={shown?.languageTag ?? ''}
+            options={languages.map((option) => ({
+              value: option.languageTag,
+              // Marked in the menu too, so the choice is legible while it is
+              // open. "Selected" until the data is here: "in use" beside a
+              // language that cannot follow anybody yet was the menu saying yes.
+              label: option.active
+                ? `${languageDisplayName(option.languageTag)} (${statusOf(option).installed ? 'in use' : 'selected'})`
+                : languageDisplayName(option.languageTag),
+            }))}
+            onchange={(value) => {
+              // Looking is not choosing. Changing this starts no download and
+              // saves no setting — §153 wants the sizes seen before anything
+              // happens.
+              highlighted = value;
+              confirmingDelete = null;
+              selectError = null;
+            }}
+          />
+        </div>
+      {/snippet}
+
+      {#if compact}
+        {@render chooser()}
+        {#if !activeOption}
+          <p class="line">No language this version can follow is selected.</p>
+        {:else if shown && !shown.active}
+          <!-- §153: which language is listening has to survive looking at
+               another one. Welcome's row owns the readiness, so this names the
+               choice and claims nothing about whether it can follow yet. -->
+          <p class="line">
+            Selected speech language: <strong>{languageDisplayName(activeOption.languageTag)}</strong>.
           </p>
         {/if}
-        {#if !shown.active && changeBlocked}
-          <!-- Rust refuses this too; saying so before the click is kinder
-               than letting it fail. -->
-          <p class="hint-line">End the take to change the speech language.</p>
+        {#if shown && status}
+          {#if !shown.active}{@render inspected(shown, status)}{/if}
+          <!-- Language, then what it costs, then the button that spends it:
+               the order §153 asks for, in reading order as well as on screen. -->
+          {@render facts(shown, status)}
+          {#if busy}{@render progress(shown, status)}{/if}
+          <!-- Welcome's row says the language needs downloading; only this
+               panel knows why the last attempt failed, and the reason belongs
+               directly above the button that retries it. -->
+          {#if shown.active && status.error && !isDamaged(status)}
+            {@render trouble(status.error.message, true)}
+          {/if}
+          {#if damagedReason(status)}{@render trouble(damagedReason(status)!, false)}{/if}
+          {#if hasNext}
+            <div class="picker-actions">{@render nextAction(shown, status)}</div>
+          {/if}
+          {#if !shown.active && status.installed && changeBlocked}
+            <p class="line">End the take to change the speech language.</p>
+          {/if}
+          {#if errorByModel[shown.modelId]}{@render failure(errorByModel[shown.modelId]!)}{/if}
+          {#if selectError}{@render failure(selectError)}{/if}
+          {@render attribution(shown)}
         {/if}
-      {/if}
+      {:else}
+        <div class="card">
+          <!--
+            §153 asks for "a clear indication of which language is active", and
+            that has to survive the user looking at a DIFFERENT row — so this
+            line is about the active language whatever the dropdown shows.
+          -->
+          <div class="summary tone-{summary.tone}">
+            <span class="summary-icon" aria-hidden="true"><Icon name={summary.icon} size={16} /></span>
+            <!-- The live region is the STATUS, which changes a handful of
+                 times in an install; never the byte count beneath it. -->
+            <p class="summary-title" role="status">{summary.title}</p>
+            {#if !activeOption}
+              <!-- The persisted language is not one this build offers — a
+                   downgrade, or a model whose profile went away. Named rather
+                   than hidden. -->
+              <p class="summary-body">No language this version can follow is selected.</p>
+            {:else}
+              {@const active = statusOf(activeOption)}
+              {@const activeName = languageDisplayName(activeOption.languageTag)}
+              {#if isModelBusy(active)}
+                <p class="summary-body">
+                  Voice following can use {activeName} once this finishes. Everything else works
+                  meanwhile.
+                </p>
+              {:else if isDamaged(active)}
+                <!-- §153: a model the app expects and cannot find must fail
+                     somewhere the user can act on it. This is that screen. -->
+                <p class="summary-body" role="alert">
+                  {activeName}’s speech data on this machine is damaged, so voice following cannot
+                  run. Download it again to repair it.
+                </p>
+              {:else if active.error}
+                <p class="summary-body" role="alert">
+                  {active.error.message} Voice following cannot run until {activeName} is downloaded.
+                </p>
+              {:else if active.installed}
+                <!-- Not "nothing is uploaded" again: Settings says that, at
+                     length, directly under this card. -->
+                <p class="summary-body">
+                  Currently using <strong>{activeName}</strong>, {sourcePhrase(active)}.
+                </p>
+              {:else}
+                <p class="summary-body" role="alert">
+                  {activeName} is selected, but its speech data is not on this machine. Everything else
+                  works without it.
+                </p>
+              {/if}
+            {/if}
+          </div>
 
-      {#if errorByModel[shown.modelId]}
-        <p class="inline-alert" role="alert">{errorByModel[shown.modelId]}</p>
-      {/if}
-      {#if selectError}
-        <p class="inline-alert" role="alert">{selectError}</p>
-      {/if}
+          <div class="install" class:inspecting={shown !== null && !shown.active}>
+            {@render chooser()}
+            {#if shown && status}
+              {@const confirming = confirmingDelete === shown.modelId}
+              {@const name = languageDisplayName(shown.languageTag)}
+              {#if !shown.active}{@render inspected(shown, status)}{/if}
 
-      <!--
-        The attribution, stated and not gated. It also travels in the model
-        directory as ATTRIBUTION.md (§157); this is the copy a user can read
-        without going to look for a file.
-      -->
-      <p class="attribution">
-        {shown.attribution.title} by {shown.attribution.author} —
-        <!--
-          A button, not an anchor.
-          
-          An `<a target="_blank">` asks the WEBVIEW to navigate, which is a
-          thing this window must never do — and it needed `opener:default` on
-          the control capability to work at all, which is standing permission
-          to open any url. `openModelLicence` goes to Rust, which checks the
-          url against the licence urls the model catalogue itself declares.
-        -->
-        <button
-          type="button"
-          class="licence-link"
-          onclick={() => void openModelLicence(shown.attribution.license.url)}
-        >
-          {shown.attribution.license.name}
-        </button>.
-        {#if shown.attribution.licenseNote}
-          {shown.attribution.licenseNote}
-        {/if}
-      </p>
+              <!-- The language, what it costs, then whatever is happening to it
+                   and the button that moves it on — the same order as Welcome. -->
+              <div class="facts-row">
+                {@render facts(shown, status)}
+                <!--
+                  §153 asks for a way to remove a model that is no longer
+                  wanted, and the language on screen is the commonest thing
+                  somebody wants to reclaim — including the active one, which is
+                  the only model most installations have. It sits on the disk
+                  line because the disk is what it changes.
+
+                  `canRemove` decides, not an inline condition: only a model
+                  this machine DOWNLOADED is ours to delete. `bundled` lives
+                  inside the app bundle, and `override` is a developer's
+                  CANDIDCUE_MODELS_DIR, where Remove would delete an invisible
+                  app-data copy and leave the visible model exactly where it
+                  was — a button that appears to do nothing.
+                -->
+                {#if removable(status, shown.modelId) && !confirming}
+                  <span class="remove-slot">
+                    <Button
+                      bind:element={
+                        () => removeTriggers[shown.modelId] ?? null,
+                        (el) => (removeTriggers[shown.modelId] = el)
+                      }
+                      size="sm"
+                      variant="danger"
+                      onclick={() => void askToRemove(shown.modelId)}
+                    >
+                      Remove download
+                    </Button>
+                  </span>
+                {/if}
+              </div>
+
+              {#if busy}{@render progress(shown, status)}{/if}
+              {#if damagedReason(status)}{@render trouble(damagedReason(status)!, false)}{/if}
+
+              {#if confirming}
+                {@render confirmRemove(
+                  shown.modelId,
+                  isDamaged(status)
+                    ? `Remove the damaged ${name} speech data?`
+                    : `Remove the ${name} speech data?`,
+                  `${isDamaged(status) ? '' : `This frees ${formatBytes(status.installedBytes)}. `}Voice following will not work in ${name} until it is downloaded again.`,
+                )}
+              {:else if hasNext}
+                <div class="picker-actions">{@render nextAction(shown, status)}</div>
+              {/if}
+              {#if !shown.active && status.installed && changeBlocked}
+                <!-- Rust refuses this too; saying so before the click is
+                     kinder than letting it fail. -->
+                <p class="line">End the take to change the speech language.</p>
+              {/if}
+              {#if errorByModel[shown.modelId]}{@render failure(errorByModel[shown.modelId]!)}{/if}
+              {#if selectError}{@render failure(selectError)}{/if}
+            {/if}
+          </div>
+
+          {#if shown}
+            <div class="card-foot">{@render attribution(shown)}</div>
+          {/if}
+        </div>
+      {/if}
     {/if}
 
     {#if !compact && options.removable.length > 0}
       <!--
         Models on disk backing no language this build offers — a previous
         choice, or one a downgrade stopped offering. Listed only so the disk can
-        be reclaimed; they are deliberately NOT choices.
+        be reclaimed; they are deliberately NOT choices. Outside the
+        language branch, so a build that offers nothing can still free them.
       -->
-      <div class="inventory">
-        <h4 class="inventory-title">Other language data on this computer</h4>
-        {#each options.removable as entry (entry.modelId)}
-          <!--
-            The OVERLAID status, not the snapshot's: a removal that has already
-            completed leaves a stale row in `options.removable` until the next
-            refresh, and rendering a Remove button for a model that is no longer
-            there is a button that can only fail.
-          -->
-          {@const current = statusByModel[entry.modelId] ?? entry}
-          {#if current.installed || current.source === 'downloaded'}
-            <div class="inventory-row">
-              <span class="inventory-name">
-                {current.languages.map((tag) => languageDisplayName(tag)).join(', ')}
-                <span class="inventory-size">
-                  {formatBytes(current.installedBytes)}{isDamaged(current) ? ', damaged' : ''}
-                </span>
-              </span>
-              {#if confirmingDelete === entry.modelId}
-                <span class="inventory-actions">
-                  <Button
-                    variant="danger-primary"
-                    onclick={() => {
-                      confirmingDelete = null;
-                      void runModelAction(entry.modelId, deleteSpeechModel);
-                    }}
-                  >
-                    Remove it
-                  </Button>
-                  <Button
-                    bind:element={keepButton}
-                    variant="default"
-                    onclick={() => (confirmingDelete = null)}
-                  >
-                    Keep it
-                  </Button>
-                </span>
-              {:else if removable(current, entry.modelId)}
-                <Button variant="danger" onclick={() => void askToRemove(entry.modelId)}>
-                  Remove
-                </Button>
-              {/if}
-            </div>
-            {#if confirmingDelete === entry.modelId}
-              <p class="inline-alert" role="alert">
-                Remove this language data? It can be downloaded again later.
-              </p>
+      <section class="inventory" aria-labelledby="{uid}-inventory">
+        <h3 class="inventory-title" id="{uid}-inventory">Other language data on this computer</h3>
+        <p class="inventory-hint">
+          Speech data for languages this version no longer offers. It cannot be downloaded again
+          here, so remove it only to free the space.
+        </p>
+        <ul class="inventory-list">
+          {#each options.removable as entry (entry.modelId)}
+            <!--
+              The OVERLAID status, not the snapshot's: a removal that has
+              already completed leaves a stale row in `options.removable` until
+              the next refresh, and rendering a Remove button for a model that
+              is no longer there is a button that can only fail.
+            -->
+            {@const current = statusByModel[entry.modelId] ?? entry}
+            {@const label = current.languages.map((tag) => languageDisplayName(tag)).join(', ')}
+            {#if current.installed || current.source === 'downloaded'}
+              <li class="inventory-row">
+                <div class="inventory-main">
+                  <span class="inventory-name">{label}</span>
+                  <span class="inventory-size">{formatBytes(current.installedBytes)}</span>
+                  {#if isDamaged(current)}<StatusPill tone="warning" label="Damaged" />{/if}
+                  {#if removable(current, entry.modelId) && confirmingDelete !== entry.modelId}
+                    <span class="remove-slot">
+                      <Button
+                        bind:element={
+                          () => removeTriggers[entry.modelId] ?? null,
+                          (el) => (removeTriggers[entry.modelId] = el)
+                        }
+                        size="sm"
+                        variant="danger"
+                        onclick={() => void askToRemove(entry.modelId)}
+                      >
+                        Remove
+                      </Button>
+                    </span>
+                  {/if}
+                </div>
+                {#if confirmingDelete === entry.modelId}
+                  {@render confirmRemove(
+                    entry.modelId,
+                    `Remove the ${label} speech data?`,
+                    `This frees ${formatBytes(current.installedBytes)}. This version cannot download it again.`,
+                  )}
+                {/if}
+                {#if errorByModel[entry.modelId]}{@render failure(errorByModel[entry.modelId]!)}{/if}
+              </li>
             {/if}
-            {#if errorByModel[entry.modelId]}
-              <p class="inline-alert" role="alert">{errorByModel[entry.modelId]}</p>
-            {/if}
-          {/if}
-        {/each}
-      </div>
+          {/each}
+        </ul>
+      </section>
     {/if}
   {/if}
 </div>
@@ -707,39 +1072,150 @@
   .picker {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-4);
     min-width: 0;
   }
-
-  .language-row {
-    display: flex;
-    align-items: flex-end;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-
-  .hint-line {
-    margin: 0;
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-  }
-
-  .active-line {
-    margin: 0;
-    font-size: var(--text-sm);
-    color: var(--text-primary);
+  .picker.compact {
+    gap: var(--space-2);
   }
 
   /*
-    A full-row wash, never a one-sided border on a rounded box.
+    The install card, Settings only. A white panel on the warm canvas with the
+    same border and radius as the rig rows and monitor tiles elsewhere in
+    Settings. Welcome gets no card: it is already inside one.
   */
-  .inline-alert {
-    margin: 0;
-    padding: var(--space-2) var(--space-3);
+  .card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--warning-soft);
-    color: var(--warning);
+    background: var(--bg-panel);
+  }
+
+  /* The tone is the ICON's colour and nothing else's: the title stays in
+     primary ink, so a problem reads by its words first and its colour second. */
+  .tone-success {
+    --tone: var(--success);
+  }
+  .tone-accent {
+    --tone: var(--accent);
+  }
+  .tone-neutral {
+    --tone: var(--text-muted);
+  }
+  .tone-warning {
+    --tone: var(--warning);
+  }
+
+  .summary {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    column-gap: var(--space-3);
+    row-gap: var(--space-1);
+    padding: var(--space-4) var(--space-4) 0;
+  }
+  .summary:only-child {
+    padding-bottom: var(--space-4);
+  }
+  .summary-icon {
+    grid-row: 1;
+    display: inline-flex;
+    margin-top: 3px;
+    color: var(--tone);
+  }
+  .summary-title {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .summary-body {
+    grid-column: 2;
+    margin: 0;
     font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+  .summary-body strong {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .summary-actions {
+    grid-column: 2;
+    margin-top: var(--space-2);
+  }
+
+  /* Under the status text, not under the icon: the block belongs to the line
+     above it, the way Welcome's picker sits under its row title. */
+  .install {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-4) calc(var(--space-4) + 16px + var(--space-3));
+  }
+
+  /* Looking at another language: the status line above is still about the
+     active one, so the looked-at language gets its own ruled-off block. */
+  .install.inspecting {
+    margin-top: var(--space-4);
+    border-top: 1px solid var(--border-faint);
+  }
+
+  /* The licence lines up with the text above it, not with the icon. */
+  .card-foot {
+    padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 16px + var(--space-3));
+    border-top: 1px solid var(--border-faint);
+  }
+
+  .checking {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .checking.card {
+    padding: var(--space-4);
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  /* A language name is short; a dropdown the width of the card read as a
+     field to type into. */
+  .chooser {
+    width: 100%;
+    max-width: 320px;
+  }
+
+  /* One-line notes: the looked-at row's state, the take that blocks a switch,
+     and — with an icon — trouble and failure. */
+  .line {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+  .line strong {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .line-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 3px;
+  }
+  .trouble {
+    color: var(--warning);
+  }
+  .failure {
+    color: var(--danger);
   }
 
   .picker-actions {
@@ -748,31 +1224,181 @@
     flex-wrap: wrap;
   }
 
+  /* The size on the button is the price, not the verb: same size, less weight. */
+  .button-size {
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Centred in a row as tall as the Remove button, whether or not the button
+     is there — so the line does not drop when it appears. */
+  .facts-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-1) var(--space-3);
+    flex-wrap: wrap;
+    min-height: var(--toolbar-control-h);
+  }
+  .facts {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .compact .facts {
+    font-size: var(--text-xs);
+  }
+  .sep {
+    color: var(--text-muted);
+    padding: 0 2px;
+  }
+
+  /* A danger trigger carries its own padding; pulled out by it so the word,
+     not the hit area, lines up with the edge. */
+  .remove-slot {
+    display: inline-flex;
+    margin-right: calc(-1 * var(--space-3));
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* --- progress ------------------------------------------------------------ */
+
+  .progress {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+  }
+  .progress-main {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .progress-line {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 18px;
+  }
+  .progress-phase {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .progress-count {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
   /*
-   * Styled for both states. With no `value` a progress element is
-   * indeterminate, which is exactly what the install and validate phases want
-   * — they have no fraction to report, and a bar reading zero there would look
-   * like the download had restarted.
+   * The track is drawn with a 3:1 edge (WCAG 1.4.11): the empty part of the
+   * bar is half of what it says, and a track the colour of the page beneath it
+   * left a terracotta stroke ending nowhere.
+   *
+   * With no `value` a progress element is indeterminate, which is exactly what
+   * the install and validate phases want — they have no fraction to report.
+   * It gets a travelling segment, not an empty track: an empty track there
+   * read as "0%", which is the restart this exists to avoid.
    */
   .model-progress {
+    display: block;
     width: 100%;
-    height: 6px;
+    height: 8px;
     appearance: none;
     border: none;
     border-radius: var(--radius-pill);
     background: var(--bg-sunken);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
     overflow: hidden;
   }
   .model-progress::-webkit-progress-bar {
-    background: var(--bg-sunken);
+    background: transparent;
     border-radius: var(--radius-pill);
   }
   .model-progress::-webkit-progress-value {
     background: var(--accent);
     border-radius: var(--radius-pill);
   }
+  .model-progress::-moz-progress-bar {
+    background: var(--accent);
+    border-radius: var(--radius-pill);
+  }
+  /* Stripes along the whole track, not a segment: a still frame of a segment
+     reads as a bar part-filled from somewhere in the middle, and stripes say
+     "working, no fraction" whether or not they move. */
+  .model-progress:indeterminate {
+    background:
+      linear-gradient(
+          -45deg,
+          var(--accent) 25%,
+          transparent 25% 50%,
+          var(--accent) 50% 75%,
+          transparent 75%
+        )
+        0 0 / 12px 12px,
+      var(--bg-sunken);
+    animation: install-indeterminate 0.6s linear infinite;
+  }
+  @keyframes install-indeterminate {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 12px 0, 0 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Still, and still not empty: the stripes stay, at full contrast against
+       the track, and the phase label beside it says what. */
+    .model-progress:indeterminate {
+      animation: none;
+    }
+  }
 
-  /* Small terracotta text takes --accent-strong for AA in the light theme. */
+  /* --- removal question ---------------------------------------------------- */
+
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+  }
+  .confirm-question {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .confirm-detail {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+  .confirm .picker-actions {
+    margin-top: var(--space-2);
+  }
+
+  /* --- licence ------------------------------------------------------------- */
+
   .attribution {
     margin: 0;
     font-size: var(--text-xs);
@@ -780,46 +1406,8 @@
     line-height: 1.5;
   }
 
-  .inventory {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin-top: var(--space-2);
-    padding-top: var(--space-3);
-    border-top: 1px solid var(--border-faint);
-  }
-
-  .inventory-title {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .inventory-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-  }
-
-  .inventory-name {
-    font-size: var(--text-sm);
-    color: var(--text-primary);
-  }
-
-  .inventory-size {
-    color: var(--text-muted);
-    margin-left: var(--space-2);
-  }
-
-  .inventory-actions {
-    display: inline-flex;
-    gap: var(--space-2);
-  }
-
-  /* Reads as a link, because it is one; it simply does not navigate this window. */
+  /* Reads as a link, because it is one; it simply does not navigate this window.
+     Small terracotta text takes --accent-strong for AA in the light theme. */
   .licence-link {
     background: none;
     border: 0;
@@ -827,6 +1415,67 @@
     font: inherit;
     color: var(--accent-strong);
     text-decoration: underline;
+    text-underline-offset: 2px;
     cursor: pointer;
+  }
+
+  /* --- inventory ----------------------------------------------------------- */
+
+  .inventory {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .inventory-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .inventory-hint {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+  .inventory-list {
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+  }
+  .inventory-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+  }
+  .inventory-row:has(.confirm),
+  .inventory-row:has(.failure) {
+    padding-bottom: var(--space-3);
+  }
+  .inventory-row + .inventory-row {
+    border-top: 1px solid var(--border-faint);
+  }
+  .inventory-main {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h);
+  }
+  .inventory-name {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .inventory-size {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .inventory-main .remove-slot {
+    margin-left: auto;
   }
 </style>
