@@ -1194,6 +1194,10 @@ async fn a_bundle_asset_lands_without_its_archive_permission_bits() {
         // setuid, setgid, sticky and executable, on a regular file.
         (asset.as_str(), png.clone(), Some(0o107777)),
     ]);
+    // The archive really carries the bits, or the assertion below proves nothing.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bundle[..])).unwrap();
+    assert_eq!(archive.by_name(&asset).unwrap().unix_mode(), Some(0o107777));
+    drop(archive);
 
     let imported = import_bundle_bytes(&h, bundle).await.expect("import");
     let path = h.paths.assets_dir(&sid(&imported.script.id)).join(&name);
