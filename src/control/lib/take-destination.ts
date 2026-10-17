@@ -270,9 +270,12 @@ function rigLabel(rigName: string): string {
  *    the line beside Present already names where the take goes, and raising
  *    the readiness sheet on every take for somebody who left the prompter at
  *    the studio would be an interruption that tells them nothing new;
- *  - the landing panel cannot be named, because "this might be the wrong panel"
- *    is a worse thing to tell somebody than nothing. A warning that fires on
+ *  - the landing panel cannot be named and the only question is whether a rig
+ *    elsewhere is being missed, because "this might be the wrong panel" is a
+ *    worse thing to tell somebody than nothing. A warning that fires on
  *    uncertainty rather than on a known problem is the kind users switch off.
+ *    An unplugged, calibrated pin is still reported then: THAT loss is known
+ *    whichever panel the window turns out to be on.
  *
  * The title has to stand on its own: the readiness sheet shows nothing else.
  */
