@@ -38,7 +38,7 @@
   import { partOutcomeLabel, scriptFollowedLabel, summaryActions } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
-  import { startTake } from '../lib/start-take';
+  import { checkThenStartTake } from '../lib/check-then-start';
   import { formatClock } from '../lib/format';
   import Disclosure from './Disclosure.svelte';
   import { sessionModeLabel } from '../../shared/take-vocabulary';
@@ -69,12 +69,16 @@
    * script will not load, the compile fails, the window will not present),
    * toasts them and returns false without changing the route, which is now
    * exactly right: the summary is gone and the editor is already underneath.
+   *
+   * Through the readiness check, like every other launch (#301). If the sheet
+   * comes up and is dismissed, the editor underneath is where that leaves
+   * them, which is where they would go to fix it.
    */
   async function presentAgain(startTokenIndex?: number, partId?: string): Promise<void> {
     const scriptId = $session.scriptId;
     clearSession();
     if (scriptId === null) return;
-    await startTake(scriptId, {
+    await checkThenStartTake(scriptId, {
       ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
       /*
        * §parts: identity only. `startTake` re-resolves the span against the

@@ -19,6 +19,7 @@
 
 use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use candidcue_lib::coordinator::AppCoordinator;
 use candidcue_lib::database::{self, Database};
@@ -26,12 +27,13 @@ use candidcue_lib::speech::catalogue::{self, ModelEntry};
 use candidcue_lib::speech::model_manager::SpeechModelManager;
 use candidcue_lib::speech::model_store;
 use candidcue_lib::speech::SpeechEngine;
+use candidcue_lib::windows::events;
 use candidcue_lib::{commands, scripts::DataPaths};
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
-use tauri::{Manager as _, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Listener as _, Manager as _, WebviewWindow, WebviewWindowBuilder};
 
 struct Harness {
     _db_dir: tempfile::TempDir,
@@ -265,6 +267,16 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
     let _ = std::fs::remove_dir_all(&dir);
     plant_whole_download(&dir, model);
     garbage_decoder(&dir);
+    // #301: the removal is ANNOUNCED to the control window, not only returned
+    // to whichever window pressed Remove. The editor lives in control and
+    // learns of every other install state from this event; before, it learned
+    // of a removal from nothing, and went on reporting a model that was gone.
+    let announced: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = Arc::clone(&announced);
+    h.webview.listen(events::SPEECH_MODEL_PROGRESS, move |event| {
+        let payload = serde_json::from_str(event.payload()).expect("event payload is json");
+        sink.lock().unwrap().push(payload);
+    });
     let status = h
         .invoke("delete_speech_model", json!({}))
         .expect("a damaged download must be removable");
@@ -272,6 +284,11 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
     assert_eq!(status["phase"], "notInstalled", "{status}");
     assert_eq!(status["source"], Value::Null, "{status}");
     assert_eq!(status["error"], Value::Null, "{status}");
+    assert_eq!(
+        *announced.lock().unwrap(),
+        vec![status.clone()],
+        "the control window must be told what the caller was told"
+    );
 
     // And the whole download, undamaged, reads as installed — so the check is
     // not simply refusing everything at the real catalogue's lengths. (Not

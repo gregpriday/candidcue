@@ -76,7 +76,7 @@
   import { formatAccelerator } from '../lib/commands';
   import { onShortcut } from '../lib/shortcuts';
   import { detectPlatform } from '../lib/platform';
-  import { startTake } from '../lib/start-take';
+  import { checkThenStartTake } from '../lib/check-then-start';
   import * as scriptsService from '../services/scripts';
   import { onRouteCommand } from '../stores/command-bus';
   import { anchorFor, openContextMenu, type ContextMenuItem } from '../stores/context-menu';
@@ -200,7 +200,7 @@
           showToast('There is no script to present yet.', 'info');
           return;
         }
-        void startTake(id);
+        void checkThenStartTake(id);
       }
     });
     return () => {
@@ -413,7 +413,7 @@
   }
 
   function presentScript(script: ScriptSummary): void {
-    void startTake(script.id);
+    void checkThenStartTake(script.id);
   }
 
   /** True while DOM focus is inside the list, captured before a mutation. */

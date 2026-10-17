@@ -70,6 +70,11 @@ export interface ReadinessInput {
    */
   modelDamaged?: boolean;
   /**
+   * Whether an install of the chosen model is running right now (#301).
+   * Optional for the same reason as `modelDamaged`.
+   */
+  modelInstalling?: boolean;
+  /**
    * The microphone Settings pins, and whether it is present right now.
    *
    * Null when nothing is pinned, which is the "follow the system default"
@@ -134,51 +139,8 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
   }
 
   if (input.voiceTake) {
-    if (!input.modelSupported) {
-      /*
-       * WARNING, not blocking — corrected.
-       *
-       * It was blocking on the reasoning that no action fixes it in place, and
-       * that is true of the MODEL. It is not true of the take: an unloadable
-       * recogniser leaves exactly the same take a missing model leaves, one
-       * that rolls at a pace and is driven by hand. Blocking it removed Start
-       * anyway and made this a gate over a take the product otherwise supports,
-       * which is the one thing this surface must never become.
-       */
-      findings.push({
-        id: 'model_unsupported',
-        severity: 'warning',
-        label: 'Voice following',
-        detail:
-          'This build cannot load the selected speech model, so this take cannot follow your voice.',
-        action: { label: 'Choose a language', settingsSection: 'speech' },
-      });
-    } else if (!input.modelInstalled && input.modelDamaged) {
-      // A warning for the same reason as a missing model, below. Said as what
-      // it is: "no model is installed" would be news to somebody who
-      // downloaded one, and "install" is not quite the remedy.
-      findings.push({
-        id: 'model_damaged',
-        severity: 'warning',
-        label: 'Voice following',
-        detail:
-          'The speech data on this computer is damaged, so this take cannot follow your voice.',
-        action: { label: 'Download it again', settingsSection: 'speech' },
-      });
-    } else if (!input.modelInstalled) {
-      /*
-       * WARNING, not blocking. A take with no model still rolls at a fixed pace
-       * and can be driven by hand, and somebody who is already on camera is
-       * better served by a take that works differently than by no take at all.
-       */
-      findings.push({
-        id: 'model_missing',
-        severity: 'warning',
-        label: 'Voice following',
-        detail: 'No speech model is installed, so this take cannot follow your voice.',
-        action: { label: 'Install a language', settingsSection: 'speech' },
-      });
-    }
+    const model = voiceModelFinding(input);
+    if (model !== null) findings.push(model);
 
     /*
      * Only a PINNED microphone can go missing. "Follow the system default" is
@@ -219,6 +181,83 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
     blocked || input.requested || findings.some((f) => f.severity === 'warning');
 
   return { show, blocked, findings };
+}
+
+/**
+ * Why the speech model cannot follow a voice take, or null when it can.
+ *
+ * Its own function because the sheet is not the only thing that has to say it:
+ * the editor's footer used to read "Ready to present." off the compile alone,
+ * on a machine with no model at all, beside a sheet saying the opposite (#301).
+ * Both now ask this, so they cannot word it — or decide it — differently.
+ *
+ * Not conditional on `voiceTake`; the caller decides whether a manual take
+ * cares.
+ */
+export function voiceModelFinding(
+  input: Pick<
+    ReadinessInput,
+    'modelInstalled' | 'modelSupported' | 'modelDamaged' | 'modelInstalling'
+  >,
+): ReadinessFinding | null {
+  if (!input.modelSupported) {
+    /*
+     * WARNING, not blocking — corrected.
+     *
+     * It was blocking on the reasoning that no action fixes it in place, and
+     * that is true of the MODEL. It is not true of the take: an unloadable
+     * recogniser leaves exactly the same take a missing model leaves, one
+     * that rolls at a pace and is driven by hand. Blocking it removed Start
+     * anyway and made this a gate over a take the product otherwise supports,
+     * which is the one thing this surface must never become.
+     */
+    return {
+      id: 'model_unsupported',
+      severity: 'warning',
+      label: 'Voice following',
+      detail:
+        'This build cannot load the selected speech model, so this take cannot follow your voice.',
+      action: { label: 'Choose a language', settingsSection: 'speech' },
+    };
+  }
+  if (input.modelInstalled) return null;
+  if (input.modelInstalling) {
+    // Said as what is happening: "no model is installed" is true for the
+    // length of a download and reads as though nobody had started one.
+    return {
+      id: 'model_installing',
+      severity: 'warning',
+      label: 'Voice following',
+      detail:
+        'The speech model is still installing, so this take cannot follow your voice yet.',
+      action: { label: 'Show progress', settingsSection: 'speech' },
+    };
+  }
+  if (input.modelDamaged) {
+    // A warning for the same reason as a missing model, below. Said as what
+    // it is: "no model is installed" would be news to somebody who
+    // downloaded one, and "install" is not quite the remedy.
+    return {
+      id: 'model_damaged',
+      severity: 'warning',
+      label: 'Voice following',
+      detail:
+        'The speech data on this computer is damaged, so this take cannot follow your voice.',
+      action: { label: 'Download it again', settingsSection: 'speech' },
+    };
+  }
+  /*
+   * WARNING, not blocking. A take with no model still rolls at a fixed pace
+   * and can be driven by hand, and somebody who is already on camera is
+   * better served by a take that works differently than by no take at all.
+   */
+  return {
+    id: 'model_missing',
+    severity: 'warning',
+    label: 'Voice following',
+    detail: 'No speech model is installed, so this take cannot follow your voice.',
+    action: { label: 'Install a language', settingsSection: 'speech' },
+  };
 }
 
 /**

@@ -22,7 +22,15 @@
   import { createAndOpenScript, exportScriptToFile, importMarkdown } from './lib/app-actions';
   import { isSettingsSection, type CommandActions, type CommandContext } from './lib/commands';
   import { openSettingsWindow } from './lib/open-settings';
-  import { startTake, takeStarting } from './lib/start-take';
+  import { takeStarting } from './lib/start-take';
+  import {
+    checkThenStartTake,
+    dismissTakeReadiness,
+    startAnyway,
+    takeReadinessPrompt,
+  } from './lib/check-then-start';
+  import { speechModelReadiness } from './stores/speech-model-readiness';
+  import TakeReadinessSheet from './components/TakeReadinessSheet.svelte';
   import {
     dispatchDroppedImages,
     dispatchInsert,
@@ -321,6 +329,17 @@ import { rememberReaderFrame } from './lib/reader-frame';
     // §30.1 triage. Off unless the operator switched it on for this window;
     // see audio-trace.ts for why the audio path needs it at all.
     initAudioTrace();
+
+    /*
+     * The speech model's readiness, followed for the life of the window (#301).
+     *
+     * Held here rather than by whichever screen shows it, because a take can be
+     * launched from a screen that shows none of it — the Library, the
+     * summary's Present again, a menu command — and each of those reads the
+     * answer once, at launch. A store with no subscriber has no listener, and
+     * would hand that read an assumption instead of the answer.
+     */
+    const releaseModelReadiness = speechModelReadiness.subscribe(() => {});
 
     /*
      * Native menu clicks. Installed for the life of the window, and reading
@@ -777,6 +796,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       unregisterLiveGuard();
       unregisterSaveGuard();
       teardownShutdown();
+      releaseModelReadiness();
     };
   });
 
@@ -888,7 +908,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     present: (mode) => {
       const id = commandTargetScriptId();
       if (id === null) return;
-      void startTake(id, mode ? { presentationMode: mode } : {});
+      void checkThenStartTake(id, mode ? { presentationMode: mode } : {});
     },
     /*
      * A practice does not take `presentationMode` from anywhere.
@@ -900,7 +920,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     practise: () => {
       const id = commandTargetScriptId();
       if (id === null) return;
-      void startTake(id, { practice: true });
+      void checkThenStartTake(id, { practice: true });
     },
     find: () => dispatchRouteCommand('edit.find'),
     findNext: () => dispatchRouteCommand('edit.find-next'),
@@ -958,7 +978,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
      */
     startTake: () => {
       const id = commandTargetScriptId();
-      if (id !== null) void startTake(id);
+      if (id !== null) void checkThenStartTake(id);
     },
     playPause: () => void emitShortcut('play-pause'),
     moveSentence: (delta) => void emitShortcut(delta < 0 ? 'back-sentence' : 'forward-sentence'),
@@ -1328,6 +1348,19 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   <ToastRegion />
   <ConfirmHost />
+  <!--
+    "Before this take", for every way of starting one (CCUX-013, #301). Hosted
+    here, not on the editor, because File › Present, the Library and the
+    summary's Present again launch from screens that are not the editor, and
+    used to skip the check entirely. Only ever mounted; almost never open —
+    `resolveReadiness` says nothing on a healthy familiar setup, which is the
+    design.
+  -->
+  <TakeReadinessSheet
+    verdict={$takeReadinessPrompt?.verdict ?? null}
+    onstart={() => void startAnyway()}
+    onclose={dismissTakeReadiness}
+  />
   <!--
     One context menu for the whole window, hosted here. See
     `stores/context-menu.ts`: a menu per row would be one popover component per
