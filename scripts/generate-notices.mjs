@@ -317,7 +317,9 @@ function builtFrom(work) {
   const shown = /^[0-9a-f]{40}$/.test(revision) ? revision.slice(0, 12) : revision;
   const cell = [`${path ? `\`${path}\` in ` : ''}<${repository}> @ \`${shown}\``];
   if (work.upstream && work.upstream !== repository) {
-    cell.push(path ? `(vendored; upstream <${work.upstream}>)` : `(fork of <${work.upstream}>)`);
+    if (!path) cell.push(`(fork of <${work.upstream}>)`);
+    else if (work.source.adapted === true) cell.push(`(adapted from <${work.upstream}>)`);
+    else cell.push(`(vendored; upstream <${work.upstream}>)`);
   }
   if (prebuiltBy) cell.push(`(prebuilt by <${prebuiltBy}>)`);
   return cell.join(' ');

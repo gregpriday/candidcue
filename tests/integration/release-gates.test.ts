@@ -1009,6 +1009,17 @@ echo '{}'
                 path: 'include/header.h',
               },
             },
+            {
+              component: 'ported-routine',
+              upstream: 'https://example.test/original',
+              spdx: 'Zlib',
+              source: {
+                repository: 'https://example.test/fork',
+                revision: 'v2.0.0',
+                path: 'src/port.cc',
+                adapted: true,
+              },
+            },
           ],
         },
         {
@@ -1043,6 +1054,11 @@ echo '{}'
       expect(notices).toContain(
         '| vendored-header | MPL-2.0 | forked | `include/header.h` in ' +
           '<https://example.test/fork> @ `v2.0.0` (vendored; upstream <https://example.test/header>) |',
+      );
+      // Rewritten from upstream rather than copied, so not "vendored".
+      expect(notices).toContain(
+        '| ported-routine | Zlib | forked | `src/port.cc` in <https://example.test/fork> @ ' +
+          '`v2.0.0` (adapted from <https://example.test/original>) |',
       );
       expect(notices).toContain('Code Form is available.');
       expect(notices).toContain(

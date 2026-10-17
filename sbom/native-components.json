@@ -22,7 +22,8 @@
     "build pinned, the `archive` it fetched and that archive's `sha256`, the build",
     "file that pins it (`pinnedBy`), and the `licenceFile` read at that revision.",
     "`path` marks a work vendored inside `repository` rather than a fork of",
-    "`upstream`; `prebuiltBy` names whoever compiled an input that arrives as a",
+    "`upstream`, and `adapted` one that was rewritten from it rather than copied;",
+    "`prebuiltBy` names whoever compiled an input that arrives as a",
     "binary; `noticeFile` is a further notices file published at that revision.",
     "A review that cannot say which source it read is not one, so both",
     "generate-notices.mjs and verify-native-review.mjs refuse `reviewed: true`",
@@ -56,8 +57,89 @@
         "libsherpa-onnx-core.a",
         "libsherpa-onnx-cxx-api.a"
       ],
+      "embeds": [
+        {
+          "component": "JSON for Modern C++",
+          "upstream": "https://github.com/nlohmann/json",
+          "spdx": "MIT",
+          "source": {
+            "repository": "https://github.com/nlohmann/json",
+            "revision": "v3.12.0",
+            "archive": "https://github.com/nlohmann/json/archive/refs/tags/v3.12.0.tar.gz",
+            "sha256": "4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187",
+            "pinnedBy": "https://github.com/k2-fsa/sherpa-onnx/blob/142807252687d81b40d6315f23470a1512a00de3/cmake/json.cmake",
+            "licenceFile": "LICENSE.MIT"
+          },
+          "evidence": "Header-only; sherpa-onnx v1.13.4's cmake/json.cmake fetches the archive above (sha256 verified by download) and adds its include/ directory, and nlohmann:: symbols are in all three of these libraries. LICENSE.MIT: \"Copyright (c) 2013-2025 Niels Lohmann\". Every file under include/ carries SPDX-License-Identifier: MIT, and the code from other authors that is compiled in is MIT too: Florian Loitsch's Grisu2 (detail/conversions/to_chars.hpp, dtoa_impl symbols in the C and C++ API libraries) and Björn Hoehrmann's UTF-8 decoder (detail/output/serializer.hpp). Two pieces the project itself attributes elsewhere produce no code: Evan Nemerson's Hedley, which its .reuse/dep5 lists as CC0, is preprocessor macros; and the integer_sequence in detail/meta/cpp_future.hpp, which it credits to Google Abseil (Apache-2.0), is compile-time templates — no function of either is in any library."
+        },
+        {
+          "component": "hclust-cpp (fastcluster)",
+          "upstream": "https://github.com/cdalitz/hclust-cpp",
+          "spdx": "BSD-2-Clause",
+          "source": {
+            "repository": "https://github.com/csukuangfj/hclust-cpp",
+            "revision": "2026-02-25",
+            "archive": "https://github.com/csukuangfj/hclust-cpp/archive/refs/tags/2026-02-25.tar.gz",
+            "sha256": "8f14e024c709d73afb40ae69cb22de4b73dba67cbce40f2e518813da8139ab56",
+            "pinnedBy": "https://github.com/k2-fsa/sherpa-onnx/blob/142807252687d81b40d6315f23470a1512a00de3/cmake/hclust-cpp.cmake",
+            "licenceFile": "LICENSE"
+          },
+          "evidence": "Hierarchical clustering for speaker diarization. sherpa-onnx v1.13.4's cmake/hclust-cpp.cmake fetches the archive above (sha256 verified by download), and csrc/fast-clustering.cc includes fastcluster-all-in-one.h, which includes fastcluster.cpp; fastclustercpp symbols are in libsherpa-onnx-core.a. LICENSE is the two-clause BSD text, \"© 2011 Daniel Müllner\" for fastcluster_dm.cpp and \"© 2018 Christoph Dalitz\" for fastcluster.(h|cpp), byte-identical to cdalitz/hclust-cpp's own."
+        },
+        {
+          "component": "Supertonic TTS",
+          "upstream": "https://github.com/supertone-oss-archive/supertonic",
+          "spdx": "MIT",
+          "source": {
+            "repository": "https://github.com/k2-fsa/sherpa-onnx",
+            "revision": "v1.13.4",
+            "path": "sherpa-onnx/csrc/offline-tts-supertonic-*",
+            "adapted": true,
+            "licenceFile": "sherpa-onnx/csrc/offline-tts-supertonic-impl.cc"
+          },
+          "evidence": "Six files, offline-tts-supertonic-{impl,model,unicode-processor}.{cc,h}, each say they are \"based on Supertonic TTS (https://github.com/Supertone-Inc/supertonic) which is licensed under MIT License (Copyright (c) 2025 Supertone Inc.)\"; the adaptation is \"Copyright (c) 2026 zengyw\". csrc/CMakeLists.txt compiles them, and 145 Supertonic text symbols are defined in libsherpa-onnx-core.a. The cited repository now redirects to supertone-oss-archive/supertonic, whose LICENSE is MIT, \"Copyright (c) 2025 Supertone Inc.\"."
+        },
+        {
+          "component": "Whisper DTW timing",
+          "upstream": "https://github.com/openai/whisper",
+          "spdx": "MIT",
+          "source": {
+            "repository": "https://github.com/k2-fsa/sherpa-onnx",
+            "revision": "v1.13.4",
+            "path": "sherpa-onnx/csrc/offline-whisper-dtw.*",
+            "adapted": true,
+            "licenceFile": "sherpa-onnx/csrc/offline-whisper-dtw.h"
+          },
+          "evidence": "offline-whisper-dtw.h (\"Copyright (c) 2026 Posit Software, PBC\") says its token-timestamp alignment is \"Based on OpenAI Whisper (whisper/timing.py) and whisper.cpp implementations\"; WhisperDTW symbols are defined in libsherpa-onnx-core.a. Both sources are MIT: openai/whisper's LICENSE is \"Copyright (c) 2022 OpenAI\", and whisper.cpp's is recorded under kaldi-native-fbank's embed. The comment claims an adaptation and identifies no copied lines, so this records it as one."
+        },
+        {
+          "component": "cpp-base64",
+          "upstream": "https://github.com/ReneNyffenegger/cpp-base64",
+          "spdx": "Zlib",
+          "source": {
+            "repository": "https://github.com/k2-fsa/sherpa-onnx",
+            "revision": "v1.13.4",
+            "path": "sherpa-onnx/csrc/base64-decode.cc",
+            "adapted": true,
+            "licenceFile": "sherpa-onnx/csrc/base64-decode.cc"
+          },
+          "evidence": "Base64Decode in base64-decode.cc cites cpp-base64's base64.cpp#L243, and its character mapping and decoding loop follow that function; Base64Decode is defined in libsherpa-onnx-core.a. The sherpa-onnx file carries only Xiaomi's copyright line. cpp-base64's LICENSE is the zlib licence worded for \"source code\" (\"Copyright © 2004-2017 by René Nyffenegger\"); GitHub's licence detection reports it as NOASSERTION."
+        },
+        {
+          "component": "Stack Overflow answer 25385766 (string trim)",
+          "upstream": "https://stackoverflow.com/a/25385766",
+          "spdx": "CC-BY-SA-4.0",
+          "source": {
+            "repository": "https://github.com/k2-fsa/sherpa-onnx",
+            "revision": "v1.13.4",
+            "path": "sherpa-onnx/csrc/symbol-table.cc",
+            "licenceFile": "sherpa-onnx/csrc/symbol-table.cc"
+          },
+          "evidence": "symbol-table.cc's TrimRight, TrimLeft and Trim, three one-line functions with their whitespace set, say \"copied from https://stackoverflow.com/questions/216823/how-to-trim-a-stdstring\"; they match Galik's answer there (ws = \" \\t\\n\\r\\f\\v\", erase find_last_not_of + 1, erase 0..find_first_not_of), and they are compiled into SymbolTable's token reader in libsherpa-onnx-core.a. Stack Overflow licenses contributions from 2011-04-08 to 2018-05-02 under CC BY-SA 3.0 and later revisions under CC BY-SA 4.0. The Stack Exchange API's revision history shows the code unchanged since revision 1 (2014-08-19, CC BY-SA 3.0); revision 5 (2019-01-07, CC BY-SA 4.0) changed only a comment, \"(left & right)\" to \"(right then left)\" — and sherpa-onnx's copy has \"(right then left)\", so the text it copied is revision 5's. Whether three standard-library one-liners carry copyright at all is a legal question this record does not answer; it records where they came from and on what terms."
+        }
+      ],
       "note": "The inference runtime CandidCue calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.",
-      "evidence": "Apache-2.0 confirmed from the unpacked sherpa-onnx-sys 1.13.4 manifest and the LICENSE in the crate. Provenance, 2026-10-17: sherpa-onnx-sys 1.13.4's build.rs downloads the release v1.13.4 assets (tag v1.13.4 is commit 142807252687d81b40d6315f23470a1512a00de3). That tag's .github/workflows/macos.yaml configures ONE universal2 static Release build (CMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\", SHERPA_ONNX_ENABLE_TTS=ON) and `lipo -thin`s every library into sherpa-onnx-v1.13.4-osx-arm64-static-lib.tar.bz2 (sha256 57801db2bbb786a5d343f515a38ff210b401842338bdc804fa075312d1cd2404) and -osx-x64-static-lib.tar.bz2 (sha256 2bda2c10b31a1cfc45d9f9e14bd4983743ec3779d309e42d99a6c8fa1689043f), so both slices come from one configure and share every source pin recorded below; the archives the build fetched match the published assets byte for byte. Three archives this entry used to claim carry sherpa-onnx's name and are other projects' work: libsherpa-onnx-fst.a and libsherpa-onnx-fstfar.a (OpenFst) and libsherpa-onnx-kaldifst-core.a (kaldifst) now have entries of their own. Not audited here: header-only code sherpa-onnx's own CMakeLists fetches into these three libraries (cmake/json.cmake, cmake/hclust-cpp.cmake)."
+      "evidence": "Confirmed 2026-10-17 against the v1.13.4 source (tag tarball sha256 3243cb386d3a4ac87596adf7d2c89fddf23e2948b154942b987b4d91c1fee295): LICENSE is Apache-2.0, and copyright in sherpa-onnx/csrc and sherpa-onnx/c-api is Xiaomi Corporation's and about twenty other named contributors'. Every comment there that cites another project was read: most cite a model, paper or format for behaviour, and the code that does come from elsewhere is either Apache-2.0 (Kaldi, k2 and icefall sources; the Arabic tashkeel tokenizer, adapted from abjadai/catt) or recorded under `embeds` with its own terms — Supertonic TTS, the Whisper DTW timing, cpp-base64's decoder and a Stack Overflow trim snippet, beside the two header-only libraries its CMakeLists fetches. Not in these libraries: the Rockchip NPU sources (built only with SHERPA_ONNX_ENABLE_RKNN, no rknn symbol) and csrc/tee-stream.h, adapted from a wordaligned.org article and used only by the websocket servers (no teebuf symbol). The Buckwalter table in the tashkeel tokenizer is the standard transliteration mapping, restated from KentonMurray/Buckwalter, a repository with no licence file. character-lexicon.cc cites OHF-Voice/piper1-gpl for one behaviour, adding a start and end token to each sentence; nothing is copied from it. Of this entry's libraries, sherpa-onnx-sys links libsherpa-onnx-c-api.a and libsherpa-onnx-core.a; libsherpa-onnx-cxx-api.a is in the archive and not on its link line (SHERPA_ONNX_STATIC_LIBS), and release links of both slices load none of it. Provenance: sherpa-onnx-sys 1.13.4's build.rs downloads the release v1.13.4 assets (tag v1.13.4 is commit 142807252687d81b40d6315f23470a1512a00de3). That tag's .github/workflows/macos.yaml configures ONE universal2 static Release build (CMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\", SHERPA_ONNX_ENABLE_TTS=ON) and `lipo -thin`s every library into sherpa-onnx-v1.13.4-osx-arm64-static-lib.tar.bz2 (sha256 57801db2bbb786a5d343f515a38ff210b401842338bdc804fa075312d1cd2404) and -osx-x64-static-lib.tar.bz2 (sha256 2bda2c10b31a1cfc45d9f9e14bd4983743ec3779d309e42d99a6c8fa1689043f), so both slices come from one configure and share every source pin recorded below; the archives the build fetched match the published assets byte for byte, re-checked 2026-10-17 against a fresh download by the build itself. Three archives this entry used to claim carry sherpa-onnx's name and are other projects' work: libsherpa-onnx-fst.a and libsherpa-onnx-fstfar.a (OpenFst) and libsherpa-onnx-kaldifst-core.a (kaldifst) now have entries of their own."
     },
     {
       "component": "OpenFst",
@@ -77,7 +159,7 @@
         "libsherpa-onnx-fstfar.a"
       ],
       "note": "Weighted finite-state transducers for the decoder. sherpa-onnx builds them from a fork and gives the libraries its own name; the code is the OpenFst authors' (Google LLC).",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/openfst.cmake fetches the archive above (sha256 verified by download) and sets OUTPUT_NAME sherpa-onnx-fst / sherpa-onnx-fstfar, which is why these archives carry sherpa-onnx's name. COPYING at that tag is the Apache-2.0 grant, \"Copyright 2005-2026 Google LLC\"; src/lib/fst.cc carries the same Apache header. Previously claimed by the sherpa-onnx entry under sherpa-onnx's licence, which was the right licence and the wrong authors."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/openfst.cmake fetches the archive above (sha256 verified by download) and sets OUTPUT_NAME sherpa-onnx-fst / sherpa-onnx-fstfar, which is why these archives carry sherpa-onnx's name. COPYING at that tag is the Apache-2.0 grant, \"Copyright 2005-2026 Google LLC\", and every source in src/lib, src/extensions/far and their headers carries the Apache header. The fork is openfst.org's own 1.8.5 release (openfst-1.8.5.tar.gz, sha256 895f98d04e98815b6c5c6b94427d112300f2996f14687b2a2bd536d9bd0ff7ec) with eight source files changed (MSVC portability, and opening archives from a stream); COPYING and AUTHORS are byte-identical to the release's, and AUTHORS names Google LLC, with Cyril Allauzen and Michael Riley as principal developers. Previously claimed by the sherpa-onnx entry under sherpa-onnx's licence, which was the right licence and the wrong authors."
     },
     {
       "component": "kaldifst",
@@ -106,11 +188,11 @@
             "path": "kaldifst/csrc/basic-filebuf.h",
             "licenceFile": "kaldifst/csrc/basic-filebuf.h"
           },
-          "evidence": "\"a modified version of the std::basic_filebuf from libc++\", copied through Kaldi, and included by kaldi-io.cc via kaldi-pipebuf.h; kaldifst::basic_filebuf symbols are in libsherpa-onnx-kaldifst-core.a. The header says it is \"dual licensed under the MIT and the University of Illinois Open Source License licenses\" and carries both texts at its end."
+          "evidence": "\"a modified version of the std::basic_filebuf from libc++\", copied through Kaldi (src/util/basic-filebuf.h there), and included by kaldi-io.cc via kaldi-pipebuf.h; kaldifst::basic_filebuf symbols are in libsherpa-onnx-kaldifst-core.a. The header says it is \"dual licensed under the MIT and the University of Illinois Open Source License licenses\", and the libc++ licence it carries at its end says \"As a user of this code you may choose to use it under either license\" — hence OR. Copyright \"2009-2014 by the contributors listed in CREDITS.TXT\". This is libc++'s licence from before LLVM's 2019 relicensing, which is the vintage of this copy."
         }
       ],
       "note": "Kaldi's finite-state-transducer utilities on top of OpenFst. kaldi-decoder fetches it; sherpa-onnx renames the library.",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. kaldi-decoder v0.3.0's cmake/kaldifst.cmake fetches the archive above (sha256 verified by download); sherpa-onnx ships no kaldifst.cmake of its own, so that is the file CMake resolves, and sherpa-onnx v1.13.4's cmake/kaldi-decoder.cmake renames the kaldifst_core target to sherpa-onnx-kaldifst-core. LICENSE at v1.8.0 is Apache-2.0 under Kaldi's \"authors own their contributions\" preamble. Most kaldifst/csrc files are copied from Kaldi and carry its copyright lines with no per-file licence, so that LICENSE governs them; the few with a header carry Apache-2.0's. The exception is basic-filebuf.h, recorded under `embeds`. Previously claimed by the sherpa-onnx entry."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. kaldi-decoder v0.3.0's cmake/kaldifst.cmake fetches the archive above (sha256 verified by download); sherpa-onnx ships no kaldifst.cmake of its own, so that is the file CMake resolves, and sherpa-onnx v1.13.4's cmake/kaldi-decoder.cmake renames the kaldifst_core target to sherpa-onnx-kaldifst-core. LICENSE at v1.8.0 is Apache-2.0 under Kaldi's \"authors own their contributions\" preamble. Most kaldifst/csrc files are copied from Kaldi and carry its copyright lines with no per-file licence, so that LICENSE governs them; the few with a header carry Apache-2.0's. The exception is basic-filebuf.h, recorded under `embeds`; text-normalizer.cc also copies one constant, the kCompiledStringProps bitmask, from Pynini's stringcompile.h (Apache-2.0). Previously claimed by the sherpa-onnx entry."
     },
     {
       "component": "ONNX Runtime",
@@ -131,7 +213,7 @@
         "libonnxruntime.a"
       ],
       "note": "A binary build of ONNX Runtime v1.27.0, compiled by a sherpa-onnx maintainer and vendored into the sherpa-onnx archive. It compiles in third-party code of its own — protobuf, abseil, Eigen and others.",
-      "evidence": "Confirmed 2026-10-17. sherpa-onnx v1.13.4's cmake/onnxruntime.cmake selects onnxruntime-osx-universal-static.cmake for a universal static build, which fetches the zip above; its sha256 was verified by download, and `lipo -thin arm64` of the libonnxruntime.a inside it reproduces the digest recorded in sbom/native-inputs.json exactly. The library names its own source: it contains \"ORT Build Info: git-branch=HEAD, git-commit-id=8f0278c77\", and microsoft/onnxruntime tag v1.27.0 is commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5; its compiled-in paths are under onnxruntime-build/onnxruntime/, the checkout csukuangfj/onnxruntime-build builds from. LICENSE at v1.27.0 is MIT (Microsoft Corporation). The zip carries no licence file. ThirdPartyNotices.txt at the same tag covers the third-party code compiled into ONNX Runtime; this review links it rather than itemising it."
+      "evidence": "Confirmed 2026-10-17. sherpa-onnx v1.13.4's cmake/onnxruntime.cmake selects onnxruntime-osx-universal-static.cmake for a universal static build, which fetches the zip above; its sha256 was verified by download, and `lipo -thin arm64` of the libonnxruntime.a inside it reproduces the digest recorded in sbom/native-inputs.json exactly. The library names its own source: it contains \"ORT Build Info: git-branch=HEAD, git-commit-id=8f0278c77\", and microsoft/onnxruntime tag v1.27.0 is commit 8f0278c77bf44b0cc83c098c6c722b92a36ac4b5; its compiled-in paths are under onnxruntime-build/onnxruntime/, the checkout csukuangfj/onnxruntime-build builds from. LICENSE at v1.27.0 is MIT, \"Copyright (c) Microsoft Corporation\". csukuangfj/onnxruntime-libs is Fangjun Kuang's (a sherpa-onnx maintainer) repository of ONNX Runtime builds, and the zip is an asset of its v1.27.0 release. The zip carries no licence file. ThirdPartyNotices.txt at the same tag covers the third-party code compiled into ONNX Runtime; this review links it rather than itemising it."
     },
     {
       "component": "kaldi-decoder",
@@ -162,11 +244,11 @@
             "pinnedBy": "https://github.com/k2-fsa/sherpa-onnx/blob/142807252687d81b40d6315f23470a1512a00de3/cmake/eigen.cmake",
             "licenceFile": "COPYING.MPL2"
           },
-          "evidence": "Header-only; kaldi-decoder's sources instantiate it, and Eigen template symbols are in libkaldi-decoder-core.a. kaldi-decoder v0.3.0's CMakeLists calls include(eigen), and it is sherpa-onnx's cmake/eigen.cmake that answers, not kaldi-decoder's own (which pins 3.4.0): sherpa-onnx's cmake/ directory is earlier in CMAKE_MODULE_PATH. That file pins 5.0.1, sha256 verified by download. COPYING.README at 5.0.1: \"Eigen is primarily MPL2 licensed\"; the other COPYING files there are Apache, BSD and MINPACK, with no LGPL or GPL."
+          "evidence": "Header-only; kaldi-decoder's sources instantiate it, and libkaldi-decoder-core.a defines ten Eigen symbols (DenseStorage_impl storage and a redux over scalar_exp_op, with their cold paths) beside six kaldi_decoder functions that take Eigen types. kaldi-decoder v0.3.0's CMakeLists calls include(eigen), and it is sherpa-onnx's cmake/eigen.cmake that answers, not kaldi-decoder's own (which pins 3.4.0): sherpa-onnx's cmake/ directory is earlier in CMAKE_MODULE_PATH. That file pins 5.0.1, sha256 verified by download, and the binary agrees: its Eigen::internal::DenseStorage_impl symbols name a class that is in 5.0.1's DenseStorage.h and not in 3.4.0's. COPYING.README at 5.0.1: \"Eigen is primarily MPL2 licensed\"; the other COPYING files there are Apache, BSD and MINPACK, with no LGPL or GPL. The files those symbols are instantiated from (DenseStorage.h, Redux.h, the functors and, for the vectorised exp, the packet math) carry MPL-2.0 headers, copyright Gael Guennebaud, Benoit Jacob and other Eigen authors; GenericPacketMathFunctions.h, under the same MPL-2.0 header, credits its exp and log to Julien Pommier. Eigen's code under other terms contributes no symbol: BFloat16.h (Apache-2.0), the half-precision conversions Half.h credits to Fabian Giesen (Half.h itself is MPL-2.0), and the BLAS, LAPACKE and MKL bindings (BSD)."
         }
       ],
       "note": "Decoding graphs and search.",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/kaldi-decoder.cmake fetches the archive above (sha256 verified by download), and the library's compiled-in paths are under _deps/kaldi_decoder-src/. LICENSE at v0.3.0 is Apache-2.0. It used to share an entry with kaldi-native-fbank, which is a separate project from a separate repository."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/kaldi-decoder.cmake fetches the archive above (sha256 verified by download), and the library's compiled-in paths are under _deps/kaldi_decoder-src/. LICENSE at v0.3.0 is Apache-2.0. Its sources carry no licence header of their own, only copyright lines — Xiaomi Corporation, and for the files derived from Kaldi (itself Apache-2.0), Microsoft Corporation, Saarland University and individual Kaldi authors — so that LICENSE governs them. It used to share an entry with kaldi-native-fbank, which is a separate project from a separate repository."
     },
     {
       "component": "kaldi-native-fbank",
@@ -184,8 +266,22 @@
       "libraries": [
         "libkaldi-native-fbank-core.a"
       ],
+      "embeds": [
+        {
+          "component": "whisper.cpp FFT",
+          "upstream": "https://github.com/ggml-org/whisper.cpp",
+          "spdx": "MIT",
+          "source": {
+            "repository": "https://github.com/csukuangfj/kaldi-native-fbank",
+            "revision": "v1.22.3",
+            "path": "kaldi-native-fbank/csrc/whisper-feature.cc",
+            "licenceFile": "kaldi-native-fbank/csrc/whisper-feature.cc"
+          },
+          "evidence": "In whisper-feature.cc the DFT \"is modified from\" and the FFT \"is copied from\" whisper.cpp (whisper.cpp#L2353 and #L2373-L2429), and WhisperFeatureComputer::Compute calls them; knf::fft and WhisperFeatureComputer are defined in libkaldi-native-fbank-core.a (the DFT has no symbol of its own, being inlined into fft). whisper.cpp is MIT: \"Copyright (c) 2023 Georgi Gerganov\" in its LICENSE as of v1.4.0, the year this was copied; the project, since moved to ggml-org, now credits \"The ggml authors\". The file around them carries Xiaomi's Apache-2.0 header (\"Copyright (c) 2023 Xiaomi Corporation\"); the copied FFT keeps whisper.cpp's MIT terms, which the file names only by those comments."
+        }
+      ],
       "note": "Audio feature extraction.",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag (commit b09e686fe2084732ddd30d1ef80acfc0f13eaf01). sherpa-onnx v1.13.4's cmake/kaldi-native-fbank.cmake fetches the archive above (sha256 verified by download). LICENSE at v1.22.3 is Apache-2.0, and its sources carry Apache headers. It brings KISS FFT with it, which has its own entry."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag (commit b09e686fe2084732ddd30d1ef80acfc0f13eaf01). sherpa-onnx v1.13.4's cmake/kaldi-native-fbank.cmake fetches the archive above (sha256 verified by download). LICENSE at v1.22.3 is Apache-2.0; 22 of its 26 non-test sources carry the Apache header and the rest copyright lines only. Copyright is Xiaomi Corporation's (Fangjun Kuang), and for the files derived from Kaldi, Brno University of Technology (Karel Vesely), Petr Motlicek and Saarland University. It brings KISS FFT with it, which has its own entry."
     },
     {
       "component": "KISS FFT",
@@ -204,7 +300,7 @@
         "libkissfft-float.a"
       ],
       "note": "The FFT behind feature extraction, fetched by kaldi-native-fbank. This copy is BSD-3-Clause; the Unlicense also in its LICENSES directory covers only test files, which are not compiled.",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned commit. kaldi-native-fbank v1.22.3's own cmake/kissfft.cmake fetches the archive above (sha256 verified by download); sherpa-onnx has no kissfft.cmake. COPYING there reads \"SPDX-License-Identifier: BSD-3-Clause\" and points at LICENSES/BSD-3-Clause, and every compiled source (kiss_fft.c, kiss_fftr.c and their headers) carries a BSD-3-Clause header. LICENSES/Unlicense applies to test/ only. No LGPL or GPL text anywhere in the tree: the LGPL/GPL history belongs to the copy vendored into Eigen, which this is not."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned commit. kaldi-native-fbank v1.22.3's own cmake/kissfft.cmake fetches the archive above (sha256 verified by download); sherpa-onnx has no kissfft.cmake. COPYING there reads \"Copyright (c) 2003-2010 Mark Borgerding\" and \"SPDX-License-Identifier: BSD-3-Clause\", pointing at LICENSES/BSD-3-Clause, and all five sources its CMakeLists compiles (kiss_fft.c, kfc.c, kiss_fftnd.c, kiss_fftndr.c, kiss_fftr.c — each an object in libkissfft-float.a) and their headers carry SPDX-License-Identifier: BSD-3-Clause. LICENSES/Unlicense applies to test/ only. No LGPL or GPL text anywhere in the tree: the LGPL/GPL history belongs to the copy vendored into Eigen, which this is not."
     },
     {
       "component": "simple-sentencepiece",
@@ -234,10 +330,22 @@
             "licenceFile": "ssentencepiece/csrc/darts.h"
           },
           "evidence": "Header-only, vendored as ssentencepiece/csrc/darts.h (DARTS_VERSION \"0.32\"), \"taken from https://github.com/s-yata/darts-clone\". The BSD 2-clause licence is written into the header itself: \"Copyright (c) 2008-2014, Susumu Yata\". Its symbols are in libssentencepiece_core.a."
+        },
+        {
+          "component": "ThreadPool",
+          "upstream": "https://github.com/progschj/ThreadPool",
+          "spdx": "Zlib",
+          "source": {
+            "repository": "https://github.com/pkufool/simple-sentencepiece",
+            "revision": "v0.7",
+            "path": "ssentencepiece/csrc/threadpool.h",
+            "licenceFile": "ssentencepiece/csrc/threadpool.h"
+          },
+          "evidence": "Header-only, vendored as ssentencepiece/csrc/threadpool.h, \"taken from https://github.com/progschj/ThreadPool/blob/master/ThreadPool.h\", and included by ssentencepiece.h; 45 ThreadPool symbols are in libssentencepiece_core.a. The zlib licence is written into the header: \"Copyright (c) 2012 Jakob Progsch, Václav Zeman\", the same terms as upstream's COPYING."
         }
       ],
       "note": "Tokenisation. The library is called ssentencepiece; the project is simple-sentencepiece.",
-      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/simple-sentencepiece.cmake fetches the archive above (sha256 verified by download), and the library's compiled-in paths are under _deps/simple-sentencepiece-src/. LICENSE at v0.7 is Apache-2.0, and its sources carry Apache headers. This entry used to name https://github.com/pkufool/ssentencepiece, which does not exist."
+      "evidence": "Confirmed 2026-10-17 against the source at the pinned tag. sherpa-onnx v1.13.4's cmake/simple-sentencepiece.cmake fetches the archive above (sha256 verified by download), and the library's compiled-in paths are under _deps/simple-sentencepiece-src/. LICENSE at v0.7 is Apache-2.0. Its own two sources, ssentencepiece.cc and ssentencepiece.h, carry the Apache header with Wei Kang's copyright; the only other two it compiles in are vendored headers from other authors, recorded under `embeds`. This entry used to name https://github.com/pkufool/ssentencepiece, which does not exist."
     },
     {
       "component": "PortAudio",
@@ -255,8 +363,8 @@
       "libraries": [
         "libsherpa-onnx-portaudio_static.a"
       ],
-      "note": "In the archive and on the link line, but CandidCue captures audio in the renderer and never calls it, and none of its code survives dead-stripping. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.",
-      "evidence": "Confirmed 2026-10-17 against the release tarball. sherpa-onnx v1.13.4's cmake/portaudio.cmake fetches the archive above (sha256 verified by download). The library names its own source: \"PortAudio V19.7.0-devel, revision 147dd722548358763a8b649b3e4b41dfffbcfbb6\", which is PortAudio/portaudio tag v19.7.0. LICENSE.txt is the MIT grant (Ross Bencina and Phil Burk) followed by \"The text above constitutes the entire PortAudio license; however, the PortAudio community also makes the following non-binding requests\". Measured: no PortAudio code survives dead-stripping either."
+      "note": "In the sherpa-onnx archive, but not linked: sherpa-onnx-sys does not put it on CandidCue's link line, and CandidCue captures audio in the renderer. It is listed because it is in what the build downloads. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.",
+      "evidence": "Confirmed 2026-10-17 against the release tarball. sherpa-onnx v1.13.4's cmake/portaudio.cmake fetches the archive above (sha256 verified by download). It is not linked at all: sherpa-onnx-sys's SHERPA_ONNX_STATIC_LIBS names 13 archives and not this one, and fresh release links of both slices on 2026-10-17 loaded none of its 16 objects. The library names its own source: \"PortAudio V19.7.0-devel, revision 147dd722548358763a8b649b3e4b41dfffbcfbb6\", which is PortAudio/portaudio tag v19.7.0. Every source compiled for macOS (src/common, src/os/unix, src/hostapi/coreaudio, src/hostapi/skeleton, include) carries the MIT grant, apart from the generated pa_gitrevision.h. LICENSE.txt is the MIT grant (Ross Bencina and Phil Burk) followed by \"The text above constitutes the entire PortAudio license; however, the PortAudio community also makes the following non-binding requests\"."
     },
     {
       "component": "piper-phonemize",
@@ -286,15 +394,15 @@
             "path": "src/uni_algo.h",
             "licenceFile": "licenses/uni-algo/LICENSE.md"
           },
-          "evidence": "The amalgamated header src/uni_algo.h (UNI_ALGO_CPP_LIB_VERSION 8001, i.e. 0.8.1) is included by src/phonemize.cpp, one of the three sources of the piper_phonemize library. Its own notice: \"License: Public Domain or MIT - choose whatever you want\"; licenses/uni-algo/LICENSE.md is the public-domain (Unlicense) text, and the MIT text is at the end of the header."
+          "evidence": "The amalgamated header src/uni_algo.h (UNI_ALGO_CPP_LIB_VERSION 8001, i.e. 0.8.1) is included by src/phonemize.cpp, one of the three sources of the piper_phonemize library. Its own notice: \"License: Public Domain or MIT - choose whatever you want\"; licenses/uni-algo/LICENSE.md is the public-domain (Unlicense) text, and the MIT text is at the end of the header. Neither text names a copyright holder, upstream included."
         }
       ],
-      "note": "Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, about 416 bytes) and NO eSpeak code does. So piper's own MIT terms are the operative ones. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.",
+      "note": "Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.",
       "copyleftIfLinkedWith": [
         "eSpeak NG",
         "ucd-tools"
       ],
-      "evidence": "MIT declared upstream. Measured 2026-08-13 by scripts/verify-no-copyleft-objects.mjs against an arm64 linker map: 2 of its own symbols ship (__GLOBAL__sub_I_phonemize.cpp and piper::DEFAULT_PHONEME_MAP), and no eSpeak NG or ucd-tools code ships beside them. Confirmed 2026-10-17 against the source at the pinned commit: sherpa-onnx v1.13.4's cmake/piper-phonemize.cmake fetches the archive above from the csukuangfj fork (sha256 verified by download). LICENSE.md there is MIT, \"Copyright (c) 2023 Michael Hansen\", byte-identical to rhasspy/piper-phonemize's. The fork's own CMakeLists would fetch a second eSpeak NG when ESPEAK_NG_DIR is unset; sherpa-onnx's CMakeLists sets it to the eSpeak NG source below, so it links that copy and no other."
+      "evidence": "MIT declared upstream. Measured 2026-08-13 by scripts/verify-no-copyleft-objects.mjs against an arm64 linker map: 2 of its own symbols ship (__GLOBAL__sub_I_phonemize.cpp and piper::DEFAULT_PHONEME_MAP), and no eSpeak NG or ucd-tools code ships beside them. Confirmed 2026-10-17 against the source at the pinned commit: sherpa-onnx v1.13.4's cmake/piper-phonemize.cmake fetches the archive above from the csukuangfj fork (sha256 verified by download). LICENSE.md there is MIT, \"Copyright (c) 2023 Michael Hansen\", byte-identical to rhasspy/piper-phonemize's. Re-measured 2026-10-17 on fresh release links of both slices (cargo build --release --manifest-path src-tauri/Cargo.toml with -Wl,-map, from archives sha256-identical to the recorded ones): arm64 ships the same 2 symbols, 0x188 + 0x18 bytes; x86_64 ships those two plus one anonymous compiler-generated symbol from phonemize.cpp.o; on neither does any eSpeak NG or ucd-tools code ship. The fork's own CMakeLists would fetch a second eSpeak NG when ESPEAK_NG_DIR is unset; sherpa-onnx's CMakeLists sets it to the eSpeak NG source below, so it links that copy and no other."
     },
     {
       "component": "ucd-tools",
@@ -316,7 +424,7 @@
       ],
       "note": "The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way.",
       "forbiddenInProprietaryBinary": true,
-      "evidence": "GPL-3.0-or-later (rhdunn/ucd-tools; the wrapper, not the Unicode data). Measured 2026-08-13: every object the linker loaded from it was dead-stripped; nothing of it is in the binary. Confirmed 2026-10-17 against the source at the pinned commit: it is not fetched on its own but vendored in the eSpeak NG fork at src/ucd-tools, and sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake installs its `ucd` target. src/ucd-tools/COPYING there is GPL version 3; src/ctype.c and the generated tables (src/categories.c and the rest) carry Reece H. Dunn's \"either version 3 of the License, or (at your option) any later version\" header; README.md: \"UCD Tools is released under the GPL version 3 or later license\", with the Unicode data files under the Unicode terms in COPYING.UCD."
+      "evidence": "GPL-3.0-or-later (rhdunn/ucd-tools; the wrapper, not the Unicode data). Measured 2026-08-13: every object the linker loaded from it was dead-stripped; nothing of it is in the binary. Re-measured 2026-10-17 on fresh release links of both slices: the linker loads 3 of its 6 objects on each, and none of them survives. Confirmed 2026-10-17 against the source at the pinned commit: it is not fetched on its own but vendored in the eSpeak NG fork at src/ucd-tools, and sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake installs its `ucd` target. src/ucd-tools/COPYING there is GPL version 3; src/ctype.c and the generated tables (src/categories.c and the rest) carry Reece H. Dunn's \"either version 3 of the License, or (at your option) any later version\" header; README.md: \"UCD Tools is released under the GPL version 3 or later license\", with the Unicode data files under the Unicode terms in COPYING.UCD — the Unicode, Inc. data files and software licence whose definitions (including source.icu-project.org and unicode.org/utility/trac/browser) are SPDX's Unicode-DFS-2016, \"Copyright © 1991-2018 Unicode, Inc.\"."
     },
     {
       "component": "eSpeak NG",
@@ -337,7 +445,7 @@
       ],
       "note": "The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is a measurement, not an argument: the linker does load most of its objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them. No eSpeak NG code or data is in the binary, and `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships.",
       "forbiddenInProprietaryBinary": true,
-      "evidence": "GPL-3.0-or-later. Measured 2026-08-13 against an arm64 linker map: the linker LOADS 23 of its 27 objects, because libsherpa-onnx-c-api.a is one broad object with undefined references to OfflineTts — but dead-stripping removes all of it. What survives is 28 coalesced literals (\"UTF-8\", \"%s\", numeric pool entries) and no eSpeak code or data whatsoever. Confirmed 2026-10-17 against the source at the pinned commit: sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake fetches the csukuangfj fork above (sha256 verified by download) and installs its espeak-ng target. COPYING there is GPL version 3, README.md says \"GPL version 3 or later\", and the compiled library sources (src/libespeak-ng/speech.c and the rest) carry the or-later header; the one that does not, sPlayer.c, is compiled only with USE_SPEECHPLAYER, which sherpa-onnx turns off. The fork's top-level COPYING.APACHE, COPYING.BSD2 and COPYING.UCD cover individual files within it; none makes the library as a whole anything but GPL-3.0-or-later."
+      "evidence": "GPL-3.0-or-later. Measured 2026-08-13 against an arm64 linker map: the linker LOADS 23 of its 27 objects, because libsherpa-onnx-c-api.a is one broad object with undefined references to OfflineTts — but dead-stripping removes all of it. What survives is 28 coalesced literals (\"UTF-8\", \"%s\", numeric pool entries) and no eSpeak code or data whatsoever. Re-measured 2026-10-17 on fresh release links of both slices: 23 of 27 objects loaded on each, then dead-stripped; 28 coalesced literals survive on arm64 and 24 on x86_64, and no eSpeak NG code or data on either. Confirmed 2026-10-17 against the source at the pinned commit: sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake fetches the csukuangfj fork above (sha256 verified by download) and installs its espeak-ng target. COPYING there is GPL version 3, README.md says \"GPL version 3 or later\", and the compiled library sources (src/libespeak-ng/speech.c and the rest) carry the or-later header. Three files do not: sPlayer.c and sPlayer.h, compiled only with USE_SPEECHPLAYER, which sherpa-onnx turns off, and ieee80.h, a one-line prototype for ieee80.c — which Ulrich Müller offers under GPL-3.0-or-later or, alternatively, the 2-clause BSD licence, the reason COPYING.BSD2 is in the tree. The fork's top-level COPYING.APACHE, COPYING.BSD2 and COPYING.UCD cover individual files within it; none makes the library as a whole anything but GPL-3.0-or-later."
     }
   ]
 }

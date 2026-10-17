@@ -56,9 +56,17 @@ Code Form is available.
 | Component | Licence | Compiled into | Built from |
 |---|---|---|---|
 | Eigen | MPL-2.0 | kaldi-decoder | <https://gitlab.com/libeigen/eigen> @ `5.0.1` |
+| whisper.cpp FFT | MIT | kaldi-native-fbank | `kaldi-native-fbank/csrc/whisper-feature.cc` in <https://github.com/csukuangfj/kaldi-native-fbank> @ `v1.22.3` (vendored; upstream <https://github.com/ggml-org/whisper.cpp>) |
 | libc++ basic_filebuf | MIT OR NCSA | kaldifst | `kaldifst/csrc/basic-filebuf.h` in <https://github.com/k2-fsa/kaldifst> @ `v1.8.0` (vendored; upstream <https://github.com/llvm/llvm-project>) |
 | uni-algo | Unlicense OR MIT | piper-phonemize | `src/uni_algo.h` in <https://github.com/csukuangfj/piper-phonemize> @ `f3ff95afc036` (vendored; upstream <https://github.com/uni-algo/uni-algo>) |
+| JSON for Modern C++ | MIT | sherpa-onnx | <https://github.com/nlohmann/json> @ `v3.12.0` |
+| hclust-cpp (fastcluster) | BSD-2-Clause | sherpa-onnx | <https://github.com/csukuangfj/hclust-cpp> @ `2026-02-25` (fork of <https://github.com/cdalitz/hclust-cpp>) |
+| Supertonic TTS | MIT | sherpa-onnx | `sherpa-onnx/csrc/offline-tts-supertonic-*` in <https://github.com/k2-fsa/sherpa-onnx> @ `v1.13.4` (adapted from <https://github.com/supertone-oss-archive/supertonic>) |
+| Whisper DTW timing | MIT | sherpa-onnx | `sherpa-onnx/csrc/offline-whisper-dtw.*` in <https://github.com/k2-fsa/sherpa-onnx> @ `v1.13.4` (adapted from <https://github.com/openai/whisper>) |
+| cpp-base64 | Zlib | sherpa-onnx | `sherpa-onnx/csrc/base64-decode.cc` in <https://github.com/k2-fsa/sherpa-onnx> @ `v1.13.4` (adapted from <https://github.com/ReneNyffenegger/cpp-base64>) |
+| Stack Overflow answer 25385766 (string trim) | CC-BY-SA-4.0 | sherpa-onnx | `sherpa-onnx/csrc/symbol-table.cc` in <https://github.com/k2-fsa/sherpa-onnx> @ `v1.13.4` (vendored; upstream <https://stackoverflow.com/a/25385766>) |
 | darts-clone | BSD-2-Clause | simple-sentencepiece | `ssentencepiece/csrc/darts.h` in <https://github.com/pkufool/simple-sentencepiece> @ `v0.7` (vendored; upstream <https://github.com/s-yata/darts-clone>) |
+| ThreadPool | Zlib | simple-sentencepiece | `ssentencepiece/csrc/threadpool.h` in <https://github.com/pkufool/simple-sentencepiece> @ `v0.7` (vendored; upstream <https://github.com/progschj/ThreadPool>) |
 
 On particular components:
 
@@ -68,7 +76,7 @@ On particular components:
 
 - **OpenFst** — Weighted finite-state transducers for the decoder. sherpa-onnx builds them from a fork and gives the libraries its own name; the code is the OpenFst authors' (Google LLC).
 
-- **PortAudio** — In the archive and on the link line, but CandidCue captures audio in the renderer and never calls it, and none of its code survives dead-stripping. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
+- **PortAudio** — In the sherpa-onnx archive, but not linked: sherpa-onnx-sys does not put it on CandidCue's link line, and CandidCue captures audio in the renderer. It is listed because it is in what the build downloads. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
 
 - **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is a measurement, not an argument: the linker does load most of its objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them. No eSpeak NG code or data is in the binary, and `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships.
 
@@ -78,7 +86,7 @@ On particular components:
 
 - **kaldifst** — Kaldi's finite-state-transducer utilities on top of OpenFst. kaldi-decoder fetches it; sherpa-onnx renames the library.
 
-- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, about 416 bytes) and NO eSpeak code does. So piper's own MIT terms are the operative ones. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
+- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
 
 - **sherpa-onnx** — The inference runtime CandidCue calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.
 
