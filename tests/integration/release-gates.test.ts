@@ -33,6 +33,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -971,10 +972,11 @@ echo '{}'
  * the inventories were written out raw: the committed copies named the
  * developer's home directory 2,107 times, and every machine that regenerated
  * them rewrote every one of those lines. The stand-in `pnpm` and `cargo` print
- * what the real ones were measured printing — the checkout as the operating
- * system resolves it (`pwd -P`, which on macOS is `/private/var/…` for a
- * temporary directory node names `/var/…`). Each checkout sits inside its own
- * HOME, which is the shape of a developer machine and of the release runner.
+ * the shapes the real ones print, in the order cargo puts `(proc-macro)` before
+ * a source, and name the checkout the way a process running in it sees it
+ * (`pwd -P`, which on macOS is `/private/var/…` for a temporary directory node
+ * names `/var/…`). Each checkout sits inside its own HOME, which is the shape
+ * of a developer machine and of the release runner.
  */
 describe('the SBOMs a release publishes name nothing on the machine that wrote them', () => {
   const SBOM_SCRIPT = 'scripts/verify-supply-chain.mjs';
@@ -985,7 +987,7 @@ describe('the SBOMs a release publishes name nothing on the machine that wrote t
 root=$(pwd -P)
 from=left-pad
 dep="$root/node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad"
-[ "$FAKE_OUTSIDE" = pnpm ] && dep="$HOME/elsewhere/left-pad"
+[ "$FAKE_OUTSIDE" = pnpm ] && dep=/opt/vendored/left-pad
 [ "$FAKE_OUTSIDE" = pnpm-embedded ] && from="left-pad@file:$HOME/left-pad.tgz"
 cat <<EOF
 [{"name":"fixture","version":"1.0.0","path":"$root","private":true,"dependencies":{
@@ -1002,7 +1004,7 @@ case "$*" in
   *) echo "cc-bench v0.1.0 ($root/crates/cc-bench)" ;;
 esac
 echo "cc-align v0.1.0 ($root/crates/cc-align)"
-echo "cc-macros v0.1.0 ($root/crates/cc-macros) (proc-macro)"
+echo "cc-macros v0.1.0 (proc-macro) ($root/crates/cc-macros)"
 echo "serde_derive v1.0.0 (proc-macro)"
 echo "serde_derive v1.0.0 (proc-macro)"
 echo "git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)"
@@ -1024,11 +1026,15 @@ exit 0
     return { home, dir, bin };
   }
 
-  function writeSboms(checkout: ReturnType<typeof scratchCheckout>, outside = '') {
-    return run(join(checkout.dir, SBOM_SCRIPT), ['sbom'], checkout.dir, {
+  function writeSboms(
+    checkout: ReturnType<typeof scratchCheckout>,
+    { outside = '', via = checkout.dir, env = {} }: { outside?: string; via?: string; env?: NodeJS.ProcessEnv } = {},
+  ) {
+    return run(join(via, SBOM_SCRIPT), ['sbom'], via, {
       PATH: `${checkout.bin}${delimiter}${process.env.PATH ?? ''}`,
       HOME: checkout.home,
       FAKE_OUTSIDE: outside,
+      ...env,
     });
   }
 
@@ -1057,16 +1063,38 @@ exit 0
 
     // A path dependency keeps its proc-macro annotation, and the parentheses
     // that never held a path — a registry crate's, a git source — are left alone.
+    const shared = [
+      'cc-align v0.1.0 (crates/cc-align)',
+      'cc-macros v0.1.0 (proc-macro) (crates/cc-macros)',
+      'git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)',
+      'serde_derive v1.0.0 (proc-macro)',
+    ];
     expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toBe(
-      [
-        '[build-dependencies]',
-        'candidcue v1.0.0 (src-tauri)',
-        'cc-align v0.1.0 (crates/cc-align)',
-        'cc-macros v0.1.0 (crates/cc-macros) (proc-macro)',
-        'git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)',
-        'serde_derive v1.0.0 (proc-macro)',
-        '',
-      ].join('\n'),
+      ['[build-dependencies]', 'candidcue v1.0.0 (src-tauri)', ...shared, ''].join('\n'),
+    );
+    expect(readFileSync(join(checkout.dir, 'sbom/rust-alignment.txt'), 'utf8')).toBe(
+      ['[build-dependencies]', shared[0], 'cc-bench v0.1.0 (crates/cc-bench)', ...shared.slice(1), ''].join(
+        '\n',
+      ),
+    );
+  });
+
+  it('names the checkout relative to itself when node was started through a symlink', () => {
+    /*
+     * `--preserve-symlinks-main` keeps the script's path as it was given, so
+     * the script's idea of the checkout is the link while the tools, running
+     * in it, print where it really is.
+     */
+    const checkout = scratchCheckout('candidcue');
+    const linked = join(checkout.home, 'linked');
+    symlinkSync(checkout.dir, linked);
+
+    const result = writeSboms(checkout, { via: linked, env: { NODE_OPTIONS: '--preserve-symlinks-main' } });
+    expect(result.status, result.output).toBe(0);
+    const [root] = JSON.parse(readFileSync(join(checkout.dir, 'sbom/javascript.json'), 'utf8'));
+    expect(root.path).toBe('.');
+    expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toContain(
+      'candidcue v1.0.0 (src-tauri)',
     );
   });
 
@@ -1090,7 +1118,7 @@ exit 0
     ['a crate outside the checkout', 'cargo', 'sbom/rust-app.txt'],
   ])('refuses to publish %s', (_, outside, file) => {
     const checkout = scratchCheckout('candidcue');
-    const result = writeSboms(checkout, outside);
+    const result = writeSboms(checkout, { outside });
     expect(result.status, 'an SBOM that would publish a machine path must fail the gate').toBe(1);
     expect(result.output).toContain(`${file} would publish a path from this machine`);
     expect(existsSync(join(checkout.dir, file)), `${file} must not be written`).toBe(false);
@@ -1105,7 +1133,7 @@ exit 0
      */
     const git = (...args: string[]) => {
       const result = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.error?.message ?? result.stderr).toBe(0);
       return result.stdout.split('\n').filter(Boolean);
     };
     expect(

@@ -155,7 +155,7 @@ function writeSboms() {
       const lines = tree.split('\n').map((line) => relativiseCargoLine(line.trim())).filter(Boolean);
       const unique = [...new Set(lines)].sort();
       // `(` is where cargo prints a crate's source. Its other parentheses —
-      // `(proc-macro)`, a git URL — never open on a path.
+      // `(proc-macro)`, a git source's URL — never open on a path.
       const leaks = unique.filter((line) => /\((?:[/\\]|[A-Za-z]:[/\\])/.test(line) || namesHome(line));
       if (leaks.length > 0) {
         problems.push(publishes(`sbom/${name}.txt`, leaks));
@@ -214,14 +214,15 @@ function relativiseJson(value) {
 }
 
 /**
- * `name vX.Y.Z (source)`, then `(proc-macro)` if it is one. The source is
- * matched by its position rather than by what it contains, because a checkout
- * path may hold parentheses of its own.
+ * `name vX.Y.Z`, then `(proc-macro)` if it is one, then `(source)` for anything
+ * not from crates.io. The source is matched by its position — the last group,
+ * running to the end of the line — rather than by what it contains, because a
+ * checkout path may hold parentheses of its own.
  */
 function relativiseCargoLine(line) {
-  const crate = line.match(/^(\S+ \S+) \((.+?)\)((?: \(proc-macro\))?)$/);
+  const crate = line.match(/^(\S+ \S+(?: \(proc-macro\))?) \((.+)\)$/);
   const relative = crate && insideCheckout(crate[2]);
-  return relative ? `${crate[1]} (${relative})${crate[3]}` : line;
+  return relative ? `${crate[1]} (${relative})` : line;
 }
 
 function strings(value) {
@@ -230,10 +231,17 @@ function strings(value) {
   return [];
 }
 
-/** The backstop for a path in a position the checks above do not know about. */
+/**
+ * The backstop for a path in a position the checks above do not know about.
+ *
+ * Only the home directory as a whole path counts: with HOME=/a, a plain
+ * substring search finds it in `@tauri-apps/api` and every `node_modules/…/a/…`.
+ */
 function namesHome(text) {
   const home = homedir();
-  return home.length > 1 && text.includes(home);
+  if (home.length <= 1) return false;
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w.@+~-])${escaped}(?![\\w.@+~-])`).test(text);
 }
 
 function publishes(file, leaks) {
