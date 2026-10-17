@@ -1796,6 +1796,25 @@ pub fn set_control_presenting<R: Runtime>(
              * without quitting, so the failure exits with the latch set and the
              * un-present that follows undoes whatever landed.
              */
+            /*
+             * The operator deliberately stops touching the keyboard for the
+             * length of a take, which is exactly when the OS blanks the display
+             * (§52.7).
+             *
+             * Claimed alongside the latch rather than after the apply, for the
+             * same reason the frame is: a failed apply leaves the latch set, a
+             * retry then plans `Reassert` or `Switch`, and neither claims
+             * anything — a take that presented on the second try would have
+             * let the display sleep. The un-present that clears the latch is
+             * what withdraws it.
+             *
+             * Held in READER mode too, and deliberately. The argument in
+             * `sleep.rs` is about somebody who stops touching the keyboard for
+             * twenty minutes, and that is MORE true of reading than of
+             * presenting, not less — a reader's hands are nowhere near the
+             * trackpad while the script follows their voice.
+             */
+            sleep::acquire(app, SleepHolder::Take);
             let decorations = saved.as_ref().expect("just written").resting.decorations;
             target = match entering {
                 /*
@@ -1830,18 +1849,6 @@ pub fn set_control_presenting<R: Runtime>(
                     bounds
                 }
             };
-            /*
-             * The operator deliberately stops touching the keyboard for the
-             * length of a take, which is exactly when the OS blanks the display
-             * (§52.7).
-             *
-             * Held in READER mode too, and deliberately. The argument in
-             * `sleep.rs` is about somebody who stops touching the keyboard for
-             * twenty minutes, and that is MORE true of reading than of
-             * presenting, not less — a reader's hands are nowhere near the
-             * trackpad while the script follows their voice.
-             */
-            sleep::acquire(app, SleepHolder::Take);
         }
         PresentAction::Reassert(current) => {
             let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;

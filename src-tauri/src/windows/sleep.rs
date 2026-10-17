@@ -5,17 +5,17 @@
 //! (default 10–20 min) and Windows blank the display. The stage going dark
 //! mid-take ruins the take.
 //!
-//! The assertion is created when the stage starts presenting and released on
-//! un-present, close, stage-window destruction, and quit. Create and release
-//! are strictly paired through [`plan`] so the assertion cannot leak or be
-//! double-released; the OS also drops it automatically if the process dies.
-//!
 //! Two things present, and they share the one assertion: the single-window take
 //! and the separate stage window (preview, display test, calibration). Each
-//! records its own claim as a [`SleepHolder`], and the assertion goes only when
-//! the last claim does. With one bare slot, closing a display test from
-//! Settings mid-take released the take's assertion, and the prompter slept on
-//! the operator's idle timer partway through the read.
+//! records its own claim as a [`SleepHolder`] when it presents and withdraws it
+//! on un-present, close or window destruction; quit drops them all. The
+//! assertion is created with the first claim and released with the last, and
+//! the two are strictly paired through [`plan`] so it cannot leak or be
+//! double-released; the OS also drops it automatically if the process dies.
+//!
+//! With one bare slot instead of claims, closing a display test from Settings
+//! mid-take released the take's assertion, and the prompter slept on the
+//! operator's idle timer partway through the read.
 //!
 //! Implemented with direct platform FFI rather than a dependency: macOS
 //! `IOPMAssertionCreateWithName`, Windows `SetThreadExecutionState`. Everything
@@ -111,10 +111,17 @@ pub fn acquire<R: Runtime>(_app: &AppHandle<R>, holder: SleepHolder) {
 
 /// Withdraw `holder`'s claim; the display may sleep once nobody else holds
 /// it. Safe to call repeatedly, and safe to call when no claim was ever made.
+///
+/// Only the last withdrawal touches the platform. One that leaves somebody
+/// else's claim standing is not the moment to retry an assertion the platform
+/// already refused — on a platform with none to give, that is a warning per
+/// close.
 pub fn release<R: Runtime>(_app: &AppHandle<R>, holder: SleepHolder) {
     let mut guard = lock();
     guard.holders.remove(&holder);
-    settle(&mut guard);
+    if guard.holders.is_empty() {
+        settle(&mut guard);
+    }
 }
 
 /// Drop every claim at once. Quit only: nothing that outlives the app may keep
@@ -355,9 +362,14 @@ mod tests {
         let app = app.handle();
         acquire(app, SleepHolder::Take);
         let take_held = is_held();
-        // Settings' display test presents, un-presents, is closed and is
-        // destroyed — three withdrawals of the one stage claim.
+        // Settings' display test presents and is closed four seconds later.
+        // Its claim can be withdrawn three times over — un-present,
+        // `close_stage`, `Destroyed` — and it is presented twice here, which a
+        // set must still let one withdrawal undo.
         acquire(app, SleepHolder::Stage(4));
+        acquire(app, SleepHolder::Stage(4));
+        release(app, SleepHolder::Stage(4));
+        assert_eq!(holders(), [SleepHolder::Take]);
         release(app, SleepHolder::Stage(4));
         release(app, SleepHolder::Stage(4));
         release(app, SleepHolder::Stage(4));
@@ -454,14 +466,17 @@ mod tests {
 
         let handle = app.handle();
         acquire(handle, SleepHolder::Take);
+        let take_held = is_held();
         acquire(handle, SleepHolder::Stage(generation));
         super::super::close_stage(handle, session_id).expect("the test's own stage closes");
         assert_eq!(holders(), [SleepHolder::Take]);
+        assert_eq!(is_held(), take_held, "the take's assertion survives the close");
 
         // A late second close from the same caller is a cleanup, not a release
         // of anything the take holds.
         super::super::close_stage(handle, session_id).expect("closing again is a cleanup");
         assert_eq!(holders(), [SleepHolder::Take]);
+        assert_eq!(is_held(), take_held);
 
         release(handle, SleepHolder::Take);
         assert!(!is_held());
