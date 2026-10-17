@@ -487,6 +487,10 @@ export class VoiceSessionPipeline {
        */
       const failed = ++this.lifecycle;
       this.running = false;
+      // Nothing is open, so the take is paused as far as `resume()` is
+      // concerned: the next one reopens it rather than returning at its first
+      // line and being reported live.
+      this.paused = true;
       // Audio held for a session that will now never open belongs to nobody.
       this.dropPreRoll();
       const unlisten = this.unlistenStt;
@@ -587,15 +591,7 @@ export class VoiceSessionPipeline {
       // `start()` owns the whole acquire → open → capture sequence, including
       // its epoch checks; duplicating it here is how the two drift apart.
       this.paused = false;
-      try {
-        await this.start();
-      } catch (err) {
-        // Nothing reopened, so the take is still paused as far as the next
-        // resume is concerned — which would otherwise return at its first
-        // line and be reported live.
-        if (!this.stopped) this.paused = true;
-        throw err;
-      }
+      await this.start();
       return;
     }
     this.paused = false;
@@ -724,12 +720,9 @@ export class VoiceSessionPipeline {
       this.handleSttFrame(frame);
       return;
     }
-    // The session this take just closed may still finalize its last utterance
-    // into it: its words, not its transport.
-    if (
-      frame.generation === this.closingGeneration &&
-      (frame.kind === 'itemStarted' || frame.kind === 'partial' || frame.kind === 'final')
-    ) {
+    // The session this take just closed is still its own: it finalizes the
+    // last utterance, reports what it dropped, and says it has closed.
+    if (frame.generation === this.closingGeneration) {
       this.handleSttFrame(frame);
       return;
     }

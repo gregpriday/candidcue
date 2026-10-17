@@ -250,12 +250,20 @@ interface Reports {
   texts: string[];
   lines: string[];
   levels: number;
+  dropped: number[];
 }
 
 const pipelines: VoiceSessionPipeline[] = [];
 
 function pipeline(): { p: VoiceSessionPipeline; reports: Reports } {
-  const reports: Reports = { states: [], fannedOut: [], texts: [], lines: [], levels: 0 };
+  const reports: Reports = {
+    states: [],
+    fannedOut: [],
+    texts: [],
+    lines: [],
+    levels: 0,
+    dropped: [],
+  };
   const p = new VoiceSessionPipeline({
     sessionId: 'session-1',
     sessionGeneration: 1,
@@ -271,6 +279,7 @@ function pipeline(): { p: VoiceSessionPipeline; reports: Reports } {
     onLevel: () => {
       reports.levels += 1;
     },
+    onAudioDropped: (frames) => reports.dropped.push(frames),
     timers: {
       setTimeout: (callback) => env.state.timers.push(callback),
       clearTimeout: () => {},
@@ -662,6 +671,23 @@ describe('a resume after a hard pause keeps everything it opens', () => {
     await expectOneLiveTake(reports);
   });
 
+  it('a resume a second pause overtook does not pause the resume after it', async () => {
+    const { p, reports } = pipeline();
+    await p.start();
+    await p.hardPause();
+    holdAt('save');
+    const overtaken = expect(p.resume()).rejects.toThrow('SESSION_STOPPED');
+    await reached('save');
+    await p.hardPause();
+    await p.resume();
+
+    release('save');
+    await overtaken;
+    await settled();
+    // Still live: audio flows, which it would not on a take quietly re-paused.
+    await expectOneLiveTake(reports);
+  });
+
   it('a hard pause that overtakes a resume says offline again', async () => {
     // The store marks a resume `reconnecting` before the pipeline has said
     // anything, so a pause the pipeline thinks is a repeat is news to it.
@@ -826,17 +852,34 @@ describe('the STT listener hears only the take it belongs to (#289)', () => {
     expect(reports.texts).toEqual([]);
   });
 
-  it('a hard-paused take keeps its session’s last words, not its transport', async () => {
+  it('a hard-paused take still hears its own session finish, and nobody else’s', async () => {
     const { p, reports } = pipeline();
     await p.start();
     await p.hardPause();
 
     deliver({ kind: 'final', generation: 1, itemId: 'last', text: 'the last words', audioEndMs: 900 });
-    deliver({ kind: 'transport', generation: 1, state: 'connected' });
+    deliver({ kind: 'audioDropped', generation: 1, frames: 3 });
+    deliver({ kind: 'transport', generation: 1, state: 'closed' });
     deliver({ kind: 'partial', generation: 2, itemId: 'other', text: 'someone else' });
+    deliver({ kind: 'transport', generation: 2, state: 'connected' });
 
     expect(reports.lines).toEqual(['the last words']);
     expect(reports.texts).toEqual(['the last words']);
+    expect(reports.dropped).toEqual([3]);
+    expect(reports.states.at(-1)).toBe('offline');
+  });
+
+  it('a soft pause that auto-disconnects hears its session close', async () => {
+    const { p, reports } = pipeline();
+    await p.start();
+    deliver({ kind: 'transport', generation: 1, state: 'connected' });
+    p.softPause();
+
+    // The auto-disconnect, on the pipeline's timer seam.
+    env.state.timers.shift()?.();
+    await settled();
+    expect(env.state.closed).toEqual([1]);
+    deliver({ kind: 'transport', generation: 1, state: 'closed' });
     expect(reports.states.at(-1)).toBe('offline');
   });
 });
