@@ -1,16 +1,21 @@
 <!--
   Recursive SafeRenderNode renderer. Text + marks only — no HTML pass-through
   (spec Appendix C: "do not use SafeRenderNode as disguised arbitrary HTML").
+  The one picture it draws comes from a url Rust resolved (PreviewImage).
 -->
 <script lang="ts">
   import type { SafeRenderNode } from '../../shared/contracts';
+  import type { PreviewImages } from '../lib/preview-images';
+  import PreviewImage from './PreviewImage.svelte';
   import RenderNodes from './RenderNodes.svelte';
 
   interface Props {
     nodes: SafeRenderNode[];
+    /** Per asset id. Without it an image renders as a plain reference. */
+    images?: PreviewImages;
   }
 
-  let { nodes }: Props = $props();
+  let { nodes, images }: Props = $props();
 
   function hasMark(
     node: Extract<SafeRenderNode, { type: 'text' }>,
@@ -32,9 +37,9 @@
   {:else if node.type === 'line_break'}
     <br />
   {:else if node.type === 'link'}
-    <span class="link"><RenderNodes nodes={node.label} /></span>
+    <span class="link"><RenderNodes nodes={node.label} {images} /></span>
   {:else if node.type === 'image'}
-    <span class="image-ref" title={node.alt}>[Image: {node.alt || node.assetId}]</span>
+    <PreviewImage assetId={node.assetId} alt={node.alt} image={images?.[node.assetId]} />
   {:else if node.type === 'table'}
     <table class="table">
       {#if node.headerRow && node.rows.length > 0}
@@ -42,7 +47,7 @@
           <tr>
             {#each node.rows[0] ?? [] as cell, colIndex}
               <th style:text-align={node.align[colIndex] ?? 'left'}>
-                <RenderNodes nodes={cell} />
+                <RenderNodes nodes={cell} {images} />
               </th>
             {/each}
           </tr>
@@ -53,7 +58,7 @@
           <tr>
             {#each row as cell, colIndex}
               <td style:text-align={node.align[colIndex] ?? 'left'}>
-                <RenderNodes nodes={cell} />
+                <RenderNodes nodes={cell} {images} />
               </td>
             {/each}
           </tr>
@@ -88,10 +93,6 @@
     color: var(--accent-strong);
     text-decoration: underline;
     text-underline-offset: 2px;
-  }
-  .image-ref {
-    color: var(--text-muted);
-    font-size: var(--text-sm);
   }
   /* Table reference card (spec §24.6). Row separation is a background band,
      never a nested border inside the block's own surface. */

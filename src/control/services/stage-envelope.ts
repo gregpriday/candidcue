@@ -28,7 +28,7 @@ import {
 } from '../../shared/optics';
 import { resolveFollowProfile, type FollowingSettings } from '../lib/follow-profiles';
 import { automaticProfile, type AutomaticProfileSeed } from '../../shared/optical-discovery';
-import { invokeOrMock } from './ipc';
+import { localImageRequests, resolveAssetUrls } from './assets';
 import {
   activeOpticalProfile,
   DEFAULT_STAGE_APPEARANCE,
@@ -604,21 +604,8 @@ export async function resolveDocumentAssets(
   // The compiler's `img-<hash>` ids are node keys derived from the authored
   // URL, never database ids, so the href must travel with them: Rust resolves
   // by canonical path and answers under the id we sent (§24.1).
-  const local = script.assets
-    .filter((a) => !a.remote && a.kind === 'image')
-    .map((a) => ({ id: a.id, href: a.href }));
-  if (local.length === 0) return {};
   try {
-    const entries = await invokeOrMock<Record<string, { url: string; mime: string }>>(
-      'resolve_asset_urls',
-      { scriptId: script.scriptId, assetsToResolve: local },
-      () => ({}),
-    );
-    const resolved: StageRenderDocument['assets'] = {};
-    for (const [id, entry] of Object.entries(entries)) {
-      resolved[id] = { url: entry.url, mime: entry.mime };
-    }
-    return resolved;
+    return await resolveAssetUrls(script.scriptId, localImageRequests(script.assets));
   } catch {
     // Unresolvable assets degrade to alt text on the stage (§24.2).
     return {};
