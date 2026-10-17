@@ -14,7 +14,7 @@
 //! holds, and the two would drift.
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, PhysicalPosition, PhysicalSize};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize};
 
 use crate::errors::AppError;
 use crate::menu::{self, MenuItemState};
@@ -381,12 +381,155 @@ pub async fn open_third_party_notices<R: tauri::Runtime>(
 /// teleprompter panel. Only the frame the window has while the app is being
 /// worked in is recorded, and `present.rs` suspends recording for the length of
 /// a take.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+///
+/// The numbers are in the platform's desktop space, [`FrameSpace::native`] —
+/// points on macOS, physical pixels elsewhere. Never raw `outer_position()`
+/// numbers on macOS: [`measure_frame`] is the one way in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowFrame {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+/// The units a frame is measured in — the one space every display on this
+/// platform shares.
+///
+/// The window and every monitor have to be compared in a space where the
+/// monitors TILE, and which space that is depends on the platform:
+///
+///   - macOS: global points. tao reports a window's geometry as points times
+///     the window's own scale, and each monitor's as points times THAT
+///     monitor's scale, so in "physical" numbers a 2x laptop and a 1x external
+///     overlap rather than sitting side by side. A physical setter is also
+///     divided by the scale of whichever display the window is on when tao
+///     handles it, which at launch is the primary. A frame left on a 1x
+///     external came back at half its coordinates and half its size on the
+///     laptop, and with the displays the other way round it came back on no
+///     display at all (#270). `present.rs` met the same trap in the opposite
+///     direction and moves in logical units for the same reason.
+///   - Windows (per-monitor DPI v2) and X11: one contiguous virtual desktop in
+///     physical pixels. Here it is the LOGICAL setter that goes wrong — tao
+///     multiplies a logical value by the window's current scale, not the
+///     target monitor's — so physical stays physical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FrameSpace {
+    Logical,
+    Physical,
+}
+
+impl FrameSpace {
+    /// This platform's space. `cfg!` rather than `#[cfg]` so both arms compile,
+    /// and are tested, on every platform — CI only runs macOS.
+    pub fn native() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Logical
+        } else {
+            Self::Physical
+        }
+    }
+}
+
+/// What `window-frame.json` holds: the frame, and the space it was taken in.
+///
+/// `space` is absent from every file written before #270, and what those
+/// numbers mean depends on the platform — see [`interpret_stored`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct StoredFrame {
+    #[serde(flatten)]
+    frame: WindowFrame,
+    #[serde(default)]
+    space: Option<FrameSpace>,
+}
+
+/// The control window's minimum size in points. Mirrors `minWidth`/`minHeight`
+/// in tauri.conf.json, so a clamp cannot produce a window the user could not
+/// have made themselves.
+const MIN_WIDTH_POINTS: u32 = 980;
+const MIN_HEIGHT_POINTS: u32 = 680;
+
+/// A scale tao reported, if it is one that can be divided by.
+fn usable_scale(scale: f64) -> Option<f64> {
+    (scale.is_finite() && scale > 0.0).then_some(scale)
+}
+
+/// Physical geometry measured at `scale`, expressed in `space`.
+///
+/// `scale` is the scale the numbers were MULTIPLIED by: the window's own for a
+/// window, the monitor's own for a monitor. That is the whole fix — each
+/// rectangle is divided by its own scale rather than by whichever display the
+/// window happens to be on.
+fn frame_from_physical(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+    space: FrameSpace,
+) -> WindowFrame {
+    let to_space = |value: f64| match space {
+        FrameSpace::Logical => (value / scale).round(),
+        FrameSpace::Physical => value,
+    };
+    WindowFrame {
+        x: to_space(position.x as f64) as i32,
+        y: to_space(position.y as f64) as i32,
+        width: to_space(size.width as f64) as u32,
+        height: to_space(size.height as f64) as u32,
+    }
+}
+
+/// The control window's current frame, in [`FrameSpace::native`]. What the
+/// recorder in `app.rs` stores.
+///
+/// Here, beside the restore, so that recording and replay cannot disagree
+/// about units.
+///
+/// `None` when the measurement cannot be trusted: a getter failed, or the
+/// window's scale changed between the reads, which means it crossed displays
+/// while being measured and the numbers belong to two different scales. The
+/// recorder skips that write; the move still settling produces another event.
+pub fn measure_frame<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Option<WindowFrame> {
+    let scale = usable_scale(window.scale_factor().ok()?)?;
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    if window.scale_factor().ok()? != scale {
+        return None;
+    }
+    Some(frame_from_physical(position, size, scale, FrameSpace::native()))
+}
+
+/// What a stored frame means in `native` space, or `None` when it cannot be
+/// trusted.
+///
+/// A file written before #270 has no `space`. Off macOS its numbers were
+/// already physical desktop pixels, so they are used as they are. On macOS
+/// they are physical pixels at the scale of whichever display the window was
+/// left on, which the file never said. They are read at `legacy_scale`, the
+/// primary display's: exact on every desk whose displays share a scale, and no
+/// worse than the restore that wrote them on a mixed one. Guessing the scale
+/// per frame is not better, because on a mixed desk more than one guess lands
+/// on a display at its own scale. The next recorded move rewrites the file in
+/// the new form.
+///
+/// A frame tagged with the OTHER platform's space is refused rather than
+/// converted: nothing this app writes produces one.
+fn interpret_stored(
+    stored: StoredFrame,
+    native: FrameSpace,
+    legacy_scale: f64,
+) -> Option<WindowFrame> {
+    let frame = stored.frame;
+    match stored.space {
+        Some(space) if space == native => Some(frame),
+        Some(_) => None,
+        None => Some(frame_from_physical(
+            PhysicalPosition::new(frame.x, frame.y),
+            PhysicalSize::new(frame.width, frame.height),
+            legacy_scale,
+            native,
+        )),
+    }
 }
 
 /// Where the frame is kept.
@@ -425,7 +568,11 @@ pub fn write_frame(paths: &DataPaths, frame: WindowFrame) -> Result<(), AppError
         return Ok(());
     }
     let path = frame_path(paths);
-    let json = serde_json::to_vec_pretty(&frame)
+    let stored = StoredFrame {
+        frame,
+        space: Some(FrameSpace::native()),
+    };
+    let json = serde_json::to_vec_pretty(&stored)
         .map_err(|e| AppError::Internal(format!("the window frame could not be encoded: {e}")))?;
     std::fs::write(&path, json)
         .map_err(|e| AppError::Internal(format!("the window frame could not be written: {e}")))?;
@@ -444,7 +591,7 @@ pub fn restore_window_frame(app: &tauri::AppHandle) {
     let Ok(bytes) = std::fs::read(frame_path(&paths)) else {
         return;
     };
-    let Ok(frame) = serde_json::from_slice::<WindowFrame>(&bytes) else {
+    let Ok(stored) = serde_json::from_slice::<StoredFrame>(&bytes) else {
         tracing::warn!("the stored window frame could not be read; using the default");
         return;
     };
@@ -472,15 +619,79 @@ pub fn restore_window_frame(app: &tauri::AppHandle) {
      * `work_area` rather than `size`, so the macOS menu bar and the Windows
      * taskbar are excluded — a window restored under the taskbar is one whose
      * title bar cannot be grabbed.
+     *
+     * The primary goes FIRST, because the first area is where a frame whose
+     * display is gone gets centred. Enumeration order is not a promise of that
+     * on every platform, and this list is local, so reordering it disturbs no
+     * index anything else holds.
      */
-    let monitors = window.available_monitors().unwrap_or_default();
-    let Some(fitted) = fit_to_monitors(frame, &monitors) else {
+    let space = FrameSpace::native();
+    let mut monitors = window.available_monitors().unwrap_or_default();
+    let primary = window.primary_monitor().ok().flatten();
+    if let Some(primary) = &primary {
+        if let Some(index) = monitors.iter().position(|monitor| {
+            monitor.position() == primary.position() && monitor.size() == primary.size()
+        }) {
+            let primary = monitors.remove(index);
+            monitors.insert(0, primary);
+        }
+    }
+
+    let legacy_scale = primary
+        .as_ref()
+        .and_then(|monitor| usable_scale(monitor.scale_factor()))
+        .or_else(|| window.scale_factor().ok().and_then(usable_scale))
+        .unwrap_or(1.0);
+    let Some(frame) = interpret_stored(stored, space, legacy_scale) else {
+        tracing::info!("the stored window frame is in another platform's units; using the default");
+        return;
+    };
+    let Some(fitted) = fit_to_monitors(frame, &monitors, space) else {
         tracing::info!("no monitor can hold the stored window frame; using the default");
         return;
     };
 
-    let _ = window.set_size(PhysicalSize::new(fitted.width, fitted.height));
-    let _ = window.set_position(PhysicalPosition::new(fitted.x, fitted.y));
+    for placement in placements(fitted, space) {
+        let _ = match placement {
+            Placement::Size(size) => window.set_size(size),
+            Placement::Position(position) => window.set_position(position),
+        };
+    }
+}
+
+/// One setter call a restore makes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Placement {
+    Size(tauri::Size),
+    Position(tauri::Position),
+}
+
+/// The setter calls that put the window at `fitted`, in the units and the order
+/// `space` needs.
+///
+/// Points (macOS): size, then position. tao sets the size through
+/// `setContentSize`, which keeps the window's BOTTOM-left corner where it is,
+/// so a position applied first would have its top edge moved by the resize.
+///
+/// Physical (Windows): position and size, twice. Windows changes a window's
+/// DPI once most of it is on a display of another DPI, and tao answers
+/// `WM_DPICHANGED` by rescaling the window. Which call sets that off depends on
+/// how much of the launch-sized window the first move leaves behind — the move
+/// itself, or the resize after it — and whichever it is, the size it rescales
+/// is the one just applied. By the second pass the window is on its
+/// destination at that display's DPI, and nothing rescales the numbers it sets.
+fn placements(fitted: WindowFrame, space: FrameSpace) -> Vec<Placement> {
+    match space {
+        FrameSpace::Logical => vec![
+            Placement::Size(LogicalSize::new(fitted.width as f64, fitted.height as f64).into()),
+            Placement::Position(LogicalPosition::new(fitted.x as f64, fitted.y as f64).into()),
+        ],
+        FrameSpace::Physical => {
+            let position = Placement::Position(PhysicalPosition::new(fitted.x, fitted.y).into());
+            let size = Placement::Size(PhysicalSize::new(fitted.width, fitted.height).into());
+            vec![position, size, position, size]
+        }
+    }
 }
 
 /// A monitor's usable rectangle, as plain numbers.
@@ -488,25 +699,54 @@ pub fn restore_window_frame(app: &tauri::AppHandle) {
 /// Extracted so `fit_to_monitors` is pure and testable: the real
 /// `tauri::Monitor` cannot be constructed without a running event loop, and the
 /// geometry rules here are exactly the part worth testing.
+///
+/// In the same space as the frame being fitted, and so is the minimum: the
+/// control window's minimum is declared in points, which on a physical-space
+/// desk is a different number of pixels on every display.
 #[derive(Debug, Clone, Copy)]
 pub struct WorkArea {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub min_width: u32,
+    pub min_height: u32,
 }
 
-fn fit_to_monitors(frame: WindowFrame, monitors: &[tauri::Monitor]) -> Option<WindowFrame> {
+/// One monitor's usable rectangle as tao reports it — physical, at the
+/// monitor's own `scale` — expressed in `space`.
+fn work_area_from_physical(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+    space: FrameSpace,
+) -> WorkArea {
+    let rect = frame_from_physical(position, size, scale, space);
+    let min = |points: u32| match space {
+        FrameSpace::Logical => points,
+        FrameSpace::Physical => (points as f64 * scale).round() as u32,
+    };
+    WorkArea {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        min_width: min(MIN_WIDTH_POINTS),
+        min_height: min(MIN_HEIGHT_POINTS),
+    }
+}
+
+fn fit_to_monitors(
+    frame: WindowFrame,
+    monitors: &[tauri::Monitor],
+    space: FrameSpace,
+) -> Option<WindowFrame> {
     let areas: Vec<WorkArea> = monitors
         .iter()
         .map(|monitor| {
             let area = monitor.work_area();
-            WorkArea {
-                x: area.position.x,
-                y: area.position.y,
-                width: area.size.width,
-                height: area.size.height,
-            }
+            let scale = usable_scale(monitor.scale_factor()).unwrap_or(1.0);
+            work_area_from_physical(area.position, area.size, scale, space)
         })
         .collect();
     fit_frame(frame, &areas)
@@ -526,32 +766,32 @@ pub fn fit_frame(frame: WindowFrame, areas: &[WorkArea]) -> Option<WindowFrame> 
         return None;
     }
 
+    // In i64 throughout: the frame comes from a file, and a corrupt one with an
+    // edge near `i32::MAX` must not overflow on the way to being refused.
     let overlap = |area: &WorkArea| -> i64 {
-        let left = frame.x.max(area.x);
-        let top = frame.y.max(area.y);
-        let right = (frame.x + frame.width as i32).min(area.x + area.width as i32);
-        let bottom = (frame.y + frame.height as i32).min(area.y + area.height as i32);
-        let w = (right - left).max(0) as i64;
-        let h = (bottom - top).max(0) as i64;
-        w * h
+        let left = (frame.x as i64).max(area.x as i64);
+        let top = (frame.y as i64).max(area.y as i64);
+        let right = (frame.x as i64 + frame.width as i64).min(area.x as i64 + area.width as i64);
+        let bottom = (frame.y as i64 + frame.height as i64).min(area.y as i64 + area.height as i64);
+        (right - left).max(0) * (bottom - top).max(0)
     };
 
     // Most overlap wins; with none anywhere (the display is gone) the first
-    // monitor is the primary and the window is centred on it below.
+    // monitor is the primary and the window is centred on it below. Ties go to
+    // the EARLIER area: `max_by_key` returns the last maximum, which with no
+    // overlap anywhere centred the window on whichever monitor was enumerated
+    // last rather than on the primary.
     let best = areas
         .iter()
-        .max_by_key(|area| overlap(area))
         .copied()
+        .reduce(|best, area| if overlap(&area) > overlap(&best) { area } else { best })
         .expect("areas is non-empty");
     let has_overlap = overlap(&best) > 0;
 
-    // Never larger than the area it is going into. `MIN_*` mirrors the
-    // `minWidth`/`minHeight` in tauri.conf.json so a clamp cannot produce a
-    // window the user could not have made themselves.
-    const MIN_W: u32 = 980;
-    const MIN_H: u32 = 680;
-    let width = frame.width.min(best.width).max(MIN_W.min(best.width));
-    let height = frame.height.min(best.height).max(MIN_H.min(best.height));
+    // Never larger than the area it is going into, and never smaller than the
+    // window's declared minimum on that display.
+    let width = frame.width.min(best.width).max(best.min_width.min(best.width));
+    let height = frame.height.min(best.height).max(best.min_height.min(best.height));
 
     if !has_overlap {
         // Centred rather than nudged: a window restored to the middle of a
@@ -580,8 +820,356 @@ pub fn fit_frame(frame: WindowFrame, areas: &[WorkArea]) -> Option<WindowFrame> 
 mod tests {
     use super::*;
 
-    const LAPTOP: WorkArea = WorkArea { x: 0, y: 25, width: 1512, height: 907 };
-    const EXTERNAL: WorkArea = WorkArea { x: 1512, y: 0, width: 2560, height: 1440 };
+    const LAPTOP: WorkArea = WorkArea {
+        x: 0,
+        y: 25,
+        width: 1512,
+        height: 907,
+        min_width: MIN_WIDTH_POINTS,
+        min_height: MIN_HEIGHT_POINTS,
+    };
+    const EXTERNAL: WorkArea = WorkArea {
+        x: 1512,
+        y: 0,
+        width: 2560,
+        height: 1440,
+        min_width: MIN_WIDTH_POINTS,
+        min_height: MIN_HEIGHT_POINTS,
+    };
+
+    fn frame(x: i32, y: i32, width: u32, height: u32) -> WindowFrame {
+        WindowFrame { x, y, width, height }
+    }
+
+    /// A rectangle in points as tao reports it on macOS: multiplied by `scale`
+    /// and rounded, with the same `dpi` conversion tao uses.
+    fn mac_physical(points: WindowFrame, scale: f64) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+        (
+            LogicalPosition::new(points.x as f64, points.y as f64).to_physical(scale),
+            LogicalSize::new(points.width as f64, points.height as f64).to_physical(scale),
+        )
+    }
+
+    /// What tao on macOS reports for a monitor whose usable area is this
+    /// rectangle in POINTS: origin and size both multiplied by the monitor's
+    /// own scale (`tauri-runtime-wry`'s `monitor/macos.rs::work_area`).
+    fn mac_work_area(points: WindowFrame, scale: f64) -> WorkArea {
+        let (position, size) = mac_physical(points, scale);
+        work_area_from_physical(position, size, scale, FrameSpace::Logical)
+    }
+
+    /// What the recorder stores on macOS for a window at this frame in points,
+    /// on a display of `scale`: tao's `outer_position`/`inner_size` multiply by
+    /// the window's scale, and `measure_frame` divides it back out.
+    fn mac_record(points: WindowFrame, scale: f64) -> WindowFrame {
+        let (position, size) = mac_physical(points, scale);
+        frame_from_physical(position, size, scale, FrameSpace::Logical)
+    }
+
+    /// Where tao on macOS puts a window given these setter calls, in points. A
+    /// logical value already is points; a physical one is divided by the scale
+    /// of the display the window is on when the call is handled, which at
+    /// launch is the primary (`platform_impl/macos/window.rs`).
+    fn mac_apply(placements: &[Placement], launch_scale: f64) -> WindowFrame {
+        let mut placed = frame(0, 0, 0, 0);
+        for placement in placements {
+            match placement {
+                Placement::Size(size) => {
+                    let size = size.to_logical::<f64>(launch_scale);
+                    placed.width = size.width.round() as u32;
+                    placed.height = size.height.round() as u32;
+                }
+                Placement::Position(position) => {
+                    let position = position.to_logical::<f64>(launch_scale);
+                    placed.x = position.x.round() as i32;
+                    placed.y = position.y.round() as i32;
+                }
+            }
+        }
+        placed
+    }
+
+    /// Record, quit, relaunch, restore — then record what the restore produced
+    /// and do it again, because the recorder writes the restored frame back
+    /// and a restore that drifts loses the arrangement for every later launch.
+    fn assert_round_trips(
+        left: WindowFrame,
+        window_scale: f64,
+        launch_scale: f64,
+        areas: &[WorkArea],
+    ) {
+        let mut on_screen = left;
+        for launch in 1..=3 {
+            let recorded = StoredFrame {
+                frame: mac_record(on_screen, window_scale),
+                space: Some(FrameSpace::Logical),
+            };
+            let json = serde_json::to_vec(&recorded).expect("encodes");
+            let stored: StoredFrame = serde_json::from_slice(&json).expect("parses");
+            let frame = interpret_stored(stored, FrameSpace::Logical, launch_scale).expect("native");
+            let fitted = fit_frame(frame, areas).expect("a monitor");
+            on_screen = mac_apply(&placements(fitted, FrameSpace::Logical), launch_scale);
+            assert_eq!(on_screen, left, "launch {launch} moved the window");
+        }
+    }
+
+    /*
+     * The three arrangements in #270, which reopened at half the coordinates,
+     * then off every display, then correctly.
+     */
+
+    #[test]
+    fn restores_onto_a_1x_external_beside_a_2x_primary() {
+        let macbook = mac_work_area(frame(0, 25, 1512, 957), 2.0);
+        let external = mac_work_area(frame(1512, 0, 2560, 1440), 1.0);
+        assert_round_trips(frame(2000, 200, 1240, 820), 1.0, 2.0, &[macbook, external]);
+    }
+
+    #[test]
+    fn restores_onto_a_2x_laptop_left_of_a_1x_primary() {
+        // The laptop sits at negative x, the arrangement that used to come
+        // back at (-2800, 200), on no display.
+        let external = mac_work_area(frame(0, 25, 2560, 1415), 1.0);
+        let macbook = mac_work_area(frame(-1512, 0, 1512, 982), 2.0);
+        assert_round_trips(frame(-1400, 100, 1240, 820), 2.0, 1.0, &[external, macbook]);
+    }
+
+    #[test]
+    fn restores_between_two_2x_displays() {
+        let macbook = mac_work_area(frame(0, 25, 1512, 957), 2.0);
+        let external = mac_work_area(frame(1512, 0, 2560, 1440), 2.0);
+        assert_round_trips(frame(2000, 200, 1240, 820), 2.0, 2.0, &[macbook, external]);
+    }
+
+    #[test]
+    fn the_model_reproduces_the_old_restore() {
+        // The pipeline this replaced, under the same model of tao: raw
+        // physical frame, raw physical work areas, physical setters. It has to
+        // land where #270 says it did, or the tests above are tests of a model
+        // that never had the bug.
+        let raw = |points: WindowFrame, scale: f64| {
+            let (position, size) = mac_physical(points, scale);
+            work_area_from_physical(position, size, scale, FrameSpace::Physical)
+        };
+        let old = |left: WindowFrame, window_scale: f64, launch_scale: f64, areas: &[WorkArea]| {
+            let (position, size) = mac_physical(left, window_scale);
+            let stored = frame_from_physical(position, size, window_scale, FrameSpace::Physical);
+            let fitted = fit_frame(stored, areas).expect("a monitor");
+            let setters = [
+                Placement::Size(PhysicalSize::new(fitted.width, fitted.height).into()),
+                Placement::Position(PhysicalPosition::new(fitted.x, fitted.y).into()),
+            ];
+            mac_apply(&setters, launch_scale)
+        };
+
+        let macbook = raw(frame(0, 25, 1512, 957), 2.0);
+        let external = raw(frame(1512, 0, 2560, 1440), 1.0);
+        assert_eq!(
+            old(frame(2000, 200, 1240, 820), 1.0, 2.0, &[macbook, external]),
+            frame(1000, 100, 620, 410)
+        );
+
+        let external = raw(frame(0, 25, 2560, 1415), 1.0);
+        let macbook = raw(frame(-1512, 0, 1512, 982), 2.0);
+        assert_eq!(
+            old(frame(-1400, 100, 1240, 820), 2.0, 1.0, &[external, macbook]),
+            frame(-2800, 200, 2480, 1640)
+        );
+    }
+
+    #[test]
+    fn rounds_odd_pixels_once_and_then_holds() {
+        let measured = frame_from_physical(
+            PhysicalPosition::new(-2801, 401),
+            PhysicalSize::new(2481, 1641),
+            2.0,
+            FrameSpace::Logical,
+        );
+        assert_eq!(measured, frame(-1401, 201, 1241, 821));
+        assert_eq!(mac_record(measured, 2.0), measured);
+    }
+
+    #[test]
+    fn applies_points_once_and_pixels_twice() {
+        let fitted = frame(2000, 200, 1240, 820);
+        assert_eq!(
+            placements(fitted, FrameSpace::Logical),
+            vec![
+                Placement::Size(LogicalSize::new(1240.0, 820.0).into()),
+                Placement::Position(LogicalPosition::new(2000.0, 200.0).into()),
+            ]
+        );
+        let position = Placement::Position(PhysicalPosition::new(2000, 200).into());
+        let size = Placement::Size(PhysicalSize::new(1240u32, 820u32).into());
+        assert_eq!(
+            placements(fitted, FrameSpace::Physical),
+            vec![position, size, position, size]
+        );
+    }
+
+    #[test]
+    fn survives_absurd_coordinates() {
+        let fitted = fit_frame(frame(i32::MAX, i32::MIN, u32::MAX, u32::MAX), &[LAPTOP])
+            .expect("a monitor");
+        assert!(fitted.x >= LAPTOP.x && fitted.y >= LAPTOP.y);
+        assert!(fitted.width <= LAPTOP.width && fitted.height <= LAPTOP.height);
+    }
+
+    #[test]
+    fn divides_each_monitor_by_its_own_scale() {
+        let laptop = work_area_from_physical(
+            PhysicalPosition::new(0, 50),
+            PhysicalSize::new(3024, 1914),
+            2.0,
+            FrameSpace::Logical,
+        );
+        assert_eq!(
+            (laptop.x, laptop.y, laptop.width, laptop.height),
+            (0, 25, 1512, 957)
+        );
+        assert_eq!((laptop.min_width, laptop.min_height), (980, 680));
+
+        let left = work_area_from_physical(
+            PhysicalPosition::new(-3024, 0),
+            PhysicalSize::new(3024, 1964),
+            2.0,
+            FrameSpace::Logical,
+        );
+        assert_eq!((left.x, left.width), (-1512, 1512));
+    }
+
+    #[test]
+    fn leaves_a_physical_desktop_alone() {
+        // Windows: one contiguous physical space, whatever each display's DPI.
+        let wide = work_area_from_physical(
+            PhysicalPosition::new(1920, 0),
+            PhysicalSize::new(3840, 2100),
+            1.5,
+            FrameSpace::Physical,
+        );
+        assert_eq!((wide.x, wide.y, wide.width, wide.height), (1920, 0, 3840, 2100));
+        // The minimum is declared in points, so it is 1.5x as many pixels here.
+        assert_eq!((wide.min_width, wide.min_height), (1470, 1020));
+
+        let measured = frame_from_physical(
+            PhysicalPosition::new(2500, 300),
+            PhysicalSize::new(1860, 1230),
+            1.5,
+            FrameSpace::Physical,
+        );
+        assert_eq!(measured, frame(2500, 300, 1860, 1230));
+        let narrow = work_area_from_physical(
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(1920, 1040),
+            1.0,
+            FrameSpace::Physical,
+        );
+        assert_eq!(fit_frame(measured, &[narrow, wide]), Some(measured));
+    }
+
+    #[test]
+    fn grows_to_the_displays_minimum_before_clamping() {
+        // A frame at the 1x minimum, restored onto a 1.5x display at its right
+        // edge. Windows would enlarge it to 1470 px after the clamp and push it
+        // off the display; the fit has to do the enlarging itself.
+        let wide = work_area_from_physical(
+            PhysicalPosition::new(1920, 0),
+            PhysicalSize::new(3840, 2100),
+            1.5,
+            FrameSpace::Physical,
+        );
+        let fitted = fit_frame(frame(1920 + 3840 - 980, 300, 980, 680), &[wide]).expect("a monitor");
+        assert_eq!((fitted.width, fitted.height), (1470, 1020));
+        assert_eq!(fitted.x + fitted.width as i32, 1920 + 3840);
+    }
+
+    #[test]
+    fn centres_on_the_first_area_when_the_display_is_gone() {
+        // `max_by_key` used to hand a zero-overlap tie to the LAST area.
+        let frame = frame(9000, 200, 1240, 820);
+        let fitted = fit_frame(frame, &[LAPTOP, EXTERNAL]).expect("a monitor");
+        assert!(fitted.x >= LAPTOP.x);
+        assert!(fitted.x + fitted.width as i32 <= LAPTOP.x + LAPTOP.width as i32);
+        let fitted = fit_frame(frame, &[EXTERNAL, LAPTOP]).expect("a monitor");
+        assert!(fitted.x >= EXTERNAL.x);
+    }
+
+    #[test]
+    fn reads_a_legacy_mac_frame_at_the_primary_scale() {
+        let legacy = StoredFrame { frame: frame(2000, 400, 2480, 1640), space: None };
+        assert_eq!(
+            interpret_stored(legacy, FrameSpace::Logical, 2.0),
+            Some(frame(1000, 200, 1240, 820))
+        );
+        assert_eq!(
+            interpret_stored(legacy, FrameSpace::Logical, 1.0),
+            Some(legacy.frame)
+        );
+    }
+
+    #[test]
+    fn reads_a_legacy_physical_frame_unchanged() {
+        let legacy = StoredFrame { frame: frame(2000, 400, 2480, 1640), space: None };
+        assert_eq!(
+            interpret_stored(legacy, FrameSpace::Physical, 1.5),
+            Some(legacy.frame)
+        );
+    }
+
+    #[test]
+    fn never_converts_a_tagged_frame_twice() {
+        let tagged = StoredFrame {
+            frame: frame(2000, 200, 1240, 820),
+            space: Some(FrameSpace::Logical),
+        };
+        assert_eq!(interpret_stored(tagged, FrameSpace::Logical, 2.0), Some(tagged.frame));
+    }
+
+    #[test]
+    fn refuses_a_frame_tagged_with_the_other_space() {
+        let tagged = StoredFrame {
+            frame: frame(2000, 200, 1240, 820),
+            space: Some(FrameSpace::Physical),
+        };
+        assert_eq!(interpret_stored(tagged, FrameSpace::Logical, 2.0), None);
+    }
+
+    #[test]
+    fn parses_old_and_new_files() {
+        let old: StoredFrame =
+            serde_json::from_str(r#"{"x":-1,"y":2,"width":1240,"height":820}"#).expect("parses");
+        assert_eq!(old, StoredFrame { frame: frame(-1, 2, 1240, 820), space: None });
+
+        let new: StoredFrame = serde_json::from_str(
+            r#"{"x":-1,"y":2,"width":1240,"height":820,"space":"logical"}"#,
+        )
+        .expect("parses");
+        assert_eq!(new.space, Some(FrameSpace::Logical));
+
+        assert!(serde_json::from_str::<StoredFrame>(
+            r#"{"x":0,"y":0,"width":1240,"height":820,"space":"furlongs"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn writes_the_native_space() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let paths = DataPaths::new(dir.path().to_path_buf());
+        write_frame(&paths, frame(10, 20, 1240, 820)).expect("written");
+        let bytes = std::fs::read(frame_path(&paths)).expect("a file");
+        let stored: StoredFrame = serde_json::from_slice(&bytes).expect("parses");
+        assert_eq!(
+            stored,
+            StoredFrame { frame: frame(10, 20, 1240, 820), space: Some(FrameSpace::native()) }
+        );
+
+        // A frame under the floor leaves the previous one where it was.
+        write_frame(&paths, frame(0, 0, 0, 0)).expect("declined quietly");
+        let bytes = std::fs::read(frame_path(&paths)).expect("a file");
+        let kept: StoredFrame = serde_json::from_slice(&bytes).expect("parses");
+        assert_eq!(kept, stored);
+    }
 
     #[test]
     fn leaves_a_frame_that_already_fits_alone() {
