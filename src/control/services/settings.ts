@@ -665,9 +665,13 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
    * "not migrated yet" would put the old global straight back on the glass at
    * the next launch. Rust keeps `None` and `{}` apart for exactly this.
    *
-   * The old switch is read the way it was RENDERED, which is the overlay's
-   * copy over Rust's: `mirrorX` used to round-trip through both and the merge
-   * below let the overlay win, and `mirrorY` never reached Rust at all.
+   * The horizontal switch is the DOCUMENT's, never the overlay's copy (#271).
+   * `mirrorX` used to round-trip through both, so the two agree for anybody
+   * whose saves succeeded — and where they disagree, it is because the
+   * document changed without the overlay, which is exactly what Settings ›
+   * Data › Restore does. Reading the overlay there carried the pre-restore
+   * mirror onto the glass of a restored install. `mirrorY` never reached Rust
+   * at all, so the overlay is the only record of it and is still read.
    */
   const rustOwnsPanelMirror = isPlainObject(rust.optical?.panelMirror);
   /* Monotonic, for the same reason as the mode above. */
@@ -676,10 +680,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     ? overlay.teleprompter
     : {};
   const legacyMirror = {
-    horizontal:
-      typeof overlayTeleprompter['mirrorX'] === 'boolean'
-        ? overlayTeleprompter['mirrorX']
-        : rust.stageBehavior.horizontalMirror === true,
+    horizontal: rust.stageBehavior.horizontalMirror === true,
     vertical: overlayTeleprompter['mirrorY'] === true,
   };
   const carriedMirror = carriedPanelMirror(
@@ -720,7 +721,16 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
 
   return {
     ...mapped,
-    general: mergeSection(mapped.general, overlay.general),
+    // Both Rust-owned fields are spread over the merge, the way `stage` and
+    // `audio` do theirs (#271). An older build cached them in the overlay on
+    // every save, and a document restored from a backup arrives without that
+    // overlay changing — so a merge alone showed the pre-restore launch choice,
+    // and the next save in this section wrote it back over the restored one.
+    general: {
+      ...mergeSection(mapped.general, overlay.general),
+      launchBehavior: mapped.general.launchBehavior,
+      defaultSessionMode: mapped.general.defaultSessionMode,
+    },
     // The recogniser name and locale are Rust-owned: they describe what
     // is built from, and an overlay disagreeing with the document would mean
     // the session declares one language and the settings screen shows another.
@@ -731,7 +741,13 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       ...mergeSection(mapped.audio, overlay.audio),
       vadSensitivity: mapped.audio.vadSensitivity,
     },
-    teleprompter: withoutLegacyMirror(mergeSection(mapped.teleprompter, overlay.teleprompter)),
+    // `fixedSpeedWpm` is Rust-owned and wins, for the same reason as the two in
+    // `general` (#271). `hidePointer` has the same shape and is deliberately
+    // left on the merge: #218 removes it.
+    teleprompter: withoutLegacyMirror({
+      ...mergeSection(mapped.teleprompter, overlay.teleprompter),
+      fixedSpeedWpm: mapped.teleprompter.fixedSpeedWpm,
+    }),
     // All three are UI-only sections with no Rust twin, so the overlay IS the
     // document for them. A merge that is missing here does not fail loudly —
     // the setting simply reverts on every read, which is how a control ends up
@@ -861,7 +877,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
  * Everything in the patch persists in the overlay so the UI view sticks —
  * except `following` (§47) and `speech` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
- * otherwise-overlaid sections (`audio.vadSensitivity` §28.4).
+ * otherwise-overlaid sections (`audio.vadSensitivity` §28.4, the stage mode and
+ * reader frame, `general.launchBehavior`/`defaultSessionMode` and
+ * `teleprompter.fixedSpeedWpm` #271).
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
@@ -904,6 +922,21 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       // The retired predecessor goes with it: it is only ever read as a stand-in
       // for a mode Rust does not hold, and Rust holds one by now.
       delete merged.fullscreen;
+    }
+    if (key === 'general') {
+      // Both persisted by Rust (`openTo`, `promptMode`). A copy here outlived
+      // every restore and was read back over the restored document (#271).
+      delete merged.launchBehavior;
+      delete merged.defaultSessionMode;
+    }
+    if (key === 'teleprompter') {
+      // `stageBehavior.fixedSpeedWpm`, for the same reason as `general`.
+      delete merged.fixedSpeedWpm;
+      // The retired global switch (#206) is read from the document now, so the
+      // overlay's copy is a second answer nobody asks for. `mirrorY` STAYS: it
+      // never reached Rust, and the per-panel move still needs it until a pin
+      // or a calibration names the glass.
+      delete merged.mirrorX;
     }
     (overlay as Record<string, object>)[key] = merged;
   }
