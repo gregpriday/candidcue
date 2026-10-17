@@ -21,6 +21,12 @@
  * So the decision is here and the component renders what it is given.
  */
 import type { SessionSummary, TakePart } from '../stores/session';
+import {
+  describeSetAside,
+  followingAssessed,
+  setAsideSeconds,
+  TOO_SHORT_SECONDS,
+} from './take-outcome';
 
 export interface SummaryActionsInput {
   /**
@@ -201,4 +207,52 @@ export function scriptFollowedLabel(
   const share =
     coverageWords > 0 ? ` (${Math.round((wordsFollowed / coverageWords) * 100)}%)` : '';
   return `${wordsFollowed} of ${coverageWords} words${span}${share}`;
+}
+
+/** The "Followed" row, its warning, and the "Not counted" row beside it. */
+export interface FollowedRow {
+  text: string;
+  /** Appended in the warning style, or null when there is nothing to warn of. */
+  warning: string | null;
+  /** The time left out of the share, or null to leave the row out. */
+  notCounted: string | null;
+}
+
+/**
+ * The "Followed" row, saying what it is a share OF (#287).
+ *
+ * It read "31% of the take — the stage spent most of it holding" over a take
+ * that followed every word it was given and was paused for a minute. The share
+ * is now out of the time following was on, and the row says so whenever that
+ * is not the whole take, with the time left out on a row of its own.
+ *
+ * Whether there is a share to show at all is the headline's own test
+ * (`followingAssessed`), so the card above it and this row cannot give two
+ * answers. A take with no voice following has no share to show either: the
+ * manual anchors that move it are not a voice being followed.
+ */
+export function followedLabel(
+  summary: Pick<SessionSummary, 'mode' | 'followingShare' | 'followingTime'>,
+): FollowedRow {
+  if (summary.mode !== 'voice') {
+    return { text: 'Not used on this take', warning: null, notCounted: null };
+  }
+  const time = summary.followingTime;
+  const notCounted = describeSetAside(time);
+  if (!followingAssessed(time)) {
+    return {
+      text: `Not assessed — following was on for under ${TOO_SHORT_SECONDS} seconds`,
+      warning: null,
+      notCounted,
+    };
+  }
+  if (summary.followingShare === null) {
+    return { text: 'No tracking this take', warning: null, notCounted };
+  }
+  const span = setAsideSeconds(time) > 0 ? 'the time following was on' : 'the take';
+  return {
+    text: `${Math.round(summary.followingShare * 100)}% of ${span}`,
+    warning: summary.followingShare < 0.6 ? '— the stage spent most of it holding' : null,
+    notCounted,
+  };
 }
