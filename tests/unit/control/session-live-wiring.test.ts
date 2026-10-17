@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { STAGE_EVENT } from '../../../src/shared/contracts';
-import type { CompiledScript } from '../../../src/shared/contracts';
+import type { AlignmentSnapshot, CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
@@ -438,27 +438,51 @@ describe('#214 — a take keeps its summary and its session row without the hist
 describe('#285 — sections reached counts sections, not paragraphs', () => {
   let seq = 0;
 
+  /**
+   * A complete snapshot, typed as the real subscription would demand it — the
+   * mocked feed forwards whatever it is given, so a short payload here would
+   * prove nothing about one that could cross the actual boundary.
+   */
+  function snapshotAt(
+    compiled: CompiledScript,
+    confirmedToken: number,
+    decision: AlignmentSnapshot['decision'] = 'localConfirmed',
+  ): AlignmentSnapshot {
+    seq += 1;
+    return {
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision,
+      confirmedToken,
+      observedToken: confirmedToken,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000 * seq,
+      atAudioMs: 1000 * seq,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: compiled.spokenTokens.length,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: compiled.spokenTokens.length,
+      observedAtom: Math.floor(confirmedToken),
+      confirmedAtom: Math.floor(confirmedToken),
+    } satisfies AlignmentSnapshot;
+  }
+
   /** Follow every sentence of `compiled`, in order, as a voice take would. */
-  function followAll(compiled: CompiledScript): void {
+  function followAll(
+    compiled: CompiledScript,
+    decision: AlignmentSnapshot['decision'] = 'localConfirmed',
+  ): void {
     for (const sentence of compiled.sentences) {
-      seq += 1;
-      alignmentFeed.push?.({
-        sessionGeneration: 7,
-        seq,
-        state: 'following',
-        decision: 'localConfirmed',
-        confirmedToken: sentence.endTokenIndex,
-        observedToken: sentence.endTokenIndex,
-        rateTokensPerSecond: 2,
-        evidenceAudioMs: 1000 * seq,
-        atAudioMs: 1000 * seq,
-        maxPredictionMs: 900,
-        confidence: 0.9,
-        suggestionToken: null,
-        scriptLenTokens: compiled.spokenTokens.length,
-        observedAtom: sentence.endTokenIndex,
-        confirmedAtom: sentence.endTokenIndex,
-      });
+      alignmentFeed.push?.(snapshotAt(compiled, sentence.endTokenIndex, decision));
     }
   }
 
@@ -474,18 +498,29 @@ describe('#285 — sections reached counts sections, not paragraphs', () => {
     return [1, 2, 3].map((n) => `The ${prefix} paragraph number ${n} is here.`).join('\n\n');
   }
 
+  /** Two sections, three paragraphs each, with no division into parts. */
+  function undivided(): CompiledScript {
+    const compiled = compile(
+      `# Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
+      { scriptId: 'script-1' },
+    );
+    expect(compiled.parts).toEqual([]);
+    return compiled;
+  }
+
   beforeEach(() => {
     seq = 0;
   });
 
   it('reports two sections for two headings over six paragraphs', async () => {
     // The issue's own script. Two headings at one level divide it into two
-    // parts, and the count is the same either way it is read.
+    // parts, so this is the parts path.
     const compiled = compile(
       `## Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
       { scriptId: 'script-1' },
     );
     expect(new Set(compiled.sentences.map((s) => s.blockId)).size).toBe(6);
+    expect((compiled.parts ?? []).map((p) => p.label)).toEqual(['Setup', 'Demo']);
     start({ compiled, sentences: compiled.sentences as never });
     await vi.advanceTimersByTimeAsync(0);
     followAll(compiled);
@@ -497,11 +532,7 @@ describe('#285 — sections reached counts sections, not paragraphs', () => {
   it('counts headings on a script that does not divide', async () => {
     // One H1 over one H2 has a single top-level heading, so there are no
     // parts, and the outline is what is counted.
-    const compiled = compile(
-      `# Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
-      { scriptId: 'script-1' },
-    );
-    expect(compiled.parts).toEqual([]);
+    const compiled = undivided();
     start({ compiled, sentences: compiled.sentences as never });
     await vi.advanceTimersByTimeAsync(0);
     followAll(compiled);
@@ -538,37 +569,59 @@ describe('#285 — sections reached counts sections, not paragraphs', () => {
   });
 
   it('counts a heading only once its first word is reached', async () => {
-    const compiled = compile(
-      `# Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
-      { scriptId: 'script-1' },
-    );
+    const compiled = undivided();
     const demo = compiled.outline[0]!.children[0]!;
     start({ compiled, sentences: compiled.sentences as never });
     await vi.advanceTimersByTimeAsync(0);
-    alignmentFeed.push?.({
-      sessionGeneration: 7,
-      seq: 1,
-      state: 'following',
-      decision: 'localConfirmed',
-      // Half a token short of the heading: still finishing the last section.
-      confirmedToken: demo.startTokenIndex - 0.5,
-      observedToken: demo.startTokenIndex,
-      rateTokensPerSecond: 2,
-      evidenceAudioMs: 1000,
-      atAudioMs: 1000,
-      maxPredictionMs: 900,
-      confidence: 0.9,
-      suggestionToken: null,
-      scriptLenTokens: compiled.spokenTokens.length,
-      observedAtom: demo.startTokenIndex,
-      confirmedAtom: demo.startTokenIndex - 1,
-    });
+    alignmentFeed.push?.(snapshotAt(compiled, compiled.sentences[0]!.endTokenIndex));
+    // Half a token short of the heading: still finishing the last section.
+    // Rounding would have put it in Demo.
+    alignmentFeed.push?.(snapshotAt(compiled, demo.startTokenIndex - 0.5));
+    expect(get(session).sectionsSeen).toHaveLength(1);
+
+    alignmentFeed.push?.(snapshotAt(compiled, demo.startTokenIndex));
+    expect(stopSession().sectionsReached).toBe(2);
+    expect(recordedSections()).toBe(2);
+  });
+
+  it('counts a document with no outline as one section, however many paragraphs', async () => {
+    // Degraded input — the compiler always emits an outline — but six
+    // paragraphs is still one script, not six sections.
+    const compiled = { ...undivided(), outline: [], parts: [] } as CompiledScript;
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled);
 
     expect(stopSession().sectionsReached).toBe(1);
+    expect(recordedSections()).toBe(1);
+  });
+
+  it('counts the sections a manual take is stepped through', async () => {
+    // A manual take moves by nothing but anchors, so they have to count.
+    const compiled = undivided();
+    start({ compiled, sentences: compiled.sentences as never, mode: 'manual' });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled, 'manualAnchor');
+    // And back again: a revisit is not another section.
+    alignmentFeed.push?.(snapshotAt(compiled, 0, 'manualAnchor'));
+
+    expect(stopSession().sectionsReached).toBe(2);
+    expect(recordedSections()).toBe(2);
+  });
+
+  it('records a practice’s sections on its row, though it opens no report', async () => {
+    const compiled = undivided();
+    start({ compiled, sentences: compiled.sentences as never, practice: true });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled);
+
+    expect(stopSession().sectionsReached).toBe(2);
+    expect(get(session).summary).toBeNull();
+    expect(recordedSections()).toBe(2);
   });
 
   it('has reached nothing when nothing was followed', () => {
-    const compiled = compile(`## Setup\n\n${paragraphs('setup')}\n`, { scriptId: 'script-1' });
+    const compiled = undivided();
     start({ compiled, sentences: compiled.sentences as never });
     expect(stopSession().sectionsReached).toBe(0);
     expect(recordedSections()).toBe(0);

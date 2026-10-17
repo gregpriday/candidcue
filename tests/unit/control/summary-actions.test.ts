@@ -233,6 +233,28 @@ describe('scriptFollowedLabel', () => {
     ).toBe('49 of 50 words from the retake to the end of part 3 (98%)');
   });
 
+  it('says when a retake began past the end of the part', () => {
+    expect(
+      scriptFollowedLabel({
+        ...base,
+        wordsFollowed: 0,
+        coverageWords: 0,
+        coverageScope: 'restOfPart',
+        part: PART_TWO,
+        retakes: 1,
+      }),
+    ).toBe('None of part 2 was left after the retake');
+  });
+
+  it('still names a part it was not handed', () => {
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'part' })).toBe(
+      '49 of 50 words in the part (98%)',
+    );
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'restOfPart' })).toBe(
+      '49 of 50 words from the start point to the end of the part (98%)',
+    );
+  });
+
   it('gives no percentage of nothing', () => {
     expect(
       scriptFollowedLabel({ ...base, wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' }),

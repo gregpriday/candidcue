@@ -182,6 +182,14 @@ export function scriptFollowedLabel(
   const { wordsFollowed, coverageWords } = summary;
   const from = summary.retakes > 0 ? 'the retake' : 'the start point';
   const partName = summary.part === null ? 'the part' : `part ${summary.part.ordinal}`;
+  /*
+   * A retake begun past the end of the part has nothing of the part left to
+   * cover. "0 of 0 words from the retake to the end of part 2" would describe a
+   * span that runs backwards, so the row says what happened instead.
+   */
+  if (summary.coverageScope === 'restOfPart' && coverageWords === 0) {
+    return `None of ${partName} was left after ${from}`;
+  }
   const span =
     summary.coverageScope === 'part'
       ? ` in ${partName}`

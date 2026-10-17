@@ -532,11 +532,17 @@ describe('a take the auto-scroll transport carried to the end', () => {
   });
 
   it('does not count the roll as words followed, jumps or sections reached', () => {
-    present(PART_THREE, null);
+    // Two sections under the part, so a roll that credited the glass's travel
+    // would have a second one to count.
+    present(PART_THREE, null, {
+      outline: [heading('h-1', 'Close', 100, 149), heading('h-2', 'Sign-off', 150, 199)],
+    });
     at(100, 'manualAnchor');
     rollToEnd();
     const summary = stopSession();
     expect(summary.wordsFollowed).toBe(0);
+    expect(summary.coverageWords).toBe(100);
+    expect(summary.coverageScope).toBe('part');
     expect(summary.manualJumps).toBe(0);
     expect(summary.sectionsReached).toBe(1);
   });
@@ -692,6 +698,30 @@ describe('script followed, out of what the take was given', () => {
       coverageWords: 25,
       coverageScope: 'restOfPart',
     });
+  });
+
+  it('has nothing of the part left for a retake begun past its end', () => {
+    present(PART_TWO, PART_THREE);
+    at(140);
+    restartParagraph();
+    at(160);
+    expect(coverage()).toEqual({
+      wordsFollowed: 0,
+      coverageWords: 0,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('stops a part at the end of the document', () => {
+    present({ ...PART_THREE, startTokenIndex: 50, endTokenIndex: 250 }, null);
+    at(199);
+    expect(coverage()).toEqual({ wordsFollowed: 149, coverageWords: 150, coverageScope: 'part' });
+  });
+
+  it('gives an empty document nothing to be a fraction of', () => {
+    // `startTake` pads the count it hands over to one; the compile has none.
+    present(null, null, { compiled: compiledStub(0), totalTokens: 1 });
+    expect(coverage()).toEqual({ wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' });
   });
 
   it('does not credit the run-up to a part to a retake begun above it', () => {
