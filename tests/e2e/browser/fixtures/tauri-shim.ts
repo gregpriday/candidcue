@@ -124,6 +124,12 @@ export interface ShimConfig {
    * choice the spec has made since.
    */
   diagnosticTake?: boolean;
+  /**
+   * The images `resolve_asset_urls` can find, by authored href (#250), each
+   * answered with the url given here. Rust leaves out any id it cannot find,
+   * so an href not listed is answered the same way: missing.
+   */
+  assetUrls?: Record<string, string>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -1104,6 +1110,20 @@ function shimBody(config: ShimConfig): void {
       case 'start_transcription':
         transcriptionGeneration += 1;
         return transcriptionGeneration;
+
+      /*
+       * Answered under the id the caller sent, as Rust answers it. Left to the
+       * `default: null` below, every image would read as a lookup that failed.
+       */
+      case 'resolve_asset_urls': {
+        const requested = (args?.['assetsToResolve'] ?? []) as Array<{ id: string; href: string }>;
+        const found: Record<string, { url: string; mime: string }> = {};
+        for (const request of requested) {
+          const url = config.assetUrls?.[request.href];
+          if (url) found[request.id] = { url, mime: 'image/png' };
+        }
+        return found;
+      }
 
       default:
         return null;

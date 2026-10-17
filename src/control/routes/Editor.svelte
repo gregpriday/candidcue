@@ -5,7 +5,7 @@
   (§13.3/§13.4), readiness messages (F.9).
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { EditorSelection } from '@codemirror/state';
   import { EditorView } from '@codemirror/view';
   import Button from '../components/Button.svelte';
@@ -52,6 +52,15 @@ import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import { sectionWordCounts } from '../lib/outline-words';
+  import {
+    beginImageResolution,
+    failedImages,
+    parsePreviewImageRequest,
+    previewImageRequestKey,
+    previewImageStates,
+    resolvedImages,
+    type ImageResolution,
+  } from '../lib/preview-images';
   import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
@@ -376,6 +385,42 @@ import type { PresentationMode } from '../services/settings-types';
     result?.script?.statistics.wordsPerMinute ?? DEFAULT_WORDS_PER_MINUTE,
   );
   const sectionWords = $derived(sectionWordCounts(outline, wordCount));
+
+  /*
+   * The preview's pictures (#250), from the same Rust lookup the stage draws
+   * from. Keyed on the script and its SET of local images rather than on the
+   * compile, which is a new object on every keystroke: typing prose around a
+   * picture never asks again. A compile left over from another script asks
+   * nothing.
+   */
+  const imageRequestKey = $derived(
+    result?.scriptId === scriptId ? previewImageRequestKey(result.script) : null,
+  );
+  let imageResolution = $state<ImageResolution | null>(null);
+  $effect(() => {
+    const key = imageRequestKey;
+    if (key === null) return;
+    const request = parsePreviewImageRequest(key);
+    imageResolution = beginImageResolution(
+      untrack(() => imageResolution),
+      request.scriptId,
+    );
+    // Only the newest request may land: an answer for a set of images the
+    // script no longer has, or for a script that is no longer open, is dropped.
+    let current = true;
+    assetsService.resolveAssetUrls(request.scriptId, request.assets).then(
+      (urls) => {
+        if (current) imageResolution = resolvedImages(request.scriptId, request, urls);
+      },
+      () => {
+        if (current) imageResolution = failedImages(request.scriptId);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  });
+  const previewImages = $derived(previewImageStates(result?.script, imageResolution));
 
   /*
    * A compile that FAILED, as opposed to a document with nothing in it.
@@ -1456,7 +1501,11 @@ import type { PresentationMode } from '../services/settings-types';
                 {/if}
               </div>
             {:else if blocks.length > 0}
-              <RenderBlocks {blocks} onblockclick={(b) => void previewBlockClick(b)} />
+              <RenderBlocks
+                {blocks}
+                images={previewImages}
+                onblockclick={(b) => void previewBlockClick(b)}
+              />
             {:else}
               <p class="preview-empty">Your rendered script will appear here.</p>
             {/if}

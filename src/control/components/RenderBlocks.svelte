@@ -4,14 +4,17 @@
 -->
 <script lang="ts">
   import type { CompiledBlock, SafeRenderNode } from '../../shared/contracts';
+  import type { PreviewImages } from '../lib/preview-images';
   import RenderNodes from './RenderNodes.svelte';
 
   interface Props {
     blocks: CompiledBlock[];
+    /** What is known about each image, by asset id (#250). */
+    images?: PreviewImages;
     onblockclick?: (block: CompiledBlock) => void;
   }
 
-  let { blocks, onblockclick }: Props = $props();
+  let { blocks, images, onblockclick }: Props = $props();
 
   function headingLevel(block: CompiledBlock): number {
     const hint = block.layoutHints?.['level'];
@@ -44,27 +47,31 @@
     >
       {#if block.kind === 'heading'}
         {#if headingLevel(block) === 1}
-          <h1 class="h h1"><RenderNodes nodes={nodesOf(block)} /></h1>
+          <h1 class="h h1"><RenderNodes nodes={nodesOf(block)} {images} /></h1>
         {:else if headingLevel(block) === 2}
-          <h2 class="h h2"><RenderNodes nodes={nodesOf(block)} /></h2>
+          <h2 class="h h2"><RenderNodes nodes={nodesOf(block)} {images} /></h2>
         {:else}
-          <h3 class="h h3"><RenderNodes nodes={nodesOf(block)} /></h3>
+          <h3 class="h h3"><RenderNodes nodes={nodesOf(block)} {images} /></h3>
         {/if}
       {:else if block.kind === 'cue'}
-        <p class="cue"><RenderNodes nodes={nodesOf(block)} /></p>
+        <p class="cue"><RenderNodes nodes={nodesOf(block)} {images} /></p>
       {:else if block.kind === 'divider'}
         <hr class="divider" />
       {:else if block.kind === 'code' || block.kind === 'diagram'}
-        <pre class="code"><RenderNodes nodes={nodesOf(block)} /></pre>
+        <pre class="code"><RenderNodes nodes={nodesOf(block)} {images} /></pre>
       {:else if block.kind === 'blockquote'}
-        <blockquote class="quote"><RenderNodes nodes={nodesOf(block)} /></blockquote>
+        <blockquote class="quote"><RenderNodes nodes={nodesOf(block)} {images} /></blockquote>
+      {:else if block.kind === 'image'}
+        <!-- A picture on its own line is a figure, as on the stage, not a
+             paragraph: it takes none of the prose size or line height. -->
+        <div class="figure"><RenderNodes nodes={nodesOf(block)} {images} /></div>
       {:else if block.kind === 'table'}
         <!-- Not wrapped in <p>: a table inside a paragraph is invalid HTML and
              the browser breaks it out of the element, so the card must be its
              own scroll container. -->
-        <div class="table-card"><RenderNodes nodes={nodesOf(block)} /></div>
+        <div class="table-card"><RenderNodes nodes={nodesOf(block)} {images} /></div>
       {:else}
-        <p class="para"><RenderNodes nodes={nodesOf(block)} /></p>
+        <p class="para"><RenderNodes nodes={nodesOf(block)} {images} /></p>
       {/if}
     </div>
   {/each}
@@ -168,6 +175,10 @@
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     overflow-x: auto;
+  }
+
+  .figure {
+    text-align: center;
   }
 
   .table-card {
