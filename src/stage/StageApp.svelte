@@ -1571,6 +1571,18 @@
    */
   let gestureStartPx: number | null = null;
   /**
+   * When the presenter last moved the document in this gesture, wall clock —
+   * the report's `atMs`.
+   *
+   * Not when the gesture settles. Control drops a report that a deliberate
+   * reposition has overtaken, and an operator who restarts the paragraph or
+   * steps a sentence inside the settle window has overtaken this one: their
+   * move came after the last thing the hand did. Stamped at the flush, the
+   * report would always look newer than that move and drag the aligner back
+   * over it.
+   */
+  let gestureLastInputAtMs = 0;
+  /**
    * Whether a key took part in the gesture in progress.
    *
    * A key is a decision to MOVE, so a gesture with one in it re-anchors the
@@ -1593,11 +1605,16 @@
   const GESTURE_SETTLE_MS = 200;
 
   /**
-   * How long a gesture may run before it reports anyway.
+   * How long a wheel gesture may run before it reports anyway.
    *
    * Somebody holding a trackpad scroll for ten seconds is not going to hit a
    * quiet window, and the tracker should not have to wait for them to stop
    * before it learns they have gone somewhere else.
+   *
+   * Not a gesture with a key in it. Somebody holding Page Down is paging, not
+   * reading, and a report in the middle of the hold reopens the race that
+   * sharing the gesture closed: the next repeat moves the hand before the
+   * answer comes back, and the answer pulls the document back a page.
    */
   const GESTURE_MAX_MS = 1200;
 
@@ -1822,15 +1839,30 @@
   function moveByHand(deltaPx: number, byKey: boolean) {
     // Read the position BEFORE the scroll lands, so the gesture's travel is
     // measured from where it actually started.
-    if (gestureStartPx === null) {
-      gestureStartPx = scriptLayer?.scrollPositionPx() ?? 0;
-    }
-    if (byKey) gestureByKey = true;
+    const fromPx = scriptLayer?.scrollPositionPx() ?? 0;
     scriptLayer?.manualScrollBy(deltaPx);
+    /*
+     * A key the document absorbed entirely is not a gesture.
+     *
+     * Page Down at the foot of the script is the case: the document is already
+     * as far down as it goes, so the reading line is not where the presenter
+     * is — the last lines they are reading sit below it, with the aligner on
+     * them. A key is a decision to move, and re-seeding the tracker on the
+     * reading line for one that moved nothing would drag it back up to a place
+     * nobody went.
+     *
+     * "Nothing" is under a pixel, not exactly zero. A resting plant is snapped
+     * to the device-pixel grid, so at the foot it can sit a fraction of a pixel
+     * either side of the end stop, and the clamp then "moves" it by that much.
+     */
+    if (byKey && Math.abs((scriptLayer?.scrollPositionPx() ?? fromPx) - fromPx) < 1) return;
+    if (gestureStartPx === null) gestureStartPx = fromPx;
+    if (byKey) gestureByKey = true;
+    gestureLastInputAtMs = Date.now();
 
     const now = performance.now();
     if (gestureStartedAtMs === 0) gestureStartedAtMs = now;
-    if (now - gestureStartedAtMs >= GESTURE_MAX_MS) {
+    if (!gestureByKey && now - gestureStartedAtMs >= GESTURE_MAX_MS) {
       flushManualGesture();
       return;
     }
@@ -1846,28 +1878,19 @@
     }
     const startPx = gestureStartPx;
     const byKey = gestureByKey;
+    const atMs = gestureLastInputAtMs;
     gestureStartedAtMs = 0;
     gestureStartPx = null;
     gestureByKey = false;
     if (startPx === null) return;
     const deltaPx = (scriptLayer?.scrollPositionPx() ?? startPx) - startPx;
-    /*
-     * A key that moved nothing re-anchors nothing.
-     *
-     * Page Down at the foot of the script is the case: the document is already
-     * as far down as it goes, so the reading line is not where the presenter
-     * is — the last lines they are reading sit below it, with the aligner on
-     * them. Re-seeding the tracker on the reading line would drag it back up to
-     * a place nobody went.
-     */
-    if (byKey && deltaPx === 0) return;
     const anchorToken = byKey
       ? (scriptLayer?.readingAnchorToken() ?? null)
       : relocationAnchorToken();
     // Nothing moved and nowhere to send anybody: a wheel event the document
     // absorbed entirely is not news.
     if (deltaPx === 0 && anchorToken === null) return;
-    sendIntent({ kind: 'manual_scroll', deltaPx, anchorToken, atMs: Date.now() });
+    sendIntent({ kind: 'manual_scroll', deltaPx, anchorToken, atMs });
   }
 
   /**

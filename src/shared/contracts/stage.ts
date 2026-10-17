@@ -707,7 +707,7 @@ export type StageIntent =
       deltaPx: number;
       anchorToken: number | null;
       /**
-       * When the gesture settled, wall clock.
+       * When the presenter last moved the document in this gesture, wall clock.
        *
        * Carried on the intent itself rather than only on the event envelope,
        * because single-window presentation hands intents straight to the host
@@ -716,6 +716,10 @@ export type StageIntent =
        * settles 200 ms after the presenter stops scrolling, and an operator who
        * restarts the paragraph inside that window would otherwise have the
        * stale report drag the freshly restarted aligner back.
+       *
+       * The LAST INPUT rather than the settle, for that same reason: the report
+       * is sent after the restart, so a settle time is always newer than the
+       * restart it is meant to lose to.
        */
       atMs: number;
     }

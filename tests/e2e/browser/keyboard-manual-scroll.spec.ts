@@ -1,6 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
+import {
+  moves,
+  scrollPx,
+  startRecording,
+  stopRecording,
+  type ScrollSample,
+} from './fixtures/take-motion';
 
 /*
  * #282 — THE ARROW AND PAGE KEYS DURING A TAKE.
@@ -86,23 +93,6 @@ async function present(page: Page): Promise<void> {
     .toBe(0);
 }
 
-/** Every token the aligner was asked to move to, in order. */
-function moves(page: Page): Promise<number[]> {
-  return page.evaluate(() =>
-    window.__E2E__.calls
-      .filter((call) => call.command === 'set_alignment_position')
-      .map((call) => (call.args as { token: number }).token),
-  );
-}
-
-/** How far down the script the document is painted, in pixels. */
-function scrollPx(page: Page): Promise<number> {
-  return page.locator('.scroll-plane').evaluate((el) => {
-    const match = /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec((el as HTMLElement).style.transform);
-    return match?.[1] === undefined ? 0 : -Number(match[1]);
-  });
-}
-
 /** Where a word sits on the glass, as the top of its box in the viewport. */
 function wordTopPx(page: Page, token: number): Promise<number> {
   return page
@@ -124,40 +114,6 @@ function linePitchPx(page: Page): Promise<number> {
   });
 }
 
-interface ScrollSample {
-  atMs: number;
-  y: number;
-}
-
-/**
- * Record where the document is painted, every frame, until `stopRecording`.
- * Started BEFORE the key, so a pull-back that lands while the press is still
- * coming back is in the trace — a final-position check alone would miss it.
- */
-async function startRecording(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
-    w.__ROLL__ = [];
-    w.__ROLL_ON__ = true;
-    const tick = () => {
-      if (!w.__ROLL_ON__) return;
-      const el = document.querySelector('.scroll-plane') as HTMLElement | null;
-      const m = el ? /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform) : null;
-      w.__ROLL__.push({ atMs: performance.now(), y: m?.[1] === undefined ? 0 : -Number(m[1]) });
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
-function stopRecording(page: Page): Promise<ScrollSample[]> {
-  return page.evaluate(() => {
-    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
-    w.__ROLL_ON__ = false;
-    return w.__ROLL__;
-  });
-}
-
 /**
  * Press `key`, then watch long enough for the engine's answer and the manual
  * grace after it, and return what the document did.
@@ -165,22 +121,38 @@ function stopRecording(page: Page): Promise<ScrollSample[]> {
 async function pressAndWatch(
   page: Page,
   key: string,
-): Promise<{ fromPx: number; landedPx: number; trace: ScrollSample[] }> {
+): Promise<{ fromPx: number; landedPx: number; afterLanding: ScrollSample[] }> {
   const fromPx = await scrollPx(page);
   await startRecording(page);
   await page.keyboard.press(key);
   await page.waitForTimeout(3000);
   const trace = await stopRecording(page);
-  const landing = trace.find((s) => Math.abs(s.y - fromPx) > 1);
-  expect(landing, `${key} never moved the document`).toBeDefined();
-  return { fromPx, landedPx: landing!.y, trace };
+  /*
+   * The first frame the key moved, which is the hand's own landing: the report
+   * that could pull it back is not sent until the keys have been quiet for
+   * 200 ms, a dozen frames later.
+   */
+  const landing = trace.findIndex((s) => Math.abs(s.y - fromPx) > 1);
+  expect(landing, `${key} never moved the document`).toBeGreaterThanOrEqual(0);
+  return { fromPx, landedPx: trace[landing]!.y, afterLanding: trace.slice(landing) };
 }
 
 /** Furthest the document came back towards where it started, after landing. */
-function worstPullBack(trace: ScrollSample[], fromPx: number, landedPx: number): number {
+function worstPullBack(afterLanding: ScrollSample[], fromPx: number, landedPx: number): number {
   const direction = Math.sign(landedPx - fromPx);
-  const after = trace.slice(trace.findIndex((s) => s.y === landedPx));
-  return Math.max(0, ...after.map((s) => direction * (landedPx - s.y)));
+  return Math.max(0, ...afterLanding.map((s) => direction * (landedPx - s.y)));
+}
+
+/**
+ * The opening's placement of the first word, as a stand-in for the reading line.
+ *
+ * Not the reading line's own coordinate, which the DOM does not expose: the
+ * opening centres the first line on the reading mark, and a manual anchor lands
+ * its line by the same mark, so in uniform prose the tops of the two lines'
+ * first words agree to well inside half a line. That is the tolerance used.
+ */
+function openingWordTopPx(page: Page): Promise<number> {
+  return wordTopPx(page, 0);
 }
 
 test('Page Down: the document stays where the key put it, and so does the aligner', async ({
@@ -189,16 +161,14 @@ test('Page Down: the document stays where the key put it, and so does the aligne
   const errors = watchPageErrors(page);
   await present(page);
   const pitch = await linePitchPx(page);
-  // The opening puts the first word on the reading line, so this is where the
-  // reading line is on the glass.
-  const readingLinePx = await wordTopPx(page, 0);
+  const readingLinePx = await openingWordTopPx(page);
 
-  const { fromPx, landedPx, trace } = await pressAndWatch(page, 'PageDown');
+  const { fromPx, landedPx, afterLanding } = await pressAndWatch(page, 'PageDown');
   // Most of a screen, as the key promises.
   expect(landedPx - fromPx).toBeGreaterThan(0.6 * 720);
   // The bug: about 400 px back, to one sentence on. At most the echo settles the
   // reading line onto the start of the line it is already on.
-  expect(worstPullBack(trace, fromPx, landedPx)).toBeLessThan(pitch);
+  expect(worstPullBack(afterLanding, fromPx, landedPx)).toBeLessThan(pitch);
 
   const moved = await moves(page);
   expect(moved).toHaveLength(1);
@@ -215,16 +185,16 @@ test('Page Up comes back the same way', async ({ page }) => {
   const errors = watchPageErrors(page);
   await present(page);
   const pitch = await linePitchPx(page);
-  const readingLinePx = await wordTopPx(page, 0);
+  const readingLinePx = await openingWordTopPx(page);
 
   await page.keyboard.press('PageDown');
   await page.keyboard.press('PageDown');
   await expect.poll(() => moves(page)).toHaveLength(1);
   await page.waitForTimeout(500);
 
-  const { fromPx, landedPx, trace } = await pressAndWatch(page, 'PageUp');
+  const { fromPx, landedPx, afterLanding } = await pressAndWatch(page, 'PageUp');
   expect(fromPx - landedPx).toBeGreaterThan(0.6 * 720);
-  expect(worstPullBack(trace, fromPx, landedPx)).toBeLessThan(pitch);
+  expect(worstPullBack(afterLanding, fromPx, landedPx)).toBeLessThan(pitch);
 
   const moved = await moves(page);
   expect(moved).toHaveLength(2);
@@ -237,7 +207,7 @@ test('the arrow keys put the aligner on the line they scrolled to', async ({ pag
   const errors = watchPageErrors(page);
   await present(page);
   const pitch = await linePitchPx(page);
-  const readingLinePx = await wordTopPx(page, 0);
+  const readingLinePx = await openingWordTopPx(page);
 
   // Three lines in one breath: one gesture, one move.
   await startRecording(page);
@@ -263,7 +233,7 @@ test('following off: the key lands exactly, and the aligner goes with it', async
   const errors = watchPageErrors(page);
   await present(page);
   const pitch = await linePitchPx(page);
-  const readingLinePx = await wordTopPx(page, 0);
+  const readingLinePx = await openingWordTopPx(page);
 
   await page.locator('.stage-root').hover();
   await page.locator('.stage-dock .dock-button.menu-trigger').click();
@@ -278,13 +248,16 @@ test('following off: the key lands exactly, and the aligner goes with it', async
   // script the way a presenter would, by clicking it.
   await page.mouse.click(640, 200);
 
-  const { fromPx, landedPx, trace } = await pressAndWatch(page, 'PageDown');
+  const { fromPx, landedPx, afterLanding } = await pressAndWatch(page, 'PageDown');
   expect(landedPx - fromPx).toBeGreaterThan(0.6 * 720);
-  expect(worstPullBack(trace, fromPx, landedPx)).toBeLessThan(1);
-  expect(Math.abs(trace.at(-1)!.y - landedPx)).toBeLessThan(1);
+  expect(worstPullBack(afterLanding, fromPx, landedPx)).toBeLessThan(1);
+  expect(Math.abs(afterLanding.at(-1)!.y - landedPx)).toBeLessThan(1);
 
   const moved = await moves(page);
   expect(moved).toHaveLength(1);
+  // The engine's answer DID reach the stage — this is the echo being recognised,
+  // not an answer that never arrived leaving the document alone.
+  await expect(page.locator('.diagnostics')).toContainText(`token: ${moved[0]!.toFixed(1)}`);
   expect(Math.abs((await wordTopPx(page, moved[0]!)) - readingLinePx)).toBeLessThan(pitch);
   errors.expectClean();
 });
@@ -300,20 +273,74 @@ test('Page Down at the foot of the script moves nothing and re-anchors nothing',
   const errors = watchPageErrors(page);
   await present(page);
 
-  let previous = -1;
-  for (let press = 0; press < 40; press += 1) {
-    const now = await scrollPx(page);
-    if (now === previous) break;
-    previous = now;
+  /*
+   * Page down until a press changes neither the glass nor the aligner. Each
+   * press is waited out past its report and the answer to it, so "nothing
+   * changed" is about that press and not about one still in flight.
+   */
+  let atFoot = false;
+  for (let press = 0; press < 40 && !atFoot; press += 1) {
+    const fromPx = await scrollPx(page);
+    const before = (await moves(page)).length;
     await page.keyboard.press('PageDown');
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(700);
+    atFoot = (await scrollPx(page)) === fromPx && (await moves(page)).length === before;
   }
-  await page.waitForTimeout(600);
-  const settled = await moves(page);
-  expect(settled.length).toBeGreaterThan(0);
+  expect(atFoot, 'Page Down never stopped moving the script').toBe(true);
+  // ...and it stopped because the script ran out, not because the key did: the
+  // last word is on the glass.
+  const lastWordBottomPx = await page.evaluate(() => {
+    const words = document.querySelectorAll<HTMLElement>('.script-layer [data-t]');
+    return words[words.length - 1]!.getBoundingClientRect().bottom;
+  });
+  expect(lastWordBottomPx).toBeLessThan(720);
+  expect((await moves(page)).length).toBeGreaterThan(0);
+  errors.expectClean();
+});
 
+test('during a roll: Page Down lands, and the roll carries on from there', async ({ page }) => {
+  /*
+   * Auto-scroll switches following off, so the key meets the transport, and
+   * both of the ways that goes wrong are motion: the transport's goal is still
+   * where the document WAS and drags it back over the key, or the engine's
+   * answer takes the document from the transport and the roll stops dead.
+   */
+  const errors = watchPageErrors(page);
+  await present(page);
+  const opening = await scrollPx(page);
+
+  await page.keyboard.press('a');
+  await expect
+    .poll(() => scrollPx(page), { timeout: 15_000, intervals: [50] })
+    .toBeGreaterThan(opening + 2);
+
+  /*
+   * Measured from where the document was before the key, not from the first
+   * recorded frame: the key can land before the recorder's first frame does,
+   * and a jump that happens between "before" and the first sample is not a
+   * step between two samples.
+   */
+  const fromPx = await scrollPx(page);
+  await startRecording(page);
   await page.keyboard.press('PageDown');
-  await page.waitForTimeout(600);
-  expect(await moves(page)).toEqual(settled);
+  await page.waitForTimeout(4000);
+  const trace = await stopRecording(page);
+
+  const moved = await moves(page);
+  expect(moved).toHaveLength(1);
+  await expect(page.locator('.diagnostics')).toContainText(`token: ${moved[0]!.toFixed(1)}`);
+
+  // The key landed most of a screen on, at once: within a few frames, where the
+  // roll itself covers a couple of pixels a frame...
+  const landed = trace.find((s) => s.y - fromPx > 0.6 * 720);
+  expect(landed, 'Page Down never moved the document').toBeDefined();
+  expect(landed!.atMs - trace[0]!.atMs).toBeLessThan(150);
+  // ...nothing pulled the document back over it afterwards...
+  const steps = trace.slice(1).map((s, i) => s.y - trace[i]!.y);
+  expect(Math.min(...steps)).toBeGreaterThan(-1);
+  // ...and the roll is still rolling in the last second of the window.
+  const end = trace.at(-1)!;
+  const secondBefore = trace.find((s) => s.atMs >= end.atMs - 1000)!;
+  expect(end.y).toBeGreaterThan(secondBefore.y);
   errors.expectClean();
 });

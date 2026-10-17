@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
+import { moves, scrollPx, startRecording, stopRecording } from './fixtures/take-motion';
 
 /*
  * #275 — SENTENCE STEPS WHILE THE TAKE IS NOT FOLLOWING.
@@ -75,23 +76,6 @@ async function present(page: Page): Promise<void> {
   await expect(page.locator('.scroll-plane')).toBeVisible();
   // A take from the top issues no opening anchor: the first move is a step.
   expect(await moves(page)).toEqual([]);
-}
-
-/** Every token the aligner was asked to move to, in order. */
-function moves(page: Page): Promise<number[]> {
-  return page.evaluate(() =>
-    window.__E2E__.calls
-      .filter((call) => call.command === 'set_alignment_position')
-      .map((call) => (call.args as { token: number }).token),
-  );
-}
-
-/** How far down the script the document is painted, in pixels. */
-function scrollPx(page: Page): Promise<number> {
-  return page.locator('.scroll-plane').evaluate((el) => {
-    const match = /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec((el as HTMLElement).style.transform);
-    return match?.[1] === undefined ? 0 : -Number(match[1]);
-  });
 }
 
 /**
@@ -192,40 +176,6 @@ test('following off: sentence steps still land on the glass', async ({ page }) =
   await expectThreeAdvancingSteps(page);
   errors.expectClean();
 });
-
-interface ScrollSample {
-  atMs: number;
-  y: number;
-}
-
-/**
- * Start recording where the document is painted, every frame, until
- * `stopRecording`. Started BEFORE the key is pressed, so a move that lands in
- * the time a key press takes to come back is in the trace.
- */
-async function startRecording(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
-    w.__ROLL__ = [];
-    w.__ROLL_ON__ = true;
-    const tick = () => {
-      if (!w.__ROLL_ON__) return;
-      const el = document.querySelector('.scroll-plane') as HTMLElement | null;
-      const m = el ? /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform) : null;
-      w.__ROLL__.push({ atMs: performance.now(), y: m?.[1] === undefined ? 0 : -Number(m[1]) });
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
-function stopRecording(page: Page): Promise<ScrollSample[]> {
-  return page.evaluate(() => {
-    const w = window as unknown as { __ROLL__: ScrollSample[]; __ROLL_ON__: boolean };
-    w.__ROLL_ON__ = false;
-    return w.__ROLL__;
-  });
-}
 
 test('during a roll: a sentence step lands, and the roll carries on from there', async ({
   page,

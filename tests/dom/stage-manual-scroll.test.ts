@@ -341,13 +341,14 @@ describe('the arrow and Page keys report where they put the document (#282)', ()
     const [down] = scrolls(onintent) as { deltaPx: number }[];
     expect(down!.deltaPx).toBeGreaterThan(0);
 
-    // Page Up from there comes back exactly as far: the report is the
-    // document's travel, so the two presses are the same distance.
+    // Page Up from there comes back as far: the report is the document's
+    // travel, so the two presses are the same distance. Within a pixel, because
+    // a resting plant is snapped to whole device pixels between them.
     key('PageUp');
     vi.advanceTimersByTime(400);
     const reported = scrolls(onintent) as { deltaPx: number }[];
     expect(reported).toHaveLength(2);
-    expect(reported[1]!.deltaPx).toBe(-down!.deltaPx);
+    expect(Math.abs(reported[1]!.deltaPx + down!.deltaPx)).toBeLessThan(1);
   });
 
   it('a held Page Down is one gesture and one report', async () => {
@@ -362,16 +363,20 @@ describe('the arrow and Page keys report where they put the document (#282)', ()
     vi.advanceTimersByTime(400);
     const [single] = scrolls(onintent) as { deltaPx: number }[];
 
+    // Held for longer than the settle interval, so a report timed from the
+    // FIRST press rather than the last would show up mid-hold.
     key('PageDown');
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 8; i++) {
       vi.advanceTimersByTime(40);
       key('PageDown', { repeat: true });
     }
-    vi.advanceTimersByTime(400);
+    vi.advanceTimersByTime(150);
+    expect(scrolls(onintent)).toHaveLength(1);
 
+    vi.advanceTimersByTime(100);
     const reported = scrolls(onintent) as { deltaPx: number }[];
     expect(reported).toHaveLength(2);
-    expect(reported[1]!.deltaPx).toBeCloseTo(4 * single!.deltaPx, 6);
+    expect(Math.abs(reported[1]!.deltaPx - 9 * single!.deltaPx)).toBeLessThan(9);
   });
 
   it('the arrow keys report a line of travel the same way', async () => {
@@ -384,7 +389,8 @@ describe('the arrow and Page keys report where they put the document (#282)', ()
 
     key('ArrowUp');
     vi.advanceTimersByTime(400);
-    expect((scrolls(onintent)[1] as { deltaPx: number }).deltaPx).toBe(-line!.deltaPx);
+    const back = (scrolls(onintent)[1] as { deltaPx: number }).deltaPx;
+    expect(Math.abs(back + line!.deltaPx)).toBeLessThan(1);
   });
 
   it('says nothing for a key the document could not answer', async () => {
@@ -395,6 +401,40 @@ describe('the arrow and Page keys report where they put the document (#282)', ()
     key('PageUp');
     vi.advanceTimersByTime(400);
     expect(kinds(onintent)).toEqual([]);
+  });
+
+  it('a key the document absorbed does not join the gesture', async () => {
+    /*
+     * Against the foot of the script Page Down moves nothing, so it is not part
+     * of the gesture. The wheel's report goes out when the WHEEL went quiet —
+     * not 200 ms after a key that did nothing — and keeps the wheel's own
+     * look-or-move judgement rather than taking the key's "always a move".
+     */
+    const { onintent, root } = await mount();
+    wheel(root, 5_000_000);
+    vi.advanceTimersByTime(150);
+    key('PageDown');
+    vi.advanceTimersByTime(60);
+    expect(scrolls(onintent)).toHaveLength(1);
+  });
+
+  it('is stamped with the last thing the hand did, not with the settle', async () => {
+    /*
+     * Control drops a report that a deliberate move has overtaken — a restart
+     * or a sentence step pressed inside the settle window. The report is SENT
+     * after that move, so a settle-time stamp always looked newer than it and
+     * dragged the aligner back over it.
+     */
+    const { onintent } = await mount();
+    key('PageDown');
+    vi.advanceTimersByTime(100);
+    const lastKeyAt = Date.now();
+    key('PageDown');
+    vi.advanceTimersByTime(400);
+    // The clock really did move on, so a settle-time stamp would differ.
+    expect(Date.now() - lastKeyAt).toBeGreaterThanOrEqual(400);
+    const [reported] = scrolls(onintent) as { atMs: number }[];
+    expect(reported!.atMs).toBe(lastKeyAt);
   });
 
   it('a wheel and a key in one breath are one gesture', async () => {
