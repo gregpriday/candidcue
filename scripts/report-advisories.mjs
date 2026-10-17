@@ -82,7 +82,14 @@ for (let i = 0; i < argv.length; i++) {
 if (options.save !== null && options.from !== null) usage('--save and --from cannot be combined');
 
 const today = options.today ?? new Date().toISOString().slice(0, 10);
-if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) usage(`--today must be YYYY-MM-DD, not ${today}`);
+if (!isDate(today)) usage(`--today must be a YYYY-MM-DD date, not ${today}`);
+
+/** A real calendar date as YYYY-MM-DD, which is also what makes `<` compare them. */
+function isDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
 
 /* ----------------------------------------------------------------- register */
 
@@ -105,15 +112,18 @@ function loadRegister(path) {
   const exceptions = Array.isArray(register?.exceptions) ? register.exceptions : [];
   if (!Array.isArray(register?.exceptions)) problems.push('it has no `exceptions` array');
 
+  // A lockfile no scan reads would match nothing and could never be reported
+  // stale either: an exception that silently does nothing.
+  const lockfiles = new Set(SCANS.map((scan) => scan.lockfile));
   const byKey = new Map();
   exceptions.forEach((exception, index) => {
     const at = `exceptions[${index}]`;
-    if (typeof exception?.lockfile !== 'string' || exception.lockfile === '') problems.push(`${at} names no lockfile`);
+    if (!lockfiles.has(exception?.lockfile)) {
+      problems.push(`${at} names lockfile ${JSON.stringify(exception?.lockfile)}, which is not scanned`);
+    }
     if (!REACH.has(exception?.reach)) problems.push(`${at} has reach ${JSON.stringify(exception?.reach)}`);
     if (typeof exception?.why !== 'string' || exception.why.trim() === '') problems.push(`${at} gives no reason`);
-    if (typeof exception?.reviewBy !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(exception.reviewBy)) {
-      problems.push(`${at} has no YYYY-MM-DD reviewBy`);
-    }
+    if (!isDate(exception?.reviewBy)) problems.push(`${at} has no YYYY-MM-DD reviewBy`);
     if (!Array.isArray(exception?.findings) || exception.findings.length === 0) {
       problems.push(`${at} lists no findings`);
       return;
@@ -198,7 +208,10 @@ function collect(scan) {
   const result = spawnSync(command, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const stdout = result.stdout ?? '';
   const stderr = result.error ? `could not run ${command}: ${result.error.message}` : (result.stderr ?? '');
-  if (options.save !== null) {
+  // Never an empty file: the publish job attaches every file in provenance/ to
+  // the GitHub release, and GitHub refuses a zero-byte asset, so a scanner that
+  // printed nothing would turn a reported failure into a failed publish.
+  if (options.save !== null && stdout !== '') {
     mkdirSync(resolve(options.save), { recursive: true });
     writeFileSync(resolve(options.save, scan.saved), stdout);
   }
@@ -206,18 +219,37 @@ function collect(scan) {
 }
 
 function scanOne(scan) {
-  const { stdout, stderr } = collect(scan);
+  let collected;
+  try {
+    collected = collect(scan);
+  } catch (error) {
+    return { scan, error: error.message };
+  }
   let report;
   try {
-    report = JSON.parse(stdout);
+    report = JSON.parse(collected.stdout);
   } catch {
-    return { scan, error: firstLine(stderr) || 'the scanner printed no JSON report' };
+    return { scan, error: firstLine(collected.stderr) || 'the scanner printed no JSON report' };
   }
   try {
     return { scan, ...scan.parse(report, scan.lockfile) };
   } catch (error) {
     return { scan, error: error.message };
   }
+}
+
+/**
+ * A finding the report can name. Anything less means the scanner's output is
+ * not what this was written against, and a report built on it is not one to
+ * trust: the scan fails rather than dropping the finding.
+ */
+function identified(finding) {
+  for (const field of ['package', 'version', 'id']) {
+    if (typeof finding[field] !== 'string' || finding[field] === '') {
+      throw new Error(`a reported finding has no ${field}; the report format may have changed`);
+    }
+  }
+  return finding;
 }
 
 function firstLine(text) {
@@ -235,25 +267,37 @@ function firstLine(text) {
  * yanked release has no advisory, so its id is the word `yanked`.
  */
 function parseCargoAudit(report, lockfile) {
-  if (!Array.isArray(report?.vulnerabilities?.list)) throw new Error('not a cargo-audit JSON report');
-  const findings = report.vulnerabilities.list.map((entry) => ({
-    lockfile,
-    package: entry.package?.name,
-    version: entry.package?.version,
-    id: entry.advisory?.id,
-    kind: 'vulnerability',
-    title: (entry.advisory?.title ?? '').trim(),
-  }));
-  for (const [kind, warnings] of Object.entries(report.warnings ?? {})) {
-    for (const warning of warnings ?? []) {
-      findings.push({
-        lockfile,
-        package: warning.package?.name,
-        version: warning.package?.version,
-        id: warning.advisory?.id ?? kind,
-        kind,
-        title: (warning.advisory?.title ?? `${kind} release`).trim(),
-      });
+  const vulnerabilities = report?.vulnerabilities;
+  if (!Array.isArray(vulnerabilities?.list)) throw new Error('not a cargo-audit JSON report');
+  if (typeof vulnerabilities.count === 'number' && vulnerabilities.count !== vulnerabilities.list.length) {
+    throw new Error(`cargo-audit counted ${vulnerabilities.count} vulnerabilities and listed ${vulnerabilities.list.length}`);
+  }
+  const warnings = report.warnings ?? {};
+  if (typeof warnings !== 'object' || Array.isArray(warnings)) throw new Error('cargo-audit warnings are not a map');
+
+  const findings = vulnerabilities.list.map((entry) =>
+    identified({
+      lockfile,
+      package: entry?.package?.name,
+      version: entry?.package?.version,
+      id: entry?.advisory?.id,
+      kind: 'vulnerability',
+      title: String(entry?.advisory?.title ?? '').trim(),
+    }),
+  );
+  for (const [kind, entries] of Object.entries(warnings)) {
+    if (!Array.isArray(entries)) throw new Error(`cargo-audit ${kind} warnings are not a list`);
+    for (const warning of entries) {
+      findings.push(
+        identified({
+          lockfile,
+          package: warning?.package?.name,
+          version: warning?.package?.version,
+          id: warning?.advisory?.id ?? kind,
+          kind,
+          title: String(warning?.advisory?.title ?? `${kind} release`).trim(),
+        }),
+      );
     }
   }
   const database = report.database ?? {};
@@ -268,21 +312,31 @@ function parseCargoAudit(report, lockfile) {
  * an exception for one copy of a package does not cover another.
  */
 function parsePnpmAudit(report, lockfile) {
+  if (report?.error !== undefined) {
+    throw new Error(firstLine(String(report.error?.message ?? report.error)) || 'pnpm audit reported an error');
+  }
   if (report === null || typeof report?.advisories !== 'object' || Array.isArray(report.advisories)) {
-    throw new Error(firstLine(String(report?.error?.message ?? '')) || 'not a pnpm audit JSON report');
+    throw new Error('not a pnpm audit JSON report');
   }
   const findings = [];
   for (const advisory of Object.values(report.advisories)) {
-    const versions = new Set((advisory.findings ?? []).map((found) => found.version));
+    // An advisory with no installed version it matched names nothing to look
+    // at, and skipping it would read as one fewer finding.
+    if (!Array.isArray(advisory?.findings) || advisory.findings.length === 0) {
+      throw new Error(`pnpm audit listed ${advisory?.github_advisory_id ?? 'an advisory'} without the versions it matched`);
+    }
+    const versions = new Set(advisory.findings.map((found) => found?.version));
     for (const version of versions) {
-      findings.push({
-        lockfile,
-        package: advisory.module_name,
-        version,
-        id: advisory.github_advisory_id ?? String(advisory.id),
-        kind: advisory.severity ?? 'advisory',
-        title: advisory.title ?? '',
-      });
+      findings.push(
+        identified({
+          lockfile,
+          package: advisory.module_name,
+          version,
+          id: advisory.github_advisory_id ?? (advisory.id === undefined ? undefined : String(advisory.id)),
+          kind: advisory.severity ?? 'advisory',
+          title: String(advisory.title ?? '').trim(),
+        }),
+      );
     }
   }
   return { findings, source: 'npm registry advisories' };

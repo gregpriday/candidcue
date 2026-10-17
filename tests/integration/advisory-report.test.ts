@@ -14,9 +14,9 @@
  * exception stops covering a finding the moment the production scan reports it.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(__dirname, '../..');
@@ -201,6 +201,19 @@ describe('the advisory report', () => {
     expect(section(result.output, 'NO LONGER REPORTED').join('\n')).toContain('rsa 0.9.10 RUSTSEC-2023-0071');
   });
 
+  it('does not let an exception cover another advisory on the same package and version', () => {
+    const result = report(
+      saved({ app: cargoReport([RSA, ['rsa', '0.9.10', 'RUSTSEC-2099-0001']]) }),
+      registerOf([exception()]),
+    );
+
+    expect(result.status, result.output).toBe(1);
+    expect(section(result.output, 'NEW').join('\n')).toContain('rsa 0.9.10 RUSTSEC-2099-0001');
+    const accepted = section(result.output, 'ACCEPTED').join('\n');
+    expect(accepted).toContain('rsa 0.9.10 RUSTSEC-2023-0071');
+    expect(accepted).not.toContain('RUSTSEC-2099-0001');
+  });
+
   it('moves an accepted finding past its review date to REVIEW OVERDUE', () => {
     const result = report(saved({ app: cargoReport([RSA]) }), registerOf([exception({ reviewBy: '2026-10-16' })]));
 
@@ -222,6 +235,74 @@ describe('the advisory report', () => {
     expect(failed).toContain('ENOTFOUND');
     // A scan that did not run cannot say an exception is stale.
     expect(section(result.output, 'NO LONGER REPORTED')).toEqual([]);
+  });
+
+  it('fails a scan it cannot read completely, rather than dropping what it could not read', () => {
+    /*
+     * Each of these parses as JSON and would once have produced a shorter,
+     * cleaner report: a finding nobody can name, a count the list disagrees
+     * with, an advisory without the versions it matched.
+     */
+    const cases: Array<[string, Saved]> = [
+      ['a vulnerability without its version', { app: cargoReport([['rsa', '', 'RUSTSEC-2023-0071']]) }],
+      [
+        'a count the list disagrees with',
+        { app: { ...cargoReport(), vulnerabilities: { found: true, count: 1, list: [] } } },
+      ],
+      ['warnings that are not a list', { app: { ...cargoReport(), warnings: { unsound: null } } }],
+      [
+        'an advisory without the versions it matched',
+        {
+          prod: {
+            ...pnpmReport(),
+            advisories: { '1': { module_name: 'devalue', github_advisory_id: 'GHSA-x', findings: [] } },
+          },
+        },
+      ],
+    ];
+    for (const [label, scans] of cases) {
+      const result = report(saved(scans), registerOf([]));
+      expect(result.status, `${label}\n${result.output}`).toBe(1);
+      expect(section(result.output, 'SCAN FAILED'), label).toHaveLength(1);
+    }
+
+    // A saved report it cannot even open fails that scan, and the rest still run.
+    const dir = saved({ app: null, crates: cargoReport([RSA]) });
+    mkdirSync(join(dir, 'advisories-cargo-app.json'));
+    const result = report(dir, registerOf([]));
+    expect(section(result.output, 'SCAN FAILED').join('\n')).toContain('src-tauri/Cargo.lock');
+    expect(section(result.output, 'NEW').join('\n')).toContain('crates/Cargo.lock  rsa 0.9.10');
+  });
+
+  it('saves what the scanners print, and never an empty file', () => {
+    /*
+     * The publish job attaches every file in provenance/ to the GitHub
+     * release, and GitHub refuses a zero-byte asset. A cargo audit that could
+     * not fetch its database prints nothing, and saving that would turn a
+     * reported failure into a failed publish.
+     */
+    const bin = scratch();
+    writeFileSync(join(bin, 'cargo'), '#!/bin/sh\necho "error: could not fetch advisory database" >&2\nexit 1\n');
+    writeFileSync(join(bin, 'pnpm'), `#!/bin/sh\necho '${JSON.stringify(pnpmReport())}'\n`);
+    chmodSync(join(bin, 'cargo'), 0o755);
+    chmodSync(join(bin, 'pnpm'), 0o755);
+    const out = scratch();
+
+    const result = spawnSync(
+      process.execPath,
+      [SCRIPT, '--save', out, '--register', join(REPO_ROOT, REGISTER), '--today', TODAY],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTIONS: '', PATH: `${bin}${delimiter}${process.env.PATH}` },
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect(result.status, output).toBe(1);
+    expect(section(output, 'SCAN FAILED').join('\n')).toContain('could not fetch advisory database');
+    expect(readdirSync(out)).toEqual(['advisories-pnpm-prod.json']);
+    expect(JSON.parse(readFileSync(join(out, 'advisories-pnpm-prod.json'), 'utf8'))).toEqual(pnpmReport());
   });
 
   it('reports every kind of cargo warning, including a yank with no advisory id', () => {
@@ -297,11 +378,14 @@ describe('the advisory report', () => {
     expect(section(result.output, 'NEW').join('\n')).toContain('undici 6.21.0');
   });
 
-  it('refuses a register entry without a recognised reach, a reason or a review date', () => {
+  it('refuses a register entry without a scanned lockfile, a recognised reach, a reason or a review date', () => {
     for (const broken of [
+      // A lockfile nothing scans matches nothing, and could never be reported stale.
+      exception({ lockfile: 'src-tauri/Cargo.lok' }),
       exception({ reach: 'fine' }),
       exception({ why: ' ' }),
       exception({ reviewBy: 'next year' }),
+      exception({ reviewBy: '2026-02-30' }),
       exception({ findings: [] }),
     ]) {
       const result = report(saved({}), registerOf([broken]));
@@ -354,7 +438,7 @@ describe('docs/advisory-exceptions.json', () => {
     expect(stale, 'update or remove these exceptions').toEqual([]);
   });
 
-  it('points every deferred fix at the issue that tracks it', () => {
+  it('links a follow-up only to an issue in this repository', () => {
     for (const { followUp } of register.exceptions) {
       if (followUp === undefined) continue;
       expect(followUp).toMatch(/^https:\/\/github\.com\/gregpriday\/candidcue\/issues\/\d+$/);
