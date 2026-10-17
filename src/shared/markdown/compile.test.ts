@@ -1453,3 +1453,61 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
     expect(normalizedWords(quoted)).toContain('candidcue');
   });
 });
+
+/*
+ * Footnotes parse and are not rendered. They used to be dropped with nothing to
+ * say so — the one construct whose text vanished silently, where every other
+ * unrendered node becomes readable source with an `unsupported_syntax` warning.
+ * They are still not rendered; the loss is now reported, and nothing else moves.
+ */
+describe('compile: footnotes are reported, not silently lost', () => {
+  const footnoted = 'Revenue grew[^q3] last quarter.\n\n[^q3]: Unaudited figures.\n';
+
+  function footnoteWarnings(script: CompiledScript) {
+    return script.diagnostics.filter(
+      (d) => d.code === 'unsupported_syntax' && /footnote/i.test(d.message),
+    );
+  }
+
+  it('warns once per footnote, without blocking, and says what is lost', () => {
+    const script = compile(footnoted, OPTS);
+    const warnings = footnoteWarnings(script);
+    expect(warnings).toHaveLength(1);
+    const [warning] = warnings;
+    expect(warning!.severity).toBe('warning');
+    expect(warning!.blocking).toBe(false);
+    expect(warning!.message).toContain('[^q3]');
+    expect(warning!.message).toMatch(/not shown or read/);
+    // It points at the definition, where the lost text is.
+    const { utf16Start, utf16End } = warning!.source!;
+    expect(footnoted.slice(utf16Start, utf16End)).toBe('[^q3]: Unaudited figures.');
+  });
+
+  it('warns once for a footnote however many times it is cited', () => {
+    const cited = 'One[^a] and two[^a] and three[^a].\n\n[^a]: The note.\n';
+    expect(footnoteWarnings(compile(cited, OPTS))).toHaveLength(1);
+    const two = 'One[^a] and two[^b].\n\n[^a]: First.\n\n[^b]: Second.\n';
+    expect(footnoteWarnings(compile(two, OPTS))).toHaveLength(2);
+  });
+
+  it('warns about a footnote defined inside a quote or a list item', () => {
+    expect(footnoteWarnings(compile('> Quoted[^n].\n>\n> [^n]: Nested.\n', OPTS))).toHaveLength(1);
+    expect(footnoteWarnings(compile('- Listed[^n].\n\n  [^n]: Nested.\n', OPTS))).toHaveLength(1);
+  });
+
+  it('changes nothing it compiles: the same words, blocks and render as without the footnote', () => {
+    const script = compile(footnoted, OPTS);
+    const plain = compile('Revenue grew last quarter.\n', OPTS);
+    expect(normalizedWords(script)).toEqual(['revenue', 'grew', 'last', 'quarter']);
+    expect(normalizedWords(script)).toEqual(normalizedWords(plain));
+    expect(script.blocks.map((b) => b.kind)).toEqual(['paragraph']);
+    expect(flattenText(script.blocks[0]!.renderNodes)).toBe('Revenue grew last quarter.');
+    expect(JSON.stringify(script.blocks)).not.toContain('Unaudited');
+  });
+
+  it('says nothing about a script without one', () => {
+    expect(footnoteWarnings(compile('Revenue grew last quarter.\n', OPTS))).toEqual([]);
+    // `[^x]` with no definition is not a footnote to the parser: it is text.
+    expect(footnoteWarnings(compile('Revenue grew[^x] last quarter.\n', OPTS))).toEqual([]);
+  });
+});

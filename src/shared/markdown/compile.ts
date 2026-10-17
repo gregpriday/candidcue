@@ -109,6 +109,33 @@ function nodeEnd(node: MdNode): number {
 }
 
 /**
+ * The warning a footnote gets: the one construct that used to vanish silently.
+ *
+ * GFM footnotes parse, and nothing renders them — the `[^1]` marker is dropped
+ * where it is cited and the definition's text appears nowhere, on the glass or
+ * in what following listens for. Every other construct the compiler does not
+ * render becomes readable source text WITH this same warning (the default case
+ * at the top level), and a footnote got neither: the author's words were simply
+ * gone. It is still not rendered; what changes is that the loss is reported.
+ *
+ * Raised once per DEFINITION, which is where the lost text is and the only
+ * place a marker can come from (remark only parses `[^x]` as a reference when
+ * `x` is defined), so a footnote cited three times is one warning, not four.
+ * Nothing else changes: no block, no render node, no spoken token.
+ */
+function footnoteDiagnostic(node: MdNode): CompileDiagnostic {
+  const label = node.label ?? node.identifier ?? '';
+  return {
+    code: 'unsupported_syntax',
+    severity: 'warning',
+    message: `Footnotes are not supported: the text of footnote [^${label}] is not shown or read, and its marker is left out where it is cited.`,
+    blocking: false,
+    source: { utf16Start: nodeStart(node), utf16End: nodeEnd(node) },
+    suggestedAction: 'open_source',
+  };
+}
+
+/**
  * micromark skips a leading byte-order mark and counts every position from the
  * character after it, while the scanners and every `source.slice` here index
  * the real document, mark included. Left alone, every token mapped one
@@ -1064,7 +1091,9 @@ function walkPhrasing(ctx: WalkContext, container: SafeRenderNode[], node: MdNod
       return;
     }
     case 'footnoteReference':
-      return; // outside the supported baseline; ignore inline marker
+      // Not drawn. The definition it points at carries the warning that says
+      // so (`footnoteDiagnostic`); one per footnote rather than one per citation.
+      return;
     default: {
       for (const child of node.children ?? []) walkPhrasing(ctx, container, child);
       if (!node.children && node.value) {
@@ -1206,7 +1235,10 @@ function appendNestedBlock(
       return;
     }
     case 'definition':
+      return;
     case 'footnoteDefinition':
+      // A footnote defined inside a quote or a list item is lost just the same.
+      state.diagnostics.push(footnoteDiagnostic(child));
       return;
     default: {
       // Unknown nested structure: readable, never spoken (§22.7).
@@ -1603,8 +1635,10 @@ export function compile(source: string, options: CompileOptions): CompiledScript
         break;
       }
       case 'definition':
-      case 'footnoteDefinition':
         break; // metadata, never rendered
+      case 'footnoteDefinition':
+        state.diagnostics.push(footnoteDiagnostic(node));
+        break;
       default: {
         // Unsupported extension node: readable source text + warning (§22.7).
         const raw = source.slice(nodeStart(node), nodeEnd(node));
