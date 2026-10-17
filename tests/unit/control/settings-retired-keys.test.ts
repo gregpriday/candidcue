@@ -349,9 +349,10 @@ describe('#218 nothing writes the retired rows any more', () => {
   it("Rust's stored pointer delay changes nothing this side can see", async () => {
     ipc.serve(ipc.document({}));
     const hidden = await settings.getSettings();
+    // Rust dropped the field (#219), so this is what an older build stored.
     const shown = ipc.document({});
-    shown.value.stageBehavior.pointerHideDelaySeconds = 1.5;
-    ipc.serve(shown);
+    const stageBehavior = { ...shown.value.stageBehavior, pointerHideDelaySeconds: 1.5 };
+    ipc.serve({ ...shown, value: { ...shown.value, stageBehavior } });
     expect(await settings.getSettings()).toStrictEqual(hidden);
   });
 });
@@ -419,7 +420,7 @@ describe('#219 a document that still carries every field nothing read', () => {
   };
   function withoutRetired() {
     const doc = served();
-    const value = doc.value as Record<string, Record<string, unknown>>;
+    const value = doc.value as unknown as Record<string, Record<string, unknown>>;
     for (const path of retiredDocument.retired) {
       const [section, field] = path.split('.');
       expect(carries(value, path), `the fixture must carry ${path}`).toBe(true);
