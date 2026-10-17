@@ -381,7 +381,9 @@ export function stageSettingsFromSettings(
     phraseHighlight: t.phraseHighlight,
     semanticLineBreaks: t.semanticLineBreaks,
     textIntensity: t.textIntensity,
-    stageMode: t.stageMode,
+    // Only a stored `true` opts in. The overlay's fields are not validated on
+    // the way in, and anything else has to mean the default.
+    stageMode: t.diagnosticTake === true ? 'diagnostic' : 'clean',
     readingCue: t.readingCue,
     ...(reader ? { readingContext: 'reader' as const } : {}),
     ...(profile && display

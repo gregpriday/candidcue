@@ -177,3 +177,63 @@ describe('#215 nothing writes saveTranscript any more', () => {
     expect(overlay()).not.toHaveProperty('privacy');
   });
 });
+
+/*
+ * #300 — the stored `teleprompter.stageMode` is nobody's choice.
+ *
+ * No control ever wrote it, and the store saves a whole section at a time, so
+ * any teleprompter change at all carried the old `'diagnostic'` default into
+ * the overlay with it. Honouring that copy would keep those profiles in
+ * Diagnostic Take after the default moved; `diagnosticTake` is where a choice
+ * is recorded now.
+ */
+describe('#300 an overlay that still carries teleprompter.stageMode', () => {
+  function seed(teleprompter: Record<string, unknown>): void {
+    store.set(
+      settings.SETTINGS_OVERLAY_KEY,
+      JSON.stringify({ teleprompter, stage: { displayFingerprint: 'dsp-2' } }),
+    );
+  }
+
+  it('is ignored on read, and the rest of the section still applies', async () => {
+    for (const legacy of ['diagnostic', 'clean']) {
+      seed({ stageMode: legacy, fontSizePx: 72 });
+      const loaded = await settings.getSettings();
+      expect(Object.hasOwn(loaded.teleprompter, 'stageMode'), legacy).toBe(false);
+      expect(loaded.teleprompter.diagnosticTake, legacy).toBe(false);
+      expect(loaded.teleprompter.fontSizePx, legacy).toBe(72);
+      expect(loaded.stage.displayFingerprint, legacy).toBe('dsp-2');
+    }
+    // A read never writes: the stale key is still there until a save.
+    expect((overlay().teleprompter as Record<string, unknown>).stageMode).toBe('clean');
+  });
+
+  it('honours a stored diagnosticTake beside it', async () => {
+    seed({ stageMode: 'clean', diagnosticTake: true });
+    const loaded = await settings.getSettings();
+    expect(loaded.teleprompter.diagnosticTake).toBe(true);
+    expect(Object.hasOwn(loaded.teleprompter, 'stageMode')).toBe(false);
+  });
+
+  it('loses the stale key on the next teleprompter save and keeps everything else', async () => {
+    seed({ stageMode: 'diagnostic', fontSizePx: 72 });
+    const loaded = await settings.getSettings();
+    // The store sends the WHOLE section, as `sendPatchBatch` does.
+    await settings.updateSettings(4, {
+      teleprompter: { ...loaded.teleprompter, diagnosticTake: true },
+    });
+    const stored = overlay().teleprompter as Record<string, unknown>;
+    expect(stored).not.toHaveProperty('stageMode');
+    expect(stored).toMatchObject({ diagnosticTake: true, fontSizePx: 72 });
+    expect(overlay()).toMatchObject({ stage: { displayFingerprint: 'dsp-2' } });
+  });
+
+  it('cannot be written back by a legacy-shaped patch', async () => {
+    await settings.updateSettings(4, {
+      teleprompter: { stageMode: 'diagnostic', fixedSpeedWpm: 160 },
+    } as never);
+    expect(overlay().teleprompter).not.toHaveProperty('stageMode');
+    const loaded = await settings.getSettings();
+    expect(loaded.teleprompter.diagnosticTake).toBe(false);
+  });
+});

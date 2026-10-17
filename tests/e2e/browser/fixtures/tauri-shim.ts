@@ -105,6 +105,16 @@ export interface ShimConfig {
    * it. Absent by default, so the app takes its own defaults.
    */
   following?: Record<string, unknown>;
+  /**
+   * Start in Diagnostic Take (#300), for a spec that reads the stage's
+   * `.diagnostics` readout or transcript bar. Absent leaves the app's own
+   * default, which is Clean.
+   *
+   * Seeded into the localStorage overlay, where the preference lives, and only
+   * when the overlay does not already state one — so a reload does not undo a
+   * choice the spec has made since.
+   */
+  diagnosticTake?: boolean;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -122,6 +132,22 @@ function shimBody(config: ShimConfig): void {
   if (config.welcomed) {
     try {
       localStorage.setItem(WELCOMED_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+  if (config.diagnosticTake !== undefined) {
+    const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+    try {
+      const overlay = JSON.parse(localStorage.getItem(OVERLAY_KEY) ?? '{}') as Record<
+        string,
+        Record<string, unknown> | undefined
+      >;
+      const teleprompter = overlay.teleprompter ?? {};
+      if (!('diagnosticTake' in teleprompter)) {
+        overlay.teleprompter = { ...teleprompter, diagnosticTake: config.diagnosticTake };
+        localStorage.setItem(OVERLAY_KEY, JSON.stringify(overlay));
+      }
     } catch {
       /* ignore */
     }

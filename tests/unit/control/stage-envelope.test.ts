@@ -535,3 +535,36 @@ describe('the mirror a take is composed with', () => {
     expect(flipped.mirrorY).toBe(true);
   });
 });
+
+/*
+ * #300 — a take opens in Clean Take unless somebody chose Diagnostic.
+ *
+ * Diagnostic used to be the saved default, so every take drew the engine's
+ * readout and the raw transcript on the glass. `diagnosticTake` is the saved
+ * choice now, and this is the one seam it crosses on the way to the stage.
+ */
+describe('the take mode a saved profile composes', () => {
+  function withDiagnosticTake(value: unknown) {
+    const s = defaultAppSettings();
+    return { ...s, teleprompter: { ...s.teleprompter, diagnosticTake: value as boolean } };
+  }
+
+  it('is Clean Take on a fresh profile', () => {
+    expect(defaultAppSettings().teleprompter.diagnosticTake).toBe(false);
+    expect(stageSettingsFromSettings(defaultAppSettings()).stageMode).toBe('clean');
+  });
+
+  it('is Diagnostic Take once it has been switched on, and Clean again once it is off', () => {
+    expect(stageSettingsFromSettings(withDiagnosticTake(true)).stageMode).toBe('diagnostic');
+    expect(stageSettingsFromSettings(withDiagnosticTake(false)).stageMode).toBe('clean');
+  });
+
+  it('treats anything but a stored true as Clean Take', () => {
+    // The overlay's fields are not validated on the way in.
+    for (const value of ['diagnostic', 'true', 1, null, undefined]) {
+      expect(stageSettingsFromSettings(withDiagnosticTake(value)).stageMode, String(value)).toBe(
+        'clean',
+      );
+    }
+  });
+});

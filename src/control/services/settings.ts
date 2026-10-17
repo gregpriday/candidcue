@@ -297,17 +297,25 @@ function panelMirrorFromStored(stored: unknown): OpticalSettings['panelMirror'] 
 }
 
 /**
- * The teleprompter section without the retired global mirror (#206).
+ * The teleprompter section without the retired global mirror (#206) or the
+ * retired `stageMode` (#300).
  *
  * Every overlay that ever held the old switches still carries `mirrorX` and
  * `mirrorY`, and `mergeSection` would spread them straight back onto a section
  * whose type no longer has them — a value nothing should read, sitting where
  * anything that spreads the section would pass it on.
+ *
+ * `stageMode` is the same, and it matters more: it was never anybody's choice.
+ * No control ever wrote it, and the store saves whole sections, so the
+ * `'diagnostic'` default rode into the overlay on any teleprompter change at
+ * all. Honouring it would keep those profiles in Diagnostic Take after the
+ * default moved. `diagnosticTake` is the field a choice is recorded in.
  */
-function withoutLegacyMirror<T extends object>(section: T): T {
+function withoutRetiredTeleprompterKeys<T extends object>(section: T): T {
   const copy = { ...section } as Record<string, unknown>;
   delete copy['mirrorX'];
   delete copy['mirrorY'];
+  delete copy['stageMode'];
   return copy as T;
 }
 
@@ -744,7 +752,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // `fixedSpeedWpm` is Rust-owned and wins, for the same reason as the two in
     // `general` (#271). `hidePointer` has the same shape and is deliberately
     // left on the merge: #218 removes it.
-    teleprompter: withoutLegacyMirror({
+    teleprompter: withoutRetiredTeleprompterKeys({
       ...mergeSection(mapped.teleprompter, overlay.teleprompter),
       fixedSpeedWpm: mapped.teleprompter.fixedSpeedWpm,
     }),
@@ -937,6 +945,9 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       // never reached Rust, and the per-panel move still needs it until a pin
       // or a calibration names the glass.
       delete merged.mirrorX;
+      // Replaced by `diagnosticTake` (#300). Every stored copy is the old
+      // default, saved alongside some other change, never a choice.
+      delete merged.stageMode;
     }
     (overlay as Record<string, object>)[key] = merged;
   }
