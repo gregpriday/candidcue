@@ -83,7 +83,6 @@ import {
   checkThenStart,
   checkThenStartTake,
   dismissTakeReadiness,
-  recheckTakeReadiness,
   startAnyway,
   takeReadinessPrompt,
 } from '../../../src/control/lib/check-then-start';
@@ -435,16 +434,37 @@ describe('microphone access before the take', () => {
     expect(findingIds()).toEqual(['mic_permission_denied']);
 
     // Still refused: the sheet stays, nothing launches.
-    await recheckTakeReadiness();
+    h.requestMicrophoneAccess.mockResolvedValue('denied');
+    await allowMicrophoneForTake();
     expect(h.startTake).not.toHaveBeenCalled();
     expect(findingIds()).toEqual(['mic_permission_denied']);
 
     // Allowed in System Settings, then Try again: the SAME launch goes.
     h.readMicrophonePermission.mockResolvedValue('granted');
-    await recheckTakeReadiness();
+    h.requestMicrophoneAccess.mockResolvedValue('granted');
+    await allowMicrophoneForTake();
     expect(h.startTake).toHaveBeenCalledTimes(1);
     expect(h.startTake).toHaveBeenCalledWith('script-1', { presentationMode: 'prompter' });
     expect(get(takeReadinessPrompt)).toBeNull();
+  });
+
+  it('believes a refusal it witnessed over the OS saying allowed', async () => {
+    // macOS can show the switch on while this running app is still refused
+    // until it is reopened. Launching on the OS's word would meet that refusal
+    // over the prompter — the thing this sheet exists to prevent.
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1');
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    h.requestMicrophoneAccess.mockResolvedValue('denied');
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+    expect(get(takeReadinessPrompt)?.verdict.findings[0]?.detail).toMatch(/quit and reopen/i);
+
+    // And it is not sticky: a request that works launches.
+    h.requestMicrophoneAccess.mockResolvedValue('granted');
+    await allowMicrophoneForTake();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
   });
 
   it('asks for a never-asked microphone from the sheet, then launches on a grant', async () => {

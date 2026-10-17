@@ -1403,6 +1403,12 @@
    * System Settings while it was in the background.
    */
   let micAccess = $state<MicrophonePermission>('unsupported');
+  /**
+   * Which native read may still land. Bumped by every read, by leaving the
+   * section, and by a grant witnessed here — a read that was already in flight
+   * then describes the OS from before the user said yes, and must not undo it.
+   */
+  let micAccessRead = 0;
   /** A request is in flight; the OS prompt may be up. */
   let micRequesting = $state(false);
   /**
@@ -1557,11 +1563,10 @@
    */
   $effect(() => {
     if (section !== 'audio') return undefined;
-    let request = 0;
     const read = async (): Promise<void> => {
-      const mine = (request += 1);
+      const mine = (micAccessRead += 1);
       const access = await readMicrophonePermission();
-      if (mine !== request) return;
+      if (mine !== micAccessRead) return;
       micAccess = access;
       if (isMicrophoneRefused(access)) {
         micAdopted = false;
@@ -1572,7 +1577,7 @@
     const onFocus = (): void => void read();
     window.addEventListener('focus', onFocus);
     return () => {
-      request += 1;
+      micAccessRead += 1;
       window.removeEventListener('focus', onFocus);
     };
   });
@@ -1801,7 +1806,8 @@
         micAdopted = false;
         micRetryRefused = false;
         // Witnessed: the device opened, so the OS has said yes, whatever an
-        // earlier read said (#303).
+        // earlier read said — or one still in flight is about to (#303).
+        micAccessRead += 1;
         micAccess = 'granted';
         await adoptGrantedMicrophone();
         // Remember it. WKWebView cannot report permission state, so this flag

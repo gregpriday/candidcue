@@ -2476,6 +2476,13 @@ export function hardPause(): void {
 export function resumeSession(): Promise<void> {
   const s0 = get(state);
   if (!s0.active) return Promise.resolve();
+  /*
+   * Whether this resume REOPENS capture rather than un-pausing a running one:
+   * after a hard pause, or with no voice running at all (a failed start, an
+   * auto-disconnect). Only then is a success news about the input — a soft
+   * resume over a dead microphone is still a dead microphone.
+   */
+  const reopens = s0.paused === 'hard' || s0.connection === 'offline';
   state.update((s) => ({ ...s, connection: 'reconnecting' }));
   // Un-pausing the take is not switching following back on. A presenter who
   // turned it off, or a transport rolling in its place, still has it off after
@@ -2504,8 +2511,8 @@ export function resumeSession(): Promise<void> {
     .resume()
     .then(() => {
       if (resuming !== pipeline) return;
-      // Capture is open, so a failed start's "no audio" is history.
-      voicePillDeviceLost = false;
+      // Capture was reopened, so a failed start's "no audio" is history.
+      if (reopens) voicePillDeviceLost = false;
       state.update((s) => ({
         ...s,
         paused: 'none',
@@ -2545,17 +2552,27 @@ export function resumeSession(): Promise<void> {
        * from the menu, say — is a newer decision a late failure may not
        * overrule.
        */
-      const refused = errorCode(err) === 'MIC_PERMISSION_DENIED';
+      const code = errorCode(err);
+      const refused = code === 'MIC_PERMISSION_DENIED';
       state.update((s) => ({
         ...s,
         paused: pauseCount === releasing ? 'none' : s.paused,
         micState: 'disconnected',
         connection: 'offline',
+        // As every reopen classifies it (#303): a refusal is no device fault,
+        // and a device that failed is one the picker can answer.
         microphoneRefused: refused,
+        inputDeviceLost: refused
+          ? false
+          : s.inputDeviceLost || (code !== null && code.startsWith('MIC_')),
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
-      if (refused) reportMicrophoneRefused();
-      else showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
+      if (refused) {
+        reportMicrophoneRefused();
+      } else {
+        dismissToastByKey(TOAST_MIC_REFUSED);
+        showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
+      }
     });
 }
 

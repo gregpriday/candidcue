@@ -27,7 +27,6 @@
     allowMicrophoneForTake,
     checkThenStartTake,
     dismissTakeReadiness,
-    recheckTakeReadiness,
     startAnyway,
     takeReadinessPrompt,
   } from './lib/check-then-start';
@@ -1371,7 +1370,6 @@ import { rememberReaderFrame } from './lib/reader-frame';
     verdict={$takeReadinessPrompt?.verdict ?? null}
     onstart={() => void startAnyway()}
     onallowmicrophone={allowMicrophoneForTake}
-    onrecheck={recheckTakeReadiness}
     onclose={dismissTakeReadiness}
   />
   <!--

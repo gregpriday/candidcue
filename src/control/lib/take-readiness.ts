@@ -307,7 +307,7 @@ export function microphoneAccessFinding(
         severity: 'warning',
         label: 'Microphone',
         detail:
-          'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
+          'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen CandidCue.',
         action: { label: 'Open System Settings', microphone: 'privacy' },
       };
     case 'restricted':

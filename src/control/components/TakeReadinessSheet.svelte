@@ -24,14 +24,16 @@
     verdict: ReadinessVerdict | null;
     /** Launch anyway. Absent for a blocked take — there is nothing to launch. */
     onstart?: () => void;
-    /** Ask the OS for the microphone, then check again (#303). */
+    /**
+     * Ask for the microphone, then check again (#303) — both "Allow microphone"
+     * and the "Try again" beside a refusal, which must ask too: only a real
+     * request can tell an allowed switch from a still-refused app.
+     */
     onallowmicrophone?: () => Promise<void>;
-    /** Check this launch again — after a change made in System Settings. */
-    onrecheck?: () => Promise<void>;
     onclose: () => void;
   }
 
-  let { verdict, onstart, onallowmicrophone, onrecheck, onclose }: Props = $props();
+  let { verdict, onstart, onallowmicrophone, onclose }: Props = $props();
 
   /*
    * One microphone action at a time. "Allow" can hold the OS prompt open for as
@@ -87,7 +89,7 @@
                   size="sm"
                   variant="ghost"
                   disabled={micBusy}
-                  onclick={() => void runMicrophoneAction(onrecheck)}
+                  onclick={() => void runMicrophoneAction(onallowmicrophone)}
                 >
                   Try again
                 </Button>

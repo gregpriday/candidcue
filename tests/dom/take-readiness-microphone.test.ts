@@ -44,10 +44,15 @@ function button(label: string): HTMLButtonElement | undefined {
 }
 
 describe('the readiness sheet for a refused microphone', () => {
-  it('opens the privacy pane, and re-checks beside it', async () => {
-    const onrecheck = vi.fn(async () => {});
+  it('opens the privacy pane, and asks again beside it', async () => {
+    const onallowmicrophone = vi.fn(async () => {});
     render(TakeReadinessSheet, {
-      props: { verdict: verdict('denied'), onstart: () => {}, onrecheck, onclose: () => {} },
+      props: {
+        verdict: verdict('denied'),
+        onstart: () => {},
+        onallowmicrophone,
+        onclose: () => {},
+      },
     });
 
     await fireEvent.click(button('Open System Settings')!);
@@ -55,8 +60,10 @@ describe('the readiness sheet for a refused microphone', () => {
     // Not the app's own Settings window: that has no switch for this.
     expect(opened.settings).not.toHaveBeenCalled();
 
+    // A real request, not a re-read: only that can tell an allowed switch from
+    // an app that is still refused until it is reopened.
     await fireEvent.click(button('Try again')!);
-    expect(onrecheck).toHaveBeenCalledTimes(1);
+    expect(onallowmicrophone).toHaveBeenCalledTimes(1);
     // A warning, so going past it stays possible.
     expect(button('Start anyway')).toBeDefined();
   });

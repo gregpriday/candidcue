@@ -20,7 +20,7 @@ import { startTake, type StartTakeOptions } from './start-take';
 import { isCompileSettledForScript } from './editor-readiness';
 import { matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
-import { readMicrophonePermission } from '../services/microphone-permission';
+import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
 import { describeError } from '../services/errors';
 import { showToast } from '../stores/toasts';
 import type { AppSettings, PresentationMode } from '../services/settings-types';
@@ -40,6 +40,13 @@ export interface LaunchIntent {
   practice?: boolean;
   /** Somebody asked to see the sheet ("Review take setup…"). */
   requested?: boolean;
+  /**
+   * The microphone was just refused to an explicit request from the sheet
+   * (#303). It outranks the OS's own answer: macOS can report CandidCue as
+   * allowed while the running webview is still refused until a relaunch, and
+   * launching on the OS's word would meet that refusal over the prompter.
+   */
+  microphoneRefused?: boolean;
 }
 
 /** The sheet, held open over a launch that has not happened yet. */
@@ -51,11 +58,11 @@ export interface TakeReadinessPrompt {
    */
   start: () => Promise<unknown>;
   /**
-   * Run this same launch through the check again — for when the user has
-   * changed something the sheet reported (#303). Launches if nothing is left
-   * to say; otherwise the sheet shows the new verdict.
+   * Run this same launch through the check again, after the sheet's microphone
+   * action has had its answer (#303). Launches if nothing is left to say;
+   * otherwise the sheet shows the new verdict.
    */
-  recheck: () => Promise<void>;
+  recheck: (witnessed: { microphoneRefused: boolean }) => Promise<void>;
 }
 
 const prompt = writable<TakeReadinessPrompt | null>(null);
@@ -196,7 +203,10 @@ export async function resolveTakeReadiness(
     modelInstalling: model.installing,
     pinnedMicLabel: mic.label,
     pinnedMicAvailable: mic.available,
-    micPermission,
+    micPermission:
+      intent.microphoneRefused === true && !isMicrophoneRefused(micPermission)
+        ? 'denied'
+        : micPermission,
     spokenWordCount: scriptFactsKnown ? (result?.spokenWordCount ?? 0) : 1,
     blockingDiagnostics: scriptFactsKnown
       ? (result?.diagnostics ?? []).filter((d) => d.blocking).length
@@ -238,8 +248,10 @@ export async function checkThenStart(
     // Only while this is still the newest check. A Present pressed since is
     // the newer request, and re-running this one would retire it and launch
     // the older take in its place.
-    recheck: () =>
-      mine === generation ? checkThenStart(scriptId, intent, launch) : Promise.resolve(),
+    recheck: (witnessed) =>
+      mine === generation
+        ? checkThenStart(scriptId, { ...intent, microphoneRefused: witnessed.microphoneRefused }, launch)
+        : Promise.resolve(),
   });
 }
 
@@ -281,24 +293,17 @@ export async function startAnyway(): Promise<void> {
 }
 
 /**
- * The sheet's "Try again": check the held launch once more (#303).
- *
- * For a refusal fixed in System Settings, this is the whole retry — the OS's
- * answer is read again, and the take launches if nothing is left to report.
- */
-export async function recheckTakeReadiness(): Promise<void> {
-  const held = get(prompt);
-  if (held === null) return;
-  await held.recheck();
-}
-
-/**
- * The sheet's "Allow microphone" (#303).
+ * The sheet's microphone actions — "Allow microphone", and "Try again" beside
+ * a refusal (#303).
  *
  * The one place before a take that may show the OS prompt, because it is an
  * explicit action (§28.1) — and the reason it exists: on a first take the
  * prompt used to appear only after Present had turned the window into the
  * prompter. The probe stream is released at once; the take opens its own.
+ *
+ * Try again asks too, rather than re-reading the OS's answer: macOS can report
+ * the switch as on while this running app is still refused, and only a real
+ * request tells the two apart.
  *
  * Whatever the answer, the launch is checked again rather than started: a
  * grant with nothing else to report launches, and a refusal comes back as the
@@ -307,8 +312,9 @@ export async function recheckTakeReadiness(): Promise<void> {
 export async function allowMicrophoneForTake(): Promise<void> {
   const held = get(prompt);
   if (held === null) return;
+  let answer: 'granted' | 'denied';
   try {
-    const answer = await getVoiceFacade().requestMicrophoneAccess();
+    answer = await getVoiceFacade().requestMicrophoneAccess();
     // The same record Settings keeps, for platforms that cannot report it.
     if (answer === 'granted' && !get(settings).audio.microphoneGranted) {
       void patchSettings('audio', { microphoneGranted: true }).catch(() => {});
@@ -327,5 +333,5 @@ export async function allowMicrophoneForTake(): Promise<void> {
   }
   // Dismissed, or replaced by another launch, while the OS was asking.
   if (get(prompt) !== held) return;
-  await held.recheck();
+  await held.recheck({ microphoneRefused: answer === 'denied' });
 }

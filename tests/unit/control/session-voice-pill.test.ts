@@ -1000,6 +1000,35 @@ describe('a refused microphone', () => {
     expect(answered).toBe(true);
   });
 
+  it('classifies a paused Try again that finds no device as a device fault', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pauseListening();
+    pipeline.captured.resumeError = refusal('MIC_DEVICE_MISSING');
+    const retry = retryMicrophone();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retry).toBe(false);
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(false);
+    expect(s.inputDeviceLost, 'the picker answers a missing device').toBe(true);
+    expect(notice(), 'the refusal notice no longer describes the take').toBeUndefined();
+  });
+
+  it('keeps a genuinely lost input on the stage through a soft pause and resume', async () => {
+    // Space twice over a dead microphone un-pauses the capture it already had;
+    // nothing was reopened, so nothing about the input is news.
+    start();
+    (deps().onConnectionState as unknown as (state: string) => void)('connected');
+    (deps().onInputDeviceLost as unknown as (code: string) => void)('MIC_DEVICE_LOST');
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('fault');
+
+    pauseListening();
+    await resumeSession();
+    (deps().onTranscriptText as unknown as (text: string, final: boolean) => void)('hello', false);
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('fault');
+  });
+
   it('carries the refusal onto the summary', async () => {
     await refusedTake('MIC_PERMISSION_DENIED');
     expect(stopSession().microphoneRefused).toBe(true);
