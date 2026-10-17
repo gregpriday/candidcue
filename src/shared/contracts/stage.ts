@@ -678,22 +678,28 @@ export interface StageEscapePayload {
  */
 export type StageIntent =
   /**
-   * One settled wheel gesture, in logical stage pixels (already applied
-   * locally).
+   * One settled manual gesture — the wheel, or the arrow and Page keys — in
+   * logical stage pixels (already applied locally).
    *
    * `anchorToken` is the half that was missing for as long as this intent has
    * existed. The stage moved its own document and told nobody where to, so the
    * tracker's cursor stayed where it was: the presenter scrolled back a
    * paragraph to re-read a line, spoke, and the document ran forward at the
-   * profile's ceiling to a place they were no longer looking at. The wheel had
-   * no way to say "I am here" while the arrow keys — which travel as
-   * `manual_step` and reach `set_manual_position` — always had.
+   * profile's ceiling to a place they were no longer looking at.
    *
-   * Null means the gesture was a LOOK, not a move: the presenter glanced ahead
-   * and their place has not changed, so re-anchoring the tracker on it would
-   * throw away a lock that is still correct. The stage decides which it was,
-   * because the distinction is "has the place I was reading left the glass",
-   * and only the stage knows how tall the glass is.
+   * The keys had the mirror-image fault (#282). They travelled as a step
+   * request — a direction and nothing else — which control spent as exactly
+   * one sentence from wherever the aligner was, so Page Down moved the glass
+   * most of a screen and then dragged it back to one sentence on. They report
+   * here now, because only the stage knows where the document went.
+   *
+   * Null from a WHEEL gesture means it was a LOOK, not a move: the presenter
+   * glanced ahead and their place has not changed, so re-anchoring the tracker
+   * on it would throw away a lock that is still correct. The stage decides
+   * which it was, because the distinction is "has the place I was reading left
+   * the glass", and only the stage knows how tall the glass is. A gesture with
+   * a key in it is always a move, so there null means only that the geometry
+   * could not say where the reading line is — and a guess would be worse.
    */
   | {
       kind: 'manual_scroll';
@@ -713,8 +719,6 @@ export type StageIntent =
        */
       atMs: number;
     }
-  /** Arrow/page keys: semantic step requests. */
-  | { kind: 'manual_step'; direction: 'forward' | 'back'; unit: 'line' | 'paragraph' }
   /** Space bar. */
   | { kind: 'toggle_pause' }
   /**

@@ -1531,7 +1531,7 @@
    * the reset below is exactly the place it was missed.
    */
   let lastEscapeAt = Number.NEGATIVE_INFINITY;
-  /* ---------------------------------------------------------- wheel gesture --
+  /* --------------------------------------------------------- manual gesture --
    * One report per gesture, not one per 250 ms.
    *
    * The intent used to be throttled: the first wheel event armed a timer, and
@@ -1540,10 +1540,25 @@
    * carries one — where the presenter ended up, and whether they moved at all
    * or only looked. Half of a gesture answers that question wrong, and a long
    * scroll produced several halves.
+   *
+   * The arrow and Page keys are gestures too, and travel the same road (#282).
+   * They used to report a DIRECTION instead — "a step forward" — which control
+   * spent as exactly one sentence from wherever the aligner already was. So
+   * Page Down moved the glass most of a screen, the engine's answer arrived a
+   * moment later for a place one sentence on, and the document lurched back to
+   * it. The stage is the only party that knows where the document went, so it
+   * says that, the same way the wheel does.
+   *
+   * Sharing the gesture rather than reporting each press is deliberate. A held
+   * Page Down repeats every few tens of milliseconds, and an answer to one
+   * press that arrives after the next has landed names a line the hand has
+   * already left — the engine spends it as an ordinary re-anchor, a page back.
+   * One report when the keys go quiet has no such race, and it is also one
+   * correction in the summary, which is what holding a key down was.
    */
-  let wheelSettleTimer = 0;
+  let gestureSettleTimer = 0;
   /** When the gesture in progress began, or 0 between gestures. */
-  let wheelGestureStartedAtMs = 0;
+  let gestureStartedAtMs = 0;
   /**
    * Where the document sat when the gesture began, or null between gestures.
    *
@@ -1554,17 +1569,28 @@
    * rule read that as "nothing happened" and told the aligner nothing, which is
    * precisely the relocation this whole path exists to report.
    */
-  let wheelGestureStartPx: number | null = null;
+  let gestureStartPx: number | null = null;
+  /**
+   * Whether a key took part in the gesture in progress.
+   *
+   * A key is a decision to MOVE, so a gesture with one in it re-anchors the
+   * tracker wherever the geometry can say where the presenter now is. The
+   * wheel's look-or-move judgement exists because a wheel is also how somebody
+   * glances ahead; nobody presses Page Down to glance, and one arrow press
+   * never travels far enough to clear that bar, so the judgement would turn
+   * every arrow press into a look and leave the tracker behind.
+   */
+  let gestureByKey = false;
 
   /**
-   * Quiet time that ends a wheel gesture.
+   * Quiet time that ends a gesture.
    *
-   * A trackpad fling delivers events a few milliseconds apart and a notched
-   * wheel about every 50–120 ms, so 200 ms is comfortably past the gap inside a
-   * continuous gesture and comfortably short of the pause before somebody
-   * starts a new one.
+   * A trackpad fling delivers events a few milliseconds apart, a notched wheel
+   * about every 50–120 ms and a held key every 30–80 ms, so 200 ms is
+   * comfortably past the gap inside a continuous gesture and comfortably short
+   * of the pause before somebody starts a new one.
    */
-  const WHEEL_SETTLE_MS = 200;
+  const GESTURE_SETTLE_MS = 200;
 
   /**
    * How long a gesture may run before it reports anyway.
@@ -1573,9 +1599,9 @@
    * quiet window, and the tracker should not have to wait for them to stop
    * before it learns they have gone somewhere else.
    */
-  const WHEEL_MAX_GESTURE_MS = 1200;
+  const GESTURE_MAX_MS = 1200;
 
-  /* Whether the gesture moved the presenter or only showed them something:
+  /* Whether a wheel gesture moved the presenter or only showed them something:
      `manualScrollRelocated`, which is where that judgement is written down. */
 
   /*
@@ -1588,7 +1614,7 @@
    * for a less careful reader on the other end.
    */
   $effect(() => () => {
-    if (wheelSettleTimer) clearTimeout(wheelSettleTimer);
+    if (gestureSettleTimer) clearTimeout(gestureSettleTimer);
   });
 
   function onKeyDown(event: KeyboardEvent) {
@@ -1649,24 +1675,14 @@
       case 'ArrowUp': {
         event.preventDefault();
         const dir = event.key === 'ArrowDown' ? 1 : -1;
-        scriptLayer?.manualScrollBy(dir * (scriptLayer?.lineHeightPx() ?? 64));
-        sendIntent({
-          kind: 'manual_step',
-          direction: dir > 0 ? 'forward' : 'back',
-          unit: 'line',
-        });
+        moveByHand(dir * (scriptLayer?.lineHeightPx() ?? 64), true);
         break;
       }
       case 'PageDown':
       case 'PageUp': {
         event.preventDefault();
         const dir = event.key === 'PageDown' ? 1 : -1;
-        scriptLayer?.manualScrollBy(dir * vh * 0.8);
-        sendIntent({
-          kind: 'manual_step',
-          direction: dir > 0 ? 'forward' : 'back',
-          unit: 'paragraph',
-        });
+        moveByHand(dir * vh * 0.8, true);
         break;
       }
       case ' ': {
@@ -1795,35 +1811,59 @@
   function onWheel(event: WheelEvent) {
     if (app.blanked || !doc) return;
     event.preventDefault();
+    moveByHand(event.deltaY, false);
+  }
+
+  /**
+   * Move the document by hand now, and report where it went once the gesture
+   * settles. `byKey` marks the gesture as a decision to move (see
+   * `gestureByKey`).
+   */
+  function moveByHand(deltaPx: number, byKey: boolean) {
     // Read the position BEFORE the scroll lands, so the gesture's travel is
     // measured from where it actually started.
-    if (wheelGestureStartPx === null) {
-      wheelGestureStartPx = scriptLayer?.scrollPositionPx() ?? 0;
+    if (gestureStartPx === null) {
+      gestureStartPx = scriptLayer?.scrollPositionPx() ?? 0;
     }
-    scriptLayer?.manualScrollBy(event.deltaY);
+    if (byKey) gestureByKey = true;
+    scriptLayer?.manualScrollBy(deltaPx);
 
     const now = performance.now();
-    if (wheelGestureStartedAtMs === 0) wheelGestureStartedAtMs = now;
-    if (now - wheelGestureStartedAtMs >= WHEEL_MAX_GESTURE_MS) {
-      flushWheelGesture();
+    if (gestureStartedAtMs === 0) gestureStartedAtMs = now;
+    if (now - gestureStartedAtMs >= GESTURE_MAX_MS) {
+      flushManualGesture();
       return;
     }
-    if (wheelSettleTimer) clearTimeout(wheelSettleTimer);
-    wheelSettleTimer = window.setTimeout(flushWheelGesture, WHEEL_SETTLE_MS);
+    if (gestureSettleTimer) clearTimeout(gestureSettleTimer);
+    gestureSettleTimer = window.setTimeout(flushManualGesture, GESTURE_SETTLE_MS);
   }
 
   /** The gesture is over: report where it left the presenter. */
-  function flushWheelGesture() {
-    if (wheelSettleTimer) {
-      clearTimeout(wheelSettleTimer);
-      wheelSettleTimer = 0;
+  function flushManualGesture() {
+    if (gestureSettleTimer) {
+      clearTimeout(gestureSettleTimer);
+      gestureSettleTimer = 0;
     }
-    const startPx = wheelGestureStartPx;
-    wheelGestureStartedAtMs = 0;
-    wheelGestureStartPx = null;
+    const startPx = gestureStartPx;
+    const byKey = gestureByKey;
+    gestureStartedAtMs = 0;
+    gestureStartPx = null;
+    gestureByKey = false;
     if (startPx === null) return;
     const deltaPx = (scriptLayer?.scrollPositionPx() ?? startPx) - startPx;
-    const anchorToken = relocationAnchorToken();
+    /*
+     * A key that moved nothing re-anchors nothing.
+     *
+     * Page Down at the foot of the script is the case: the document is already
+     * as far down as it goes, so the reading line is not where the presenter
+     * is — the last lines they are reading sit below it, with the aligner on
+     * them. Re-seeding the tracker on the reading line would drag it back up to
+     * a place nobody went.
+     */
+    if (byKey && deltaPx === 0) return;
+    const anchorToken = byKey
+      ? (scriptLayer?.readingAnchorToken() ?? null)
+      : relocationAnchorToken();
     // Nothing moved and nowhere to send anybody: a wheel event the document
     // absorbed entirely is not news.
     if (deltaPx === 0 && anchorToken === null) return;

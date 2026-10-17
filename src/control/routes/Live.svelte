@@ -689,8 +689,6 @@ import { onShortcut } from '../lib/shortcuts';
   function handleEmbeddedStageIntent(intent: StageIntent): void {
     if (intent.kind === 'toggle_pause') {
       togglePlayPause();
-    } else if (intent.kind === 'manual_step') {
-      moveSentences(intent.direction === 'forward' ? 1 : -1);
     } else if (intent.kind === 'manual_scroll') {
       if (intent.anchorToken !== null) anchorManualScroll(intent.anchorToken, intent.atMs);
     } else if (intent.kind === 'toggle_follow') {

@@ -3393,9 +3393,9 @@
    * The token sitting on the reading line right now, or null when the geometry
    * cannot answer.
    *
-   * This is the wheel's answer to the question the arrow keys have always been
-   * able to answer: WHERE did the presenter just put themselves. A scroll moves
-   * the document and nothing else, so without this the tracker keeps its old
+   * This is how a manual gesture — the wheel, the arrow keys, Page Up and Page
+   * Down — answers WHERE the presenter just put themselves. A scroll moves the
+   * document and nothing else, so without this the tracker keeps its old
    * cursor and the next thing the presenter says is matched against a place
    * they have left.
    *

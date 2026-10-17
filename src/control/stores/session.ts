@@ -2433,9 +2433,9 @@ export function goToToken(tokenIndex: number): void {
  * where it was and the next sentence the presenter spoke was matched against a
  * place they had left — which either dragged the script back at the profile's
  * full forward speed, or held it in the wrong place for however long the
- * aligner took to relocate on evidence alone. The arrow keys never had this
- * problem: they travel as `manual_step`, and every one of them re-seeds the
- * cursor.
+ * aligner took to relocate on evidence alone. The arrow and Page keys arrive
+ * here too (#282): they used to ask for a one-sentence step instead, which
+ * re-seeded the cursor somewhere other than where the keys had put the glass.
  *
  * The correction COUNTS — `manualCorrectionCount` in the summary is a measure
  * of how much hand-holding the take needed, and this is exactly that.
