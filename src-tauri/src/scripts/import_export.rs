@@ -370,7 +370,11 @@ async fn import_bundle(
             .by_index(index)
             .map_err(|e| AppError::validation("The bundle is corrupt.")
                 .with_log(format!("zip entry: {e}")))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| AppError::validation("The bundle is corrupt.")
+                .with_log(format!("zip entry name: {e}")))?
+            .into_owned();
         if entry.is_dir() {
             continue;
         }

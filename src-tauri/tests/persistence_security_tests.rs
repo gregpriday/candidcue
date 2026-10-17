@@ -1156,11 +1156,11 @@ async fn a_bundle_asset_must_be_a_decodable_image() {
     }
 }
 
-/// RUSTSEC-2026-0367 to -0369 are in `zip`'s own extraction
+/// RUSTSEC-2026-0367 to -0369 were in `zip`'s own extraction
 /// (`ZipArchive::extract` and friends), which writes an archive's symlinks and
-/// Unix permission bits to disk. `docs/advisory-exceptions.json` accepts them
-/// because the importer never extracts: it reads entries into memory and writes
-/// assets itself. These hold it to that.
+/// Unix permission bits to disk. zip 9 fixed them, but the importer never
+/// depended on that: it does not extract, it reads entries into memory, refuses
+/// symlinks and writes assets itself. These hold it to that.
 #[tokio::test]
 async fn a_bundle_symlink_entry_is_refused() {
     let h = harness().await;
@@ -1195,8 +1195,10 @@ async fn a_bundle_asset_lands_without_its_archive_permission_bits() {
         (asset.as_str(), png.clone(), Some(0o107777)),
     ]);
     // The archive really carries the bits, or the assertion below proves nothing.
+    // Read the raw external attributes: since zip 9, `unix_mode()` clears the
+    // setuid, setgid and sticky bits before returning them.
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bundle[..])).unwrap();
-    assert_eq!(archive.by_name(&asset).unwrap().unix_mode(), Some(0o107777));
+    assert_eq!(archive.by_name(&asset).unwrap().external_attributes() >> 16, 0o107777);
     drop(archive);
 
     let imported = import_bundle_bytes(&h, bundle).await.expect("import");
@@ -1207,6 +1209,42 @@ async fn a_bundle_asset_lands_without_its_archive_permission_bits() {
         0,
         "the archive's special or execute bits reached disk: {mode:o}"
     );
+}
+
+/// The importer judges an entry by the name the archive carries. `zip` hands
+/// that name over without sanitising it, so a traversal or absolute name must
+/// reach `is_safe_relative_path` intact and be refused there, rather than be
+/// quietly rewritten into a path inside the bundle.
+#[tokio::test]
+async fn a_bundle_entry_with_an_unsafe_name_is_refused() {
+    let h = harness().await;
+    for name in [
+        "../escape.md",
+        "/absolute.md",
+        "assets/../escape.png",
+        "assets\\..\\escape.png",
+        "C:escape.md",
+    ] {
+        let before: i64 = sqlx::query_scalar("SELECT count(*) FROM scripts")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+        let bundle = zip_writer::write(&[
+            ("manifest.json", manifest_json(&[])),
+            ("script.md", b"# Bundled\n\nBody.\n".to_vec()),
+            (name, b"payload".to_vec()),
+        ]);
+        let err = import_bundle_bytes(&h, bundle)
+            .await
+            .expect_err(name);
+        assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{name}: {err:?}");
+
+        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM scripts")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+        assert_eq!(before, after, "{name} left a partial script behind");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,7 +1450,10 @@ async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
     .await
     .expect("bundle export");
     let mut archive = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).expect("zip");
-    let mut entries: Vec<String> = archive.file_names().map(str::to_string).collect();
+    let mut entries: Vec<String> = archive
+        .file_names()
+        .map(|name| name.expect("zip entry name").into_owned())
+        .collect();
     entries.sort();
     assert_eq!(
         entries,

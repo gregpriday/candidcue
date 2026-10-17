@@ -12,19 +12,6 @@
     {
       "lockfile": "src-tauri/Cargo.lock",
       "findings": [
-        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0367" },
-        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0368" },
-        { "package": "zip", "version": "2.4.2", "id": "RUSTSEC-2026-0369" }
-      ],
-      "reach": "unused-api",
-      "why": "zip ships: it reads and writes script bundles in src-tauri/src/scripts/import_export.rs. All three advisories are in ZipArchive::extract and ZipStreamReader::extract, which write archive symlinks and Unix permission bits to disk. The importer calls neither: it reads each entry into memory with by_index, refuses symlink entries and writes assets itself through atomic_write. The fix is only in zip 9, a major upgrade.",
-      "recheck": "Nothing under src-tauri/src or crates/ calls ZipArchive::extract, ZipArchive::extract_unwrapped_root_dir or ZipStreamReader::extract, or sets a file's permissions from an entry's unix_mode. src-tauri/tests/persistence_security_tests.rs holds the importer to refusing a symlink entry and to landing an asset without its archive permission bits.",
-      "reviewBy": "2027-01-17",
-      "followUp": "https://github.com/gregpriday/candidcue/issues/368"
-    },
-    {
-      "lockfile": "src-tauri/Cargo.lock",
-      "findings": [
         { "package": "glib", "version": "0.18.5", "id": "RUSTSEC-2024-0429" },
         { "package": "proc-macro-error", "version": "1.0.4", "id": "RUSTSEC-2024-0370" }
       ],
