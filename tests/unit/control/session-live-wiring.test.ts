@@ -121,6 +121,7 @@ const {
   toggleVoiceFollow,
 } = await import('../../../src/control/stores/session');
 const { smoothFollow } = await import('../../../src/control/stores/smooth-follow');
+const { resolveTakeOutcome } = await import('../../../src/control/lib/take-outcome');
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
@@ -1002,6 +1003,11 @@ describe('#275 — manual moves while the take is paused or not following', () =
       moveSentences(1);
       await vi.advanceTimersByTimeAsync(1000);
     }
+    // Back on for a second, so there is following time to be a share OF — the
+    // paused stretch is not in it any more (#287), and without this the share
+    // would be null whatever the steps had been credited.
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(1000);
 
     expect(stopSession().followingShare).toBe(0);
   });
@@ -1285,5 +1291,247 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     hold(false);
     expect(get(session).voiceFollow, 'the last take’s pause is not this one’s').toBe(true);
     expect(voiceReaches(compiled.sentences[1]!.startTokenIndex)).toBe(true);
+  });
+});
+
+/**
+ * #287 — following is judged on the time it was asked to run.
+ *
+ * The share divided by the whole pass, so a minute of Space was a minute of
+ * following failing and a take auto-scroll rolled from the first line had
+ * "did not track". These drive the real store and the real driver, because
+ * the bug lived in how the two account for time between them.
+ */
+describe('#287 — time the presenter set following aside is not charged to following', () => {
+  const SOURCE =
+    '# Opening\n\nFirst sentence of the opening. Second sentence of the opening.\n\n' +
+    '## Close\n\nThird sentence near the close. Fourth and final sentence.\n';
+
+  let seq = 0;
+
+  function voiceAt(token: number): Record<string, unknown> {
+    seq += 1;
+    return {
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: token,
+      observedToken: token,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000 * seq,
+      atAudioMs: 1000 * seq,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: token,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: token,
+      confirmedAtom: token,
+    };
+  }
+
+  function feed(snapshot: Record<string, unknown>): void {
+    if (!alignmentFeed.push) throw new Error('the take never subscribed to the alignment feed');
+    alignmentFeed.push(snapshot);
+  }
+
+  function pipelineCallback<T>(name: string): T {
+    const callback = pipeline.captured.deps?.[name];
+    if (!callback) throw new Error('the voice pipeline was never constructed');
+    return callback as unknown as T;
+  }
+
+  /** Words the recogniser finalised — without them every take is "nothing was transcribed". */
+  function heard(text: string): void {
+    pipelineCallback<(text: string, final: boolean) => void>('onTranscriptText')(text, true);
+  }
+
+  function hold(held: boolean): void {
+    pipelineCallback<(held: boolean, reason: string | null) => void>('onFollowingHold')(
+      held,
+      held ? 'reconnecting' : null,
+    );
+  }
+
+  /**
+   * A steady read: a snapshot a second for `seconds` seconds, every gap well
+   * under the credit cap, ending on a snapshot so the last second is booked.
+   */
+  async function follow(seconds: number): Promise<void> {
+    for (let second = 0; second < seconds; second += 1) {
+      feed(voiceAt(1));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    feed(voiceAt(1));
+  }
+
+  async function startScript() {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    heard('first sentence of the opening second sentence of the opening');
+    return compiled;
+  }
+
+  beforeEach(() => {
+    seq = 0;
+  });
+
+  it.each([
+    ['a Space pause', () => togglePlayPause(), () => togglePlayPause(), 'pausedSeconds'],
+    ['a hard pause', () => hardPause(), () => togglePlayPause(), 'pausedSeconds'],
+    ['following switched off', () => toggleVoiceFollow(), () => toggleVoiceFollow(), 'offSeconds'],
+  ] as const)(
+    'scores 20 s followed, a minute of %s and 10 s more as following throughout',
+    async (_label, standDown, resume, bucket) => {
+      await startScript();
+      await follow(20);
+      standDown();
+      await vi.advanceTimersByTimeAsync(60_000);
+      resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get(session).paused).toBe('none');
+      expect(get(session).followPausedByUser).toBe(false);
+      await follow(10);
+
+      const summary = stopSession();
+      expect(summary.followingTime[bucket]).toBeCloseTo(60, 1);
+      expect(summary.followingTime.onSeconds).toBeCloseTo(30, 1);
+      // The issue measured 0.31 here, and "Following needed help".
+      expect(summary.followingShare).toBeCloseTo(1, 2);
+      const outcome = resolveTakeOutcome(summary);
+      expect(outcome.headline).toBe('CandidCue stayed with you');
+      expect(outcome.health).toBe('steady');
+    },
+  );
+
+  it('reports a take auto-scroll rolled from the first line as auto-scroll', async () => {
+    await startScript();
+    toggleAutoScroll();
+    // The recogniser keeps listening under a roll; the driver keeps the voice
+    // off the take.
+    for (let second = 0; second < 60; second += 1) {
+      feed(voiceAt(1));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+
+    const summary = stopSession();
+    expect(summary.followingShare).toBeNull();
+    expect(summary.followingTime.autoScrollSeconds).toBeCloseTo(60, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
+    const outcome = resolveTakeOutcome(summary);
+    // It was "CandidCue heard you, but did not track", with a support bundle.
+    expect(outcome.headline).toBe('Take finished on auto-scroll');
+    expect(outcome.suggestion).toBeNull();
+  });
+
+  it('gives the same answer when a snapshot landed before the roll began', async () => {
+    // A take started part way opens on an anchor, so the share is not null —
+    // and the take is still one auto-scroll carried.
+    await startScript();
+    feed(voiceAt(1));
+    await vi.advanceTimersByTimeAsync(500);
+    toggleAutoScroll();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const summary = stopSession();
+    expect(summary.followingShare).not.toBeNull();
+    expect(resolveTakeOutcome(summary).headline).toBe('Take finished on auto-scroll');
+  });
+
+  it('does not book the gap a pause interrupted as following straight through it', async () => {
+    /*
+     * Intervals are credited when the NEXT snapshot arrives. Following until
+     * 10 s, Space at 11 s, back at 13 s, a snapshot at 14 s: that snapshot
+     * would credit all four seconds since the last one, two of them paused.
+     */
+    await startScript();
+    await follow(10);
+    await vi.advanceTimersByTimeAsync(1000);
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(2000);
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(1000);
+    feed(voiceAt(1));
+
+    const summary = stopSession();
+    expect(summary.followingTime.pausedSeconds).toBeCloseTo(2, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(12, 1);
+    // Ten seconds followed plus the one up to the pause, out of twelve on.
+    expect(summary.followingShare).toBeCloseTo(11 / 12, 3);
+  });
+
+  it('counts a pause still in force when the take is stopped', async () => {
+    await startScript();
+    await follow(10);
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const summary = stopSession();
+    expect(summary.followingTime.pausedSeconds).toBeCloseTo(30, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(10, 1);
+    expect(summary.followingShare).toBeCloseTo(1, 2);
+  });
+
+  it('opens a retake made while paused as paused', async () => {
+    // No write to the store announces it — nothing changed — so the pass has
+    // to read the pause it starts under.
+    await startScript();
+    await follow(5);
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(10_000);
+    restartParagraph();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    const summary = stopSession();
+    expect(summary.followingTime.pausedSeconds).toBeCloseTo(20, 1);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(0, 1);
+    expect(resolveTakeOutcome(summary).headline).toBe('Take finished while paused');
+  });
+
+  it('starts the next take with nothing set aside after one stopped paused', async () => {
+    await startScript();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(10_000);
+    stopSession();
+    clearSession();
+
+    await startScript();
+    await follow(10);
+    const summary = stopSession();
+    expect(summary.followingTime.pausedSeconds).toBe(0);
+    expect(summary.followingTime.onSeconds).toBeCloseTo(10, 1);
+  });
+
+  it('still charges an automatic hold to following', async () => {
+    /*
+     * The verdict the issue keeps. A hold stops following too, but nobody
+     * chose it — the transcript stopped being trustworthy — and it is exactly
+     * what "Following needed help" exists to report.
+     */
+    await startScript();
+    await follow(5);
+    hold(true);
+    for (let second = 0; second < 40; second += 1) {
+      feed(voiceAt(1));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    hold(false);
+    await follow(5);
+
+    const summary = stopSession();
+    const { pausedSeconds, offSeconds, autoScrollSeconds, onSeconds } = summary.followingTime;
+    expect(pausedSeconds + offSeconds + autoScrollSeconds).toBe(0);
+    expect(onSeconds).toBeCloseTo(50, 1);
+    expect(summary.followingShare).toBeCloseTo(10 / 50, 2);
+    expect(resolveTakeOutcome(summary).headline).toBe('Following needed help');
   });
 });

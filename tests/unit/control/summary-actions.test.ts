@@ -10,12 +10,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  followedLabel,
   partOutcomeLabel,
   scriptFollowedLabel,
   summaryActions,
   type SummaryActionsInput,
 } from '../../../src/control/lib/summary-actions';
-import type { TakePart } from '../../../src/control/stores/session';
+import type { FollowingTime, TakePart } from '../../../src/control/stores/session';
 
 function part(ordinal: number, label: string, start: number, end: number): TakePart {
   return { id: `p${ordinal}`, label, ordinal, totalParts: 3, startTokenIndex: start, endTokenIndex: end };
@@ -259,5 +260,82 @@ describe('scriptFollowedLabel', () => {
     expect(
       scriptFollowedLabel({ ...base, wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' }),
     ).toBe('0 of 0 words');
+  });
+});
+
+/**
+ * #287 — the "Followed" row says what its share is out of.
+ *
+ * It read "31% of the take — the stage spent most of it holding" over a take
+ * that followed every word it was given and was paused for a minute in the
+ * middle.
+ */
+describe('followedLabel', () => {
+  const on = (over: Partial<FollowingTime> = {}): FollowingTime => ({
+    onSeconds: 90,
+    pausedSeconds: 0,
+    offSeconds: 0,
+    autoScrollSeconds: 0,
+    ...over,
+  });
+
+  it('reads as before for a take that set nothing aside', () => {
+    expect(followedLabel({ mode: 'voice', followingShare: 0.95, followingTime: on() })).toEqual({
+      text: '95% of the take',
+      warning: null,
+      notCounted: null,
+    });
+    expect(followedLabel({ mode: 'voice', followingShare: 0.3, followingTime: on() }).warning).toBe(
+      '— the stage spent most of it holding',
+    );
+    expect(followedLabel({ mode: 'voice', followingShare: null, followingTime: on() }).text).toBe(
+      'No tracking this take',
+    );
+  });
+
+  it('is out of the time following was on, and names what was left out', () => {
+    const row = followedLabel({
+      mode: 'voice',
+      followingShare: 1,
+      followingTime: on({ onSeconds: 30, pausedSeconds: 60 }),
+    });
+    expect(row).toEqual({
+      text: '100% of the time following was on',
+      warning: null,
+      notCounted: '1:00 paused',
+    });
+  });
+
+  it('still warns about holding while following was on', () => {
+    const row = followedLabel({
+      mode: 'voice',
+      followingShare: 0.2,
+      followingTime: on({ onSeconds: 30, pausedSeconds: 60 }),
+    });
+    expect(row.text).toBe('20% of the time following was on');
+    expect(row.warning).toBe('— the stage spent most of it holding');
+  });
+
+  it('shows no share for a take following was barely on for', () => {
+    // A roll from the first line: share null. Started part way: one snapshot,
+    // share zero. The row must not call either "no tracking" or "holding".
+    for (const followingShare of [null, 0]) {
+      const row = followedLabel({
+        mode: 'voice',
+        followingShare,
+        followingTime: on({ onSeconds: 0, autoScrollSeconds: 90 }),
+      });
+      expect(row.text).toBe('Not assessed — following was on for under 5 seconds');
+      expect(row.warning).toBeNull();
+      expect(row.notCounted).toBe('1:30 on auto-scroll');
+    }
+  });
+
+  it('shows no share for a take that never followed a voice', () => {
+    // Manual anchors move a manual take and are not a voice being followed.
+    for (const mode of ['manual', 'fixed'] as const) {
+      const row = followedLabel({ mode, followingShare: 0.4, followingTime: on({ autoScrollSeconds: 30 }) });
+      expect(row).toEqual({ text: 'Not used on this take', warning: null, notCounted: null });
+    }
   });
 });

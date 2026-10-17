@@ -15,10 +15,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  describeSetAside,
   FOLLOW_HEALTH_LABELS,
   resolveTakeOutcome,
   type TakeOutcomeInput,
 } from '../../../src/control/lib/take-outcome';
+import type { FollowingTime } from '../../../src/control/stores/session';
 
 function take(over: Partial<TakeOutcomeInput> = {}): TakeOutcomeInput {
   return {
@@ -33,6 +35,24 @@ function take(over: Partial<TakeOutcomeInput> = {}): TakeOutcomeInput {
     ...over,
   };
 }
+
+/** How a pass divided up; following on throughout unless told otherwise. */
+function time(over: Partial<FollowingTime> = {}): FollowingTime {
+  return { onSeconds: 180, pausedSeconds: 0, offSeconds: 0, autoScrollSeconds: 0, ...over };
+}
+
+/**
+ * Every shape of pass the sweeps below must cover: no timing at all (a caller
+ * that predates #287), following on throughout, a long pause around steady
+ * following, and following barely on at all.
+ */
+const TIMES: Array<FollowingTime | undefined> = [
+  undefined,
+  time(),
+  time({ onSeconds: 30, pausedSeconds: 60 }),
+  time({ onSeconds: 0, autoScrollSeconds: 90 }),
+  time({ onSeconds: 2, pausedSeconds: 30, offSeconds: 20, autoScrollSeconds: 40 }),
+];
 
 describe('resolveTakeOutcome', () => {
   it('says plainly when it worked, and names where you stopped', () => {
@@ -169,6 +189,11 @@ describe('resolveTakeOutcome', () => {
     // 0.98 is not the whole take either — 2% of it was not followed.
     expect(resolveTakeOutcome(take({ followingShare: 0.98 })).detail).not.toMatch(/whole take/i);
     expect(resolveTakeOutcome(take({ followingShare: 1 })).detail).toMatch(/whole take/i);
+    // Nor all of thirty seconds of a ninety-second take (#287).
+    const paused = resolveTakeOutcome(
+      take({ followingShare: 1, followingTime: time({ onSeconds: 30, pausedSeconds: 60 }) }),
+    );
+    expect(paused.detail).not.toMatch(/whole take/i);
   });
 
   it('does not contradict the detail rows in the middle band', () => {
@@ -246,11 +271,21 @@ describe('resolveTakeOutcome', () => {
           for (const mode of ['voice', 'manual', 'fixed'] as const) {
             for (const durationSeconds of [2, 180]) {
               for (const manualJumps of [0, 3]) {
-                const outcome = resolveTakeOutcome(
-                  take({ followingShare, reconnects, wordsHeard, mode, durationSeconds, manualJumps }),
-                );
-                const text = `${outcome.headline} ${outcome.detail} ${outcome.suggestion ?? ''}`;
-                expect(text, `judged the delivery: ${text}`).not.toMatch(banned);
+                for (const followingTime of TIMES) {
+                  const outcome = resolveTakeOutcome(
+                    take({
+                      followingShare,
+                      reconnects,
+                      wordsHeard,
+                      mode,
+                      durationSeconds,
+                      manualJumps,
+                      followingTime,
+                    }),
+                  );
+                  const text = `${outcome.headline} ${outcome.detail} ${outcome.suggestion ?? ''}`;
+                  expect(text, `judged the delivery: ${text}`).not.toMatch(banned);
+                }
               }
             }
           }
@@ -264,10 +299,12 @@ describe('resolveTakeOutcome', () => {
     for (const followingShare of shares) {
       for (const mode of ['voice', 'manual', 'fixed'] as const) {
         for (const wordsHeard of [0, 200]) {
-          const outcome = resolveTakeOutcome(take({ followingShare, mode, wordsHeard }));
-          expect(FOLLOW_HEALTH_LABELS[outcome.health], `unlabelled band for ${outcome.health}`).toBeTruthy();
-          expect(outcome.headline.length).toBeGreaterThan(0);
-          expect(outcome.detail.length).toBeGreaterThan(0);
+          for (const followingTime of TIMES) {
+            const outcome = resolveTakeOutcome(take({ followingShare, mode, wordsHeard, followingTime }));
+            expect(FOLLOW_HEALTH_LABELS[outcome.health], `unlabelled band for ${outcome.health}`).toBeTruthy();
+            expect(outcome.headline.length).toBeGreaterThan(0);
+            expect(outcome.detail.length).toBeGreaterThan(0);
+          }
         }
       }
     }
@@ -278,5 +315,195 @@ describe('resolveTakeOutcome', () => {
     expect(resolveTakeOutcome(take({ followingShare: 0.4 })).health).toBe('occasional_holds');
     expect(resolveTakeOutcome(take({ followingShare: 0.79 })).health).toBe('occasional_holds');
     expect(resolveTakeOutcome(take({ followingShare: 0.8 })).health).toBe('steady');
+  });
+});
+
+/**
+ * #287 — following is judged on the time it was asked to run.
+ *
+ * The share used to divide by the whole take, so every second the presenter
+ * took following away — Space, the follow switch, auto-scroll — was booked as
+ * following failing. A minute's pause read "Following needed help", a take
+ * rolled from the first line read "did not track", and both sent the presenter
+ * looking for a fault in a microphone or a script that had none.
+ */
+describe('resolveTakeOutcome — time the presenter set following aside (#287)', () => {
+  /** Everything an outcome says, for asserting what it must never say. */
+  const said = (input: TakeOutcomeInput) => {
+    const outcome = resolveTakeOutcome(input);
+    return `${outcome.headline} ${outcome.detail} ${outcome.suggestion ?? ''}`;
+  };
+
+  it('judges a paused take on the following it was given', () => {
+    // The issue's take: 20 s followed, a 60 s Space pause, 10 s more.
+    const outcome = resolveTakeOutcome(
+      take({ followingShare: 1, followingTime: time({ onSeconds: 30, pausedSeconds: 60 }) }),
+    );
+    expect(outcome.health).toBe('steady');
+    expect(outcome.tone).toBe('good');
+    expect(outcome.headline).toBe('CandidCue stayed with you');
+    expect(outcome.detail).toContain('the time following was on');
+    expect(outcome.detail).toContain('Not counted: 1:00 paused.');
+    expect(outcome.suggestion).toBeNull();
+  });
+
+  it('still says following needed help when it held while it was on', () => {
+    // The verdict the issue asks to keep: following on, and holding.
+    const outcome = resolveTakeOutcome(
+      take({ followingShare: 0.2, followingTime: time({ onSeconds: 30, pausedSeconds: 60 }) }),
+    );
+    expect(outcome.headline).toBe('Following needed help');
+    expect(outcome.health).toBe('frequent_help');
+    expect(outcome.detail).toContain('much of the time following was on');
+    expect(outcome.detail).toContain('Not counted: 1:00 paused.');
+  });
+
+  it('says a take auto-scroll carried was auto-scroll, whatever the share came back as', () => {
+    /*
+     * A roll from the first line keeps every snapshot away, so the share is
+     * null; started part way, the opening anchor is one snapshot and the share
+     * is a small number. Neither is a tracking fault, and both are the same
+     * take.
+     */
+    for (const followingShare of [null, 0, 0.05]) {
+      for (const onSeconds of [0, 1.5]) {
+        const input = take({
+          followingShare,
+          followingTime: time({ onSeconds, autoScrollSeconds: 90 }),
+        });
+        const outcome = resolveTakeOutcome(input);
+        expect(outcome.headline).toBe('Take finished on auto-scroll');
+        expect(outcome.health).toBe('not_assessed');
+        expect(outcome.tone).toBe('neutral');
+        expect(outcome.suggestion).toBeNull();
+        expect(outcome.detail).toContain('Call to action');
+        expect(said(input)).not.toMatch(/did not track|support bundle|microphone|ad-libs/i);
+      }
+    }
+  });
+
+  it('names the reason the presenter set following aside for longest', () => {
+    const headline = (over: Partial<FollowingTime>) =>
+      resolveTakeOutcome(take({ followingShare: null, followingTime: time({ onSeconds: 1, ...over }) }))
+        .headline;
+    expect(headline({ pausedSeconds: 60 })).toBe('Take finished while paused');
+    expect(headline({ offSeconds: 60 })).toBe('Take finished with following off');
+    expect(headline({ autoScrollSeconds: 60 })).toBe('Take finished on auto-scroll');
+    expect(headline({ pausedSeconds: 10, offSeconds: 50, autoScrollSeconds: 20 })).toBe(
+      'Take finished with following off',
+    );
+  });
+
+  it('judges a take whose following was on for five seconds', () => {
+    const at = (onSeconds: number) =>
+      resolveTakeOutcome(
+        take({ followingShare: 0.2, followingTime: time({ onSeconds, pausedSeconds: 60 }) }),
+      ).health;
+    expect(at(4.9)).toBe('not_assessed');
+    expect(at(5)).toBe('frequent_help');
+  });
+
+  it('does not tell a presenter who paused through a take to test the microphone', () => {
+    // Space and a hard pause stop the microphone reaching the recogniser, so
+    // nothing was heard because nothing was sent.
+    const input = take({
+      wordsHeard: 0,
+      followingShare: null,
+      durationSeconds: 90,
+      followingTime: time({ onSeconds: 2, pausedSeconds: 88 }),
+    });
+    const outcome = resolveTakeOutcome(input);
+    expect(outcome.headline).toBe('Take finished while paused');
+    expect(outcome.tone).toBe('neutral');
+    expect(said(input)).not.toMatch(/microphone|nothing was transcribed/i);
+  });
+
+  it('still reports silence under a roll, without saying the stage stood still', () => {
+    // A roll leaves listening running, so a minute of it with nothing heard
+    // is exactly what the microphone advice is for.
+    const input = take({
+      wordsHeard: 0,
+      followingShare: null,
+      durationSeconds: 90,
+      followingTime: time({ onSeconds: 5, autoScrollSeconds: 85 }),
+    });
+    const outcome = resolveTakeOutcome(input);
+    expect(outcome.headline).toBe('Nothing was transcribed');
+    expect(outcome.suggestion).toMatch(/microphone/i);
+    expect(outcome.detail).toMatch(/auto-scroll/);
+    expect(outcome.detail).not.toMatch(/stayed where it was|only thing that moved/i);
+    expect(outcome.detail).toMatch(/nothing was lost/i);
+  });
+
+  it('still reports silence while following was switched off', () => {
+    const outcome = resolveTakeOutcome(
+      take({
+        wordsHeard: 0,
+        followingShare: null,
+        durationSeconds: 90,
+        followingTime: time({ onSeconds: 0, offSeconds: 90 }),
+      }),
+    );
+    expect(outcome.headline).toBe('Nothing was transcribed');
+  });
+
+  it('does not blame an interruption nobody was being followed through', () => {
+    const outcome = resolveTakeOutcome(
+      take({ reconnects: 1, followingShare: 0, followingTime: time({ onSeconds: 2, pausedSeconds: 60 }) }),
+    );
+    expect(outcome.health).toBe('not_assessed');
+    // With following on long enough to have been interrupted, it still is.
+    expect(
+      resolveTakeOutcome(
+        take({ reconnects: 1, followingShare: 0.5, followingTime: time({ onSeconds: 30, pausedSeconds: 60 }) }),
+      ).headline,
+    ).toBe('Voice following was interrupted');
+  });
+
+  it('still reports a take that was on and never tracked, without claiming the stage stood still', () => {
+    const outcome = resolveTakeOutcome(
+      take({ followingShare: null, followingTime: time({ onSeconds: 30, autoScrollSeconds: 60 }) }),
+    );
+    expect(outcome.headline).toBe('CandidCue heard you, but did not track');
+    expect(outcome.detail).not.toMatch(/did not move on its own/);
+  });
+
+  it('leaves the answers for a missing model and a non-voice take alone', () => {
+    const aside = time({ onSeconds: 0, autoScrollSeconds: 90 });
+    expect(
+      resolveTakeOutcome(take({ voiceFollowingAvailable: false, followingTime: aside })).headline,
+    ).toBe('Take finished without voice following');
+    expect(resolveTakeOutcome(take({ mode: 'fixed', followingTime: aside })).headline).toBe('Take finished');
+  });
+
+  it('gives a take with nothing set aside the answers it always had', () => {
+    for (const followingShare of [null, 0.2, 0.5, 0.9, 1]) {
+      expect(resolveTakeOutcome(take({ followingShare, followingTime: time() }))).toEqual(
+        resolveTakeOutcome(take({ followingShare })),
+      );
+    }
+    // A short take that set nothing aside is still just short.
+    expect(
+      resolveTakeOutcome(
+        take({ wordsHeard: 0, durationSeconds: 2, followingTime: time({ onSeconds: 2 }) }),
+      ).headline,
+    ).toBe('Take ended early');
+  });
+});
+
+describe('describeSetAside', () => {
+  it('names every reason, in the presenter’s units', () => {
+    expect(describeSetAside(time({ pausedSeconds: 60 }))).toBe('1:00 paused');
+    expect(describeSetAside(time({ pausedSeconds: 60, autoScrollSeconds: 30 }))).toBe(
+      '1:00 paused and 0:30 on auto-scroll',
+    );
+    expect(describeSetAside(time({ pausedSeconds: 60, offSeconds: 20.4, autoScrollSeconds: 45 }))).toBe(
+      '1:00 paused, 0:20 with following off and 0:45 on auto-scroll',
+    );
+  });
+
+  it('says nothing about time that does not round to a second', () => {
+    expect(describeSetAside(time())).toBeNull();
+    expect(describeSetAside(time({ pausedSeconds: 0.4 }))).toBeNull();
   });
 });

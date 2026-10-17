@@ -35,7 +35,12 @@
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
-  import { partOutcomeLabel, scriptFollowedLabel, summaryActions } from '../lib/summary-actions';
+  import {
+    followedLabel,
+    partOutcomeLabel,
+    scriptFollowedLabel,
+    summaryActions,
+  } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import { checkThenStartTake } from '../lib/check-then-start';
@@ -147,6 +152,7 @@
           wordsHeard: $session.summary.wordsHeard,
           wordsInFlight: $session.summary.wordsInFlight,
           followingShare: $session.summary.followingShare,
+          followingTime: $session.summary.followingTime,
           reconnects: $session.summary.reconnects,
           manualJumps: $session.summary.manualJumps,
           durationSeconds: $session.summary.durationSeconds,
@@ -175,6 +181,7 @@
 >
   {#if $session.summary}
     {@const summary = $session.summary}
+    {@const followed = followedLabel(summary)}
 
     <!--
       THE ANSWER, ABOVE THE EVIDENCE (CCUX-006).
@@ -272,15 +279,17 @@
       -->
       <dt>Followed</dt>
       <dd>
-        {#if summary.followingShare === null}
-          No tracking this take
-        {:else}
-          {Math.round(summary.followingShare * 100)}% of the take
-          {#if summary.followingShare < 0.6}
-            <span class="summary-warn">— the stage spent most of it holding</span>
-          {/if}
+        {followed.text}
+        {#if followed.warning}
+          <span class="summary-warn">{followed.warning}</span>
         {/if}
       </dd>
+      <!-- What the share above is NOT out of (#287): the time the presenter
+           paused, switched following off, or rolled the script. -->
+      {#if followed.notCounted}
+        <dt>Not counted</dt>
+        <dd>{followed.notCounted}</dd>
+      {/if}
       <dt>Manual jumps</dt>
       <dd>{summary.manualJumps}</dd>
       <dt>Sections reached</dt>

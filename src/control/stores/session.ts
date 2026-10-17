@@ -148,10 +148,13 @@ export interface SessionSummary {
    */
   manualJumps: number;
   /**
-   * Share of the take the engine spent following, 0–1, or null when it saw no
-   * snapshots at all. See `takeFollowingShare`.
+   * Share of the time following was ON that the engine spent following, 0–1,
+   * or null when it saw no snapshots at all or following was never on. See
+   * `takeFollowingTime`.
    */
   followingShare: number | null;
+  /** What the share is a fraction of, and what was left out of it (#287). */
+  followingTime: FollowingTime;
   /**
    * Words the recogniser FINALISED this take. Zero means nothing was heard.
    *
@@ -222,6 +225,31 @@ export interface SessionSummary {
   partComplete: boolean;
   partRolledToEnd: boolean;
   nextPart: TakePart | null;
+}
+
+/**
+ * How the last pass's time divided up, in seconds (#287).
+ *
+ * Four buckets that never overlap and add up to the pass. The first is the
+ * time following was asked to run, and it is the following share's
+ * denominator; the other three are the ways a presenter takes following away
+ * on purpose. Before these existed the share divided by the whole pass, so a
+ * minute of Space read as a minute of following failing — "Following needed
+ * help" over a take that had followed every word it was given.
+ *
+ * An AUTOMATIC hold is not in any of the three. It stops following too, but
+ * nobody chose it: it is the transcript stopping being trustworthy, which is
+ * exactly what the share exists to report.
+ */
+export interface FollowingTime {
+  /** Following was asked to run — through any automatic holds. */
+  onSeconds: number;
+  /** The take was paused: Space, a hard pause, or Session › Pause. */
+  pausedSeconds: number;
+  /** Following was switched off, with the take running and no roll. */
+  offSeconds: number;
+  /** The auto-scroll transport was carrying the take. */
+  autoScrollSeconds: number;
 }
 
 /**
@@ -660,6 +688,15 @@ interface ActiveTake {
   lastSnapshotAtMs: number | null;
   lastState: AlignmentSnapshot['state'] | null;
   /**
+   * Why the presenter has following stood down right now, if they have, and
+   * since when (#287). Kept current by `noteSuspension` on every write to the
+   * take's state — see there for why it is not maintained by the writers.
+   */
+  suspension: Suspension | null;
+  suspendedSinceMs: number;
+  /** Suspended time already closed, by reason. The open stretch is not in it. */
+  suspendedMs: Record<Suspension, number>;
+  /**
    * Where the auto-scroll transport left the document, when it ran it off the
    * end (#276). Null when it has not, or when something since has put the take
    * somewhere else.
@@ -684,6 +721,70 @@ interface ActiveTake {
 }
 
 let activeTake: ActiveTake | null = null;
+
+/**
+ * The presenter's reasons for following not to run (#287).
+ *
+ * Deliberate ones only. `!voiceFollow` is NOT one of them: it also goes false
+ * for an automatic hold, and a hold is following failing — counting it here
+ * would hide the very takes "Following needed help" is for. `followPausedByUser`
+ * is the field that tells the two apart.
+ */
+type Suspension = 'paused' | 'autoScroll' | 'followingOff';
+
+/**
+ * Which reason holds, one at a time so the buckets never overlap.
+ *
+ * In this order because each outranks the next on the glass: Space over a
+ * roll stops the roll too, and a roll takes following off itself, so a rolling
+ * take is always `followPausedByUser` as well.
+ */
+function suspensionOf(s: SessionState): Suspension | null {
+  if (s.paused !== 'none') return 'paused';
+  if (s.autoScroll.running) return 'autoScroll';
+  if (s.followPausedByUser) return 'followingOff';
+  return null;
+}
+
+/**
+ * Time the presenter stood following down, measured where it is DECIDED.
+ *
+ * A subscriber rather than a line in each writer, because there are a lot of
+ * writers and more arrive: Space, a hard pause, Session › Pause, the dock's
+ * switch, the drawer's, the transport and its own give-back, a resume that
+ * only lands once the recogniser reopens. One of them forgetting would quietly
+ * put that time back on following's account. Reading the state the writers
+ * leave behind covers the next one by construction, the same argument
+ * `autoScrollLive` makes.
+ *
+ * It never writes to the store, and an emission that changes nothing it reads
+ * is a no-op, so the many unrelated updates during a take cost a comparison.
+ *
+ * Going into a suspension also closes whatever following interval was open,
+ * at that instant. `handleSnapshot` credits an interval when the NEXT snapshot
+ * arrives, so a gap that began following and ended after a two-second pause
+ * would otherwise be booked as following straight through the pause — the
+ * same time counted on both sides of the ledger.
+ */
+function noteSuspension(s: SessionState): void {
+  const take = activeTake;
+  if (take === null) return;
+  const next = suspensionOf(s);
+  if (next === take.suspension) return;
+  const nowMs = monotonicNowMs();
+  if (take.suspension === null) {
+    creditFollowing(take, nowMs);
+    take.lastState = null;
+  } else {
+    take.suspendedMs[take.suspension] += nowMs - take.suspendedSinceMs;
+  }
+  take.suspension = next;
+  take.suspendedSinceMs = nowMs;
+}
+
+// For the life of the module, not the take: with no pass open it returns at
+// its first line, and there is no per-take subscription to forget to drop.
+state.subscribe(noteSuspension);
 
 /**
  * Words the recogniser returned this take (§36 summary).
@@ -844,9 +945,6 @@ export function startLiveSession(input: StartSessionInput): string {
     Math.min(Math.round(input.startTokenIndex ?? 0), Math.max(0, input.totalTokens - 1)),
   );
 
-  // §36.3: the session's first pass opens with it.
-  beginTake(startTokenIndex);
-
   // Smooth-following store (§50.1): user-visible following state + §48 actions.
   const following = input.following ?? currentFollowingSettings();
   smoothFollow.beginSession(sessionId, following);
@@ -889,6 +987,10 @@ export function startLiveSession(input: StartSessionInput): string {
       wordsPerMinute: clampAutoScrollWpm(takeTeleprompter.fixedSpeedWpm),
     },
   });
+
+  // §36.3: the session's first pass opens with it — after the state above, so
+  // that it starts from this take's pause and follow switch, not the last one's.
+  beginTake(startTokenIndex);
 
   // Voice mode without a Tauri runtime has no realtime feed — keep the
   // animated mock driver so browser dev stays demonstrable.
@@ -1624,21 +1726,19 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
      * gaps either side of it would book a paused presenter stepping through
      * the script by hand as time spent following them. (`voiceFollow` is false
      * from the start of a take with no voice, which is not a pause.)
+     *
+     * Nothing that arrives while the presenter has following stood down opens
+     * an interval either (#287), whatever it says. That time is not in the
+     * share's denominator, so it cannot be in the numerator.
      */
     const current = get(state);
     const heldMove =
       snapshot.decision === 'manualAnchor' &&
       (current.paused !== 'none' || (current.mode === 'voice' && !current.voiceFollow));
-    if (
-      !heldMove &&
-      activeTake.lastSnapshotAtMs !== null &&
-      activeTake.lastState === 'following' &&
-      nowMs - activeTake.lastSnapshotAtMs <= FOLLOWING_CREDIT_MAX_GAP_MS
-    ) {
-      activeTake.followingMs += nowMs - activeTake.lastSnapshotAtMs;
-    }
+    const outside = heldMove || activeTake.suspension !== null;
+    if (!outside) creditFollowing(activeTake, nowMs);
     activeTake.lastSnapshotAtMs = nowMs;
-    activeTake.lastState = heldMove ? null : snapshot.state;
+    activeTake.lastState = outside ? null : snapshot.state;
   }
 
   /*
@@ -1927,17 +2027,45 @@ function takeEndToken(): number {
 /**
  * Open a pass. `startLiveSession` opens the first; a retake opens the next, and
  * this is the only place its measurements start again from nothing.
+ *
+ * The suspension is read from the take as it stands, not assumed clear: a
+ * retake made while paused opens a pass that is paused from its first moment,
+ * and no store write would announce it, because nothing changed. Which is also
+ * why `startLiveSession` opens the first pass only once the session's own state
+ * is in place — read any earlier, this would be the LAST take's pause.
  */
 function beginTake(startTokenIndex: number): void {
+  const nowMs = monotonicNowMs();
   activeTake = {
-    startedAtMs: monotonicNowMs(),
+    startedAtMs: nowMs,
     startTokenIndex,
     maxConfirmedToken: startTokenIndex,
     followingMs: 0,
     lastSnapshotAtMs: null,
     lastState: null,
+    suspension: suspensionOf(get(state)),
+    suspendedSinceMs: nowMs,
+    suspendedMs: { paused: 0, autoScroll: 0, followingOff: 0 },
     autoScrollEndToken: null,
   };
+}
+
+/**
+ * Book the following interval the last snapshot opened, up to `nowMs`.
+ *
+ * Only an interval that opened in `following` and is no longer than a gap the
+ * feed could plausibly produce — see `handleSnapshot` for why both. Shared with
+ * `noteSuspension`, which closes the interval early when the presenter stands
+ * following down.
+ */
+function creditFollowing(take: ActiveTake, nowMs: number): void {
+  if (
+    take.lastSnapshotAtMs !== null &&
+    take.lastState === 'following' &&
+    nowMs - take.lastSnapshotAtMs <= FOLLOWING_CREDIT_MAX_GAP_MS
+  ) {
+    take.followingMs += nowMs - take.lastSnapshotAtMs;
+  }
 }
 
 /**
@@ -1952,7 +2080,8 @@ function beginTake(startTokenIndex: number): void {
 const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
 
 /**
- * How much of the take the engine was actually following, 0–1.
+ * How much of the time following was ON the engine was actually following,
+ * 0–1, and how the pass's time divided up.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS BELONGS ON THE SUMMARY
@@ -1973,13 +2102,45 @@ const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
  * different takes — one followed nothing, the other never got the chance — and
  * "0% followed" over a take whose microphone never opened is an accusation
  * pointed at the wrong thing.
+ *
+ * ---------------------------------------------------------------------------
+ * OUT OF THE TIME IT WAS ASKED TO RUN (#287)
+ * ---------------------------------------------------------------------------
+ * It divided by the whole pass, and so charged following for every second the
+ * presenter had taken it away: twenty seconds followed, a minute of Space, ten
+ * more, and the summary said 31% and "Following needed help". Time paused,
+ * switched off or rolled by auto-scroll is now left out of the denominator and
+ * reported beside the share instead, so the summary can say what happened
+ * rather than diagnose a fault. A take with following never on has nothing to
+ * divide by, and is null for the same reason as one that saw no snapshots.
+ *
+ * Sampled at one instant, and without closing anything: the suspension still
+ * open at the stop is counted, but the pass is not touched, so asking twice
+ * gives the same answer.
  */
-function takeFollowingShare(): number | null {
+function takeFollowingTime(): { share: number | null; time: FollowingTime } {
   const take = activeTake;
-  if (take === null || take.lastSnapshotAtMs === null) return null;
-  const elapsedMs = monotonicNowMs() - take.startedAtMs;
-  if (!(elapsedMs > 0)) return null;
-  return Math.min(1, Math.max(0, take.followingMs / elapsedMs));
+  if (take === null) return { share: null, time: noFollowingTime() };
+  const nowMs = monotonicNowMs();
+  const suspended = { ...take.suspendedMs };
+  if (take.suspension !== null) suspended[take.suspension] += nowMs - take.suspendedSinceMs;
+  const elapsedMs = Math.max(0, nowMs - take.startedAtMs);
+  const onMs = Math.max(
+    0,
+    elapsedMs - suspended.paused - suspended.autoScroll - suspended.followingOff,
+  );
+  const time: FollowingTime = {
+    onSeconds: onMs / 1000,
+    pausedSeconds: suspended.paused / 1000,
+    offSeconds: suspended.followingOff / 1000,
+    autoScrollSeconds: suspended.autoScroll / 1000,
+  };
+  if (take.lastSnapshotAtMs === null || !(onMs > 0)) return { share: null, time };
+  return { share: Math.min(1, Math.max(0, take.followingMs / onMs)), time };
+}
+
+function noFollowingTime(): FollowingTime {
+  return { onSeconds: 0, pausedSeconds: 0, offSeconds: 0, autoScrollSeconds: 0 };
 }
 
 function pushTranscriptLine(line: string): void {
@@ -3328,6 +3489,7 @@ export function stopSession(): SessionSummary {
    */
   const rolledTo = activeTake?.autoScrollEndToken ?? null;
   const endTokenIndex = rolledTo ?? roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
+  const following = takeFollowingTime();
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
@@ -3342,7 +3504,8 @@ export function stopSession(): SessionSummary {
     partRolledToEnd: s.partRolledToEnd,
     nextPart: s.nextPart,
     manualJumps: s.counts.jumps,
-    followingShare: takeFollowingShare(),
+    followingShare: following.share,
+    followingTime: following.time,
     wordsHeard,
     ...takeCoverage(s),
     wordsInFlight,
@@ -3442,6 +3605,7 @@ function emptySummary(s: SessionState): SessionSummary {
     endingLocation: 'Beginning',
     manualJumps: 0,
     followingShare: null,
+    followingTime: noFollowingTime(),
     wordsHeard: 0,
     wordsFollowed: 0,
     // Nothing was given, so nothing is the denominator — not the length of
