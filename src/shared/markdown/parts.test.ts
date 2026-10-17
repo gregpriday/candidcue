@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compile } from './compile';
-import { deriveParts, nextPart, partAt } from './parts';
+import { deriveParts, nextPart, outlineSectionAt, partAt } from './parts';
 import type { CueEvent, OutlineNode, SentenceUnit } from '../contracts';
 
 /**
@@ -267,6 +267,53 @@ describe('partAt / nextPart', () => {
     expect(nextPart(parts, partAt(parts, 0))?.label).toBe('B');
     expect(nextPart(parts, partAt(parts, 20))).toBeNull();
     expect(nextPart(parts, null)).toBeNull();
+  });
+});
+
+/*
+ * The section a position is in (#285). The take summary counts these and names
+ * its ending from them, so the rule has to be the innermost heading — a parent
+ * spans its children, and "in the parent" would be true of every token.
+ */
+describe('outlineSectionAt', () => {
+  const nested: OutlineNode[] = [
+    {
+      ...heading('h1', 'Talk', 1, 0),
+      children: [heading('h2a', 'Setup', 2, 10), heading('h2b', 'Demo', 2, 20)],
+    },
+  ];
+
+  it('names the innermost heading the token is under', () => {
+    expect(outlineSectionAt(nested, 0)?.id).toBe('h1');
+    expect(outlineSectionAt(nested, 9)?.id).toBe('h1');
+    expect(outlineSectionAt(nested, 10)?.id).toBe('h2a');
+    expect(outlineSectionAt(nested, 25)?.id).toBe('h2b');
+  });
+
+  it('does not reach a heading half a token early', () => {
+    expect(outlineSectionAt(nested, 9.6)?.id).toBe('h1');
+  });
+
+  it('gives a shared start to the later heading', () => {
+    // A heading with nothing spoken under it starts on the same token as the
+    // next one, and the words there belong to the next.
+    const empty: OutlineNode[] = [heading('a', 'Empty', 2, 0), heading('b', 'Full', 2, 0)];
+    expect(outlineSectionAt(empty, 0)?.id).toBe('b');
+  });
+
+  it('has no section without an outline, or before its first node', () => {
+    expect(outlineSectionAt([], 5)).toBeNull();
+    expect(outlineSectionAt([heading('late', 'Late', 2, 10)], 3)).toBeNull();
+  });
+
+  it('resolves the compiler’s own synthetic sections', async () => {
+    const compiled = await compile(
+      ['An opening line.', '', '## Setup', '', 'Then the setup.'].join('\n'),
+      { scriptId: 'outline-at' },
+    );
+    expect(outlineSectionAt(compiled.outline, 0)?.title).toBe('Opening');
+    const plain = await compile('Just prose.', { scriptId: 'outline-at-2' });
+    expect(outlineSectionAt(plain.outline, 0)?.title).toBe('Script');
   });
 });
 

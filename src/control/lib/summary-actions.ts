@@ -159,3 +159,38 @@ export function partOutcomeLabel(
   if (summary.mode !== 'voice') return null;
   return summary.partComplete ? '— read to the end' : '— stopped part way';
 }
+
+/**
+ * The "Script followed" row, saying what it is a fraction of (#285).
+ *
+ * It used to be "N of M words" over the whole script, whatever the take was
+ * given — a part read to its last word scored a quarter. The denominator is now
+ * the span the last pass could have covered (`coverageScope`), and anything
+ * short of the whole script from its first word says so, because "49 of 50
+ * words" with no qualifier reads as a claim about the script.
+ *
+ * "From the retake" rather than "from the start point" once a retake has
+ * happened: the summary reports on the last pass, and a retake is what opened
+ * it, so naming where the take was launched would point at the wrong place.
+ */
+export function scriptFollowedLabel(
+  summary: Pick<
+    SessionSummary,
+    'wordsFollowed' | 'coverageWords' | 'coverageScope' | 'part' | 'retakes'
+  >,
+): string {
+  const { wordsFollowed, coverageWords } = summary;
+  const from = summary.retakes > 0 ? 'the retake' : 'the start point';
+  const partName = summary.part === null ? 'the part' : `part ${summary.part.ordinal}`;
+  const span =
+    summary.coverageScope === 'part'
+      ? ` in ${partName}`
+      : summary.coverageScope === 'restOfPart'
+        ? ` from ${from} to the end of ${partName}`
+        : summary.coverageScope === 'restOfScript'
+          ? ` from ${from} to the end of the script`
+          : '';
+  const share =
+    coverageWords > 0 ? ` (${Math.round((wordsFollowed / coverageWords) * 100)}%)` : '';
+  return `${wordsFollowed} of ${coverageWords} words${span}${share}`;
+}

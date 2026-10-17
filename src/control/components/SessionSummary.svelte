@@ -35,7 +35,7 @@
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
-  import { partOutcomeLabel, summaryActions } from '../lib/summary-actions';
+  import { partOutcomeLabel, scriptFollowedLabel, summaryActions } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import { startTake } from '../lib/start-take';
@@ -255,12 +255,8 @@
         {/if}
       </dd>
       <dt>Script followed</dt>
-      <dd>
-        {summary.wordsFollowed} of {summary.scriptWords} words
-        {#if summary.scriptWords > 0}
-          ({Math.round((summary.wordsFollowed / summary.scriptWords) * 100)}%)
-        {/if}
-      </dd>
+      <!-- Out of the span the take was given, and saying which (#285). -->
+      <dd>{scriptFollowedLabel(summary)}</dd>
       <!--
         How hard following actually worked.
 

@@ -155,9 +155,11 @@ function start(overrides: StartOverrides = {}): string {
     scriptTitle: 'Launch video',
     mode: overrides.mode ?? 'voice',
     displayLabel: 'Stage',
-    outline: [],
+    // A real compile brings its own outline and length, as `startTake` hands
+    // them over; the stub has neither and stands in for degraded input.
+    outline: overrides.compiled?.outline ?? [],
     sentences: (overrides.sentences ?? []) as never,
-    totalTokens: 200,
+    totalTokens: overrides.compiled?.spokenTokens.length ?? 200,
     sessionId: 'session-uuid-1',
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
@@ -327,16 +329,15 @@ describe('#214 — a take keeps its summary and its session row without the hist
     alignmentFeed.push?.(heardAt(close!.startTokenIndex));
     alignmentFeed.push?.(heardAt(opening!.startTokenIndex));
 
-    const blocks = new Set(
-      [opening, middle, close].map((sentence) => sentence!.blockId),
-    );
+    // Opening, Middle and Close — each once, though Opening was read twice and
+    // the retake opened a pass that had reached none of them yet.
     const summary = stopSession();
-    expect(summary.sectionsReached).toBe(blocks.size);
+    expect(summary.sectionsReached).toBe(3);
     const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
       string,
       { metrics?: { sectionsReached: number } },
     ];
-    expect(recorded.metrics?.sectionsReached).toBe(blocks.size);
+    expect(recorded.metrics?.sectionsReached).toBe(3);
   });
 
   it('closes a practice’s session row once, with where it ended', async () => {
@@ -391,7 +392,8 @@ describe('#214 — a take keeps its summary and its session row without the hist
     ];
     expect(sessionId).toBe('session-uuid-1');
     expect(typeof summary.endTokenIndex).toBe('number');
-    expect(summary.metrics?.sectionsReached).toBeGreaterThan(0);
+    // No outline at all: the whole script is the one section the take was in.
+    expect(summary.metrics?.sectionsReached).toBe(1);
   });
 
   it('holds shutdown until the session row is written', async () => {
@@ -423,6 +425,162 @@ describe('#214 — a take keeps its summary and its session row without the hist
       deferred.resolve?.();
       await awaitPendingPersistence();
     }
+  });
+});
+
+/**
+ * #285 — "Sections reached" counts sections, and the session row agrees.
+ *
+ * It counted authored BLOCKS, and every paragraph is a block: two headings over
+ * six paragraphs, followed end to end through the real compiler and store,
+ * reported six.
+ */
+describe('#285 — sections reached counts sections, not paragraphs', () => {
+  let seq = 0;
+
+  /** Follow every sentence of `compiled`, in order, as a voice take would. */
+  function followAll(compiled: CompiledScript): void {
+    for (const sentence of compiled.sentences) {
+      seq += 1;
+      alignmentFeed.push?.({
+        sessionGeneration: 7,
+        seq,
+        state: 'following',
+        decision: 'localConfirmed',
+        confirmedToken: sentence.endTokenIndex,
+        observedToken: sentence.endTokenIndex,
+        rateTokensPerSecond: 2,
+        evidenceAudioMs: 1000 * seq,
+        atAudioMs: 1000 * seq,
+        maxPredictionMs: 900,
+        confidence: 0.9,
+        suggestionToken: null,
+        scriptLenTokens: compiled.spokenTokens.length,
+        observedAtom: sentence.endTokenIndex,
+        confirmedAtom: sentence.endTokenIndex,
+      });
+    }
+  }
+
+  function recordedSections(): number | undefined {
+    const [, recorded] = records.endSessionRecord.mock.calls.at(-1) as unknown as [
+      string,
+      { metrics?: { sectionsReached: number } },
+    ];
+    return recorded.metrics?.sectionsReached;
+  }
+
+  function paragraphs(prefix: string): string {
+    return [1, 2, 3].map((n) => `The ${prefix} paragraph number ${n} is here.`).join('\n\n');
+  }
+
+  beforeEach(() => {
+    seq = 0;
+  });
+
+  it('reports two sections for two headings over six paragraphs', async () => {
+    // The issue's own script. Two headings at one level divide it into two
+    // parts, and the count is the same either way it is read.
+    const compiled = compile(
+      `## Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
+      { scriptId: 'script-1' },
+    );
+    expect(new Set(compiled.sentences.map((s) => s.blockId)).size).toBe(6);
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled);
+
+    expect(stopSession().sectionsReached).toBe(2);
+    expect(recordedSections()).toBe(2);
+  });
+
+  it('counts headings on a script that does not divide', async () => {
+    // One H1 over one H2 has a single top-level heading, so there are no
+    // parts, and the outline is what is counted.
+    const compiled = compile(
+      `# Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
+      { scriptId: 'script-1' },
+    );
+    expect(compiled.parts).toEqual([]);
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled);
+
+    expect(stopSession().sectionsReached).toBe(2);
+    expect(recordedSections()).toBe(2);
+  });
+
+  it('counts parts on a divided script, and still names the heading it ended in', async () => {
+    // Two take markers over three headings: the count is of parts, the ending
+    // is as precise as the outline can make it.
+    const compiled = compile(
+      [
+        '[Take: First]',
+        '## Alpha',
+        'Alpha has a sentence of its own.',
+        '## Beta',
+        'Beta has a sentence of its own.',
+        '[Take: Second]',
+        '## Gamma',
+        'Gamma has a sentence of its own.',
+      ].join('\n\n'),
+      { scriptId: 'script-1' },
+    );
+    expect((compiled.parts ?? []).map((p) => p.label)).toEqual(['First', 'Second']);
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    followAll(compiled);
+
+    const summary = stopSession();
+    expect(summary.sectionsReached).toBe(2);
+    expect(summary.endingLocation).toBe('Gamma');
+    expect(recordedSections()).toBe(2);
+  });
+
+  it('counts a heading only once its first word is reached', async () => {
+    const compiled = compile(
+      `# Setup\n\n${paragraphs('setup')}\n\n## Demo\n\n${paragraphs('demo')}\n`,
+      { scriptId: 'script-1' },
+    );
+    const demo = compiled.outline[0]!.children[0]!;
+    start({ compiled, sentences: compiled.sentences as never });
+    await vi.advanceTimersByTimeAsync(0);
+    alignmentFeed.push?.({
+      sessionGeneration: 7,
+      seq: 1,
+      state: 'following',
+      decision: 'localConfirmed',
+      // Half a token short of the heading: still finishing the last section.
+      confirmedToken: demo.startTokenIndex - 0.5,
+      observedToken: demo.startTokenIndex,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: compiled.spokenTokens.length,
+      observedAtom: demo.startTokenIndex,
+      confirmedAtom: demo.startTokenIndex - 1,
+    });
+
+    expect(stopSession().sectionsReached).toBe(1);
+  });
+
+  it('has reached nothing when nothing was followed', () => {
+    const compiled = compile(`## Setup\n\n${paragraphs('setup')}\n`, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never });
+    expect(stopSession().sectionsReached).toBe(0);
+    expect(recordedSections()).toBe(0);
+  });
+
+  it('gives a stop with no session no denominator from an earlier one', () => {
+    start();
+    stopSession();
+    clearSession();
+    const empty = stopSession();
+    expect(empty.coverageWords).toBe(0);
+    expect(empty.wordsFollowed).toBe(0);
   });
 });
 

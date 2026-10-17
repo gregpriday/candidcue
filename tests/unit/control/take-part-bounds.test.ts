@@ -165,6 +165,8 @@ function present(
     sentences?: SentenceUnit[];
     compiled?: CompiledScript | null;
     totalTokens?: number;
+    /** Where the take opens, when that is not the part's own start. */
+    startTokenIndex?: number;
   } = {},
 ): void {
   startLiveSession({
@@ -175,7 +177,7 @@ function present(
     outline: shape.outline ?? [],
     sentences: shape.sentences ?? [],
     totalTokens: shape.totalTokens ?? 200,
-    startTokenIndex: part?.startTokenIndex ?? 0,
+    startTokenIndex: shape.startTokenIndex ?? part?.startTokenIndex ?? 0,
     sessionId: 'session-uuid-1',
     compiled: shape.compiled === undefined ? compiledStub() : shape.compiled,
     sessionGeneration: 7,
@@ -624,5 +626,79 @@ describe('a take the auto-scroll transport carried to the end', () => {
     expect(summary.endTokenIndex).toBe(50);
     expect(summary.partComplete).toBe(false);
     expect(summary.partRolledToEnd).toBe(false);
+  });
+});
+
+/*
+ * #285 — "Script followed" is measured against what the take was given.
+ *
+ * It was a fraction of the whole script every time: a 50-word part read to its
+ * last word reported 49 of 200 words (25%), and a "From here" take near the end
+ * of a script could never look complete.
+ */
+describe('script followed, out of what the take was given', () => {
+  function coverage() {
+    const { wordsFollowed, coverageWords, coverageScope } = stopSession();
+    return { wordsFollowed, coverageWords, coverageScope };
+  }
+
+  it('measures a whole-part take against the part', () => {
+    present(PART_TWO, PART_THREE);
+    at(50, 'manualAnchor');
+    at(99);
+    // Still a distance, as it always was: first word to last is N-1 of N.
+    expect(coverage()).toEqual({ wordsFollowed: 49, coverageWords: 50, coverageScope: 'part' });
+  });
+
+  it('does not credit reading on past the end of the part', () => {
+    present(PART_TWO, PART_THREE);
+    at(140);
+    expect(coverage()).toEqual({ wordsFollowed: 49, coverageWords: 50, coverageScope: 'part' });
+  });
+
+  it('measures a take begun part way into a part against the rest of it', () => {
+    present(PART_TWO, PART_THREE, { startTokenIndex: 75 });
+    at(99);
+    expect(coverage()).toEqual({
+      wordsFollowed: 24,
+      coverageWords: 25,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('measures an unbounded take begun part way in against the rest of the script', () => {
+    present(null, null, { startTokenIndex: 150 });
+    at(199);
+    expect(coverage()).toEqual({
+      wordsFollowed: 49,
+      coverageWords: 50,
+      coverageScope: 'restOfScript',
+    });
+  });
+
+  it('measures a take from the top against the whole script', () => {
+    present(null);
+    at(100);
+    expect(coverage()).toEqual({ wordsFollowed: 100, coverageWords: 200, coverageScope: 'script' });
+  });
+
+  it('measures a retake from where it began, as the words followed are', () => {
+    present(PART_TWO, PART_THREE);
+    at(75);
+    restartParagraph();
+    at(99);
+    expect(coverage()).toEqual({
+      wordsFollowed: 24,
+      coverageWords: 25,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('does not credit the run-up to a part to a retake begun above it', () => {
+    present(PART_TWO, PART_THREE);
+    at(30, 'manualAnchor');
+    restartParagraph();
+    at(60);
+    expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
   });
 });
