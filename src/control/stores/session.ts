@@ -2272,6 +2272,10 @@ export function resumeSession(): void {
     })
     .catch((err) => {
       if (resuming !== pipeline) return;
+      // Paused again while the resume was reopening the microphone (#289).
+      // The pause has already said what the take is doing; "could not
+      // resume" over it would be a failure nobody had.
+      if (errorCode(err) === 'SESSION_STOPPED') return;
       // `resume()` re-runs `start()` after a hard pause, so the model can be
       // refused here too — and that is no more a microphone fault than it was
       // at the start of the take.
@@ -2350,7 +2354,9 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   try {
     await pipeline.switchMicrophone(deviceId);
   } catch (err) {
-    if (pipeline === forPipeline) {
+    // `SESSION_STOPPED` is the take being paused or ended mid-switch, and the
+    // pipeline released the device it was opening; nothing failed (#289).
+    if (pipeline === forPipeline && errorCode(err) !== 'SESSION_STOPPED') {
       showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
     }
     return false;

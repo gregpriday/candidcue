@@ -51,7 +51,8 @@ describe('captured audio reaches the provider', () => {
 
   it('every captured frame is forwarded, not just counted', () => {
     const body = code(PIPELINE);
-    expect(/onFrame:\s*\(samples\)\s*=>\s*this\.forwardFrame\(samples\)/.test(body)).toBe(true);
+    // Through a guard that drops a replaced tap's frames (#289), but forwarded.
+    expect(/onFrame:\s*\(samples\)\s*=>\s*\{[^}]*this\.forwardFrame\(samples\)/.test(body)).toBe(true);
     expect(
       /pushTranscriptionAudio\(/.test(body),
       'forwardFrame must actually invoke the Rust command',
@@ -106,8 +107,10 @@ describe('provider frames reach the aligner', () => {
     expect(/listen<SttFrame>\(STT_EVENT/.test(body), 'nothing subscribes to stt://event').toBe(
       true,
     );
+    // Through the ownership filter (#289), which hands on what is this take's.
     expect(
-      /this\.handleSttFrame\(event\.payload\)/.test(body),
+      /this\.receiveSttFrame\(event\.payload\)/.test(body) &&
+        /receiveSttFrame\(frame: SttFrame\): void \{[\s\S]*?this\.handleSttFrame\(frame\)/.test(body),
       'the subscription must drive handleSttFrame — a listener that discards its ' +
         'payload is a session that hears everything and reports nothing',
     ).toBe(true);
@@ -165,8 +168,8 @@ describe('provider frames reach the aligner', () => {
      * the one the UI uses to stop claiming the session is live.
      */
     const body = code(PIPELINE);
-    const subscribe = body.indexOf('await this.subscribeToStt()');
-    const acquire = body.indexOf('await this.acquireMicrophone(this.preferredDeviceId)');
+    const subscribe = body.indexOf('await this.subscribeToStt(epoch)');
+    const acquire = body.indexOf('await this.acquireMicrophone(epoch, this.preferredDeviceId)');
     expect(subscribe).toBeGreaterThan(-1);
     expect(acquire).toBeGreaterThan(-1);
     expect(subscribe).toBeLessThan(acquire);
@@ -181,7 +184,7 @@ describe('provider frames reach the aligner', () => {
      * pins the order that makes there be any to hold.
      */
     const body = code(PIPELINE);
-    const capture = body.indexOf('await this.startCapture(stream)');
+    const capture = body.indexOf('await this.startCapture(epoch, stream)');
     const transport = body.indexOf('await startTranscription()');
     expect(capture).toBeGreaterThan(-1);
     expect(transport).toBeGreaterThan(-1);
