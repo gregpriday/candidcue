@@ -84,6 +84,16 @@ There is no lint script and no ESLint/Prettier config in the tree. Conventions:
 single quotes, no Prettier. Do **not** run `cargo fmt` — the tree predates it
 and it would rewrite unrelated files.
 
+## Branches (gitflow)
+
+`develop` is the integration branch and the GitHub default. Branch `feature/*`
+and `bugfix/*` from `develop`, open pull requests against `develop`, and merge
+them with a merge commit. `main` moves only on releases: `develop` is merged into
+`main` (a merge commit, and never `--delete-branch`, which would delete
+`develop`), then a `v*` tag is pushed from `main`, which is what `release.yml`
+builds. CI runs on pushes to both branches and on every pull request.
+`docs/release-runbook.md` has the full release procedure.
+
 ## Architecture
 
 ### Four entry points, one Vite config

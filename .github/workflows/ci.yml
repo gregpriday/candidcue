@@ -19,10 +19,15 @@ name: CI
 # red CI, so no job here names that step. It is marked `releaseOnly` in the
 # plan, and the same test asserts this file keeps not naming it — a tagged
 # release runs the whole plan and cannot get past it.
+#
+# Gitflow: `develop` is the integration branch, and every pull request merges
+# there. `main` moves only when a release merges `develop` into it, and the
+# `v*` tag goes on that merge. Both get a push run, so the commit a release is
+# tagged from has its own green check rather than borrowing develop's.
 
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
   pull_request:
   workflow_dispatch:
 

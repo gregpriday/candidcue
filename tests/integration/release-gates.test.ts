@@ -1665,6 +1665,34 @@ describe('CI is defined by the release plan, not a hand-copied subset', () => {
   });
 });
 
+describe('CI runs on both gitflow branches', () => {
+  /*
+   * `develop` is the integration branch and every pull request merges there;
+   * `main` moves only when a release merges `develop` into it, and the tag goes
+   * on that merge. A push trigger naming one branch leaves the other without a
+   * check of its own — and with `main` alone, nothing merged would be tested
+   * until a release was already under way.
+   */
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const triggers = workflow.slice(workflow.search(/^on:$/m), workflow.search(/^concurrency:$/m));
+
+  it('builds pushes to develop and to main', () => {
+    const branches = /^ {2}push:\n {4}branches:\s*\[([^\]]*)\]/m.exec(triggers);
+    expect(branches, 'ci.yml must name its push branches as an inline list under `on: push:`').not.toBeNull();
+    expect(
+      branches![1]!
+        .split(',')
+        .map((name) => name.trim())
+        .sort(),
+    ).toEqual(['develop', 'main']);
+  });
+
+  it('still builds every pull request and a manual dispatch', () => {
+    expect(triggers).toMatch(/^ {2}pull_request:\s*$/m);
+    expect(triggers).toMatch(/^ {2}workflow_dispatch:\s*$/m);
+  });
+});
+
 /* ------------------------------------------------ the release workflow */
 
 describe('the release workflow cannot publish an unverified build', () => {

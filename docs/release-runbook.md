@@ -23,17 +23,25 @@ the release workflow runs the full plan. CI does not run that step, so a green
 CI does not mean a tag will build. Only a person can clear it, by confirming
 each licence against the build that ships.
 
+Releases follow gitflow. `develop` is the integration branch, and every
+feature and fix merges there. `main` moves only when a release is cut: `develop`
+is merged into it, and the `v*` tag goes on that merge commit. So §1–§4 below
+happen on `develop` (the version bump and the `CHANGELOG.md` section reach it
+through ordinary pull requests), and §5 merges it into `main` and tags the
+result.
+
 ---
 
 ## 1. Prepare the repository
 
-Stop feature work first. A release candidate is a thing you are measuring, and
-a moving one cannot be measured.
+Stop merging feature work into `develop` first. A release candidate is a thing
+you are measuring, and a moving one cannot be measured.
 
 ```bash
 # From a fresh clone, not from the tree you have been working in.
 git clone https://github.com/gregpriday/candidcue candidcue-release-check
 cd candidcue-release-check
+git switch develop         # what is about to be released; main has not moved yet
 
 git lfs install && git lfs pull
 git lfs ls-files          # the bench corpora must be real files, not pointers
@@ -61,7 +69,7 @@ cargo clippy --locked --manifest-path crates/Cargo.toml --all-targets -- -D warn
 
 Before going further, confirm by reading rather than by memory:
 
-- [ ] CI is green on the commit you intend to tag.
+- [ ] CI is green on the `develop` commit you intend to release.
 - [ ] No model weights are bundled — `pnpm exec node scripts/verify-no-model-weights.mjs <path to .app>` after a local `pnpm tauri build --bundles app`.
 - [ ] The speech catalogue names the model and digests you meant to ship.
 - [ ] `docs/network-inventory.md` still describes this build, and the surfaces it lists still agree with it.
@@ -77,6 +85,9 @@ have disagreed before.
 pnpm version:set 1.0.0-rc.2
 pnpm version:check
 ```
+
+Commit that on a branch off `develop` and merge it through a pull request, like
+any other change.
 
 `version:check` reads `package.json`, `src-tauri/Cargo.toml`,
 `src-tauri/tauri.conf.json` and `src/shared/version.ts` and refuses if they
@@ -101,9 +112,12 @@ limitations, that the app is English-only, the OS and hardware claim, that
 updates are manual and how to do one, whether data from the previous RC
 survives, the privacy and network note, and how to report a problem.
 
+The section reaches `develop` the same way the version bump did, through a pull
+request.
+
 ## 4. Prove the credentials without publishing anything
 
-Dispatch the workflow manually against the branch with `dry_run` ticked. It
+Dispatch the workflow manually against `develop` with `dry_run` ticked. It
 builds, signs, notarises and inspects, and the `publish` job does not run.
 
 ```bash
@@ -118,7 +132,21 @@ checksums, and the credential cleanup step reporting that it ran.
 
 ## 5. Publish the tag deliberately
 
+Merge `develop` into `main` first, through a pull request, and only then tag.
+Use a merge commit, not a squash or a rebase, so `main` keeps `develop`'s
+history and the next release merges cleanly. Leave out `--delete-branch`, which
+would delete `develop`.
+
 ```bash
+gh pr create --base main --head develop --title "Release 1.0.0-rc.2" --body "CandidCue 1.0.0-rc.2"
+gh pr merge <number> --merge   # once CI is green on the pull request
+```
+
+Wait for CI to pass on the merge commit's own push run, then tag that commit:
+
+```bash
+git fetch origin
+git switch -C main origin/main # the release merge, and nothing after it
 pnpm version:tag v1.0.0-rc.2   # the tag must name the version the artifact reports
 pnpm notes:check v1.0.0-rc.2   # CHANGELOG.md must describe it
 git tag -s v1.0.0-rc.2 -m "CandidCue 1.0.0-rc.2"
@@ -292,7 +320,8 @@ The procedure:
    what it exists for — the app does not check for updates, so nothing else
    will tell them.
 5. **Fix forward.** Never re-cut a tag that has been published. The replacement
-   is a new version — `1.0.0-rc.3` — even if the fix is one line.
+   is a new version — `1.0.0-rc.3` — even if the fix is one line, and the fix
+   lands on `develop` and reaches `main` through a release merge like any other.
 6. **Write it down.** Add the withdrawal to `CHANGELOG.md` under the withdrawn
    version, so the record survives the incident.
 7. **If it was a security or signing problem**, revoke the signing certificate
