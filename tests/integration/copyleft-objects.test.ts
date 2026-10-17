@@ -140,7 +140,14 @@ const ANCHOR_LIVE = {
   'session.cc.o': ['__ZN3Ort7SessionC1Ev'],
 };
 
-describe('the copyleft gate', () => {
+/*
+ * Every test here compiles real objects with `cc` and packs them with `ar`,
+ * and the first one also pays the toolchain's cold start: on a fresh macOS
+ * runner that alone has taken 5-7 s against well under a second locally. That
+ * is the cost of the real archives above, not a hang, so the budget fits it
+ * rather than vitest's 5 s unit-test default.
+ */
+describe('the copyleft gate', { timeout: 30_000 }, () => {
   it('passes when every copyleft object was dead-stripped', () => {
     const dir = workspace();
     const lib = archives(dir, LIB_SPEC);
