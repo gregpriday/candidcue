@@ -445,25 +445,37 @@ describe('#219 a document that still carries every field nothing read', () => {
     expect(loaded.audio.vadSensitivity).toBe(0.72);
     expect(loaded.following.feel).toBe('calm');
     expect(loaded.following.developerDiagnostics).toBe(true);
-    expect(Object.keys(loaded.optical.profiles), 'the calibrated rig survives').toEqual([
-      'dsp-glass::Glass%20rig',
-    ]);
+    expect(loaded.speech.language).toBe('en-GB');
+    expect(loaded.stage.presentationMode).toBe('reader');
+    expect(loaded.stage.readerFrame).toEqual({ x: 120, y: 90, width: 860, height: 600 });
+    expect(loaded.stage.displayFingerprint).toBe('dsp-glass');
+    // The calibration itself, not just its key — and the persisted mirror, which
+    // sets an axis the old global switch could never have rebuilt.
+    expect(Object.keys(loaded.optical.profiles)).toEqual(['dsp-glass::Glass%20rig']);
+    expect(loaded.optical.profiles['dsp-glass::Glass%20rig']).toMatchObject({
+      viewingDistanceMm: 900,
+      bias: 0.55,
+    });
+    expect(loaded.optical.activeRig).toEqual({ 'dsp-glass': 'Glass rig' });
+    expect(loaded.optical.panelMirror['dsp-glass']).toEqual({ horizontal: true, vertical: true });
   });
 
-  it('is adopted from a broadcast like any other document', () => {
+  it('is adopted from a broadcast exactly as the same document without them', () => {
     const adopted = settings.adaptRevisionedSettings(served());
-    expect(adopted).not.toBeNull();
+    expect(adopted).toStrictEqual(settings.adaptRevisionedSettings(withoutRetired()));
     expect(adopted?.revision).toBe(9);
+    expect(adopted?.teleprompter.fixedSpeedWpm).toBe(172);
   });
 
-  it('a save of every Rust-backed section sends none of them back', async () => {
+  it('a save of every Rust-backed section sends what survives and none of them', async () => {
     ipc.serve(served() as never);
     const loaded = await settings.getSettings();
-    // Whole sections, as `sendPatchBatch` sends them.
+    // Whole sections, as `sendPatchBatch` sends them. Not `speech`: the
+    // language goes through `select_speech_language`, and `update_settings`
+    // refuses a patch that names it.
     await settings.updateSettings(9, {
       general: loaded.general,
       audio: loaded.audio,
-      speech: loaded.speech,
       stage: loaded.stage,
       teleprompter: { ...loaded.teleprompter, fixedSpeedWpm: 150 },
       following: loaded.following,
@@ -472,7 +484,27 @@ describe('#219 a document that still carries every field nothing read', () => {
 
     const update = ipc.calls.find((call) => call.command === 'update_settings');
     const patch = (update!.args as { patch: Record<string, unknown> }).patch;
-    expect(patch.stageBehavior).toMatchObject({ fixedSpeedWpm: 150 });
+    // Every section with a Rust home reached it, so the loop below is not
+    // passing over a patch that sent nothing.
+    expect(Object.keys(patch).sort()).toEqual([
+      'audio',
+      'following',
+      'general',
+      'optical',
+      'stageBehavior',
+    ]);
+    expect(patch).toMatchObject({
+      general: { openTo: 'last_script' },
+      audio: { vadSensitivity: 0.72 },
+      stageBehavior: {
+        promptMode: 'fixed',
+        fixedSpeedWpm: 150,
+        presentationMode: 'reader',
+        displayFingerprint: 'dsp-glass',
+      },
+      following: { feel: 'calm', developerDiagnostics: true },
+      optical: { activeRig: { 'dsp-glass': 'Glass rig' } },
+    });
     for (const path of retiredDocument.retired) {
       expect(carries(patch, path), `${path} must not be sent`).toBe(false);
     }

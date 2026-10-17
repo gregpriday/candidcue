@@ -1418,6 +1418,22 @@ mod tests {
         }
     }
 
+    /// What #219 left of `validate` is exactly what was there before it, at
+    /// the edges: removing twenty fields' checks must not move a survivor's.
+    #[test]
+    fn the_surviving_checks_keep_their_bounds() {
+        for (wpm, legal) in [(29, false), (30, true), (300, true), (301, false)] {
+            let mut settings = AppSettings::default();
+            settings.stage_behavior.fixed_speed_wpm = wpm;
+            assert_eq!(validate(&settings).is_ok(), legal, "fixedSpeedWpm={wpm}");
+        }
+        for feel in ["calm", "balanced", "responsive"] {
+            let mut settings = AppSettings::default();
+            settings.following.feel = feel.into();
+            assert!(validate(&settings).is_ok(), "{feel} must be accepted");
+        }
+    }
+
     /// The same keys arriving in a PATCH — from a Settings window an older
     /// build opened, or a stale overlay — are dropped, not refused, even with
     /// values the old checks refused or of the wrong type entirely.

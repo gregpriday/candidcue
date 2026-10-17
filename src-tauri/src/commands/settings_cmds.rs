@@ -182,8 +182,9 @@ pub struct ClearResult {
 /// The directories a `clear_cache` kind empties.
 ///
 /// C6: the control window's "Clear logs" mapped onto `all`, which deleted the
-/// compiled-script, vocabulary and thumbnail caches and left every log file in
-/// place — then reported "Logs cleared." `logs` became its own kind.
+/// compiled-script, vocabulary, thumbnail and download caches and left every
+/// log file in place — then reported "Logs cleared." `logs` became its own
+/// kind.
 ///
 /// It is now the only one (#219). Nothing ever wrote `cache/compiled`,
 /// `cache/vocabulary` or `cache/thumbnails`, and once the Settings button that
@@ -213,13 +214,14 @@ pub async fn clear_cache(
     let dirs = clear_cache_targets(&paths, &kind)?;
 
     /*
-     * Truncated by `clear_logs`, never unlinked.
+     * Through `clear_logs`, never a plain delete.
      *
      * One of the files is the daily log the tracing appender is holding open.
      * Unlinking it does not close the descriptor — the appender goes on writing
      * into an inode with no name, and every line after the clear is invisible
      * until the next rotation quietly opens a new file. `clear_logs` truncates
-     * that file in place instead, so logging survives its own log being cleared.
+     * the appender's files in place instead (and deletes everything else), so
+     * logging survives its own log being cleared.
      *
      * Driven off `dirs` rather than off `paths.logs_dir()` so that
      * `clear_cache_targets` stays the single answer to "what does this kind

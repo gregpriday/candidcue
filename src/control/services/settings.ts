@@ -1224,10 +1224,10 @@ export async function clearCache(kind: 'logs'): Promise<ClearResult> {
    * §46.8. Logs are the only thing Settings clears now: "Clear analysis cache"
    * emptied `cache/vocabulary`, a directory nothing has ever written (#218).
    *
-   * C6: `logs` used to map onto `all`, which empties the compiled, vocabulary,
-   * thumbnail and download caches and never touches the log directory — so
+   * C6: `logs` used to map onto `all`, which emptied the compiled, vocabulary,
+   * thumbnail and download caches and never touched the log directory — so
    * "Clear logs" destroyed four caches, left the logs, and reported success.
-   * There is a real `logs` arm now.
+   * `logs` got its own arm, and since #219 it is the only kind Rust accepts.
    */
   const result = await ipcInvoke<{ kind: string; removedFiles: number; removedBytes: number }>(
     'clear_cache',

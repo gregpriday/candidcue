@@ -1092,10 +1092,13 @@ fn a_stored_document_carrying_every_field_removed_by_219_loads_and_sheds_them() 
             },
         }),
     );
-    assert_eq!(mixed["value"]["stageBehavior"]["fixedSpeedWpm"], json!(150));
-    assert_eq!(mixed["value"]["general"]["openTo"], json!("last_script"));
+    // Exactly the speed moved: the write must not reset a survivor on its way
+    // past, on the wire or on disk.
+    let mut after_write = expected.clone();
+    after_write["stageBehavior"]["fixedSpeedWpm"] = json!(150);
+    assert_eq!(mixed["value"], after_write);
     let stored = stored_json();
-    assert_eq!(stored["stageBehavior"]["fixedSpeedWpm"], json!(150));
+    assert_eq!(stored, after_write, "the stored row is the survivors and nothing else");
     for path in &retired {
         assert!(!carries(&stored, path), "the write must take {path} off disk, got {stored}");
     }
@@ -1111,7 +1114,8 @@ fn a_stored_document_carrying_every_field_removed_by_219_loads_and_sheds_them() 
             },
         }),
     );
-    assert_eq!(retired_only["value"], mixed["value"], "and it changes nothing that is read");
+    assert_eq!(retired_only["value"], after_write, "and it changes nothing that is read");
+    assert_eq!(stored_json(), after_write, "nor writes any of them to disk");
 }
 
 /// #216 — permanently deleting a script deletes its sessions, so a take still
@@ -1784,13 +1788,13 @@ fn get_stage_status_binds_with_and_without_a_session_id() {
 /// §179: "Clear logs" must not stop the app from logging.
 ///
 /// This goes through the COMMAND, not through `clear_logs`, and that is the
-/// whole point. The generic `clear_cache` loop unlinks every entry it finds —
-/// including the daily file the tracing appender is holding open, after which
-/// the appender writes into an inode with no name and the app logs to nowhere
-/// the user can reach. `clear_cache` routes the `logs` kind to `clear_logs`,
-/// which truncates in place instead.
+/// whole point. The generic `clear_cache` loop that used to sit beside it
+/// unlinked every entry it found — including the daily file the tracing
+/// appender is holding open, after which the appender writes into an inode with
+/// no name and the app logs to nowhere the user can reach. `clear_cache` hands
+/// the log directory to `clear_logs`, which truncates in place instead.
 ///
-/// Deleting that early return in `settings_cmds::clear_cache` fails HERE. The
+/// Routing `clear_cache` through anything but `clear_logs` fails HERE. The
 /// unit test over `clear_logs` in `diagnostics::logging` stays green, because
 /// it never touches the routing — which is exactly the gap this closes.
 ///

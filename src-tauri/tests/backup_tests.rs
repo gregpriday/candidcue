@@ -2281,11 +2281,9 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
         .expect("the next launch applies the restore");
     let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
     assert_eq!(restored.revision, 9);
-    assert_eq!(
-        restored.value,
-        serde_json::from_value::<candidcue_lib::settings::AppSettings>(document).expect("loads"),
-        "every surviving setting comes back, not the defaults"
-    );
+    let mut expected =
+        serde_json::from_value::<candidcue_lib::settings::AppSettings>(document).expect("loads");
+    assert_eq!(restored.value, expected, "every surviving setting comes back, not the defaults");
     assert_eq!(restored.value.stage_behavior.fixed_speed_wpm, 172);
     assert_eq!(restored.value.optical.profiles.len(), 1, "the calibrated rig comes back");
 
@@ -2305,6 +2303,9 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
     for path in &retired {
         assert!(!carries(&stored, path), "the write must take {path} off disk");
     }
+    // And only the speed moved: the write kept every restored survivor.
+    expected.stage_behavior.fixed_speed_wpm = 150;
+    assert_eq!(stored, serde_json::to_value(&expected).expect("serializes"));
 }
 
 /* ------------------------------------------------- the recovery-mode guard */

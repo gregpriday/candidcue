@@ -11,8 +11,11 @@
     "`get_settings` falls back to `AppSettings::default()` when a document does",
     "not parse, so a mistake here resets EVERY setting, calibrated rigs included,",
     "without a word. Each side therefore asserts that this document reads exactly",
-    "as the same document with `retired` deleted, and every surviving value is",
-    "moved off its default so the comparison cannot be two copies of the defaults.",
+    "as the same document with `retired` deleted, and every surviving value a",
+    "person can choose is moved off its default (and, on the frontend, off what",
+    "the one-time overlay adoptions would rebuild — the panel mirror sets",
+    "`vertical`, which the old global switch never could), so the comparison",
+    "cannot be two copies of the defaults. The recogniser has one possible value.",
     "",
     "Several retired values are ones the old validator REFUSED (a 5000 ms",
     "debounce, a 40 px editor font, a 9x wheel, an unknown fidelity mode): a",
@@ -96,7 +99,7 @@
           "lensPlacement": "in-panel",
           "flips": { "horizontal": false, "vertical": false },
           "framing": "head-and-shoulders",
-          "bias": 0.4,
+          "bias": 0.55,
           "overrides": {},
           "intensity": "standard",
           "readingCue": "ticks",
@@ -104,7 +107,7 @@
         }
       },
       "activeRig": { "dsp-glass": "Glass rig" },
-      "panelMirror": { "dsp-glass": { "horizontal": true, "vertical": false } }
+      "panelMirror": { "dsp-glass": { "horizontal": true, "vertical": true } }
     }
   }
 }
