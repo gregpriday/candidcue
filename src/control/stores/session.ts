@@ -2071,9 +2071,16 @@ export function startPrompting(): void {
   driver?.start();
 }
 
+/**
+ * Every pause made, counted — so a resume that fails can tell whether the pause
+ * it was asked to undo is still the one in force when its answer arrives.
+ */
+let pauseCount = 0;
+
 /** Listening pause — transcription stays connected (§15.3). */
 export function pauseListening(): void {
   trace('pause', 'listening pause (user)');
+  pauseCount += 1;
   state.update((s) => ({ ...s, paused: 'listening' }));
   driver?.pause();
   pipeline?.softPause();
@@ -2084,6 +2091,7 @@ export function hardPause(): void {
   // 'muted' is the deliberate-pause label; 'disconnected' means something
   // broke. A hard pause is a choice, so it must not read as a failure.
   trace('pause', 'hard pause (user)');
+  pauseCount += 1;
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
   void pipeline?.hardPause().catch((err) => {
@@ -2100,6 +2108,11 @@ export function hardPause(): void {
  * transition) left the UI showing a live microphone over a dead session, which
  * is the single worst outcome this product has. The UI now follows the
  * session, never leads it.
+ *
+ * Releasing the pause is a different claim from that one. A resume whose voice
+ * cannot come back still un-pauses the take (#279), with the microphone marked
+ * disconnected, unless a newer pause has been made since — see the failure
+ * branch below.
  */
 export function resumeSession(): void {
   const s0 = get(state);
@@ -2121,6 +2134,7 @@ export function resumeSession(): void {
    * raise a toast about a failure it never had.
    */
   const resuming = pipeline;
+  const releasing = pauseCount;
   void pipeline
     .resume()
     .then(() => {
@@ -2133,10 +2147,29 @@ export function resumeSession(): void {
       // refused here too — and that is no more a microphone fault than it was
       // at the start of the take.
       const modelUnavailable = isSpeechModelUnavailable(errorCode(err));
-      // Stay paused and say so. Silence here is what made the failure invisible.
+      /*
+       * Say so, and let the take go (#279).
+       *
+       * Voice is not the only thing that moves a take. A presenter whose
+       * recogniser never started rolls the script with auto-scroll, and
+       * `autoScrollLive` only runs while nothing is paused — so keeping the
+       * pause here held a working transport hostage to a failed one, and Space
+       * could stop the roll but never start it again.
+       *
+       * Staying paused was not even stable. `resume()` clears the pipeline's
+       * own pause before it re-runs `start()`, so the next Space found nothing
+       * to resume, resolved at once and marked a dead microphone live. Released,
+       * the take is where one whose voice failed to start already is: running,
+       * disconnected, and a Space pair away from trying again.
+       *
+       * Only the pause it was asked to undo, though. The retry can spend
+       * seconds on the microphone, and a pause made meanwhile — a hard pause
+       * from the menu, say — is a newer decision a late failure may not
+       * overrule.
+       */
       state.update((s) => ({
         ...s,
-        paused: s.paused === 'none' ? 'listening' : s.paused,
+        paused: pauseCount === releasing ? 'none' : s.paused,
         micState: 'disconnected',
         connection: 'offline',
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
