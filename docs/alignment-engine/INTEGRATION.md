@@ -1,75 +1,102 @@
 # Integrating the Rust alignment engine (`cc-align`)
 
-**Audience:** the frontend/stage agent wiring the new speech-to-script
-alignment engine into the app.
+**Audience:** anyone working on how the stage and control windows consume
+speech-to-script alignment.
 **Engine location:** `crates/cc-align` (pure Rust, no Tauri/network/clock
-dependencies — it slots into the existing Rust backend next to the Inworld
-socket).
+dependencies), hosted by `src-tauri/src/align/mod.rs`, which sits next to the
+on-device speech session in `src-tauri/src/speech/`.
 **Benchmarked behaviour:** `bench/REPORT.md` — zero false jumps across the
 suite, 99.99% within ±5 words on clean reads, and the display ahead of the
-reader 3.8% of the time on live captures (down from 22.2%). Read it to know
-what the engine promises. Note the deliberate asymmetry before tuning
-anything on top of it: **the display is built to trail the reader, never to
-lead**, so the symmetric ±2-word figure is intentionally not the objective.
+reader 3.8% of the time on live captures (down from 22.2%). The live captures
+are the frozen corpora under `bench/runs/`, recorded through the hosted
+recogniser the app used before speech moved on-device. Read the report to know
+what the engine promises. Note the deliberate asymmetry before tuning anything
+on top of it: **the display is built to trail the reader, never to lead**, so
+the symmetric ±2-word figure is intentionally not the objective.
 
 ---
 
 ## 1. The mental model
 
-The engine consumes the transcript frames the Rust Inworld session already
-produces and emits one `Snapshot` per transcript event (~1/second). A
-snapshot is not a scroll command — it is the engine's best statement of
-*where the reader is*, plus how confident it is and what mode it's in. The
-stage owns all animation.
+The engine consumes the transcript frames the on-device recogniser produces
+and emits one snapshot per transcript event. There is no timer: snapshot
+cadence is the recogniser's partial cadence. A snapshot is not a scroll
+command — it is the engine's best statement of *where the reader is*, plus how
+confident it is and what mode it's in. The stage owns all animation.
 
 ```
-src-tauri inworld socket ──SttFrame──► Engine::handle(SessionEvent) ──► Snapshot
-     (already exists)                        (new, Rust side)              │
-                                                                           ▼
-                                            stage WebView: 60 Hz motion from
-                                            snapshot.display_at(now) + smoothing
+on-device recogniser (cc-stt, dedicated OS thread)
+   │ transcript frames + audio clock + word times
+   ▼
+src-tauri/src/align/mod.rs: Engine::handle(SessionEvent) ──► project_to_tokens
+   │
+   ├──► stage://alignment-snapshot ──► stage: 60 Hz motion from
+   │                                   alignmentDisplayAt(snapshot, now)
+   └──► align://snapshot ────────────► control: progress, take summary
 ```
 
 Three positions, one per concern:
 
 | Field | Meaning | Use it for |
 |---|---|---|
-| `confirmed` | Conservative anchor; monotonic except accepted retakes / manual moves | progress %, "words covered", recovery UI |
-| `observed` | Best evidence-supported position right now (may retract a little on partial revisions) | debugging, coverage |
-| `display_at(t)` | Where the display should place the reader at audio-clock time `t` — observed + rate·horizon, lag-compensated and capped | **the scroll target** |
+| `confirmedToken` | Conservative anchor; monotonic except accepted retakes / manual moves | progress %, "words covered", recovery UI |
+| `observedToken` | Best evidence-supported position right now (may retract a little on partial revisions) | debugging, coverage |
+| `alignmentDisplayAt(snapshot, t)` | Where the display should place the reader at audio-clock time `t` — observed plus a bounded, lag-compensated lead, less a safety margin | **the scroll target** |
 
-Positions are fractional boundaries in **spoken-atom space** (see §4 for
-mapping atoms → DOM).
+Positions are fractional indices into the compiled script's `spokenTokens`.
+The engine itself works in spoken atoms; the host converts once, in Rust,
+before anything leaves it (see §4).
 
 ## 2. Session wiring (Rust side)
 
+This is built. What follows describes `src-tauri/src/align/mod.rs` as it is.
+
+**Take start.** Control calls `start_alignment` with the script's spoken tokens
+(`alignTokensFor` in `src/control/services/alignment.ts`). `AlignmentState`
+compiles them with `cc_align::compile_tokens_in`, which builds atoms *from the
+app's own tokens* so every position can be projected back, and arms
+`Engine::new(script, AlignmentConfig::default())`. The session starts unbound:
+`SpeechEngine::start_stream` binds it to the recogniser stream generation it
+mints, and frames from any other stream are ignored.
+
+**Frames.** The recogniser thread in `src-tauri/src/speech/session.rs` hands
+every transcript frame to `align::observe_frame` before emitting it to control
+on `stt://event`. The host turns it into an engine event:
+
 ```rust
-use cc_align::{compile, CompileOptions, AlignmentConfig, Engine, SessionEvent};
-
-// At take start:
-let script = compile(&markdown_source, CompileOptions { read_headings: false });
-let mut engine = Engine::new(script, AlignmentConfig::default());
-
-// For every SttFrame the inworld session emits (same wire data it already
-// sends to the renderer):
-let snapshot = match frame {
+let event = match frame {
     SttFrame::ItemStarted { item_id, audio_start_ms, .. } =>
-        engine.handle(SessionEvent::ItemStarted { item_id, audio_start_ms }),
+        SessionEvent::ItemStarted { item_id, audio_start_ms },
     SttFrame::Partial { item_id, text, .. } =>
-        engine.handle(SessionEvent::Partial { item_id, text, audio_ms }),
-    SttFrame::Final { item_id, text, audio_end_ms, .. } =>
-        engine.handle(SessionEvent::Final { item_id, text, audio_end_ms }),
-    _ => /* transport frames don't feed the engine */ return,
+        SessionEvent::Partial { item_id, text, audio_ms: audio_now_ms, word_times },
+    SttFrame::Final { item_id, text, audio_end_ms, acoustic_end_ms, .. } =>
+        SessionEvent::Final { item_id, text, audio_end_ms, acoustic_end_ms, word_times },
+    // Transport, Failed and AudioDropped frames say nothing about where the
+    // reader is.
+    _ => return None,
 };
-// Ship `snapshot` to the stage over an ordered channel (Tauri Channel, not
-// global events). ~1 message/second — no throttling needed.
+let snapshot = engine.handle(event);
+publish(project_to_tokens(&snapshot, &engine.script, label));
 ```
 
-**The audio clock.** `audio_ms` is the session's bytes-sent clock the Inworld
-module already maintains (`SessionHandle::audio_ms()`), captured when the
-frame arrives. Do not substitute wall-clock time — the engine's lag model is
-calibrated against the audio clock (`AlignmentConfig::partial_lag_ms` /
-`endpoint_lag_ms`, measured on live captures).
+`word_times`, the recogniser's per-word start times, rides beside the frame
+rather than inside it: the renderer's `SttFrame` is the `stt://event` contract
+and has no use for them.
+
+**Delivery.** `publish` emits the projected snapshot to two windows by name:
+`stage://alignment-snapshot` to the stage for motion, and `align://snapshot` to
+control for progress and the take summary. These are targeted events, not a
+broadcast. Control is out of the motion path; it receives its own copy only so
+its report can never disagree with what the stage showed.
+
+**The audio clock.** Time is milliseconds of audio handed to the recogniser,
+counted from samples at the pinned `SAMPLE_RATE_HZ`
+(`cc_stt::LocalSession::audio_ms`, mirrored into `SessionHandle::audio_ms()`).
+Each frame comes off the decoder stamped on that clock — `audio_ms` for a
+partial, `audio_start_ms` / `audio_end_ms` for the others — and that stamp is
+what the host passes as `audio_now_ms`. Do not substitute wall-clock time — the
+engine's lag model is calibrated against the audio clock
+(`AlignmentConfig::partial_lag_ms` / `endpoint_lag_ms`).
 
 **Config.** `AlignmentConfig::default()` is the benchmarked configuration.
 Don't hand-tune fields in the app; change defaults in `cc-align` and re-run
@@ -77,69 +104,62 @@ Don't hand-tune fields in the app; change defaults in `cc-align` and re-run
 
 ## 3. Stage behaviour per state
 
-`snapshot.state` tells the stage what kind of moment this is. The research
-brief (docs/improvements) is explicit: calm, no drama, no red.
+`snapshot.state` tells the stage what kind of moment this is. Keep it calm: no
+drama, no red.
 
 | `state` | What's happening | Stage behaviour |
 |---|---|---|
-| `Following` | Healthy local tracking | Animate toward `display_at(now)` each frame; normal smoothing |
-| `Holding` | Off-script speech / weak evidence | Stop advancing; hold position; optional quiet "holding" affordance |
-| `Ambiguous` | Two distant places both fit (duplicate passage) | Hold; do NOT pick a side visually |
-| `Searching` | No lock yet (session start, manual reset) | Hold at current scroll; subtle "listening…" is fine |
+| `following` | Healthy local tracking | Animate toward `alignmentDisplayAt(snapshot, now)` each frame; normal smoothing |
+| `holding` | Off-script speech / weak evidence | Stop advancing; hold position; optional quiet "holding" affordance |
+| `ambiguous` | Two distant places both fit (duplicate passage) | Hold; do NOT pick a side visually |
+| `searching` | No lock yet (session start, manual reset) | Hold at current scroll; subtle "listening…" is fine |
 
 Frame loop (60 Hz, stage-side):
 
 ```ts
-const target = snapshotDisplayAt(lastSnapshot, audioClockNowMs());
+const target = alignmentDisplayAt(snapshot, audioNowMs);
 // velocity/acceleration-limited approach to `target`; the engine already
 // bounds prediction, so no extra dead-reckoning on the stage side.
 ```
 
-`display_at` reference implementation (mirror of `Snapshot::display_at`):
-
-```ts
-function snapshotDisplayAt(s: Snapshot, tMs: number): number {
-  const ceiling = Math.min(s.displayLimitToken, s.scriptLen);
-  if (s.rate <= 0) return Math.min(s.observed, ceiling);
-  const age = Math.max(0, tMs - s.evidenceAudioMs);
-  const onset = Math.min(s.pauseOnsetMs, s.maxPredictionMs);
-  // Fresh evidence: the lead grows 1:1. That is pipeline-lag compensation,
-  // not a guess about the future — the words are already said, the recogniser
-  // has simply not finished saying so. Stale evidence: the reader has
-  // probably stopped, and the lead decays to rest on the last word heard.
-  const leadMs =
-    age <= onset ? age : Math.max(onset - (age - onset), Math.min(s.leadFloorMs, onset));
-  const lead = Math.min((s.rate * leadMs) / 1000, s.maxLeadTokens);
-  return Math.min(s.observed + lead, ceiling);
-}
-```
-
-The canonical TS mirror lives in `src/shared/contracts/alignment.ts`
-(`alignmentDisplayAt`) — never fork it.
+`alignmentDisplayAt` in `src/shared/contracts/alignment.ts` is the canonical
+TypeScript mirror of `Snapshot::display_at`, and a Rust test asserts the two
+agree. Never fork it, and don't transcribe it into a document either: a copy
+that used to live here fell behind it. In outline, while evidence is fresh the
+lead grows 1:1 with evidence age (pipeline-lag compensation, not a guess about
+the future: the words are already said, the recogniser has simply not finished
+saying so), eases into a plateau at `pauseOnsetMs`, holds for `leadHoldMs`, and
+then settles over `leadDecayMs` onto the last word heard.
 
 **The contract this function exists to keep: the returned position must never
 get ahead of what the reader has actually said.** Four separate mechanisms
 enforce it, and none of them is something the stage should re-derive, relax,
 or compensate for:
 
-* `rate` is already scaled *below* the reader's estimated pace
-  (`prediction_gain`, currently 0.35), so the steady state trails them. It is
-  not a measured reading speed and must not be "corrected" back up.
-* `rate` is already zero whenever extrapolation would be a guess
-  (holding / ambiguous / searching), and the moment the provider endpoints an
-  utterance — its VAD heard silence, so the display parks exactly where the
-  reader stopped. `speechStarted` re-bases the clock so gliding resumes the
-  instant they speak again.
+* `leadMarginTokens` holds the display a fixed distance behind its own
+  estimate while the reader is flowing, and fades out through the same settle
+  as the lead, so a display at rest rests on the last word heard. Caution is
+  bought as a distance, not a speed: `rateTokensPerSecond` is not scaled down
+  (`prediction_gain` is 1.0), because a reduced rate makes the display crawl
+  between transcript events and then step forward at each one. Don't remove
+  the margin, and don't "correct" for it.
+* `rateTokensPerSecond` is zero whenever extrapolation would be a guess
+  (holding / ambiguous / searching), and it decays to zero as evidence goes
+  stale (`rate_hold_ms`, `rate_decay_ms`), so the display parks where the
+  reader stopped. A final does not stop it by itself: it arrives
+  `endpoint_lag_ms` after the last word, and stopping on arrival put a halt in
+  the motion at every sentence. `ItemStarted` re-bases the evidence clock so
+  gliding resumes the instant the reader speaks again.
 * `maxLeadTokens` caps the lead in *words*, not milliseconds, because a
   reader who slows down invalidates the rate estimate without invalidating
   the clock.
-* `displayLimitToken` is a hard ceiling at the end of the paragraph the
-  reader was last heard in. The engine will not predict across a paragraph
-  break on any amount of confidence: a break is where readers stop, so it is
-  simultaneously the likeliest place for a forward guess to be wrong and the
-  most visible place to be wrong in. Expect the display to sit still at a
-  paragraph end until the next paragraph is genuinely heard — that pause is
-  the feature.
+* `displayLimitToken` is a hard ceiling at the end of the sentence the reader
+  was last heard in, and never past the end of its paragraph. The engine will
+  not predict across either break on any amount of confidence: a break is
+  where readers stop, so it is simultaneously the likeliest place for a
+  forward guess to be wrong and the most visible place to be wrong in. Expect
+  the display to sit still at a full stop until the next sentence is genuinely
+  heard — that pause is the feature.
 
 Benchmarked as `ahead_*` in `bench/REPORT.md`: live time-spent-ahead-of-the-
 reader is 3.8%, down from 22.2%, against a measurement floor of ~0.5%.
@@ -177,73 +197,81 @@ treatment rather than assert a single token.
 ### Jumps and suggestions
 
 * Accepted skips/retakes arrive as an ordinary snapshot whose position moved
-  far (`decision` = `JumpForwardAccepted` / `RetakeAccepted` /
-  `RelocationAccepted`). Animate these as a **deliberate relocation** (fast
-  scripted scroll), not an instant teleport and not the normal smoothing.
-* `snapshot.suggestion: Option<f64>` is a distant candidate that is
+  far (`decision` = `jumpForwardAccepted` / `retakeAccepted` /
+  `relocationAccepted` / `manualAnchor`, the set `ALIGNMENT_RELOCATIONS` in
+  `src/shared/contracts/alignment.ts`). Animate these as a **deliberate
+  relocation** (fast scripted scroll), not an instant teleport and not the
+  normal smoothing.
+* `snapshot.suggestionToken: number | null` is a distant candidate that is
   accumulating evidence but has NOT been accepted ("possible match below").
-  The UI may surface it as an unobtrusive affordance ("resume here?"). Never
-  auto-scroll to a suggestion.
-* A small backward `observed` correction after a partial retraction is
-  normal; the motion layer should absorb ≤2-atom corrections gently.
+  A discontinuity the viewport leash refused (`holdOffScreen`) travels here
+  too. The UI may surface it as an unobtrusive affordance ("resume here?").
+  Never auto-scroll to a suggestion.
+* A small backward `observedToken` correction after a partial retraction is
+  normal; the motion layer should absorb a correction of a word or two gently.
 
 ## 4. Mapping atoms ↔ screen
 
-The engine positions are indices into `CompiledScript::atoms`. Each
-`ScriptAtom` carries `line` (0-based source line in the Markdown) and `para`
-(0-based spoken-paragraph ordinal). To map a fractional position to the DOM:
+The mapping is done, and it is done in Rust. Control compiles the Markdown
+into `spokenTokens` and sends each token's authored surface, source line,
+paragraph and sentence end to `start_alignment` (`alignTokensFor`). The host
+builds atoms from those tokens with `compile_tokens_in`, which records where
+each atom came from, and projects every snapshot back with `project_to_tokens`
+before publishing it. Every position the frontend sees is a fractional index
+into `spokenTokens`, and the stage resolves it against its own measured token
+and line geometry.
 
-1. When compiling, export `(atom index → line, para)` to the stage (a flat
-   array; ~1–5k entries).
-2. The stage keeps its existing element-per-line/word rendering; the scroll
-   target for position `p` is the element containing atom `floor(p)`,
-   interpolated toward the next atom by `frac(p)`.
-3. Non-spoken blocks (headings, cues, images, code) occupy screen space but
-   no atom space — that's why mapping goes through the compiled atoms, not
-   through word counts in the raw Markdown.
+Keep it that way: no atom arrays shipped to the stage, no atom-to-DOM mapping,
+and no tokenizing or normalizing in TypeScript. The `observedAtom` /
+`confirmedAtom` snapshot fields exist for diagnostics and benchmark parity
+only.
 
-Note the compiler's spoken-content rules match the app's contract: code
-fences, `:::` containers, tables, dividers, whole-line `[Cue: …]`/`[Beat]`
-directives and HTML comments are not spoken; headings only if
-`read_headings`.
+Content the app's Markdown compiler (`src/shared/markdown/`) does not mark as
+spoken occupies screen space but never becomes a spoken token, so it never
+reaches the engine.
 
 ## 5. Inputs the frontend must provide
 
 ### Viewport hints (the "this is what I can see" prior)
 
-Whenever the visible range changes (user scroll, resize, font change):
-
-```rust
-engine.set_viewport_hint(first_visible_atom, last_visible_atom);
-```
+Whenever the visible range changes (user scroll, resize, font change), the
+stage emits `stage://viewport-hint` with `sessionGeneration`, `firstToken`,
+`lastToken` and `cleared`. `app.rs` relays it to `align::apply_viewport_hint`,
+which ignores a hint for a different take, converts the inclusive token range
+to atoms, and calls `engine.set_viewport_hint` — or `clear_viewport_hint` when
+`cleared` is set because the concept doesn't apply (e.g. full-script minimap
+view).
 
 This is a *prior*, not a command — it biases candidate ranking, speeds up
 starting-in-the-middle locks (3.6 s in the benchmarks), and, with
 `viewport_confines_jumps` on (the default), leashes discontinuities: a far
 jump, retake or cold lock to an off-screen target is refused and reported as
-`suggestion` instead. Debounce to ~4/s, and repeat an unchanged range every
-couple of seconds — a hint that arrives before the session is installed is
-dropped, and an engine with no viewport has no leash;
-call `clear_viewport_hint()` if the concept doesn't apply (e.g. full-script
-minimap view).
+`suggestionToken` instead. Debounce to ~4/s, and repeat an unchanged range
+every couple of seconds — a hint that arrives before the session is installed
+is dropped, and an engine with no viewport has no leash.
 
 ### Manual navigation
 
-When the user explicitly says "I'm here" (tap a paragraph, jump-to-section):
-
-```rust
-let snapshot = engine.set_manual_position(atom, audio_ms_now);
-```
+When the user explicitly says "I'm here" (tap a paragraph, jump-to-section),
+control calls `setAlignmentPosition(token)`, which invokes
+`set_alignment_position`. The host converts the token to an atom, calls
+`engine.set_manual_position` at its own last audio-clock reading, and publishes
+the result to both windows. The frontend never supplies a time.
 
 This resets evidence continuity — speech from before the manual move can
 never drag the cursor back.
 
+"Re-find me here" is a different call: `reacquireAlignment()`
+(`reacquire_alignment`) reopens the search over the viewport the stage last
+reported, without asserting a position.
+
 ## 6. Reading `decision` (diagnostics, not UI copy)
 
-`DecisionCode` explains each snapshot: `LocalObserved`, `LocalConfirmed`,
-`HoldOffScript`, `HoldAmbiguous`, `JumpPending`, `RetakeAccepted`, … Use it
-for logging/diagnostics panels; don't map codes directly to user-facing
-text (the state table in §3 is the user-facing contract).
+`decision` (`DecisionCode` in Rust, camelCase on the wire) explains each
+snapshot: `localObserved`, `localConfirmed`, `holdOffScript`, `holdAmbiguous`,
+`holdOffScreen`, `jumpPending`, `retakeAccepted`, … (`ALIGNMENT_DECISIONS`).
+Use it for logging/diagnostics panels; don't map codes directly to
+user-facing text (the state table in §3 is the user-facing contract).
 
 `confidence` (0..1) is a documented heuristic, not a calibrated
 probability. It's fine for a debug meter; don't gate product behaviour on
@@ -252,10 +280,10 @@ exact thresholds.
 ## 7. Take summary
 
 At take end, derive the honest summary from snapshots you've already
-received (spec §14.7): unique coverage from `confirmed` progression,
-recovery events from `decision` codes, availability from time spent in
-`Following`. Do not report "followed N of M words" from a single final
-position.
+received: unique coverage from the high-water mark of `confirmedToken`, and
+availability from time spent in `following`. Do not report "followed N of M
+words" from a single final position. Control does this in
+`src/control/stores/session.ts`, from its own copy of the snapshots.
 
 ## 8. Testing your integration
 
@@ -270,11 +298,11 @@ position.
 
 ## 9. What NOT to do
 
-* Don't feed the engine wall-clock times, provider `Transport` frames, or
-  renderer-side VAD guesses.
-* Don't scroll to `observed` directly — that reintroduces the
+* Don't feed the engine wall-clock times, `Transport` / `Failed` /
+  `AudioDropped` frames, or renderer-side VAD guesses.
+* Don't scroll to `observedToken` directly — that reintroduces the
   freeze-then-lurch the display model exists to fix.
-* Don't auto-accept `suggestion`.
+* Don't auto-accept `suggestionToken`.
 * Don't create a second stopword list, tokenizer, or "is this word close
   enough" check anywhere in the frontend. All lexical judgement lives in
   the engine — that split is what the historical `0 of 26` failure taught.

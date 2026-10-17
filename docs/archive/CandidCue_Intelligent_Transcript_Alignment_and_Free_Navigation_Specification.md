@@ -1,3 +1,20 @@
+> **Historical design. This is not a description of the app as it ships.**
+>
+> CandidCue as shipped differs from this document: speech recognition runs
+> on-device, there is no live coaching, there is no OpenAI or other hosted
+> speech or language model, and macOS is the only supported platform. Where
+> this document and the code disagree, the code is the authority.
+>
+> The text and section numbering below are unchanged. This document is kept
+> because it overrides the navigation policy of the
+> [Smooth Following specification](CandidCue_Smooth_Following_and_Intelligent_Alignment_Specification.md),
+> and the record of that policy is incomplete without it.
+>
+> [The archive index](README.md) explains how to read a `§` reference in a
+> code comment.
+
+---
+
 # CandidCue Intelligent Transcript Alignment and Free Navigation
 
 ## Implementation specification

@@ -1,3 +1,23 @@
+> **Historical design. This is not a description of the app as it ships.**
+>
+> CandidCue as shipped differs from this document: speech recognition runs
+> on-device, there is no live coaching, there is no OpenAI or other hosted
+> speech or language model, and macOS is the only supported platform. Where
+> this document and the code disagree, the code is the authority.
+>
+> This file was `docs/improvements/spec.md`. The text and section numbering
+> below are unchanged, because comments in `crates/cc-align`,
+> `crates/cc-bench` and `bench/REPORT.md` still cite them as `spec §N`. That
+> citation can equally mean the
+> [Intelligent Alignment, Navigation, and Scroll Control spec](CandidCue_Intelligent_Alignment_Navigation_Spec.md).
+> The two number their sections independently, and some cited numbers match
+> neither.
+>
+> [The archive index](README.md) explains how to read a `§` reference in a
+> code comment.
+
+---
+
 # CandidCue Alignment Engine: Technical Design
 
 The system should not treat matching as “find the text most similar to the latest transcript and scroll there.” That will inevitably produce surprising jumps.

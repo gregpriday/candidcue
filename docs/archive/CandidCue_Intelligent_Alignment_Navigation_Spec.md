@@ -1,3 +1,22 @@
+> **Historical design. This is not a description of the app as it ships.**
+>
+> CandidCue as shipped differs from this document: speech recognition runs
+> on-device, there is no live coaching, there is no OpenAI or other hosted
+> speech or language model, and macOS is the only supported platform. Where
+> this document and the code disagree, the code is the authority.
+>
+> The text and section numbering below are unchanged, because code comments
+> still cite them. Comments in `crates/cc-align` and `crates/cc-bench` say
+> `spec §N` for either this document or the
+> [Alignment Engine Technical Design](Alignment_Engine_Technical_Design.md).
+> The two number their sections independently, and some cited numbers match
+> neither.
+>
+> [The archive index](README.md) explains how to read a `§` reference in a
+> code comment.
+
+---
+
 # CandidCue Intelligent Alignment, Navigation, and Scroll Control
 
 ## Alignment Engine v3 — implementation specification
