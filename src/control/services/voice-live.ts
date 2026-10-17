@@ -26,6 +26,7 @@ import {
   type PermissionsLike,
 } from './audio';
 import { PcmCapture } from './audio/capture';
+import { AudioSendQueue } from './audio/send-queue';
 import {
   encodePcm16,
   pushTranscriptionAudio,
@@ -234,7 +235,9 @@ export function createRealVoiceFacade(): VoiceFacade {
       let capture: PcmCapture | null = null;
       let generation: number | null = null;
       let unlisten: (() => void) | null = null;
-      let sendChain: Promise<void> = Promise.resolve();
+      // The take's own bounded queue, so a stalled push cannot pile audio up
+      // here either. Its losses are traced and not raised, as Rust's are not.
+      let sender: AudioSendQueue | null = null;
       let stopped = false;
 
       const stop: Unsubscribe = () => {
@@ -242,6 +245,8 @@ export function createRealVoiceFacade(): VoiceFacade {
         stopped = true;
         unlisten?.();
         unlisten = null;
+        sender?.dispose();
+        sender = null;
         const closing = generation;
         generation = null;
         if (closing !== null) void stopTranscription(closing).catch(() => {});
@@ -291,14 +296,14 @@ export function createRealVoiceFacade(): VoiceFacade {
          * cannot answer the only question it is asked.
          */
         generation = await startTranscription();
+        const opened = generation;
+        sender = new AudioSendQueue({
+          send: (chunk) => pushTranscriptionAudio(opened, chunk),
+        });
         capture = new PcmCapture({
           onFrame: (samples) => {
-            const current = generation;
-            if (current === null || stopped) return;
-            const chunk = encodePcm16(samples);
-            sendChain = sendChain
-              .then(() => pushTranscriptionAudio(current, chunk))
-              .catch(() => {});
+            if (generation === null || stopped) return;
+            sender?.enqueue(encodePcm16(samples));
           },
         });
         await capture.start(result.stream);
