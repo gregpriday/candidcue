@@ -33,6 +33,7 @@
   import Link from '@lucide/svelte/icons/link';
   import Mic from '@lucide/svelte/icons/mic';
   import Monitor from '@lucide/svelte/icons/monitor';
+  import PanelRight from '@lucide/svelte/icons/panel-right';
   import Pause from '@lucide/svelte/icons/pause';
   import Pencil from '@lucide/svelte/icons/pencil';
   import Play from '@lucide/svelte/icons/play';
@@ -91,6 +92,8 @@
     user: User,
     clock: Clock,
     diagram: Workflow,
+    // The trailing inspector, shown or hidden — the Editor's Outline toggle.
+    'panel-right': PanelRight,
   };
 
 </script>

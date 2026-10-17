@@ -80,15 +80,24 @@
     color: var(--text-muted);
   }
 
+  /*
+   * Off is an outline and a grey knob; on is a clay fill and a white knob.
+   *
+   * Off used to be a light track with a white knob, which put both the track's
+   * edge (1.63:1) and the knob (1.19:1 on the track) under SC 1.4.11's 3:1 —
+   * the switch's position was the only thing saying "off", and the thing in
+   * that position could barely be seen. `--border-state` is the one grey that
+   * clears 3:1 on every surface a settings row sits on.
+   */
   .switch {
     position: relative;
     flex: 0 0 auto;
     width: 38px;
     height: 22px;
     padding: 0;
-    border: 1px solid var(--border-control);
+    border: 1px solid var(--border-state);
     border-radius: var(--radius-pill);
-    background: var(--bg-secondary);
+    background: var(--bg-panel);
     transition:
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out);
@@ -103,9 +112,10 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--bg-panel);
-    box-shadow: var(--shadow-card);
-    transition: transform var(--dur-med) var(--ease-out);
+    background: var(--border-state);
+    transition:
+      transform var(--dur-med) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
   }
   .on {
     background: var(--accent);

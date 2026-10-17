@@ -98,8 +98,8 @@
      never a nested border inside the block's own surface. */
   .table {
     border-collapse: collapse;
-    font-size: var(--text-sm);
-    line-height: var(--lh-label);
+    font-size: calc(var(--text-sm) * var(--doc-scale, 1));
+    line-height: calc(var(--lh-label) * var(--doc-scale, 1));
     min-width: 100%;
   }
   .table th,

@@ -26,6 +26,8 @@ export interface PresentMenuItem {
   description?: string;
   selected?: boolean;
   disabled?: boolean;
+  /** Starts a new group in the menu: a rule above, and an optional heading. */
+  group?: { heading?: string };
   onselect: () => void;
 }
 

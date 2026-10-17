@@ -67,8 +67,17 @@
 </div>
 
 <style>
+  /*
+   * Intrinsically sized. Dropped into a column whose items stretch (a Settings
+   * section), an inline-flex track grew to the column's width with its options
+   * bunched at the start — an empty trough that read as missing choices.
+   * `fit-content` is the width it has in a row anyway, so the toolbar's Edit /
+   * Preview / Both is unchanged.
+   */
   .track {
     display: inline-flex;
+    width: fit-content;
+    max-width: 100%;
     align-items: center;
     gap: 2px;
     padding: 3px;
@@ -80,7 +89,8 @@
   .segment {
     position: relative;
     appearance: none;
-    border: none;
+    /* Transparent until selected, so the keyline below costs no layout. */
+    border: 1px solid transparent;
     background: transparent;
     color: var(--text-secondary);
     height: var(--control-h-sm);
@@ -107,10 +117,16 @@
     cursor: not-allowed;
   }
 
+  /*
+   * A white thumb on the warm track is 1.19:1 — the micro-shadow was the only
+   * thing marking which option is on, and SC 1.4.11 wants 3:1 for that. The
+   * keyline in `--border-state` is the selection's edge; keyboard focus keeps
+   * its own treatment on top of it.
+   */
   .selected,
   .selected:hover:not(:disabled) {
     background: var(--bg-panel);
     color: var(--text-primary);
-    box-shadow: var(--shadow-card);
+    border-color: var(--border-state);
   }
 </style>

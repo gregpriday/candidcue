@@ -29,6 +29,7 @@
 -->
 <script lang="ts">
   import { openSettingsWindow } from '../lib/open-settings';
+  import BrandMark from '../components/BrandMark.svelte';
   import Button from '../components/Button.svelte';
   import Icon from '../components/Icon.svelte';
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
@@ -431,7 +432,10 @@
   <div class="inner">
     <section class="start" aria-labelledby="welcome-heading">
       <div class="intro">
-        <p class="wordmark">CandidCue</p>
+        <!-- The one place in the window the mark appears: the sidebar gave
+             its tile up (it read as a microphone button), and the app icon is
+             what carries the identity everywhere else. -->
+        <p class="wordmark"><BrandMark size={22} /><span>CandidCue</span></p>
         <h1 id="welcome-heading" class="heading">Speak naturally. Keep your place.</h1>
         <p class="body">
           CandidCue is a voice-following teleprompter for your second screen. Write or import a
@@ -652,6 +656,9 @@
   }
 
   .wordmark {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin: 0;
     line-height: var(--lh-body);
     font-size: var(--text-xs);
@@ -732,7 +739,7 @@
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    box-shadow: var(--shadow-card);
+    /* No resting shadow: a contained panel on the page, not a floating one. */
     overflow: hidden;
   }
 

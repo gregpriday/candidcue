@@ -1,7 +1,14 @@
 <!--
-  Premium-flat button: darker 1px border "lip", --shadow-card micro-lift,
-  darkening press. No gradients, no glow. Primary is a solid clay fill
-  with a 15px hero label.
+  Flat button: a 1px outline on the neutral variants, a solid clay fill on
+  primary, a darkening press. No shadow, no darker "lip" on the fill, no
+  gradient, no glow — and one label size, 13px, on every variant.
+
+  That is the owner's settled recipe, arrived at over many rounds: the darker
+  border lip read as a "cheap heavy outline", the 15px primary label as
+  "chunky" beside the 13px buttons next to it (most visibly Import beside
+  New script in the Library toolbar), and every shadow as decoration. Weight
+  comes from the fill and, on the hero action, from height — not from a
+  bigger label.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -68,7 +75,6 @@
     border: 1px solid var(--border-control);
     background: var(--bg-elevated);
     color: var(--text-primary);
-    box-shadow: var(--shadow-card);
     font-size: var(--text-sm);
     font-weight: 600;
     letter-spacing: -0.01em;
@@ -131,12 +137,11 @@
     font-size: var(--text-sm);
   }
 
-  /* Primary — solid clay fill, darker lip, 15px hero label. */
+  /* Primary — a solid clay fill, edge to edge in the fill's own colour. */
   .primary {
     background: var(--accent);
-    border-color: var(--accent-strong);
+    border-color: var(--accent);
     color: var(--accent-contrast);
-    font-size: var(--text-base);
   }
   .primary:hover:not(:disabled) {
     background: var(--accent-strong);
@@ -148,9 +153,6 @@
     border-color: var(--border);
     color: var(--text-muted);
     box-shadow: none;
-  }
-  .primary.sm {
-    font-size: var(--text-sm);
   }
 
   /* Ghost recedes into toolbars. */
@@ -197,9 +199,8 @@
    */
   .danger-primary {
     background: var(--danger);
-    border-color: var(--danger-strong);
+    border-color: var(--danger);
     color: var(--danger-contrast);
-    font-size: var(--text-base);
   }
   .danger-primary:hover:not(:disabled) {
     background: var(--danger-strong);
@@ -213,8 +214,5 @@
     border-color: var(--border);
     color: var(--text-muted);
     box-shadow: none;
-  }
-  .danger-primary.sm {
-    font-size: var(--text-sm);
   }
 </style>

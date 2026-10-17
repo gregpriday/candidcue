@@ -798,11 +798,12 @@
     gap: var(--space-3);
     align-self: stretch;
   }
+  /* A setting's name, like the shared Slider's beside it. */
   .field-label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: 500;
+    color: var(--text-primary);
   }
   .field-value {
     font-size: var(--text-meta);

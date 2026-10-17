@@ -94,16 +94,17 @@
     min-width: 0;
   }
   /*
-   * A host can restyle every field label at once through these two — Settings
-   * gives its rows the switch's label treatment so a select, a slider and a
-   * switch in one section read as one kind of row. Stacked fields elsewhere
-   * keep the quieter label they always had.
+   * A host can restyle every field label at once through these two. The
+   * default is a setting's NAME, in the primary label colour at a regular
+   * weight — the same as a Toggle's — so a row with a menu and a row with a
+   * switch read as the same kind of thing. (Grey semibold beside Toggle's
+   * black made "On launch" look like a caption and its neighbour a setting.)
    */
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: var(--field-label-weight, 600);
-    color: var(--field-label-color, var(--text-secondary));
+    font-weight: var(--field-label-weight, 500);
+    color: var(--field-label-color, var(--text-primary));
   }
   .description {
     font-size: var(--text-xs);
@@ -151,6 +152,11 @@
     font: inherit;
     font-size: var(--text-sm);
     font-weight: 500;
+    /* A value too long for the column ends in an ellipsis rather than being
+       cut mid-word with nothing to say it was cut. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition:
       border-color var(--dur-fast) var(--ease-out),
       background var(--dur-fast) var(--ease-out);

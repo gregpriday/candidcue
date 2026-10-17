@@ -124,6 +124,12 @@
 </div>
 
 <style>
+  /*
+   * Every size here is multiplied by `--doc-scale`, which the Editor sets from
+   * View › Larger / Smaller Editor Text. CodeMirror already followed it; the
+   * rendered preview kept fixed pixel sizes, so Both drew the same script at
+   * two scales. Outside the Editor nothing sets it and it falls back to 1.
+   */
   .doc {
     max-width: var(--prose-measure);
     display: flex;
@@ -152,24 +158,24 @@
   }
   .h1 {
     font-family: var(--font-serif);
-    font-size: var(--text-3xl);
+    font-size: calc(var(--text-3xl) * var(--doc-scale, 1));
     line-height: 1.25;
     margin-top: var(--space-4);
   }
   .h2 {
-    font-size: var(--text-2xl);
+    font-size: calc(var(--text-2xl) * var(--doc-scale, 1));
     line-height: 1.3;
     margin-top: var(--space-3);
   }
   .h3 {
-    font-size: var(--text-xl);
-    line-height: var(--lh-section);
+    font-size: calc(var(--text-xl) * var(--doc-scale, 1));
+    line-height: calc(var(--lh-section) * var(--doc-scale, 1));
   }
 
   .para {
     margin: 0;
-    font-size: var(--text-lg);
-    line-height: var(--lh-transcript);
+    font-size: calc(var(--text-lg) * var(--doc-scale, 1));
+    line-height: calc(var(--lh-transcript) * var(--doc-scale, 1));
     color: var(--prose-text-warm);
     letter-spacing: var(--ls-prose);
   }
@@ -182,8 +188,8 @@
   .list-item {
     display: flex;
     align-items: baseline;
-    font-size: var(--text-lg);
-    line-height: var(--lh-transcript);
+    font-size: calc(var(--text-lg) * var(--doc-scale, 1));
+    line-height: calc(var(--lh-transcript) * var(--doc-scale, 1));
   }
   .marker {
     flex: none;
@@ -241,12 +247,26 @@
     border-radius: var(--radius-pill);
     background: var(--warning-soft);
     color: var(--warning);
-    font-size: var(--text-sm);
+    font-size: calc(var(--text-sm) * var(--doc-scale, 1));
     font-weight: 600;
     width: fit-content;
   }
+  /* A cue paragraph keeps its cue as an inline node, and that node draws its
+     own capsule for when a cue sits inside a sentence. Here the paragraph IS
+     the capsule, so the inner one stands down — otherwise the chip is a pill
+     inside a pill with two layers of the same fill. */
+  .cue :global(.cue-inline) {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+  }
 
-  .silent {
+  /*
+   * Unspoken blocks dim their CONTENT, not themselves: the wrapper is the
+   * keyboard target in Preview, and dimming it dimmed its quiet focus edge with
+   * it — --focus-quiet at 62% is about 2.3:1 on white, under SC 1.4.11's 3:1.
+   */
+  .silent > :global(*) {
     opacity: 0.62;
   }
 
@@ -276,7 +296,7 @@
     background: var(--bg-sunken);
     border: 1px solid var(--border-faint);
     font-family: var(--font-mono);
-    font-size: var(--text-sm);
+    font-size: calc(var(--text-sm) * var(--doc-scale, 1));
     overflow-x: auto;
   }
 
