@@ -110,7 +110,10 @@ vi.mock('../../../src/control/services/audio-trace', () => ({
 }));
 
 import { AUDIO_SEND_QUEUE_FRAMES } from '../../../src/control/services/audio/send-queue';
-import { VoiceSessionPipeline } from '../../../src/control/services/voice-session';
+import {
+  VoiceSessionPipeline,
+  type VoicePipelineDeps,
+} from '../../../src/control/services/voice-session';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
 /** What the take was told about audio that never reached the recogniser. */
@@ -118,7 +121,7 @@ const dropped: number[] = [];
 let clock = 0;
 let spoken = 0;
 
-function pipeline(): VoiceSessionPipeline {
+function pipeline(extra: Partial<VoicePipelineDeps> = {}): VoiceSessionPipeline {
   return new VoiceSessionPipeline({
     sessionId: 'session-1',
     sessionGeneration: 1,
@@ -128,6 +131,7 @@ function pipeline(): VoiceSessionPipeline {
     onConnectionState: () => {},
     onAudioDropped: (frames) => dropped.push(frames),
     now: () => clock,
+    ...extra,
   });
 }
 
@@ -278,6 +282,66 @@ describe('a push that stalls for longer than the frame cadence', () => {
       { generation: 8, chunk: 'frame-3' },
       { generation: 8, chunk: 'frame-4' },
     ]);
+
+    // And when the old call does land at last, it changes nothing for the new
+    // session: its backlog stays unsent and the new queue keeps flowing.
+    stt.pushes.find((push) => push.generation === 7)!.settle();
+    await settled();
+    speak(1);
+    await settled();
+    expect(stt.pushes.filter((push) => push.generation === 7).map((push) => push.chunk)).toEqual([
+      'frame-0',
+    ]);
+    expect(stt.delivered.at(-1)).toEqual({ generation: 8, chunk: 'frame-5' });
+    expect(dropped).toEqual([]);
+    await p.stop();
+  });
+
+  it('keeps one queue, in order, across a microphone switch mid-stall', async () => {
+    const p = pipeline();
+    await p.start();
+    stt.stalled = true;
+    speak(2);
+    // Re-acquiring the device replaces the PCM tap, not the session: the
+    // frames still waiting must go out ahead of what the new tap hears.
+    await p.switchMicrophone('usb');
+    expect(taps).toHaveLength(2);
+    speak(2);
+    expect(outstanding().map((push) => push.chunk)).toEqual(['frame-0']);
+
+    stt.stalled = false;
+    outstanding()[0]!.settle();
+    await settled();
+    expect(deliveredChunks()).toEqual(frames(0, 4));
+    expect(dropped).toEqual([]);
+    await p.stop();
+  });
+
+  it('sends nothing more once a soft pause has timed out and closed the session', async () => {
+    const armed: Array<() => void> = [];
+    const p = pipeline({
+      softPauseAutoDisconnectMs: 60_000,
+      timers: {
+        setTimeout: (callback) => {
+          armed.push(callback);
+          return armed.length;
+        },
+        clearTimeout: () => {},
+      },
+    });
+    await p.start();
+    stt.stalled = true;
+    speak(3);
+    p.softPause();
+    expect(armed, 'the soft pause armed its auto-disconnect').toHaveLength(1);
+    armed[0]!();
+    await settled();
+    expect(stt.closed).toEqual([7]);
+
+    outstanding()[0]!.settle();
+    await settled();
+    expect(stt.pushes, 'the frames waiting belonged to the session that closed').toHaveLength(1);
+    expect(dropped).toEqual([]);
     await p.stop();
   });
 });

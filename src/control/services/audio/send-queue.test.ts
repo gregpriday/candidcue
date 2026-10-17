@@ -38,6 +38,8 @@ function harness(options: Partial<AudioSendQueueOptions> = {}) {
     pushes: [] as Push[],
     delivered: [] as string[],
     dropped: [] as number[],
+    /** The clock at each report, to check how often the presenter is told. */
+    reportedAt: [] as number[],
     acknowledged: 0,
     /** While set, pushes stay pending until settled by hand. */
     stalled: false,
@@ -69,7 +71,10 @@ function harness(options: Partial<AudioSendQueueOptions> = {}) {
     onDelivered: () => {
       h.acknowledged += 1;
     },
-    onDropped: (frames) => h.dropped.push(frames),
+    onDropped: (frames) => {
+      h.dropped.push(frames);
+      h.reportedAt.push(h.clock);
+    },
     now: () => h.clock,
     ...options,
   });
@@ -160,9 +165,15 @@ describe('a push that stalls for longer than the frame cadence', () => {
     // Ten more seconds of speech into a queue that is already full.
     speak(h, 1 + AUDIO_SEND_QUEUE_FRAMES, 100);
 
-    expect(h.dropped.length).toBeGreaterThan(1);
-    expect(h.dropped.length).toBeLessThanOrEqual(11);
-    expect(sum(h.dropped)).toBeLessThanOrEqual(100);
+    // A frame a tick is lost; the presenter hears about it once a second.
+    expect(h.reportedAt).toHaveLength(10);
+    const gaps = h.reportedAt.slice(1).map((at, i) => at - h.reportedAt[i]!);
+    expect(gaps.every((gap) => gap === 1_000), `reports at ${h.reportedAt.join(', ')}`).toBe(
+      true,
+    );
+    // What the throttle holds back is held, not lost: the last nine frames
+    // fall after the tenth report and wait for the stall to end.
+    expect(sum(h.dropped)).toBe(91);
   });
 
   it('resumes on the newest audio once the call comes back, and accounts for the rest', async () => {
@@ -224,11 +235,12 @@ describe('a push that fails', () => {
   });
 
   it('counts a push that throws instead of throwing into the audio callback', async () => {
-    let calls = 0;
+    const sent: string[] = [];
     const dropped: number[] = [];
     const queue = new AudioSendQueue({
-      send: async () => {
-        calls += 1;
+      send: async (chunk) => {
+        if (chunk === 'a') throw new Error('IPC_UNAVAILABLE');
+        sent.push(chunk);
       },
       onDropped: (frames) => dropped.push(frames),
       now: () => 0,
@@ -237,16 +249,75 @@ describe('a push that fails', () => {
       send: () => {
         throw new Error('IPC_UNAVAILABLE');
       },
-      onDropped: (frames) => dropped.push(frames),
       now: () => 0,
     });
-    expect(() => throwing.enqueue('a')).not.toThrow();
-    await drain();
-    expect(dropped).toEqual([1]);
+    expect(() => throwing.enqueue('a'), 'a synchronous throw is contained').not.toThrow();
 
+    queue.enqueue('a');
     queue.enqueue('b');
     await drain();
-    expect(calls).toBe(1);
+    expect(dropped).toEqual([1]);
+    expect(sent, 'the frame behind it still goes').toEqual(['b']);
+  });
+
+  it('reports every refusal once the queue runs dry, throttle or not', async () => {
+    const h = harness();
+    h.stalled = true;
+    // Three frames in one instant, all refused: two of the losses land inside
+    // the throttle window, and no push will ever come back to flush them.
+    h.queue.enqueue('a');
+    h.queue.enqueue('b');
+    h.queue.enqueue('c');
+    for (let i = 0; i < 3; i += 1) {
+      h.open()[0]!.refuse();
+      await drain();
+    }
+    expect(sum(h.dropped)).toBe(3);
+    expect(h.queue.depth).toBe(0);
+  });
+
+  it('reports a backlog that expired behind a push that was then refused', async () => {
+    const h = harness();
+    h.stalled = true;
+    speak(h, 0, 4);
+    h.clock += AUDIO_SEND_MAX_WAIT_MS + 1;
+    h.open()[0]!.refuse();
+    await drain();
+    // One refused and three too old to send, with nothing after them to wait
+    // for: all four are reported now, not when the next push comes back.
+    expect(sum(h.dropped)).toBe(4);
+    expect(h.pushes).toHaveLength(1);
+  });
+});
+
+describe('callbacks that throw', () => {
+  it('cannot stall the queue or throw into the audio callback', async () => {
+    const failures = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sent: string[] = [];
+    const queue = new AudioSendQueue({
+      send: async (chunk) => {
+        sent.push(chunk);
+      },
+      onDelivered: () => {
+        throw new Error('listener broke');
+      },
+      onDropped: () => {
+        throw new Error('listener broke');
+      },
+      now: () => 0,
+      capacity: 1,
+    });
+    // Over capacity in one instant, so `onDropped` throws inside `enqueue`.
+    expect(() => {
+      queue.enqueue('a');
+      queue.enqueue('b');
+      queue.enqueue('c');
+    }).not.toThrow();
+    await drain();
+    // `onDelivered` threw after every push, and the next one still went.
+    expect(sent).toEqual(['a', 'c']);
+    expect(failures).toHaveBeenCalled();
+    failures.mockRestore();
   });
 });
 

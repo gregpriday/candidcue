@@ -864,7 +864,9 @@ export class VoiceSessionPipeline {
       // Audio the recogniser will never hear, reported the way Rust reports
       // its own: from here the presenter cannot tell which side lost it.
       onDropped: (frames) => this.deps.onAudioDropped?.(frames),
-      now: this.now,
+      // A test's clock if it brought one; otherwise the queue's own monotonic
+      // one, because a wall-clock step must not age fresh audio into a loss.
+      now: this.deps.now,
     });
   }
 

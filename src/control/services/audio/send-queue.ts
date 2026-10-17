@@ -21,9 +21,11 @@
  *   replay of it. Nothing is sent in a gap's place: the audio clock is the
  *   count of samples the recogniser received, and a frame never sent leaves it
  *   exactly as a frame Rust dropped does.
- * - NOTHING SILENTLY. Every frame lost here is counted, traced, and handed to
- *   `onDropped` — the first of a stall at once, so a call that never settles
- *   is still visible, and then at most once a second while it lasts.
+ * - NOTHING SILENTLY. Every frame lost here while the session is open is
+ *   counted, traced, and handed to `onDropped`: the first of a stall at once,
+ *   so a call that never settles is still visible, then at most once a second
+ *   while it lasts, and the rest the moment it ends — a push comes back, or
+ *   the queue runs dry.
  */
 import { trace } from '../audio-trace';
 
@@ -109,7 +111,8 @@ export class AudioSendQueue {
    *
    * Synchronous, and never waits on the call in flight: one that never settles
    * must not hold a microphone open behind it. The take is over, so what was
-   * lost is traced rather than raised as a notice nobody is reading.
+   * lost is traced rather than raised as a notice nobody is reading — and a
+   * push that fails after this point is not counted at all.
    */
   dispose(): void {
     if (this.disposed) return;
@@ -130,7 +133,12 @@ export class AudioSendQueue {
     if (this.sending || this.disposed) return;
     this.expire(this.now());
     const next = this.waiting.shift();
-    if (!next) return;
+    if (!next) {
+      // Run dry, so whatever loss is still held back by the throttle has
+      // nothing left to wait for.
+      this.report(true);
+      return;
+    }
     this.sending = true;
     let pending: Promise<void>;
     try {
@@ -142,7 +150,7 @@ export class AudioSendQueue {
       () => {
         this.sending = false;
         if (this.disposed) return;
-        this.options.onDelivered?.();
+        this.notify(() => this.options.onDelivered?.());
         // The gap, if there was one, has closed: what is left of it goes now.
         this.report(true);
         this.pump();
@@ -188,7 +196,20 @@ export class AudioSendQueue {
       `${frames} frames did not reach the recogniser (${this.describeLosses()}, ` +
         `${this.waiting.length} waiting)`,
     );
-    this.options.onDropped?.(frames);
+    this.notify(() => this.options.onDropped?.(frames));
+  }
+
+  /**
+   * Contained. A callback is somebody else's code running inside the pump;
+   * letting it throw would strand the frames behind it, or throw into the
+   * audio callback that enqueued them.
+   */
+  private notify(callback: () => void): void {
+    try {
+      callback();
+    } catch (err) {
+      console.error('an audio send-queue callback failed', err);
+    }
   }
 
   private describeLosses(): string {
