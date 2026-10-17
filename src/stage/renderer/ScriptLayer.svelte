@@ -67,7 +67,8 @@
     VIEWPORT_HINT_INTERVAL_MS,
     VIEWPORT_HINT_REFRESH_MS,
   } from '../../shared/contracts';
-  import { resolveStageGeometry } from '../../shared/optical-resolve';
+  import { DEFAULT_LINE_HEIGHT, resolveStageGeometry } from '../../shared/optical-resolve';
+  import { FALLBACK_ZERO_ADVANCE_RATIO, normalizeFontMetrics } from '../../shared/optics';
   import { emitStageEvent } from '../events';
   import {
     computeReadingBand,
@@ -936,9 +937,28 @@
     return out;
   });
 
+  /*
+   * The gap is horizontal, and in a reading window it is NOT sized off the line
+   * pitch.
+   *
+   * It is expressed in lines, and on a prompter the pitch is a constant of the
+   * rig, so `lines × pitch` is a fixed number of pixels. A reading window lets
+   * the reader change the line spacing, and then the same multiplication made a
+   * VERTICAL choice widen every sentence gap and re-wrap the paragraph under
+   * them. So the reader holds the pitch the gap was tuned against — the
+   * resolver's default line height at the size actually rendered — which is
+   * today's value exactly at the default, and stays put when spacing moves.
+   *
+   * The prompter keeps `linePx`: its line height is fixed per rig, and its
+   * geometry is the one every benchmark number was measured against.
+   */
+  const microgapPitchPx = $derived(
+    readerOptics ? readerOptics.bodyFontSizePx * DEFAULT_LINE_HEIGHT : linePx,
+  );
+
   const microgapPx = $derived(
     optics && optics.sentenceMicrogapLines > 0
-      ? Math.max(0, optics.sentenceMicrogapLines) * linePx
+      ? Math.max(0, optics.sentenceMicrogapLines) * microgapPitchPx
       : 0,
   );
 
@@ -969,6 +989,28 @@
   });
 
   /**
+   * What one `ch` of the resolved column is worth — and it depends on WHO
+   * resolved it.
+   *
+   * `columnCh` is a pixel width the resolver divided by its own zero advance, so
+   * it has to be multiplied back by the same one or the column renders at a
+   * width nobody chose. Control resolves the envelope against the DIN fallbacks
+   * (it cannot measure a font it does not render), so 0.55 is exact for every
+   * prompter take. A reading window resolves HERE, against the measured face,
+   * and Atkinson Hyperlegible Next's "0" is about 0.653 em: rebuilt with 0.55, a
+   * reader column drew at 84% of its resolved width, and the character count
+   * the resolver reported described a line about 19% longer than the one drawn.
+   *
+   * Through `normalizeFontMetrics`, as the resolver does, so a measurement it
+   * refused is refused here too and both sides fall back to the same 0.55.
+   * Gated on `readerOptics` rather than on the reading context: a reading window
+   * with no profile renders the envelope's column, which was resolved at 0.55.
+   */
+  const chAdvanceRatio = $derived(
+    readerOptics ? normalizeFontMetrics(fontMetrics).zeroAdvanceRatio : FALLBACK_ZERO_ADVANCE_RATIO,
+  );
+
+  /**
    * The column, measured in characters rather than in a share of the window.
    *
    * A viewport percentage means a different number of characters per line on
@@ -979,7 +1021,7 @@
    */
   const columnWidthPx = $derived(
     optics
-      ? Math.min(safeRect.width, optics.columnCh * 0.55 * optics.bodyFontSizePx)
+      ? Math.min(safeRect.width, optics.columnCh * chAdvanceRatio * optics.bodyFontSizePx)
       : (vw * settings.columnWidthPercent) / 100,
   );
 
@@ -3659,6 +3701,10 @@
     the one that can be dragged off by paragraph gaps. It is also the number the
     padding and the fades are already solved against, so the cue cannot end up
     describing a pitch the rest of the vertical layout does not use.
+
+    `hugColumn` in a reading window: its column is capped at a reading measure,
+    so the margins grow with the window, and a tick centred in one would drift
+    hundreds of pixels from the text it marks.
   -->
   <ReadingCue
     style={settings.readingCue ?? 'ticks'}
@@ -3668,6 +3714,7 @@
     hollow={cueHollow}
     sizePx={capHeightPx}
     linePitchPx={linePx}
+    hugColumn={settings.readingContext === 'reader'}
   />
 
   <!-- Focus fades (layer 6): quiet ramps into the background at both edges. -->

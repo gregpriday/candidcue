@@ -100,6 +100,11 @@
      * missing falls back to {@link TRAVEL_FALLBACK_CAPS}.
      */
     linePitchPx?: number;
+    /**
+     * Sit each tick one unit off the column's edge instead of centring it in
+     * the margin. For a reading window — see where the ticks are placed below.
+     */
+    hugColumn?: boolean;
   }
 
   let {
@@ -110,6 +115,7 @@
     hollow = false,
     sizePx = 24,
     linePitchPx = 0,
+    hugColumn = false,
   }: Props = $props();
 
   /** Props cross a process boundary; a NaN here would take the layout out. */
@@ -134,9 +140,9 @@
    * wherever the margin happened to leave it — on a 9-inch Prompter at the
    * shipped sizes that was 45px of air outside the mark and 17px inside, so it
    * sat closer to the text than to the bezel and read as pushed aside rather
-   * than placed. It is centred in its own margin now (see below), which is the
-   * same statement the column's `MAX_COLUMN_FRACTION` makes: the mark has equal
-   * air on both sides of it.
+   * than placed. On a prompter it is centred in its own margin now (see below),
+   * which is the same statement the column's `MAX_COLUMN_FRACTION` makes: the
+   * mark has equal air on both sides of it.
    *
    * The gap survives as the minimum: centring cannot be allowed to walk the
    * mark into a descender on a rig whose margin is too tight to centre in.
@@ -151,13 +157,41 @@
    * centred in the average of them would be centred in neither. The right one
    * is expressed in `calc` against `100%` because this component is told where
    * the column starts and how wide it is, never how wide its own container is.
+   *
+   * Except in a reading window (`hugColumn`), where the margin is not a designed
+   * quantity. On a panel it is a fixed share of the glass, so centring in it is
+   * centring in a known space. A reading window's column is capped at a reading
+   * measure, and every pixel the window grows past that goes into the margins —
+   * on a 2560 px window a centred tick sits about 400 px from the text, marking
+   * the band for nobody's eye. So the tick hugs the column instead: one unit of
+   * air (a cap height, twice the floor above) between its inner edge and the
+   * text, at every window width. The outer clamps — `0` on the left, `100%` on
+   * the right, both live while a window is being dragged — keep it on the glass
+   * when the margin is narrower than the mark.
    */
+  const hugGapPx = $derived(unitPx);
+
   const leftTickPx = $derived(
-    Math.min((leftPx - tickWidthPx) / 2, leftPx - gapPx - tickWidthPx),
+    hugColumn
+      ? leftPx - hugGapPx - tickWidthPx
+      : Math.min((leftPx - tickWidthPx) / 2, leftPx - gapPx - tickWidthPx),
   );
   /** Distance from the column's right edge to the centred mark's left edge. */
   const rightTickFromColumnPx = $derived(Math.max(gapPx, 0));
   const columnRightPx = $derived(leftPx + widthPx);
+  /** Where a hugging right tick starts, before the clamp; null when centring. */
+  const hugRightPx = $derived(hugColumn ? columnRightPx + hugGapPx : null);
+  /**
+   * The right tick's preferred `left`, before the clamp to the glass both
+   * placements share. The hugging one is read from a custom property so the
+   * unclamped position stays inspectable by anything that cannot evaluate a
+   * `min()` against `100%`.
+   */
+  const rightTickPreferred = $derived(
+    hugRightPx === null
+      ? `max(${columnRightPx + rightTickFromColumnPx}px, calc((100% + ${columnRightPx - tickWidthPx}px) / 2))`
+      : 'var(--hug-left)',
+  );
 
   /**
    * The travel, in cap heights, when no pitch has been handed over.
@@ -238,10 +272,8 @@
     </span>
     <span
       class="tick"
-      style:left="min(
-        max({columnRightPx + rightTickFromColumnPx}px, calc((100% + {columnRightPx - tickWidthPx}px) / 2)),
-        calc(100% - {tickWidthPx}px)
-      )"
+      style:--hug-left={hugRightPx === null ? null : `${hugRightPx}px`}
+      style:left="min({rightTickPreferred}, calc(100% - {tickWidthPx}px))"
       style:top="{centerPx}px"
       style:width="{tickWidthPx}px"
       style:height="{unitPx}px"
