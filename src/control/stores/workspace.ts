@@ -304,11 +304,11 @@ let pending: Partial<WorkspaceState> | null = null;
  *
  * What this is NOT is a transaction. Web Storage promises no locking between
  * webviews, so two windows writing in the same instant can both read the old
- * copy and the second loses the first's field. Each write is a human gesture
- * that has already waited out a debounce, which makes that a far smaller
- * window than the one this replaced — every write, always — and the locks
- * that would close it are asynchronous, which the flush before Settings opens
- * and the one on `pagehide` cannot wait for.
+ * copy and the second loses the first's field. Writes follow human gestures —
+ * a drag that has waited out the debounce, a section click, a window closing —
+ * which makes that a far smaller window than the one this replaced, where
+ * every write did it. The locks that would close it are asynchronous, and the
+ * flush before Settings opens and the one on `pagehide` cannot wait for them.
  */
 function writeNow(patch: Partial<WorkspaceState>): void {
   try {
