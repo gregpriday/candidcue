@@ -12,9 +12,9 @@
  *
  * "Motion profile" was a dropdown over a one-item array.
  *
- * The compatibility half is asserted too: the FIELD must keep round-tripping,
- * because documents written by older builds carry it and Rust validates it
- * against a closed vocabulary. Removing the control must not remove the value.
+ * The field behind Script fidelity went later (#218); the adapter tests in
+ * `tests/unit/control/settings-following.test.ts` cover a document that still
+ * carries it.
  */
 import { fireEvent, render } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
@@ -56,18 +56,6 @@ describe('the dead Script fidelity control', () => {
     expect(text).not.toContain('tips');
     expect(text).not.toContain('Conversational');
     expect(text).not.toContain('omission');
-  });
-
-  it('leaves the stored value alone — nothing here writes fidelityMode', () => {
-    const { patches } = mount();
-    expect(patches.every((p) => !('fidelityMode' in p))).toBe(true);
-  });
-
-  it('still accepts a settings object carrying the compatibility field', () => {
-    // A document from an older build arrives with this set. Rendering must not
-    // care, because the field is still valid — it is merely unread.
-    const { following } = mount({ fidelityMode: 'exact' });
-    expect(following.fidelityMode).toBe('exact');
   });
 });
 

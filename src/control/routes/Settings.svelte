@@ -2079,14 +2079,8 @@
               </button>
             </p>
           {/if}
-          <Slider
-            label="Revision retention"
-            value={$settings.general.revisionRetentionDays}
-            min={7}
-            max={90}
-            format={(v) => `${v} days`}
-            onchange={(value) => void patchSettings('general', { revisionRetentionDays: value })}
-          />
+          <!-- #218 removed "Revision retention": nothing prunes revisions, so
+               every one is kept whatever the slider said. -->
           <!--
             This shipped with no reader anywhere in the tree — the same defect
             the retired "Full screen" switch was culled for. It governs the
@@ -3203,22 +3197,11 @@
             A small prompter panel holds too few words a line for that to read well, so it wraps
             the way a browser does whatever this says. Turn it off to wrap that way everywhere.
           </p>
-          <Select
-          layout="row"
-            label="When a session ends"
-            value={$settings.teleprompter.stageEndBehavior}
-            options={[
-              { value: 'close', label: 'Close the stage window' },
-              { value: 'blank', label: 'Keep the stage open, blanked' },
-            ]}
-            onchange={(value) =>
-              void patchSettings('teleprompter', { stageEndBehavior: value as 'close' | 'blank' })}
-          />
-          <Toggle
-            checked={$settings.teleprompter.hidePointer}
-            label="Hide the pointer on the stage"
-            onchange={(value) => void patchSettings('teleprompter', { hidePointer: value })}
-          />
+          <!-- #218 removed "When a session ends" and "Hide the pointer on the
+               stage". Nothing read the first, and a take runs in the control
+               window, so there is no stage window for it to close. The stage
+               hides the pointer 1.5 s after it stops moving whatever the second
+               said. -->
           <!-- The only writer of `diagnosticTake` (#300), and it reaches a take
                that is already running through `installLiveSettingsFollow`.
                Named for what it changes on the stage, because two other
@@ -3293,16 +3276,8 @@
             <Button variant="ghost" onclick={() => void runRestoreAllData()}>
               Restore from export…
             </Button>
-            <Button
-              variant="ghost"
-              onclick={() =>
-                void runMaintenance(
-                  () => settingsService.clearCache('analysis'),
-                  () => 'Analysis cache cleared',
-                )}
-            >
-              Clear analysis cache
-            </Button>
+            <!-- #218 removed "Clear analysis cache": it emptied a directory
+                 nothing has ever written. -->
             <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>
           </div>
 

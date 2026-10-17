@@ -23,7 +23,7 @@ import {
 } from '../../shared/optical-rig-presets';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 
-export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-profiles';
+export type { FollowFeel, FollowingSettings } from '../lib/follow-profiles';
 
 export type LaunchBehavior = 'library' | 'recent';
 export type SessionMode = 'voice' | 'manual' | 'fixed';
@@ -61,7 +61,6 @@ export interface AppSettings {
   general: {
     launchBehavior: LaunchBehavior;
     defaultSessionMode: SessionMode;
-    revisionRetentionDays: number;
     restoreWindows: boolean;
     confirmEndSession: boolean;
     /**
@@ -253,8 +252,6 @@ export interface AppSettings {
      */
     textIntensity: TextIntensity;
     fixedSpeedWpm: number;
-    stageEndBehavior: 'close' | 'blank';
-    hidePointer: boolean;
     /**
      * Diagnostic Take when true, Clean Take when false (#300).
      *
@@ -960,7 +957,6 @@ export function defaultAppSettings(): AppSettings {
     general: {
       launchBehavior: 'library',
       defaultSessionMode: 'voice',
-      revisionRetentionDays: 30,
       restoreWindows: true,
       confirmEndSession: true,
       readHeadings: false,
@@ -1010,8 +1006,6 @@ export function defaultAppSettings(): AppSettings {
       semanticLineBreaks: true,
       textIntensity: 'standard',
       fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
-      stageEndBehavior: 'close',
-      hidePointer: true,
       /*
        * Clean, not Diagnostic (#300).
        *

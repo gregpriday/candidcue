@@ -249,7 +249,6 @@ describe('captured IPC payloads (production services → wire)', () => {
       speechModels.selectSpeechLanguage(3, 'en-US'),
     );
     await capture('clear_cache_logs', () => settings.clearCache('logs'));
-    await capture('clear_cache_analysis', () => settings.clearCache('analysis'));
     await capture('app_version', () => settings.getAppVersion());
   });
 

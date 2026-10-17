@@ -111,7 +111,6 @@ describe('#215 a document that still carries saveTranscript', () => {
     expect(without.general.launchBehavior).toBe('recent');
     expect(without.general.defaultSessionMode).toBe('fixed');
     expect(without.teleprompter.fixedSpeedWpm).toBe(172);
-    expect(without.teleprompter.hidePointer).toBe(false);
   });
 
   it('surfaces no privacy section for anything to read', async () => {
@@ -235,5 +234,179 @@ describe('#300 an overlay that still carries teleprompter.stageMode', () => {
     expect(overlay().teleprompter).not.toHaveProperty('stageMode');
     const loaded = await settings.getSettings();
     expect(loaded.teleprompter.diagnosticTake).toBe(false);
+  });
+});
+
+/*
+ * #218 — Settings rows that changed nothing.
+ *
+ * Revision retention pruned nothing, nothing read "When a session ends", and
+ * the stage hides the pointer after a fixed 1.5 s whatever "Hide the pointer"
+ * said. The rows are gone, and an overlay saved while they existed still holds
+ * all three keys — the store saved whole sections, so the defaults rode in with
+ * any change to General or Teleprompter.
+ */
+describe('#218 an overlay that still carries the retired rows', () => {
+  const current = {
+    general: { confirmEndSession: false, readHeadings: true },
+    teleprompter: { fontSizePx: 72, diagnosticTake: true },
+    stage: { displayFingerprint: 'dsp-2' },
+  };
+  const legacy = {
+    general: { ...current.general, revisionRetentionDays: 7 },
+    teleprompter: { ...current.teleprompter, stageEndBehavior: 'blank', hidePointer: false },
+    stage: current.stage,
+  };
+
+  function seed(value: unknown): void {
+    store.set(settings.SETTINGS_OVERLAY_KEY, JSON.stringify(value));
+  }
+
+  it('loads exactly as the same overlay without them', async () => {
+    seed(current);
+    const without = await settings.getSettings();
+
+    seed(legacy);
+    const loaded = await settings.getSettings();
+    expect(loaded).toStrictEqual(without);
+    expect(Object.hasOwn(loaded.general, 'revisionRetentionDays')).toBe(false);
+    expect(Object.hasOwn(loaded.teleprompter, 'stageEndBehavior')).toBe(false);
+    expect(Object.hasOwn(loaded.teleprompter, 'hidePointer')).toBe(false);
+    // And the rest of the overlay really applied, so the comparison above is
+    // not two copies of the defaults.
+    expect(loaded.general.confirmEndSession).toBe(false);
+    expect(loaded.general.readHeadings).toBe(true);
+    expect(loaded.teleprompter.fontSizePx).toBe(72);
+    expect(loaded.teleprompter.diagnosticTake).toBe(true);
+    expect(loaded.stage.displayFingerprint).toBe('dsp-2');
+    // A read never writes: the stale keys are still there until a save.
+    expect(overlay()).toStrictEqual(legacy);
+  });
+
+  it('is adopted from a broadcast without them', () => {
+    seed(legacy);
+    const adopted = settings.adaptRevisionedSettings(ipc.document({}));
+    expect(adopted).not.toBeNull();
+    expect(Object.hasOwn(adopted!.general, 'revisionRetentionDays')).toBe(false);
+    expect(Object.hasOwn(adopted!.teleprompter, 'hidePointer')).toBe(false);
+    expect(adopted!.teleprompter.fontSizePx).toBe(72);
+  });
+
+  it('loses them on the next save of each section and keeps everything else', async () => {
+    seed(legacy);
+    const loaded = await settings.getSettings();
+    // The store sends the WHOLE section, as `sendPatchBatch` does.
+    await settings.updateSettings(4, {
+      general: { ...loaded.general, confirmEndSession: true },
+      teleprompter: { ...loaded.teleprompter, fontSizePx: 80 },
+    });
+    const stored = overlay() as { general: object; teleprompter: object; stage: object };
+    expect(stored.general).not.toHaveProperty('revisionRetentionDays');
+    expect(stored.general).toMatchObject({ confirmEndSession: true, readHeadings: true });
+    expect(stored.teleprompter).not.toHaveProperty('stageEndBehavior');
+    expect(stored.teleprompter).not.toHaveProperty('hidePointer');
+    expect(stored.teleprompter).toMatchObject({ fontSizePx: 80, diagnosticTake: true });
+    expect(stored.stage).toStrictEqual({ displayFingerprint: 'dsp-2' });
+  });
+
+  it('drops the stored copies even when the patch does not mention them', async () => {
+    // Stripped from the MERGED section: the write spreads the stored section
+    // back in, so a patch-only strip would leave them there for good.
+    seed(legacy);
+    await settings.updateSettings(4, {
+      general: { confirmEndSession: true },
+      teleprompter: { fontSizePx: 80 },
+    } as never);
+    const stored = overlay() as { general: object; teleprompter: object };
+    expect(stored.general).toStrictEqual({ confirmEndSession: true, readHeadings: true });
+    expect(stored.teleprompter).toStrictEqual({ fontSizePx: 80, diagnosticTake: true });
+  });
+});
+
+describe('#218 nothing writes the retired rows any more', () => {
+  it('a legacy-shaped patch stores none of them and sends Rust no pointer delay', async () => {
+    await settings.updateSettings(4, {
+      general: { revisionRetentionDays: 90 },
+      teleprompter: { stageEndBehavior: 'blank', hidePointer: false, fixedSpeedWpm: 160 },
+    } as never);
+
+    const updates = ipc.calls.filter((call) => call.command === 'update_settings');
+    expect(updates, 'the speed change must still reach Rust').toHaveLength(1);
+    expect((updates[0]!.args as { patch: Record<string, unknown> }).patch).toEqual({
+      stageBehavior: { fixedSpeedWpm: 160 },
+    });
+    const stored = overlay() as { general?: object; teleprompter?: object };
+    expect(stored.general ?? {}).not.toHaveProperty('revisionRetentionDays');
+    expect(stored.teleprompter ?? {}).not.toHaveProperty('stageEndBehavior');
+    expect(stored.teleprompter ?? {}).not.toHaveProperty('hidePointer');
+  });
+
+  it('a whole-section save from the defaults carries none of them', async () => {
+    const loaded = await settings.getSettings();
+    await settings.updateSettings(4, {
+      general: { ...loaded.general, confirmEndSession: false },
+      teleprompter: { ...loaded.teleprompter, fontSizePx: 80 },
+    });
+    const patch = (ipc.calls.find((call) => call.command === 'update_settings')!.args as {
+      patch: { stageBehavior?: Record<string, unknown> };
+    }).patch;
+    expect(patch.stageBehavior ?? {}).not.toHaveProperty('pointerHideDelaySeconds');
+    const stored = overlay() as { general: object; teleprompter: object };
+    expect(stored.general).not.toHaveProperty('revisionRetentionDays');
+    expect(stored.teleprompter).not.toHaveProperty('stageEndBehavior');
+    expect(stored.teleprompter).not.toHaveProperty('hidePointer');
+  });
+
+  it("Rust's stored pointer delay changes nothing this side can see", async () => {
+    ipc.serve(ipc.document({}));
+    const hidden = await settings.getSettings();
+    const shown = ipc.document({});
+    shown.value.stageBehavior.pointerHideDelaySeconds = 1.5;
+    ipc.serve(shown);
+    expect(await settings.getSettings()).toStrictEqual(hidden);
+  });
+});
+
+describe('#218 a document that still carries the retired following fields', () => {
+  function withFollowing(following: Record<string, unknown>) {
+    const doc = ipc.document({});
+    return { ...doc, value: { ...doc.value, following } };
+  }
+  const following = {
+    feel: 'calm',
+    motionProfileId: 'default-v4',
+    developerDiagnostics: true,
+  };
+
+  it('loads every other following setting exactly as a document without them', async () => {
+    ipc.serve(withFollowing(following));
+    const without = await settings.getSettings();
+
+    ipc.serve(
+      withFollowing({ ...following, fidelityMode: 'exact', semanticRequestLimit: 40 }),
+    );
+    const loaded = await settings.getSettings();
+    expect(loaded).toStrictEqual(without);
+    expect(Object.hasOwn(loaded.following, 'fidelityMode')).toBe(false);
+    expect(Object.hasOwn(loaded.following, 'semanticRequestLimit')).toBe(false);
+    expect(loaded.following.feel).toBe('calm');
+    expect(loaded.following.developerDiagnostics).toBe(true);
+  });
+
+  it('a whole-section following save sends neither back', async () => {
+    ipc.serve(
+      withFollowing({ ...following, fidelityMode: 'exact', semanticRequestLimit: 40 }),
+    );
+    const loaded = await settings.getSettings();
+    await settings.updateSettings(4, { following: { ...loaded.following, feel: 'responsive' } });
+
+    const update = ipc.calls.find((call) => call.command === 'update_settings');
+    expect((update!.args as { patch: Record<string, unknown> }).patch).toEqual({
+      following: {
+        feel: 'responsive',
+        motionProfileId: loaded.following.motionProfileId,
+        developerDiagnostics: true,
+      },
+    });
   });
 });

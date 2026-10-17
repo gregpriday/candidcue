@@ -65,10 +65,8 @@
       removed, so the control was offering to tune the behaviour of something
       that no longer runs.
 
-      The FIELD stays in the settings document and in Rust's closed vocabulary:
-      it costs nothing, and dropping it would make every profile written by an
-      older build fail validation on load. What is gone is the pretence that
-      moving it does something.
+      The field went after it (#218). A document written by an older build still
+      carries it and loads as before; this side simply never reads or sends it.
     -->
     <div class="field">
       {#if hasMotionChoice}
