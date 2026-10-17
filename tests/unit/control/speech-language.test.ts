@@ -133,22 +133,38 @@ describe('language display names', () => {
     //
     // `vi.spyOn` rather than assignment: `Intl.DisplayNames` is a read-only
     // property, so `Intl.DisplayNames = …` does not typecheck.
-    const spy = vi.spyOn(Intl, 'DisplayNames').mockImplementation((() => {
-      throw new RangeError('no ICU data');
-    }) as never);
+    //
+    // A `class`, not an arrow: the service calls it with `new`, and Vitest 4
+    // refuses to construct an arrow implementation. That refusal is a
+    // TypeError the service catches like any other, so with an arrow the
+    // fallback assertion alone would still pass while never throwing the
+    // RangeError this test is about — hence the assertion on what the
+    // constructor actually threw.
+    const spy = vi.spyOn(Intl, 'DisplayNames').mockImplementation(
+      class {
+        constructor() {
+          throw new RangeError('no ICU data');
+        }
+      } as never,
+    );
     try {
       expect(languageDisplayName('en-US')).toBe('en-US');
+      expect(spy.mock.results[0]?.value).toBeInstanceOf(RangeError);
     } finally {
       spy.mockRestore();
     }
   });
 
   it('falls back when the runtime returns nothing for a tag', () => {
-    const spy = vi
-      .spyOn(Intl, 'DisplayNames')
-      .mockImplementation((() => ({ of: () => undefined })) as never);
+    const of = vi.fn(() => undefined);
+    const spy = vi.spyOn(Intl, 'DisplayNames').mockImplementation(
+      class {
+        of = of;
+      } as never,
+    );
     try {
       expect(languageDisplayName('de-DE')).toBe('de-DE');
+      expect(of).toHaveBeenCalledWith('de-DE');
     } finally {
       spy.mockRestore();
     }
