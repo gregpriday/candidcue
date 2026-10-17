@@ -279,6 +279,63 @@ function rustCrates() {
 /* ----------------------------------------------------------------- native */
 
 /**
+ * The provenance fields that are missing or unusable, by name. Kept in step with
+ * the copy in verify-native-review.mjs; each script runs alone in the gates'
+ * scratch-tree tests, so they cannot share a module.
+ */
+function provenanceProblems(provenance) {
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) {
+    return ['source.repository', 'source.revision'];
+  }
+  const unusable = [];
+  let url = null;
+  try {
+    url = new URL(provenance.repository);
+  } catch {
+    // Not a URL at all; reported below with the rest.
+  }
+  if (url === null || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+    unusable.push('source.repository');
+  }
+  if (typeof provenance.revision !== 'string' || provenance.revision.trim() === '') {
+    unusable.push('source.revision');
+  }
+  return unusable;
+}
+
+/**
+ * Where a work's code came from, as one table cell. That is often not the
+ * project's home: several of these are built from forks, and some are vendored
+ * inside somebody else's repository. A component nobody has traced says so.
+ */
+function builtFrom(work) {
+  if (provenanceProblems(work.source).length > 0) return `unconfirmed; upstream <${work.upstream}>`;
+  const { repository, revision, path, prebuiltBy } = work.source;
+  // Forty hex digits do not fit a table; the inventory keeps the full commit.
+  const shown = /^[0-9a-f]{40}$/.test(revision) ? revision.slice(0, 12) : revision;
+  const cell = [`${path ? `\`${path}\` in ` : ''}<${repository}> @ \`${shown}\``];
+  if (work.upstream && work.upstream !== repository) {
+    cell.push(path ? `(vendored; upstream <${work.upstream}>)` : `(fork of <${work.upstream}>)`);
+  }
+  if (prebuiltBy) cell.push(`(prebuilt by <${prebuiltBy}>)`);
+  return cell.join(' ');
+}
+
+/**
+ * A component's note, and a link to any notices file its source publishes for
+ * code compiled into it — ONNX Runtime's runs to hundreds of entries, which
+ * belong to it and are linked rather than copied here.
+ */
+function aboutComponent(component) {
+  const { note, source } = component;
+  const link =
+    typeof source?.noticeFile === 'string' && provenanceProblems(source).length === 0
+      ? `Its own third-party notices: <${source.repository}/blob/${source.revision}/${source.noticeFile}>.`
+      : '';
+  return [note, link].filter(Boolean).join(' ');
+}
+
+/**
  * The static libraries linked into the binary, named individually.
  *
  * This listed a COUNT and a release name — "15 libraries from
@@ -343,6 +400,43 @@ function nativeComponents() {
     );
   }
 
+  // The table prints where each reviewed component was built from, so a review
+  // that cannot say is refused here — in CI — rather than first at a release.
+  // An UNreviewed entry may still lack a source: the dagger discloses that.
+  for (const component of reviewed.components ?? []) {
+    if (component.reviewed === true) {
+      const unusable = provenanceProblems(component.source);
+      if (unusable.length > 0) {
+        problems.push(
+          `${component.component} is marked reviewed in sbom/native-components.json but has ` +
+            `no usable ${unusable.join(' or ')}. A review has to say which source it read.`,
+        );
+      }
+    }
+    const embeds = component.embeds ?? [];
+    if (!Array.isArray(embeds)) {
+      problems.push(`${component.component}: \`embeds\` in sbom/native-components.json is not a list.`);
+      continue;
+    }
+    for (const [index, work] of embeds.entries()) {
+      const unusable =
+        work !== null && typeof work === 'object'
+          ? [
+              ...(typeof work.component === 'string' ? [] : ['component']),
+              ...(typeof work.spdx === 'string' ? [] : ['spdx']),
+              ...provenanceProblems(work.source),
+            ]
+          : ['the entry itself'];
+      if (unusable.length > 0) {
+        problems.push(
+          `${component.component}: embeds[${index}] in sbom/native-components.json has no ` +
+            `usable ${unusable.join(', ')}. Code compiled into a component is disclosed with ` +
+            `its own licence and source, or not claimed at all.`,
+        );
+      }
+    }
+  }
+
   const present = (reviewed.components ?? []).filter((component) =>
     (component.libraries ?? []).some((library) => files.includes(library)),
   );
@@ -379,6 +473,17 @@ function render() {
   const crates = rustCrates();
   const native = nativeComponents();
   const models = speechModels();
+  // A malformed embed is already a problem, so nothing will be written; it is
+  // skipped here only so that the run reaches the report instead of a TypeError.
+  const embedded = native.components.flatMap((carrier) =>
+    (Array.isArray(carrier.embeds) ? carrier.embeds : [])
+      .filter((work) => work !== null && typeof work === 'object' && typeof work.spdx === 'string')
+      .map((work) => ({ work, carrier })),
+  );
+  const notes = native.components
+    .map((component) => [component, aboutComponent(component)])
+    .filter(([, about]) => about !== '')
+    .map(([component, about]) => `- **${component.component}** — ${about}`);
 
   const out = [];
   const w = (...lines) => out.push(...lines);
@@ -420,15 +525,15 @@ function render() {
     `the release provenance (\`sbom/native-inputs.json\`), from ` +
       `${native.releases.map((r) => `\`${r}\``).join(', ') || '(none recorded)'}.`,
     '',
-    '| Component | Licence | Upstream |',
+    '| Component | Licence | Built from |',
     '|---|---|---|',
     ...native.components.map(
       (component) =>
-        `| ${component.component} | ${component.spdx}${component.reviewed ? '' : ' †'} ` +
-        `| <${component.upstream}> |`,
+        `| ${component.component} | ${component.spdx}${component.reviewed === true ? '' : ' †'} ` +
+        `| ${builtFrom(component)} |`,
     ),
     '',
-    ...(native.components.some((component) => !component.reviewed)
+    ...(native.components.some((component) => component.reviewed !== true)
       ? [
           '† Recorded from the upstream project, and **not yet confirmed against the',
           'exact build in this archive**. The archive carries no licence metadata of its',
@@ -436,10 +541,30 @@ function render() {
           'listed rather than omitted because a component nobody has classified is still',
           'in the binary.',
           '',
-          ...native.components
-            .filter((component) => !component.reviewed && component.note)
-            .flatMap((component) => [`- **${component.component}** — ${component.note}`, '']),
         ]
+      : []),
+    ...(embedded.length > 0
+      ? [
+          'Compiled into those libraries, and under their own licences rather than the',
+          "licence of the component that carries them. Each one's source is published at",
+          ...(embedded.some(({ work }) => work.spdx.includes('MPL-2.0'))
+            ? [
+                'the revision named, which for a work under the MPL-2.0 is where its Source',
+                'Code Form is available.',
+              ]
+            : ['the revision named.']),
+          '',
+          '| Component | Licence | Compiled into | Built from |',
+          '|---|---|---|---|',
+          ...embedded.map(
+            ({ work, carrier }) =>
+              `| ${work.component} | ${work.spdx} | ${carrier.component} | ${builtFrom(work)} |`,
+          ),
+          '',
+        ]
+      : []),
+    ...(notes.length > 0
+      ? ['On particular components:', '', ...notes.flatMap((line) => [line, ''])]
       : []),
     'The model weights are **not** part of this application. They are downloaded',
     'after installation, at your request, and each carries its own attribution and',

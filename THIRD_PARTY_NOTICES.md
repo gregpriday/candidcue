@@ -33,37 +33,56 @@ so no dependency scanner sees what is inside it — and it is not one project.
 Each component below is a separate work under its own terms. Digests are in
 the release provenance (`sbom/native-inputs.json`), from `sherpa-onnx-v1.13.4-osx-arm64-static-lib`.
 
-| Component | Licence | Upstream |
+| Component | Licence | Built from |
 |---|---|---|
-| KISS FFT | BSD-3-Clause † | <https://github.com/mborgerding/kissfft> |
-| ONNX Runtime | MIT † | <https://github.com/microsoft/onnxruntime> |
-| PortAudio | MIT † | <https://github.com/PortAudio/portaudio> |
-| eSpeak NG | GPL-3.0-or-later † | <https://github.com/espeak-ng/espeak-ng> |
-| kaldi-decoder / kaldi-native-fbank | Apache-2.0 † | <https://github.com/k2-fsa/kaldi-decoder> |
-| piper-phonemize | MIT † | <https://github.com/rhasspy/piper-phonemize> |
-| sherpa-onnx | Apache-2.0 | <https://github.com/k2-fsa/sherpa-onnx> |
-| ssentencepiece | Apache-2.0 † | <https://github.com/pkufool/ssentencepiece> |
-| ucd-tools | GPL-3.0-or-later † | <https://github.com/rhdunn/ucd-tools> |
+| KISS FFT | BSD-3-Clause | <https://github.com/mborgerding/kissfft> @ `febd4caeed32` |
+| ONNX Runtime | MIT | <https://github.com/microsoft/onnxruntime> @ `v1.27.0` (prebuilt by <https://github.com/csukuangfj/onnxruntime-libs>) |
+| OpenFst | Apache-2.0 | <https://github.com/csukuangfj/openfst> @ `v1.8.5-2026-04-11` (fork of <https://www.openfst.org>) |
+| PortAudio | MIT | <https://github.com/PortAudio/portaudio> @ `v19.7.0` |
+| eSpeak NG | GPL-3.0-or-later | <https://github.com/csukuangfj/espeak-ng> @ `ed530aa11304` (fork of <https://github.com/espeak-ng/espeak-ng>) |
+| kaldi-decoder | Apache-2.0 | <https://github.com/k2-fsa/kaldi-decoder> @ `v0.3.0` |
+| kaldi-native-fbank | Apache-2.0 | <https://github.com/csukuangfj/kaldi-native-fbank> @ `v1.22.3` |
+| kaldifst | Apache-2.0 | <https://github.com/k2-fsa/kaldifst> @ `v1.8.0` |
+| piper-phonemize | MIT | <https://github.com/csukuangfj/piper-phonemize> @ `f3ff95afc036` (fork of <https://github.com/rhasspy/piper-phonemize>) |
+| sherpa-onnx | Apache-2.0 | <https://github.com/k2-fsa/sherpa-onnx> @ `v1.13.4` |
+| simple-sentencepiece | Apache-2.0 | <https://github.com/pkufool/simple-sentencepiece> @ `v0.7` |
+| ucd-tools | GPL-3.0-or-later | `src/ucd-tools` in <https://github.com/csukuangfj/espeak-ng> @ `ed530aa11304` (vendored; upstream <https://github.com/rhdunn/ucd-tools>) |
 
-† Recorded from the upstream project, and **not yet confirmed against the
-exact build in this archive**. The archive carries no licence metadata of its
-own, so each of these has to be verified before CandidCue is sold. They are
-listed rather than omitted because a component nobody has classified is still
-in the binary.
+Compiled into those libraries, and under their own licences rather than the
+licence of the component that carries them. Each one's source is published at
+the revision named, which for a work under the MPL-2.0 is where its Source
+Code Form is available.
 
-- **KISS FFT** — Confirm; kissfft has shipped under more than one licence over its history.
+| Component | Licence | Compiled into | Built from |
+|---|---|---|---|
+| Eigen | MPL-2.0 | kaldi-decoder | <https://gitlab.com/libeigen/eigen> @ `5.0.1` |
+| libc++ basic_filebuf | MIT OR NCSA | kaldifst | `kaldifst/csrc/basic-filebuf.h` in <https://github.com/k2-fsa/kaldifst> @ `v1.8.0` (vendored; upstream <https://github.com/llvm/llvm-project>) |
+| uni-algo | Unlicense OR MIT | piper-phonemize | `src/uni_algo.h` in <https://github.com/csukuangfj/piper-phonemize> @ `f3ff95afc036` (vendored; upstream <https://github.com/uni-algo/uni-algo>) |
+| darts-clone | BSD-2-Clause | simple-sentencepiece | `ssentencepiece/csrc/darts.h` in <https://github.com/pkufool/simple-sentencepiece> @ `v0.7` (vendored; upstream <https://github.com/s-yata/darts-clone>) |
 
-- **ONNX Runtime** — Vendored inside the sherpa-onnx release archive, which carries no version or licence metadata of its own. The exact build must be identified and its MIT claim confirmed against that build before release.
+On particular components:
 
-- **PortAudio** — CandidCue captures audio in the renderer and does not call PortAudio, but the archive is on the link line. Confirm whether it is reachable in the shipped binary.
+- **KISS FFT** — The FFT behind feature extraction, fetched by kaldi-native-fbank. This copy is BSD-3-Clause; the Unlicense also in its LICENSES directory covers only test files, which are not compiled.
+
+- **ONNX Runtime** — A binary build of ONNX Runtime v1.27.0, compiled by a sherpa-onnx maintainer and vendored into the sherpa-onnx archive. It compiles in third-party code of its own — protobuf, abseil, Eigen and others. Its own third-party notices: <https://github.com/microsoft/onnxruntime/blob/v1.27.0/ThirdPartyNotices.txt>.
+
+- **OpenFst** — Weighted finite-state transducers for the decoder. sherpa-onnx builds them from a fork and gives the libraries its own name; the code is the OpenFst authors' (Google LLC).
+
+- **PortAudio** — In the archive and on the link line, but CandidCue captures audio in the renderer and never calls it, and none of its code survives dead-stripping. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
 
 - **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is: nothing references an eSpeak symbol, a selective static link extracts no object file, and no GPL code is in the binary — which is an argument until `verify-no-copyleft-objects.mjs` turns it into a linker-map fact.
 
-- **kaldi-decoder / kaldi-native-fbank** — Feature extraction and decoding. Confirm against the upstream repositories at the pinned sherpa-onnx release.
+- **kaldi-decoder** — Decoding graphs and search.
+
+- **kaldi-native-fbank** — Audio feature extraction.
+
+- **kaldifst** — Kaldi's finite-state-transducer utilities on top of OpenFst. kaldi-decoder fetches it; sherpa-onnx renames the library.
 
 - **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, about 416 bytes) and NO eSpeak code does. So piper's own MIT terms are the operative ones, and MIT is satisfied by the attribution in THIRD_PARTY_NOTICES.md. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
 
-- **ssentencepiece** — Tokenisation. Confirm against upstream.
+- **sherpa-onnx** — The inference runtime CandidCue calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.
+
+- **simple-sentencepiece** — Tokenisation. The library is called ssentencepiece; the project is simple-sentencepiece.
 
 - **ucd-tools** — The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way.
 

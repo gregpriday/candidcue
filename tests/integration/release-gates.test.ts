@@ -959,6 +959,162 @@ echo '{}'
     expect(existsSync(join(repo.dir, 'relative-cargo-home/registry/src'))).toBe(true);
     expect(readFileSync(repo.notices, 'utf8')).toContain('| notices-fixture | 1.0.0 | MIT |');
   });
+
+  /*
+   * The native table names the copy each library was built from, which is
+   * often not the project's home page: a fork, a binary somebody else
+   * compiled, a header vendored in another repository. The real inventory is
+   * swapped for a small one so each shape is asserted exactly, and so these
+   * tests do not move every time a component does.
+   */
+  describe('and its native table says where each component was built from', () => {
+    function withNative(repo: Repo, components: Array<{ libraries?: string[] }>) {
+      const libraries = components.flatMap((entry) => entry.libraries ?? []);
+      writeFileSync(
+        join(repo.dir, 'sbom/native-inputs.json'),
+        JSON.stringify({
+          libraries: libraries.map((name) => ({
+            path: `lib/${name}`,
+            release: 'fixture-static-lib',
+            sha256: '0'.repeat(64),
+          })),
+        }),
+      );
+      writeFileSync(join(repo.dir, 'sbom/native-components.json'), JSON.stringify({ components }));
+      return repo;
+    }
+
+    it('prints forks, prebuilt binaries and vendored code as what they are', () => {
+      const repo = withNative(scratchNotices(), [
+        {
+          component: 'forked',
+          upstream: 'https://example.test/canonical',
+          spdx: 'MIT',
+          reviewed: true,
+          libraries: ['libforked.a'],
+          source: {
+            repository: 'https://example.test/fork',
+            revision: '0123456789abcdef0123456789abcdef01234567',
+          },
+          embeds: [
+            {
+              component: 'vendored-header',
+              upstream: 'https://example.test/header',
+              spdx: 'MPL-2.0',
+              source: {
+                repository: 'https://example.test/fork',
+                revision: 'v2.0.0',
+                path: 'include/header.h',
+              },
+            },
+          ],
+        },
+        {
+          component: 'prebuilt',
+          upstream: 'https://example.test/prebuilt',
+          spdx: 'Apache-2.0',
+          reviewed: true,
+          libraries: ['libprebuilt.a'],
+          note: 'A binary.',
+          source: {
+            repository: 'https://example.test/prebuilt',
+            revision: 'v1.0.0',
+            prebuiltBy: 'https://example.test/packager',
+            noticeFile: 'NOTICES.txt',
+          },
+        },
+      ]);
+
+      const result = generate(repo, []);
+      expect(result.status, result.output).toBe(0);
+      const notices = readFileSync(repo.notices, 'utf8');
+      expect(notices).toContain(
+        '| forked | MIT | <https://example.test/fork> @ `0123456789ab` ' +
+          '(fork of <https://example.test/canonical>) |',
+      );
+      expect(notices).toContain(
+        '| prebuilt | Apache-2.0 | <https://example.test/prebuilt> @ `v1.0.0` ' +
+          '(prebuilt by <https://example.test/packager>) |',
+      );
+      // Embedded code claims no library, so it is listed beside its carrier.
+      expect(notices).toContain(
+        '| vendored-header | MPL-2.0 | forked | `include/header.h` in ' +
+          '<https://example.test/fork> @ `v2.0.0` (vendored; upstream <https://example.test/header>) |',
+      );
+      expect(notices).toContain('Code Form is available.');
+      expect(notices).toContain(
+        '- **prebuilt** — A binary. Its own third-party notices: ' +
+          '<https://example.test/prebuilt/blob/v1.0.0/NOTICES.txt>.',
+      );
+      expect(notices, 'nothing here is unreviewed').not.toContain('†');
+    });
+
+    it('still lists a component nobody has traced, and marks it', () => {
+      /*
+       * An unreviewed entry with no source is honest — it is what the dagger is
+       * for — so it must not fail CI. Only the release review refuses it.
+       */
+      const repo = withNative(scratchNotices(), [
+        {
+          component: 'untraced',
+          upstream: 'https://example.test/untraced',
+          spdx: 'MIT',
+          reviewed: false,
+          libraries: ['libuntraced.a'],
+        },
+      ]);
+
+      const result = generate(repo, []);
+      expect(result.status, result.output).toBe(0);
+      const notices = readFileSync(repo.notices, 'utf8');
+      expect(notices).toContain('| untraced | MIT † | unconfirmed; upstream <https://example.test/untraced> |');
+      expect(notices).toContain('† Recorded from the upstream project');
+    });
+
+    it('refuses a reviewed component that does not say which source was read', () => {
+      const repo = withNative(scratchNotices(), [
+        {
+          component: 'traceless',
+          upstream: 'https://example.test/traceless',
+          spdx: 'MIT',
+          reviewed: true,
+          libraries: ['libtraceless.a'],
+        },
+      ]);
+
+      const result = generate(repo, []);
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(
+        'traceless is marked reviewed in sbom/native-components.json but has no usable ' +
+          'source.repository or source.revision',
+      );
+      expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
+    });
+
+    it('refuses embedded code disclosed without its own licence and source', () => {
+      const repo = withNative(scratchNotices(), [
+        {
+          component: 'carrier',
+          upstream: 'https://example.test/carrier',
+          spdx: 'MIT',
+          reviewed: true,
+          libraries: ['libcarrier.a'],
+          source: { repository: 'https://example.test/carrier', revision: 'v1.0.0' },
+          embeds: [{ component: 'header' }, null],
+        },
+      ]);
+
+      const result = generate(repo, []);
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(
+        'carrier: embeds[0] in sbom/native-components.json has no usable spdx, ' +
+          'source.repository, source.revision',
+      );
+      expect(result.output).toContain('carrier: embeds[1] in sbom/native-components.json');
+      expect(result.output).not.toContain('TypeError');
+      expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
+    });
+  });
 });
 
 /* ------------------------------------------------ native licence review */
@@ -986,7 +1142,12 @@ function scratchNativeReview(inventory: unknown): { dir: string; script: string 
 }
 
 function component(name: string, reviewed: unknown) {
-  return { component: name, spdx: 'MIT', reviewed };
+  return {
+    component: name,
+    spdx: 'MIT',
+    reviewed,
+    source: { repository: `https://example.test/${name}`, revision: 'v1.0.0' },
+  };
 }
 
 describe('the native licence review refuses what it exists to refuse', () => {
@@ -999,19 +1160,45 @@ describe('the native licence review refuses what it exists to refuse', () => {
     expect(output).toContain('2 of 2 statically linked native components reviewed');
   });
 
-  it('reads the committed inventory once its components are reviewed', () => {
+  it('reads the committed inventory, and every review in it names its source', () => {
     // The committed file, not a fixture: a shape the checker cannot read would
-    // otherwise be found only on a release tag.
+    // otherwise be found only on a release tag. Whether each entry IS reviewed
+    // is left alone — an honest `false` is a release question, not a CI one —
+    // but a `true` that cannot say what was read is never honest.
     const committed = JSON.parse(readFileSync(join(REPO_ROOT, NATIVE_INVENTORY), 'utf8'));
     expect(committed.components.length).toBeGreaterThan(0);
-    for (const entry of committed.components) entry.reviewed = true;
 
     const { dir, script } = scratchNativeReview(committed);
+    const { output } = run(script, [], dir);
+    expect(output).toContain(`of ${committed.components.length} statically linked`);
+    expect(output).not.toContain('is marked reviewed but');
+    expect(output).not.toContain('is not an object');
+  });
+
+  it.each([
+    ['has no source', undefined, 'source.repository or source.revision'],
+    ['has a null source', null, 'source.repository or source.revision'],
+    ['has a list for a source', [], 'source.repository or source.revision'],
+    ['names no repository', { revision: 'v1.0.0' }, 'source.repository'],
+    ['names a repository that is not a URL', { repository: 'k2-fsa/x', revision: 'v1' }, 'source.repository'],
+    ['names a repository that is not on the web', { repository: 'file:///x', revision: 'v1' }, 'source.repository'],
+    ['names no revision', { repository: 'https://example.test/x' }, 'source.revision'],
+    ['names a blank revision', { repository: 'https://example.test/x', revision: ' ' }, 'source.revision'],
+    ['names a revision that is not text', { repository: 'https://example.test/x', revision: 5 }, 'source.revision'],
+  ])('does not count a reviewed component that %s', (_label, source, unusable) => {
+    // A flag is not a review: `reviewed: true` with nothing to say what was
+    // read is the state the eight front-page licences were in.
+    const { dir, script } = scratchNativeReview({
+      components: [
+        component('traced', true),
+        { component: 'untraced', spdx: 'MIT', reviewed: true, source },
+      ],
+    });
     const { status, output } = run(script, [], dir);
-    expect(status, output).toBe(0);
-    expect(output).toContain(
-      `${committed.components.length} of ${committed.components.length} statically linked`,
-    );
+    expect(status, output).toBe(1);
+    expect(output).toContain(`untraced (MIT) is marked reviewed but has no usable ${unusable} —`);
+    expect(output).not.toMatch(/: traced \(MIT\)/);
+    expect(output).toContain('1 of 2 statically linked native components reviewed');
   });
 
   it('names every component that is not exactly reviewed: true', () => {
