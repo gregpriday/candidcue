@@ -41,7 +41,6 @@ const ipc = vi.hoisted(() => {
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
         analyticsEnabled: false,
-        saveTranscript: 'off',
       },
       editor: {},
       stageBehavior: {

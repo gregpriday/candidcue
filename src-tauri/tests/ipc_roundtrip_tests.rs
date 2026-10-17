@@ -898,12 +898,41 @@ fn start_session_assigns_the_generation_control_must_adopt() {
     );
 }
 
-/// §36.2 — retention is decided by settings AT START and cannot be talked into
-/// existence later. The settings patch the UI sends must be the one that flips
-/// it, which is the mapping that was missing entirely.
+/// The real `update_settings` patch the UI sends, replayed through the command.
+/// The settings adapter has twice shipped a field mapped in one direction only,
+/// and the fixture is what the TypeScript side actually emits.
 #[test]
-fn transcript_retention_follows_the_settings_patch_the_ui_sends() {
+fn the_settings_patch_the_ui_sends_persists_through_the_command() {
     let fixture = capture_fixture();
+    let h = harness();
+    let settings = h.expect_ok("get_settings", Value::Null);
+    let mut patch_args = fixture["invocations"]["update_settings"]["args"].clone();
+    patch_args["expectedRevision"] = json!(settings["revision"].as_i64().unwrap());
+    let updated = h.expect_ok("update_settings", patch_args);
+    assert_eq!(
+        updated["value"]["stageBehavior"]["fixedSpeedWpm"],
+        json!(155),
+        "the teleprompter speed in the UI's patch must reach the document"
+    );
+    // The same captured patch carries a panel's mirroring (#206). Without the
+    // field on `OpticalSettings` serde would drop it silently and every
+    // mirror the operator set would revert on the next read.
+    assert_eq!(
+        updated["value"]["optical"]["panelMirror"]["dsp-1"],
+        json!({ "horizontal": true, "vertical": false }),
+        "a panel's mirroring must survive the real command and read back"
+    );
+}
+
+/// §36.2 — retention is decided by settings AT START and cannot be talked into
+/// existence later.
+///
+/// The UI no longer sends this patch: the Settings row went with #215, once
+/// takes stopped writing transcripts (#214). Rust still honours the field, and
+/// still sweeps what older builds kept, until #217 removes it — so the patch is
+/// built here rather than replayed from the capture fixture.
+#[test]
+fn transcript_retention_follows_the_settings_document() {
     let h = harness();
     let created = h.expect_ok(
         "create_script",
@@ -929,24 +958,18 @@ fn transcript_retention_follows_the_settings_patch_the_ui_sends() {
         json!({ "sessionId": before["id"].as_str().unwrap(), "summary": null }),
     );
 
-    // Apply the REAL captured patch from `updateSettings({ privacy: … })`.
     let settings = h.expect_ok("get_settings", Value::Null);
-    let mut patch_args = fixture["invocations"]["update_settings"]["args"].clone();
-    patch_args["expectedRevision"] = json!(settings["revision"].as_i64().unwrap());
-    let updated = h.expect_ok("update_settings", patch_args);
+    let updated = h.expect_ok(
+        "update_settings",
+        json!({
+            "expectedRevision": settings["revision"].as_i64().unwrap(),
+            "patch": { "general": { "saveTranscript": "7d" } },
+        }),
+    );
     assert_eq!(
         updated["value"]["general"]["saveTranscript"],
         json!("7d"),
-        "the UI's privacy patch must reach `general.saveTranscript`; without this \
-         mapping the retention setting could not be changed at all"
-    );
-    // The same captured patch carries a panel's mirroring (#206). Without the
-    // field on `OpticalSettings` serde would drop it silently and every
-    // mirror the operator set would revert on the next read.
-    assert_eq!(
-        updated["value"]["optical"]["panelMirror"]["dsp-1"],
-        json!({ "horizontal": true, "vertical": false }),
-        "a panel's mirroring must survive the real command and read back"
+        "a retention patch must reach `general.saveTranscript`"
     );
 
     let after = h.expect_ok("start_session", start);

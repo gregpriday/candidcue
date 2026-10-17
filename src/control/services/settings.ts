@@ -43,7 +43,6 @@ import {
   type SessionMode,
   type DataExportResult,
   type RestoreResult,
-  type TranscriptRetention,
 } from './settings-types';
 import { DEV_APP_VERSION } from '../../shared/version';
 
@@ -64,7 +63,12 @@ interface RustSettings {
      * dead contract back on the TypeScript side of the boundary.
      */
     analyticsEnabled: boolean;
-    saveTranscript: string;
+    /*
+     * No `saveTranscript` either. Takes stopped writing transcripts (#214), so
+     * the retention window decides nothing; Rust still carries the field until
+     * #217, and every document on disk has it, but nothing on this side of the
+     * boundary reads or writes it.
+     */
   };
   editor: Record<string, unknown>;
   stageBehavior: {
@@ -218,10 +222,9 @@ function loadOverlay(): Overlay {
  *
  * What is left in the overlay after the §52 move is presentation and
  * per-machine capture state, not measured data: the calibrated rigs, the
- * following profile, the retention consent and the speech selection are all
- * Rust-owned now. So a failure here is worth SAYING and not worth refusing a
- * settings change over — the authoritative half already committed by the time
- * this runs.
+ * following profile and the speech selection are all Rust-owned now. So a
+ * failure here is worth SAYING and not worth refusing a settings change over —
+ * the authoritative half already committed by the time this runs.
  */
 let lastOverlayFailure: string | null = null;
 
@@ -588,10 +591,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // Following settings are Rust-owned end to end (§47) — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
     following: followingFromRust(rust.following),
-    privacy: {
-      ...defaults.privacy,
-      saveTranscript: toTranscriptRetention(rust.general.saveTranscript),
-    },
   };
 
   /*
@@ -757,25 +756,12 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       readerFrame: readerFrameFromRust(rust.stageBehavior.readerFrame),
     },
     optical: resolvedOptical,
-    // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
-    // be able to claim retention is on when the persisted document says off.
-    privacy: {
-      ...mergeSection(mapped.privacy, overlay.privacy),
-      saveTranscript: mapped.privacy.saveTranscript,
-    },
     revision: revisioned.revision,
   };
 }
 
 function toSessionMode(promptMode: string): SessionMode {
   return promptMode === 'manual' || promptMode === 'fixed' ? promptMode : 'voice';
-}
-
-/** Unknown values read as 'off' — the safe side of a privacy setting. */
-function toTranscriptRetention(value: string): TranscriptRetention {
-  return value === '1d' || value === '7d' || value === '30d' || value === 'forever'
-    ? value
-    : 'off';
 }
 
 /** UI patch → the subset that has a Rust home (recursive-merge patch shape). */
@@ -832,11 +818,6 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     const following = followingToRustPatch(patch.following);
     for (const [key, value] of Object.entries(following)) put('following', key, value);
   }
-  if (patch.privacy) {
-    // §36.2 — the missing half of the mapping. Without it the setting that
-    // decides whether spoken words reach disk could not be changed at all.
-    put('general', 'saveTranscript', patch.privacy.saveTranscript);
-  }
   if (patch.optical) {
     /*
      * §52 calibrated rigs — the section this file lost hardest.
@@ -881,9 +862,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
  * Everything in the patch persists in the overlay so the UI view sticks —
  * except `following` (§47) and `speech` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
- * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
- * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
- * exactly the thing that must not exist.
+ * otherwise-overlaid sections (`audio.vadSensitivity` §28.4).
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
@@ -896,15 +875,15 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
     if (key === 'following' || key === 'speech' || key === 'optical') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
-    // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
-    // copy would outlive the document and could contradict it.
+    // Rust-owned fields never enter the overlay (§28.4, §47) — a cached copy
+    // would outlive the document and could contradict it.
     const merged: Record<string, unknown> = {
       ...((overlay as Record<string, Record<string, unknown> | undefined>)[key] ?? {}),
       ...(section as Record<string, unknown>),
     };
     /*
-     * Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
-     * copy would outlive the document and could contradict it.
+     * Rust-owned fields never enter the overlay (§28.4, §47) — a cached copy
+     * would outlive the document and could contradict it.
      *
      * Stripped from the MERGED result, not from the incoming patch. Stripping
      * the patch alone is the mistake this used to make: the line below spreads
@@ -915,7 +894,6 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
      * whenever Rust has no answer, so a stale choice could come back from the
      * dead.
      */
-    delete merged.saveTranscript;
     if (key === 'audio') {
       for (const owned of RUST_OWNED_AUDIO_KEYS) delete merged[owned];
     }
@@ -930,6 +908,11 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
     }
     (overlay as Record<string, object>)[key] = merged;
   }
+  // The retired retention window (#215) is the only thing a `privacy` section
+  // ever held. Nothing reads it, so it goes the next time the overlay is
+  // written rather than riding along in every copy forever — after the loop,
+  // so not even a stray untyped patch can write it back.
+  delete (overlay as Record<string, unknown>).privacy;
   saveOverlay(overlay);
 }
 

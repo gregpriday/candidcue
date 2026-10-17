@@ -320,28 +320,19 @@ export interface AppSettings {
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
-  /**
-   * #180: `diagnosticLogging` and `updateChannel` used to live here too. Neither
-   * was ever read — no Rust mapping in `toRustPatch`, no consumer anywhere — so
-   * both were a stored preference that decided nothing, behind a toggle and a
-   * dropdown that implied otherwise. A field nobody reads is worse than a
-   * missing one: it reads as wired. If either genuinely ships, it comes back
-   * Rust-owned like `saveTranscript`, and must NOT adopt whatever stale value
-   * is still sitting in the localStorage overlay from the version that faked it.
+  /*
+   * No `privacy` section. #180 took `diagnosticLogging` and `updateChannel` out
+   * of it — neither was ever read, so both were a stored preference that
+   * decided nothing behind a control that implied otherwise. #215 took the last
+   * field, `saveTranscript`: takes stopped writing transcripts (#214), so the
+   * retention window had nothing left to keep. Rust still carries
+   * `general.saveTranscript` until #217 and nothing here reads or writes it; a
+   * `privacy` section still sitting in the localStorage overlay is ignored.
+   *
+   * If a privacy setting genuinely ships, it comes back Rust-owned, and must
+   * NOT adopt whatever stale value that overlay still holds.
    */
-  privacy: {
-    /**
-     * §36.2 transcript retention. Rust-owned in both directions and 'off' by
-     * default — it had no mapping in `settings.ts` at all, so the one setting
-     * that decides whether spoken words are written to disk was unreachable
-     * from the UI in either direction.
-     */
-    saveTranscript: TranscriptRetention;
-  };
 }
-
-/** §36.2 retention windows, exactly the values Rust validates. */
-export type TranscriptRetention = 'off' | '1d' | '7d' | '30d' | 'forever';
 
 /* ---------------------------------------------------------------------------
  * The optical section
@@ -1041,8 +1032,5 @@ export function defaultAppSettings(): AppSettings {
     // Nothing calibrated until somebody stands at a rig and measures it.
     optical: { profiles: {}, activeRig: {}, panelMirror: {} },
     following: defaultFollowingSettings(),
-    privacy: {
-      saveTranscript: 'off',
-    },
   };
 }

@@ -158,7 +158,6 @@ function broadcast(revision: number, fixedSpeedWpm: number): unknown {
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
         analyticsEnabled: false,
-        saveTranscript: 'off',
       },
       editor: {},
       stageBehavior: {

@@ -71,7 +71,6 @@ function broadcast(revision: number, openTo: 'library' | 'last_script'): unknown
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
         analyticsEnabled: false,
-        saveTranscript: 'off',
       },
       editor: {},
       stageBehavior: {
