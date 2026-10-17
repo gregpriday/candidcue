@@ -30,7 +30,7 @@
  * number goes through `clamp`, every enum through an allow-list, and anything
  * unrecognised falls back to the default rather than being kept.
  */
-import { writable, type Readable } from 'svelte/store';
+import { get, writable, type Readable } from 'svelte/store';
 
 /*
  * NOT shared between windows, and not watched for `storage` events.
@@ -44,6 +44,15 @@ import { writable, type Readable } from 'svelte/store';
  * `settingsSection` is the one field two windows both touch, and it is handed
  * over deliberately — written and flushed before the window opens, and
  * broadcast when it is already open — rather than by watching storage.
+ *
+ * Not watching is NOT the same as not sharing the key, though. Both windows
+ * write the one `localStorage` entry, and each holds a copy it loaded at
+ * startup and never refreshes. Writing that whole copy put the other window's
+ * fields back as they were at load: a Settings section click undid the
+ * editor's switch to Preview, and a pane drag sent the next ⌘, back to the
+ * section the main window had launched with. So a write carries only the
+ * fields THIS window changed, merged over whatever is stored at the moment it
+ * lands — see `writeNow`. The in-memory copy is still never refreshed from it.
  */
 const STORAGE_KEY = 'candidcue.workspace.v1';
 
@@ -276,20 +285,47 @@ export const workspace: Readable<WorkspaceState> = { subscribe: state.subscribe 
  * immediately — only the persistence is deferred.
  */
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
-/** The state the pending timer will write, kept so shutdown can flush it. */
-let pending: WorkspaceState | null = null;
+/**
+ * The fields this window has changed since its last write, kept so shutdown
+ * can flush them.
+ *
+ * A patch rather than a state, because the state this window holds is stale
+ * for every field the OTHER window owns — see the note on `STORAGE_KEY`.
+ */
+let pending: Partial<WorkspaceState> | null = null;
 
-function writeNow(next: WorkspaceState): void {
+/**
+ * Merge a patch over what is stored right now, and write the result.
+ *
+ * Read immediately before writing, so a field another window stored since this
+ * one loaded — or since this patch started waiting on the debounce — survives.
+ * The stored side goes through `parseWorkspace`, which means a clamped-out
+ * value on disk is repaired by the next write rather than carried.
+ *
+ * What this is NOT is a transaction. Web Storage promises no locking between
+ * webviews, so two windows writing in the same instant can both read the old
+ * copy and the second loses the first's field. Writes follow human gestures —
+ * a drag that has waited out the debounce, a section click, a window closing —
+ * which makes that a far smaller window than the one this replaced, where
+ * every write did it. The locks that would close it are asynchronous, and the
+ * flush before Settings opens and the one on `pagehide` cannot wait for them.
+ */
+function writeNow(patch: Partial<WorkspaceState>): void {
   try {
-    storage()?.setItem(STORAGE_KEY, JSON.stringify(next));
+    const store = storage();
+    if (store === null) return;
+    const stored = parseWorkspace(store.getItem(STORAGE_KEY));
+    store.setItem(STORAGE_KEY, JSON.stringify({ ...stored, ...patch }));
   } catch {
     // Quota, private mode, or storage disabled. The layout still works for
     // this run; it simply will not be there next time. Not worth a toast.
+    // A READ that throws lands here too, and writes nothing: merging over
+    // defaults instead would put them over every field the other window owns.
   }
 }
 
-function persist(next: WorkspaceState): void {
-  pending = next;
+function persist(patch: Partial<WorkspaceState>): void {
+  pending = { ...(pending ?? {}), ...patch };
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = setTimeout(() => {
     flushTimer = null;
@@ -328,11 +364,12 @@ if (typeof window !== 'undefined') {
 
 /** Apply a partial change. The only mutator — everything else calls through it. */
 export function updateWorkspace(patch: Partial<WorkspaceState>): void {
-  state.update((current) => {
-    const next = { ...current, ...patch };
-    persist(next);
-    return next;
-  });
+  // Queued BEFORE the store notifies. Subscribers run synchronously inside
+  // `update`, and one that answers with its own `updateWorkspace` must have
+  // the later patch: queued afterwards, this one would land over it and disk
+  // would disagree with the layout on screen.
+  persist(patch);
+  state.update((current) => ({ ...current, ...patch }));
 }
 
 /** Set a pane's width, clamped to that pane's declared range. */
@@ -368,26 +405,26 @@ export function resetPaneWidth(pane: PaneName): void {
 
 /** Step the document scale one notch, or back to 1. */
 export function stepDocumentScale(direction: 1 | -1 | 0): void {
-  state.update((current) => {
-    if (direction === 0) {
-      const next = { ...current, documentScale: 1 };
-      persist(next);
-      return next;
-    }
-    const index = DOCUMENT_SCALE_STEPS.indexOf(
-      nearestScaleStep(current.documentScale) as (typeof DOCUMENT_SCALE_STEPS)[number],
-    );
-    const nextIndex = Math.min(
-      DOCUMENT_SCALE_STEPS.length - 1,
-      Math.max(0, (index === -1 ? 2 : index) + direction),
-    );
-    const next = { ...current, documentScale: DOCUMENT_SCALE_STEPS[nextIndex] as number };
-    persist(next);
-    return next;
-  });
+  if (direction === 0) {
+    updateWorkspace({ documentScale: 1 });
+    return;
+  }
+  const index = DOCUMENT_SCALE_STEPS.indexOf(
+    nearestScaleStep(get(state).documentScale) as (typeof DOCUMENT_SCALE_STEPS)[number],
+  );
+  const nextIndex = Math.min(
+    DOCUMENT_SCALE_STEPS.length - 1,
+    Math.max(0, (index === -1 ? 2 : index) + direction),
+  );
+  updateWorkspace({ documentScale: DOCUMENT_SCALE_STEPS[nextIndex] as number });
 }
 
-/** Reset everything. Used by tests, and by Settings' "restore workspace layout". */
+/**
+ * Reset everything. Used by tests.
+ *
+ * The one write that legitimately carries every field: its patch names them
+ * all, so it overwrites what the other window stored as well.
+ */
 export function resetWorkspace(): void {
   updateWorkspace({ ...DEFAULT_WORKSPACE });
 }
