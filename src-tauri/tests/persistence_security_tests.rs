@@ -238,8 +238,8 @@ async fn concurrent_save_and_rename_leave_the_row_and_file_in_agreement() {
     );
     assert_eq!(db_revision(&h, &id).await, start + 1);
 
-    let indexed: String =
-        sqlx::query_scalar("SELECT plain_text FROM script_search WHERE script_id = ?")
+    let (indexed, body): (String, String) =
+        sqlx::query_as("SELECT plain_text, body FROM script_search WHERE script_id = ?")
             .bind(id.as_str())
             .fetch_one(&h.pool)
             .await
@@ -249,6 +249,7 @@ async fn concurrent_save_and_rename_leave_the_row_and_file_in_agreement() {
         "the search index must describe the same revision as the row: \
          index={indexed:?} disk={on_disk:?}"
     );
+    assert_eq!(body, on_disk, "and so must the page text it searches (#254)");
 }
 
 /// Rename now takes the same optimistic revision as a save, so a rename with

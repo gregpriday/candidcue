@@ -12,7 +12,7 @@ use super::words::{
     estimated_duration_seconds, preview_text, spoken_text, SpokenTextOptions, SPOKEN_STATS_VERSION,
 };
 use super::{
-    into_without_bom, CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
+    into_without_bom, without_bom, CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
     RevisionSummary, SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks,
     ScriptMetadataPatch, ScriptPage, ScriptSettings, ScriptStatus, ScriptSummary,
 };
@@ -120,11 +120,11 @@ async fn fetch_preview(pool: &SqlitePool, script_id: &ScriptId) -> Result<String
     Ok(preview.unwrap_or_default())
 }
 
-/// The Library's derived fields for a script: its spoken text (preview and
-/// search), spoken word count and estimated duration (§21.8). Every write of
-/// those fields comes through here and stamps `last_compile_version` with
-/// `SPOKEN_STATS_VERSION`, which is how reconciliation finds rows derived by an
-/// older extraction.
+/// The Library's derived fields for a script: its spoken text (the preview,
+/// and one of the texts search matches), spoken word count and estimated
+/// duration (§21.8). Every write of those fields comes through here and stamps
+/// `last_compile_version` with `SPOKEN_STATS_VERSION`, which is how
+/// reconciliation finds rows derived by an older extraction.
 fn stats_for(source: &str, settings: &ScriptSettings) -> (String, u32, u32) {
     let spoken = spoken_text(
         source,
@@ -142,20 +142,28 @@ fn stats_for(source: &str, settings: &ScriptSettings) -> (String, u32, u32) {
 /// Search-index maintenance. Takes a connection rather than the pool so it
 /// can run INSIDE the same transaction as the row update (spec §47.5: the
 /// search index must never describe a different revision than the row).
+///
+/// A script is found by any word on the page, not only the ones it speaks
+/// (#254): `body` is the source as the editor shows it, so headings,
+/// `:::stage`/`:::silent` blocks, code, alt text and comments all match.
+/// `plain` is the spoken text, kept beside it for the preview and because the
+/// spoken form of a word is not always in the source literally.
 async fn update_fts(
     conn: &mut sqlx::SqliteConnection,
     script_id: &ScriptId,
     title: &str,
     plain: &str,
+    source: &str,
 ) -> Result<(), AppError> {
     sqlx::query("DELETE FROM script_search WHERE script_id = ?")
         .bind(script_id.as_str())
         .execute(&mut *conn)
         .await?;
-    sqlx::query("INSERT INTO script_search (script_id, title, plain_text) VALUES (?, ?, ?)")
+    sqlx::query("INSERT INTO script_search (script_id, title, plain_text, body) VALUES (?, ?, ?, ?)")
         .bind(script_id.as_str())
         .bind(title)
         .bind(plain)
+        .bind(without_bom(source))
         .execute(&mut *conn)
         .await?;
     Ok(())
@@ -239,7 +247,7 @@ pub async fn create_script(
     .bind(&now)
     .execute(&mut *tx)
     .await?;
-    update_fts(&mut tx, &id, title, &plain).await?;
+    update_fts(&mut tx, &id, title, &plain, &source).await?;
     tx.commit().await?;
 
     let row = fetch_row(pool, &id).await?;
@@ -412,7 +420,7 @@ pub async fn get_script(
         .execute(&mut *tx)
         .await?;
         expect_single_row(updated.rows_affected(), row.revision)?;
-        update_fts(&mut tx, script_id, &row.title, &plain).await?;
+        update_fts(&mut tx, script_id, &row.title, &plain, &source).await?;
         tx.commit().await?;
         tracing::warn!(script_id = script_id.as_str(), revision_id = %snapshot, "adopted external change to canonical file");
     }
@@ -588,6 +596,7 @@ pub async fn save_script(
             settings: &settings,
             now: &now,
             plain: &plain,
+            source: &source,
             patch: &patch,
         },
     )
@@ -636,6 +645,7 @@ struct CommitSave<'a> {
     settings: &'a ScriptSettings,
     now: &'a str,
     plain: &'a str,
+    source: &'a str,
     patch: &'a ScriptMetadataPatch,
 }
 
@@ -678,7 +688,7 @@ async fn commit_save(
     // A lost compare-and-swap used to commit anyway and report the new
     // revision while the row still described the old content (H1).
     expect_single_row(updated.rows_affected(), c.expected_revision)?;
-    update_fts(&mut tx, script_id, c.title, c.plain).await?;
+    update_fts(&mut tx, script_id, c.title, c.plain, c.source).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -866,7 +876,7 @@ pub async fn duplicate_script(
         .execute(&mut *tx)
         .await?;
     }
-    update_fts(&mut tx, &new_id, &title, &plain).await?;
+    update_fts(&mut tx, &new_id, &title, &plain, &source).await?;
     tx.commit().await?;
 
     let row = fetch_row(pool, &new_id).await?;
@@ -1515,7 +1525,7 @@ pub(crate) async fn adopt_script_folder(
     .bind(script.trashed_at.as_deref())
     .execute(&mut *tx)
     .await?;
-    update_fts(&mut tx, id, &script.title, &plain).await?;
+    update_fts(&mut tx, id, &script.title, &plain, source).await?;
 
     // Numbered in the order they were taken, which is the order of their
     // names. Why each one was taken was only ever in the database, so they
@@ -1752,7 +1762,7 @@ pub async fn repair_row_from_canonical_file(
     .execute(&mut *tx)
     .await?;
     expect_single_row(updated.rows_affected(), row.revision)?;
-    update_fts(&mut tx, script_id, &row.title, &plain).await?;
+    update_fts(&mut tx, script_id, &row.title, &plain, &source).await?;
     tx.commit().await?;
 
     tracing::warn!(
@@ -1762,9 +1772,11 @@ pub async fn repair_row_from_canonical_file(
     Ok(true)
 }
 
-/// Re-derive a row's Library fields — word count, duration, and the spoken
-/// text behind its preview and search entry — when they were produced by an
-/// older extraction than `SPOKEN_STATS_VERSION`. Returns true when it did.
+/// Re-derive a row's Library fields — word count, duration, and the texts
+/// behind its preview and search entry — when they were produced by an older
+/// extraction than `SPOKEN_STATS_VERSION`, or by none (a NULL stamp, which is
+/// also how migration 0002 asked for every search entry to be rebuilt with
+/// the whole source, #254). Returns true when it did.
 ///
 /// Rows are otherwise only re-derived when their source changes, so without
 /// this a library indexed before a change to what counts as speech would keep
@@ -1817,7 +1829,7 @@ pub async fn refresh_stale_spoken_stats(
     .execute(&mut *tx)
     .await?;
     expect_single_row(updated.rows_affected(), row.revision)?;
-    update_fts(&mut tx, script_id, &row.title, &plain).await?;
+    update_fts(&mut tx, script_id, &row.title, &plain, &source).await?;
     tx.commit().await?;
     Ok(true)
 }
