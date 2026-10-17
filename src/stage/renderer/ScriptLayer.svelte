@@ -85,6 +85,7 @@
   import {
     advanceAutoScrollTarget,
     autoScrollAtEnd,
+    autoScrollBlockBoxes,
     autoScrollNowhereToGo,
     autoScrollPxPerSecond,
     measureAutoScrollScale,
@@ -1934,7 +1935,10 @@
     const geometryMoved = disagreementPx > GEOMETRY_DRIFT_TOLERANCE_PX;
 
     lineMap = next;
-    autoScrollScale = measureAutoScrollScale(next.lines, measurement.blocks);
+    autoScrollScale = measureAutoScrollScale(
+      next.lines,
+      autoScrollBlockBoxes(measurement.blocks, performanceBlocks),
+    );
     /*
      * VALID, not merely built. The reveal gate reads this as "the stage now
      * knows where the script is", and an unusable measurement knows nothing —

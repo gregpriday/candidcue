@@ -7,6 +7,7 @@ import {
   AUTO_SCROLL_MIN_WPM,
   advanceAutoScrollTarget,
   autoScrollAtEnd,
+  autoScrollBlockBoxes,
   autoScrollNowhereToGo,
   autoScrollPxPerSecond,
   clampAutoScrollWpm,
@@ -80,8 +81,8 @@ function lineIn(blockId: string, firstTokenIndex: number, baselineY: number): Re
   return { ...line(firstTokenIndex, baselineY), blockId };
 }
 
-function box(blockId: string, topY: number, bottomY: number) {
-  return { blockId, topY, bottomY };
+function box(blockId: string, topY: number, bottomY: number, spokenTokens = 0) {
+  return { blockId, topY, bottomY, spokenTokens };
 }
 
 /**
@@ -202,6 +203,27 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
     expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo(340 / 32, 6);
   });
 
+  /**
+   * The #278 script with the image read by 76 words of alt text: tokens 80..155
+   * are the image's own, spoken and anchored nowhere on the glass.
+   */
+  function scriptWithReadImage(imageOwnsTokens: number) {
+    const lines: RenderedLine[] = [];
+    let y = 100;
+    for (let i = 0; i < 20; i++) {
+      if (i === 10) y += 600;
+      const first = i < 10 ? i * 8 : 156 + (i - 10) * 8;
+      lines.push(lineIn(i < 10 ? 'p1' : 'p2', first, y));
+      y += 60;
+    }
+    const blocks = [
+      box('p1', lines[0]!.topY, lines[9]!.bottomY),
+      box('image', lines[9]!.bottomY + 4, lines[9]!.bottomY + 604, imageOwnsTokens),
+      box('p2', lines[10]!.topY, lines[19]!.bottomY),
+    ];
+    return { lines, blocks };
+  }
+
   it('takes the alt text out with the image it is the spoken form of', () => {
     /*
      * With `readImageAltText` on, an image owns spoken tokens that have no
@@ -210,25 +232,35 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
      * would roll the text SLOWER than the dial: here, 76 words of alt text
      * would turn 130 wpm into under 90.
      */
-    const lines: RenderedLine[] = [];
-    let y = 100;
-    for (let i = 0; i < 20; i++) {
-      if (i === 10) y += 600;
-      // Tokens 80..155 are the alt text, spoken and unrendered.
-      const first = i < 10 ? i * 8 : 156 + (i - 10) * 8;
-      lines.push(lineIn(i < 10 ? 'p1' : 'p2', first, y));
-      y += 60;
-    }
-    const blocks = [
-      box('p1', lines[0]!.topY, lines[9]!.bottomY),
-      box('image', lines[9]!.bottomY + 4, lines[9]!.bottomY + 604),
-      box('p2', lines[10]!.topY, lines[19]!.bottomY),
-    ];
+    const { lines, blocks } = scriptWithReadImage(76);
     const scale = measureAutoScrollScale(lines, blocks);
 
     expect(scale?.pxPerWord).toBeCloseTo(7.5, 6);
     expect(scale?.sampledWords).toBe(152);
     expect(paceOverText(130, scale)).toBeCloseTo(130, 6);
+  });
+
+  it('never takes out more words than lie between the two lines', () => {
+    // A range that claimed more than the gap would be taking words that ARE
+    // on the glass.
+    const { lines, blocks } = scriptWithReadImage(500);
+    expect(measureAutoScrollScale(lines, blocks)?.sampledWords).toBe(152);
+  });
+
+  it('leaves the paragraph above its own unanchored words when a cue follows it', () => {
+    /*
+     * The tokens between two lines are not all the wordless block's. A
+     * paragraph ending on an inline image read by its alt text, or on a `say=`
+     * pronunciation, owns tokens that anchor nowhere either — and they belong
+     * to the paragraph, whose height stays. Here 100 such tokens close the
+     * paragraph above a cue that owns none.
+     */
+    const lines = [lineIn('p1', 0, 100), lineIn('p2', 108, 300), lineIn('p2', 116, 360)];
+    const blocks = [box('p1', 60, 112), box('cue', 150, 180), box('p2', 260, 372)];
+    const scale = measureAutoScrollScale(lines, blocks);
+
+    expect(scale?.sampledWords).toBe(116);
+    expect(scale?.pxPerWord).toBeCloseTo((260 - 30) / 116, 6);
   });
 
   it('leaves tokens with no geometry alone on a step that loses no height', () => {
@@ -277,6 +309,31 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
     expect(measureAutoScrollScale([line(0, 100)], blocks)).toBeNull();
     expect(measureAutoScrollScale([line(0, 200), line(8, 100)], blocks)).toBeNull();
     expect(measureAutoScrollScale([line(8, 100), line(8, 164)], blocks)).toBeNull();
+  });
+});
+
+describe('autoScrollBlockBoxes', () => {
+  it('gives each measured box the spoken tokens its compiled block owns', () => {
+    const boxes = [box('p1', 0, 100), box('image', 120, 720), box('cue', 740, 760)];
+    const compiled = [
+      { id: 'p1', startTokenIndex: 0, endTokenIndex: 15 },
+      { id: 'image', startTokenIndex: 16, endTokenIndex: 91 },
+      { id: 'cue' },
+    ];
+    expect(autoScrollBlockBoxes(boxes, compiled).map((b) => b.spokenTokens)).toEqual([16, 76, 0]);
+  });
+
+  it('owns nothing for a block it cannot find, or a range that runs backwards', () => {
+    const boxes = [box('gone', 0, 100), box('odd', 120, 720)];
+    const compiled = [{ id: 'odd', startTokenIndex: 9, endTokenIndex: 4 }];
+    expect(autoScrollBlockBoxes(boxes, compiled).map((b) => b.spokenTokens)).toEqual([0, 0]);
+  });
+
+  it('keeps the geometry exactly as measured', () => {
+    const boxes = [box('p1', 12.5, 99.25)];
+    expect(autoScrollBlockBoxes(boxes, [])).toEqual([
+      { blockId: 'p1', topY: 12.5, bottomY: 99.25, spokenTokens: 0 },
+    ]);
   });
 });
 

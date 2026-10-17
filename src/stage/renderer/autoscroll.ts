@@ -34,14 +34,14 @@
  * for the type currently on the glass, and it re-derives itself for free when
  * the operator changes the size mid-take.
  *
- * Except that a line map only knows about words. An image, a table, a silent
- * block, a heading nobody reads aloud — none of them has a spoken token, so none
- * of them is a line, and the height each one takes up sits inside a single
- * baseline-to-baseline step between the spoken lines either side of it. Counted
- * as distance the words bought, a 600 px screenshot in a twenty-line script
- * turns 130 wpm into nearly 200 over the text. So that height is taken back out
- * of the measurement (`measureAutoScrollScale`), and what is left describes the
- * words alone.
+ * Except that a line map only knows about words on the glass. An image, a
+ * table, a silent block, a heading nobody reads aloud — none of them has a word
+ * anchored on the glass, so none of them is a line, and the height each one
+ * takes up sits inside a single baseline-to-baseline step between the spoken
+ * lines either side of it. Counted as distance the words bought, a 600 px
+ * screenshot in a twenty-line script turns 130 wpm into nearly 200 over the
+ * text. So that height is taken back out of the measurement
+ * (`measureAutoScrollScale`), and what is left describes the words alone.
  *
  * Pure and separate from the component for the usual reason: the interesting
  * behaviour is at the edges — one line, zero-height spans, a map that ran
@@ -49,7 +49,7 @@
  * and not one of those is worth mounting a stage to check.
  */
 
-import type { RenderedLine } from '../../shared/contracts';
+import type { CompiledBlock, RenderedLine } from '../../shared/contracts';
 import type { MeasuredBlockBox } from '../motion/lineMap';
 
 /**
@@ -153,7 +153,41 @@ export function measureAutoScrollScale(
 }
 
 /** The parts of a measured block box the wordless correction reads. */
-export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bottomY'>;
+export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bottomY'> & {
+  /**
+   * Spoken tokens the compiled block owns. Only ever read for a block that
+   * produced no rendered line, so none of them can be on the glass; absent is
+   * none.
+   */
+  spokenTokens?: number;
+};
+
+/**
+ * The measured boxes, each carrying how many spoken tokens its block owns.
+ *
+ * The measurement knows where a block is and the compiler knows what it says,
+ * and the wordless correction needs both: an image read by its alt text owns
+ * tokens that never reach a line, and the only record of which tokens are its
+ * — rather than an unanchored tail of the paragraph above it — is its compiled
+ * token range.
+ */
+export function autoScrollBlockBoxes(
+  boxes: readonly AutoScrollBlockBox[],
+  compiled: readonly Pick<CompiledBlock, 'id' | 'startTokenIndex' | 'endTokenIndex'>[],
+): AutoScrollBlockBox[] {
+  const owned = new Map<string, number>();
+  for (const block of compiled) {
+    const { startTokenIndex: start, endTokenIndex: end } = block;
+    if (start === undefined || end === undefined || !(end >= start)) continue;
+    owned.set(block.id, end - start + 1);
+  }
+  return boxes.map((box) => ({
+    blockId: box.blockId,
+    topY: box.topY,
+    bottomY: box.bottomY,
+    spokenTokens: owned.get(box.blockId) ?? 0,
+  }));
+}
 
 /**
  * What inside the line map's span is not text on the glass: the height of the
@@ -178,10 +212,11 @@ export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bo
  * on the glass — the picture is their visual form — so they sit between the two
  * lines' token indices exactly as the picture sits between their baselines.
  * Taking the height out and leaving those words in would have the text roll
- * SLOWER than the dial by however much alt text there was. Only on a step that
- * loses height, though: tokens with no geometry inside a paragraph (an inline
- * image's alt text) are paid for by the same paragraph's unremoved height, as
- * they always were.
+ * SLOWER than the dial by however much alt text there was. Only the removed
+ * blocks' OWN tokens, though (`spokenTokens`, from their compiled ranges):
+ * the paragraphs either side can have unanchored tokens too — an inline image's
+ * alt text, the extra words of a `say=` pronunciation — and those are paid for
+ * by their own paragraph's height, which stays, as they always were.
  *
  * The removed height is not skipped, and it is not hurried either: the transport
  * crosses it at the same pixel rate as the text. A faster crossing is a velocity
@@ -216,6 +251,7 @@ function wordlessSpan(
 
     let topY = Infinity;
     let bottomY = -Infinity;
+    let owned = 0;
     for (let k = from + 1; k < to; k++) {
       const box = blocks[k];
       if (!box || voiced.has(box.blockId)) continue;
@@ -225,13 +261,15 @@ function wordlessSpan(
       if (!(box.bottomY > box.topY)) continue;
       topY = Math.min(topY, box.topY);
       bottomY = Math.max(bottomY, box.bottomY);
+      const tokens = box.spokenTokens ?? 0;
+      if (tokens > 0 && Number.isFinite(tokens)) owned += tokens;
     }
     const removed = Math.min(bottomY, below.topY) - Math.max(topY, above.bottomY);
     if (!(removed > 0) || !Number.isFinite(removed)) continue;
     px += removed;
-    // Tokens after the last one on the line above and before the first one on
-    // the line below: spoken, and nowhere on the glass.
-    words += Math.max(0, below.firstTokenIndex - above.lastTokenIndex - 1);
+    // Never more than the tokens that are genuinely between the two lines: a
+    // range that claimed more would be taking words that ARE on the glass.
+    words += Math.min(owned, Math.max(0, below.firstTokenIndex - above.lastTokenIndex - 1));
   }
   return { px, words };
 }

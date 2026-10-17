@@ -16,11 +16,11 @@
 import { render } from '@testing-library/svelte';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StageRenderDocument, StageSettings } from '../../src/shared/contracts';
-import type { AutoScrollScale } from '../../src/stage/renderer/autoscroll';
+import type { AutoScrollBlockBox, AutoScrollScale } from '../../src/stage/renderer/autoscroll';
 import type { MeasuredBlockBox, MeasuredTokenRect } from '../../src/stage/motion';
 
 /** Every scale the component measured, newest last. */
-const measured: { blockIds: string[]; scale: AutoScrollScale | null }[] = [];
+const measured: { boxes: AutoScrollBlockBox[]; scale: AutoScrollScale | null }[] = [];
 
 /*
  * Two paragraphs of two eight-word lines each, 64 px of pitch, with a 600 px
@@ -72,7 +72,7 @@ vi.mock('../../src/stage/renderer/autoscroll', async (importOriginal) => {
     ...actual,
     measureAutoScrollScale: (...args: Parameters<typeof actual.measureAutoScrollScale>) => {
       const scale = actual.measureAutoScrollScale(...args);
-      measured.push({ blockIds: (args[1] ?? []).map((box) => box.blockId), scale });
+      measured.push({ boxes: [...(args[1] ?? [])], scale });
       return scale;
     },
   };
@@ -177,7 +177,13 @@ describe('ScriptLayer measures the auto-scroll pace off the words alone', () => 
     await vi.waitFor(() => expect(measured.some((entry) => entry.scale !== null)).toBe(true));
 
     const latest = measured.filter((entry) => entry.scale !== null).at(-1)!;
-    expect(latest.blockIds).toEqual(['p1', 'img', 'p2']);
+    // Every measured box, carrying the spoken tokens its compiled block owns —
+    // the image none, each paragraph its sixteen.
+    expect(latest.boxes.map((box) => [box.blockId, box.spokenTokens])).toEqual([
+      ['p1', 16],
+      ['img', 0],
+      ['p2', 16],
+    ]);
     // 264 px of text over 24 words, not 864 px of paper.
     expect(latest.scale?.pxPerWord).toBeCloseTo(11, 6);
     expect(latest.scale?.sampledWords).toBe(24);
