@@ -75,8 +75,15 @@
    * "Quiet", then "Hearing you" again, with the advice swapping beneath —
    * made the healthy state flicker at exactly the moment someone was watching.
    */
-  let openedAtMs: number | null = level?.generatedAtMs ?? null;
-  let spokeAtMs = level?.speaking ? level.generatedAtMs : -Infinity;
+  /** Seeded from the first frame, like the fold above. */
+  function seedMarks(): { openedAtMs: number | null; spokeAtMs: number } {
+    const first = level;
+    return {
+      openedAtMs: first?.generatedAtMs ?? null,
+      spokeAtMs: first?.speaking ? first.generatedAtMs : -Infinity,
+    };
+  }
+  let { openedAtMs, spokeAtMs } = seedMarks();
   let marks = $state({ openedAtMs, spokeAtMs });
   $effect(() => {
     const frame = level;

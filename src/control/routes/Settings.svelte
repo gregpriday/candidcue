@@ -1688,12 +1688,13 @@
   /** Disposed on unmount even mid-acquisition, and on leaving the section. */
   $effect(() => {
     if (section === 'audio') return;
+    micTestSession.dispose();
+    // A press still waiting for the meter never reached the session, so the
+    // dispose above cannot cancel it: bump the start token so it never opens,
+    // and clear the "opening" it left, or the meter would stay closed when the
+    // section is opened again.
+    micTestStarts += 1;
     untrack(() => {
-      micTestStarts += 1;
-      micTestSession.dispose();
-      // A press still waiting for the meter never reached the session, so
-      // nothing above clears it; left at "opening", the meter would stay
-      // closed when the section is opened again.
       if (micTestSnapshot.state === 'opening') {
         micTestSnapshot = { state: 'idle', partial: '', final: '', error: null, stoppedReason: null };
       }
@@ -1910,6 +1911,29 @@
    * this, and a start that finds it moved does not happen.
    */
   let micTestStarts = 0;
+
+  /**
+   * The Test/Stop slot, and whether focus was in it when the test started or
+   * stopped.
+   *
+   * Start and Stop are two buttons, so the one that was pressed leaves the
+   * page the moment it does its job. Somebody working from the keyboard would
+   * be dropped to the top of the document mid-test; this puts focus on the
+   * button that replaced it instead. Read BEFORE the swap (`$effect.pre`),
+   * restored after it.
+   */
+  let micTestSlot = $state<HTMLElement | null>(null);
+  let micTestFocusCarry = false;
+  $effect.pre(() => {
+    void micTestRunning;
+    micTestFocusCarry = micTestSlot?.contains(document.activeElement) ?? false;
+  });
+  $effect(() => {
+    void micTestRunning;
+    if (!micTestFocusCarry) return;
+    micTestFocusCarry = false;
+    micTestSlot?.querySelector('button')?.focus();
+  });
 
   function stopTranscriptionTest(): void {
     micTestStarts += 1;
@@ -2444,7 +2468,7 @@
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="Choose the microphone your takes listen to, check that it hears you, then make sure CandidCue understands what you say."
+          description="Choose the microphone your takes listen to and check it on the input meter, which listens while this page is open. Then make sure CandidCue understands what you say."
         >
           <!-- Mounted for as long as the section is, so a notice that arrives
                is spoken into a region that was already there (the cards and
@@ -2607,20 +2631,23 @@
                     <span class="mic-test-name">Transcription test</span>
                     <span class="mic-test-prompt">Say “{MIC_TEST_SENTENCE}”</span>
                   </div>
-                  <!-- Holds the wider label's width, so Stop lands exactly where
-                       Test was pressed. -->
-                  <div class="mic-test-button">
-                    <Button
-                      onclick={() => (micTestRunning ? stopTranscriptionTest() : void runTranscriptionTest())}
-                    >
-                      {#if micTestRunning}
+                  <!-- One slot that holds the wider label's width, so Stop lands
+                       exactly where Test was pressed. Start and Stop are separate
+                       buttons — the start always goes through
+                       runTranscriptionTest and its wait for the meter — and focus
+                       is carried from one to the other (see `micTestSlot`). -->
+                  <div class="mic-test-button" bind:this={micTestSlot}>
+                    {#if micTestRunning}
+                      <Button onclick={() => stopTranscriptionTest()}>
                         <span class="mic-stop-glyph" aria-hidden="true"></span>
                         Stop test
-                      {:else}
+                      </Button>
+                    {:else}
+                      <Button onclick={() => void runTranscriptionTest()}>
                         <Icon name="mic" size={14} />
                         Test transcription
-                      {/if}
-                    </Button>
+                      </Button>
+                    {/if}
                   </div>
                 </div>
                 <div class="mic-test-well">
@@ -2659,9 +2686,9 @@
           <p class="mic-privacy">
             <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
             <span>
-              Speech is transcribed on this Mac and never recorded, saved or uploaded. The
-              microphone is open only while this page, a test or a take is running, and the level
-              meter only measures loudness.
+              Speech is transcribed on this Mac and never recorded, saved or uploaded. CandidCue
+              uses the microphone while a test or a take runs, and while the input meter is on
+              screen here; the meter only measures loudness.
             </span>
           </p>
           <!--

@@ -106,6 +106,23 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   await openPreferences(page);
   await page.getByRole('button', { name: 'Audio', exact: true }).click();
 
+  /*
+   * The capture controls live in the "Capture tuning" disclosure, closed by
+   * default. Open it only if it is closed: clicking a summary TOGGLES, so an
+   * unconditional click would close a disclosure something else had already
+   * opened and the slider would be hidden for a reason this test cannot see.
+   * Asserting the `open` attribute afterwards makes either path land in the
+   * same state.
+   */
+  const tuning = page.locator('details', {
+    has: page.locator('summary', { hasText: 'Capture tuning' }),
+  });
+  await expect(tuning).toHaveCount(1);
+  if (!(await tuning.evaluate((details) => (details as HTMLDetailsElement).open))) {
+    await tuning.locator('summary').click();
+  }
+  await expect(tuning).toHaveAttribute('open', '');
+
   const slider = page.getByRole('slider', { name: 'Voice-detection sensitivity' });
   await expect(slider).toBeVisible();
   // The shim's document predates the field, so the UI shows the A.6 neutral
