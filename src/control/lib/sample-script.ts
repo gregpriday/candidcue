@@ -68,7 +68,7 @@ That's the hard part of following a voice, and it's worth seeing how it handles 
 
 Read this next sentence, stop halfway through, and then start it again from the beginning. Presenters do this constantly, and the script should follow you backwards without losing its place.
 
-[Take: Second attempt]
+[Take: Wrapping up]
 
 # Wrapping up
 

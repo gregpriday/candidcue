@@ -353,11 +353,17 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    * The readout that replaced it, and the sentence carrying the same fact.
    *
    * Anchored on the sentence rather than on the component name because the
-   * sentence is the claim: while Settings tells the reader these modes are not
-   * offered, error copy must not send them looking for one.
+   * sentence is the claim: while Settings tells the reader that every take
+   * opens listening, no other mode can start one, and error copy must not send
+   * them looking for one. It used to say so outright — "manual and fixed-speed
+   * modes are not offered", design rationale that #304 took out of the readout
+   * — and the day a mode ships this sentence stops being true and has to go,
+   * which retires the ban with it.
+   *
+   * The attribute, not the words alone: a comment saying the same thing is not
+   * something the reader is told.
    */
-  const readoutSaysUnavailable =
-    /manual and fixed-speed modes are not offered/i.test(settingsSource);
+  const readoutSaysUnavailable = /description="Every take opens listening\./.test(settingsSource);
 
   /** Each mode, and whether Settings currently marks it unavailable. */
   const modeOptions = selectOptions.length > 0 ? selectOptions : [{ body: '', mode: 'manual' }, { body: '', mode: 'fixed' }];

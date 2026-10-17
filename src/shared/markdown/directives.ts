@@ -382,7 +382,7 @@ export function classifyBracketDirective(label: string): InlineDirective {
       return {
         kind: 'malformed',
         code: 'directive_take_empty',
-        message: 'A [Take: …] marker needs a name to be a navigation target.',
+        message: 'A part break ([Take: …]) needs a name to be a navigation target.',
         blocking: true,
       };
     }

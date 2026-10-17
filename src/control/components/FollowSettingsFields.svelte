@@ -88,7 +88,7 @@
         <SettingReadout
           label="Motion profile"
           value={motionFamily.label}
-          description="The only motion profile in this release. Follow feel adjusts it; section safety and retake evidence are never relaxed."
+          description="CandidCue has one motion profile. Follow feel adjusts it; section safety and retake evidence are never relaxed."
         />
       {/if}
     </div>

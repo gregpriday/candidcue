@@ -244,13 +244,24 @@ describe('compile: §23.8 directive error handling', () => {
       expect.objectContaining({ code: 'directive_cue_empty', blocking: false }),
     );
     expect(script.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'directive_take_empty', blocking: true, severity: 'error' }),
+      expect.objectContaining({
+        code: 'directive_take_empty',
+        blocking: true,
+        severity: 'error',
+        // One name for the marker everywhere (#304): Insert › Part Break, the
+        // toolbar's "Insert part break" and the outline's parts.
+        message: 'A part break ([Take: …]) needs a name to be a navigation target.',
+      }),
     );
   });
 
   it('warns on duplicate take names', () => {
     expect(edge().diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'take_duplicate_name' }),
+      expect.objectContaining({
+        code: 'take_duplicate_name',
+        // Names are compared folded, so the message carries the folded form.
+        message: 'Part name "retry" is used 2 times; voice navigation will need an ordinal.',
+      }),
     );
   });
 

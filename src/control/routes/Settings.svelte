@@ -1926,9 +1926,9 @@
             follow without saying so.
 
             Constant-rate motion is no longer the thing that is missing: there
-            is a fixed-pace transport, and the pace slider further down this
-            section sets it. What is missing is a MODE — a take that opens with
-            no microphone, no socket and no meter, and prompts by the clock
+            is a fixed-pace transport, and Auto-scroll pace in Settings ›
+            Teleprompter sets it. What is missing is a MODE — a take that opens
+            with no microphone and no recogniser, and prompts by the clock
             alone. That is a different decision from "can the script roll", and
             until somebody makes it, a take always opens listening.
           -->
@@ -1964,13 +1964,13 @@
             <SettingReadout
               label="Session mode"
               value={SESSION_MODE_LABELS.voice}
-              description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take (see the pace below), but there is no mode that starts one without a microphone — so manual and fixed-speed modes are not offered rather than shipped as something that silently behaves like this one."
+              description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take; set the pace with Auto-scroll pace in Settings › Teleprompter."
             />
           {:else}
             <SettingReadout
               label="Session mode"
               value={sessionModeLabel($settings.general.defaultSessionMode)}
-              description={`This setting was stored by an earlier version and takes no longer open in it. Switch back to ${SESSION_MODE_LABELS.voice} to prompt normally; auto-scroll still rolls the script at a set pace from inside any take.`}
+              description={`This mode was saved by an earlier version, and takes started in it do not follow your voice. Switch back to ${SESSION_MODE_LABELS.voice} to prompt normally; auto-scroll still rolls the script at a set pace from inside any take.`}
             />
             <p class="hint-line">
               <button
@@ -2131,7 +2131,7 @@
                 <span class="mic-test-state" class:live={micTestRunning} aria-live="polite">
                   {#if micTestRunning}<span class="mic-test-dot" aria-hidden="true"></span>{/if}
                   {#if micTest === 'opening'}
-                    Connecting…
+                    Starting speech recognition…
                   {:else if micTest === 'listening'}
                     Say: “CandidCue is following my voice.” — Listening…
                   {:else if micTest === 'waiting'}
@@ -2339,7 +2339,7 @@
               disabled
               label="Always on top"
               description={$settings.stage.presentationMode === 'prompter'
-                ? 'Always on in this release — the teleprompter must sit above other windows'
+                ? 'Always on — the teleprompter must sit above other windows'
                 : 'Off for a reading window, so you can work beside it'}
             />
             <!-- Per panel (#206): these describe the glass in front of the

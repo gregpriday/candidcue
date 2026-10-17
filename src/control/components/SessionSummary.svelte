@@ -283,7 +283,7 @@
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>
       <dd>{summary.retakes}</dd>
-      <dt>Reconnects</dt>
+      <dt>Voice restarts</dt>
       <dd>{summary.reconnects}</dd>
       <dt>Ending location</dt>
       <dd>{summary.endingLocation}</dd>

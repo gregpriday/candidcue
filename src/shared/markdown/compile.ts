@@ -2068,13 +2068,13 @@ function finalize(
 
   const totalTokens = spokenTokens.length;
 
-  // Duplicate take names produce a readiness warning (§23.3).
+  // Duplicate part names produce a readiness warning (§23.3).
   for (const [label, count] of takeLabelCounts) {
     if (count > 1) {
       diagnostics.push({
         code: 'take_duplicate_name',
         severity: 'warning',
-        message: `Take name "${label}" is used ${count} times; voice navigation will need an ordinal.`,
+        message: `Part name "${label}" is used ${count} times; voice navigation will need an ordinal.`,
         blocking: false,
       });
     }

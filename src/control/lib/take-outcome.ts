@@ -197,15 +197,17 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   }
 
   /*
-   * A transport that dropped is named ahead of the following share, because it
-   * EXPLAINS a poor share rather than competing with it — and because the
-   * remedy is different from anything the presenter could do by reading better.
+   * Speech recognition that dropped out is named ahead of the following share,
+   * because it EXPLAINS a poor share rather than competing with it — and
+   * because the remedy is different from anything the presenter could do by
+   * reading better. It is not the microphone: a lost input is `micState`, and
+   * the recogniser runs on this machine, so there is no cable or link to check.
    */
   if (input.reconnects > 0) {
     return {
-      headline: 'The microphone connection dropped',
+      headline: 'Voice following was interrupted',
       detail: `CandidCue held the text through ${input.reconnects === 1 ? 'an interruption' : `${input.reconnects} interruptions`} and picked you up again. You ended in ${input.endingLocation}.`,
-      suggestion: 'Check the input, cable or wireless link before the next pass.',
+      suggestion: 'Present again. If it keeps happening, export a support bundle from Settings.',
       health: healthFromShare(input.followingShare),
       tone: 'attention',
     };

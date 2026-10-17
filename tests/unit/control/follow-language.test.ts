@@ -187,6 +187,22 @@ describe('degraded-state copy (Part XI)', () => {
     }
   });
 
+  /*
+   * #304: the recogniser runs on this machine. "Reconnecting" promised a retry
+   * that a recogniser which gave up will never make, and "still connected"
+   * pointed a presenter at their wifi.
+   */
+  it('describes speech recognition, not a connection, when transcription stops', () => {
+    const copy = FOLLOW_NOTICE_COPY.transcription_interrupted;
+    // Raised on a healthy first start too, so it cannot claim an interruption.
+    expect(copy.title).toBe('Voice following unavailable — position held');
+    expect(copy.detail).toMatch(/^Speech recognition is not ready\./);
+    expect(FOLLOW_STATE_DETAIL.paused).toBe('Automatic movement is stopped. The take is still running.');
+    for (const text of [copy.title, copy.detail, FOLLOW_STATE_DETAIL.paused, FOLLOW_STATE_LABELS.paused]) {
+      expect(text).not.toMatch(/connect|transcriber|network/i);
+    }
+  });
+
   it('frames an exceeded budget as a measurement, not a failure (§63)', () => {
     const copy = budgetNoticeCopy([
       { id: 'stage_frame', observed: 2.4, budget: 1, unit: ' ms' },

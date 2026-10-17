@@ -1492,8 +1492,8 @@ import type { PresentationMode } from '../services/settings-types';
             Italic beside it: the icon set has no heading mark. It wore a
             chevron, which means "go forward" everywhere else in the product.
 
-            "Insert cue" gives up `flag` to the take marker. The compiler models
-            take markers as navigation targets — a flag is exactly that — and a
+            "Insert cue" gives up `flag` to the part break. The compiler models
+            part breaks as navigation targets — a flag is exactly that — and a
             cue is an aside to the presenter.
           -->
           <div

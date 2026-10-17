@@ -518,9 +518,9 @@ test('a session mode stored by an older build is admitted, not papered over', as
   // "Follow voice" is two names for one mode.
   await expect(
     page.getByText(
-      'This setting was stored by an earlier version and takes no longer open in it. ' +
-        'Switch back to Follow voice to prompt normally; auto-scroll still rolls the ' +
-        'script at a set pace from inside any take.',
+      'This mode was saved by an earlier version, and takes started in it do not follow ' +
+        'your voice. Switch back to Follow voice to prompt normally; auto-scroll still ' +
+        'rolls the script at a set pace from inside any take.',
       { exact: true },
     ),
   ).toBeVisible();
@@ -541,7 +541,7 @@ test('a session mode stored by an older build is admitted, not papered over', as
     )
     .toBe(true);
   await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  await expect(page.getByText(/takes no longer open in it/)).toHaveCount(0);
+  await expect(page.getByText(/saved by an earlier version/)).toHaveCount(0);
 });
 
 test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
@@ -554,6 +554,14 @@ test('Session mode states its one value instead of offering two dead options', a
   // The dropdown is gone, and with it the two permanently disabled rows.
   await expect(page.getByLabel('Default session mode')).toHaveCount(0);
   await expect(page.getByText(/not available in this release/)).toHaveCount(0);
+  // It says where the pace actually lives — Teleprompter, not "below" in General.
+  await expect(
+    page.getByText(
+      'Every take opens listening. Auto-scroll can roll the script at a set pace from inside ' +
+        'any take; set the pace with Auto-scroll pace in Settings › Teleprompter.',
+      { exact: true },
+    ),
+  ).toBeVisible();
 });
 
 test('Following drops the dead Script fidelity control', async ({ page }) => {
@@ -565,7 +573,7 @@ test('Following drops the dead Script fidelity control', async ({ page }) => {
   await expect(page.getByText('Script fidelity')).toHaveCount(0);
   // Motion profile states its one family rather than opening a dropdown of one.
   await expect(page.getByText('Standard motion (v1)')).toBeVisible();
-  await expect(page.getByText('The only motion profile in this release')).toBeVisible();
+  await expect(page.getByText('CandidCue has one motion profile')).toBeVisible();
   // What genuinely reaches resolveFollowProfile stays. Matched exactly: the
   // motion-profile description mentions follow feel too, and a loose match
   // would pass on the sentence about the control rather than the control.

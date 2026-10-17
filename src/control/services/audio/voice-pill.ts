@@ -406,7 +406,7 @@ export function voicePillVisible(state: VoicePillState): boolean {
 export function voicePillLabel(state: VoicePillState): string {
   if (state.reading === 'fault') {
     if (state.fault === 'no_audio') return 'No audio';
-    return state.fault === 'offline' ? 'Not connected' : 'Not hearing you';
+    return state.fault === 'offline' ? 'Voice off' : 'Not hearing you';
   }
   // `confirmed` and `steady` are the same fact drawn two ways — a tick that has
   // just landed, and the dot it settles into — so they say the same thing. The

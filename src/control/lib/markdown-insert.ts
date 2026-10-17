@@ -169,7 +169,7 @@ export function insertDiagram(view: EditorView): void {
 }
 
 /**
- * A take marker, which is also a PART boundary (§parts).
+ * A part break: the `[Take: …]` marker, which starts a PART (§parts).
  *
  * The placeholder names the thing that follows the marker rather than the
  * marker itself. `[Take: name this take]` read as an instruction to describe

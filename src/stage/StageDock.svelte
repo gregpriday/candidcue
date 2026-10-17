@@ -938,7 +938,7 @@
    * THE AUDIO SLOT IS SIZED BY ITS CONTENTS.
    *
    * This was briefly a fixed 232px, wide enough to hold the readout carrying
-   * its longest fault label (`No audio`, `Not connected`, `Not hearing you`,
+   * its longest fault label (`No audio`, `Voice off`, `Not hearing you`,
    * and the stage's own `Control lost`) so that a fault could not widen the
    * pill and shove the button row sideways.
    *

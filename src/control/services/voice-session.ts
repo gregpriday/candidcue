@@ -186,7 +186,10 @@ export interface VoicePipelineDeps {
   onInputFellBackToDefault?(): void;
   /** A session-level provider failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
-  /** M3: soft pause will auto-disconnect in `msRemaining` (A.6). */
+  /**
+   * M3: a soft pause outlasted its limit and the recogniser was closed (A.6).
+   * Fired as it closes, so `msRemaining` is always 0.
+   */
   onPauseWarning?(msRemaining: number): void;
   /**
    * Audio was captured but could not be forwarded — a reconnect in flight, or
