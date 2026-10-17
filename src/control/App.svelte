@@ -978,11 +978,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * The Session menu is routed through the SHORTCUT BUS rather than calling
      * the session store directly.
      *
-     * Live already subscribes there with every guard it needs — the
-     * delegate-to-the-embedded-stage list, the section bounds, the
-     * rig-resolved type ceiling. Calling `togglePlayPause()` from here would
-     * work and would skip all of them, which is how a menu item and a key come
-     * to do subtly different things.
+     * Live already subscribes there with every guard it needs — the section
+     * bounds, the rig-resolved type ceiling. Calling `togglePlayPause()` from
+     * here would work and would skip all of them, which is how a menu item and
+     * a key come to do subtly different things. The one guard a menu command
+     * must skip, the delegate-to-the-embedded-stage list, it skips because
+     * `emitShortcut` delivers it as `'menu'` (#284).
      */
     startTake: () => {
       const id = commandTargetScriptId();

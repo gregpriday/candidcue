@@ -466,6 +466,9 @@ function shimBody(config: ShimConfig): void {
    */
   const alignment = { generation: 0, seq: 0, token: 0, lenTokens: 0 };
 
+  /** Off the session counter's numbers, so the two cannot agree by accident. */
+  let transcriptionGeneration = 40;
+
   function publishAlignment(): void {
     if (alignment.generation === 0) return;
     alignment.seq += 1;
@@ -1074,6 +1077,17 @@ function shimBody(config: ShimConfig): void {
         publishAlignment();
         return null;
       }
+
+      /*
+       * A real generation, as Rust mints one. This used to fall through to
+       * `null`, and the voice pipeline closes only a session it holds a
+       * generation for — so a hard pause sent no `stop_transcription` here
+       * however correctly it was wired, and no spec could tell a hard pause
+       * from a soft one. Nothing is transcribed: no frame ever arrives.
+       */
+      case 'start_transcription':
+        transcriptionGeneration += 1;
+        return transcriptionGeneration;
 
       default:
         return null;

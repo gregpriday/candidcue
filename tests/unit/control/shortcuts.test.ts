@@ -76,6 +76,7 @@ beforeAll(() => {
 });
 
 const {
+  emitShortcut,
   installShortcuts,
   isModalOpen,
   isSelfActivatingTarget,
@@ -601,5 +602,50 @@ describe('shortcut ownership (issue #128)', () => {
         expect(shortcutAppliesToRoute(action, routeName)).toBe(false);
       }
     }
+  });
+});
+
+/*
+ * #284. Live stands down during a take for the keys the embedded stage answers
+ * on its own listener — and a menu command reaches no listener but this bus.
+ * Without the source, Session › Pause stood down for a stage that never heard
+ * it, and did nothing.
+ */
+describe('where an action came from (issue #284)', () => {
+  let received: Array<[string, string]> = [];
+
+  function subscribe(): void {
+    received = [];
+    unsubscribe = onShortcut((action, source) => {
+      received.push([action, source]);
+    });
+  }
+
+  it('says a keystroke is a key', () => {
+    subscribe();
+    teardown = installShortcuts();
+    press(' ');
+    press('ArrowDown', { altKey: true });
+    expect(received).toEqual([
+      ['play-pause', 'key'],
+      ['next-chapter', 'key'],
+    ]);
+  });
+
+  it('says a menu command is a menu command', () => {
+    subscribe();
+    expect(emitShortcut('play-pause')).toBe(true);
+    expect(emitShortcut('next-chapter')).toBe(true);
+    expect(received).toEqual([
+      ['play-pause', 'menu'],
+      ['next-chapter', 'menu'],
+    ]);
+  });
+
+  it('still refuses a menu command the screen does not own', () => {
+    onScreen('library');
+    subscribe();
+    expect(emitShortcut('play-pause')).toBe(false);
+    expect(received).toEqual([]);
   });
 });

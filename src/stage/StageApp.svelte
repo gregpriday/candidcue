@@ -1673,6 +1673,7 @@
     if (event.key !== 'Escape') {
       const target = event.target;
       if (target instanceof Element && target.closest('[data-stage-chrome]') !== null) return;
+      if (isAppChord(event)) return;
     }
     if (preview && handlePreviewKey(event.key)) return;
     switch (event.key) {
@@ -1737,6 +1738,27 @@
         break;
       }
     }
+  }
+
+  /**
+   * Is this keystroke a chord — somebody else's command — rather than one of
+   * the plain keys this listener answers?
+   *
+   * The switch above matches `event.key` alone, so before this guard ⌥↓ (next
+   * section) stepped a line as if it were ↓, and ⌘⇧Space (hard pause) toggled
+   * pause as if it were Space (#284). In this window the app shortcut layer
+   * hears the same keystroke and owns the chord; a standalone stage has no
+   * command for one, and should not read it as a plain key either.
+   *
+   * ⌘, and Ctrl on its own, are always a chord. Option is not on a key that
+   * types something: Option is how a German Mac types `[`, and Ctrl+Alt is
+   * AltGr, how a German PC does. On a named key — Space, an arrow, a page key —
+   * no layout needs either, so there they are a chord too.
+   */
+  function isAppChord(event: KeyboardEvent): boolean {
+    if (event.metaKey || (event.ctrlKey && !event.altKey)) return true;
+    const typesCharacter = event.key.length === 1 && event.key !== ' ';
+    return !typesCharacter && (event.ctrlKey || event.altKey);
   }
 
   function handlePreviewKey(key: string): boolean {
