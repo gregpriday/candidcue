@@ -211,6 +211,7 @@ import type { PresentationMode } from '../services/settings-types';
         inserts.insertMarkdownBlocks(view, markdown);
         inserted = true;
       });
+      if (inserted) assetRevision += 1;
       // Awaited and reported HONESTLY: the shell decides whether to say
       // anything from this answer, so claiming success before the dispatch
       // landed is how an asset ends up in a script with nothing referencing it.
@@ -392,13 +393,21 @@ import type { PresentationMode } from '../services/settings-types';
    * compile, which is a new object on every keystroke: typing prose around a
    * picture never asks again. A compile left over from another script asks
    * nothing.
+   *
+   * An import is the one thing that can change Rust's answer while the set
+   * stays the same: imported files are named by their content, so importing a
+   * picture this script was missing (say, one pasted in from another script)
+   * restores the very path it already referred to. `assetRevision` makes that
+   * ask again.
    */
   const imageRequestKey = $derived(
     result?.scriptId === scriptId ? previewImageRequestKey(result.script) : null,
   );
+  let assetRevision = $state(0);
   let imageResolution = $state<ImageResolution | null>(null);
   $effect(() => {
     const key = imageRequestKey;
+    void assetRevision;
     if (key === null) return;
     const request = parsePreviewImageRequest(key);
     imageResolution = beginImageResolution(
@@ -902,6 +911,7 @@ import type { PresentationMode } from '../services/settings-types';
       // Alt text stays a placeholder on purpose: it is spoken when a script
       // enables `readImageAltText`, so a file name would be the wrong default.
       inserts.insertImage(view, asset.markdownPath);
+      assetRevision += 1;
     } catch (err) {
       showToast(`Could not add that image. ${describeError(err)}`, 'danger');
     }

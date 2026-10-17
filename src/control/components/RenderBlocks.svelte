@@ -33,7 +33,7 @@
     <div
       class="block kind-{block.kind}"
       data-block-id={block.id}
-      class:silent={!block.spoken && block.kind !== 'cue'}
+      class:silent={!block.spoken && block.kind !== 'cue' && block.kind !== 'image'}
       role={onblockclick ? 'button' : undefined}
       tabindex={onblockclick ? 0 : undefined}
       data-focus={onblockclick ? 'surface' : undefined}
@@ -64,7 +64,9 @@
       {:else if block.kind === 'image'}
         <!-- A picture on its own line is a figure, as on the stage, not a
              paragraph: it takes none of the prose size or line height. -->
-        <div class="figure"><RenderNodes nodes={nodesOf(block)} {images} /></div>
+        <div class="figure" class:quiet={!block.spoken}>
+          <RenderNodes nodes={nodesOf(block)} {images} />
+        </div>
       {:else if block.kind === 'table'}
         <!-- Not wrapped in <p>: a table inside a paragraph is invalid HTML and
              the browser breaks it out of the element, so the card must be its
@@ -179,6 +181,12 @@
 
   .figure {
     text-align: center;
+  }
+  /* Unspoken, so quiet like every other silent block, as the stage dims it.
+     The picture only: a whole-block opacity would take the "Image not found"
+     note under it below a readable contrast. */
+  .figure.quiet :global(.preview-img) {
+    opacity: 0.62;
   }
 
   .table-card {

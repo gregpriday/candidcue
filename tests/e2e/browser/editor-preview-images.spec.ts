@@ -18,9 +18,12 @@ import { openScript } from './fixtures/library';
  * asset-protocol scope and WKWebView's `asset://` loading are all untested.
  */
 
-/** A 40x20 PNG, so a decoded image is distinguishable from a broken one. */
-const PNG_40x20 =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAIAAABwJOjsAAAAJElEQVR4nGM4EWUzIIhh1OJRi0ctHrV41OJRi0ctHrV45FgMAJuARf2mHG7uAAAAAElFTkSuQmCC';
+/**
+ * A 2400x40 PNG: wider than any preview pane, so the picture has to be scaled
+ * down to fit, and a decoded image is distinguishable from a broken one.
+ */
+const WIDE_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAACWAAAAAoCAIAAAD1vFbrAAABcklEQVR42u3ZQQ0AAAjEsBOGEhQjCxskNKmCfZfpAgAAAAAAAJ6IBAAAAAAAAGAQAgAAAAAAAAYhAAAAAAAAYBACAAAAAAAABiEAAAAAAABgEAIAAAAAAAAGIQAAAAAAAGAQAgAAAAAAAAYhAAAAAAAAYBACAAAAAAAABiEAAAAAAABgEAIAAAAAAIBBCAAAAAAAABiEAAAAAAAAgEEIAAAAAAAAGIQAAAAAAACAQQgAAAAAAAAYhAAAAAAAAIBBCAAAAAAAABiEAAAAAAAAgEEIAAAAAAAAGIQAAAAAAACAQQgAAAAAAAAGIQAAAAAAAGAQAgAAAAAAAAYhAAAAAAAAYBACAAAAAAAABiEAAAAAAABgEAIAAAAAAAAGIQAAAAAAAGAQAgAAAAAAAAYhAAAAAAAAYBACAAAAAAAABiEAAAAAAAAYhAAAAAAAAIBBCAAAAAAAABiEAAAAAAAAgEEIAAAAAAAAGIQAAAAAAADADQuPZNAB9WEucQAAAABJRU5ErkJggg==';
 
 const SCRIPT = {
   id: '33333333-3333-4333-8333-333333333333',
@@ -43,7 +46,7 @@ test.beforeEach(async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    assetUrls: { 'assets/revenue.png': PNG_40x20 },
+    assetUrls: { 'assets/revenue.png': WIDE_PNG },
   });
 });
 
@@ -65,7 +68,7 @@ test('Preview and Both draw the picture and mark the one that is missing', async
   // Decoded, not merely present: a broken image is an `<img>` too.
   await expect
     .poll(() => picture.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth))
-    .toBe(40);
+    .toBe(2400);
 
   const missing = preview.locator('[data-image-state="missing"]');
   await expect(missing).toContainText('Image not found');
@@ -94,16 +97,26 @@ test('Preview and Both draw the picture and mark the one that is missing', async
     'assets/revenue.png',
   ]);
 
-  // Both: the same picture beside the source, and never wider than its pane.
+  // Both: the same picture beside the source, scaled down to its pane rather
+  // than overflowing it, and not squashed on the way.
   await modes.getByRole('radio', { name: 'Both' }).click();
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
   await expect(picture).toBeVisible();
-  const fits = await picture.evaluate((img: HTMLImageElement) => {
+  const box = await picture.evaluate((img: HTMLImageElement) => {
     const pane = img.closest('.preview')!.getBoundingClientRect();
-    const box = img.getBoundingClientRect();
-    return box.width > 0 && box.left >= pane.left - 0.5 && box.right <= pane.right + 0.5;
+    const rect = img.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      paneWidth: pane.width,
+      inside: rect.left >= pane.left - 0.5 && rect.right <= pane.right + 0.5,
+    };
   });
-  expect(fits).toBe(true);
+  expect(box.paneWidth).toBeLessThan(2400);
+  expect(box.width).toBeGreaterThan(0);
+  expect(box.width).toBeLessThan(2400);
+  expect(box.inside).toBe(true);
+  expect(box.height / box.width).toBeCloseTo(40 / 2400, 2);
 
   expect(remoteRequests).toEqual([]);
 });

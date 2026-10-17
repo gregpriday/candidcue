@@ -19,14 +19,18 @@
 
   let { assetId, alt, image }: Props = $props();
 
-  /*
-   * The url that failed to load, rather than a flag: a flag would outlive the
-   * url and mark its replacement broken too, while this clears itself the
-   * moment the url changes.
-   */
-  let failedUrl = $state<string | null>(null);
-
   const url = $derived(image?.status === 'resolved' ? image.url : null);
+
+  /*
+   * The url that failed to load. Derived from `url` so that it resets every
+   * time the url changes: the replacement gets a fresh attempt, and so does a
+   * url that failed once and comes back (a file put back, an edit undone).
+   * `onerror` overrides it until then.
+   */
+  let failedUrl = $derived.by((): string | null => {
+    void url;
+    return null;
+  });
   const failed = $derived(url !== null && failedUrl === url);
 
   const note = $derived.by((): { label: string; detail: string; problem: boolean } | null => {

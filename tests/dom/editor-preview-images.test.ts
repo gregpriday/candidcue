@@ -25,6 +25,8 @@ import type { CompileOutput } from '../../src/control/services/compiler';
 import { compiled, type CompiledState } from '../../src/control/stores/compiled';
 import Editor from '../../src/control/routes/Editor.svelte';
 import { compile } from '../../src/shared/markdown';
+import { dispatchDroppedImages } from '../../src/control/stores/command-bus';
+import PreviewImage from '../../src/control/components/PreviewImage.svelte';
 
 vi.mock('../../src/control/stores/toasts', () => ({
   showToast: vi.fn(),
@@ -88,14 +90,15 @@ type ResolveAnswer = Record<string, { url: string; mime: string }>;
  * id the caller sent. `answer` may hold a call open or reject it.
  */
 function installBackend(
-  answer: (requests: ResolveRequest[]) => Promise<ResolveAnswer> = async (requests) =>
-    found(requests, { 'assets/revenue.png': REVENUE_URL }),
+  answer: (requests: ResolveRequest[], scriptId: string) => Promise<ResolveAnswer> = async (
+    requests,
+  ) => found(requests, { 'assets/revenue.png': REVENUE_URL }),
 ): Array<ResolveRequest[]> {
   const resolveCalls: Array<ResolveRequest[]> = [];
   const fake: InvokeFn = async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
     if (command === 'get_script') {
       return {
-        id: SCRIPT_ID,
+        id: String(args?.['scriptId']),
         title: 'Keynote',
         status: 'draft',
         language: 'en',
@@ -119,10 +122,9 @@ function installBackend(
       } as T;
     }
     if (command === 'resolve_asset_urls') {
-      expect(args?.['scriptId']).toBe(SCRIPT_ID);
       const requests = args?.['assetsToResolve'] as ResolveRequest[];
       resolveCalls.push(requests);
-      return (await answer(requests)) as T;
+      return (await answer(requests, String(args?.['scriptId']))) as T;
     }
     throw new Error(`unexpected command ${command}`);
   };
@@ -140,12 +142,12 @@ function found(requests: ResolveRequest[], urls: Record<string, string>): Resolv
 }
 
 /** The compile the editor would get back, made the way the worker makes it. */
-function compiledFrom(source: string, editorRevision: number): CompiledState {
-  const script = compile(source, { scriptId: SCRIPT_ID });
+function compiledFrom(source: string, editorRevision: number, scriptId = SCRIPT_ID): CompiledState {
+  const script = compile(source, { scriptId });
   const result: CompileOutput = {
     stale: false,
     requestId: editorRevision + 1,
-    scriptId: SCRIPT_ID,
+    scriptId,
     sourceHash: script.sourceHash,
     script,
     blocks: script.blocks,
@@ -157,7 +159,7 @@ function compiledFrom(source: string, editorRevision: number): CompiledState {
     spokenWordCount: script.statistics.spokenWordCount,
     estimatedDurationSeconds: script.statistics.estimatedDurationSeconds,
   };
-  return { status: 'ready', editorRevision, result, error: null, scriptId: SCRIPT_ID };
+  return { status: 'ready', editorRevision, result, error: null, scriptId };
 }
 
 async function settle(): Promise<void> {
@@ -166,10 +168,11 @@ async function settle(): Promise<void> {
   await tick();
 }
 
-async function mountEditor(source = SOURCE): Promise<void> {
+async function mountEditor(source = SOURCE): Promise<ReturnType<typeof render<typeof Editor>>> {
   compiledState.set(compiledFrom(source, 0));
-  render(Editor, { props: { scriptId: SCRIPT_ID } });
+  const mounted = render(Editor, { props: { scriptId: SCRIPT_ID } });
   await settle();
+  return mounted;
 }
 
 function preview(): HTMLElement {
@@ -313,5 +316,131 @@ describe('editor preview images', () => {
     const failed = note('error');
     expect(failed?.textContent).toContain('Image could not be loaded');
     expect(failed?.textContent).toContain('Revenue by month');
+  });
+
+  it('drops an answer once every image is gone, and asks afresh when one returns', async () => {
+    const held: Array<() => void> = [];
+    installBackend(async (requests) => {
+      await new Promise<void>((resolve) => held.push(resolve));
+      return found(requests, { 'assets/revenue.png': REVENUE_URL });
+    });
+    await mountEditor();
+    expect(held).toHaveLength(1);
+
+    // Every picture deleted while the lookup is out, then its answer arrives.
+    compiledState.set(compiledFrom('# Launch\n\nHere is the chart.\n', 1));
+    await settle();
+    held[0]!();
+    await settle();
+
+    // The picture comes back: a new question, waiting on its own answer.
+    compiledState.set(compiledFrom(SOURCE, 2));
+    await settle();
+    expect(held).toHaveLength(2);
+    expect(previewImage('Revenue by month')).toBeNull();
+    expect(note('pending')?.textContent).toContain('Revenue by month');
+
+    held[1]!();
+    await settle();
+    expect(previewImage('Revenue by month')?.getAttribute('src')).toBe(REVENUE_URL);
+  });
+
+  it('never shows one script the pictures of the script before it', async () => {
+    // Both scripts use the same path, so their image ids are the same too.
+    const held: Array<{ scriptId: string; release: () => void }> = [];
+    installBackend(async (requests, scriptId) => {
+      await new Promise<void>((release) => held.push({ scriptId, release }));
+      return found(requests, {
+        'assets/revenue.png': `asset://localhost/${scriptId}/revenue.png`,
+        'assets/team.png': `asset://localhost/${scriptId}/team.png`,
+      });
+    });
+    const mounted = await mountEditor();
+    held[0]!.release();
+    await settle();
+    expect(previewImage('Revenue by month')?.getAttribute('src')).toBe(
+      'asset://localhost/a/revenue.png',
+    );
+
+    // A second lookup for A is still out when the author opens B.
+    compiledState.set(compiledFrom(`${SOURCE}\n![Team photo](assets/team.png)\n`, 1));
+    await settle();
+    expect(held.map((h) => h.scriptId)).toEqual(['a', 'a']);
+
+    compiledState.set({ status: 'idle', editorRevision: -1, result: null, error: null, scriptId: null });
+    await mounted.rerender({ scriptId: 'b' });
+    compiledState.set(compiledFrom(SOURCE, 0, 'b'));
+    await settle();
+    expect(held.map((h) => h.scriptId)).toEqual(['a', 'a', 'b']);
+
+    // B waits for its own answer rather than borrowing A's picture.
+    expect(preview().querySelector('img[src^="asset://localhost/a/"]')).toBeNull();
+    expect(note('pending')?.textContent).toContain('Revenue by month');
+
+    // B's answer, then A's late one: B's picture is the one that stays.
+    held[2]!.release();
+    await settle();
+    held[1]!.release();
+    await settle();
+    expect(previewImage('Revenue by month')?.getAttribute('src')).toBe(
+      'asset://localhost/b/revenue.png',
+    );
+  });
+
+  it('asks again after a drop, which can restore a file the script was missing', async () => {
+    // Imported files are named by their content, so importing the picture an
+    // `assets/gone.png` line was missing restores that same path: the set of
+    // images does not change, and only the import says to ask again.
+    let restored = false;
+    const calls = installBackend(async (requests) =>
+      found(requests, {
+        'assets/revenue.png': REVENUE_URL,
+        ...(restored ? { 'assets/gone.png': 'asset://localhost/gone.png' } : {}),
+      }),
+    );
+    await mountEditor();
+    expect(note('missing')?.textContent).toContain('Old screenshot');
+
+    restored = true;
+    const inserted = await dispatchDroppedImages(SCRIPT_ID, [
+      '![Old screenshot](assets/gone.png)',
+    ]);
+    await settle();
+
+    expect(inserted).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(previewImage('Old screenshot')?.getAttribute('src')).toBe('asset://localhost/gone.png');
+    expect(note('missing')).toBeNull();
+  });
+});
+
+describe('preview image load failures', () => {
+  const BROKEN = 'asset://localhost/broken.png';
+  const WORKING = 'asset://localhost/working.png';
+
+  function shown(): HTMLImageElement | null {
+    return document.querySelector<HTMLImageElement>('img.preview-img');
+  }
+
+  it('tries a url again when it comes back after failing', async () => {
+    const mounted = render(PreviewImage, {
+      props: { assetId: 'img-1', alt: 'Chart', image: { status: 'resolved', url: BROKEN } },
+    });
+    await tick();
+    shown()!.dispatchEvent(new Event('error'));
+    await tick();
+    expect(shown()).toBeNull();
+    expect(document.querySelector('[data-image-state="error"]')?.textContent).toContain(
+      'Image could not be loaded',
+    );
+
+    // The same component, a new url: drawn, not still marked broken.
+    await mounted.rerender({ image: { status: 'resolved', url: WORKING } });
+    expect(shown()?.getAttribute('src')).toBe(WORKING);
+    expect(document.querySelector('[data-image-state="error"]')).toBeNull();
+
+    // And back to the url that failed once (a file put back): tried again.
+    await mounted.rerender({ image: { status: 'resolved', url: BROKEN } });
+    expect(shown()?.getAttribute('src')).toBe(BROKEN);
   });
 });

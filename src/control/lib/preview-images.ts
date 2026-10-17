@@ -73,8 +73,13 @@ export function parsePreviewImageRequest(key: string): PreviewImageRequest {
 export interface ImageResolution {
   scriptId: string;
   status: 'pending' | 'resolved' | 'error';
-  /** Every id the last answer covered: the ids it was asked about. */
-  answered: string[];
+  /**
+   * Every id the last answer covered, with the href it was asked about. An
+   * answer holds for an image only while both still match: the compiler names
+   * an image with no path after its alt text, so `![a.png]()` and
+   * `![a.png](a.png)` share an id and are different questions.
+   */
+  answered: Record<string, string>;
   /** The urls in that answer. An answered id not in here is missing. */
   urls: Record<string, ResolvedAssetUrl>;
 }
@@ -82,9 +87,9 @@ export interface ImageResolution {
 /**
  * The state to show while a new request is in flight.
  *
- * The last answer for the same script stays on screen: an image id is a hash
- * of its authored path, and within one script one path is one file, so the
- * old answer for an id is still the right one until the new answer lands.
+ * The last answer for the same script stays on screen: within one script one
+ * path is one file, so the old answer for a path is still the right one until
+ * the new answer lands.
  * Without that, adding one picture would flash every other picture to a
  * placeholder and back. A previous answer for another script is dropped, since
  * two scripts can each have their own `assets/chart.png`.
@@ -97,7 +102,7 @@ export function beginImageResolution(
   return {
     scriptId,
     status: 'pending',
-    answered: carried ? previous.answered : [],
+    answered: carried ? previous.answered : {},
     urls: carried ? previous.urls : {},
   };
 }
@@ -107,11 +112,13 @@ export function resolvedImages(
   request: PreviewImageRequest,
   urls: Record<string, ResolvedAssetUrl>,
 ): ImageResolution {
-  return { scriptId, status: 'resolved', answered: request.assets.map((a) => a.id), urls };
+  const answered: Record<string, string> = {};
+  for (const asset of request.assets) answered[asset.id] = asset.href;
+  return { scriptId, status: 'resolved', answered, urls };
 }
 
 export function failedImages(scriptId: string): ImageResolution {
-  return { scriptId, status: 'error', answered: [], urls: {} };
+  return { scriptId, status: 'error', answered: {}, urls: {} };
 }
 
 /**
@@ -126,17 +133,18 @@ export function previewImageStates(
   const states: PreviewImages = {};
   if (!script) return states;
   const current = resolution?.scriptId === script.scriptId ? resolution : null;
-  const answered = new Set(current?.answered ?? []);
   for (const asset of script.assets) {
-    if (asset.kind !== 'image') continue;
+    // One state per id, and the first asset's, as the request is made.
+    if (asset.kind !== 'image' || states[asset.id]) continue;
     if (asset.remote) {
       states[asset.id] = { status: 'remote' };
       continue;
     }
-    const resolved = current?.urls[asset.id];
+    const answered = current?.answered[asset.id] === asset.href;
+    const resolved = answered ? current?.urls[asset.id] : undefined;
     if (resolved) {
       states[asset.id] = { status: 'resolved', url: resolved.url };
-    } else if (answered.has(asset.id)) {
+    } else if (answered) {
       states[asset.id] = { status: 'missing', href: asset.href };
     } else if (current?.status === 'error') {
       states[asset.id] = { status: 'error' };

@@ -159,11 +159,28 @@ describe('beginImageResolution', () => {
     expect(beginImageResolution(answered, 'script-b')).toEqual({
       scriptId: 'script-b',
       status: 'pending',
-      answered: [],
+      answered: {},
       urls: {},
     });
     expect(beginImageResolution(failedImages('script-a'), 'script-a').urls).toEqual({});
-    expect(beginImageResolution(failedImages('script-a'), 'script-a').answered).toEqual([]);
+    expect(beginImageResolution(failedImages('script-a'), 'script-a').answered).toEqual({});
+  });
+
+  it('holds an old answer only for the path it was about', () => {
+    // No path, so the compiler names the image after its alt text, which
+    // here is a path: the two lines share an id and are different questions.
+    const empty = script('![assets/chart.png]()');
+    const pathed = script('![assets/chart.png](assets/chart.png)');
+    const id = empty.assets[0]!.id;
+    expect(pathed.assets[0]!.id).toBe(id);
+
+    const emptyRequest = parsePreviewImageRequest(previewImageRequestKey(empty)!);
+    const missingForEmpty = resolvedImages('script-a', emptyRequest, {});
+    expect(previewImageStates(empty, missingForEmpty)[id]).toEqual({ status: 'missing', href: '' });
+    // Writing the path in is a new question: pending, not still "not found".
+    const pending = beginImageResolution(missingForEmpty, 'script-a');
+    expect(previewImageStates(pathed, pending)[id]).toEqual({ status: 'pending' });
+    expect(previewImageStates(pathed, missingForEmpty)[id]).toEqual({ status: 'pending' });
   });
 });
 
