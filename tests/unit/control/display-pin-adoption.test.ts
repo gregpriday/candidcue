@@ -50,6 +50,8 @@ const ipc = vi.hoisted(() => {
   let document = emptyDocument();
   let updates = 0;
   let failUpdates = 0;
+  /** A write whose ANSWER is held back, to reorder it against a broadcast. */
+  let held: { reached: () => void; gate: Promise<void> } | null = null;
 
   /** `merge_json`: objects merge key-by-key, a null REMOVES the key. */
   const merge = (base: Record<string, unknown>, patch: Record<string, unknown>): void => {
@@ -75,6 +77,25 @@ const ipc = vi.hoisted(() => {
       document = emptyDocument();
       updates = 0;
       failUpdates = 0;
+      held = null;
+    },
+    /**
+     * Commit the next write at once but hold its answer until `release`.
+     * `reached` settles when the write has landed.
+     */
+    holdNextUpdate(): { reached: Promise<void>; release: () => void } {
+      let release!: () => void;
+      let reached!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const landed = new Promise<void>((resolve) => (reached = resolve));
+      held = { reached, gate };
+      return { reached: landed, release };
+    },
+    /** Another window's save: applied to the document, returned as its broadcast. */
+    otherWindowWrites(patch: Record<string, unknown>): unknown {
+      merge(document.value, patch);
+      document.revision += 1;
+      return structuredClone(document);
     },
     stageBehavior: () => document.value['stageBehavior'] as Record<string, unknown>,
     /** How many `update_settings` calls reached the document. */
@@ -97,6 +118,16 @@ const ipc = vi.hoisted(() => {
         merge(document.value, patch);
         document.revision += 1;
         updates += 1;
+        if (held !== null) {
+          // The answer is the document as THIS write left it, however late it
+          // arrives.
+          const answer = structuredClone(document);
+          const { reached, gate } = held;
+          held = null;
+          reached();
+          await gate;
+          return answer;
+        }
       }
       return document;
     },
@@ -241,6 +272,60 @@ describe('the document is the answer once it owns the pin', () => {
 
     expect(reloaded.stage.displayFingerprint).toBeNull();
     expect(ipc.updates()).toBe(writesBefore);
+  });
+
+  it('takes a pin the document holds as ownership, with or without the flag', async () => {
+    // A document written by hand, or by an older shape of this field: Rust
+    // holding a value is answer enough, and the overlay's different pin is not
+    // adopted over it.
+    seedOverlay({ displayFingerprint: 'dsp-old-desk' });
+    Object.assign(ipc.stageBehavior(), { displayFingerprint: 'dsp-glass' });
+
+    const loaded = await settingsStore.loadSettings(true);
+
+    expect(loaded.stage.displayFingerprint).toBe('dsp-glass');
+    expect(ipc.updates()).toBe(0);
+  });
+
+  it('never falls back to the overlay for a stale document read after an owned one', async () => {
+    /*
+     * Documents do not arrive in the order they were produced. Once this window
+     * has seen Rust own the pin, a read that began before the adoption and lands
+     * after it must not put the overlay's answer back — not on screen, and not
+     * as a second adoption.
+     */
+    const settingsService = await import('../../../src/control/services/settings');
+    const stale = structuredClone(await ipc.invoke('get_settings'));
+    Object.assign(ipc.stageBehavior(), { displayPinMigrated: true });
+    const owned = structuredClone(await ipc.invoke('get_settings'));
+    seedOverlay({ displayFingerprint: 'dsp-old-desk' });
+
+    expect(settingsService.adaptRevisionedSettings(owned)?.stage.displayFingerprint).toBeNull();
+    expect(settingsService.adaptRevisionedSettings(stale)?.stage.displayFingerprint).toBeNull();
+    expect(settingsService.pendingDisplayPinAdoption()).toBeNull();
+  });
+
+  it('does not let an older adoption answer put back a pin another window removed', async () => {
+    /*
+     * The mode's adoption carries the whole stage section, pin included. If the
+     * other window unpins while that write is in flight and its broadcast lands
+     * first, adopting the older answer would show the pin again — and the next
+     * save would send it back to Rust.
+     */
+    seedOverlay({ presentationMode: 'reader', displayFingerprint: 'dsp-glass' });
+    const held = ipc.holdNextUpdate();
+
+    const loading = settingsStore.loadSettings(true);
+    await held.reached;
+    const newer = ipc.otherWindowWrites({
+      stageBehavior: { displayFingerprint: null, displayPinMigrated: true },
+    });
+    expect(settingsStore.adoptSettings(newer)).toBe(true);
+    held.release();
+    const loaded = await loading;
+
+    expect(loaded.stage.displayFingerprint).toBeNull();
+    expect(settingsStore.getSettingsSnapshot().stage.displayFingerprint).toBeNull();
   });
 
   it("takes another window's unpin as the answer, never having seen the pin itself", async () => {

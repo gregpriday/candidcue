@@ -321,7 +321,9 @@ describe('the pinned prompter display is Rust-owned (#272)', () => {
   it('never reads or sends a pin Rust would refuse', async () => {
     // Every stage save carries the pin, so one Rust rejects would fail every
     // save of the section rather than just the one that set it.
-    for (const bad of ['', '   ', 'x'.repeat(257), 42, { fingerprint: 'dsp-glass' }]) {
+    // 129 two-byte characters: 258 UTF-8 bytes, under 256 UTF-16 units. Rust
+    // counts bytes, so this side must too.
+    for (const bad of ['', '   ', 'x'.repeat(257), 'é'.repeat(129), 42, { fingerprint: 'dsp-glass' }]) {
       store.clear();
       settings.resetMigrationStateForTesting();
       seedOverlay({ displayFingerprint: bad });
@@ -329,6 +331,11 @@ describe('the pinned prompter display is Rust-owned (#272)', () => {
       expect(loaded.stage.displayFingerprint, JSON.stringify(bad)).toBeNull();
       expect(settings.pendingDisplayPinAdoption(), JSON.stringify(bad)).toBeNull();
     }
+    // The cap itself, in two-byte characters, is still a pin.
+    store.clear();
+    settings.resetMigrationStateForTesting();
+    seedOverlay({ displayFingerprint: 'é'.repeat(128) });
+    expect((await settings.getSettings()).stage.displayFingerprint).toBe('é'.repeat(128));
     await settings.updateSettings(7, { stage: { displayFingerprint: '' } as never });
     expect(lastPatch()).toEqual({
       stageBehavior: { displayFingerprint: null, displayPinMigrated: true },

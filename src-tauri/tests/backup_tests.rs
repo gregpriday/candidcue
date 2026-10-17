@@ -245,6 +245,18 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     )
     .await
     .expect("create");
+    // The pinned prompter display (#272): restoring onto a reinstalled Mac with
+    // the same prompter must bring back which panel takes open on.
+    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
+    candidcue_lib::settings::update_settings(
+        &h.pool,
+        current.revision,
+        serde_json::json!({
+            "stageBehavior": { "displayFingerprint": "dsp-glass", "displayPinMigrated": true }
+        }),
+    )
+    .await
+    .expect("pin the prompter display");
 
     let dest = tempfile::tempdir().expect("dest");
     let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -273,7 +285,16 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
         .expect("startup applies the pending restore");
+    // Read before the pool closes: the pin is in the restored database, not in
+    // anything the WebView kept.
+    let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
     pool.close().await;
+    assert_eq!(
+        restored.value.stage_behavior.display_fingerprint.as_deref(),
+        Some("dsp-glass"),
+        "a restore brings back which panel prompter takes open on"
+    );
+    assert!(restored.value.stage_behavior.display_pin_migrated);
 
     assert!(
         !h.dir.path().join("restore-pending.json").exists(),

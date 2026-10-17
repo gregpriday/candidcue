@@ -1023,6 +1023,13 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.stage_behavior.display_fingerprint = Some("x".repeat(MAX_DISPLAY_FINGERPRINT_BYTES));
         assert!(validate(&settings).is_ok(), "the cap itself is allowed");
+
+        // The cap is BYTES, which the frontend mirrors with `TextEncoder`: 128
+        // two-byte characters fit exactly, 129 do not.
+        settings.stage_behavior.display_fingerprint = Some("é".repeat(128));
+        assert!(validate(&settings).is_ok());
+        settings.stage_behavior.display_fingerprint = Some("é".repeat(129));
+        assert!(validate(&settings).is_err());
     }
 
     /// Unpinning removes the pin and keeps the ownership marker. That pair is

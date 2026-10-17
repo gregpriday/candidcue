@@ -206,8 +206,13 @@ async function adoptStageModeFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       stage: { ...before.stage, presentationMode: pending },
     });
-    /* A commit, like any other — see `commitCount`. */
-    commitSettings(saved);
+    /*
+     * A commit unless a newer document already stands — see `sendPatchBatch`.
+     * This write carries the whole stage section, pin included (#272), so the
+     * other window unpinning in the meantime and its broadcast landing first is
+     * exactly the case where adopting this older answer puts the pin back.
+     */
+    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }
@@ -272,8 +277,8 @@ async function adoptOpticalFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: pending,
     });
-    /* A commit, like any other — see `commitCount`. */
-    commitSettings(saved);
+    /* A commit unless a newer document already stands — see `sendPatchBatch`. */
+    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
     /*
      * Only now, and this ordering is the fix.
      *
