@@ -130,7 +130,10 @@ async function exposeSessionSetter(page: Page): Promise<void> {
 async function showSummary(page: Page, summary: Record<string, unknown>): Promise<void> {
   await page.evaluate(
     async ({ summary, scriptId }) => {
-      const store = (await import('/src/control/stores/session.ts')) as unknown as {
+      // A browser-absolute URL the dev server resolves at runtime; held in a
+      // variable because tsc tries (and fails) to resolve it as a literal.
+      const sessionUrl = '/src/control/stores/session.ts';
+      const store = (await import(/* @vite-ignore */ sessionUrl)) as unknown as {
         __designSetSession: (patch: Record<string, unknown>) => void;
       };
       store.__designSetSession({ active: false, scriptId, summary });
