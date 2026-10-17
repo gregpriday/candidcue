@@ -304,6 +304,16 @@
         matched += 1;
         row.setAttribute('data-settings-search-hit', '');
         row.removeAttribute('data-settings-search-miss');
+      } else if (row.contains(document.activeElement)) {
+        /*
+         * Never the row the keyboard is in. A change made in a matching row can
+         * rewrite its own text — a follow feel's description, a slider's
+         * readout — and the `$settings` re-run above would then hide the
+         * control mid-adjustment and drop focus with it. Left unmarked, the
+         * safe direction, until the next pass after focus has moved on.
+         */
+        row.removeAttribute('data-settings-search-miss');
+        row.removeAttribute('data-settings-search-hit');
       } else {
         row.setAttribute('data-settings-search-miss', '');
         row.removeAttribute('data-settings-search-hit');

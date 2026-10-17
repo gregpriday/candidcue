@@ -521,6 +521,33 @@ test('searching for what Diagnostic Take shows finds its row', async ({ page }) 
   await expect(pointer).toBeHidden();
 });
 
+/**
+ * A search never hides the row the keyboard is in.
+ *
+ * Only reachable once a miss is really hidden. "sluggish" is in Balanced's
+ * description and not Responsive's, so moving the feel with the arrow keys
+ * rewrites the matching row into a miss — and the re-run that follows a
+ * settings change used to hide the radio group with focus inside it.
+ */
+test('a search never hides the row the keyboard is adjusting', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Following');
+
+  const feel = page.getByRole('radiogroup', { name: 'Follow feel' });
+  const balanced = feel.getByRole('radio', { name: 'Balanced' });
+  await expect(balanced).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('sluggish');
+
+  await balanced.focus();
+  await page.keyboard.press('ArrowRight');
+
+  const responsive = feel.getByRole('radio', { name: 'Responsive' });
+  await expect(responsive).toHaveAttribute('aria-checked', 'true');
+  await expect(responsive).toBeFocused();
+  await expect(feel).toBeVisible();
+});
+
 test('a rig with every step answered but no measured scale does not read as done', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: false });
