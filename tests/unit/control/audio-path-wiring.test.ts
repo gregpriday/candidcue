@@ -31,6 +31,8 @@ const CAPTURE = source('../../../src/control/services/audio/capture.ts');
 const STORE = source('../../../src/control/stores/session.ts');
 const DRIVER = source('../../../src/control/services/session.ts');
 const STT_STREAM = source('../../../src-tauri/src/speech/session.rs');
+const VOICE_LIVE = source('../../../src/control/services/voice-live.ts');
+const SEND_QUEUE = source('../../../src/control/services/audio/send-queue.ts');
 
 /** Strip comments, so a mention in prose can never satisfy a call-site check. */
 function code(text: string): string {
@@ -54,6 +56,27 @@ describe('captured audio reaches the provider', () => {
       /pushTranscriptionAudio\(/.test(body),
       'forwardFrame must actually invoke the Rust command',
     ).toBe(true);
+  });
+
+  it('both callers push through the bounded queue, not an open-ended chain (#288)', () => {
+    /*
+     * A chain of `.then` hops is unbounded: a push that never settles holds
+     * every frame after it, and none of them is counted anywhere. The take and
+     * the microphone test both hand frames to `AudioSendQueue` instead, which
+     * is only a fix if each of them actually does.
+     */
+    for (const [caller, text] of [
+      ['the take', PIPELINE],
+      ['the microphone test', VOICE_LIVE],
+    ] as const) {
+      const body = code(text);
+      expect(/new AudioSendQueue\(/.test(body), `${caller} must build the queue`).toBe(true);
+      expect(/sender\?\.enqueue\(/.test(body), `${caller} must feed it`).toBe(true);
+      expect(
+        /\.then\(\(\) => pushTranscriptionAudio\(/.test(body),
+        `${caller} must not chain pushes past the bound`,
+      ).toBe(false);
+    }
   });
 
   it('the processor callback is connected to a destination', () => {
@@ -190,6 +213,7 @@ describe('the trace has call sites, not just a module', () => {
     ['frames held for a loading recogniser', PIPELINE, /trace\(\s*'pre-roll'/],
     ['every inbound provider frame', PIPELINE, /trace\(\s*`rx:\$\{frame\.kind\}`/],
     ['a frame dropped by generation', PIPELINE, /trace\('rx-dropped'/],
+    ['audio lost before the IPC edge', SEND_QUEUE, /trace\(\s*'audio-dropped'/],
     ['a duplicated final', PIPELINE, /trace\('final-duplicate'/],
     ['the confirmed cursor advancing', DRIVER, /trace\(\s*'confirmed'/],
     ['an explicit navigation', DRIVER, /trace\('align-cmd'/],

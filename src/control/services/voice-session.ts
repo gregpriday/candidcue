@@ -39,6 +39,7 @@ import {
 } from './audio';
 import { PcmCapture } from './audio/capture';
 import { frameHasSignal } from './audio/levelMeter';
+import { AudioSendQueue } from './audio/send-queue';
 import {
   encodePcm16,
   pushTranscriptionAudio,
@@ -276,8 +277,14 @@ export class VoiceSessionPipeline {
   private pcmHeardRecently(): boolean {
     return this.lastPcmSignalAtMs > 0 && Date.now() - this.lastPcmSignalAtMs < 5000;
   }
-  /** Frames handed to Rust this session; traced, not merely counted. */
-  private framesSent = 0;
+  /**
+   * Pushes Rust has acknowledged this session; traced, not merely counted.
+   *
+   * Counted when the call comes back, not when the frame is queued: a count of
+   * frames merely queued went on climbing through a stall that delivered
+   * nothing, and the trace said the take was fine while following had stopped.
+   */
+  private framesDelivered = 0;
   /**
    * Frames captured while `start()` waits for the recogniser, in order.
    *
@@ -303,14 +310,11 @@ export class VoiceSessionPipeline {
   private readonly timers: PipelineTimers;
   private readonly now: () => number;
   /**
-   * Serializes `stt_audio` calls.
-   *
-   * Tauri dispatches invocations concurrently, so frames fired without awaiting
-   * the previous one can reach Rust out of order — and audio delivered out of
-   * order is not "slightly wrong", it is a transcript of a sentence with its
-   * syllables shuffled. Chaining costs nothing at ten frames a second.
+   * Frames on their way to the open Rust session, one push at a time and in
+   * order, with a bound — see `AudioSendQueue`. One per transport generation:
+   * opened with the session in `start()`, disposed in `closeSession()`.
    */
-  private sendChain: Promise<void> = Promise.resolve();
+  private sender: AudioSendQueue | null = null;
 
   constructor(private readonly deps: VoicePipelineDeps) {
     this.timers = deps.timers ?? {
@@ -380,9 +384,10 @@ export class VoiceSessionPipeline {
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       // In the same turn as the assignment above, with no await between them:
-      // a frame captured after this point cannot be chained ahead of the
+      // a frame captured after this point cannot be queued ahead of the
       // backlog it follows.
-      this.releasePreRoll(this.transportGeneration);
+      this.openSender(this.transportGeneration);
+      this.releasePreRoll();
     } catch (err) {
       trace('start-failed', err instanceof Error ? err.message : 'unknown');
       this.running = false;
@@ -802,10 +807,11 @@ export class VoiceSessionPipeline {
   /**
    * Forward one frame, in order, dropping nothing silently.
    *
-   * Frames are chained rather than fired concurrently — see `sendChain`. A
-   * rejected push is swallowed here because the Rust session reports its own
-   * drops as `audioDropped`, which counts them; throwing out of an audio
-   * callback would only tear down the capture graph mid-take.
+   * Frames are queued rather than fired concurrently — see `sender`. A frame
+   * the queue cannot deliver, because the push stalled or was refused, is
+   * counted there and reported through `onAudioDropped`, as Rust reports its
+   * own drops; nothing is thrown, because throwing out of an audio callback
+   * would only tear down the capture graph mid-take.
    */
   private forwardFrame(samples: Float32Array): void {
     /*
@@ -836,20 +842,32 @@ export class VoiceSessionPipeline {
     if (generation === null || this.paused || this.stopped) {
       // Silence with a cause is the thing worth naming: an unforwarded frame
       // is indistinguishable downstream from a presenter who said nothing.
-      if (this.framesSent === 0 && !this.stopped) trace('frame-skipped', this.frameSkipReason());
+      if (this.framesDelivered === 0 && !this.stopped) {
+        trace('frame-skipped', this.frameSkipReason());
+      }
       return;
     }
-    this.sendFrame(generation, encodePcm16(samples));
+    this.sender?.enqueue(encodePcm16(samples));
   }
 
-  private sendFrame(generation: number, chunk: string): void {
-    this.framesSent += 1;
-    if (this.framesSent === 1 || this.framesSent % 50 === 0) {
-      trace('audio', `${this.framesSent} frames sent (${this.framesSent / 10}s)`);
-    }
-    this.sendChain = this.sendChain
-      .then(() => pushTranscriptionAudio(generation, chunk))
-      .catch(() => {});
+  /** A fresh queue for a session that has just opened, stamped with its generation. */
+  private openSender(generation: number): void {
+    this.sender?.dispose();
+    this.sender = new AudioSendQueue({
+      send: (chunk) => pushTranscriptionAudio(generation, chunk),
+      onDelivered: () => {
+        const delivered = (this.framesDelivered += 1);
+        if (delivered === 1 || delivered % 50 === 0) {
+          trace('audio', `${delivered} frames delivered (${delivered / 10}s)`);
+        }
+      },
+      // Audio the recogniser will never hear, reported the way Rust reports
+      // its own: from here the presenter cannot tell which side lost it.
+      onDropped: (frames) => this.deps.onAudioDropped?.(frames),
+      // A test's clock if it brought one; otherwise the queue's own monotonic
+      // one, because a wall-clock step must not age fresh audio into a loss.
+      now: this.deps.now,
+    });
   }
 
   /** Keep one frame for the session `start()` is still opening. */
@@ -862,7 +880,7 @@ export class VoiceSessionPipeline {
   }
 
   /** Send the held frames to the session that now exists, oldest first. */
-  private releasePreRoll(generation: number): void {
+  private releasePreRoll(): void {
     const held = this.preRoll;
     const shed = this.preRollShed;
     this.dropPreRoll();
@@ -871,7 +889,7 @@ export class VoiceSessionPipeline {
       `${held.length} frames held for the recogniser (${held.length / 10}s)` +
         (shed > 0 ? `, ${shed} oldest shed` : ''),
     );
-    for (const chunk of held) this.sendFrame(generation, chunk);
+    for (const chunk of held) this.sender?.enqueue(chunk);
     // Audio the recogniser will never hear, which is what this callback
     // reports whichever side of the IPC edge it was lost on.
     if (shed > 0) this.deps.onAudioDropped?.(shed);
@@ -934,6 +952,10 @@ export class VoiceSessionPipeline {
 
   /** Close the Rust session, letting the last utterance finalize. */
   private async closeSession(): Promise<void> {
+    // Before any await: a frame still waiting is for a session that is going,
+    // and a push that never settles must not hold anything open behind it.
+    this.sender?.dispose();
+    this.sender = null;
     const generation = this.transportGeneration;
     this.transportGeneration = null;
     if (generation === null) return;

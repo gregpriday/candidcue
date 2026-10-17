@@ -84,6 +84,7 @@ vi.mock('../../../src/control/services/audio-trace', () => ({
   },
 }));
 
+import { AUDIO_SEND_QUEUE_FRAMES } from '../../../src/control/services/audio/send-queue';
 import {
   PRE_ROLL_MAX_FRAMES,
   VoiceSessionPipeline,
@@ -279,6 +280,13 @@ describe('a take hears its opening words while the recogniser loads', () => {
     // pushed in one burst, so it must fit even if the worker has not taken a
     // single frame yet.
     expect(PRE_ROLL_MAX_FRAMES).toBeLessThan(50);
+  });
+
+  it('fits the renderer send queue, which sheds the oldest past its bound (#288)', () => {
+    // The same burst passes through `AudioSendQueue` first. A queue smaller
+    // than the pre-roll would shed a healthy start's opening words before Rust
+    // ever saw them.
+    expect(PRE_ROLL_MAX_FRAMES).toBeLessThanOrEqual(AUDIO_SEND_QUEUE_FRAMES);
   });
 
   it('sends nothing it heard when the take is stopped during the load', async () => {
