@@ -475,4 +475,3 @@ describe('the release advisory step', () => {
     expect(step).toMatch(/--save provenance(\s|$)/);
   });
 });
-
