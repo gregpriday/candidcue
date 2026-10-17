@@ -1894,9 +1894,10 @@
   }
 
   /**
-   * C6: this used to invoke the Rust `all` cache kind, which empties the
-   * compiled/vocabulary/thumbnail/download caches and never touches a log
-   * file — then reported "Logs cleared." It now calls the real `logs` arm.
+   * C6: this used to invoke the Rust `all` cache kind, which emptied the
+   * compiled/vocabulary/thumbnail/download caches and never touched a log
+   * file — then reported "Logs cleared." It now calls the real `logs` arm,
+   * the only kind Rust accepts since #219.
    */
   async function clearLogs(): Promise<void> {
     const accepted = await requestConfirm({
