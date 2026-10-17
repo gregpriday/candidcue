@@ -3,7 +3,8 @@
 **Effective date:** 17 October 2026
 
 CandidCue is a free, MIT-licensed teleprompter for the Mac. This policy
-covers the CandidCue application. The project's pages on GitHub — the
+describes the CandidCue application as the project releases it; a fork or a
+modified build may behave differently. The project's pages on GitHub — the
 repository, its releases and its issue tracker — are run by GitHub under the
 [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement).
 
@@ -17,35 +18,37 @@ client, no crash reporter.
 
 CandidCue opens your microphone briefly when you grant access, while a take or
 a microphone test is running, and while the input meter is on screen in Audio
-settings. Audio is held in memory and passed to the speech model installed on
-your Mac; it is never written to disk. A microphone test keeps its short clip
-in memory so you can play it back, and discards it when the test ends.
-Recognised words are used to follow your script, or shown during a microphone
-test, and are not saved.
+settings. Audio from a take or a test is held in memory and transcribed on your
+Mac by the speech model installed there; it is not written to disk. The input
+meter only measures how loud you are. Recognised words are used to follow your
+script and are shown on screen during a microphone test or a Diagnostic Take;
+they are not saved. You can turn microphone access off in System Settings ›
+Privacy & Security › Microphone.
 
 ## What stays on your Mac
 
 Your scripts and their saved revisions, imported images, settings and display
 calibrations, the speech model you installed, a summary of each session (when
 it ran, how long it took, and where in the script it started and stopped),
-diagnostic logs, and backups taken before a database upgrade. None of it is
-sent to us, and we cannot retrieve it. Older revisions and trashed scripts are
-cleared out automatically, and logs rotate. Deleting something in CandidCue
-does not reach copies made outside its database: those upgrade backups,
-anything you exported, or what your own backup software has saved.
+diagnostic logs, backups taken before a database upgrade, and recovery copies
+of anything a save could not write or a restore or repair replaced. None of it
+is sent to us, and we cannot retrieve it. Older revisions and trashed scripts
+are cleared out automatically, and logs rotate. Deleting something in CandidCue
+does not remove the copies kept apart from it: those backups and recovery
+copies, files you exported, or what your own backup software has saved.
 
 ## The network
 
 The speech model is downloaded when you choose to install it, from the Welcome
-screen or from Speech settings. The download goes to the model publisher's
-release hosting on GitHub (`github.com`) and to whatever host that redirects
-it to, such as a content delivery network, so the server that finally sends
-the file is not one we can promise in advance. Like any download, it shows
-that server your IP address, and its User-Agent names CandidCue and its
-version. It carries none of your scripts, audio or transcripts, and the file
-is checked against a SHA-256 hash built into the app before it is installed.
-Those servers handle your IP address under their own privacy policies; we
-receive nothing.
+screen or from Speech settings. The download goes to the model's release
+hosting on GitHub (`github.com`) and to whatever host that redirects it to,
+such as a content delivery network, so the server that finally sends the file
+is not one we can promise in advance. Like any download, it shows that server
+your IP address, and its User-Agent names CandidCue and its version. It
+carries none of your scripts, audio or transcripts, and the file is checked
+against a SHA-256 hash built into the app before it is installed. Those
+servers handle your IP address under their own privacy policies; we receive
+nothing.
 
 This version of CandidCue does not check for application updates. An image in
 a script that points at a web address is not fetched. Links to web pages, in
@@ -62,9 +65,15 @@ before you send it to anyone.
 ## Your data
 
 We hold none of the data CandidCue creates, so there is nothing for us to
-access, correct or delete on your behalf. You manage it through CandidCue and
-macOS. If you send us something — an issue, an email or a support bundle — we
-hold only what you sent.
+access, correct or delete on your behalf. **Export all data**, in Settings ›
+Data, privacy & updates, copies your scripts with their revisions and images,
+your settings and the database to a folder you choose. To remove CandidCue's
+data from your Mac, quit it and delete
+`~/Library/Application Support/com.candidcue.app`. A few interface preferences
+are kept separately in macOS's web storage for the app, and anything you
+exported or saved elsewhere stays where you put it.
+If you send us something — an issue, an email or a support bundle — we have
+what you sent and the account or address it came from.
 
 ## Changes and contact
 
