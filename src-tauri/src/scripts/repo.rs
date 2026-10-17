@@ -59,7 +59,6 @@ struct ScriptRow {
     language: String,
     spoken_word_count: i64,
     estimated_duration_seconds: i64,
-    selected_display_profile_id: Option<String>,
     script_settings_json: String,
     updated_at: String,
     last_opened_at: Option<String>,
@@ -75,7 +74,6 @@ fn read_row(row: &SqliteRow) -> Result<ScriptRow, sqlx::Error> {
         language: row.try_get("language")?,
         spoken_word_count: row.try_get("spoken_word_count")?,
         estimated_duration_seconds: row.try_get("estimated_duration_seconds")?,
-        selected_display_profile_id: row.try_get("selected_display_profile_id")?,
         script_settings_json: row.try_get("script_settings_json")?,
         updated_at: row.try_get("updated_at")?,
         last_opened_at: row.try_get("last_opened_at")?,
@@ -445,7 +443,6 @@ pub async fn get_script(
         source: into_without_bom(source),
         source_hash,
         settings,
-        selected_display_profile_id: row.selected_display_profile_id.clone(),
         externally_changed,
     })
 }
@@ -663,7 +660,6 @@ async fn commit_save(
             title = ?, source_hash = ?, file_fingerprint = ?, revision = ?,
             status = ?, spoken_word_count = ?, estimated_duration_seconds = ?,
             last_compile_version = ?, script_settings_json = ?, updated_at = ?,
-            selected_display_profile_id = CASE WHEN ? THEN ? ELSE selected_display_profile_id END,
             last_opened_at = CASE WHEN ? THEN ? ELSE last_opened_at END
          WHERE id = ? AND revision = ?",
     )
@@ -677,8 +673,6 @@ async fn commit_save(
     .bind(SPOKEN_STATS_VERSION)
     .bind(serde_json::to_string(c.settings).unwrap_or_else(|_| "{}".into()))
     .bind(c.now)
-    .bind(patch.selected_display_profile_id.is_some())
-    .bind(patch.selected_display_profile_id.clone().flatten())
     .bind(patch.last_opened.unwrap_or(false))
     .bind(c.now)
     .bind(script_id.as_str())
@@ -804,9 +798,8 @@ pub async fn duplicate_script(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
-             last_compile_version, selected_display_profile_id,
-             script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
+             last_compile_version, script_settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(new_id.as_str())
     .bind(&title)
@@ -817,7 +810,6 @@ pub async fn duplicate_script(
     .bind(words as i64)
     .bind(duration as i64)
     .bind(SPOKEN_STATS_VERSION)
-    .bind(&row.selected_display_profile_id)
     .bind(&row.script_settings_json)
     .bind(&now)
     .bind(&now)
@@ -960,8 +952,7 @@ pub async fn restore_script(
 
 /// Permanent deletion (spec §21.5): canonical source, revisions, copied
 /// assets, caches, analyses, database rows — including the script's session
-/// history. Never touches dictionary entries, display profiles, or another
-/// script's sessions.
+/// history. Never touches another script's sessions.
 pub async fn permanently_delete_script(
     pool: &SqlitePool,
     paths: &DataPaths,

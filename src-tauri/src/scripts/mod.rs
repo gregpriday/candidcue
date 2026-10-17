@@ -300,13 +300,12 @@ pub struct ScriptDocument {
     pub source: String,
     pub source_hash: String,
     pub settings: ScriptSettings,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_display_profile_id: Option<String>,
     /*
      * No `selected_tracking_profile_id`. `tracking_profiles` was dropped in
      * the 1.0 schema baseline: named tracking presets never shipped, nothing
      * ever wrote a row, and the product settled on one following
-     * configuration in Settings.
+     * configuration in Settings. No `selected_display_profile_id` either: it
+     * pointed into `display_profiles`, and both went in migration 0004.
      */
     /// True when the canonical file changed outside CandidCue and the file
     /// content (authority, spec §48.1) was adopted during this read.
@@ -376,25 +375,10 @@ pub struct ScriptMetadataPatch {
     pub title: Option<String>,
     pub status: Option<ScriptStatus>,
     pub settings: Option<ScriptSettings>,
-    #[serde(default, with = "double_option")]
-    pub selected_display_profile_id: Option<Option<String>>,
     /// Force a revision snapshot with this reason (e.g. `pre_session`,
     /// `before_destructive_edit`); otherwise the 5-minute policy applies.
     pub revision_reason: Option<String>,
     pub last_opened: Option<bool>,
-}
-
-/// `Option<Option<T>>` deserializer: absent = no change, null = clear.
-mod double_option {
-    use serde::{Deserialize, Deserializer};
-
-    pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-    where
-        T: Deserialize<'de>,
-        D: Deserializer<'de>,
-    {
-        Deserialize::deserialize(deserializer).map(Some)
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]

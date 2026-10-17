@@ -2,7 +2,7 @@
  * Display and stage contracts (spec Appendix C.2) — everything the stage
  * window needs arrives as a validated snapshot; the stage never fetches.
  */
-import type { Uuid, IsoDateTime } from './core';
+import type { Uuid } from './core';
 import type { CompiledBlock } from './compiler';
 import type { SmoothFollowProfile } from './smooth-follow';
 import type {
@@ -98,8 +98,8 @@ export interface StageSettings {
    *
    * All optional, and all additive: a settings document written before
    * calibration existed still validates, still renders, and simply takes the
-   * uncalibrated path. Rust persists this whole object as opaque JSON checked
-   * only for `schemaVersion === 1`, so none of this needs a migration.
+   * uncalibrated path. Where Rust stores any of it (a script's
+   * `stageOverrides`) it is opaque JSON, so none of this needs a migration.
    *
    * `optics` is the RESOLVED geometry the stage renders from; `opticalProfile`
    * is the calibration that produced it, carried along so re-opening the wizard
@@ -128,14 +128,6 @@ export interface StageSettings {
    * resolve rather than a result of it, and `ResolvedOptics` is the results.
    */
   readingContext?: ReadingContext;
-}
-
-export interface DisplayProfile {
-  id: Uuid;
-  name: string;
-  displayFingerprint?: string;
-  stage: StageSettings;
-  updatedAt: IsoDateTime;
 }
 
 export interface StageSessionEnvelope {

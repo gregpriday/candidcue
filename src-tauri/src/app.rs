@@ -131,8 +131,6 @@ pub fn run() {
             commands::publish_stage_document,
             commands::publish_stage_command,
             commands::get_stage_status,
-            commands::save_display_profile,
-            commands::list_display_profiles,
             // Settings / diagnostics (spec §46.8)
             commands::get_settings,
             commands::update_settings,

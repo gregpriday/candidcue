@@ -10,8 +10,8 @@
  *  - fields with a Rust home are mapped bidirectionally (wake phrase, prompt
  *    mode, models, mirror, fixed speed, …);
  *  - UI-only presentation fields (per-display appearance, audio processing
- *    toggles, …) persist in a local overlay (localStorage) — they belong to
- *    display profiles / frontend state per §52, not the Rust document.
+ *    toggles, …) persist in a local overlay (localStorage) — they are
+ *    frontend state, not the Rust document.
  */
 // `describeError`/`errorCode` used to be imported here for `checkForUpdate`,
 // which classified an updater failure. There is no updater (docs/updates.md).

@@ -1,14 +1,13 @@
 //! Window management (spec §44.9, §43, §52): display enumeration and stable
-//! fingerprints, safe stage creation/positioning, fullscreen behavior, the
-//! control→stage event bridge, and display profiles.
+//! fingerprints, safe stage creation/positioning, fullscreen behavior, and the
+//! control→stage event bridge.
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
 use tauri::{AppHandle, Emitter, Manager, Monitor, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 use crate::coordinator::AppCoordinator;
 use crate::errors::{AppError, ErrorCategory};
-use crate::util::{new_uuid, now_iso};
+use crate::util::new_uuid;
 
 pub mod drag_drop;
 pub mod panel_size;
@@ -217,8 +216,9 @@ pub struct DisplayDescriptor {
 /// Position and scale factor are deliberately excluded. They used to be folded
 /// in, which meant dragging a monitor in System Settings ▸ Displays ▸ Arrange —
 /// or docking a laptop, or changing the resolution scaling — silently
-/// invalidated every saved display profile and turned a configured stage
-/// display into `StageDisplayMissing`. Arrangement is not identity.
+/// orphaned everything keyed to the panel (the rig in force, how it mirrors)
+/// and turned a configured stage display into `StageDisplayMissing`.
+/// Arrangement is not identity.
 pub fn display_identity(name: Option<&str>, physical_width: u32, physical_height: u32) -> String {
     let material = format!(
         "{}|{}x{}",
@@ -1400,88 +1400,6 @@ pub fn replay_stage_live<R: Runtime>(app: &AppHandle<R>, generation: u64) -> boo
         .is_ok()
 }
 
-// ---------------------------------------------------------------------------
-// Display profiles (spec §46.6 save_display_profile, table display_profiles)
-// ---------------------------------------------------------------------------
-
-/// Twin of `DisplayProfile` (src/shared/contracts/display.ts). The stage
-/// settings are carried as a validated JSON document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DisplayProfile {
-    #[serde(default)]
-    pub id: Option<String>,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_fingerprint: Option<String>,
-    pub stage: serde_json::Value,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-pub async fn save_display_profile(
-    pool: &SqlitePool,
-    mut profile: DisplayProfile,
-) -> Result<DisplayProfile, AppError> {
-    if profile.name.trim().is_empty() {
-        return Err(AppError::invalid_input("A display profile needs a name."));
-    }
-    if !profile.stage.is_object() {
-        return Err(AppError::invalid_input("Stage settings must be an object."));
-    }
-    if profile.stage.get("schemaVersion").and_then(|v| v.as_u64()) != Some(1) {
-        return Err(AppError::invalid_input(
-            "Stage settings have an unsupported schema version.",
-        ));
-    }
-    let id = profile.id.clone().unwrap_or_else(new_uuid);
-    let now = now_iso();
-    sqlx::query(
-        "INSERT INTO display_profiles
-            (id, name, display_fingerprint, stage_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            display_fingerprint = excluded.display_fingerprint,
-            stage_settings_json = excluded.stage_settings_json,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&id)
-    .bind(profile.name.trim())
-    .bind(&profile.display_fingerprint)
-    .bind(serde_json::to_string(&profile.stage).unwrap_or_else(|_| "{}".into()))
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
-    .await?;
-
-    profile.id = Some(id);
-    profile.updated_at = Some(now);
-    Ok(profile)
-}
-
-pub async fn list_display_profiles(pool: &SqlitePool) -> Result<Vec<DisplayProfile>, AppError> {
-    let rows = sqlx::query(
-        "SELECT id, name, display_fingerprint, stage_settings_json, updated_at
-         FROM display_profiles ORDER BY updated_at DESC",
-    )
-    .fetch_all(pool)
-    .await?;
-    rows.iter()
-        .map(|row| {
-            let stage_json: String = row.try_get("stage_settings_json")?;
-            Ok(DisplayProfile {
-                id: Some(row.try_get("id")?),
-                name: row.try_get("name")?,
-                display_fingerprint: row.try_get("display_fingerprint")?,
-                stage: serde_json::from_str(&stage_json).unwrap_or(serde_json::Value::Null),
-                updated_at: row.try_get("updated_at")?,
-            })
-        })
-        .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2018,7 +1936,7 @@ mod tests {
     /// The regression this pins: position and scale factor USED to be folded
     /// into the fingerprint, so dragging a monitor in System Settings ▸
     /// Displays ▸ Arrange — or docking a laptop, or changing the scaling —
-    /// silently invalidated every saved display profile and turned a
+    /// silently orphaned everything keyed to the panel and turned a
     /// configured stage display into StageDisplayMissing.
     #[test]
     fn fingerprint_survives_rearranging_and_rescaling_displays() {

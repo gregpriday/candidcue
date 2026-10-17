@@ -868,14 +868,6 @@ function shimBody(config: ShimConfig): void {
           displays: displays().map((d, i) => ({ number: i + 1, fingerprint: d.fingerprint, name: d.name, logicalSize: d.logicalSize, primary: d.primary })),
         };
 
-      case 'list_display_profiles':
-        return [];
-
-      case 'save_display_profile': {
-        const profile = (args?.['profile'] ?? {}) as Record<string, unknown>;
-        return { ...profile, id: (profile['id'] as string | undefined) ?? 'profile-e2e', updatedAt: nowIso() };
-      }
-
       case 'open_stage':
         control.stageGeneration += 1;
         control.stage = { exists: true, visible: false, fullscreen: false, nativeFullscreen: false };

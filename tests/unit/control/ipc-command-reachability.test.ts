@@ -37,21 +37,9 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
   // v1". That waiver was the problem in miniature: an unreachable command with
   // a note explaining why it is fine to leave registered. CandidCue 1.0 updates
   // manually (docs/updates.md), so the command is gone rather than excused.
-  /*
-   * Still dormant, and the destination readout is NOT their reader.
-   *
-   * These briefly left this list when `stores/destination.ts` read display
-   * profiles for a rig name. That was the wrong source: a display-profile row
-   * is a display-NAMED record, and whether a panel is calibrated lives in
-   * `optical.activeRig` / `activeOpticalProfile`. Reading the profile rows made
-   * the Present button warn people who had calibrated nothing at all, so the
-   * store reads the optical settings instead and these two went back to having
-   * no caller.
-   */
-  save_display_profile:
-    'Single-window presentation has no independently selected stage display to persist.',
-  list_display_profiles:
-    'Single-window presentation uses Settings directly; legacy stage-display rows are dormant.',
+  // `save_display_profile` and `list_display_profiles` went the same way
+  // (#232): dormant since single-window presentation, waived here for it, and
+  // now removed with the table they wrote.
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */

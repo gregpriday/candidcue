@@ -101,10 +101,10 @@ export interface StageSettingsOverrides {
 /**
  * The stage field is black, and only black.
  *
- * `themeId`, `background` and `foreground` stay on the wire because
- * `StageSettings` is a persisted document — every §52 `display_profiles` row
- * carries one — and dropping a required field would invalidate the saved rows.
- * Nothing READS them: `src/styles/stage.css` hard-codes `--stage-bg`, which is
+ * `themeId`, `background` and `foreground` stay on the wire as required fields
+ * of `StageSettings`. They were kept because §52 `display_profiles` rows
+ * persisted that document; the rows are gone (#232), so dropping the fields is
+ * now a contract change rather than a data migration. Nothing READS them: `src/styles/stage.css` hard-codes `--stage-bg`, which is
  * why the two-option "Stage background" menu rendered identically on both of
  * its options for as long as it existed. What replaces it is `textIntensity`,
  * which changes the thing a presenter is actually reaching for when they go
@@ -154,12 +154,9 @@ const UNCALIBRATED_PARAGRAPH_SPACING_EM = 0.7;
 /**
  * How "past-text dimming off" is written down.
  *
- * It is an encoding, not a level: `applyProfileToStageOverrides`
- * (services/display-profiles.ts) reads the boolean back out of a saved §52 row
- * as `pastOpacity < 0.9`, so the off state has to land above that threshold or
- * a restored profile silently comes back with dimming on. That is why the
- * resolved `pastOpacity` is not consulted in this branch: the operator did not
- * ask for a subtler dim, they asked for none.
+ * A fixed value, not a level: the resolved `pastOpacity` is not consulted in
+ * this branch because the operator did not ask for a subtler dim, they asked
+ * for none.
  */
 const PAST_DIMMING_OFF_OPACITY = 0.92;
 

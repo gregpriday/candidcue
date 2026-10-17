@@ -35,17 +35,11 @@ export interface ScriptDocument extends ScriptSummary {
   source: string;
   sourceHash: string;
   settings: ScriptSettings;
-  /**
-   * A per-script stage configuration, if one was ever chosen.
-   *
-   * Still carried by Rust and still a column in the 1.0 schema, but nothing in
-   * the frontend sets it: single-window presentation configures the stage from
-   * Settings rather than per script. Kept because `display_profiles` is where
-   * durable per-display configuration lives and a per-script override is a
-   * plausible thing to want; noted here so the absence of a caller reads as a
-   * decision rather than an oversight.
+  /*
+   * No `selectedDisplayProfileId`. It pointed into `display_profiles`, which
+   * nothing wrote after single-window presentation; both went in migration
+   * 0004 (#232). The stage is configured from Settings, not per script.
    */
-  selectedDisplayProfileId?: Uuid;
   /*
    * No `selectedTrackingProfileId`. `tracking_profiles` was dropped in the 1.0
    * schema baseline — named tracking presets never shipped and nothing ever

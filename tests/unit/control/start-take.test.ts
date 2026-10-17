@@ -115,14 +115,6 @@ const stageCalls = vi.hoisted(() => ({
   closeStage: vi.fn(),
 }));
 vi.mock('../../../src/control/services/stage', () => stageCalls);
-vi.mock('../../../src/control/services/display-profiles', async (original) => {
-  const actual = await original<typeof import('../../../src/control/services/display-profiles')>();
-  return {
-    ...actual,
-    listDisplayProfiles: vi.fn(async () => []),
-    saveDisplayProfile: vi.fn(),
-  };
-});
 
 const { defaultAppSettings, opticalRigKey, READER_RIG_NAME } = await import(
   '../../../src/control/services/settings-types'
