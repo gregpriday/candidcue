@@ -438,6 +438,339 @@ fn asset_file_name(href: &str) -> Option<&str> {
     }
 }
 
+/// A script's text, asked which asset files it uses (#253).
+///
+/// The reference rows cannot answer this: they record that a script OWNS a
+/// file, from the moment it was imported, and nothing removes one when the
+/// image's line is deleted. So the text is asked directly, and it is asked for
+/// the file's name anywhere in it rather than parsed for image syntax. That is
+/// deliberately generous — an inline image, a reference definition and a
+/// mention in a code block all count — because the two ways of being wrong are
+/// not alike: a stray name carries one extra file along, while a missed one
+/// drops an image the text shows, and at startup deletes it. Every import
+/// names a file after the SHA-256 of its bytes, so a name the text did not mean
+/// is not a name it will contain by accident.
+///
+/// A file named by its hash is also used wherever its hash appears in the text
+/// as the compiler reads a URL before resolving it: character references
+/// decoded, whitespace and control characters dropped (`classifyUrl` in
+/// `compile.ts`), and, since a hash is hex, in either case. So
+/// `assets/&#51;055….png`, `<assets/3055 ….png>` and an extension written
+/// `\.png` or `&#46;png` all keep the image, and so does `<HASH>.png` for a file
+/// stored as `<hash>.png`, which on a case-insensitive disk is the same file.
+pub(crate) struct AssetMentions<'a> {
+    source: &'a str,
+    as_a_url_reads: String,
+}
+
+impl<'a> AssetMentions<'a> {
+    pub(crate) fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            as_a_url_reads: as_a_url_reads(source),
+        }
+    }
+
+    pub(crate) fn uses(&self, file_name: &str) -> bool {
+        if file_name.is_empty() {
+            return false;
+        }
+        if self.source.contains(file_name) {
+            return true;
+        }
+        match file_name.split_once('.') {
+            Some((stem, _)) if stem.len() == 64 && stem.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                self.as_a_url_reads.contains(&stem.to_ascii_lowercase())
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `source` with numeric character references decoded, whitespace and
+/// control characters removed, and ASCII in lower case. `&Tab;` and
+/// `&NewLine;` are the named references that decode to a character this then
+/// drops, so they are dropped too; no named reference spells a hex digit.
+fn as_a_url_reads(source: &str) -> String {
+    fn push(out: &mut String, c: char) {
+        if c > '\u{20}' && c != '\u{7f}' {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(at) = rest.find('&') {
+        rest[..at].chars().for_each(|c| push(&mut out, c));
+        let after = &rest[at + 1..];
+        if let Some(named) = ["Tab;", "NewLine;"].into_iter().find(|n| after.starts_with(n)) {
+            rest = &after[named.len()..];
+        } else if let Some((c, len)) = after.strip_prefix('#').and_then(numeric_reference) {
+            push(&mut out, c);
+            rest = &after[1 + len..];
+        } else {
+            out.push('&');
+            rest = after;
+        }
+    }
+    rest.chars().for_each(|c| push(&mut out, c));
+    out
+}
+
+/// The character a numeric reference names, given what follows its `&#`, and
+/// how many bytes of that it spans — by CommonMark's rule: up to seven decimal
+/// or six hex digits and a closing `;`.
+fn numeric_reference(after: &str) -> Option<(char, usize)> {
+    let (radix, skip) = match after.as_bytes().first()? {
+        b'x' | b'X' => (16, 1),
+        _ => (10, 0),
+    };
+    let digits = &after[skip..];
+    let len = digits.bytes().take_while(|b| (*b as char).is_digit(radix)).count();
+    let max = if radix == 16 { 6 } else { 7 };
+    if len == 0 || len > max || !digits[len..].starts_with(';') {
+        return None;
+    }
+    let code = u32::from_str_radix(&digits[..len], radix).ok()?;
+    let c = char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{FFFD}');
+    Some((c, skip + len + 1))
+}
+
+/// Remove the images in a script's folder that nothing can show any more
+/// (#253): not its text, and not any saved version of it a restore could bring
+/// back. Returns how many images went.
+///
+/// Deleting an image's line used to leave its file there for good. It cannot
+/// go when the line does, because the line can come back — an undo replays
+/// text that was never in a revision, and a restore replays one that was — so
+/// this runs only from startup reconciliation, before the first command is
+/// dispatched, when no editor holds an undo history at all. What a revision
+/// still uses stays until retention thins that revision away.
+///
+/// The text that can come back is more than the revisions the database lists:
+/// a snapshot is written before its row, and a rebuild indexes every snapshot
+/// file it finds (#252), so every file in the revisions folder counts; and
+/// text that could not be saved when the app closed is parked in
+/// `quarantine/unsaved/` for the user to copy back by hand, so that counts
+/// too.
+///
+/// It removes only what it can prove unused, and only images it indexed: a
+/// file without an `assets` row was never registered (or was refused by
+/// recovery) and is left where it is, and an image another script references
+/// is left too. If any of that text cannot be read in full, nothing is
+/// removed: text that cannot be read is evidence that is missing, not evidence
+/// that the image is unused.
+pub(crate) async fn collect_unused_script_assets(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+) -> Result<u32, AppError> {
+    let prefix = format!("scripts/{}/assets/", script_id.as_str());
+    // Compared with `substr` rather than `LIKE`, as `permanently_delete_script`
+    // does, so `%` and `_` can never act as wildcards.
+    let indexed: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT rel_path FROM assets WHERE substr(rel_path, 1, ?) = ?",
+    )
+    .bind(prefix.len() as i64)
+    .bind(&prefix)
+    .fetch_all(pool)
+    .await?;
+    if indexed.is_empty() {
+        return Ok(0);
+    }
+
+    let canonical_path = paths.canonical_file(script_id);
+    let canonical = read_recoverable_text(&canonical_path)?;
+    let mut unused: Vec<String> = {
+        let mentions = AssetMentions::new(&canonical);
+        indexed
+            .into_iter()
+            .filter(|rel_path| !mentions.uses(rel_path.rsplit('/').next().unwrap_or_default()))
+            .collect()
+    };
+    if unused.is_empty() {
+        return Ok(0);
+    }
+
+    for path in recoverable_texts(pool, paths, script_id).await? {
+        let text = read_recoverable_text(&path)?;
+        let mentions = AssetMentions::new(&text);
+        unused.retain(|asset| !mentions.uses(asset.rsplit('/').next().unwrap_or_default()));
+        if unused.is_empty() {
+            return Ok(0);
+        }
+    }
+
+    // An image another script still references is not this script's to remove
+    // (and its row could not be deleted under the foreign key anyway) — under
+    // any spelling of its path, since on a case-insensitive disk two spellings
+    // are one file.
+    let mut removable = Vec::with_capacity(unused.len());
+    for rel_path in unused {
+        let shared: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM script_asset_references r JOIN assets a ON a.id = r.asset_id
+                 WHERE lower(a.rel_path) = lower(?) AND r.script_id != ?
+             )",
+        )
+        .bind(&rel_path)
+        .bind(script_id.as_str())
+        .fetch_one(pool)
+        .await?;
+        if !shared {
+            removable.push(rel_path);
+        }
+    }
+    if removable.is_empty() {
+        return Ok(0);
+    }
+
+    // Only inside the script's own folder. `is_within_root` canonicalizes both
+    // sides, so an `assets/` that is a link would pass a check against itself
+    // while every file in it is somewhere else — another script's images, or
+    // the user's. A folder that is not there holds no files to remove, and its
+    // rows can still go.
+    let assets_root = paths.assets_dir(script_id);
+    match fs::symlink_metadata(&assets_root) {
+        Ok(meta) if meta.is_dir() && crate::util::is_within_root(&assets_root, &paths.scripts_dir()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        _ => {
+            return Err(AppError::Internal(
+                "its assets folder is not a folder inside the library".into(),
+            ))
+        }
+    }
+    // The text was read a moment ago, and nothing in the app can write it
+    // before the first command — but an outside editor can. One that saved in
+    // between may have put an image back.
+    if read_recoverable_text(&canonical_path)? != canonical {
+        return Err(AppError::Internal("its text changed while it was being checked".into()));
+    }
+
+    // Files first, then their rows. A crash between the two leaves rows for
+    // files already gone, which nothing shows and the next launch clears; the
+    // other order would leave files that nothing indexes any more, which no
+    // later launch would ever look at again. A file that cannot be removed
+    // keeps its row, for the same reason.
+    let mut forget = Vec::with_capacity(removable.len());
+    let mut unlinked = Vec::with_capacity(removable.len());
+    for rel_path in &removable {
+        let absolute = paths.root().join(rel_path);
+        match fs::symlink_metadata(&absolute) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => forget.push(rel_path),
+            Ok(meta) if meta.is_file() && crate::util::is_within_root(&absolute, &assets_root) => {
+                match fs::remove_file(&absolute) {
+                    Ok(()) => unlinked.push(rel_path),
+                    Err(err) => tracing::warn!(
+                        script_id = script_id.as_str(),
+                        error = %err,
+                        "an unused image could not be removed"
+                    ),
+                }
+            }
+            _ => tracing::warn!(
+                script_id = script_id.as_str(),
+                rel_path = %rel_path,
+                "an unused image is not a plain file in its script's folder, and was left"
+            ),
+        }
+    }
+    // The removals must outlast a power cut before the rows that describe the
+    // files go; otherwise the commit survives and the unlink does not.
+    let removed = unlinked.len() as u32;
+    if !unlinked.is_empty() {
+        crate::util::sync_dir(&assets_root)?;
+        forget.extend(unlinked);
+    }
+    let mut tx = pool.begin().await?;
+    for rel_path in forget {
+        sqlx::query(
+            "DELETE FROM script_asset_references
+             WHERE script_id = ? AND asset_id IN (SELECT id FROM assets WHERE rel_path = ?)",
+        )
+        .bind(script_id.as_str())
+        .bind(rel_path)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM assets WHERE rel_path = ?")
+            .bind(rel_path)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(removed)
+}
+
+/// A file of script text, whole. Bytes, decoded leniently: a name is ASCII, and
+/// a snapshot that is not valid UTF-8 can still name an image. Larger than a
+/// script can be is refused rather than read into memory at startup — and, as
+/// text that could not be read, stops the sweep for that script.
+fn read_recoverable_text(path: &Path) -> Result<String, AppError> {
+    use std::io::Read;
+    let limit = crate::scripts::repo::MAX_SOURCE_BYTES as u64;
+    // Through `take`, not after a size check: a file can be replaced, or grow,
+    // between looking at it and reading it.
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(AppError::Internal(format!(
+            "{} is larger than a script can be",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Every file holding text of `script_id` that could come back: the revisions
+/// the database lists, everything else in its revisions folder, and the
+/// unsaved text parked for it when the app closed.
+async fn recoverable_texts(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut found = std::collections::BTreeSet::new();
+    let indexed: Vec<String> =
+        sqlx::query_scalar("SELECT rel_path FROM script_revisions WHERE script_id = ?")
+            .bind(script_id.as_str())
+            .fetch_all(pool)
+            .await?;
+    for rel_path in indexed {
+        found.insert(paths.root().join(rel_path));
+    }
+
+    let mut notes = Vec::new();
+    if let Some(entries) = crate::util::read_owned_dir(&paths.revisions_dir(script_id), &mut notes)? {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                found.insert(entry.path());
+            }
+        }
+    }
+    // A revisions folder that is a link, or not a folder, was not looked in —
+    // which is not the same as having nothing in it.
+    if let Some(note) = notes.into_iter().next() {
+        return Err(AppError::Internal(format!("revisions not read: {note}")));
+    }
+
+    let prefix = format!("{}-", script_id.as_str());
+    match fs::read_dir(paths.quarantine_dir().join("unsaved")) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_type()?.is_file()
+                    && entry.file_name().to_string_lossy().starts_with(&prefix)
+                {
+                    found.insert(entry.path());
+                }
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    Ok(found.into_iter().collect())
+}
+
 /// Drop a script→asset reference; the file itself is collected by GC once
 /// nothing references it.
 pub async fn remove_asset_reference(
@@ -689,6 +1022,54 @@ mod tests {
             asset_file_name("  assets/nested/deep.webp  "),
             Some("deep.webp")
         );
+    }
+
+    /// #253: what an export carries and what startup keeps is decided by the
+    /// text, generously — any mention keeps an image, however it is written.
+    #[test]
+    fn an_asset_is_used_wherever_the_text_names_it() {
+        let hash = "305519f5".repeat(8);
+        let name = format!("{hash}.png");
+        let uses = |source: &str, file_name: &str| AssetMentions::new(source).uses(file_name);
+        for source in [
+            format!("![Kept](assets/{name})"),
+            format!("![Kept][shot]\n\n[shot]: assets/{name}\n"),
+            format!("<img src=\"assets/{name}\">"),
+            format!("```\nassets/{name}\n```"),
+            format!("![Kept]({name})"),
+            // What the compiler decodes or drops before it resolves a path.
+            format!("![Kept](assets/{hash}\\.png)"),
+            format!("![Kept](assets/{hash}&#46;png)"),
+            format!("![Kept](assets/&#51;{}.png)", &hash[1..]),
+            format!("![Kept](assets/&#x33;{}.png)", &hash[1..]),
+            format!("![Kept](<assets/{} {}.png>)", &hash[..8], &hash[8..]),
+            format!("![Kept](assets/{}&Tab;{}.png)", &hash[..32], &hash[32..]),
+            format!("![Kept](assets/{}&NewLine;{}.png)", &hash[..32], &hash[32..]),
+            // On a case-insensitive disk, the same file.
+            format!("![Kept](assets/{}.png)", hash.to_ascii_uppercase()),
+        ] {
+            assert!(uses(&source, &name), "{source}");
+        }
+        // An uppercase name, as a bundle may carry, written in lower case.
+        assert!(uses(&format!("![](assets/{name})"), &name.to_ascii_uppercase()));
+
+        let other = format!("{}.png", "d6593080".repeat(8));
+        assert!(!uses(&format!("![Kept](assets/{name})"), &other));
+        assert!(!uses("Just words.", &name));
+        assert!(!uses("Just words.", ""));
+        // A reference that is not one is left as written.
+        assert!(!uses(&format!("assets/&#99999999;{}.png", &hash[1..]), &name));
+        // A name that is not a hash is matched as written.
+        assert!(uses("![](assets/photo.png)", "photo.png"));
+        assert!(!uses("![](assets/photo.jpg)", "photo.png"));
+    }
+
+    #[test]
+    fn numeric_references_decode_as_commonmark_reads_them() {
+        assert_eq!(as_a_url_reads("A&#66;c&#x44;&#X65;"), "abcde");
+        assert_eq!(as_a_url_reads("&#0; &#; &#x; &#12345678; &#1"), "\u{fffd}&#;&#x;&#12345678;&#1");
+        assert_eq!(as_a_url_reads("&#38;#51; x"), "&#51;x");
+        assert_eq!(as_a_url_reads("a&Tab;b&NewLine;c&tab;&amp;"), "abc&tab;&amp;");
     }
 
     #[test]

@@ -43,6 +43,10 @@ pub struct RecoveryReport {
     /// "file rename succeeded, database commit did not" crash state.
     pub hash_mismatches_repaired: Vec<String>,
     pub trash_purged: u32,
+    /// Images removed because neither their script's text nor any saved
+    /// version of it uses them any more (#253). Maintenance, like the trash
+    /// purge, so not a finding.
+    pub unused_assets_removed: u32,
     pub notes: Vec<String>,
 }
 
@@ -207,6 +211,9 @@ pub async fn run_startup_reconciliation(
     // extraction, so a library indexed by an older one shows today's previews,
     // counts and durations without every script being re-saved (#249).
     let mut stats_refreshed = 0u32;
+    // A restore or repair that failed part way may still have written the
+    // canonical file; step 7 treats it as one that happened.
+    let mut repair_failed = false;
     for (id, _) in repo::all_script_ids_and_paths(pool).await? {
         let Ok(script_id) = ScriptId::parse(&id) else {
             report
@@ -224,6 +231,7 @@ pub async fn run_startup_reconciliation(
                 }
                 Err(err) => {
                     report.notes.push(format!("restore {id}: {err}"));
+                    repair_failed = true;
                     continue;
                 }
             }
@@ -236,6 +244,7 @@ pub async fn run_startup_reconciliation(
                 Ok(false) => {}
                 Err(err) => {
                     report.notes.push(format!("repair {id}: {err}"));
+                    repair_failed = true;
                     continue;
                 }
             }
@@ -276,6 +285,42 @@ pub async fn run_startup_reconciliation(
             }
         }
     };
+
+    // 7. Remove images nothing can show any more (#253). Here and nowhere
+    // else: this runs before the first command is dispatched, so no editor
+    // holds an undo history that could bring a deleted image's line back, and
+    // every revision a restore could bring back is read before anything goes.
+    // Not on a launch that repaired a script — one restored from its latest
+    // revision has lost the newer text that may have used an image, and the
+    // first look at a repaired library should not be preceded by permanently
+    // deleting part of it. The next ordinary launch collects. What stays wrong
+    // from launch to launch (a file nothing could restore, a folder waiting to
+    // be adopted) does not hold every other script back: a script whose text
+    // cannot be read is skipped on its own.
+    let repaired = repair_failed
+        || !report.orphan_files_recovered.is_empty()
+        || !report.missing_files_restored.is_empty()
+        || !report.hash_mismatches_repaired.is_empty();
+    if repaired {
+        report
+            .notes
+            .push("unused image removal deferred to the next launch: this one repaired the library".to_string());
+    } else {
+        for (id, _) in repo::all_script_ids_and_paths(pool).await? {
+            let Ok(script_id) = ScriptId::parse(&id) else {
+                continue;
+            };
+            let lock = locks.lock_for(&script_id);
+            let _guard = lock.lock().await;
+            match crate::assets::collect_unused_script_assets(pool, paths, &script_id).await {
+                Ok(removed) => report.unused_assets_removed += removed,
+                Err(err) => {
+                    tracing::warn!(script_id = %id, error = %err, "unused images were not collected");
+                    report.notes.push(format!("collect unused images {id}: {err}"));
+                }
+            }
+        }
+    }
 
     // Preserve evidence: write the report to the diagnostics directory.
     write_report(paths, &report)?;
