@@ -81,8 +81,12 @@
        * compile the new take runs on, which matters most here — this dialog can
        * sit open while the editor behind it is being edited, and the part that
        * was recorded may not be the part that now bears its name.
+       *
+       * Every row that names a part records all of it, so it opens at the
+       * part's re-measured start; the token beside it is only where to open if
+       * the part has gone.
        */
-      ...(partId === undefined ? {} : { part: { id: partId } }),
+      ...(partId === undefined ? {} : { part: { id: partId, whole: true } }),
     });
   }
 

@@ -1439,14 +1439,59 @@ describe('recording one part of a script', () => {
       expect(opened().startTokenIndex).toBe(40);
     });
 
-    it('opens a whole part at its start when no token comes with it', async () => {
-      // A part row and the summary's "record part N" pass the part alone.
+    it('opens a part at its start when no token comes with it', async () => {
       await expect(startTake(SCRIPT.id, { part: { id: 'p2' } })).resolves.toBe(true);
       expect(calls.startSessionRecord).toHaveBeenCalledWith(
         expect.objectContaining({ startTokenIndex: 20 }),
       );
       expect(opened().startTokenIndex).toBe(20);
       expect(glass()).toBe(20);
+    });
+
+    it('opens a WHOLE part at its re-measured start even where its old start now falls inside it', async () => {
+      /*
+       * The part row was drawn when "Demo" began at 40; an edit above it has
+       * since moved it to 20..49. The stale 40 is inside the new span, so it is
+       * indistinguishable from a caret by position — which is why a part row
+       * says `whole` rather than relying on the token to mean "the start".
+       */
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 40, part: { id: 'p2', whole: true } }),
+      ).resolves.toBe(true);
+      expect(calls.startSessionRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startTokenIndex: 20 }),
+      );
+      expect(opened().startTokenIndex).toBe(20);
+      expect(glass()).toBe(20);
+      expect(opened().part).toMatchObject({ id: 'p2', startTokenIndex: 20, endTokenIndex: 49 });
+    });
+
+    it('opens a whole part that can no longer be found at the token that came with it', async () => {
+      /*
+       * A marker part's identity includes its source offset, so an edit
+       * anywhere above the marker re-identifies it and the lookup misses. The
+       * take runs unbounded, as it says — but from where the part was, not from
+       * the top of the script.
+       */
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 40, part: { id: 'renamed', whole: true } }),
+      ).resolves.toBe(true);
+      expect(opened().part).toBeNull();
+      expect(opened().startTokenIndex).toBe(40);
+      expect(glass()).toBe(40);
+    });
+
+    it('lets a practice keep its token and drop the part', async () => {
+      // A practice is never bounded (§practice), so the part is not there to
+      // confine the token — and it is not "missing" either, so nothing is said.
+      await expect(
+        startTake(SCRIPT.id, { practice: true, startTokenIndex: 55, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect(opened().startTokenIndex).toBe(50);
+      expect(glass()).toBe(50);
+      expect(opened().part).toBeNull();
+      expect(opened().nextPart).toBeNull();
+      expect(calls.showToast).not.toHaveBeenCalled();
     });
 
     it.each([

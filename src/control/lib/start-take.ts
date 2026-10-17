@@ -322,7 +322,8 @@ export interface StartTakeOptions {
    *
    * Absent means the beginning, which is what every take got before this
    * existed — `startTake` wrote `startTokenIndex: 0` onto every session row
-   * while the field had been on the record since it was written.
+   * while the field had been on the record since it was written. With a `part`
+   * that resolves, it is confined to that part; see there.
    *
    * SNAPPED HERE rather than by the caller, and that is deliberate: the caret
    * position, an outline node and a previous take's ending are three different
@@ -387,22 +388,35 @@ export interface StartTakeOptions {
    * a boundary impossible rather than merely unintended, which is a promise the
    * engine's position estimate is not accurate enough to keep.
    *
-   * ONLY THE ID IS READ. The span, the name and the position are re-resolved
+   * ONLY THE ID IS RESOLVED. The span, the name and the position are re-resolved
    * against the compile this take actually runs on — see the lookup in
    * `startTake` — so a caller cannot hand in a part measured against a document
    * that has since been edited. The type says so rather than a comment saying
    * so: anything that knows a part's identity can launch it, which is what lets
    * the summary dialog offer the next part without holding a compiler type.
-   *
-   * WHERE IN THE PART THE TAKE BEGINS is `startTokenIndex`'s answer. Without
-   * one the take opens at the part's start, re-measured like the span — which
-   * is what a part row and the summary's "record part N" mean, so they pass no
-   * token at all. With one it opens there, snapped as usual, provided the token
-   * still lies inside the re-measured part: "From here" passes the caret this
-   * way, and a take begun part way into part three is a take of part three
-   * that starts where the cursor was.
    */
-  part?: { id: string };
+  part?: TakePartRequest;
+}
+
+/** A part to bound a take to (§parts): its identity, and how much of it. */
+export interface TakePartRequest {
+  id: string;
+  /**
+   * Record ALL of it: open at the part's own start, re-measured against this
+   * compile, whatever `startTokenIndex` says. A part row and the summary's
+   * "record part N" set it. "From here" does not — its token is where the
+   * presenter is pointing, and a take begun part way into part three is a take
+   * of part three that starts where the cursor was.
+   *
+   * WHY A FLAG, when "no token" could have meant the same thing: a whole-part
+   * launch still carries its token, as the place to open if the part cannot be
+   * found at all. A marker part's identity includes its source offset, so any
+   * edit above the marker re-identifies it, and without the token that ordinary
+   * case would open at the top of the script. And a token alone cannot say it
+   * means the part's start: after an edit that moves the part earlier, its old
+   * start can lie inside the new span, where it looks exactly like a cursor.
+   */
+  whole?: boolean;
 }
 
 /**
@@ -629,14 +643,14 @@ export async function startTake(
      * That is deliberately not "the part always wins", which is what this used
      * to be: it served the part rows and swallowed the caret, so "From here"
      * six paragraphs into a section opened at the section's first sentence.
-     * The part rows still get their re-measured start because they pass no
-     * token — an in-range check alone could not tell a stale part start from a
-     * cursor.
+     * The part rows and the summary still get the re-measured start, because
+     * they say `whole` — see `TakePartRequest` for why their token cannot.
      */
     const requestedToken =
       takePart === null
         ? (options.startTokenIndex ?? 0)
-        : options.startTokenIndex !== undefined &&
+        : options.part?.whole !== true &&
+            options.startTokenIndex !== undefined &&
             Number.isFinite(options.startTokenIndex) &&
             options.startTokenIndex >= takePart.startTokenIndex &&
             options.startTokenIndex <= takePart.endTokenIndex

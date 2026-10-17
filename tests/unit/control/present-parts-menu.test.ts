@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { startMenuItems, type StartMenuInput } from '../../../src/control/lib/present-menu';
+import type { TakePartRequest } from '../../../src/control/lib/start-take';
 import type { ScriptPart } from '../../../src/shared/contracts';
 
 function part(ordinal: number, label: string, start: number, end: number): ScriptPart {
@@ -66,20 +67,20 @@ describe('startMenuItems part rows', () => {
     expect(items[2]?.description).toBe('Part 2 of 2. Done at the end of the script.');
   });
 
-  it('hands the chosen part to the caller, and no start token beside it', () => {
-    // A part row means the WHOLE part. Its start was measured against the
-    // compile the menu was drawn from, and a token that came with it would be
-    // honoured by `startTake` wherever it still fell inside the re-measured
-    // part — part way into it, after an edit that moved the part earlier.
-    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
+  it('hands the chosen part to the caller as the whole part, not only its start token', () => {
+    // `whole` is what makes `startTake` open at the part's re-measured start.
+    // The token was measured against the compile the menu was drawn from, and
+    // after an edit that moved the part earlier it can lie inside the new span,
+    // where without the flag it would be honoured like a cursor — part way in.
+    const chosen: Array<[number, TakePartRequest | undefined]> = [];
     const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
     const items = startMenuItems(input({ parts }), (token, p) => chosen.push([token, p]));
     items.find((i) => i.label === 'Part 2 · Pricing')?.onselect();
-    expect(chosen).toEqual([[undefined, parts[1]]]);
+    expect(chosen).toEqual([[10, { id: 'p2', whole: true }]]);
   });
 
   it('starts an unbounded take from the beginning row', () => {
-    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
+    const chosen: Array<[number, TakePartRequest | undefined]> = [];
     const items = startMenuItems(
       input({ parts: [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)] }),
       (token, p) => chosen.push([token, p]),
@@ -125,7 +126,7 @@ describe('startMenuItems part rows', () => {
   it('records the part the caret sits in when "From here" is chosen', () => {
     // The overflow notice tells anybody with more than twelve parts to reach
     // the rest this way, so this row has to actually bound the take.
-    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
+    const chosen: Array<[number, TakePartRequest | undefined]> = [];
     const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
     const items = startMenuItems(
       input({ hereTokenIndex: 14, hereLabel: 'From here', herePart: parts[1]!, parts }),
@@ -134,11 +135,12 @@ describe('startMenuItems part rows', () => {
     const here = items.find((i) => i.label === 'From here')!;
     expect(here.description).toContain('Records part 2');
     here.onselect();
-    expect(chosen).toEqual([[14, parts[1]]]);
+    // The part, but not the WHOLE part: the take begins at the caret (#280).
+    expect(chosen).toEqual([[14, { id: 'p2' }]]);
   });
 
   it('leaves "From here" unbounded on an undivided script', () => {
-    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
+    const chosen: Array<[number, TakePartRequest | undefined]> = [];
     const items = startMenuItems(
       input({ hereTokenIndex: 14, hereLabel: 'From here', herePart: null }),
       (token, p) => chosen.push([token, p]),

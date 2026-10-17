@@ -9,6 +9,7 @@
  */
 import type { ScriptPart } from '../../shared/contracts';
 import type { PresentationMode } from '../services/settings-types';
+import type { TakePartRequest } from './start-take';
 
 /**
  * Structurally the `SplitMenuItem` that `SplitButton.svelte` takes, declared
@@ -84,13 +85,13 @@ export interface StartMenuInput {
 }
 
 /**
- * `present` gets a token, a part, or both. A part with no token is the whole
- * part — `startTake` opens it at its re-measured start — and a token with a part
- * is a take of that part begun at the token, which is what "From here" means.
+ * `present` gets a token and, on a divided script, the part to record. A part
+ * row asks for the `whole` part, so `startTake` opens it at its re-measured
+ * start; "From here" does not, so the take of that part begins at the caret.
  */
 export function startMenuItems(
   input: StartMenuInput,
-  present: (tokenIndex: number | undefined, part?: ScriptPart) => void,
+  present: (tokenIndex: number, part?: TakePartRequest) => void,
 ): PresentMenuItem[] {
   const items: PresentMenuItem[] = [
     {
@@ -110,7 +111,11 @@ export function startMenuItems(
         input.herePart === null
           ? (input.hereLabel ?? 'Starts at the cursor, snapped to a whole sentence.')
           : `${input.hereLabel ?? 'Starts at the cursor'}. Records part ${input.herePart.ordinal}.`,
-      onselect: () => present(input.hereTokenIndex as number, input.herePart ?? undefined),
+      onselect: () =>
+        present(
+          input.hereTokenIndex as number,
+          input.herePart === null ? undefined : { id: input.herePart.id },
+        ),
     });
   }
 
@@ -142,9 +147,10 @@ export function startMenuItems(
     items.push({
       label: `Part ${part.ordinal} · ${part.label}`,
       description: describePartRange(input.parts, part),
-      // No token: the row's start was measured against the compile the menu
-      // was drawn from, and only the part is re-measured at launch.
-      onselect: () => present(undefined, part),
+      // The token is only where to open if the part has gone by launch: it was
+      // measured against the compile the menu was drawn from, and `whole` makes
+      // `startTake` use the part's re-measured start instead.
+      onselect: () => present(part.startTokenIndex, { id: part.id, whole: true }),
     });
   }
 

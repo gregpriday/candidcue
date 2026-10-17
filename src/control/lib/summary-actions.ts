@@ -44,10 +44,7 @@ export interface SummaryAction {
   primary: boolean;
   /**
    * Where the take it starts begins. `partId` is identity only — `startTake`
-   * re-resolves the span against the compile the new take runs on — and a row
-   * that records a whole part carries no token beside it, so the part's
-   * re-measured start is where it opens. A token taken from this take's compile
-   * could still sit inside the part after an edit and open it part way.
+   * re-resolves the span against the compile the new take runs on.
    */
   startTokenIndex?: number;
   partId?: string;
@@ -85,6 +82,7 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
       id: 'record-part-again',
       label: `Record part ${part.ordinal} again`,
       primary: retryIsPrimary,
+      startTokenIndex: part.startTokenIndex,
       partId: part.id,
     });
   }
@@ -103,6 +101,7 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
       id: 'record-next-part',
       label: `Record “${nextPart.label}” next`,
       primary: nextIsPrimary,
+      startTokenIndex: nextPart.startTokenIndex,
       partId: nextPart.id,
     });
   }

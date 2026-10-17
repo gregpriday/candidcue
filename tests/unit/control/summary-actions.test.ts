@@ -122,20 +122,18 @@ describe('summaryActions', () => {
     expect(actions.find((a) => a.primary)?.id).toBe('present-again');
   });
 
-  it('carries identity and no start for every row that launches a part', () => {
-    // A whole part opens at its start as `startTake` re-measures it. A token
-    // from this take's compile would be honoured wherever it still fell inside
-    // the part, so an edit made with this dialog open could start the retake
-    // part way in.
+  it('carries identity and a start for every row that launches a part', () => {
     const actions = summaryActions(
       input({ part: PART_TWO, partComplete: true, nextPart: PART_THREE }),
     );
-    const again = actions.find((a) => a.id === 'record-part-again');
-    expect(again?.partId).toBe('p2');
-    expect(again?.startTokenIndex).toBeUndefined();
-    const next = actions.find((a) => a.id === 'record-next-part');
-    expect(next?.partId).toBe('p3');
-    expect(next?.startTokenIndex).toBeUndefined();
+    expect(actions.find((a) => a.id === 'record-part-again')).toMatchObject({
+      startTokenIndex: 50,
+      partId: 'p2',
+    });
+    expect(actions.find((a) => a.id === 'record-next-part')).toMatchObject({
+      startTokenIndex: 100,
+      partId: 'p3',
+    });
   });
 
   it('gives "present again" no start, so it opens the whole script', () => {
