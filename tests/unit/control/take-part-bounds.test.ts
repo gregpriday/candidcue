@@ -732,3 +732,52 @@ describe('script followed, out of what the take was given', () => {
     expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
   });
 });
+
+describe('a hand report and the commands around it (#282)', () => {
+  /*
+   * The stage reports where a wheel or key gesture left the document once the
+   * gesture settles, stamped with the gesture's LAST movement. A command the
+   * operator gives after that movement — a sentence step, a restart — has
+   * overtaken the report, and the report must lose; one given before it has
+   * not, and the report must win. Counted moves are what the summary sees, so
+   * they are what these read.
+   *
+   * The clock is set far past anything earlier tests stamped: the guard is
+   * module state and outlives a take.
+   */
+  const base = Date.parse('2100-01-01T00:00:00Z');
+  const jumps = () => get(session).counts.jumps;
+
+  beforeEach(() => {
+    vi.setSystemTime(base);
+    present(null);
+  });
+
+  it('drops a report a sentence step overtook', () => {
+    const lastHandInputAt = Date.now();
+    vi.advanceTimersByTime(100);
+    moveSentences(1);
+    vi.advanceTimersByTime(100);
+    anchorManualScroll(140, lastHandInputAt);
+    expect(jumps()).toBe(1);
+  });
+
+  it('keeps a report whose hand moved after the step', () => {
+    moveSentences(1);
+    vi.advanceTimersByTime(50);
+    const lastHandInputAt = Date.now();
+    vi.advanceTimersByTime(200);
+    anchorManualScroll(140, lastHandInputAt);
+    expect(jumps()).toBe(2);
+  });
+
+  it('never drops one hand report for another, even in the same millisecond', () => {
+    // Hand reports arrive one per gesture, in order; the second is the newer
+    // place, however close behind the first it comes. Both after the take's
+    // own opening placement, which is a command like any other.
+    vi.advanceTimersByTime(1000);
+    anchorManualScroll(100, Date.now() - 200);
+    anchorManualScroll(160, Date.now());
+    expect(jumps()).toBe(2);
+  });
+});

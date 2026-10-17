@@ -2460,18 +2460,26 @@ export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
     trace('manual-scroll', 'anchor dropped: a deliberate reposition overtook it');
     return;
   }
+  /*
+   * Deliberately NOT `noteReposition()`. That stamp is what a LATER hand
+   * report is judged against, and hand reports cannot overtake each other —
+   * the stage sends one per gesture, in order, stamped with the gesture's last
+   * movement. Stamping here only made the next gesture lose a tie it should
+   * win: a key pressed in the millisecond this report was accepted was dropped
+   * as stale, and the aligner never followed it.
+   */
   driver?.moveToToken(Math.max(0, Math.round(tokenIndex)));
-  noteReposition();
   releaseAutoScrollEnd();
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
 /**
- * When the aligner was last put somewhere on purpose, wall clock.
+ * When the operator last put the aligner somewhere by command, wall clock — a
+ * sentence step, an outline jump, a restart, a re-find.
  *
- * Read by `anchorManualScroll` to drop a wheel report that a deliberate
- * reposition has overtaken. Module state rather than store state because
- * nothing renders it — it is a race guard, not a fact about the take.
+ * Read by `anchorManualScroll` to drop a hand report that one of those has
+ * overtaken. Module state rather than store state because nothing renders it —
+ * it is a race guard, not a fact about the take.
  */
 let lastRepositionAtMs = Number.NEGATIVE_INFINITY;
 
