@@ -235,9 +235,12 @@ describe('captured IPC payloads (production services → wire)', () => {
     // `optical` carries a panel's mirroring (#206), so the Rust replay proves
     // the per-panel map binds to the document's typed shape. No `privacy`:
     // the transcript retention window it used to carry left Settings (#215).
+    // `stage` carries the pinned prompter display (#272), which is Rust-owned
+    // now and must bind to `stageBehavior` with its ownership flag.
     await capture('update_settings', () =>
       settings.updateSettings(3, {
         teleprompter: { fixedSpeedWpm: 155 } as never,
+        stage: { displayFingerprint: 'dsp-1' } as never,
         optical: {
           profiles: {},
           activeRig: {},

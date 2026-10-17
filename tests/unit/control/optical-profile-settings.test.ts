@@ -79,8 +79,21 @@ const ipc = vi.hoisted(() => {
         throw new Error('revision conflict');
       }
       if (command === 'update_settings' && ipc.applyPatch) {
+        /*
+         * Section by section, the way `merge_json` merges them: a stage patch
+         * carrying only the pin must not wipe the retired mirror switch beside
+         * it. One level is enough — the optical maps are replaced whole in Rust
+         * too (`REPLACED_MAPS`).
+         */
         const patch = (args as { patch?: Record<string, unknown> })?.patch ?? {};
-        Object.assign(document.value as Record<string, unknown>, patch);
+        const value = document.value as Record<string, unknown>;
+        for (const [section, fields] of Object.entries(patch)) {
+          const current = value[section];
+          value[section] =
+            typeof current === 'object' && current !== null && typeof fields === 'object'
+              ? { ...current, ...fields }
+              : fields;
+        }
         document.revision += 1;
       }
       return document;
@@ -144,6 +157,11 @@ beforeEach(() => {
   ipc.applyPatch = false;
   store.clear();
   rustSettings.optical = undefined;
+  // The shared document outlives each case, and a pin one case adopted into it
+  // would be the pinned panel of every case after.
+  const stageBehavior = ipc.document.value.stageBehavior as Record<string, unknown>;
+  delete stageBehavior['displayFingerprint'];
+  delete stageBehavior['displayPinMigrated'];
   /* The "Rust already owns this" latch is module state and only moves one way,
      so a case that saw a migrated document would silently disable the migration
      for every case after it. */
@@ -874,6 +892,8 @@ describe('carrying the retired global mirror onto the glass, once', () => {
      * yet there is no panel to carry it onto, so the overlay is still the only
      * record of it.
      */
+    // The pin is Rust-owned (#272), so the save below has to land somewhere.
+    ipc.applyPatch = true;
     setLegacyHorizontalMirror(true);
     store.set(
       OVERLAY_KEY,
@@ -894,6 +914,27 @@ describe('carrying the retired global mirror onto the glass, once', () => {
     await settings.updateSettings(4, { stage: { ...loaded.stage, displayFingerprint: 'dsp-glass' } });
     loaded = await settings.getSettings();
     expect(panelMirrorFor(loaded.optical, 'dsp-glass')).toEqual({ horizontal: true, vertical: true });
+  });
+
+  it("carries the old switch onto the document's pin once the overlay copy is gone", async () => {
+    /*
+     * #272. Adopting the pin drops it from the overlay, and the carry used to
+     * read the overlay's copy — so the old switch would have lost the one panel
+     * it is carried to. A different overlay pin must not win over Rust's either.
+     */
+    setLegacyHorizontalMirror(true);
+    const stageBehavior = ipc.document.value.stageBehavior as Record<string, unknown>;
+    stageBehavior['displayFingerprint'] = 'dsp-glass';
+    stageBehavior['displayPinMigrated'] = true;
+    store.set(OVERLAY_KEY, JSON.stringify({ stage: { displayFingerprint: 'dsp-old-desk' } }));
+
+    const loaded = await settings.getSettings();
+
+    expect(loaded.stage.displayFingerprint).toBe('dsp-glass');
+    expect(Object.keys(loaded.optical.panelMirror)).toEqual(['dsp-glass']);
+    expect(settings.pendingPanelMirrorAdoption()).toEqual({
+      'dsp-glass': { horizontal: true, vertical: false },
+    });
   });
 
   it('guesses no panel when nothing says which one is the glass', async () => {

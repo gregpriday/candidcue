@@ -81,13 +81,19 @@ export interface AppSettings {
    * test and the optical rigs belong to.
    *
    * ---------------------------------------------------------------------------
-   * THE SECTION IS SPLIT DOWN THE MIDDLE, AND THAT IS THE POINT
+   * EVERY FIELD HERE IS RUST-BACKED NOW, ONE MIGRATION AT A TIME
    * ---------------------------------------------------------------------------
    * This section used to be wholly overlay-backed on the grounds that all of it
-   * was per-machine. `displayFingerprint` genuinely is — a fingerprint means
-   * nothing on another Mac — and it stays local.
+   * was per-machine. None of it is local any more.
    *
-   * `presentationMode` is not. It is a statement about how somebody works, it is
+   * `displayFingerprint` stayed in the overlay longest, as "genuinely
+   * per-machine". Then Present started moving takes onto it, and a cleared
+   * browser store stopped meaning a wrong default and started meaning a take
+   * filling the desk monitor. It is Rust-backed now (#272). A fingerprint is a
+   * panel's name and size, not the Mac's, so an export restored onto another
+   * machine with the same prompter brings the pin back with the rigs.
+   *
+   * `presentationMode` is a statement about how somebody works, it is
    * the same answer on every machine they own, and losing it to a cleared
    * browser store is exactly the failure this codebase has already documented
    * for the optical rigs. It is Rust-backed now; see `RustSettings` in
@@ -109,8 +115,10 @@ export interface AppSettings {
      * monitor the window is already on instead — and either way the take is
      * calibrated against the panel Rust reports it actually landed on, never
      * against this value. It also selects which panel the preview, the display
-     * test and the optical rigs belong to, which is why it is per-machine: a
-     * fingerprint means nothing on another Mac.
+     * test and the optical rigs belong to.
+     *
+     * Persisted by Rust (`stageBehavior.displayFingerprint`), with the old
+     * overlay value adopted once — see `displayPinAwaitingAdoption`.
      *
      * Read directly on ONE other take path, as a last resort: when Rust can
      * name no panel at all, `chooseStageDisplay` falls back to this. That is a

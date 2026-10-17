@@ -62,6 +62,18 @@ async fn a_complete_export_is_named_complete_and_carries_every_section() {
     repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening\n\nHello."))
         .await
         .expect("create");
+    // The pinned prompter display (#272), which used to live only in the
+    // WebView's localStorage and so was never in an export at all.
+    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
+    candidcue_lib::settings::update_settings(
+        &h.pool,
+        current.revision,
+        serde_json::json!({
+            "stageBehavior": { "displayFingerprint": "dsp-glass", "displayPinMigrated": true }
+        }),
+    )
+    .await
+    .expect("pin the prompter display");
 
     let dest = tempfile::tempdir().expect("dest");
     let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -98,6 +110,11 @@ async fn a_complete_export_is_named_complete_and_carries_every_section() {
         serde_json::from_slice(&fs::read(export.join("settings.json")).expect("settings.json"))
             .expect("settings.json parses");
     assert!(settings["settings"].is_object(), "the settings document is the section");
+    assert_eq!(
+        settings["settings"]["value"]["stageBehavior"]["displayFingerprint"],
+        serde_json::json!("dsp-glass"),
+        "the export carries which panel prompter takes open on"
+    );
     assert!(
         settings.get("displayProfiles").is_none(),
         "display profiles were dropped (#232); an export no longer writes them"
@@ -228,6 +245,18 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     )
     .await
     .expect("create");
+    // The pinned prompter display (#272): restoring onto a reinstalled Mac with
+    // the same prompter must bring back which panel takes open on.
+    let current = candidcue_lib::settings::get_settings(&h.pool).await.expect("settings");
+    candidcue_lib::settings::update_settings(
+        &h.pool,
+        current.revision,
+        serde_json::json!({
+            "stageBehavior": { "displayFingerprint": "dsp-glass", "displayPinMigrated": true }
+        }),
+    )
+    .await
+    .expect("pin the prompter display");
 
     let dest = tempfile::tempdir().expect("dest");
     let export = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -256,7 +285,16 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
         .expect("startup applies the pending restore");
+    // Read before the pool closes: the pin is in the restored database, not in
+    // anything the WebView kept.
+    let restored = candidcue_lib::settings::get_settings(&pool).await.expect("settings");
     pool.close().await;
+    assert_eq!(
+        restored.value.stage_behavior.display_fingerprint.as_deref(),
+        Some("dsp-glass"),
+        "a restore brings back which panel prompter takes open on"
+    );
+    assert!(restored.value.stage_behavior.display_pin_migrated);
 
     assert!(
         !h.dir.path().join("restore-pending.json").exists(),

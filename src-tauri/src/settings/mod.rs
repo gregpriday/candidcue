@@ -223,7 +223,30 @@ pub struct StageBehaviorSettings {
     /// prompter mode has no bounds of its own to remember, it fills whichever
     /// monitor the window is already on.
     pub reader_frame: Option<crate::windows::ReaderFrame>,
+    /// The panel a prompter take opens on, by `DisplayDescriptor.fingerprint`
+    /// (#272). `None` is "no pin": Present fills the monitor the window is on.
+    ///
+    /// Present moves the control window onto this panel, so it decides where
+    /// every prompter take lands. It used to live only in the frontend's
+    /// localStorage overlay, where a cleared store silently sent the next take
+    /// borderless over the desk monitor. A pin naming a panel that is not
+    /// connected is still a valid pin — nothing here checks the monitors, and
+    /// Present falls back without touching it, so it applies again on replug.
+    pub display_fingerprint: Option<String>,
+    /// Has this document taken ownership of the pin?
+    ///
+    /// The same marker as `optical.migrated`, for the same reason: `merge_json`
+    /// removes a key whose patch value is null, so an operator who unpinned and
+    /// a document written before the move both arrive here as `None`. Without
+    /// this the frontend would read the first as the second and adopt the stale
+    /// overlay pin straight back. The frontend stamps it on every write of the
+    /// pin, in the same patch.
+    pub display_pin_migrated: bool,
 }
+
+/// A fingerprint is `dsp-` plus sixteen hex digits and an optional ordinal;
+/// this is room for any scheme that might replace it, not a measurement.
+pub const MAX_DISPLAY_FINGERPRINT_BYTES: usize = 256;
 
 impl Default for StageBehaviorSettings {
     fn default() -> Self {
@@ -240,6 +263,8 @@ impl Default for StageBehaviorSettings {
             // See the field docs: absent is not the same claim as 'prompter'.
             presentation_mode: None,
             reader_frame: None,
+            display_fingerprint: None,
+            display_pin_migrated: false,
         }
     }
 }
@@ -393,6 +418,17 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
                 "Setting stageBehavior.presentationMode must be prompter or reader.",
             )
             .with_detail("field", "stageBehavior.presentationMode"));
+        }
+    }
+    // The pin is an opaque identifier, so only nonsense is refused: blank, or
+    // too long to be one. Whether that panel is connected is Present's
+    // question, and an unplugged pin is meant to survive (#272).
+    if let Some(pin) = settings.stage_behavior.display_fingerprint.as_deref() {
+        if pin.trim().is_empty() || pin.len() > MAX_DISPLAY_FINGERPRINT_BYTES {
+            return Err(AppError::invalid_input(
+                "Setting stageBehavior.displayFingerprint is not a display fingerprint.",
+            )
+            .with_detail("field", "stageBehavior.displayFingerprint"));
         }
     }
 
@@ -933,6 +969,94 @@ mod tests {
             round_tripped["stageBehavior"]["readerFrame"]["x"],
             serde_json::json!(120.0),
         );
+    }
+
+    /// A document written before the pin moved here (#272) says nothing about
+    /// it, and must say so — not claim ownership — so the frontend can adopt
+    /// the overlay's pin once.
+    #[test]
+    fn the_display_pin_starts_absent_and_unowned() {
+        let defaults = StageBehaviorSettings::default();
+        assert_eq!(defaults.display_fingerprint, None);
+        assert!(!defaults.display_pin_migrated);
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({ "schemaVersion": 1 }))
+                .expect("defaults fill in");
+        assert_eq!(settings.stage_behavior.display_fingerprint, None);
+        assert!(!settings.stage_behavior.display_pin_migrated);
+    }
+
+    /// The pin is stored as given, in the camelCase the frontend sends, and a
+    /// panel that is not connected right now is still a valid pin — Present
+    /// falls back without it being cleared, so it applies again on replug.
+    #[test]
+    fn the_display_pin_round_trips_without_checking_the_monitors() {
+        let json = serde_json::json!({
+            "schemaVersion": 1,
+            "stageBehavior": {
+                "displayFingerprint": "dsp-not-plugged-in-1",
+                "displayPinMigrated": true,
+            },
+        });
+        let settings: AppSettings = serde_json::from_value(json).expect("pin loads");
+        assert_eq!(
+            settings.stage_behavior.display_fingerprint.as_deref(),
+            Some("dsp-not-plugged-in-1")
+        );
+        assert!(validate(&settings).is_ok());
+
+        let round_tripped = serde_json::to_value(&settings).expect("serializes");
+        assert_eq!(
+            round_tripped["stageBehavior"]["displayFingerprint"],
+            serde_json::json!("dsp-not-plugged-in-1")
+        );
+        assert_eq!(round_tripped["stageBehavior"]["displayPinMigrated"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_blank_or_oversized_display_pin_is_refused() {
+        for pin in [String::new(), "   ".to_string(), "x".repeat(MAX_DISPLAY_FINGERPRINT_BYTES + 1)] {
+            let mut settings = AppSettings::default();
+            settings.stage_behavior.display_fingerprint = Some(pin.clone());
+            assert!(validate(&settings).is_err(), "{pin:?} must be refused");
+        }
+        let mut settings = AppSettings::default();
+        settings.stage_behavior.display_fingerprint = Some("x".repeat(MAX_DISPLAY_FINGERPRINT_BYTES));
+        assert!(validate(&settings).is_ok(), "the cap itself is allowed");
+
+        // The cap is BYTES, which the frontend mirrors with `TextEncoder`: 128
+        // two-byte characters fit exactly, 129 do not.
+        settings.stage_behavior.display_fingerprint = Some("é".repeat(128));
+        assert!(validate(&settings).is_ok());
+        settings.stage_behavior.display_fingerprint = Some("é".repeat(129));
+        assert!(validate(&settings).is_err());
+    }
+
+    /// Unpinning removes the pin and keeps the ownership marker. That pair is
+    /// what tells "unpinned" apart from "never migrated" once `merge_json` has
+    /// turned the null into an absent key.
+    #[test]
+    fn unpinning_keeps_ownership_of_the_pin() {
+        let mut base = serde_json::to_value(AppSettings {
+            stage_behavior: StageBehaviorSettings {
+                display_fingerprint: Some("dsp-0123456789abcdef".into()),
+                display_pin_migrated: true,
+                ..StageBehaviorSettings::default()
+            },
+            ..AppSettings::default()
+        })
+        .expect("serializes");
+
+        merge_json(
+            &mut base,
+            &serde_json::json!({
+                "stageBehavior": { "displayFingerprint": null, "displayPinMigrated": true }
+            }),
+        );
+        let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
+        assert_eq!(merged.stage_behavior.display_fingerprint, None);
+        assert!(merged.stage_behavior.display_pin_migrated);
+        assert!(validate(&merged).is_ok());
     }
 
     #[test]
