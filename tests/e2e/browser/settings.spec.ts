@@ -389,8 +389,12 @@ test('a reading window owns the same four fields, with no rig measured at all', 
   ]) {
     await expect(page.getByRole('slider', { name: label })).toBeDisabled();
   }
-  // And it names the reading window rather than a rig it does not have.
-  await expect(page.getByText(/Controlled by the reading window/)).toHaveCount(4);
+  // And it says where a reading window's text is set instead, rather than
+  // naming a rig it does not have or a control this screen does not hold.
+  await expect(
+    page.getByText(/A reading window does not use this: during a read, its text is set in Reading appearance/),
+  ).toHaveCount(4);
+  await expect(page.getByText(/Controlled by/)).toHaveCount(0);
 });
 
 test('auto-scroll pace stays live under a rig, because a rig does not own pace', async ({ page }) => {
