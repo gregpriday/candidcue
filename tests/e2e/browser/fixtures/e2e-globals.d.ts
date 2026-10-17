@@ -20,6 +20,8 @@ declare global {
       presenting: boolean;
       /** Hold a command open for `ms` before it answers; null clears. */
       setDelay(command: string, ms: number | null): void;
+      /** Hold a command's replies until released with `false`, in order. */
+      setHeld(command: string, held: boolean): void;
       /** StageDirectives relayed through publish_stage_command, in order. */
       directives: Array<{ kind: string; payload: Record<string, unknown> }>;
       setFail(command: string, error: unknown): void;

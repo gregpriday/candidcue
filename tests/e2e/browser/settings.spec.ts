@@ -659,35 +659,44 @@ test('searching settings hides the rows that do not match, and says how many did
   await openPreferences(page);
   await gotoSection(page, 'Prompter display and rigs');
 
-  // Wait for the section to render before counting — the window shows
-  // "Loading settings…" until `get_settings` answers.
-  await expect(page.getByRole('switch', { name: 'Horizontal mirror' })).toBeVisible();
-  // And for the rig rows, which arrive only once `list_displays` answers.
-  // Counted before them, the section looks three rows long and two late rows
-  // can make a correct filter fail `toBeLessThan(rowsBefore)`.
-  await expect(page.getByLabel('How you are framed')).toBeVisible();
-  const rows = page.locator('.content .field, .content .toggle-row');
-  const rowsBefore = await rows.count();
-  expect(rowsBefore).toBeGreaterThan(1);
+  // Named rows rather than a count. A count taken before the section settles
+  // measures how far the render got, not what the filter did: the rig rows
+  // arrive only once `list_displays` answers, and a section counted before them
+  // looks three rows long.
+  const horizontal = page.locator('.content .toggle-row', { hasText: 'Horizontal mirror' });
+  const vertical = page.locator('.content .toggle-row', { hasText: 'Vertical mirror' });
+  const unrelated = [
+    page.locator('.content .toggle-row', { hasText: 'Always on top' }),
+    page.locator('.content .readout', { hasText: 'Body text' }),
+    page.locator('.content .field', { has: page.getByLabel('Custom (metres)') }),
+    page.locator('.content .field', { has: page.getByLabel('How you are framed') }),
+  ];
+  for (const row of [horizontal, vertical, ...unrelated]) await expect(row).toBeVisible();
 
-  await page.getByRole('searchbox', { name: 'Search settings' }).fill('mirror');
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('mirror');
 
-  // The count is stated rather than left to be inferred from a short form.
-  // The toast region is also `role="status"`, so this names the note itself.
-  await expect(page.locator('p[role="status"]')).toContainText('matched in this section');
-
-  const visible = page.locator(
-    '.content .field:not([data-settings-search-miss]), .content .toggle-row:not([data-settings-search-miss])',
-  );
-  const visibleCount = await visible.count();
-  expect(visibleCount).toBeGreaterThan(0);
-  expect(visibleCount).toBeLessThan(rowsBefore);
-  await expect(visible.first()).toContainText(/mirror/i);
+  await expect(horizontal).toBeVisible();
+  await expect(vertical).toBeVisible();
+  // Attached AND hidden: a row that is simply absent would pass `toBeHidden`
+  // on its own.
+  for (const row of unrelated) {
+    await expect(row).toHaveAttribute('data-settings-search-miss', '');
+    await expect(row).toBeHidden();
+  }
+  // The count is stated rather than left to be inferred from a short form, and
+  // it is the count of what is on screen.
+  await expectRowFilterNote(page, 2);
 
   // And "Show all" puts the section back rather than leaving the user to clear
   // a field they may not remember typing in.
   await page.getByRole('button', { name: 'Show all' }).click();
-  await expect(page.locator('.content [data-settings-search-miss]')).toHaveCount(0);
+  await expect(search).toHaveValue('');
+  await expect(page.locator('.content p.row-filter-note')).toHaveCount(0);
+  await expect(
+    page.locator('.content [data-settings-search-miss], .content [data-settings-search-hit]'),
+  ).toHaveCount(0);
+  for (const row of unrelated) await expect(row).toBeVisible();
 });
 
 /**
@@ -697,22 +706,194 @@ test('searching settings hides the rows that do not match, and says how many did
  * search, and the rig rows in Prompter display and rigs render only once
  * `list_displays` answers — after the pass that marked the rows already there.
  * They used to stay visible, unmarked, under a note counting fewer rows.
+ *
+ * The reply is held until the section has been seen without them, so the order
+ * is certain rather than likely. And a row already on screen changes too: the
+ * mirror switch's description names the display once it resolves, which is
+ * what makes it match `prompter` — a row whose TEXT arrives late, not the row.
  */
 test('rows that render after the search ran are filtered too', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await openPreferences(page);
+  await page.evaluate(() => window.__E2E__.setHeld('list_displays', true));
   await page.getByRole('searchbox', { name: 'Search settings' }).fill('prompter');
   await gotoSection(page, 'Prompter display and rigs');
 
+  const alwaysOnTop = page.locator('.content .toggle-row', { hasText: 'Always on top' });
+  const horizontal = page.locator('.content .toggle-row', { hasText: 'Horizontal mirror' });
   const framing = page.locator('.content .field', { has: page.getByLabel('How you are framed') });
-  await expect(framing).toBeAttached();
-  await expect(framing).toHaveAttribute('data-settings-search-miss');
+  // The section is open and the display list is not: only "Always on top"
+  // says teleprompter yet, and the rig rows do not exist.
+  await expect(alwaysOnTop).toBeVisible();
+  await expect(horizontal).toHaveAttribute('data-settings-search-miss', '');
+  await expect(framing).toHaveCount(0);
+  await expectRowFilterNote(page, 1);
 
+  await releaseHeld(page, 'list_displays');
+
+  await expect(framing).toBeAttached();
+  await expect(framing).toHaveAttribute('data-settings-search-miss', '');
+  await expect(framing).toBeHidden();
+  await expect(horizontal).toContainText('Teleprompter Display');
+  await expect(horizontal).toBeVisible();
   // And the note counts what is actually left on screen.
-  const visible = page.locator(
-    '.content .field:not([data-settings-search-miss]), .content .toggle-row:not([data-settings-search-miss])',
-  );
-  const visibleCount = await visible.count();
-  expect(visibleCount).toBeGreaterThan(0);
-  await expect(page.locator('p[role="status"]')).toContainText(`${visibleCount} setting`);
+  await expectRowFilterNote(page, 2);
+
+  await page.getByRole('button', { name: 'Show all' }).click();
+  await expect(framing).toBeVisible();
 });
+
+/**
+ * The same, for a row the Settings screen does not render itself.
+ *
+ * The Language dropdown belongs to the speech language picker, which asks for
+ * its languages when it mounts and draws the row only once they arrive. Nothing
+ * the Settings screen holds changes when they do, so a filter that re-ran on the
+ * screen's own state — the section, the settings document, the display list —
+ * never saw it: it stayed visible and unmarked under a note saying nothing in
+ * the section matched.
+ */
+test('a row a child component renders after the search ran is filtered too', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  // Before the section opens: the picker asks as it mounts.
+  await page.evaluate(() => window.__E2E__.setHeld('get_speech_language_options', true));
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('speech');
+  await gotoSection(page, 'Speech');
+
+  const language = page.locator('.content .field', {
+    has: page.getByLabel('Language', { exact: true }),
+  });
+  await expect(page.getByText('Checking which languages are available')).toBeVisible();
+  await expect(language).toHaveCount(0);
+
+  await releaseHeld(page, 'get_speech_language_options');
+
+  await expect(language).toBeAttached();
+  await expect(language).toHaveAttribute('data-settings-search-miss', '');
+  await expect(language).toBeHidden();
+  await expectRowFilterNote(page, 0);
+
+  // A row that arrived during the search comes back with the rest.
+  await page.getByRole('button', { name: 'Show all' }).click();
+  await expect(language).toBeVisible();
+  await expect(
+    page.locator('.content [data-settings-search-miss], .content [data-settings-search-hit]'),
+  ).toHaveCount(0);
+});
+
+/**
+ * A row inside another row is one setting, not two.
+ *
+ * Following's motion profile is a readout inside a `.field` of its own, and both
+ * wrappers are rows to the filter. Counted separately, a search for it said two
+ * settings matched while one was on screen — and marked separately, the inner
+ * row could be hidden inside an outer row that matched.
+ */
+test('searching counts a row once when another row sits inside it', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Following');
+  const readout = page.locator('.content .readout', { hasText: 'Motion profile' });
+  await expect(readout).toBeVisible();
+
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('motion profile');
+
+  await expect(readout).toBeVisible();
+  const diagnostics = page.locator('.content .toggle-row', { hasText: 'Developer diagnostics' });
+  await expect(diagnostics).toBeHidden();
+  await expectRowFilterNote(page, 1);
+});
+
+/**
+ * A row stops matching while it has focus, and stays until focus leaves.
+ *
+ * Follow feel matches "sluggish" only through Balanced's description, and the
+ * arrow keys move focus AND the choice together. One press to Responsive swaps
+ * the description, so the row no longer matches — and hiding it there would
+ * hide the radio the keyboard is on, dropping focus to the page mid-gesture.
+ * It is held, and judged again once focus goes somewhere else.
+ */
+test('a row that stops matching while it has focus stays until focus leaves', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Following');
+
+  // `includeHidden`: a role query skips hidden elements, and the row is meant
+  // to end up hidden.
+  const feel = page.locator('.content .field', {
+    has: page.getByRole('radiogroup', { name: 'Follow feel', includeHidden: true }),
+  });
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('sluggish');
+  await expect(feel).toBeVisible();
+  await expectRowFilterNote(page, 1);
+
+  await page.getByRole('radio', { name: 'Balanced' }).focus();
+  await page.keyboard.press('ArrowRight');
+
+  const responsive = page.getByRole('radio', { name: 'Responsive' });
+  await expect(responsive).toHaveAttribute('aria-checked', 'true');
+  // The description has changed, and the row no longer says "sluggish"…
+  await expect(feel).toContainText('Livelier');
+  // …and it is still on screen, with the keyboard still on it.
+  await expect(feel).toBeVisible();
+  await expect(feel).not.toHaveAttribute('data-settings-search-miss');
+  await expect(responsive).toBeFocused();
+  await expectRowFilterNote(page, 1);
+
+  // Leaving the row lets the filter catch up.
+  await search.focus();
+  await expect(feel).toHaveAttribute('data-settings-search-miss', '');
+  await expect(feel).toBeHidden();
+  await expectRowFilterNote(page, 0);
+});
+
+/**
+ * Let a command held by `setHeld` answer — once the screen has actually asked.
+ *
+ * Releasing first would lift the hold before the request it was there for, and
+ * the reply would then answer at once.
+ */
+async function releaseHeld(page: Page, command: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate((name) => window.__E2E__.calls.some((call) => call.command === name), command),
+    )
+    .toBe(true);
+  await page.evaluate((name) => window.__E2E__.setHeld(name, false), command);
+}
+
+/**
+ * The row filter's note against the rows it claims to count.
+ *
+ * Both are read in ONE pass, inside the page, and polled until they agree on
+ * `expected`: a count captured once and compared with a note read later is two
+ * snapshots of a section that may still be rendering. The whole number is
+ * parsed, so "1 setting" cannot pass on a note that says "10 settings"; every
+ * row wrapper the filter indexes is counted, `.readout` included; and a row
+ * inside another row is counted with it, as the filter counts it. A missing
+ * note reads as `null`, so it never agrees with a number.
+ */
+async function expectRowFilterNote(page: Page, expected: number): Promise<void> {
+  await expect
+    .poll(async () => {
+      const { note, visible } = await page.evaluate(() => ({
+        note: document.querySelector('.content p.row-filter-note')?.textContent ?? null,
+        // Unmarked, and not inside another row.
+        visible: document.querySelectorAll(
+          '.content :is(.field, .toggle-row, .readout)' +
+            ':not([data-settings-search-miss]):not(:is(.field, .toggle-row, .readout) *)',
+        ).length,
+      }));
+      if (note === null) return { stated: null, visible };
+      const text = note.replace(/\s+/g, ' ').trim();
+      if (text.startsWith('No settings in this section matched.')) return { stated: 0, visible };
+      const match = /^(\d+) settings? matched in this section\./.exec(text);
+      // An unrecognised note comes back as itself, so a failure says what it read.
+      return { stated: match ? Number(match[1]) : text, visible };
+    })
+    .toEqual({ stated: expected, visible: expected });
+}

@@ -270,36 +270,39 @@
    */
   const ROW_SELECTOR = '.field, .toggle-row, .readout';
 
-  $effect(() => {
-    const query = sectionQuery.trim().toLowerCase();
-    const root = contentElement;
-    /*
-     * Re-run when the ROWS may have changed, not only when the query did.
-     *
-     * `section` covers switching sections. `$settings` covers the rows that
-     * appear and disappear inside one — the model list once a language is
-     * chosen, the advanced following controls behind a toggle, the calibration
-     * rows that depend on a resolved rig. `displays` covers the rig form, which
-     * renders only once `list_displays` answers — after the section switch that
-     * asked for it, so a query typed before opening the section left those rows
-     * unmarked while the note counted fewer. A row created after this last ran
-     * would otherwise carry no mark and stay visible through a filter.
-     *
-     * Under-filtering is the safe direction to fail, but it still reads as a
-     * search that missed something, and these reads cost nothing.
-     */
-    void section;
-    void $settings;
-    void displays;
-    if (!root) return;
+  /**
+   * Mark every row under `root` against `query` (already trimmed and
+   * lower-cased), and return how many matched — `null` for no query, when the
+   * marks come off instead.
+   *
+   * A row inside another row is part of it, not a second setting: Following's
+   * motion profile wraps its readout — or its dropdown and a hint — in a
+   * `.field` of its own. Only the outermost row is searched, counted and
+   * hidden; the rows inside it go with it. Counted separately, one setting read
+   * as two; marked separately, a query that matched only the hint would hide
+   * the dropdown and leave its description standing.
+   *
+   * A row holding keyboard focus counts as a match until focus leaves it. Using
+   * a row can change what it says: Follow feel matches "sluggish" only through
+   * Balanced's description, and one arrow key to Responsive swaps it. Hiding the
+   * row there hides the control the keyboard is on, and focus falls out to the
+   * page in the middle of the gesture. So it stays as it was, washed and
+   * counted — nothing on screen moves under the hands that moved it — and the
+   * `focusout` pass below judges it again once focus is elsewhere.
+   */
+  function applyRowFilter(root: HTMLElement, query: string): number | null {
+    const focused = root.ownerDocument.activeElement;
     let matched = 0;
     for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
-      if (query === '') {
+      const outer = row.parentElement?.closest(ROW_SELECTOR) ?? null;
+      if (query === '' || (outer !== null && root.contains(outer))) {
         row.removeAttribute('data-settings-search-miss');
         row.removeAttribute('data-settings-search-hit');
         continue;
       }
-      const hit = (row.textContent ?? '').toLowerCase().includes(query);
+      const hit =
+        (row.textContent ?? '').toLowerCase().includes(query) ||
+        (focused !== null && row.contains(focused));
       if (hit) {
         matched += 1;
         row.setAttribute('data-settings-search-hit', '');
@@ -309,7 +312,68 @@
         row.removeAttribute('data-settings-search-hit');
       }
     }
-    rowMatches = query === '' ? null : matched;
+    return query === '' ? null : matched;
+  }
+
+  $effect(() => {
+    const query = sectionQuery.trim().toLowerCase();
+    const root = contentElement;
+    void section;
+    if (!root) return;
+    rowMatches = applyRowFilter(root, query);
+    if (query === '') return;
+    /*
+     * Re-run when the ROWS change, not only when the query did — by watching
+     * the rows rather than the state behind them.
+     *
+     * Rows arrive after the query for reasons this screen does not hold. The
+     * rig form renders once `list_displays` answers, after the section switch
+     * that asked for it; the Language dropdown once the speech picker's own
+     * request does; others once a model is chosen or a toggle opens a group.
+     * This effect used to re-run on the state it could name — the section, the
+     * settings document, then the display list — and each row created by
+     * anything else stayed visible and unmarked under a note counting fewer.
+     * Naming one more dependency per bug report is a list that is never
+     * finished, and a child component's state is not one this file can name.
+     *
+     * So the filter watches the DOM it reads. Child lists catch rows that
+     * appear; character data catches a row whose text changes in place — the
+     * mirror switch's description once a display resolves. Attributes are NOT
+     * watched: the filter writes two, and would wake itself. The note is inside
+     * `root` too, so a new count wakes it once more, finds the same count, and
+     * settles — assigning `$state` its current value notifies nobody.
+     *
+     * The observer callback runs as a microtask, before the browser paints, so
+     * a late row is marked before it is ever seen unmarked. It exists only
+     * while there is a query: with none, a new row has nothing to be marked by.
+     */
+    const observer = new MutationObserver(() => {
+      rowMatches = applyRowFilter(root, query);
+    });
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    /*
+     * And when focus leaves a row, so a row held for it is judged again.
+     *
+     * A task later rather than at once: `focusout` fires before focus has
+     * landed anywhere, and a pass run inside it would read the page's body as
+     * focused — dropping a row that focus is only moving within. When the
+     * window itself loses focus, the element keeps it, so a presenter switching
+     * apps does not come back to a row that vanished behind them.
+     */
+    let focusPass: ReturnType<typeof setTimeout> | null = null;
+    const onFocusOut = (): void => {
+      if (focusPass !== null) return;
+      focusPass = setTimeout(() => {
+        focusPass = null;
+        rowMatches = applyRowFilter(root, query);
+      }, 0);
+    };
+    root.addEventListener('focusout', onFocusOut);
+    return () => {
+      observer.disconnect();
+      root.removeEventListener('focusout', onFocusOut);
+      if (focusPass !== null) clearTimeout(focusPass);
+    };
   });
 
   /*
@@ -3375,10 +3439,17 @@
    * ancestor: `.content` is also the app shell's main region and Calibrate's
    * body, so a rule hung off it would be global in the way that matters and
    * specific only by accident. These two attributes are set in exactly one
-   * `$effect`, in this file.
+   * function, `applyRowFilter`, in this file.
+   *
+   * `!important`, because every row this marks lays itself out: each wrapper's
+   * own scoped rule sets `display: flex`, and the scoping class makes that rule
+   * (two classes) outrank a bare attribute (one). Without it the mark was set,
+   * the note counted the row out, and the row stayed on screen. A miss is a
+   * state that has to beat whatever layout the row declares, so it is stated as
+   * one rather than out-specified by a selector the next wrapper could tie.
    */
   :global([data-settings-search-miss]) {
-    display: none;
+    display: none !important;
   }
   /*
    * A wash rather than a highlighted substring. Marking the matched words

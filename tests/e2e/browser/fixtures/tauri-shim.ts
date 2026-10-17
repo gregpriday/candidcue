@@ -381,6 +381,27 @@ function shimBody(config: ShimConfig): void {
     },
     delay: {} as Record<string, number>,
     /**
+     * Test seam: hold a command's replies until the spec lets them go.
+     *
+     * `setDelay` holds for a time, and a time is a race against the runner: a
+     * spec asserting what the screen shows BEFORE the reply loses whenever a
+     * slow machine spends the delay getting there. Held replies answer only
+     * when `setHeld(command, false)` releases them, in the order they were
+     * asked, so the in-flight state lasts exactly as long as the spec needs it.
+     */
+    setHeld(command: string, held: boolean) {
+      if (held) {
+        this.held[command] = true;
+        return;
+      }
+      delete this.held[command];
+      const due = this.heldReplies.filter((reply) => reply.command === command);
+      this.heldReplies = this.heldReplies.filter((reply) => reply.command !== command);
+      for (const reply of due) reply.release();
+    },
+    held: {} as Record<string, true>,
+    heldReplies: [] as Array<{ command: string; release: () => void }>,
+    /**
      * Commands that have ANSWERED, in order — `calls` only records that one was
      * asked. A spec waiting on a held command has no other way to know the
      * reply landed, and the alternative is sleeping for longer than the delay
@@ -1073,6 +1094,17 @@ function shimBody(config: ShimConfig): void {
       const held = control.delay[command];
       try {
         const answer = handle(command, args);
+        if (control.held[command]) {
+          return new Promise((resolve) => {
+            control.heldReplies.push({
+              command,
+              release: () => {
+                control.settled.push(command);
+                resolve(answer);
+              },
+            });
+          });
+        }
         if (held === undefined) {
           control.settled.push(command);
           return Promise.resolve(answer);
