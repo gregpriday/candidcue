@@ -28,6 +28,11 @@ export interface ShimScriptSeed {
   source: string;
   status?: 'draft' | 'ready' | 'trash';
   scriptRevision?: number;
+  /** ISO timestamp. Defaults to the moment the shim boots. */
+  updatedAt?: string;
+  /** ISO timestamp; seeds the Recent view without opening the script first. */
+  lastOpenedAt?: string;
+  hasWarnings?: boolean;
 }
 
 export interface ShimConfig {
@@ -187,12 +192,22 @@ function shimBody(config: ShimConfig): void {
 
   const nowIso = () => new Date().toISOString();
   const words = (s: string) => (s.trim() === '' ? 0 : s.trim().split(/\s+/).length);
-  const excerpt = (s: string) =>
-    s
-      .replace(/[#>*_`\-]/g, ' ')
+  /*
+   * What Rust's `preview_text` answers: the spoken text (headings are not
+   * spoken by default, so they are not in it), cut on a word boundary at 200
+   * characters with an ellipsis.
+   */
+  const excerpt = (s: string) => {
+    const plain = s
+      .replace(/^#{1,6}\s+.*$/gm, ' ')
+      .replace(/[>*_`\-]/g, ' ')
       .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120);
+      .trim();
+    if (plain.length <= 200) return plain;
+    const head = plain.slice(0, 200);
+    const boundary = head.lastIndexOf(' ');
+    return `${(boundary > 0 ? head.slice(0, boundary) : head).trimEnd()}…`;
+  };
 
   const defaultScriptSettings = () => ({
     schemaVersion: 1,
@@ -225,7 +240,11 @@ function shimBody(config: ShimConfig): void {
 
   const store = new Map<string, Doc>();
   for (const seed of config.seedScripts ?? []) {
-    store.set(seed.id, makeDoc(seed.id, seed.title, seed.source, seed.status ?? 'draft', seed.scriptRevision ?? 1));
+    const doc = makeDoc(seed.id, seed.title, seed.source, seed.status ?? 'draft', seed.scriptRevision ?? 1);
+    if (seed.updatedAt) doc.updatedAt = seed.updatedAt;
+    if (seed.lastOpenedAt) doc.lastOpenedAt = seed.lastOpenedAt;
+    if (seed.hasWarnings) doc.hasWarnings = true;
+    store.set(seed.id, doc);
   }
 
   const settingsDoc = {

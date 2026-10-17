@@ -80,12 +80,12 @@
           onclick={item.onclick}
         >
           {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span>{item.label}</span>
+          <span class="label">{item.label}</span>
         </button>
       {:else}
         <span class="item {item.tone ?? 'normal'}" title={item.title}>
           {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span>{item.label}</span>
+          <span class="label">{item.label}</span>
         </span>
       {/if}
     {/each}
@@ -103,12 +103,12 @@
           onclick={item.onclick}
         >
           {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span>{item.label}</span>
+          <span class="label">{item.label}</span>
         </button>
       {:else}
         <span class="item {item.tone ?? 'normal'}" title={item.title}>
           {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span>{item.label}</span>
+          <span class="label">{item.label}</span>
         </span>
       {/if}
     {/each}
@@ -151,12 +151,23 @@
     display: flex;
     align-items: center;
     gap: var(--space-4);
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
   }
+  /*
+   * When the band runs out of room the trailing group gives way first, and
+   * its labels ellipsize rather than pushing the leading facts out of view.
+   * It used to refuse to shrink at all, so a long selected title in a narrow
+   * window clipped the script count instead of itself.
+   */
   .trailing {
     justify-content: flex-end;
-    flex: 0 0 auto;
+    flex: 0 3 auto;
+  }
+  /* The first leading fact (a count, a word total) is never the one cut. */
+  .group:not(.trailing) > .item:first-child {
+    flex-shrink: 0;
   }
 
   .item {
@@ -164,9 +175,16 @@
     align-items: center;
     gap: 5px;
     font-size: var(--text-2xs);
-    line-height: 1;
+    /* Room for descenders: the group clips its overflow (to truncate), and a
+       line box of exactly 1em cut the tails off "scripts" and "agents". */
+    line-height: 16px;
     color: var(--text-muted);
     white-space: nowrap;
+    min-width: 0;
+  }
+  .label {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .interactive {

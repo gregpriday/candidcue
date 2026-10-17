@@ -393,8 +393,15 @@
   .item:focus-visible {
     outline: none;
   }
+  /* A solid clay fill with an inverse label and description: the highlight is
+     the only focus indicator a menu row has — see OverflowMenu. */
   .item.active:not(:disabled) {
-    background: var(--bg-hover-surface);
+    background: var(--accent-strong);
+    color: var(--accent-contrast);
+  }
+  .item.active:not(:disabled) .tick,
+  .item.active:not(:disabled) .item-desc {
+    color: inherit;
   }
   .item:disabled {
     opacity: 0.45;

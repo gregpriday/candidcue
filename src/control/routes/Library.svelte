@@ -126,6 +126,8 @@
     { value: 'estimated_length', label: 'Estimated length' },
   ];
 
+  /** The view alone: a string, so a selection change does not count as a change of it. */
+  const currentView = $derived($library.view);
   const inTrash = $derived($library.view === 'trash');
   const showsSort = $derived($library.view === 'all');
   const viewTitle = $derived(
@@ -156,9 +158,16 @@
    * Module-level rather than in the workspace store: it is a within-session
    * position, not a preference, and persisting it across launches would restore
    * a scroll into a list that has since changed underneath it.
+   *
+   * Keyed on `currentView`, NOT on `$library.view` read in here. Reading the
+   * store inside the effect made it depend on the whole store, so every
+   * selection change re-ran it — and the re-run scheduled a frame that put
+   * the old scroll offset back straight after `revealSelected` had scrolled
+   * the new row into view. Arrowing or paging past the visible rows snapped
+   * the list back and left the selected row off screen.
    */
   $effect(() => {
-    const view = $library.view;
+    const view = currentView;
     const element = scrollElement;
     if (!element) return;
     const saved = scrollOffsets.get(view);
@@ -301,7 +310,9 @@
    * from the stylesheet.
    */
   function pageSize(): number {
-    const viewport = scrollElement?.clientHeight ?? 0;
+    // Less the pinned column headings, which cover the top of the scrollport.
+    const headings = scrollElement?.querySelector<HTMLElement>('.columns')?.offsetHeight ?? 0;
+    const viewport = (scrollElement?.clientHeight ?? 0) - headings;
     const firstRow = listElement?.querySelector<HTMLElement>('[role="option"]');
     const pitch = firstRow?.offsetHeight ?? (compact ? 38 : 52);
     const visible = Math.floor(viewport / Math.max(1, pitch));
@@ -324,7 +335,27 @@
   async function restoreFocusAfterMutation(hadFocus: boolean): Promise<void> {
     if (!hadFocus) return;
     await tick();
+    // The last row went with it: there is no list left to hold focus, so it
+    // goes to the search field — the nearest control, and still in the view.
+    if (scripts.length === 0) {
+      searchInput?.focus();
+      return;
+    }
     revealSelected();
+  }
+
+  /**
+   * Restore, keeping the keyboard where it was.
+   *
+   * Restoring removes the row from Trash exactly as trashing removes it from
+   * All scripts, so it goes through the same focus recovery — the Restore
+   * button and the menu item both called the store directly, and focus fell
+   * to the page with the row.
+   */
+  async function restoreFromTrash(script: ScriptSummary): Promise<void> {
+    const hadFocus = focusWasInList();
+    await restoreScriptFromTrash(script.id);
+    await restoreFocusAfterMutation(hadFocus);
   }
 
   function listKeydown(event: KeyboardEvent): void {
@@ -505,7 +536,7 @@
   function rowMenuItems(script: ScriptSummary): ContextMenuItem[] {
     if (inTrash) {
       return [
-        { label: 'Restore', onselect: () => void restoreScriptFromTrash(script.id) },
+        { label: 'Restore', onselect: () => void restoreFromTrash(script) },
         {
           label: 'Delete permanently',
           danger: true,
@@ -515,7 +546,7 @@
       ];
     }
     return [
-      { label: 'Open', onselect: () => openScript(script) },
+      { label: 'Open', shortcut: formatAccelerator('Return', mac), onselect: () => openScript(script) },
       {
         label: 'Present',
         shortcut: formatAccelerator('Mod+Return', mac),
@@ -611,18 +642,82 @@
   );
 
   const trailingStatus = $derived<StatusBarItem[]>(
-    selected ? [{ key: 'selected', label: selected.title }] : [],
+    selected ? [{ key: 'selected', label: selected.title, title: selected.title }] : [],
   );
+
+  type Column = 'name' | 'length' | 'date';
+
+  /** The order a heading asks for. Each runs the one way Rust sorts it. */
+  const columnSort: Record<Column, { sort: ScriptSort; label: string }> = {
+    name: { sort: 'name', label: 'name' },
+    length: { sort: 'estimated_length', label: 'length, longest first' },
+    date: { sort: 'recently_edited', label: 'date modified, newest first' },
+  };
+
+  /** Recent is ordered by, and shows, when each script was last opened. */
+  const dateHeading = $derived($library.view === 'recent' ? 'Opened' : 'Modified');
+
+  /**
+   * Which column the list is ordered by, and which way — or null for Created,
+   * which orders the list by a date no column shows.
+   */
+  const ordering = $derived.by((): { column: Column; ascending: boolean } | null => {
+    if ($library.view === 'recent') return { column: 'date', ascending: false };
+    switch ($library.sort) {
+      case 'name':
+        return { column: 'name', ascending: true };
+      case 'estimated_length':
+        return { column: 'length', ascending: false };
+      case 'recently_edited':
+        return { column: 'date', ascending: false };
+      default:
+        return null;
+    }
+  });
+
+  /** Placeholder title widths, so the skeleton reads as rows of different scripts. */
+  const SKELETON_WIDTHS = [34, 22, 28, 40, 25, 31];
 </script>
+
+{#snippet heading(column: Column, label: string)}
+  {@const active = ordering?.column === column}
+  {@const arrow = active ? (ordering?.ascending ? 'chevron-up' : 'chevron-down') : null}
+  {#if showsSort}
+    <button
+      type="button"
+      class="heading"
+      class:active
+      tabindex={-1}
+      data-focus="control"
+      aria-pressed={active}
+      title={`Sort by ${columnSort[column].label}`}
+      onclick={() => setLibrarySort(columnSort[column].sort)}
+    >
+      {#if arrow && column !== 'name'}<Icon name={arrow} size={12} />{/if}
+      <span>{label}</span>
+      {#if arrow && column === 'name'}<Icon name={arrow} size={12} />{/if}
+    </button>
+  {:else}
+    <span class="heading static" class:active>
+      {#if arrow && column !== 'name'}<Icon name={arrow} size={12} />{/if}
+      <span>{label}</span>
+      {#if arrow && column === 'name'}<Icon name={arrow} size={12} />{/if}
+    </span>
+  {/if}
+{/snippet}
 
 <div class="page">
   <Toolbar title={viewTitle}>
-    {#snippet leading()}
+    {#snippet actions()}
       <!--
         Search in the PRIMARY toolbar, where it is stable across every Library
         view (§10.4). The ⌘K keycap that used to sit inside the field is gone:
         §10.4 asks for it in the tooltip and the native menu instead, because a
         rendered keycap inside an input is a web command-palette signature.
+
+        At the TRAILING end, with the commands, where a Mac toolbar keeps its
+        search field. It used to lead the toolbar, in front of the title, and
+        the view's name read as a word trailing off the end of the field.
       -->
       <div class="search">
         <span class="search-icon"><Icon name="search" size={14} /></span>
@@ -643,9 +738,6 @@
           </span>
         {/if}
       </div>
-    {/snippet}
-
-    {#snippet actions()}
       <OverflowMenu items={viewOptionItems} label="View options" />
       {#if inTrash}
         {#if canEmptyTrash}
@@ -690,15 +782,20 @@
         rows that are the right shape make it look like a list filling in.
       -->
       <div class="skeletons" aria-hidden="true">
-        {#each Array.from({ length: 6 }) as _, index (index)}
-          <div class="skeleton" class:compact></div>
+        {#each SKELETON_WIDTHS as width, index (index)}
+          <div class="skeleton" class:compact>
+            <span class="bar" style:width={`${width}%`}></span>
+            {#if !compact}<span class="bar excerpt-bar"></span>{/if}
+          </div>
         {/each}
       </div>
       <p class="sr-only" role="status">Loading scripts</p>
     {:else if $library.error !== null && scripts.length === 0}
       <EmptyState title="Scripts could not be loaded" body={$library.error}>
         {#snippet actions()}
-          <Button variant="primary" onclick={() => loadLibrary()}>Try again</Button>
+          <!-- Not filled: New script in the toolbar is this screen's one filled
+               button, and a retry is not a second hero action. -->
+          <Button onclick={() => loadLibrary()}>Try again</Button>
         {/snippet}
       </EmptyState>
     {:else if scripts.length === 0}
@@ -720,16 +817,18 @@
         />
       {:else}
         <!-- The one place the boxed editorial variant is still right: a genuine
-             first-use invitation, not a message inside a list. -->
+             first-use invitation, not a message inside a list.
+
+             Create a script is NOT filled here. The toolbar's New script is the
+             same command, already filled, and two terracotta buttons for one
+             command is the screen asking which to press. -->
         <EmptyState
           variant="editorial"
           title="Write the words. CandidCue keeps your place."
           body="Create a script, or import Markdown you have already written."
         >
           {#snippet actions()}
-            <Button variant="primary" onclick={() => createAndOpenScript('new')}>
-              Create a script
-            </Button>
+            <Button onclick={() => createAndOpenScript('new')}>Create a script</Button>
             <Button onclick={() => importMarkdown()}>Import Markdown</Button>
             <Button variant="ghost" onclick={() => createAndOpenScript('sample')}>
               Try a sample script
@@ -750,51 +849,78 @@
         pattern — and carrying `aria-activedescendant` as well would tell a
         screen reader focus is on the container when it is not.
       -->
-      <div
-        class="list"
-        role="listbox"
-        tabindex={-1}
-        aria-label={viewTitle}
-        bind:this={listElement}
-        onkeydown={listKeydown}
-        onfocusin={() => (listFocused = true)}
-        onfocusout={() => (listFocused = false)}
-      >
-        {#each scripts as script (script.id)}
-          <div class="row-slot" id={`script-row-${script.id}`}>
-            <ScriptRow
-              title={script.title}
-              excerpt={script.previewText || undefined}
-              duration={formatSpeakingDuration(script.estimatedDurationSeconds)}
-              modified={relativeTime(script.updatedAt)}
-              selected={$library.selectedId === script.id}
-              {listFocused}
-              {compact}
-              tabindex={$library.selectedId === script.id ? 0 : -1}
-              onselect={() => selectScript(script.id)}
-              onopen={inTrash ? undefined : () => openScript(script)}
-              oncontextmenu={(event) => contextMenuFor(script, event)}
-            >
-              {#snippet status()}
-                <!-- Shown only when actionable (§10.1): "Prepared" on every
-                     healthy row is a badge that carries no information. -->
-                {#if script.hasWarnings}
-                  <StatusPill tone="warning" label="Needs attention" />
-                {/if}
-              {/snippet}
-              {#snippet actions()}
-                {#if inTrash}
-                  <Button size="sm" onclick={() => restoreScriptFromTrash(script.id)}>
-                    Restore
-                  </Button>
-                {:else}
-                  <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
-                {/if}
-                <OverflowMenu items={rowMenuItems(script)} label={`Actions for ${script.title}`} />
-              {/snippet}
-            </ScriptRow>
-          </div>
-        {/each}
+      <div class="collection">
+        <!--
+          Column headings (§10.1's stable columns, named). Without them the two
+          figures on every row were unlabelled — a length and a date the reader
+          had to recognise by shape — and the list's order was a fact hidden
+          behind the View options menu. The heading of the column the list is
+          ordered by says so, with its direction; in All scripts a heading is
+          also a pointer shortcut to that order.
+
+          Out of the tab order: the same orders are one keystroke away in View
+          options, and three more tab stops between the toolbar and the list
+          would be paid on every trip through it.
+        -->
+        <div class="columns">
+          <span class="column name">
+            {@render heading('name', 'Name')}
+            {#if $library.view !== 'recent' && $library.sort === 'created'}
+              <span class="order-note">Newest created first</span>
+            {/if}
+          </span>
+          <span class="column length">{@render heading('length', 'Length')}</span>
+          <span class="column date">{@render heading('date', dateHeading)}</span>
+          <span class="column spacer" aria-hidden="true"></span>
+        </div>
+        <div
+          class="list"
+          role="listbox"
+          tabindex={-1}
+          aria-label={viewTitle}
+          bind:this={listElement}
+          onkeydown={listKeydown}
+          onfocusin={() => (listFocused = true)}
+          onfocusout={() => (listFocused = false)}
+        >
+          {#each scripts as script (script.id)}
+            <div class="row-slot" id={`script-row-${script.id}`}>
+              <ScriptRow
+                title={script.title}
+                excerpt={script.previewText || undefined}
+                duration={formatSpeakingDuration(script.estimatedDurationSeconds)}
+                modified={relativeTime(
+                  $library.view === 'recent' ? (script.lastOpenedAt ?? script.updatedAt) : script.updatedAt,
+                )}
+                selected={$library.selectedId === script.id}
+                {listFocused}
+                {compact}
+                tabindex={$library.selectedId === script.id ? 0 : -1}
+                onselect={() => selectScript(script.id)}
+                onopen={inTrash ? undefined : () => openScript(script)}
+                oncontextmenu={(event) => contextMenuFor(script, event)}
+              >
+                {#snippet status()}
+                  <!-- Shown only when actionable (§10.1): "Prepared" on every
+                       healthy row is a badge that carries no information. -->
+                  {#if script.hasWarnings}
+                    <StatusPill tone="warning" label="Needs attention" size="sm" />
+                  {/if}
+                {/snippet}
+                {#snippet actions()}
+                  {#if inTrash}
+                    <Button size="sm" onclick={() => void restoreFromTrash(script)}>
+                      Restore
+                    </Button>
+                  {:else}
+                    <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
+                  {/if}
+                  <OverflowMenu items={rowMenuItems(script)} label={`Actions for ${script.title}`} />
+                {/snippet}
+              </ScriptRow>
+            </div>
+          {/each}
+        </div>
       </div>
 
       {#if scripts.length < $library.total}
@@ -849,8 +975,8 @@
     position: relative;
     display: flex;
     align-items: center;
-    width: 260px;
-    max-width: 40vw;
+    width: 240px;
+    max-width: 30vw;
   }
   .search-icon {
     position: absolute;
@@ -884,10 +1010,15 @@
   .search-input:hover {
     border-color: var(--border-strong);
   }
-  /* Quiet focus on a surface — never an accent ring (the house rule). */
+  /*
+   * Quiet focus — never an accent ring (the house rule). The 2px inset edge
+   * itself comes from the focus policy in tokens.css; this only firms the
+   * border and lifts the fill. It used to cancel that edge with `outline:
+   * none`, which left a one-pixel border shift, identical to hover, as the
+   * only sign that ⌘F had landed.
+   */
   .search-input:focus,
   .search-input:focus-visible {
-    outline: none;
     border-color: var(--border-strong);
     background: var(--bg-elevated);
   }
@@ -908,26 +1039,133 @@
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-2) var(--page-x) var(--space-6);
+    /* Keyboard reveal stops short of the pinned headings (28px) rather than
+       tucking the selected row underneath them. */
+    scroll-padding-top: 28px;
   }
 
   /*
    * One continuous surface with hairlines between rows — not a stack of cards
    * with gaps. The container has the border and the radius; the rows have
    * neither, which is what makes a run of them read as a table.
+   *
+   * The column widths are set here, once, and read by both the headings and
+   * every `ScriptRow`, so a heading cannot drift off the figures under it.
    */
-  .list {
-    display: flex;
-    flex-direction: column;
+  .collection {
+    --col-length: 72px;
+    --col-modified: 112px;
+    --col-actions: 120px;
     border: 1px solid var(--border-faint);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
-    overflow: hidden;
+    /*
+     * NOT `overflow: hidden`. A row's menu is positioned inside the row, and a
+     * clipping collection cut it off at the bottom edge of a short list —
+     * Recent with three scripts could not show its own row menu. The one
+     * thing the clip was doing, keeping the last row's tint inside the
+     * rounded corners, the rule below does instead.
+     */
+  }
+  .row-slot:last-child :global(.row) {
+    border-bottom-left-radius: calc(var(--radius-sm) - 1px);
+    border-bottom-right-radius: calc(var(--radius-sm) - 1px);
+  }
+  .list {
+    display: flex;
+    flex-direction: column;
   }
   .list:focus {
     outline: none;
   }
   .row-slot + .row-slot {
     border-top: 1px solid var(--border-faint);
+  }
+
+  /*
+   * The headings: the row's own geometry (padding, gap, column widths) with
+   * nothing in the action column. Small and muted — they label the figures,
+   * they are not a second toolbar.
+   */
+  .columns {
+    /* Pinned to the top of the scrolling list, so a long library keeps its
+       column names and its order in view; rows pass underneath. Offset by the
+       list area's top padding, which a sticky box otherwise keeps clear — and
+       through which the rows would show above it. */
+    position: sticky;
+    top: calc(-1 * var(--space-2));
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    height: 28px;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border-faint);
+    border-radius: calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0 0;
+    background: var(--bg-panel);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    user-select: none;
+  }
+  .column {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .column.name {
+    flex: 1 1 auto;
+    gap: var(--space-2);
+  }
+  .column.length {
+    width: var(--col-length);
+    justify-content: flex-end;
+  }
+  .column.date {
+    width: var(--col-modified);
+    justify-content: flex-end;
+  }
+  .column.spacer {
+    width: var(--col-actions);
+  }
+  .heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 22px;
+    /* The label, not the button's padding, lines up with the figures. */
+    padding: 0 var(--space-1);
+    margin: 0 calc(-1 * var(--space-1));
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  button.heading:hover {
+    background: var(--bg-hover-surface);
+    color: var(--text-primary);
+  }
+  .heading.active {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+  .order-note {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The Length heading goes with the Length column (ScriptRow, same width). */
+  @media (max-width: 900px) {
+    .column.length {
+      display: none;
+    }
   }
 
   .skeletons {
@@ -939,18 +1177,34 @@
     overflow: hidden;
   }
   .skeleton {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 9px;
     height: var(--list-row-h);
+    padding: 0 var(--space-3);
     border-bottom: 1px solid var(--border-faint);
-    /*
-     * A static tint, not a shimmer. §23.5 and §3.2: no perpetual motion, and a
-     * sweeping gradient across six rows is the most decorative animation a list
-     * can have. It reads as "these rows are not real yet" perfectly well
-     * standing still.
-     */
-    background: var(--bg-hover-surface);
   }
   .skeleton.compact {
     height: var(--list-row-h-compact);
+  }
+  /*
+   * Static placeholder lines, not a shimmer. §23.5 and §3.2: no perpetual
+   * motion, and a sweeping gradient across six rows is the most decorative
+   * animation a list can have. A title-shaped and an excerpt-shaped line read
+   * as "these rows are not real yet" perfectly well standing still; the blank
+   * tinted bands they replace read as a ruled table with nothing in it.
+   */
+  .bar {
+    display: block;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-secondary);
+  }
+  .excerpt-bar {
+    width: 58%;
+    height: 7px;
+    opacity: 0.7;
   }
   .skeleton:last-child {
     border-bottom: none;

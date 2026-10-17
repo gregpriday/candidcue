@@ -3625,10 +3625,11 @@
   .settings-search .search-input::placeholder {
     color: var(--text-faint);
   }
-  /* Quiet focus on a surface — never an accent ring (the house rule). */
+  /* Quiet focus — never an accent ring (the house rule). The 2px inset edge
+     comes from the focus policy in tokens.css, as it does for the Library's
+     search field; cancelling it left a border shift identical to hover. */
   .settings-search .search-input:focus,
   .settings-search .search-input:focus-visible {
-    outline: none;
     border-color: var(--border-strong);
     background: var(--bg-elevated);
   }

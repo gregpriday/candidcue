@@ -10,12 +10,14 @@
     tone?: PillTone;
     label: string;
     dot?: boolean;
+    /** `sm` sits inline on a line of 13px text, such as a list row's title. */
+    size?: 'md' | 'sm';
   }
 
-  let { tone = 'neutral', label, dot = true }: Props = $props();
+  let { tone = 'neutral', label, dot = true, size = 'md' }: Props = $props();
 </script>
 
-<span class="pill {tone}">
+<span class="pill {tone}" class:sm={size === 'sm'}>
   {#if dot}<span class="dot" aria-hidden="true"></span>{/if}
   <span class="label">{label}</span>
 </span>
@@ -41,6 +43,18 @@
     border-radius: 50%;
     background: currentColor;
     flex: 0 0 auto;
+  }
+
+  .sm {
+    flex: 0 0 auto;
+    gap: 5px;
+    height: 18px;
+    padding: 0 7px;
+    font-size: var(--text-2xs);
+  }
+  .sm .dot {
+    width: 5px;
+    height: 5px;
   }
 
   .neutral {
