@@ -7,11 +7,11 @@ application, and the way they stay in agreement is that they are all written
 from this table rather than from memory.
 
 The 1.0 pre-promotion review found the failure this is for: the stock build
-compiles the remote-image importer's command out, and the security policy still
-described it as one of two live network paths. Nothing was exploitable — the
-policy simply overstated the binary, which is the direction that matters,
-because a reader who checks a claim and finds it false stops believing the true
-ones.
+compiled a since-removed remote-image importer's command out, and the security
+policy still described it as one of two live network paths. Nothing was
+exploitable — the policy simply overstated the binary, which is the direction
+that matters, because a reader who checks a claim and finds it false stops
+believing the true ones.
 
 Everything below is the **current** behaviour of a stock 1.0 build, not a plan.
 
@@ -22,7 +22,7 @@ Everything below is the **current** behaviour of a stock 1.0 build, not a plan.
 | Activity | Shipping status | Trigger | What is sent | Host | User control |
 |---|---|---|---|---|---|
 | Speech-model download | **Active** | The user starts it from the Welcome screen or Settings › Speech | Ordinary HTTPS request metadata and no body: a DNS lookup for the host, a TLS handshake carrying the host name, and a `GET` for the archive with the user's IP address, `User-Agent: CandidCue/<version>`, and `Range` with the server's own `If-Range` validator when a partial download is resumed. No script, audio or transcript, and no account or device identifier — the IP address and the version in the User-Agent are the identifying things any HTTPS request carries | The mirror named by the catalogue if one is configured, then the model publisher's own release hosting (`github.com`) — plus any host those redirect to; see below | Start, cancel, remove; the app works without it, without following |
-| Remote-image import | **No command in this build** | None. The IPC command is compiled out, so nothing can call it | Nothing | None | Not exposed |
+| Remote-image import | **None** | None. An image enters a script only from a local file; the compiler flags a remote image URL and nothing fetches it | Nothing | None | — |
 | Application update checks | **None** | None. There is no updater and no endpoint to check | Nothing | None | Updates are downloaded manually from the project's GitHub releases (`docs/updates.md`) |
 | Analytics / product telemetry | **None** | — | — | — | — |
 | Automatic crash-report upload | **None** | — | — | — | Crashes leave local log lines, which go nowhere unless the user exports a support bundle |
@@ -51,43 +51,19 @@ the binary, and a substituted file is rejected wherever it came from.
 So the honest public claim is "the download goes to the host named in the app,
 and to wherever that host redirects it", never "it only ever contacts GitHub".
 
-### Reading the "no command in this build" row
-
-`remote-images` is a Cargo feature that is **not** in any default set
-(`src-tauri/Cargo.toml`). With it off:
-
-- `commands::assets_cmds::import_remote_image` — the IPC command — does not
-  exist in the binary; it is behind `#[cfg(feature = "remote-images")]`;
-- it is not in the command registry in `src-tauri/src/app.rs`;
-- it is not in `src-tauri/permissions/app-commands.toml`, so the control
-  window's `allow-control-commands` grant does not cover it;
-- the compiler marks a remote image URL as remote and warns; the asset resolver
-  then has nothing local to hand the renderer, so the image does not load.
-
-What is **not** true is that the implementation is gone. `assets::remote` and
-`assets::import_remote_image` compile unconditionally, and whether their code
-survives into the executable is up to optimisation and linking. The precise
-claim is that the app exposes no way to reach them — not that the bytes are
-absent.
-
-Turning the feature on is a deliberate act that has to add the command to the
-registry, to the permissions file and to a UI — and to revise this table and the
-privacy policy first.
-
 ### The files that reach the network
 
-Both go through `src-tauri/src/net.rs`, which is the only outbound-HTTP
-discipline in the **application**: HTTPS only, no credentials in the URL, no
-proxy, no cookies, no referer, redirects disabled in the client and revalidated
-by hand, every resolved address checked as publicly routable and then pinned so
-a DNS rebind cannot move the target. The model download alone also accepts the
-fake-IP and NAT64 answers above, because its bytes are checked against a
-compiled-in digest; an image's are not, so the image path does not.
+The one caller goes through `src-tauri/src/net.rs`, which is the only
+outbound-HTTP discipline in the **application**: HTTPS only, no credentials in
+the URL, no proxy, no cookies, no referer, redirects disabled in the client and
+revalidated by hand, every resolved address checked as publicly routable and
+then pinned so a DNS rebind cannot move the target. The model download also
+accepts the fake-IP and NAT64 answers above, because its bytes are checked
+against a compiled-in digest.
 
 | Caller | Reachable in a stock build? |
 |---|---|
 | `src-tauri/src/speech/model_download.rs` | Yes — the model download |
-| `src-tauri/src/assets/remote.rs` | No — `remote-images` is off |
 
 Development and build tooling is a different question and does reach the
 network: `crates/cc-bench` synthesises benchmark speech through a hosted TTS
@@ -171,9 +147,9 @@ when:
 
 - a file in the shipping Rust or the frontend uses an outbound network
   primitive that this file's caller table does not name;
-- the remote-image command loses its `#[cfg]`, gains a default feature (directly
-  or through another feature), enters the command registry, or enters the
-  permissions file, while this file calls it absent;
+- the removed remote-image importer comes back — its command or fetcher in the
+  shipping Rust, its `remote-images` feature in `Cargo.toml`, or its command in
+  the permissions file — while this file says no image is fetched by URL;
 - one of a named list of updaters, analytics SDKs and crash reporters is
   declared in a manifest the app or its crates build from — a list of names in
   direct manifests, not a proof about the dependency graph;

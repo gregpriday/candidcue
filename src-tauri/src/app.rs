@@ -91,11 +91,6 @@ pub fn run() {
             commands::reveal_script_folder,
             // Assets (spec §46.3)
             commands::import_image,
-            // No `import_remote_image`. The URL-based image import has no UI
-            // caller — the editor imports local files and the compiler rejects
-            // remote images — so registering it was standing permission for a
-            // network path nobody uses. It is feature-gated off for 1.0
-            // (`remote-images`); the hardened implementation is still there.
             commands::open_model_licence,
             commands::resolve_asset_urls,
             commands::remove_asset_reference,

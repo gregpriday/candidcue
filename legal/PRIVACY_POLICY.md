@@ -164,12 +164,6 @@ about it.** CandidCue ordinarily writes a line to its own local log recording
 that an install finished, was cancelled or failed — that log stays on your
 machine, and the [Diagnostic logs](#diagnostic-logs) section below covers it.
 
-CandidCue's source also contains a remote-image importer that would fetch an
-image from a URL you supply. **This version is built without a way to use it.**
-The command it would be reached through is compiled out, so nothing in the
-application can call it, and it is not a request this version can make. If a
-future version includes it, this policy will be revised first.
-
 Links in the application that point to third-party pages — such as the licence
 for the speech model — open in your browser and are governed by those sites'
 own policies.

@@ -89,11 +89,6 @@ export const APP_ERROR_CODES = [
   'IMPORT_UNSAFE_PATH',
   'ASSET_UNSUPPORTED',
   'ASSET_TOO_LARGE',
-  // Remote image import (spec §24.2, §50.7). The URL codes are distinct so the
-  // UI can say WHY a link was refused: not https, versus not publicly routable.
-  'ASSET_URL_INSECURE',
-  'ASSET_URL_BLOCKED',
-  'ASSET_DOWNLOAD_FAILED',
   'DATABASE_MIGRATION_FAILED',
   'DATABASE_INTEGRITY_FAILED',
   'STAGE_DISPLAY_MISSING',

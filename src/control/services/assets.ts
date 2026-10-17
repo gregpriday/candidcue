@@ -3,9 +3,8 @@
  *
  * C10: these wrappers did not exist. The editor's "Insert image" button typed
  * the literal string `![Image description](./assets/image.png)` into the
- * document — a path that has never existed — so `import_image` and
- * `import_remote_image` had zero callers and the Rust-side picker, the
- * MIME/size validation and the redirect-disabled remote fetch were all
+ * document — a path that has never existed — so `import_image` had zero
+ * callers and the Rust-side picker and the MIME/size validation were
  * unreachable from the product.
  *
  * As with import/export of scripts, the picker runs in Rust: there is no
@@ -39,15 +38,6 @@ export async function importImage(scriptId: string): Promise<ImportedAsset | nul
     mockImportedAsset(),
   );
 }
-
-/*
- * `importRemoteImage` used to live here.
- *
- * It had no caller — the editor imports local files and the compiler rejects
- * remote images — and the command behind it is compiled out for 1.0 behind the
- * `remote-images` feature. A service function for a command that does not
- * exist is worse than no function: it reads as a capability the app has.
- */
 
 function mockImportedAsset(): ImportedAsset {
   return {

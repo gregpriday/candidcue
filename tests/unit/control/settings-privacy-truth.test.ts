@@ -164,11 +164,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * application boundary — Rust holds a reqwest client — so saying nothing
      * about the network would be its own overclaim.
      *
-     * The reachable path is the speech-model download. `import_remote_image`
-     * exists in Rust and in `services/assets.ts`, but NOTHING calls it: the
-     * editor only imports local files and the compiler rejects remote images.
-     * Naming it would advertise an action a user cannot take, which is the
-     * same defect as the update-check claim this issue removed.
+     * The one path is the speech-model download.
      */
     expect(privacySection).toMatch(/Speech settings/i);
   });
