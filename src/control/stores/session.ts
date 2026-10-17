@@ -632,7 +632,10 @@ interface ActiveTake {
    * document moved; when following is handed back, its idea of the reader is
    * wherever the roll began, and the next snapshot it publishes describes that
    * stale place. Only the operator moving the take on purpose supersedes it — a
-   * manual anchor, a retake, or starting the transport again.
+   * step, a jump, a hand scroll, a retake, or starting the transport again.
+   *
+   * Superseded where the move is ASKED FOR, not where Rust's `manualAnchor`
+   * answer arrives — see `releaseAutoScrollEnd`.
    */
   autoScrollEndToken: number | null;
 }
@@ -1527,10 +1530,6 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
     if (snapshot.confirmedToken > activeTake.maxConfirmedToken) {
       activeTake.maxConfirmedToken = snapshot.confirmedToken;
     }
-    // A manual anchor is the operator putting the take somewhere on purpose,
-    // after the transport left it at the end — so the ending is theirs again.
-    // A voice snapshot is not: see `ActiveTake.autoScrollEndToken`.
-    if (snapshot.decision === 'manualAnchor') activeTake.autoScrollEndToken = null;
     /*
      * §36.3 availability: time spent in `following`, accumulated between
      * snapshots. Measured rather than inferred from a state count, because
@@ -1974,6 +1973,7 @@ const followActions = {
   acceptCandidate(candidate: { tokenIndex: number }): void {
     driver?.moveToToken(candidate.tokenIndex);
     noteReposition();
+    releaseAutoScrollEnd();
   },
   /**
    * Pausing following is not pausing the session (§15.3, §48): transcription
@@ -2245,6 +2245,7 @@ export function togglePlayPause(): void {
 export function moveSentences(delta: number): void {
   driver?.moveSentences(delta);
   noteReposition();
+  releaseAutoScrollEnd();
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
@@ -2257,6 +2258,7 @@ export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
   driver?.moveToToken(Math.max(0, tokenIndex));
   noteReposition();
+  releaseAutoScrollEnd();
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
@@ -2298,6 +2300,7 @@ export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
   }
   driver?.moveToToken(Math.max(0, Math.round(tokenIndex)));
   noteReposition();
+  releaseAutoScrollEnd();
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
@@ -2472,7 +2475,7 @@ export function toggleAutoScroll(): void {
     // A new roll takes the document from wherever it is now, so an ending the
     // last roll recorded no longer describes it. If this one runs off the end
     // too, it says so itself.
-    if (activeTake !== null) activeTake.autoScrollEndToken = null;
+    releaseAutoScrollEnd();
   } else {
     const restore = autoScrollPausedFollowing;
     autoScrollPausedFollowing = false;
@@ -2556,7 +2559,10 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
  */
 export function autoScrollReachedEnd(reason: StageAutoScrollEndReason): void {
   const s = get(state);
-  if (!s.autoScroll.running) return;
+  // A report that outlives its take is the stage finishing a frame it had
+  // already started: there is no transport left to stand down, and a toast and
+  // a follow-timeline entry for a take that is over would describe nothing.
+  if (!s.active || !s.autoScroll.running) return;
   if (reason === 'document_end') recordAutoScrollEnd(s);
   publishAutoScroll({ ...s.autoScroll, running: false });
   // The pause is still given back — the transport took it and is done with it —
@@ -2582,7 +2588,7 @@ export function autoScrollReachedEnd(reason: StageAutoScrollEndReason): void {
  * as `nowhere_to_go` and never reaches here; this is the second guard.
  */
 function recordAutoScrollEnd(s: SessionState): void {
-  if (!s.active || activeTake === null) return;
+  if (activeTake === null) return;
   const documentTokens = compiledScript?.spokenTokens.length ?? scriptWordCount;
   if (documentTokens <= 0) return;
   const lastToken = documentTokens - 1;
@@ -2600,6 +2606,24 @@ function recordAutoScrollEnd(s: SessionState): void {
     partRolledToEnd: current.partRolledToEnd || !current.partComplete,
     partComplete: true,
   }));
+}
+
+/**
+ * The operator put the take somewhere on purpose, so the ending is theirs again.
+ *
+ * Called where the move is REQUESTED, and deliberately not on the
+ * `manualAnchor` snapshot Rust answers it with. Anchors are not in step with
+ * the transport: every move waits on the engine being installed, and the
+ * opening anchor a part-bounded take starts with is issued before that has
+ * happened. On a short last part the transport can run the document off its end
+ * before that opening anchor comes back — and clearing on the echo let a move
+ * made before the roll erase the ending the roll had just recorded.
+ *
+ * Not called by "re-find me here": a reacquisition reopens the search around
+ * what is on the glass, and moves nothing.
+ */
+function releaseAutoScrollEnd(): void {
+  if (activeTake !== null) activeTake.autoScrollEndToken = null;
 }
 
 /** The offered pace range, for the controls that present it. */
@@ -3028,6 +3052,7 @@ function jumpSection(delta: number): boolean {
   const target = flat[Math.max(0, Math.min(flat.length - 1, currentIndex + delta))];
   if (!target) return false;
   driver?.moveToToken(target.startTokenIndex);
+  releaseAutoScrollEnd();
   state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
   return true;
 }

@@ -89,8 +89,10 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
 });
 
 const {
+  anchorManualScroll,
   autoScrollReachedEnd,
   clearSession,
+  moveSentences,
   restartParagraph,
   session,
   startLiveSession,
@@ -101,14 +103,14 @@ const { summaryActions } = await import('../../../src/control/lib/summary-action
 
 type TakePart = NonNullable<import('../../../src/control/stores/session').SessionState['part']>;
 
-function compiledStub(): CompiledScript {
+function compiledStub(tokenCount = 200): CompiledScript {
   /*
    * 200 tokens, and the arrays say so. An earlier version of this fixture
    * claimed `spokenWordCount: 200` over empty arrays, which is not a document
    * the compiler can produce and would have hidden any consumer that read the
    * tokens rather than the count.
    */
-  const spokenTokens = Array.from({ length: 200 }, (_, index) => ({
+  const spokenTokens = Array.from({ length: tokenCount }, (_, index) => ({
     index,
     blockId: 'b-1',
     sentenceId: 's-1',
@@ -119,7 +121,13 @@ function compiledStub(): CompiledScript {
   return {
     sourceHash: 'hash-abc',
     sentences: [
-      { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 199, normalizedText: 'words' },
+      {
+        id: 's-1',
+        blockId: 'b-1',
+        startTokenIndex: 0,
+        endTokenIndex: Math.max(0, tokenCount - 1),
+        normalizedText: 'words',
+      },
     ],
     navigationTargets: [],
     spokenTokens,
@@ -127,7 +135,7 @@ function compiledStub(): CompiledScript {
     blocks: [],
     outline: [],
     diagnostics: [],
-    spokenWordCount: 200,
+    spokenWordCount: tokenCount,
   } as unknown as CompiledScript;
 }
 
@@ -152,7 +160,12 @@ const PART_THREE: TakePart = {
 function present(
   part: TakePart | null,
   nextPart: TakePart | null = null,
-  shape: { outline?: OutlineNode[]; sentences?: SentenceUnit[] } = {},
+  shape: {
+    outline?: OutlineNode[];
+    sentences?: SentenceUnit[];
+    compiled?: CompiledScript | null;
+    totalTokens?: number;
+  } = {},
 ): void {
   startLiveSession({
     scriptId: 'script-1',
@@ -161,10 +174,10 @@ function present(
     displayLabel: 'Stage',
     outline: shape.outline ?? [],
     sentences: shape.sentences ?? [],
-    totalTokens: 200,
+    totalTokens: shape.totalTokens ?? 200,
     startTokenIndex: part?.startTokenIndex ?? 0,
     sessionId: 'session-uuid-1',
-    compiled: compiledStub(),
+    compiled: shape.compiled === undefined ? compiledStub() : shape.compiled,
     sessionGeneration: 7,
     part,
     nextPart,
@@ -454,14 +467,30 @@ describe('a take the auto-scroll transport carried to the end', () => {
     at(100, 'manualAnchor');
     rollToEnd();
     at(104);
+    expect(get(session).snapshot?.confirmedToken, 'the stale snapshot was never delivered').toBe(104);
     const summary = stopSession();
     expect(summary.endTokenIndex).toBe(199);
   });
 
-  it('gives the ending back to the operator when they move the take by hand', () => {
+  it('is not erased by a late answer to a move made before the roll ended', () => {
+    /*
+     * Every move waits on the engine being installed, and a part-bounded take
+     * issues its opening anchor before that has happened. On a short last part
+     * the roll can reach the end first — and Rust's answer to the opening
+     * anchor then arrives as a `manualAnchor` the operator did not make after
+     * the roll.
+     */
+    present(PART_THREE, null);
+    rollToEnd();
+    at(100, 'manualAnchor');
+    expect(stopSession().endTokenIndex).toBe(199);
+  });
+
+  it('gives the ending back to the operator when they scroll the take by hand', () => {
     present(PART_THREE, null);
     at(100, 'manualAnchor');
     rollToEnd();
+    anchorManualScroll(140);
     at(140, 'manualAnchor');
     const summary = stopSession();
     expect(summary.endTokenIndex).toBe(140);
@@ -469,6 +498,15 @@ describe('a take the auto-scroll transport carried to the end', () => {
     // on the same latch voice completion uses.
     expect(summary.partComplete).toBe(true);
     expect(summary.partRolledToEnd).toBe(true);
+  });
+
+  it('gives the ending back to the operator when they step a sentence', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    moveSentences(-1);
+    at(150, 'manualAnchor');
+    expect(stopSession().endTokenIndex).toBe(150);
   });
 
   it('forgets the roll on a retake, which opens a new pass', () => {
@@ -547,10 +585,33 @@ describe('a take the auto-scroll transport carried to the end', () => {
     at(100, 'manualAnchor');
     toggleAutoScroll();
     const summary = stopSession();
+    const after = get(session);
     autoScrollReachedEnd('document_end');
-    expect(get(session).summary).toEqual(summary);
+    // Not one write: no stand-down, no follow-timeline entry, nothing to the
+    // summary the presenter is already looking at.
+    expect(get(session)).toBe(after);
     expect(summary.endTokenIndex).toBe(100);
     expect(summary.partComplete).toBe(false);
+  });
+
+  it('credits no position to an empty script, whatever the padded count says', () => {
+    // `startTake` hands over at least one token so the aligner has an array to
+    // anchor in; an empty compile still has nothing to have rolled through.
+    const onlyToken: TakePart = { ...PART_THREE, startTokenIndex: 0, endTokenIndex: 0 };
+    present(onlyToken, null, { compiled: compiledStub(0), totalTokens: 1 });
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(0);
+    expect(summary.partComplete).toBe(false);
+    expect(summary.partRolledToEnd).toBe(false);
+  });
+
+  it('ends at the last token of the count when there is no compile to read', () => {
+    present(PART_THREE, null, { compiled: null });
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(199);
+    expect(summary.partRolledToEnd).toBe(true);
   });
 
   it('does not carry a roll into the next take', () => {

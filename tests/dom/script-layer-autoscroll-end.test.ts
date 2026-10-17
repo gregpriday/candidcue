@@ -107,17 +107,21 @@ function mountLayer() {
 }
 
 describe('the transport reports which end it reached', () => {
-  it('reports a document with nowhere to go as nowhere_to_go, not as its end', async () => {
+  it('reports a document with nowhere to go as nowhere_to_go, on the first frame, once', async () => {
     const { onautoscrollend, result } = mountLayer();
+    // Settle the layout first, so the report can be pinned to a frame.
     pumpFrames(3);
     expect(onautoscrollend).not.toHaveBeenCalled();
 
     await result.rerender({ autoScroll: RUNNING });
-    pumpFrames(5);
-    // Once, not once per frame: a report every frame would stand down a
-    // transport control has already stood down, sixty times a second.
+    pumpFrames(1);
     expect(onautoscrollend).toHaveBeenCalledTimes(1);
     expect(onautoscrollend).toHaveBeenCalledWith('nowhere_to_go');
+
+    // Once, not once per frame: a report every frame would stand down a
+    // transport control has already stood down, sixty times a second.
+    pumpFrames(5);
+    expect(onautoscrollend).toHaveBeenCalledTimes(1);
     result.unmount();
   });
 
@@ -129,16 +133,19 @@ describe('the transport reports which end it reached', () => {
      * following stayed paused for a take with nothing to roll.
      */
     const { onautoscrollend, result } = mountLayer();
+    pumpFrames(3);
     await result.rerender({ autoScroll: RUNNING });
     pumpFrames(3);
     expect(onautoscrollend).toHaveBeenCalledTimes(1);
 
-    // Control stands the transport down on the report, as it does in a take.
+    // Control stands the transport down on the report, as it does in a take,
+    // and a stood-down transport reports nothing.
     await result.rerender({ autoScroll: STOPPED });
     pumpFrames(3);
-    await result.rerender({ autoScroll: RUNNING });
-    pumpFrames(3);
+    expect(onautoscrollend).toHaveBeenCalledTimes(1);
 
+    await result.rerender({ autoScroll: RUNNING });
+    pumpFrames(1);
     expect(onautoscrollend).toHaveBeenCalledTimes(2);
     expect(onautoscrollend).toHaveBeenLastCalledWith('nowhere_to_go');
     result.unmount();
