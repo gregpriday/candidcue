@@ -343,7 +343,7 @@ pub async fn open_web_destination(name: String) -> Result<(), AppError> {
 
 /// Open the third-party notices that ship inside the bundle (Help › Licences).
 ///
-/// CandidCue is proprietary and links a lot of other people's work. Apache-2.0,
+/// CandidCue is MIT-licensed and links a lot of other people's work. Apache-2.0,
 /// MIT, BSD and the model's own licence all require the notice to travel with
 /// the binary, and `tauri.conf.json` already bundles `THIRD_PARTY_NOTICES.md`
 /// as a resource — but nothing in the application pointed at it, so a user

@@ -3,6 +3,7 @@ name = "candidcue"
 version = "1.0.0-rc.1"
 description = "CandidCue — voice-following teleprompter"
 authors = ["Greg Priday"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.85"
 

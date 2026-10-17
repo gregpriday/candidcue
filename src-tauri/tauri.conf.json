@@ -59,13 +59,15 @@
   },
   "bundle": {
     "active": true,
+    "copyright": "Copyright (c) 2026 Greg Priday",
     "targets": [
       "app",
       "dmg"
     ],
     "resources": {
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
-      "../assets/fonts/LICENSE.txt": "LICENSE-fonts.txt"
+      "../assets/fonts/LICENSE.txt": "LICENSE-fonts.txt",
+      "../LICENSE": "LICENSE.txt"
     },
     "icon": [
       "icons/32x32.png",

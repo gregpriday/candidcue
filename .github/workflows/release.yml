@@ -217,7 +217,7 @@ jobs:
           # ------------------------------------------------------------
           #
           # sherpa-onnx-sys links libespeak-ng.a and libucd.a — both
-          # GPL-3.0-or-later — into a proprietary binary, and no feature or
+          # GPL-3.0-or-later — into an MIT-licensed binary, and no feature or
           # environment variable removes them from the link line. The
           # comfortable argument was that a static link takes only what it
           # needs and CandidCue never calls TTS; that argument is false,

@@ -2,7 +2,7 @@
  * The copyleft gate, driven the way the release drives it.
  *
  * `sherpa-onnx-sys` links `libespeak-ng.a` and `libucd.a` — both
- * GPL-3.0-or-later — into a proprietary binary, and nothing in that crate
+ * GPL-3.0-or-later — into an MIT-licensed binary, and nothing in that crate
  * removes them. What keeps CandidCue defensible is that the linker
  * dead-strips every one of their objects, and that is a fact about a
  * particular binary rather than a policy: the next sherpa-onnx bump, or a

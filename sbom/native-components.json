@@ -10,12 +10,14 @@
     "classified is precisely the component an automated dependency scan misses,",
     "because it is in neither lockfile.",
     "",
-    "`forbiddenInProprietaryBinary` means no code of it may reach the shipped",
-    "binary. `copyleftIfLinkedWith` means a component whose own licence governs",
-    "UNLESS the named copyleft projects ship beside it. Both are enforced against",
-    "a real ld64 linker map by scripts/verify-no-copyleft-objects.mjs — which is",
-    "the point: whether a binary is a derivative work is a fact about that",
-    "binary, not an argument about intentions.",
+    "`forbiddenInBinary` means no code of it may reach the shipped binary: it",
+    "is copyleft, and a binary carrying it could only be distributed on its",
+    "terms, not CandidCue's MIT. `copyleftIfLinkedWith` means a component whose",
+    "own licence governs UNLESS the named copyleft projects ship beside it. Both",
+    "are enforced against a real ld64 linker map by",
+    "scripts/verify-no-copyleft-objects.mjs — which is the point: whether a",
+    "binary is a derivative work is a fact about that binary, not an argument",
+    "about intentions.",
     "",
     "`source` is the copy that was actually built, which is often not `upstream`",
     "(the canonical project): `repository` and the tag or commit (`revision`) the",
@@ -35,10 +37,11 @@
     "each one beside the component that carries it.",
     "",
     "`evidence` records what the SPDX id is based on. `reviewed` stays false",
-    "until a HUMAN confirms it and accepts it for a proprietary, statically",
-    "linked, signed distribution; scripts/verify-native-review.mjs refuses a",
-    "release while any is false. It is a step of release-verify.mjs that only a",
-    "full run reaches, so CI never runs it and a tagged release cannot skip it."
+    "until a HUMAN confirms it and accepts it for a statically linked, signed",
+    "distribution under the MIT licence; scripts/verify-native-review.mjs",
+    "refuses a release while any is false. It is a step of release-verify.mjs",
+    "that only a full run reaches, so CI never runs it and a tagged release",
+    "cannot skip it."
   ],
   "components": [
     {
@@ -423,7 +426,7 @@
         "libucd.a"
       ],
       "note": "The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way.",
-      "forbiddenInProprietaryBinary": true,
+      "forbiddenInBinary": true,
       "evidence": "GPL-3.0-or-later (rhdunn/ucd-tools; the wrapper, not the Unicode data). Measured 2026-08-13: every object the linker loaded from it was dead-stripped; nothing of it is in the binary. Re-measured 2026-10-17 on fresh release links of both slices: the linker loads 3 of its 6 objects on each, and none of them survives. Confirmed 2026-10-17 against the source at the pinned commit: it is not fetched on its own but vendored in the eSpeak NG fork at src/ucd-tools, and sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake installs its `ucd` target. src/ucd-tools/COPYING there is GPL version 3; src/ctype.c and the generated tables (src/categories.c and the rest) carry Reece H. Dunn's \"either version 3 of the License, or (at your option) any later version\" header; README.md: \"UCD Tools is released under the GPL version 3 or later license\", with the Unicode data files under the Unicode terms in COPYING.UCD — the Unicode, Inc. data files and software licence whose definitions (including source.icu-project.org and unicode.org/utility/trac/browser) are SPDX's Unicode-DFS-2016, \"Copyright © 1991-2018 Unicode, Inc.\"."
     },
     {
@@ -444,7 +447,7 @@
         "libespeak-ng.a"
       ],
       "note": "The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is a measurement, not an argument: the linker does load most of its objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them. No eSpeak NG code or data is in the binary, and `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships.",
-      "forbiddenInProprietaryBinary": true,
+      "forbiddenInBinary": true,
       "evidence": "GPL-3.0-or-later. Measured 2026-08-13 against an arm64 linker map: the linker LOADS 23 of its 27 objects, because libsherpa-onnx-c-api.a is one broad object with undefined references to OfflineTts — but dead-stripping removes all of it. What survives is 28 coalesced literals (\"UTF-8\", \"%s\", numeric pool entries) and no eSpeak code or data whatsoever. Re-measured 2026-10-17 on fresh release links of both slices: 23 of 27 objects loaded on each, then dead-stripped; 28 coalesced literals survive on arm64 and 24 on x86_64, and no eSpeak NG code or data on either. Confirmed 2026-10-17 against the source at the pinned commit: sherpa-onnx v1.13.4's cmake/espeak-ng-for-piper.cmake fetches the csukuangfj fork above (sha256 verified by download) and installs its espeak-ng target. COPYING there is GPL version 3, README.md says \"GPL version 3 or later\", and the compiled library sources (src/libespeak-ng/speech.c and the rest) carry the or-later header. Three files do not: sPlayer.c and sPlayer.h, compiled only with USE_SPEECHPLAYER, which sherpa-onnx turns off, and ieee80.h, a one-line prototype for ieee80.c — which Ulrich Müller offers under GPL-3.0-or-later or, alternatively, the 2-clause BSD licence, the reason COPYING.BSD2 is in the tree. The fork's top-level COPYING.APACHE, COPYING.BSD2 and COPYING.UCD cover individual files within it; none makes the library as a whole anything but GPL-3.0-or-later."
     }
   ]

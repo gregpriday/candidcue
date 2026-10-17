@@ -399,6 +399,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 "A voice-following teleprompter. Speech is transcribed on this machine and never leaves it."
                     .into(),
             ),
+            copyright: app.config().bundle.copyright.clone(),
+            license: Some(env!("CARGO_PKG_LICENSE").into()),
             ..Default::default()
         };
         let app_menu = Submenu::with_items(
@@ -698,6 +700,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     "A voice-following teleprompter. Speech is transcribed on this machine and never leaves it."
                         .into(),
                 ),
+                copyright: app.config().bundle.copyright.clone(),
+                license: Some(env!("CARGO_PKG_LICENSE").into()),
                 ..Default::default()
             }),
         )?)?;

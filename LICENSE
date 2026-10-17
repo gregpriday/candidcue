@@ -1,41 +1,21 @@
-CandidCue
+MIT License
 
-Copyright (c) @@LEGAL_COPYRIGHT_YEARS@@ @@LEGAL_COPYRIGHT_HOLDER@@.
-All rights reserved.
+Copyright (c) 2026 Greg Priday
 
-This software is proprietary. It is not open source, and no open-source
-licence is granted by the presence of this file or by access to this source
-code.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-No permission is granted to copy, modify, merge, publish, distribute,
-sublicense, sell, or create derivative works of this source code, or of any
-build produced from it, except where such permission is granted in writing by
-the copyright holder or cannot lawfully be withheld. Access to this repository,
-however obtained, grants no licence beyond what is stated here.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-Use of the compiled CandidCue application is governed by the CandidCue End User
-Licence Agreement in `legal/EULA.md`, not by this file. This file concerns the
-source code; the EULA concerns the application.
-
-Third-party components distributed with or built into CandidCue remain governed
-by their own licences, which take precedence over this notice for those
-components. Those licences are reproduced alongside the components they cover —
-for example `assets/fonts/LICENSE.txt`, which covers the bundled Atkinson
-Hyperlegible Next fonts under the SIL Open Font License 1.1. The speech
-recognition model is not distributed with CandidCue; it is downloaded from its
-own publisher and carries that publisher's terms.
-
-No trademark rights and no patent rights are granted by this notice.
-
-TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, THIS SOURCE CODE IS PROVIDED
-"AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
-LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
-AND NONINFRINGEMENT. TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, THE
-COPYRIGHT HOLDER IS NOT LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH ACCESS TO OR USE OF THIS SOURCE CODE.
-
-The compiled CandidCue application remains governed by the End User Licence
-Agreement, not by this paragraph.
-
-Contact: @@LEGAL_SUPPORT_EMAIL@@
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

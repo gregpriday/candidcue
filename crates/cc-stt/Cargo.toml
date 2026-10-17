@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "The STT event protocol and the on-device sherpa-onnx recogniser the app ships"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }

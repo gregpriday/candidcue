@@ -11,7 +11,10 @@ from the application itself rather than from a repository.
 It ships inside the app. On macOS it is at
 `CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.
 
-Two licences require their full text to travel with the work, and both do:
+CandidCue itself is free software under the MIT licence. Its text is in
+`Contents/Resources/LICENSE.txt`, beside this file.
+
+Two third-party licences travel in full with the work they cover:
 
 - the typeface, whose SIL Open Font License is in
   `Contents/Resources/LICENSE-fonts.txt`;
