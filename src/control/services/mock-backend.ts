@@ -279,7 +279,7 @@ export const mockSettings = {
     };
     return structuredClone(state.settings);
   },
-  clearCache(kind: string): ClearResult {
+  clearCache(kind: 'logs'): ClearResult {
     return { kind, clearedFiles: 0, clearedBytes: 0 };
   },
   // No `checkForUpdate`: CandidCue 1.0 has no updater to mock.

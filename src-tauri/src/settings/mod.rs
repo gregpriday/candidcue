@@ -16,7 +16,16 @@ pub const SETTINGS_KEY: &str = "app";
 pub struct AppSettings {
     pub schema_version: u32,
     pub general: GeneralSettings,
-    pub editor: EditorSettings,
+    /*
+     * No `editor` section. Its eight fields (font size, line height, preview
+     * position, word wrap, the two read-aloud switches, cue and silent-block
+     * visibility) were persisted, defaulted and range-checked here and read by
+     * nothing: the frontend typed the section `Record<string, unknown>` and
+     * never looked inside it, and the read-aloud switches that do matter live
+     * per script in `ScriptSettings`. A document that still carries the section
+     * loads as before — `AppSettings` does not deny unknown fields — and loses
+     * it on its next write (#219).
+     */
     pub stage_behavior: StageBehaviorSettings,
     pub audio: AudioSettings,
     pub following: FollowingSettings,
@@ -30,7 +39,6 @@ impl Default for AppSettings {
         Self {
             schema_version: 1,
             general: GeneralSettings::default(),
-            editor: EditorSettings::default(),
             stage_behavior: StageBehaviorSettings::default(),
             audio: AudioSettings::default(),
             following: FollowingSettings::default(),
@@ -115,9 +123,6 @@ pub struct OpticalSettings {
 pub struct GeneralSettings {
     /// 'library' | 'last_script' (Appendix A.1).
     pub open_to: String,
-    pub autosave_debounce_ms: u32,
-    pub revision_interval_minutes: u32,
-    pub words_per_minute_estimate: u32,
     /*
      * No `update_check`. It was a String defaulting to "daily" that nothing
      * scheduled and nothing read — a persisted claim that the app checks for
@@ -128,7 +133,6 @@ pub struct GeneralSettings {
      * fields, so an existing settings row carrying `updateCheck` still
      * deserialises and simply drops it on the next write.
      */
-    pub analytics_enabled: bool,
     /*
      * No `save_transcript` either. It was the transcript retention window
      * (spec §36.2): takes stopped writing transcripts (#214), the setting left
@@ -136,47 +140,25 @@ pub struct GeneralSettings {
      * written before that still carries `saveTranscript` until its next save,
      * and is tolerated for the same reason as `updateCheck`.
      */
+    /*
+     * Nor the four that went with #219, each of which nothing read:
+     *
+     * - `autosave_debounce_ms` — the editor debounces on its own
+     *   `AUTOSAVE_DEBOUNCE_MS` (src/control/stores/editor.ts);
+     * - `revision_interval_minutes` — snapshots are spaced by
+     *   `REVISION_INTERVAL_SECONDS` (scripts/repo.rs);
+     * - `words_per_minute_estimate` — duration estimates read the script's own
+     *   `ScriptSettings::words_per_minute_estimate`, which stays;
+     * - `analytics_enabled` — there is no analytics code to enable.
+     *
+     * Tolerated on old documents for the same reason as `updateCheck`.
+     */
 }
 
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             open_to: "library".into(),
-            autosave_debounce_ms: 600,
-            revision_interval_minutes: 5,
-            words_per_minute_estimate: 130,
-            analytics_enabled: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
-pub struct EditorSettings {
-    pub font_size_px: u32,
-    pub line_height: f64,
-    /// 'source' | 'split_right' | 'preview'.
-    pub preview_position: String,
-    pub word_wrap: bool,
-    pub read_headings: bool,
-    pub read_image_alt_text: bool,
-    /// 'hidden' | 'subtle' | 'prominent'.
-    pub show_cues_on_stage: String,
-    /// 'hidden' | 'dim'.
-    pub show_silent_blocks_on_stage: String,
-}
-
-impl Default for EditorSettings {
-    fn default() -> Self {
-        Self {
-            font_size_px: 15,
-            line_height: 1.6,
-            preview_position: "split_right".into(),
-            word_wrap: true,
-            read_headings: false,
-            read_image_alt_text: false,
-            show_cues_on_stage: "subtle".into(),
-            show_silent_blocks_on_stage: "dim".into(),
         }
     }
 }
@@ -186,15 +168,18 @@ impl Default for EditorSettings {
 pub struct StageBehaviorSettings {
     /// 'voice' | 'manual' | 'fixed'.
     pub prompt_mode: String,
-    pub manual_wheel_multiplier: f64,
     pub fixed_speed_wpm: u32,
-    pub pointer_hide_delay_seconds: f64,
-    pub manual_move_tracking_grace_seconds: f64,
-    /// 'off' | 'subtle'.
-    pub stage_acknowledgement: String,
     pub horizontal_mirror: bool,
-    pub keep_screen_awake: bool,
-    pub blank_color: String,
+    /*
+     * Six fields went with #219, all persisted and none read:
+     * `manual_wheel_multiplier`, `manual_move_tracking_grace_seconds`,
+     * `stage_acknowledgement` (not the stage's `StageSettings.
+     * stageAcknowledgements`, which is a live contract field), `blank_color`,
+     * `keep_screen_awake` and `pointer_hide_delay_seconds`. The last two
+     * described behaviour that is fixed elsewhere: the display-sleep assertion
+     * is taken for every take, and the stage hides the pointer after 1.5 s.
+     * Old documents that carry them still load; see `GeneralSettings`.
+     */
     /// The shape a take OPENS in: 'prompter' | 'reader' (§ reader-mode spec).
     ///
     /// ------------------------------------------------------------------------
@@ -252,14 +237,8 @@ impl Default for StageBehaviorSettings {
     fn default() -> Self {
         Self {
             prompt_mode: "voice".into(),
-            manual_wheel_multiplier: 1.0,
             fixed_speed_wpm: 130,
-            pointer_hide_delay_seconds: 1.5,
-            manual_move_tracking_grace_seconds: 2.5,
-            stage_acknowledgement: "subtle".into(),
             horizontal_mirror: false,
-            keep_screen_awake: true,
-            blank_color: "#000000".into(),
             // See the field docs: absent is not the same claim as 'prompter'.
             presentation_mode: None,
             reader_frame: None,
@@ -296,7 +275,10 @@ pub struct AudioSettings {
     /// the engine normalises English alone and has no Chinese. The two overlap
     /// on English alone. See `migrate_in_place`.
     pub language: String,
-    pub soft_pause_auto_disconnect_minutes: u32,
+    /*
+     * No `soft_pause_auto_disconnect_minutes` (#219). Nothing ever disconnected
+     * on it; an old document that still carries it loads as before.
+     */
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
     /// (spec §28.4). Resolved into a `VadConfig` override by
     /// `vadConfigForSensitivity` in src/control/services/audio/defaults.ts.
@@ -316,7 +298,6 @@ impl Default for AudioSettings {
         Self {
             transcription_model: crate::speech::default_model().id.into(),
             language: default_language().into(),
-            soft_pause_auto_disconnect_minutes: 10,
             // A.6 neutral. Never an extreme: an unreadable or absent value must
             // not silently become the most aggressive VAD on offer.
             vad_sensitivity: 0.5,
@@ -336,8 +317,12 @@ impl Default for AudioSettings {
 pub struct FollowingSettings {
     /// 'calm' | 'balanced' | 'responsive' (§47.1).
     pub feel: String,
-    /// 'conversational' | 'balanced' | 'exact' (§45, §47.5).
-    pub fidelity_mode: String,
+    /*
+     * No `fidelity_mode` (#219). It was validated against a closed vocabulary
+     * and read by nothing: `resolveFollowProfile` builds a take's motion from
+     * the profile family and `feel` alone, and the Settings control that wrote
+     * it went with #124. An old document that still carries it loads as before.
+     */
     /// Versioned motion-profile family id; matches
     /// `DEFAULT_SMOOTH_FOLLOW_PROFILE.id` in
     /// `src/shared/contracts/smooth-follow.ts`.
@@ -350,7 +335,6 @@ impl Default for FollowingSettings {
     fn default() -> Self {
         Self {
             feel: "balanced".into(),
-            fidelity_mode: "balanced".into(),
             motion_profile_id: "default-v1".into(),
             developer_diagnostics: false,
         }
@@ -372,25 +356,7 @@ fn in_range_f(value: f64, min: f64, max: f64) -> bool {
 /// Validate against the Appendix A ranges we enforce in Rust. Returns a
 /// recoverable validation error naming the offending field.
 pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
-    let checks: [(&str, bool); 8] = [
-        (
-            "general.autosaveDebounceMs",
-            (250..=2000).contains(&settings.general.autosave_debounce_ms),
-        ),
-        (
-            "general.revisionIntervalMinutes",
-            (1..=30).contains(&settings.general.revision_interval_minutes),
-        ),
-        (
-            "general.wordsPerMinuteEstimate",
-            (70..=220).contains(&settings.general.words_per_minute_estimate),
-        ),
-        ("editor.fontSizePx", (11..=24).contains(&settings.editor.font_size_px)),
-        ("editor.lineHeight", in_range_f(settings.editor.line_height, 1.2, 2.0)),
-        (
-            "stageBehavior.manualWheelMultiplier",
-            in_range_f(settings.stage_behavior.manual_wheel_multiplier, 0.25, 4.0),
-        ),
+    let checks: [(&str, bool); 2] = [
         (
             "stageBehavior.fixedSpeedWpm",
             (30..=300).contains(&settings.stage_behavior.fixed_speed_wpm),
@@ -434,18 +400,11 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
 
     // Following settings (companion §47): closed vocabularies, validated here
     // so a malformed patch cannot leave a session in an unknown assist mode.
-    let following_enums: [(&str, &str, &[&str]); 2] = [
-        (
-            "following.feel",
-            settings.following.feel.as_str(),
-            &["calm", "balanced", "responsive"],
-        ),
-        (
-            "following.fidelityMode",
-            settings.following.fidelity_mode.as_str(),
-            &["conversational", "balanced", "exact"],
-        ),
-    ];
+    let following_enums: [(&str, &str, &[&str]); 1] = [(
+        "following.feel",
+        settings.following.feel.as_str(),
+        &["calm", "balanced", "responsive"],
+    )];
     for (field, value, allowed) in following_enums {
         if !allowed.contains(&value) {
             return Err(
@@ -510,8 +469,8 @@ pub fn selected_model(settings: &AppSettings) -> &'static crate::speech::Bundled
 /// Sections whose maps a patch REPLACES rather than merges into.
 ///
 /// `merge_json` recurses into objects, which is right for a settings document
-/// made of named scalars: a patch mentions the two fields it changes and says
-/// nothing about the other forty.
+/// made of named scalars: a patch mentions the fields it changes and says
+/// nothing about the rest.
 ///
 /// It is wrong for a map whose KEYS are the data. `optical.profiles` is keyed
 /// by rig, so a merge can only ever add or update one — a rig the user deleted
@@ -907,14 +866,13 @@ mod tests {
     fn following_defaults_match_the_specified_defaults() {
         let following = AppSettings::default().following;
         assert_eq!(following.feel, "balanced");
-        assert_eq!(following.fidelity_mode, "balanced");
         assert!(!following.developer_diagnostics);
     }
 
     #[test]
     fn rejects_unknown_following_enum_values() {
         let mut settings = AppSettings::default();
-        settings.following.fidelity_mode = "psychic".into();
+        settings.following.feel = "psychic".into();
         assert!(validate(&settings).is_err());
     }
 
@@ -1192,11 +1150,12 @@ mod tests {
     /// `Option<T>` in the tree, where the refill happened to land on `None`.
     /// The Listener is gone; the merge behaviour it was covering is not, so
     /// the test moved to a field that still exists rather than leaving with it.
+    /// (It moved again when `blankColor` went with #219.)
     #[test]
     fn a_null_patch_value_restores_a_fields_default() {
         let mut base = serde_json::to_value(AppSettings {
             stage_behavior: StageBehaviorSettings {
-                blank_color: "#123456".into(),
+                prompt_mode: "fixed".into(),
                 ..StageBehaviorSettings::default()
             },
             ..AppSettings::default()
@@ -1205,17 +1164,17 @@ mod tests {
 
         merge_json(
             &mut base,
-            &serde_json::json!({ "stageBehavior": { "blankColor": null } }),
+            &serde_json::json!({ "stageBehavior": { "promptMode": null } }),
         );
         assert!(
-            base["stageBehavior"].get("blankColor").is_none(),
+            base["stageBehavior"].get("promptMode").is_none(),
             "a null patch removes the key rather than storing a null"
         );
 
         let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
         assert_eq!(
-            merged.stage_behavior.blank_color,
-            StageBehaviorSettings::default().blank_color,
+            merged.stage_behavior.prompt_mode,
+            StageBehaviorSettings::default().prompt_mode,
             "and the container default refills what the patch removed"
         );
     }
@@ -1293,7 +1252,7 @@ mod tests {
     fn a_document_carrying_the_removed_listener_section_still_loads() {
         let stored = serde_json::json!({
             "schemaVersion": 1,
-            "editor": { "fontSizePx": 19 },
+            "stageBehavior": { "fixedSpeedWpm": 172 },
             "listener": {
                 "defaultPackId": "mira",
                 "autoplay": true,
@@ -1307,7 +1266,7 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_value(stored).expect("a document with a listener section still loads");
 
-        assert_eq!(settings.editor.font_size_px, 19, "surviving keys are kept");
+        assert_eq!(settings.stage_behavior.fixed_speed_wpm, 172, "surviving keys are kept");
         assert!(validate(&settings).is_ok());
     }
 
@@ -1325,15 +1284,14 @@ mod tests {
     /// FIELD, which `GeneralSettings` tolerates for the same reason — and they
     /// are separate derives, so adding `deny_unknown_fields` to the inner
     /// struct alone would break this while leaving the section test green. A
-    /// user who upgrades would lose their words-per-minute estimate and their
-    /// open-to preference because of one key nobody reads.
+    /// user who upgrades would lose their open-to preference because of one key
+    /// nobody reads.
     #[test]
     fn a_document_carrying_the_removed_update_check_field_still_loads() {
         let stored = serde_json::json!({
             "schemaVersion": 1,
             "general": {
                 "openTo": "last_script",
-                "wordsPerMinuteEstimate": 155,
                 "updateCheck": "daily",
             },
         });
@@ -1341,9 +1299,8 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(stored)
             .expect("a document carrying the retired updateCheck field still loads");
 
-        assert_eq!(settings.general.open_to, "last_script");
         assert_eq!(
-            settings.general.words_per_minute_estimate, 155,
+            settings.general.open_to, "last_script",
             "the settings beside the retired key must survive the upgrade"
         );
         assert!(validate(&settings).is_ok());
@@ -1371,8 +1328,6 @@ mod tests {
                 "schemaVersion": 1,
                 "general": {
                     "openTo": "last_script",
-                    "wordsPerMinuteEstimate": 155,
-                    "revisionIntervalMinutes": 12,
                     "saveTranscript": retention,
                 },
             });
@@ -1381,8 +1336,6 @@ mod tests {
                 .unwrap_or_else(|e| panic!("saveTranscript {retention:?} must still load: {e}"));
 
             assert_eq!(settings.general.open_to, "last_script");
-            assert_eq!(settings.general.words_per_minute_estimate, 155);
-            assert_eq!(settings.general.revision_interval_minutes, 12);
             assert!(validate(&settings).is_ok(), "saveTranscript {retention:?} must validate");
 
             let written = serde_json::to_value(&settings).expect("serializes");
@@ -1391,5 +1344,124 @@ mod tests {
                 "the retired field must not be written back out"
             );
         }
+    }
+
+    /// #219: the twenty fields nothing read, from a document that carries every
+    /// one of them (`tests/fixtures/ipc/settings-retired-document.json`, which
+    /// the frontend reads too).
+    fn retired_document_fixture() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/ipc/settings-retired-document.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+        serde_json::from_str(&raw).expect("fixture parses")
+    }
+
+    /// The fixture's `retired` paths, each `section` or `section.field`.
+    fn retired_paths(fixture: &serde_json::Value) -> Vec<(String, Option<String>)> {
+        fixture["retired"]
+            .as_array()
+            .expect("retired is a list")
+            .iter()
+            .map(|p| {
+                let p = p.as_str().expect("a path");
+                match p.split_once('.') {
+                    Some((section, field)) => (section.to_string(), Some(field.to_string())),
+                    None => (p.to_string(), None),
+                }
+            })
+            .collect()
+    }
+
+    /// Every surviving value reads exactly as it would from the same document
+    /// without the retired keys, the document validates — several retired
+    /// values are ones the old checks refused — and none of them is written
+    /// back out.
+    #[test]
+    fn a_document_carrying_every_field_removed_by_219_still_loads() {
+        let fixture = retired_document_fixture();
+        let stored = fixture["document"].clone();
+        let mut survivors = stored.clone();
+        for (section, field) in retired_paths(&fixture) {
+            let removed = match &field {
+                Some(field) => survivors[section.as_str()]
+                    .as_object_mut()
+                    .and_then(|s| s.remove(field.as_str())),
+                None => survivors.as_object_mut().and_then(|d| d.remove(section.as_str())),
+            };
+            assert!(removed.is_some(), "the fixture must carry {section}.{field:?}");
+        }
+
+        let settings: AppSettings = serde_json::from_value(stored)
+            .expect("a document carrying every retired field still loads");
+        let expected: AppSettings =
+            serde_json::from_value(survivors).expect("the survivors load");
+        assert_eq!(settings, expected, "the retired keys change nothing that survives");
+        // Not two copies of the defaults: the fixture moved every survivor.
+        assert_eq!(settings.general.open_to, "last_script");
+        assert_eq!(settings.stage_behavior.prompt_mode, "fixed");
+        assert_eq!(settings.stage_behavior.fixed_speed_wpm, 172);
+        assert!(settings.stage_behavior.horizontal_mirror);
+        assert_eq!(settings.audio.vad_sensitivity, 0.72);
+        assert_eq!(settings.following.feel, "calm");
+        assert!(settings.following.developer_diagnostics);
+        assert_eq!(settings.optical.profiles.len(), 1, "the calibrated rig survives");
+        assert!(validate(&settings).is_ok(), "a stale key must not make the document unsaveable");
+
+        let written = serde_json::to_value(&settings).expect("serializes");
+        for (section, field) in retired_paths(&fixture) {
+            let present = match &field {
+                Some(field) => written[section.as_str()].get(field.as_str()).is_some(),
+                None => written.get(section.as_str()).is_some(),
+            };
+            assert!(!present, "{section}.{field:?} must not be written back out");
+        }
+    }
+
+    /// What #219 left of `validate` is exactly what was there before it, at
+    /// the edges: removing twenty fields' checks must not move a survivor's.
+    #[test]
+    fn the_surviving_checks_keep_their_bounds() {
+        for (wpm, legal) in [(29, false), (30, true), (300, true), (301, false)] {
+            let mut settings = AppSettings::default();
+            settings.stage_behavior.fixed_speed_wpm = wpm;
+            assert_eq!(validate(&settings).is_ok(), legal, "fixedSpeedWpm={wpm}");
+        }
+        for feel in ["calm", "balanced", "responsive"] {
+            let mut settings = AppSettings::default();
+            settings.following.feel = feel.into();
+            assert!(validate(&settings).is_ok(), "{feel} must be accepted");
+        }
+    }
+
+    /// The same keys arriving in a PATCH — from a Settings window an older
+    /// build opened, or a stale overlay — are dropped, not refused, even with
+    /// values the old checks refused or of the wrong type entirely.
+    #[test]
+    fn a_patch_naming_a_field_removed_by_219_is_dropped_not_refused() {
+        let mut base = serde_json::to_value(AppSettings::default()).expect("serializes");
+        let patch = serde_json::json!({
+            "general": { "autosaveDebounceMs": 1, "analyticsEnabled": "yes" },
+            "editor": { "fontSizePx": 1000 },
+            "stageBehavior": { "manualWheelMultiplier": 99.0, "keepScreenAwake": "always", "fixedSpeedWpm": 150 },
+            "audio": { "softPauseAutoDisconnectMinutes": -1 },
+            "following": { "fidelityMode": "psychic" },
+        });
+        clear_replaced_maps(&mut base, &patch);
+        merge_json(&mut base, &patch);
+        let merged: AppSettings = serde_json::from_value(base).expect("the patch is accepted");
+        assert!(validate(&merged).is_ok());
+        assert_eq!(merged.stage_behavior.fixed_speed_wpm, 150, "the live key beside them lands");
+        assert_eq!(
+            AppSettings {
+                stage_behavior: StageBehaviorSettings {
+                    fixed_speed_wpm: 130,
+                    ..merged.stage_behavior.clone()
+                },
+                ..merged
+            },
+            AppSettings::default(),
+            "and nothing else moved"
+        );
     }
 }

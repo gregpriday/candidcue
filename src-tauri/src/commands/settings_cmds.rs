@@ -179,46 +179,19 @@ pub struct ClearResult {
     pub removed_bytes: u64,
 }
 
-/// Total size of a file, or of everything under a directory. Best-effort:
-/// anything unreadable simply counts as zero.
-fn size_of(path: &std::path::Path) -> u64 {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return 0;
-    };
-    if meta.file_type().is_symlink() {
-        return 0; // never follow, never count the target
-    }
-    if meta.is_file() {
-        return meta.len();
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .filter_map(|e| e.ok())
-        .map(|e| size_of(&e.path()))
-        .sum()
-}
-
 /// The directories a `clear_cache` kind empties.
 ///
-/// C6: the control window's "Clear logs" mapped onto `all`, which deletes the
-/// compiled-script, vocabulary, thumbnail and download caches and leaves every
-/// log file in place — then reported "Logs cleared." No arm touched
-/// `paths.logs_dir()` at all. `logs` is its own kind now, and it is
-/// deliberately NOT part of `all`: logs are not a cache.
+/// C6: the control window's "Clear logs" mapped onto `all`, which deleted the
+/// compiled-script, vocabulary, thumbnail and download caches and left every
+/// log file in place — then reported "Logs cleared." `logs` became its own
+/// kind.
+///
+/// It is now the only one (#219). Nothing ever wrote `cache/compiled`,
+/// `cache/vocabulary` or `cache/thumbnails`, and once the Settings button that
+/// asked for `all` was gone nothing asked for them either; a request naming one
+/// is refused like any other unknown kind.
 pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>, AppError> {
-    let cache_root = paths.cache_dir();
-    let cache = |sub: &str| cache_root.join(sub);
     Ok(match kind {
-        "compiled" => vec![cache("compiled")],
-        "vocabulary" => vec![cache("vocabulary")],
-        "thumbnails" => vec![cache("thumbnails")],
-        "all" => vec![
-            cache("compiled"),
-            cache("vocabulary"),
-            cache("thumbnails"),
-        ],
         "logs" => vec![paths.logs_dir()],
         other => {
             return Err(AppError::invalid_input(format!(
@@ -228,8 +201,8 @@ pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>
     })
 }
 
-/// Empty a cache directory — or, for `logs`, the log directory, which is not a
-/// cache and does not live under `cache/`.
+/// Empty the log directory — the one kind left (see `clear_cache_targets`),
+/// and not a cache: it does not live under `cache/`.
 #[tauri::command]
 pub async fn clear_cache(
     boot: State<'_, crate::database::BootStatus>,
@@ -241,56 +214,29 @@ pub async fn clear_cache(
     let dirs = clear_cache_targets(&paths, &kind)?;
 
     /*
-     * Logs cannot go through the generic loop below.
+     * Through `clear_logs`, never a plain delete.
      *
-     * That loop unlinks every entry it finds, and one of the entries is the
-     * daily file the tracing appender is holding open. Unlinking it does not
-     * close the descriptor — the appender goes on writing into an inode with
-     * no name, and every line after the clear is invisible until the next
-     * rotation quietly opens a new file. `clear_logs` truncates that file in
-     * place instead, so logging survives its own log being cleared.
+     * One of the files is the daily log the tracing appender is holding open.
+     * Unlinking it does not close the descriptor — the appender goes on writing
+     * into an inode with no name, and every line after the clear is invisible
+     * until the next rotation quietly opens a new file. `clear_logs` truncates
+     * the appender's files in place instead (and deletes everything else), so
+     * logging survives its own log being cleared.
      *
      * Driven off `dirs` rather than off `paths.logs_dir()` so that
      * `clear_cache_targets` stays the single answer to "what does this kind
      * empty" — re-deriving the path here would let the two disagree silently.
      */
-    if kind == "logs" {
-        let mut stats = crate::diagnostics::logging::LogClearStats::default();
-        for dir in &dirs {
-            let cleared = crate::diagnostics::logging::clear_logs(dir)?;
-            stats.removed_files += cleared.removed_files;
-            stats.removed_bytes += cleared.removed_bytes;
-        }
-        return Ok(ClearResult {
-            kind,
-            removed_files: stats.removed_files,
-            removed_bytes: stats.removed_bytes,
-        });
-    }
-
-    let mut removed = 0u32;
-    let mut removed_bytes = 0u64;
-    for dir in dirs {
-        if dir.exists() {
-            for entry in fs::read_dir(&dir)?.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                let bytes = size_of(&path);
-                let ok = if path.is_dir() {
-                    fs::remove_dir_all(&path).is_ok()
-                } else {
-                    fs::remove_file(&path).is_ok()
-                };
-                if ok {
-                    removed += 1;
-                    removed_bytes += bytes;
-                }
-            }
-        }
+    let mut stats = crate::diagnostics::logging::LogClearStats::default();
+    for dir in &dirs {
+        let cleared = crate::diagnostics::logging::clear_logs(dir)?;
+        stats.removed_files += cleared.removed_files;
+        stats.removed_bytes += cleared.removed_bytes;
     }
     Ok(ClearResult {
         kind,
-        removed_files: removed,
-        removed_bytes,
+        removed_files: stats.removed_files,
+        removed_bytes: stats.removed_bytes,
     })
 }
 

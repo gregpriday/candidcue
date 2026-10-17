@@ -84,7 +84,7 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
  * All three of its descriptions were written against live coaching — which
  * words earn a tip, how many omissions are worth mentioning. That feature was
  * removed, and nothing replaced it: `resolveFollowProfile` below builds a take's
- * motion from `family` and `feel`, and `fidelityMode` reaches the settings
+ * motion from `family` and `feel`, and `fidelityMode` reached the settings
  * document and Rust's validator without ever being read to decide anything.
  *
  * So the copy promised behaviour that could not happen, attached to a control
@@ -93,8 +93,8 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
  * The field went after it (#218), along with `semanticRequestLimit`, the cap on
  * a hosted sidecar that no longer exists. A document that still carries either
  * one loads as it always did: `AppSettings` does not deny unknown fields, and
- * the adapter in `settings-following.ts` simply never reads or sends them, so
- * Rust's merge leaves whatever it stored alone until its own half goes.
+ * the adapter in `settings-following.ts` never reads or sends them. Rust's
+ * half went with #219, so the next write takes `fidelityMode` off disk.
  */
 
 /* ---------------------------------------------------------------------------

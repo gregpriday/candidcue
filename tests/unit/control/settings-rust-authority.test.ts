@@ -30,23 +30,12 @@ const ipc = vi.hoisted(() => {
       schemaVersion: 1,
       general: {
         openTo: 'library',
-        autosaveDebounceMs: 800,
-        revisionIntervalMinutes: 10,
-        wordsPerMinuteEstimate: 150,
-        analyticsEnabled: false,
         ...general,
       },
-      editor: {},
       stageBehavior: {
         promptMode: 'voice',
-        manualWheelMultiplier: 1,
         fixedSpeedWpm: 140,
-        pointerHideDelaySeconds: 1.5,
-        manualMoveTrackingGraceSeconds: 2,
-        stageAcknowledgement: 'flash',
         horizontalMirror: false,
-        keepScreenAwake: true,
-        blankColor: '#000000',
         // Persisted, so the presentation-mode migration has nothing to adopt.
         presentationMode: 'prompter',
         ...stageBehavior,

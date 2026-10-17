@@ -664,10 +664,11 @@ async fn an_unrelated_patch_leaves_the_language_alone() {
     let updated = settings::update_settings(
         &pool,
         1,
-        json!({ "general": { "wordsPerMinuteEstimate": 150 } }),
+        json!({ "stageBehavior": { "fixedSpeedWpm": 150 } }),
     )
     .await
     .expect("unrelated patch");
+    assert_eq!(updated.value.stage_behavior.fixed_speed_wpm, 150, "the patch landed");
     assert_eq!(updated.value.audio.language, "en-US");
     assert_eq!(
         updated.value.audio.transcription_model,

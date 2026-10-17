@@ -416,10 +416,10 @@ pub(crate) struct LogClearStats {
 /// Empty the log directory without breaking the log.
 ///
 /// The obvious implementation — `remove_file` on everything, which is what the
-/// generic `clear_cache` loop does — is wrong for exactly one file: the daily
-/// log the appender currently holds open. Unlinking it on macOS does not close
-/// the descriptor, so the appender goes on writing happily into an inode with
-/// no name, and every subsequent line is invisible until the next rotation
+/// generic `clear_cache` loop used to do — is wrong for exactly one file: the
+/// daily log the appender currently holds open. Unlinking it on macOS does not
+/// close the descriptor, so the appender goes on writing happily into an inode
+/// with no name, and every subsequent line is invisible until the next rotation
 /// silently opens a new file. The user asked to clear the logs and got a
 /// working app that no longer logs.
 ///

@@ -58,15 +58,15 @@
     <!--
       "Script fidelity" used to sit here, and it configured nothing.
 
-      It set `following.fidelityMode`, which reaches the settings document, Rust's
-      validator, and stops. `resolveFollowProfile` builds a take's motion from
+      It set `following.fidelityMode`, which reached the settings document, Rust's
+      validator, and stopped. `resolveFollowProfile` builds a take's motion from
       `family` and `feel` alone and has never read it. Its three descriptions all
       promised tips on numbers, names and omissions — a coaching feature that was
       removed, so the control was offering to tune the behaviour of something
       that no longer runs.
 
-      The field went after it (#218). A document written by an older build still
-      carries it and loads as before; this side simply never reads or sends it.
+      The field went after it (#218 here, #219 in Rust). A document written by an
+      older build still carries it and loads as before.
     -->
     <div class="field">
       {#if hasMotionChoice}

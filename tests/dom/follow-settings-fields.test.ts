@@ -4,17 +4,17 @@
  * Two defects lived in this component (#124), and both were the same mistake in
  * different shapes: a widget that looks like a decision but is not one.
  *
- * "Script fidelity" set `following.fidelityMode`, which reaches the settings
- * document and Rust's validator and stops — `resolveFollowProfile` builds a
+ * "Script fidelity" set `following.fidelityMode`, which reached the settings
+ * document and Rust's validator and stopped — `resolveFollowProfile` builds a
  * take's motion from `family` and `feel` alone. Its copy promised tips on
  * numbers, names and omissions, from a coaching feature that was removed. So it
  * offered to tune something that does not run.
  *
  * "Motion profile" was a dropdown over a one-item array.
  *
- * The field behind Script fidelity went later (#218); the adapter tests in
- * `tests/unit/control/settings-following.test.ts` cover a document that still
- * carries it.
+ * The field behind Script fidelity went later (#218, and from Rust in #219);
+ * the adapter tests in `tests/unit/control/settings-following.test.ts` cover a
+ * document that still carries it.
  */
 import { fireEvent, render } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';

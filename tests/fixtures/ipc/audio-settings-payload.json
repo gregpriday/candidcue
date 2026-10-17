@@ -20,14 +20,13 @@
     "one side maps and the other does not comes back as its default, and 0.5",
     "would hide exactly that.",
     "",
-    "The other three fields are the rest of Rust's audio section. They are here",
+    "The other two fields are the rest of Rust's audio section. They are here",
     "so the round trip is asserted on the WHOLE document rather than on one key",
     "— a patch that silently dropped `language` would otherwise pass."
   ],
   "settings": {
     "transcriptionModel": "x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05",
     "language": "en-GB",
-    "softPauseAutoDisconnectMinutes": 15,
     "vadSensitivity": 0.72
   },
   "patch": {
