@@ -330,17 +330,28 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
     expect(mismatch.suggestion).toMatch(/or carry on/i);
   });
 
-  it('says so for an unplugged pin with no rig too — the take is still going somewhere unchosen', () => {
+  it('stays quiet about an unplugged pin with no rig — nothing measured is lost', () => {
+    /*
+     * The line beside Present already says where the take goes. Raising the
+     * readiness sheet on every take for somebody who left an uncalibrated
+     * prompter at the studio would interrupt them to repeat it.
+     */
     const destination = resolveTakeDestination(
       input({ currentDisplay: STUDIO, displays: [STUDIO], pinnedFingerprint: 'dsp-elgato', calibratedRigs: [] }),
     );
-    expect(destination.mismatch!.title).toMatch(/not connected/);
-    expect(destination.mismatch!.detail).not.toContain('“');
+    expect(destination.summary).toBe('Teleprompter · Studio Display');
+    expect(destination.mismatch).toBeNull();
   });
 
   it('describes the fallback rather than naming a guess when the window’s monitor is unknown', () => {
     const destination = resolveTakeDestination(
-      input({ currentDisplay: null, displays: [STUDIO], pinnedFingerprint: 'dsp-elgato', calibratedRigs: [] }),
+      input({
+        currentDisplay: null,
+        displays: [STUDIO],
+        pinnedFingerprint: 'dsp-elgato',
+        calibratedRigs: [],
+        pinnedRigName: 'Elgato rig',
+      }),
     );
     expect(destination.confidence).toBe('unknown');
     expect(destination.mismatch!.title).toBe(
@@ -358,6 +369,7 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
           displays: [STUDIO],
           pinnedFingerprint: 'dsp-elgato',
           calibratedRigs: [rigOn(STUDIO, 'Desk rig')],
+          pinnedRigName: 'Elgato rig',
         }),
       ).mismatch,
     ).toBeNull();
@@ -366,7 +378,13 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
   it('does not call a pin unplugged on a list that named no panels at all', () => {
     expect(
       resolveTakeDestination(
-        input({ currentDisplay: null, displays: [], pinnedFingerprint: 'dsp-elgato', calibratedRigs: [] }),
+        input({
+          currentDisplay: null,
+          displays: [],
+          pinnedFingerprint: 'dsp-elgato',
+          calibratedRigs: [],
+          pinnedRigName: 'Elgato rig',
+        }),
       ).mismatch,
     ).toBeNull();
   });

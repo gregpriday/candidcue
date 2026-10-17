@@ -187,9 +187,9 @@ export interface TakeDestination {
   summary: string;
   confidence: DestinationConfidence;
   /**
-   * Present when the take will open somewhere other than the panel the
-   * operator set up for it: away from a calibrated rig's panel, or away from a
-   * pinned panel that is unplugged. Informative, never blocking — the take
+   * Present when the take will open away from measured optics it would
+   * otherwise have used: a calibrated rig's panel elsewhere, or a pinned,
+   * calibrated panel that is unplugged. Informative, never blocking — the take
    * still opens, and the readiness sheet offers to start it anyway.
    */
   mismatch: DestinationMismatch | null;
@@ -253,8 +253,9 @@ function rigLabel(rigName: string): string {
  *
  * Two cases earn it, both KNOWN problems rather than guesses:
  *
- *  - the pinned panel is unplugged, so the take falls back to the monitor the
- *    window is on — a panel the operator did not choose;
+ *  - the pinned panel is unplugged and a rig was chosen for it, so the take
+ *    falls back to the monitor the window is on and goes without the optics
+ *    the operator measured;
  *  - the take lands on a panel with no rig while a rig is in force on another
  *    connected one.
  *
@@ -265,7 +266,10 @@ function rigLabel(rigName: string): string {
  *    calibrated panel used to be reported as the wrong one whenever Present was
  *    pressed from the desk monitor, which was every time);
  *  - no rig is calibrated at all — display-based defaults are the normal case
- *    and are not a degradation;
+ *    and are not a degradation. That includes an unplugged pin with no rig:
+ *    the line beside Present already names where the take goes, and raising
+ *    the readiness sheet on every take for somebody who left the prompter at
+ *    the studio would be an interruption that tells them nothing new;
  *  - the landing panel cannot be named, because "this might be the wrong panel"
  *    is a worse thing to tell somebody than nothing. A warning that fires on
  *    uncertainty rather than on a known problem is the kind users switch off.
@@ -286,18 +290,15 @@ function resolveMismatch(
    * no panels at all, and "the display you chose is not connected" would be
    * a claim made on no evidence.
    */
-  if (target.reason === 'pin-missing' && input.displays.length > 0) {
+  const pinnedRig = input.pinnedRigName;
+  if (target.reason === 'pin-missing' && pinnedRig !== null && input.displays.length > 0) {
     const where =
       landing === null
         ? 'the display the CandidCue window is on'
         : `${displayName(landing)}, where the CandidCue window is`;
-    const pinnedRig = input.pinnedRigName;
     return {
       title: `The prompter display you chose is not connected, so this take will open on ${where}.`,
-      detail:
-        pinnedRig === null
-          ? 'Present falls back to the display the CandidCue window is on until the display you chose is back.'
-          : `${rigLabel(pinnedRig)} is calibrated for the display you chose, so this take will size its text from the panel it lands on rather than from measured optics.`,
+      detail: `${rigLabel(pinnedRig)} is calibrated for the display you chose, so this take will size its text from the panel it lands on rather than from measured optics.`,
       suggestion:
         'Reconnect the display you chose and present again, choose another in Settings › Prompter display and rigs, or carry on.',
     };

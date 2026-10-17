@@ -218,18 +218,30 @@ test('a re-read overtaken by a topology change waits for the newer list instead 
   const answeredBefore = await listAnswers();
   await page.getByRole('button', { name: 'Identify displays' }).click();
   await expect.poll(listCalls).toBe(before + 1);
-  const { delivered, answered } = await page.evaluate(() => ({
-    delivered: window.__E2E__.emit('app://device-or-display-change', {
+  const delivered = await page.evaluate(() =>
+    window.__E2E__.emit('app://device-or-display-change', {
       kind: 'display',
       displays: [],
     }),
-    answered: window.__E2E__.settled.filter((c) => c === 'list_displays').length,
-  }));
+  );
   expect(delivered).toBeGreaterThan(0);
-  // A was still unanswered when B started, or this proves nothing about the
-  // overlap: a stalled runner would let A land first and the old code pass.
-  expect(answered).toBe(answeredBefore);
-  await expect.poll(listCalls).toBeGreaterThanOrEqual(before + 2);
+  /*
+   * A was still unanswered when B started, or this proves nothing about the
+   * overlap: a stalled runner would let A land first and the old code pass.
+   * B starts after the display-change debounce rather than at the emit, so
+   * both counts are read in ONE snapshot, taken once B has been asked.
+   */
+  let snapshot = { calls: 0, answered: 0 };
+  await expect
+    .poll(async () => {
+      snapshot = await page.evaluate(() => ({
+        calls: window.__E2E__.calls.filter((c) => c.command === 'list_displays').length,
+        answered: window.__E2E__.settled.filter((c) => c === 'list_displays').length,
+      }));
+      return snapshot.calls;
+    })
+    .toBeGreaterThanOrEqual(before + 2);
+  expect(snapshot.answered).toBe(answeredBefore);
 
   // Judged against B, which matches the glass: no "the displays changed"
   // alarm, and the tiles carry the numbers.
@@ -298,6 +310,6 @@ test('an unplugged pin names where the take opens and where previews go, separat
 
   const alert = page.locator('.inline-alert[role="alert"]');
   await expect(alert).toContainText('The display you chose is not connected.');
-  await expect(alert).toContainText('takes open on Built-in Display, where the CandidCue window is');
+  await expect(alert).toContainText('prompter takes open on Built-in Display, where the CandidCue window is');
   await expect(alert).toContainText('previews, tests and calibration use Teleprompter Display');
 });

@@ -2373,7 +2373,7 @@
                  take goes where the CandidCue window is, previews prefer an
                  external display. -->
             <p class="inline-alert" role="alert">
-              The display you chose is not connected. Until it is back, takes open on {windowPanel},
+              The display you chose is not connected. Until it is back, prompter takes open on {windowPanel},
               and previews, tests and calibration use {effectiveDisplay
                 ? displayName(effectiveDisplay)
                 : 'another display'}.
@@ -2409,7 +2409,7 @@
               <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
               <span class="monitor-name">Teleprompter</span>
               <span class="monitor-meta">
-                Fills the display it is on, above everything, for reading off glass at a distance.
+                Fills the prompter display chosen here, or the one it is on, above everything, for reading off glass at a distance.
               </span>
             </button>
             <button
