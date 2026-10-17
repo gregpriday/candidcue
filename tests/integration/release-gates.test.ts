@@ -638,6 +638,7 @@ describe('opening bundle.resources for notices did not open it for models', () =
     'src-tauri/tauri.conf.json',
     'THIRD_PARTY_NOTICES.md',
     'assets/fonts/LICENSE.txt',
+    'LICENSE',
   ];
 
   function withResources(resources: unknown, extra?: (dir: string) => void) {
@@ -650,7 +651,7 @@ describe('opening bundle.resources for notices did not open it for models', () =
     return run(join(dir, 'scripts/verify-no-model-weights.mjs'), [], dir);
   }
 
-  it('accepts the two notices this repository actually ships', () => {
+  it('accepts the licence notices this repository actually ships', () => {
     const conf = JSON.parse(readFileSync(join(REPO_ROOT, 'src-tauri/tauri.conf.json'), 'utf8'));
     expect(withResources(conf.bundle.resources).status).toBe(0);
   });
@@ -1114,6 +1115,7 @@ echo '{}'
       );
       expect(notices).toContain('| untraced | MIT † | unconfirmed; upstream <https://example.test/untraced> |');
       expect(notices).toContain('† Recorded from the upstream project');
+      expect(notices).toContain('has to be verified before CandidCue is released.');
       expect(notices).toContain('- **untraced** — Somebody should look.\n');
       expect(notices).not.toContain('NOTICES.txt');
     });

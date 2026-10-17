@@ -7,11 +7,12 @@
  * `sherpa-onnx-sys` links a fixed set of static archives, and three are
  * copyleft: `libespeak-ng.a` and `libucd.a` are GPL-3.0-or-later, and
  * `libpiper_phonemize.a` declares MIT while linking eSpeak NG, which makes its
- * distributed terms GPL-3.0. CandidCue is proprietary. Nothing in that crate
- * removes them from the link line — there is no TTS feature, upstream's
- * `-DSHERPA_ONNX_ENABLE_TTS=OFF` is unavailable because we consume a prebuilt
- * archive, and the `shared` alternative is worse, because the sherpa-onnx
- * dylib genuinely contains the code.
+ * distributed terms GPL-3.0. CandidCue is MIT-licensed, and a binary that kept
+ * any of their code would have to be distributed on GPL terms instead. Nothing
+ * in that crate removes them from the link line — there is no TTS feature,
+ * upstream's `-DSHERPA_ONNX_ENABLE_TTS=OFF` is unavailable because we consume
+ * a prebuilt archive, and the `shared` alternative is worse, because the
+ * sherpa-onnx dylib genuinely contains the code.
  *
  * The comfortable assumption was that a static link extracts only what
  * resolves an undefined symbol, that CandidCue does speech-to-TEXT and calls
@@ -92,7 +93,7 @@ const CONDITIONAL = new Map(); // archive basename -> component, copyleft only i
 for (const component of components ?? []) {
   const conditional = component.copyleftIfLinkedWith;
   for (const library of component.libraries ?? []) {
-    if (component.forbiddenInProprietaryBinary === true) FORBIDDEN.set(library, component);
+    if (component.forbiddenInBinary === true) FORBIDDEN.set(library, component);
     else if (Array.isArray(conditional) && conditional.length > 0) {
       CONDITIONAL.set(library, component);
     }
@@ -289,7 +290,7 @@ const shipping = new Set(
 
 for (const { component, literal, stdlib, project } of survivors.values()) {
   const residue = `${literal} coalesced literal(s), ${stdlib} standard-library instantiation(s)`;
-  const forbidden = component.forbiddenInProprietaryBinary === true;
+  const forbidden = component.forbiddenInBinary === true;
 
   if (project.length === 0) {
     notes.push(
@@ -308,7 +309,8 @@ for (const { component, literal, stdlib, project } of survivors.values()) {
     problems.push(
       `${component.component} (${component.spdx}): ${project.length} of its OWN symbol(s) ` +
         `survived into the binary — plus ${residue}, which are not the problem. CandidCue is ` +
-        `proprietary and this is that project's code:\n${detail}`,
+        `MIT-licensed, and a binary carrying this project's code could only be distributed ` +
+        `on its terms:\n${detail}`,
     );
     continue;
   }

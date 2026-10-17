@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "CandidCue alignment benchmark harness: fixtures, fal.ai TTS, on-device capture, offline replay, metrics"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 cc-align = { path = "../cc-align" }

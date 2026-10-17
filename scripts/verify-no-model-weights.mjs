@@ -117,7 +117,7 @@ const PAYLOAD_DECLARATIONS = [
  * It is deliberately a list of exact names rather than a pattern: the failure
  * this gate exists to catch is one entry added to `bundle.resources`, and a
  * pattern is how "one entry" becomes "a glob that also matched the models
- * directory". Both entries here are text.
+ * directory". Every entry here is text.
  *
  * Anything not on this list is a failure, whether or not it looks like a model
  * — the gate is "the bundle contains what we decided it contains", and model
@@ -131,6 +131,10 @@ const ALLOWED_BUNDLE_RESOURCES = new Map([
   [
     'LICENSE-fonts.txt',
     'the SIL OFL, whose text must travel with the font binaries that are in the bundle',
+  ],
+  [
+    'LICENSE.txt',
+    "CandidCue's own MIT licence, whose notice must travel with every copy of the software",
   ],
 ]);
 
