@@ -635,29 +635,40 @@ test('searching settings hides the rows that do not match, and says how many did
  * `list_displays` answers — after the pass that marked the rows already there.
  * They used to stay visible, unmarked, under a note counting fewer rows.
  *
- * The reply is held so the order is certain: `list_displays` is asked for when
- * the section opens, and an answer quick enough to land in the same pass would
- * prove nothing about the rows that come later.
+ * The reply is held until the section has been seen without them, so the order
+ * is certain rather than likely. And a row already on screen changes too: the
+ * mirror switch's description names the display once it resolves, which is
+ * what makes it match `prompter` — a row whose TEXT arrives late, not the row.
  */
 test('rows that render after the search ran are filtered too', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await openPreferences(page);
-  await page.evaluate(() => window.__E2E__.setDelay('list_displays', 1500));
+  await page.evaluate(() => window.__E2E__.setHeld('list_displays', true));
   await page.getByRole('searchbox', { name: 'Search settings' }).fill('prompter');
   await gotoSection(page, 'Prompter display and rigs');
 
+  const alwaysOnTop = page.locator('.content .toggle-row', { hasText: 'Always on top' });
+  const horizontal = page.locator('.content .toggle-row', { hasText: 'Horizontal mirror' });
   const framing = page.locator('.content .field', { has: page.getByLabel('How you are framed') });
-  // The section is open, and the rig rows are not here yet.
-  await expect(
-    page.getByRole('switch', { name: 'Horizontal mirror', includeHidden: true }),
-  ).toBeAttached();
+  // The section is open and the display list is not: only "Always on top"
+  // says teleprompter yet, and the rig rows do not exist.
+  await expect(alwaysOnTop).toBeVisible();
+  await expect(horizontal).toHaveAttribute('data-settings-search-miss', '');
   await expect(framing).toHaveCount(0);
+  await expectRowFilterNote(page, 1);
+
+  await releaseHeld(page, 'list_displays');
 
   await expect(framing).toBeAttached();
   await expect(framing).toHaveAttribute('data-settings-search-miss', '');
   await expect(framing).toBeHidden();
+  await expect(horizontal).toContainText('Teleprompter Display');
+  await expect(horizontal).toBeVisible();
   // And the note counts what is actually left on screen.
-  await expectRowFilterNote(page);
+  await expectRowFilterNote(page, 2);
+
+  await page.getByRole('button', { name: 'Show all' }).click();
+  await expect(framing).toBeVisible();
 });
 
 /**
@@ -674,7 +685,7 @@ test('a row a child component renders after the search ran is filtered too', asy
   await installTauriShim(page, { welcomed: true });
   await openPreferences(page);
   // Before the section opens: the picker asks as it mounts.
-  await page.evaluate(() => window.__E2E__.setDelay('get_speech_language_options', 1500));
+  await page.evaluate(() => window.__E2E__.setHeld('get_speech_language_options', true));
   await page.getByRole('searchbox', { name: 'Search settings' }).fill('speech');
   await gotoSection(page, 'Speech');
 
@@ -683,6 +694,8 @@ test('a row a child component renders after the search ran is filtered too', asy
   });
   await expect(page.getByText('Checking which languages are available')).toBeVisible();
   await expect(language).toHaveCount(0);
+
+  await releaseHeld(page, 'get_speech_language_options');
 
   await expect(language).toBeAttached();
   await expect(language).toHaveAttribute('data-settings-search-miss', '');
@@ -698,40 +711,71 @@ test('a row a child component renders after the search ran is filtered too', asy
 });
 
 /**
+ * A row inside another row is one setting, not two.
+ *
+ * Following's motion profile is a readout inside a `.field` of its own, and both
+ * wrappers are rows to the filter. Counted separately, a search for it said two
+ * settings matched while one was on screen — and marked separately, the inner
+ * row could be hidden inside an outer row that matched.
+ */
+test('searching counts a row once when another row sits inside it', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Following');
+  const readout = page.locator('.content .readout', { hasText: 'Motion profile' });
+  await expect(readout).toBeVisible();
+
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('motion profile');
+
+  await expect(readout).toBeVisible();
+  const diagnostics = page.locator('.content .toggle-row', { hasText: 'Developer diagnostics' });
+  await expect(diagnostics).toBeHidden();
+  await expectRowFilterNote(page, 1);
+});
+
+/**
+ * Let a command held by `setHeld` answer — once the screen has actually asked.
+ *
+ * Releasing first would lift the hold before the request it was there for, and
+ * the reply would then answer at once.
+ */
+async function releaseHeld(page: Page, command: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate((name) => window.__E2E__.calls.some((call) => call.command === name), command),
+    )
+    .toBe(true);
+  await page.evaluate((name) => window.__E2E__.setHeld(name, false), command);
+}
+
+/**
  * The row filter's note against the rows it claims to count.
  *
- * Both are read in ONE pass, inside the page, and polled until they agree: a
- * count captured once and compared with a note read later is two snapshots of a
- * section that may still be rendering. The whole number is parsed, so "1
- * setting" cannot pass on a note that says "10 settings", and every row wrapper
- * the filter indexes is counted — `.readout` included.
- *
- * With `expected`, the agreement must also be on that number, which is what
- * stops two zeroes (a note that never rendered, no rows at all) agreeing.
+ * Both are read in ONE pass, inside the page, and polled until they agree on
+ * `expected`: a count captured once and compared with a note read later is two
+ * snapshots of a section that may still be rendering. The whole number is
+ * parsed, so "1 setting" cannot pass on a note that says "10 settings"; every
+ * row wrapper the filter indexes is counted, `.readout` included; and a row
+ * inside another row is counted with it, as the filter counts it. A missing
+ * note reads as `null`, so it never agrees with a number.
  */
-async function expectRowFilterNote(page: Page, expected?: number): Promise<void> {
-  const read = async (): Promise<{ stated: number | string | null; visible: number }> => {
-    const { note, visible } = await page.evaluate(() => ({
-      note: document.querySelector('.content p.row-filter-note')?.textContent ?? null,
-      visible: document.querySelectorAll(
-        '.content :is(.field, .toggle-row, .readout):not([data-settings-search-miss])',
-      ).length,
-    }));
-    if (note === null) return { stated: null, visible };
-    const text = note.replace(/\s+/g, ' ').trim();
-    if (text.startsWith('No settings in this section matched.')) return { stated: 0, visible };
-    const match = /^(\d+) settings? matched in this section\./.exec(text);
-    // An unrecognised note comes back as itself, so a failure says what it read.
-    return { stated: match ? Number(match[1]) : text, visible };
-  };
-  if (expected !== undefined) {
-    await expect.poll(read).toEqual({ stated: expected, visible: expected });
-    return;
-  }
+async function expectRowFilterNote(page: Page, expected: number): Promise<void> {
   await expect
     .poll(async () => {
-      const { stated, visible } = await read();
-      return typeof stated === 'number' && stated === visible ? 'agree' : { stated, visible };
+      const { note, visible } = await page.evaluate(() => ({
+        note: document.querySelector('.content p.row-filter-note')?.textContent ?? null,
+        // Unmarked, and not inside another row.
+        visible: document.querySelectorAll(
+          '.content :is(.field, .toggle-row, .readout)' +
+            ':not([data-settings-search-miss]):not(:is(.field, .toggle-row, .readout) *)',
+        ).length,
+      }));
+      if (note === null) return { stated: null, visible };
+      const text = note.replace(/\s+/g, ' ').trim();
+      if (text.startsWith('No settings in this section matched.')) return { stated: 0, visible };
+      const match = /^(\d+) settings? matched in this section\./.exec(text);
+      // An unrecognised note comes back as itself, so a failure says what it read.
+      return { stated: match ? Number(match[1]) : text, visible };
     })
-    .toBe('agree');
+    .toEqual({ stated: expected, visible: expected });
 }

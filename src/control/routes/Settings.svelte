@@ -273,11 +273,19 @@
    * Mark every row under `root` against `query` (already trimmed and
    * lower-cased), and return how many matched — `null` for no query, when the
    * marks come off instead.
+   *
+   * A row inside another row is part of it, not a second setting: Following's
+   * motion profile wraps its readout — or its dropdown and a hint — in a
+   * `.field` of its own. Only the outermost row is searched, counted and
+   * hidden; the rows inside it go with it. Counted separately, one setting read
+   * as two; marked separately, a query that matched only the hint would hide
+   * the dropdown and leave its description standing.
    */
   function applyRowFilter(root: HTMLElement, query: string): number | null {
     let matched = 0;
     for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
-      if (query === '') {
+      const outer = row.parentElement?.closest(ROW_SELECTOR) ?? null;
+      if (query === '' || (outer !== null && root.contains(outer))) {
         row.removeAttribute('data-settings-search-miss');
         row.removeAttribute('data-settings-search-hit');
         continue;
