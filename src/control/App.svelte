@@ -449,7 +449,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     let disposed = false;
     const teardownShortcuts = installShortcuts();
     const teardownHelp = onShortcut((action) => {
-      if (action === 'command-help') shortcutsOpen = true;
+      if (action === 'command-help') showKeyboardShortcuts();
     });
 
     /* Leaving an active live session requires an explicit stop (spec §45.1). */
@@ -886,10 +886,25 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * it. Present can still be reached with it open — the native menu is not
    * behind the scrim — and in single-window presentation this window becomes
    * the prompter, where a modal would cover the script being read.
+   *
+   * It reads the open flag too, so a reference opened DURING the start (the
+   * startup awaits a save and a compile before the route changes) is closed
+   * again rather than left over the prompter.
    */
   $effect(() => {
-    if ($session.active || $takeStarting) closeSyntaxReference();
+    if ($syntaxReferenceOpen && ($session.active || $takeStarting)) closeSyntaxReference();
   });
+
+  /*
+   * The two help pages replace each other rather than stack. Both are opened
+   * from the native menu, which no scrim covers, and two Dialogs at the same
+   * z-index paint in DOM order while focus goes to whichever opened last — so
+   * Shortcuts opened over the reference took focus underneath it.
+   */
+  function showKeyboardShortcuts(): void {
+    closeSyntaxReference();
+    shortcutsOpen = true;
+  }
 
   /**
    * What each command actually does.
@@ -1020,8 +1035,11 @@ import { rememberReaderFrame } from './lib/reader-frame';
      * reaching this always has a window to bring forward.
      */
     showStageWindow: () => void focusAppWindow('stage'),
-    keyboardShortcuts: () => (shortcutsOpen = true),
-    syntaxReference: () => openSyntaxReference(),
+    keyboardShortcuts: showKeyboardShortcuts,
+    syntaxReference: () => {
+      shortcutsOpen = false;
+      openSyntaxReference();
+    },
     setupAssistant: () => void navigate({ name: 'welcome' }),
     exportSupportBundle: () => void exportSupportBundleFromMenu(),
     revealLogs: () => {

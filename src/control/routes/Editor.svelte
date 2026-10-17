@@ -1457,7 +1457,13 @@ import type { PresentationMode } from '../services/settings-types';
             nothing.
           -->
           <span class="secondary-spacer" aria-hidden="true"></span>
-          <Button size="sm" variant="ghost" title="Script syntax reference" onclick={openSyntaxReference}>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Script syntax reference"
+            disabled={$takeStarting}
+            onclick={openSyntaxReference}
+          >
             <Icon name="book-open" size={14} />
             Syntax reference
           </Button>

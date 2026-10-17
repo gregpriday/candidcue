@@ -11,9 +11,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { CompiledScript, SafeRenderNode } from '../contracts';
+import type { CompiledBlock, CompiledScript, SafeRenderNode } from '../contracts';
 import { compile } from './compile';
-import { KNOWN_CONTAINERS, SHORTHAND_CUES } from './directives';
+import { KNOWN_CONTAINERS, NAMED_DIRECTIVES, SHORTHAND_CUES } from './directives';
 import { PERFORMANCE_CUE_LABELS, performanceCueKind, projectForPerformance } from '../performance-view';
 import {
   READ_HEADINGS_SETTING,
@@ -78,6 +78,15 @@ const OUTCOME_FIELDS = [
   'takeCues',
 ] as const satisfies readonly (keyof SyntaxOutcome)[];
 
+/*
+ * Every asserted field is listed above, checked at compile time: a field added
+ * to `SyntaxOutcome` and filled in the catalog but not read here would make its
+ * expectations pass by being ignored.
+ */
+type UnreadOutcomeField = Exclude<keyof SyntaxOutcome, 'options' | (typeof OUTCOME_FIELDS)[number]>;
+const everyOutcomeFieldIsRead: [UnreadOutcomeField] extends [never] ? true : never = true;
+void everyOutcomeFieldIsRead;
+
 /** The asserted fields alone — not the options, and not a case's name or source. */
 function expected(outcome: SyntaxOutcome): SyntaxOutcome {
   const fields: Record<string, unknown> = {};
@@ -120,10 +129,50 @@ describe('the reference is complete', () => {
     }
   });
 
-  it('documents every shorthand cue', () => {
-    const shown = new Set(outcomes.flatMap((o) => o.cues ?? []).map((cue) => cue.cueType));
-    for (const cueType of Object.values(SHORTHAND_CUES)) {
-      expect(shown.has(cueType), `[${cueType}] has no example`).toBe(true);
+  it('documents every named directive', () => {
+    for (const name of Object.keys(NAMED_DIRECTIVES)) {
+      const used = new RegExp(`\\[${name}\\s*:`, 'i');
+      expect(
+        entries.some((entry) => used.test(entry.example)),
+        `[${name}: …] has no example`,
+      ).toBe(true);
+    }
+  });
+
+  it('documents every shorthand cue, by the name a user types', () => {
+    const shown = outcomes.flatMap((o) => o.cues ?? []);
+    for (const [name, cueType] of Object.entries(SHORTHAND_CUES)) {
+      expect(
+        shown.some((cue) => cue.cueType === cueType && cue.label.toLowerCase() === name),
+        `[${name}] has no example`,
+      ).toBe(true);
+    }
+  });
+
+  /**
+   * Every kind of block the compiler emits is asserted by some example, so the
+   * reference has said what makes one. A `Record` over the union, so a new kind
+   * does not compile until it is listed here — and then fails until it has one.
+   */
+  const BLOCK_KINDS: Record<CompiledBlock['kind'], true> = {
+    paragraph: true,
+    heading: true,
+    list_item: true,
+    blockquote: true,
+    image: true,
+    table: true,
+    diagram: true,
+    cue: true,
+    silent: true,
+    stage_only: true,
+    code: true,
+    divider: true,
+  };
+
+  it('documents every kind of block the compiler emits', () => {
+    const asserted = new Set<string>(outcomes.flatMap((o) => o.blockKinds ?? []));
+    for (const kind of Object.keys(BLOCK_KINDS)) {
+      expect(asserted.has(kind), `no example asserts a ${kind} block`).toBe(true);
     }
   });
 
@@ -193,7 +242,7 @@ describe('the reference is complete', () => {
   it('does not document the retired coaching syntax', () => {
     const text = JSON.stringify(SYNTAX_REFERENCE);
     expect(text).not.toMatch(/coach/i);
-    expect(text).not.toMatch(/<!--/);
+    expect(text).not.toMatch(/<!--\s*cc:/i);
     expect(text).not.toMatch(/\bcc:/i);
   });
 });

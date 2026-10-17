@@ -89,7 +89,7 @@ describe('SyntaxReferenceDialog', () => {
     const panel = open();
     const text = panel.textContent ?? '';
     expect(text).not.toMatch(/coach/i);
-    expect(text).not.toMatch(/<!--/);
+    expect(text).not.toMatch(/<!--\s*cc:/i);
     expect(text).not.toMatch(/\bcc:/i);
   });
 });

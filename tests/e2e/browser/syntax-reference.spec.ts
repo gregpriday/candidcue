@@ -36,6 +36,15 @@ async function chooseMenuCommand(page: Page, id: string): Promise<void> {
 
 const reference = (page: Page) => page.getByRole('dialog', { name: 'Script syntax reference' });
 
+/** Whether the last menu push enabled Help › Script Syntax Reference. */
+function referenceMenuEnabled(page: Page): Promise<boolean | null> {
+  return page.evaluate(() => {
+    const call = window.__E2E__.lastCall('set_menu_state');
+    const items = (call?.args as { items?: Array<{ id: string; enabled: boolean }> } | null)?.items;
+    return items?.find((item) => item.id === 'help.syntax-reference')?.enabled ?? null;
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
@@ -74,22 +83,46 @@ test('the editor button opens the reference and Escape returns focus to it', asy
 test('Help opens the same reference, whose last entry and Done are reachable', async ({ page }) => {
   const errors = watchPageErrors(page);
   await page.setViewportSize({ width: 900, height: 560 });
+  await expect.poll(() => referenceMenuEnabled(page)).toBe(true);
   await chooseMenuCommand(page, 'help.syntax-reference');
 
   const dialog = reference(page);
   await expect(dialog).toBeVisible();
 
+  // The page is taller than the panel, so the reference's own region scrolls
+  // under the wheel — not the document, and not the footer with Done in it.
+  const region = dialog.locator('.scroll');
+  const done = dialog.getByRole('button', { name: 'Done' });
+  const doneBefore = await done.boundingBox();
+  await region.hover();
+  await page.mouse.wheel(0, 20_000);
+  await expect.poll(() => region.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);
+
   const last = syntaxEntries().at(-1)!;
   const lastEntry = dialog.locator(`[data-entry="${last.id}"]`);
-  await lastEntry.scrollIntoViewIfNeeded();
   await expect(lastEntry).toBeInViewport();
   await expect(lastEntry.locator('pre code')).toHaveText(last.example);
 
-  const done = dialog.getByRole('button', { name: 'Done' });
-  await expect(done).toBeInViewport();
+  await expect(done).toBeInViewport({ ratio: 1 });
+  expect(await done.boundingBox()).toEqual(doneBefore);
   await done.click();
   await expect(dialog).toHaveCount(0);
   errors.expectClean();
+});
+
+test('Keyboard Shortcuts replaces the reference rather than opening under it', async ({ page }) => {
+  await chooseMenuCommand(page, 'help.syntax-reference');
+  await expect(reference(page)).toBeVisible();
+
+  await chooseMenuCommand(page, 'help.keyboard-shortcuts');
+  const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(shortcuts).toBeVisible();
+  await expect(reference(page)).toHaveCount(0);
+
+  await chooseMenuCommand(page, 'help.syntax-reference');
+  await expect(reference(page)).toBeVisible();
+  await expect(shortcuts).toHaveCount(0);
 });
 
 test('a take refuses the reference rather than covering the prompter', async ({ page }) => {
@@ -99,9 +132,9 @@ test('a take refuses the reference rather than covering the prompter', async ({ 
   });
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
 
+  // The menu greys the item out, and the command refuses even if delivered.
+  await expect.poll(() => referenceMenuEnabled(page)).toBe(false);
   await chooseMenuCommand(page, 'help.syntax-reference');
-  // Give a wrongly-accepted command time to render before asserting its absence.
-  await page.waitForTimeout(250);
   await expect(reference(page)).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
 });
