@@ -29,6 +29,12 @@
       <div class="toast {toast.tone}">
         <span class="dot" aria-hidden="true"></span>
         <span class="message">{toast.message}</span>
+        {#if toast.action}
+          {@const action = toast.action}
+          <button type="button" class="action" data-focus="control" onclick={() => action.run()}>
+            {action.label}
+          </button>
+        {/if}
         <button
           type="button"
           class="dismiss"
@@ -46,6 +52,12 @@
       <div class="toast danger">
         <span class="dot" aria-hidden="true"></span>
         <span class="message">{toast.message}</span>
+        {#if toast.action}
+          {@const action = toast.action}
+          <button type="button" class="action" data-focus="control" onclick={() => action.run()}>
+            {action.label}
+          </button>
+        {/if}
         <button
           type="button"
           class="dismiss"
@@ -124,6 +136,24 @@
 
   .message {
     min-width: 0;
+  }
+
+  /* Text, not a second button shape: the toast is already a surface, and a
+     filled button inside it would outweigh the message it acts on. */
+  .action {
+    flex: 0 0 auto;
+    padding: var(--space-1) var(--space-2);
+    border: none;
+    background: transparent;
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent-strong);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .action:hover {
+    background: var(--bg-hover-surface);
   }
 
   .dismiss {

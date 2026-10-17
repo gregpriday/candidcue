@@ -66,6 +66,7 @@ function followState(state: SmoothFollowState['state']): SmoothFollowState {
 interface PanelInputs {
   micState?: 'live' | 'muted' | 'disconnected';
   inputDeviceLost?: boolean;
+  microphoneRefused?: boolean;
   heardAnything?: boolean;
   heldByUser?: boolean;
   rollingAtPace?: boolean;
@@ -160,6 +161,20 @@ describe('FollowStatePanel honesty', () => {
     const text = textOf(true, 'holding', { micState: 'disconnected', inputDeviceLost: false });
     expect(text).toMatch(/not the microphone/i);
     expect(text).not.toMatch(/another input/i);
+  });
+
+  it('names a refused microphone as a refusal, with neither other remedy (#303)', () => {
+    // Same `micState` again, a third cause: the OS said no. Neither another
+    // input nor "this is not the microphone" is true of it.
+    const text = textOf(true, 'holding', {
+      micState: 'disconnected',
+      inputDeviceLost: false,
+      microphoneRefused: true,
+    });
+    expect(text).toContain('Microphone not allowed');
+    expect(text).toMatch(/System Settings/);
+    expect(text).not.toMatch(/another input/i);
+    expect(text).not.toMatch(/not the microphone/i);
   });
 
   it('never says the text is stationary while it rolls', () => {

@@ -21,6 +21,22 @@ export interface Toast {
    * presenter met all at once, minutes later, on a take that had worked.
    */
   key?: string;
+  /**
+   * One thing the reader can do about it, right there (#303).
+   *
+   * A notice that names a remedy the reader then has to go and find is the
+   * unfollowable-instruction defect in its smallest form: "allow it in System
+   * Settings" meant three menus deep, during a take, with the prompter up.
+   * The toast stays after the action runs — the action starts a remedy, it does
+   * not prove one worked, and the condition's own retraction is what clears it.
+   */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  /** Fire-and-forget; whatever it starts reports its own failures. */
+  run: () => void;
 }
 
 const store = writable<Toast[]>([]);
@@ -43,15 +59,22 @@ export const DEFAULT_TOAST_DURATION_MS: Record<ToastTone, number> = {
 export function showToast(
   message: string,
   tone: ToastTone = 'info',
-  options?: { durationMs?: number; key?: string },
+  options?: { durationMs?: number; key?: string; action?: ToastAction },
 ): number {
   const id = nextId;
   nextId += 1;
   const key = options?.key;
+  const action = options?.action;
   if (key !== undefined) dismissToastByKey(key);
   store.update((list) => [
     ...list,
-    { id, tone, message, ...(key === undefined ? {} : { key }) },
+    {
+      id,
+      tone,
+      message,
+      ...(key === undefined ? {} : { key }),
+      ...(action === undefined ? {} : { action }),
+    },
   ]);
   const duration = options?.durationMs ?? DEFAULT_TOAST_DURATION_MS[tone];
   if (duration > 0) {

@@ -2236,6 +2236,14 @@ fn every_registered_command_is_classified_for_recovery_mode() {
             "opens a file from this build's own resources; reads nothing of the user's",
         ),
         (
+            "get_microphone_permission",
+            "a passive OS read that never prompts; touches no app data",
+        ),
+        (
+            "open_microphone_settings",
+            "opens a fixed OS privacy pane; takes no argument and touches no app data",
+        ),
+        (
             "log_client_diagnostic",
             "the recovery screen's own failures have to be recordable",
         ),
@@ -2335,6 +2343,7 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         include_str!("../src/commands/align_cmds.rs"),
         include_str!("../src/commands/recovery_cmds.rs"),
         include_str!("../src/commands/shell_cmds.rs"),
+        include_str!("../src/commands/microphone_cmds.rs"),
     ]
     .concat();
 

@@ -4,7 +4,7 @@
   transport, §15.3 pause semantics, F.17 end-of-session summary.
 -->
 <script lang="ts">
-  import { openSettingsWindow } from '../lib/open-settings';
+  import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
   import FollowControls from '../components/FollowControls.svelte';
@@ -71,6 +71,7 @@ import { onShortcut } from '../lib/shortcuts';
     startPrompting,
     stopSession,
     switchMicrophone,
+    retryMicrophone,
     toggleBlankStage,
     togglePlayPause,
     toggleStageMirror,
@@ -144,6 +145,24 @@ import { onShortcut } from '../lib/shortcuts';
       ($session.inputDeviceLost || $session.usingFallbackInput) &&
       canSwitchMicrophone(),
   );
+
+  /**
+   * #303 — the OS refused the microphone. The input picker above is not offered
+   * for this (`inputDeviceLost` stays false): another input cannot answer a
+   * refusal. The privacy pane can, and then a retry.
+   */
+  const micAccessRecoveryOffered = $derived(hasVoiceTransport && $session.microphoneRefused);
+  let micRetrying = $state(false);
+
+  async function retryMicrophoneAccess(): Promise<void> {
+    if (micRetrying) return;
+    micRetrying = true;
+    try {
+      await retryMicrophone();
+    } finally {
+      micRetrying = false;
+    }
+  }
 
   /**
    * The take-controls drawer (§115). Declared here, beside the microphone state
@@ -1101,7 +1120,9 @@ import { onShortcut } from '../lib/shortcuts';
 
   /** Something needs the operator, and the drawer is the only place it shows. */
   const takeControlsAttention = $derived(
-    micRecoveryOffered || $smoothFollow.notices.some((notice) => notice.action),
+    micRecoveryOffered ||
+      micAccessRecoveryOffered ||
+      $smoothFollow.notices.some((notice) => notice.action),
   );
 
   function closeTakeControls(restoreFocus = true): void {
@@ -1293,7 +1314,7 @@ import { onShortcut } from '../lib/shortcuts';
     -->
     <span class="live-status">
       <span
-        class="status-dot {$session.inputDeviceLost
+        class="status-dot {$session.inputDeviceLost || $session.microphoneRefused
           ? 'danger'
           : !$session.voiceFollowingAvailable
             ? 'neutral'
@@ -1306,7 +1327,9 @@ import { onShortcut } from '../lib/shortcuts';
       ></span>
       {$session.inputDeviceLost
         ? 'Mic lost'
-        : !$session.voiceFollowingAvailable
+        : $session.microphoneRefused
+          ? 'Mic not allowed'
+          : !$session.voiceFollowingAvailable
           ? 'Voice unavailable'
           : $session.micState === 'live'
             ? 'Mic live'
@@ -1352,6 +1375,31 @@ import { onShortcut } from '../lib/shortcuts';
       <Button size="sm" variant="ghost" disabled={micSwitching} onclick={() => refreshMicInputs()}>
         Rescan
       </Button>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet micAccessRecovery()}
+  <!--
+    #303. What happened, and both halves of the way back: the pane where it is
+    allowed, and the retry once it has been. Not the input picker — that is the
+    remedy for a device, and this is not one.
+  -->
+  {#if micAccessRecoveryOffered}
+    <div class="mic-access" role="status">
+      <p class="lf-title">CandidCue is not allowed to use the microphone</p>
+      <p class="lf-note">
+        Allow CandidCue in System Settings → Privacy &amp; Security → Microphone, then try again. If
+        it is already allowed there, quit and reopen CandidCue.
+      </p>
+      <div class="mic-access-actions">
+        <Button size="sm" variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
+          Open System Settings
+        </Button>
+        <Button size="sm" disabled={micRetrying} onclick={() => void retryMicrophoneAccess()}>
+          {micRetrying ? 'Trying…' : 'Try again'}
+        </Button>
+      </div>
     </div>
   {/if}
 {/snippet}
@@ -1561,6 +1609,7 @@ import { onShortcut } from '../lib/shortcuts';
         micState={$session.micState}
 
         inputDeviceLost={$session.inputDeviceLost}
+        microphoneRefused={$session.microphoneRefused}
 
         heardAnything={$session.heardAnything}
 
@@ -1830,6 +1879,7 @@ import { onShortcut } from '../lib/shortcuts';
       is usually because the tab was showing attention, and a dead microphone is
       the fault with the shortest fuse and the only one whose remedy lives here.
     -->
+    {@render micAccessRecovery()}
     {@render micRecovery()}
 
     <p class="region-label">Tracking</p>
@@ -1840,6 +1890,7 @@ import { onShortcut } from '../lib/shortcuts';
       micState={$session.micState}
 
       inputDeviceLost={$session.inputDeviceLost}
+      microphoneRefused={$session.microphoneRefused}
 
       heardAnything={$session.heardAnything}
 
@@ -2040,6 +2091,34 @@ import { onShortcut } from '../lib/shortcuts';
   }
   .mic-picker:disabled {
     opacity: 0.6;
+  }
+
+  /* --- #303 the microphone was refused --- */
+  .mic-access {
+    position: relative;
+    margin-bottom: var(--space-3);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
+  /* Inset bar, never a one-sided border on a rounded box. Danger, unlike the
+     moved-panel notice: this take cannot follow a voice until it is fixed. */
+  .mic-access::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: var(--space-3);
+    bottom: var(--space-3);
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--danger);
+  }
+  .mic-access-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
   }
 
   .lf-title {

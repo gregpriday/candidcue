@@ -24,6 +24,7 @@
 import { emitSettingsSection } from '../services/settings-sync';
 import { openPreferences } from '../services/desktop-shell';
 import { describeError } from '../services/errors';
+import { openMicrophoneSettings } from '../services/microphone-permission';
 import type { SettingsSection } from '../stores/router';
 import { showToast } from '../stores/toasts';
 import { flushWorkspace, updateWorkspace } from '../stores/workspace';
@@ -38,5 +39,23 @@ export async function openSettingsWindow(section?: SettingsSection): Promise<voi
     await openPreferences();
   } catch (err) {
     showToast(`Settings could not be opened. ${describeError(err)}`, 'danger');
+  }
+}
+
+/**
+ * The OS microphone privacy pane — the one place a refused microphone can be
+ * allowed again (#303). Every surface that reports a refusal offers this.
+ *
+ * Failure is said, not swallowed: a button that silently does nothing is the
+ * dead end this exists to remove, and the copy still names the path by hand.
+ */
+export async function openMicrophonePrivacySettings(): Promise<void> {
+  try {
+    await openMicrophoneSettings();
+  } catch (err) {
+    showToast(
+      `System Settings could not be opened. Open it yourself, then go to Privacy & Security → Microphone. ${describeError(err)}`,
+      'danger',
+    );
   }
 }

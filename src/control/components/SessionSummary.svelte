@@ -149,6 +149,7 @@
       : resolveTakeOutcome({
           mode: $session.summary.mode,
           voiceFollowingAvailable: $session.summary.voiceFollowingAvailable,
+          microphoneRefused: $session.summary.microphoneRefused,
           wordsHeard: $session.summary.wordsHeard,
           wordsInFlight: $session.summary.wordsInFlight,
           followingShare: $session.summary.followingShare,

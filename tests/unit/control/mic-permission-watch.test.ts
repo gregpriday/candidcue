@@ -128,3 +128,37 @@ describe('watchMicrophonePermission', () => {
     expect(seen).toEqual([]);
   });
 });
+
+/*
+ * #303 — the explicit request calls a refusal a refusal and nothing else.
+ * Every failure used to come back 'denied', so a machine with no microphone
+ * plugged in was told its access was blocked and sent to System Settings.
+ */
+describe('requestMicrophoneAccess', () => {
+  function installGetUserMedia(getUserMedia: () => Promise<unknown>): void {
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        enumerateDevices: async () => [],
+        getUserMedia,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+    });
+  }
+
+  it('answers denied for a refusal', async () => {
+    installGetUserMedia(async () => {
+      throw Object.assign(new Error('refused'), { name: 'NotAllowedError' });
+    });
+    await expect(createRealVoiceFacade().requestMicrophoneAccess()).resolves.toBe('denied');
+  });
+
+  it('rejects with the device’s own code when there is no microphone', async () => {
+    installGetUserMedia(async () => {
+      throw Object.assign(new Error('none'), { name: 'NotFoundError' });
+    });
+    await expect(createRealVoiceFacade().requestMicrophoneAccess()).rejects.toThrow(
+      'MIC_DEVICE_MISSING',
+    );
+  });
+});

@@ -88,6 +88,27 @@ describe('resolveTakeOutcome', () => {
     expect(outcome.detail).toMatch(/nothing was lost|as you left it/i);
   });
 
+  it('blames the refusal, not the microphone, when the OS said no (#303)', () => {
+    // Long or short, a refused take heard nothing because nothing listened —
+    // "test or change the microphone" sent the presenter to working hardware.
+    for (const durationSeconds of [2, 120]) {
+      const outcome = resolveTakeOutcome(
+        take({ wordsHeard: 0, durationSeconds, microphoneRefused: true }),
+      );
+      expect(outcome.headline).toBe('CandidCue could not use the microphone');
+      expect(outcome.suggestion).toMatch(/System Settings/);
+      expect(outcome.suggestion).not.toMatch(/test or change/i);
+      expect(outcome.health).toBe('no_tracking');
+    }
+  });
+
+  it('reports what WAS heard when the refusal came later in the take', () => {
+    // A take that heard words, then had a resume refused, followed for part of
+    // its length; the refusal must not hide that.
+    const outcome = resolveTakeOutcome(take({ microphoneRefused: true }));
+    expect(outcome.headline).not.toBe('CandidCue could not use the microphone');
+  });
+
   it('counts an unfinished utterance as having been heard', () => {
     /*
      * `wordsHeard` is finals only, and the summary is taken before the last

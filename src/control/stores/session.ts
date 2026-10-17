@@ -67,6 +67,7 @@ import { defaultFollowingSettings } from '../lib/follow-profiles';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, onSettingsCommitted, patchSettings } from './settings';
 import { clearConditionToasts, dismissToastByKey, showToast } from './toasts';
+import { openMicrophonePrivacySettings } from '../lib/open-settings';
 
 /**
  * Lost audio is worth interrupting for — words were said and will never be
@@ -85,6 +86,14 @@ const TOAST_AUDIO_DROPPED = 'audio-dropped';
  * before the instruction could be carried out.
  */
 const TOAST_INPUT_FELL_BACK = 'input-fell-back';
+
+/**
+ * #303 — the OS refused this application the microphone.
+ *
+ * Keyed for the same reason as the fallback notice: it is a condition, it must
+ * not stack when a retry is refused again, and a retry that works retracts it.
+ */
+const TOAST_MIC_REFUSED = 'mic-refused';
 import { compiled as compiledStore } from './compiled';
 import { saveNow } from './editor';
 
@@ -199,6 +208,11 @@ export interface SessionSummary {
    * in the take keeps it true: the summary then reports on what was heard.
    */
   voiceFollowingAvailable: boolean;
+  /**
+   * The OS was still refusing the microphone when the take ended (#303). The
+   * summary otherwise read the resulting silence as a microphone to test.
+   */
+  microphoneRefused: boolean;
   /**
    * Where this take stopped, and the start of the section it stopped in
    * (CCUX-008, CCUX-016).
@@ -399,6 +413,16 @@ export interface SessionState {
    */
   usingFallbackInput: boolean;
   /**
+   * #303 — the OS refused this application the microphone.
+   *
+   * Not `inputDeviceLost`, and the distinction is the fix. Every `MIC_*` start
+   * failure used to raise that flag, so a refusal offered the input picker —
+   * and another input cannot answer a refusal, only the privacy pane can. This
+   * gates that remedy instead, and is cleared only once a retry has actually
+   * reopened capture: opening System Settings proves nothing.
+   */
+  microphoneRefused: boolean;
+  /**
    * False while the recogniser cannot run because the speech model was refused
    * (`isSpeechModelUnavailable`), which is not a microphone fault.
    *
@@ -519,6 +543,7 @@ const initial: SessionState = {
   micState: 'live',
   inputDeviceLost: false,
   usingFallbackInput: false,
+  microphoneRefused: false,
   voiceFollowingAvailable: true,
   snapshot: null,
   transcriptTail: [],
@@ -1414,7 +1439,9 @@ export function startLiveSession(input: StartSessionInput): string {
        * already gone looking at their wifi.
        */
       const micFailure = code !== null && code.startsWith('MIC_');
+      // The pill's "no audio" is true of a refusal too: nothing is captured.
       if (micFailure) voicePillDeviceLost = true;
+      const refused = code === 'MIC_PERMISSION_DENIED';
       /*
        * `micState` too, not just the connection.
        *
@@ -1451,10 +1478,13 @@ export function startLiveSession(input: StartSessionInput): string {
         ...s,
         connection: 'offline',
         micState: 'disconnected',
-        inputDeviceLost: micFailure || s.inputDeviceLost,
+        // A refusal is not a device fault (#303): no input could answer it.
+        inputDeviceLost: (micFailure && !refused) || s.inputDeviceLost,
+        microphoneRefused: refused,
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
-      showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
+      if (refused) reportMicrophoneRefused();
+      else showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });
   }
 
@@ -2471,7 +2501,14 @@ export function resumeSession(): void {
     .resume()
     .then(() => {
       if (resuming !== pipeline) return;
-      state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
+      state.update((s) => ({
+        ...s,
+        paused: 'none',
+        micState: 'live',
+        connection: 'connected',
+        microphoneRefused: false,
+      }));
+      dismissToastByKey(TOAST_MIC_REFUSED);
     })
     .catch((err) => {
       if (resuming !== pipeline) return;
@@ -2503,15 +2540,107 @@ export function resumeSession(): void {
        * from the menu, say — is a newer decision a late failure may not
        * overrule.
        */
+      const refused = errorCode(err) === 'MIC_PERMISSION_DENIED';
       state.update((s) => ({
         ...s,
         paused: pauseCount === releasing ? 'none' : s.paused,
         micState: 'disconnected',
         connection: 'offline',
+        microphoneRefused: refused,
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
-      showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
+      if (refused) reportMicrophoneRefused();
+      else showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
     });
+}
+
+/**
+ * #303 — the take's notice for a refused microphone, with the way back on it.
+ *
+ * The notice used to name System Settings and stop there, during a take, with
+ * the prompter up: an instruction with no control behind it. The pane opens
+ * from the notice itself, and "Try again" is in the take controls, beside the
+ * state it clears.
+ */
+function reportMicrophoneRefused(): void {
+  showToast(
+    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
+      'Allow it in System Settings, then choose Try again in the take controls.',
+    'danger',
+    {
+      key: TOAST_MIC_REFUSED,
+      action: { label: 'Open System Settings', run: () => void openMicrophonePrivacySettings() },
+    },
+  );
+}
+
+/**
+ * #303 — try the microphone again, after it was refused.
+ *
+ * A start that failed left the pipeline closed and resumable (`openSession`
+ * marks it paused), so this is `resume()`: the whole acquire → open → capture
+ * sequence again, on the same pipeline and the same session. The refusal is
+ * cleared only once that has resolved, because nothing short of it proves
+ * anything — not opening System Settings, and not the OS now reporting a grant
+ * a running webview may still be refused until CandidCue is reopened.
+ *
+ * A paused take is resumed instead. Reopening capture under a pause would send
+ * audio the presenter asked not to send, and `resumeSession` already retries
+ * the microphone on its way out of one.
+ *
+ * Resolves whether capture is open again.
+ */
+export async function retryMicrophone(): Promise<boolean> {
+  const s0 = get(state);
+  if (!s0.active || !pipeline) return false;
+  if (s0.paused !== 'none') {
+    resumeSession();
+    return false;
+  }
+  const retrying = pipeline;
+  const forSession = s0.sessionId;
+  const current = (): boolean =>
+    retrying === pipeline && get(state).sessionId === forSession;
+  trace('microphone', 'retry (user)');
+  state.update((s) => ({ ...s, connection: 'reconnecting' }));
+  try {
+    await retrying.resume();
+  } catch (err) {
+    if (!current()) return false;
+    const code = errorCode(err);
+    // Paused or ended while the retry was opening: that is what happened.
+    if (code === 'SESSION_STOPPED') return false;
+    const refused = code === 'MIC_PERMISSION_DENIED';
+    const modelUnavailable = isSpeechModelUnavailable(code);
+    state.update((s) => ({
+      ...s,
+      connection: 'offline',
+      micState: 'disconnected',
+      microphoneRefused: refused,
+      // Allowed now, but the device is what failed: that one the picker answers.
+      inputDeviceLost: s.inputDeviceLost || (!refused && code !== null && code.startsWith('MIC_')),
+      voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
+    }));
+    if (refused) {
+      reportMicrophoneRefused();
+    } else {
+      dismissToastByKey(TOAST_MIC_REFUSED);
+      showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
+    }
+    return false;
+  }
+  if (!current()) return false;
+  state.update((s) => ({
+    ...s,
+    micState: 'live',
+    connection: 'connected',
+    microphoneRefused: false,
+  }));
+  dismissToastByKey(TOAST_MIC_REFUSED);
+  // Capture is open, which is all this claims. Whether following is on is the
+  // presenter's switch, and the status line already says which.
+  showToast('CandidCue can use the microphone now.', 'success');
+  return true;
 }
 
 /**
@@ -2554,8 +2683,21 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   // Where the fallback counter stood before this attempt. If it moves, THIS
   // switch is what fell back.
   const fallbacksBefore = inputFallbackCount;
+  /*
+   * Whether a microphone is actually open on the chosen device when this is
+   * done (#303). A pipeline whose start failed has no capture to swap, and its
+   * switch used to resolve anyway — so the store announced "voice following has
+   * resumed" over a take that had opened nothing. The device is that
+   * pipeline's choice now, so starting it is the switch. Not under a pause:
+   * that is the presenter's to undo, and the resume will open this device.
+   */
+  let resumed = false;
   try {
-    await pipeline.switchMicrophone(deviceId);
+    if (!(await pipeline.switchMicrophone(deviceId))) {
+      if (pipeline !== forPipeline || get(state).paused !== 'none') return false;
+      await forPipeline.resume();
+      resumed = true;
+    }
   } catch (err) {
     // `SESSION_STOPPED` is the take being paused or ended mid-switch, and the
     // pipeline released the device it was opening; nothing failed (#289).
@@ -2584,9 +2726,13 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   state.update((s) => ({
     ...s,
     micState: 'live',
+    ...(resumed ? { connection: 'connected' as const } : {}),
     inputDeviceLost: false,
     usingFallbackInput: fellBack,
+    // Capture opened, so whatever refused it before has not refused this.
+    microphoneRefused: false,
   }));
+  dismissToastByKey(TOAST_MIC_REFUSED);
   if (fellBack) return false;
   // The input is the operator's choice again, so the "we picked one for you"
   // notice has nothing left to report.
@@ -3523,6 +3669,7 @@ export function stopSession(): SessionSummary {
      * telling it otherwise would hide what it heard.
      */
     voiceFollowingAvailable: s.voiceFollowingAvailable || everConnected,
+    microphoneRefused: s.microphoneRefused,
   };
   // §36.1: close the record BEFORE the teardown. `stopInternals` clears the
   // pass `takeEndToken` reads, so the ending has to be taken from it first.
@@ -3623,6 +3770,7 @@ function emptySummary(s: SessionState): SessionSummary {
     coverageScope: 'script',
     wordsInFlight: 0,
     voiceFollowingAvailable: true,
+    microphoneRefused: false,
   };
 }
 

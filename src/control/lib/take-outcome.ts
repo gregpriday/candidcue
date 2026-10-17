@@ -46,6 +46,11 @@ export interface TakeOutcomeInput {
    * was never the problem. Fed from `SessionSummary.voiceFollowingAvailable`.
    */
   voiceFollowingAvailable?: boolean;
+  /**
+   * The OS was refusing the microphone when the take ended (#303). With
+   * nothing heard, that is the reason — not a microphone to test or change.
+   */
+  microphoneRefused?: boolean;
   /** Words the recogniser FINALISED. Zero with none in flight means silence. */
   wordsHeard: number;
   /** Words in the utterance still open when the take stopped. */
@@ -180,6 +185,23 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   const time = input.followingTime;
 
   if (heard === 0) {
+    /*
+     * Refused, so nothing COULD be heard (#303) — before the "too short to
+     * tell" answer, because here it is not a question of length. "Test or
+     * change the microphone" over this sent the presenter to hardware that was
+     * never asked for.
+     */
+    if (input.microphoneRefused) {
+      return {
+        headline: 'CandidCue could not use the microphone',
+        detail: `This Mac did not allow CandidCue to use the microphone, so it could not follow your voice. You ended in ${input.endingLocation}.`,
+        suggestion:
+          'Allow CandidCue in System Settings → Privacy & Security → Microphone before the next take.',
+        // Not "no speech detected": nothing was listening to detect it.
+        health: 'no_tracking',
+        tone: 'attention',
+      };
+    }
     /*
      * Distinguish "it heard nothing" from "there was nothing to hear yet" —
      * and count only the time it was LISTENING (#287). Space and a hard pause

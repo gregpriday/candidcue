@@ -20,13 +20,14 @@ import { startTake, type StartTakeOptions } from './start-take';
 import { isCompileSettledForScript } from './editor-readiness';
 import { matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
+import { readMicrophonePermission } from '../services/microphone-permission';
 import type { AppSettings, PresentationMode } from '../services/settings-types';
 import type { AudioDeviceInfo } from '../../shared/contracts';
 import { compiled } from '../stores/compiled';
 import { takeDestination } from '../stores/destination';
 import { editor } from '../stores/editor';
 import { route } from '../stores/router';
-import { settings } from '../stores/settings';
+import { patchSettings, settings } from '../stores/settings';
 import { speechModelReadiness } from '../stores/speech-model-readiness';
 
 /** What is being launched, as far as readiness cares. */
@@ -47,6 +48,12 @@ export interface TakeReadinessPrompt {
    * part — rather than a default one.
    */
   start: () => Promise<unknown>;
+  /**
+   * Run this same launch through the check again — for when the user has
+   * changed something the sheet reported (#303). Launches if nothing is left
+   * to say; otherwise the sheet shows the new verdict.
+   */
+  recheck: () => Promise<void>;
 }
 
 const prompt = writable<TakeReadinessPrompt | null>(null);
@@ -128,7 +135,12 @@ export async function resolveTakeReadiness(
   scriptId: string,
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
-  const mic = await pinnedMicrophone();
+  // Both passive: a device list and the OS's answer about access, neither of
+  // which can prompt (§28.1).
+  const [mic, micPermission] = await Promise.all([
+    pinnedMicrophone(),
+    readMicrophonePermission(),
+  ]);
 
   /*
    * Everything else is read AFTER the await. The model's answer is live, and
@@ -182,6 +194,7 @@ export async function resolveTakeReadiness(
     modelInstalling: model.installing,
     pinnedMicLabel: mic.label,
     pinnedMicAvailable: mic.available,
+    micPermission,
     spokenWordCount: scriptFactsKnown ? (result?.spokenWordCount ?? 0) : 1,
     blockingDiagnostics: scriptFactsKnown
       ? (result?.diagnostics ?? []).filter((d) => d.blocking).length
@@ -217,7 +230,7 @@ export async function checkThenStart(
     await launch();
     return;
   }
-  prompt.set({ verdict, start: launch });
+  prompt.set({ verdict, start: launch, recheck: () => checkThenStart(scriptId, intent, launch) });
 }
 
 /** `startTake`, through the check. What every launcher outside the editor calls. */
@@ -255,4 +268,46 @@ export async function startAnyway(): Promise<void> {
   dismissTakeReadiness();
   if (held === null || held.verdict.blocked) return;
   await held.start();
+}
+
+/**
+ * The sheet's "Try again": check the held launch once more (#303).
+ *
+ * For a refusal fixed in System Settings, this is the whole retry — the OS's
+ * answer is read again, and the take launches if nothing is left to report.
+ */
+export async function recheckTakeReadiness(): Promise<void> {
+  const held = get(prompt);
+  if (held === null) return;
+  await held.recheck();
+}
+
+/**
+ * The sheet's "Allow microphone" (#303).
+ *
+ * The one place before a take that may show the OS prompt, because it is an
+ * explicit action (§28.1) — and the reason it exists: on a first take the
+ * prompt used to appear only after Present had turned the window into the
+ * prompter. The probe stream is released at once; the take opens its own.
+ *
+ * Whatever the answer, the launch is checked again rather than started: a
+ * grant with nothing else to report launches, and a refusal comes back as the
+ * row that says how to undo it.
+ */
+export async function allowMicrophoneForTake(): Promise<void> {
+  const held = get(prompt);
+  if (held === null) return;
+  try {
+    const answer = await getVoiceFacade().requestMicrophoneAccess();
+    // The same record Settings keeps, for platforms that cannot report it.
+    if (answer === 'granted' && !get(settings).audio.microphoneGranted) {
+      void patchSettings('audio', { microphoneGranted: true }).catch(() => {});
+    }
+  } catch {
+    // A device that would not open is not a refusal. The take reports it in
+    // its own words if it persists; the access question has been answered.
+  }
+  // Dismissed, or replaced by another launch, while the OS was asking.
+  if (get(prompt) !== held) return;
+  await held.recheck();
 }

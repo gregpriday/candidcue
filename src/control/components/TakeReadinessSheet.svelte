@@ -17,17 +17,38 @@
 <script lang="ts">
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
-  import { openSettingsWindow } from '../lib/open-settings';
+  import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
   import { summariseReadiness, type ReadinessVerdict } from '../lib/take-readiness';
 
   interface Props {
     verdict: ReadinessVerdict | null;
     /** Launch anyway. Absent for a blocked take — there is nothing to launch. */
     onstart?: () => void;
+    /** Ask the OS for the microphone, then check again (#303). */
+    onallowmicrophone?: () => Promise<void>;
+    /** Check this launch again — after a change made in System Settings. */
+    onrecheck?: () => Promise<void>;
     onclose: () => void;
   }
 
-  let { verdict, onstart, onclose }: Props = $props();
+  let { verdict, onstart, onallowmicrophone, onrecheck, onclose }: Props = $props();
+
+  /*
+   * One microphone action at a time. "Allow" can hold the OS prompt open for as
+   * long as the user takes to answer it, and a second click would queue a
+   * second request behind it.
+   */
+  let micBusy = $state(false);
+
+  async function runMicrophoneAction(action: (() => Promise<void>) | undefined): Promise<void> {
+    if (!action || micBusy) return;
+    micBusy = true;
+    try {
+      await action();
+    } finally {
+      micBusy = false;
+    }
+  }
 </script>
 
 <Dialog open={verdict !== null && verdict.show} title="Before this take" onclose={onclose}>
@@ -45,6 +66,32 @@
               <Button size="sm" onclick={() => void openSettingsWindow(section)}>
                 {finding.action.label}
               </Button>
+            {:else if finding.action?.microphone === 'allow'}
+              <Button
+                size="sm"
+                disabled={micBusy}
+                onclick={() => void runMicrophoneAction(onallowmicrophone)}
+              >
+                {finding.action.label}
+              </Button>
+            {:else if finding.action?.microphone === 'privacy'}
+              <!--
+                #303. The pane is where a refusal is undone, and the user comes
+                back here afterwards — so the re-check sits beside it.
+              -->
+              <div class="finding-actions">
+                <Button size="sm" onclick={() => void openMicrophonePrivacySettings()}>
+                  {finding.action.label}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={micBusy}
+                  onclick={() => void runMicrophoneAction(onrecheck)}
+                >
+                  Try again
+                </Button>
+              </div>
             {/if}
           </li>
         {/each}
@@ -115,6 +162,12 @@
   }
   .finding.blocking::before {
     background: var(--danger);
+  }
+
+  .finding-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .finding-label {

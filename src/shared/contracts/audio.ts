@@ -27,6 +27,16 @@ export type RealtimeState =
   | 'recoverable_error'
   | 'fatal_error';
 
+/**
+ * Whether the OS allows this application the microphone (#303), as
+ * `get_microphone_permission` reports it — read, never asked.
+ *
+ * `prompt` means never asked, which is the only state in which the OS will
+ * show its prompt. `restricted` is managed by policy rather than chosen by the
+ * user. `unsupported` is "this platform cannot say" and is neither answer.
+ */
+export type MicrophonePermission = 'granted' | 'denied' | 'restricted' | 'prompt' | 'unsupported';
+
 export interface AudioDeviceInfo {
   deviceId: string;
   groupId?: string;
