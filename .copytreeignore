@@ -104,10 +104,7 @@ docs/**
 
 # ── Data blobs ───────────────────────────────────────────────────────────────
 # Word lists and vocabularies: large, flat, and they teach nothing the code
-# using them doesn't say better. common-words.txt is 8,500 lines of ordinary
-# English backing the "don't bias the recogniser on plain words" rule in
-# crates/cc-align/src/.
-crates/cc-align/assets/**
+# using them doesn't say better.
 src-tauri/models/**/tokens.txt
 
 # ── Lockfiles ────────────────────────────────────────────────────────────────

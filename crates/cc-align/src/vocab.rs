@@ -46,10 +46,20 @@
 //!    outside ASCII is a name somebody chose deliberately. Digits mixed with
 //!    letters are a model number or a unit. None of these needs a corpus to
 //!    recognise, and none of them is ambiguous.
-//! 2. **Absence from ordinary English** (`assets/common-words.txt`), which is a
-//!    filter rather than a detector. It exists to stop the capitalisation rule
-//!    firing on `Monday`, and to let a plain lowercase word like `teleprompter`
-//!    through at a low score when nothing better fills the list.
+//! 2. **Ordinary English**, which is a filter rather than a detector. It
+//!    exists to stop the capitalisation rule firing on `Monday`, `Then` or the
+//!    `Big Idea` of a title, and it is judged from two things only: a short
+//!    hand-written table of grammar words, and the script itself. A word the
+//!    script also writes in lowercase is a word, whatever its capital says
+//!    elsewhere. A name is never written that way, which is the property the
+//!    filter exists to keep.
+//!
+//!    There is deliberately no dictionary behind this. Every frequency list
+//!    large enough to matter carries names (`aaron`, `aaliyah` and `zimbabwe`
+//!    all sit in the top 20k of a web ranking), and would quietly suppress
+//!    exactly the words this module is here to find; the one list that had
+//!    been cleaned of them came under a share-alike licence this repository
+//!    does not carry.
 //!
 //! Position matters as much as shape: a capitalised word at the start of a
 //! sentence is evidence of nothing, which is why [`VocabToken`] carries a
@@ -147,10 +157,11 @@ pub fn extract_terms(tokens: &[VocabToken<'_>], limits: VocabLimits) -> Vec<Stri
         .collect();
 
     let occurrences = count_occurrences(&words);
+    let english = OrdinaryEnglish::of(&words);
     let mut candidates: Vec<Candidate> = Vec::new();
     collect_figure_phrases(&words, &mut candidates);
-    collect_name_phrases(&words, &mut candidates);
-    collect_singletons(&words, &mut candidates);
+    collect_name_phrases(&words, &english, &mut candidates);
+    collect_singletons(&words, &english, &mut candidates);
     rank(candidates, &occurrences, limits)
 }
 
@@ -210,140 +221,128 @@ pub fn spoken_surfaces(source: &str, options: CompileOptions) -> Vec<String> {
  * Ordinary English
  * ---------------------------------------------------------------------- */
 
-/// The list, with its comment header stripped. See the asset for provenance.
-const COMMON_WORDS: &str = include_str!("../assets/common-words.txt");
+/// Grammar words the alignment stopword profile does not already hold.
+///
+/// Closed classes only: pronouns, determiners, prepositions, conjunctions,
+/// auxiliaries, greetings, and the handful of time words a sentence opens on.
+/// A closed class is grammar rather than vocabulary — it can be written down
+/// whole, it does not grow, and nothing in it is a name — which is what keeps
+/// this table from becoming a dictionary again. A content word does not belong
+/// here; whether `Design` is ordinary is a question for the script's own
+/// evidence (see [`OrdinaryEnglish`]), not for a list.
+///
+/// Read together with [`crate::normalize::is_stopword`], which is deliberately
+/// NOT widened for this: it sets alignment weights, and growing it would move
+/// the aligner to fix the extractor.
+const FUNCTION_WORDS: &[&str] = &[
+    "after", "again", "against", "ago", "almost", "along", "already", "although", "always", "am",
+    "among", "another", "anybody", "anyone", "anything", "anyway", "anywhere", "around", "because",
+    "before", "behind", "below", "beneath", "beside", "besides", "between", "beyond", "both",
+    "during", "each", "either", "else", "enough", "even", "ever", "every", "everybody", "everyone",
+    "everything", "everywhere", "except", "few", "further", "hello", "hence", "hers", "herself",
+    "hey", "hi", "him", "himself", "however", "inside", "itself", "least", "less", "many", "maybe",
+    "mine", "more", "most", "much", "must", "myself", "near", "neither", "never", "next", "nobody",
+    "none", "nor", "nothing", "nowhere", "off", "often", "once", "only", "onto", "other", "others",
+    "ought", "ours", "ourselves", "outside", "own", "perhaps", "please", "quite", "rather", "same",
+    "several", "since", "somebody", "someone", "something", "sometimes", "somewhere", "soon",
+    "still", "such", "thanks", "theirs", "themselves", "therefore", "though", "through",
+    "throughout", "thus", "today", "together", "tomorrow", "tonight", "too", "toward", "towards",
+    "under", "unless", "until", "upon", "whatever", "whenever", "whether", "which", "while", "whom",
+    "whose", "within", "without", "yesterday", "yet", "yours", "yourself", "yourselves",
+];
 
-fn common_words() -> &'static [&'static str] {
-    static WORDS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    WORDS.get_or_init(|| {
-        COMMON_WORDS
-            .lines()
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .collect()
-    })
-}
+/// Endings a possessive or contraction adds to the word wearing it.
+///
+/// `nobody's` is `nobody` and `doesn't` is `does`. Ordinary English with an
+/// apostrophe attached is still ordinary English, and treating one as an
+/// unknown word would offer the recogniser `nobody's` as a term worth
+/// learning. `can't` and `won't` do not reduce this way and are simply not
+/// ordinary, which costs nothing: neither is a capital anyone needs explained.
+const CLITICS: &[&str] = &["'s", "'re", "'ve", "'ll", "'d", "'m", "n't"];
 
-/// Is `word` ordinary English — a word no script needs to teach a recogniser?
+/// The form a word is looked up under, or `None` if it cannot be ordinary.
 ///
 /// Case-insensitive, ASCII-only by definition: a word carrying a letter outside
 /// ASCII is never ordinary for this purpose, because that letter is exactly the
 /// thing the recogniser is about to get wrong.
-///
-/// Tries the word itself, then its US/UK counterpart, then a short list of
-/// regular suffix strips against both. The asset holds word FAMILIES, so the
-/// strips are a backstop for words the NGSL lists without every derivation
-/// (`teleprompter` is absent either way; `dashboards` is reachable from
-/// `dashboard`), not the primary mechanism.
-pub fn is_ordinary_word(word: &str) -> bool {
-    // `nobody's` is `nobody`. Possessives and contractions are ordinary English
-    // wearing an apostrophe, and treating one as an unknown word would offer
-    // the recogniser `nobody's` as a term worth learning.
+fn ordinary_key(word: &str) -> Option<String> {
     let lowered = word
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_lowercase()
-        .replace(['\'', '\u{2019}'], "");
-    if lowered.len() < 2 || !lowered.chars().all(|c| c.is_ascii_alphabetic()) {
-        return false;
-    }
-    let list = common_words();
-    let known = |w: &str| list.binary_search(&w).is_ok();
-    if known(&lowered) {
-        return true;
-    }
-    for variant in fold_spelling(&lowered) {
-        if known(&variant) {
-            return true;
-        }
-        for stem in strip_suffixes(&variant) {
-            if known(&stem) {
-                return true;
-            }
-        }
-    }
-    strip_suffixes(&lowered).iter().any(|s| known(s))
+        .replace('\u{2019}', "'");
+    let stem = CLITICS
+        .iter()
+        .find_map(|clitic| lowered.strip_suffix(clitic).filter(|s| !s.is_empty()))
+        .unwrap_or(&lowered);
+    (!stem.is_empty() && stem.chars().all(|c| c.is_ascii_lowercase())).then(|| stem.to_string())
 }
 
-/// US/UK spelling equivalents of `word`.
+fn is_function_word(key: &str) -> bool {
+    crate::normalize::is_stopword(key) || FUNCTION_WORDS.binary_search(&key).is_ok()
+}
+
+/// Is `word` ordinary English in ANY script — grammar no recogniser needs
+/// teaching?
 ///
-/// The asset stores one spelling of each pair, so this is what makes a British
-/// script behave like an American one. Each rule is applied independently — a
-/// word matching none of them yields nothing and costs a single length check.
-fn fold_spelling(word: &str) -> Vec<String> {
-    const SUFFIX_SWAPS: &[(&str, &str)] = &[
-        ("isation", "ization"),
-        ("isations", "izations"),
-        ("ise", "ize"),
-        ("ises", "izes"),
-        ("ised", "ized"),
-        ("ising", "izing"),
-        ("yse", "yze"),
-        ("ysed", "yzed"),
-        ("ysing", "yzing"),
-        ("our", "or"),
-        ("ours", "ors"),
-        ("oured", "ored"),
-        ("ouring", "oring"),
-        ("ence", "ense"),
-        ("ences", "enses"),
-        ("ogue", "og"),
-        ("ogues", "ogs"),
-        ("mme", "m"),
-        ("mmes", "ms"),
-        ("re", "er"),
-        ("res", "ers"),
-        ("lling", "ling"),
-        ("lled", "led"),
-        ("ller", "ler"),
-    ];
-    let mut out = Vec::new();
-    for (from, to) in SUFFIX_SWAPS {
-        // `re` → `er` on a three-letter word turns `are` into `aer`; the guard
-        // keeps the shortest rules away from words that are mostly suffix.
-        if word.len() >= from.len() + 3 {
-            if let Some(stem) = word.strip_suffix(from) {
-                out.push(format!("{stem}{to}"));
-            }
-        }
-    }
-    // `anaemia` → `anemia`, `oesophagus` → `esophagus`.
-    for digraph in ["ae", "oe"] {
-        if let Some(at) = word.find(digraph) {
-            let mut folded = String::with_capacity(word.len() - 1);
-            folded.push_str(&word[..at]);
-            folded.push('e');
-            folded.push_str(&word[at + digraph.len()..]);
-            out.push(folded);
-        }
-    }
-    out
+/// Deliberately narrow: `FUNCTION_WORDS` and the stopword profile, and nothing
+/// else. `people` and `design` are not in it and do not need to be — a plain
+/// lowercase word is never sent anyway, and a capitalised one is judged against
+/// the script's own lowercase uses by `OrdinaryEnglish`. What this
+/// answers is the part no script can: whether `Then`, opening a sentence in
+/// front of `SoundCloud`, is grammar or the first half of a name.
+pub fn is_ordinary_word(word: &str) -> bool {
+    ordinary_key(word).is_some_and(|key| is_function_word(&key))
 }
 
-/// Regular inflections, stripped back towards a headword.
-fn strip_suffixes(word: &str) -> Vec<String> {
-    const SUFFIXES: &[&str] = &["s", "es", "ed", "ing", "ly", "er", "est", "'s"];
-    let mut out = Vec::new();
-    if let Some(stem) = word.strip_suffix("ies") {
-        out.push(format!("{stem}y"));
+/// Ordinary English for ONE script: the grammar words, plus every word the
+/// script itself writes in lowercase.
+///
+/// The second half is evidence standing in for a corpus. `The Big Idea` is a
+/// title when the same script talks about "a big idea", and `IMPORTANT` is
+/// emphasis when it also says "important"; `Saoirse` is a name because nobody
+/// writes `saoirse`. The script is the one source that knows which of its
+/// capitals are words, and it costs nothing to ask.
+///
+/// Exact spellings only. No suffix is stripped and no spelling is folded,
+/// because both invent relationships the script never made — `Miller` is not
+/// `mill`, and a witness that has to be argued for is not a witness. A
+/// hyphenated token witnesses nothing, not even its own parts: if it did,
+/// every lowercase compound would vouch for itself, and `sherpa-onnx` would
+/// look as ordinary as `held-back`.
+///
+/// What it cannot see is a name the script also uses as a word (`Rust` beside
+/// `rust`), or an ordinary capital the script never repeats in lowercase. The
+/// first errs towards dropping a term, but only one whose spelling the script
+/// itself treats as a word; the second errs towards sending one, which is the
+/// direction any filter short of a dictionary has to err in.
+struct OrdinaryEnglish {
+    witnessed: std::collections::BTreeSet<String>,
+}
+
+impl OrdinaryEnglish {
+    fn of(words: &[Word<'_>]) -> Self {
+        let witnessed = words
+            .iter()
+            .filter(|w| {
+                w.core
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '\'' || c == '\u{2019}')
+            })
+            .filter_map(|w| ordinary_key(w.core))
+            .collect();
+        Self { witnessed }
     }
-    for suffix in SUFFIXES {
-        if word.len() >= suffix.len() + 3 {
-            if let Some(stem) = word.strip_suffix(suffix) {
-                out.push(stem.to_string());
-                // `running` → `run`, `stopped` → `stop`.
-                let bytes = stem.as_bytes();
-                if bytes.len() >= 3 && bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
-                    out.push(stem[..stem.len() - 1].to_string());
-                }
-            }
-        }
+
+    fn contains(&self, word: &str) -> bool {
+        ordinary_key(word)
+            .is_some_and(|key| is_function_word(&key) || self.witnessed.contains(&key))
     }
-    out
 }
 
 /// Capitalised words that are ordinary despite being proper nouns.
 ///
-/// The NGSL strips days, months and numerals on purpose — sensible for a
-/// vocabulary syllabus, wrong for us, because it leaves `Monday` looking
+/// A script almost never writes a day, a month or a title in lowercase, so its
+/// own evidence cannot clear one, and without this table `Monday` would look
 /// exactly like `Nkosinathi`. Short and hand-written: every entry is here
 /// because it is a capitalised word a presenter says without needing help.
 const ORDINARY_CAPITALISED: &[&str] = &[
@@ -722,7 +721,11 @@ fn shape_score(word: &Word<'_>, ordinary: bool) -> u32 {
 /// capitalises the first word of a sentence, not the second. A run of one is
 /// only evidence when it is NOT sentence-initial, which is the whole reason
 /// [`VocabToken`] carries a sentence ordinal.
-fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
+fn collect_name_phrases(
+    words: &[Word<'_>],
+    english: &OrdinaryEnglish,
+    out: &mut Vec<Candidate>,
+) {
     let mut i = 0;
     while i < words.len() {
         if !is_name_part(&words[i]) {
@@ -738,7 +741,7 @@ fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
         // grammar rather than evidence — so the run starts after it.
         let mut start = i;
         if words[start].sentence_start
-            && is_ordinary_word(words[start].core)
+            && english.contains(words[start].core)
             && !words[start].shape.is_distinctive()
             && end - start >= 2
         {
@@ -751,12 +754,12 @@ fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
             // name: `The Big Idea` teaches the recogniser nothing.
             let informative = span
                 .iter()
-                .any(|w| w.shape.is_distinctive() || !is_ordinary_word(w.core));
+                .any(|w| w.shape.is_distinctive() || !english.contains(w.core));
             if informative {
                 let text = span.iter().map(|w| w.core).collect::<Vec<_>>().join(" ");
                 let strongest = span
                     .iter()
-                    .map(|w| shape_score(w, is_ordinary_word(w.core)))
+                    .map(|w| shape_score(w, english.contains(w.core)))
                     .max()
                     .unwrap_or(0);
                 // The phrase must out-score every word inside it, or the
@@ -764,7 +767,7 @@ fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
                 // the phrase — the wrong way round. So it earns the same
                 // bonuses its best part would earn on its own, plus the phrase
                 // bonus for the context it adds.
-                let uncommon = if span.iter().any(|w| !is_ordinary_word(w.core)) {
+                let uncommon = if span.iter().any(|w| !english.contains(w.core)) {
                     SCORE_UNCOMMON
                 } else {
                     0
@@ -785,13 +788,13 @@ fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
 
 /* ----------------------------- singletons ---------------------------- */
 
-fn collect_singletons(words: &[Word<'_>], out: &mut Vec<Candidate>) {
+fn collect_singletons(words: &[Word<'_>], english: &OrdinaryEnglish, out: &mut Vec<Candidate>) {
     for (index, word) in words.iter().enumerate() {
         if word.core.is_empty() || word.shape.letters == 0 {
             continue;
         }
         let shape = word.shape;
-        let ordinary = is_ordinary_word(word.core);
+        let ordinary = english.contains(word.core);
         let mut score = shape_score(word, ordinary);
 
         if shape.hyphenated
@@ -799,7 +802,7 @@ fn collect_singletons(words: &[Word<'_>], out: &mut Vec<Candidate>) {
             && word
                 .core
                 .split('-')
-                .any(|part| part.len() >= 3 && !is_ordinary_word(part))
+                .any(|part| part.len() >= 3 && !english.contains(part))
         {
             score += SCORE_HYPHENATED;
         }
@@ -818,14 +821,14 @@ fn collect_singletons(words: &[Word<'_>], out: &mut Vec<Candidate>) {
             score += SCORE_PROPER_NOUN;
         }
         // A plain lowercase word with no shape signal is NEVER sent, however
-        // rare the word list thinks it is. This class used to be offered when
+        // rare it looks. This class used to be offered when
         // the script repeated it, and every member it ever produced —
         // `backend`, `microphone`, `milliseconds`, `transcribe`, `ingestion`,
         // `onboarding` — is ordinary technical English that no recogniser has
         // trouble with. It bought nothing and, on `technical.md`, cost four of
-        // the nine duplications that made that capture worse. The word list is
-        // a filter on candidates orthography has already found; it is not
-        // itself a reason to send a word.
+        // the nine duplications that made that capture worse. Ordinary English
+        // is a filter on candidates orthography has already found; being
+        // outside it is not itself a reason to send a word.
         if score == 0 {
             continue;
         }
@@ -1002,25 +1005,59 @@ mod tests {
     }
 
     #[test]
-    fn the_word_list_is_sorted_and_loads() {
-        let words = common_words();
-        assert!(words.len() > 8_000, "got {}", words.len());
-        assert!(words.windows(2).all(|w| w[0] < w[1]), "asset must stay sorted");
-    }
-
-    #[test]
-    fn ordinary_english_is_recognised_through_inflection_and_spelling() {
-        for word in ["the", "people", "design", "went", "children", "margins"] {
+    fn grammar_is_ordinary_in_any_script_and_names_never_are() {
+        for word in ["the", "Then", "nobody", "Through", "today", "doesn't", "We're"] {
             assert!(is_ordinary_word(word), "{word} should be ordinary");
         }
-        // US/UK folding.
-        for word in ["colour", "centre", "organisation", "travelling", "programme", "defence"] {
-            assert!(is_ordinary_word(word), "{word} should fold to its US spelling");
+        // A content word is not grammar. Whether `design` is ordinary is the
+        // script's call, made by `OrdinaryEnglish`, never this table's.
+        for word in ["people", "design", "children"] {
+            assert!(!is_ordinary_word(word), "{word} is not a function word");
         }
         // Names and brands must survive the filter — that is its whole job.
         for word in ["saoirse", "dlamini", "rustlight", "pagerduty", "reykjavik", "zimbabwe"] {
             assert!(!is_ordinary_word(word), "{word} must not be filtered out");
         }
+    }
+
+    #[test]
+    fn a_title_the_script_also_says_in_lowercase_is_not_a_name() {
+        let terms = extract(&[
+            "Every team has a big idea it never ships.",
+            "Ours was called The Big Idea and Saoirse built it.",
+        ]);
+        for title in ["The Big Idea", "Big Idea"] {
+            assert!(!has(&terms, title), "{title} in {terms:?}");
+        }
+        // The same evidence can never clear a name: nobody writes `saoirse`.
+        assert!(has(&terms, "Saoirse"), "{terms:?}");
+    }
+
+    #[test]
+    fn emphasis_is_not_an_initialism_when_the_script_uses_the_word() {
+        let terms = extract(&[
+            "This part is IMPORTANT, so read it twice.",
+            "The important thing is that GDPR still applies.",
+        ]);
+        assert!(!has(&terms, "IMPORTANT"), "{terms:?}");
+        assert!(has(&terms, "GDPR"), "{terms:?}");
+    }
+
+    #[test]
+    fn a_lowercase_compound_does_not_vouch_for_its_own_parts() {
+        // Saying `sherpa-onnx` twice is not saying `sherpa` and `onnx`; if a
+        // compound witnessed its parts, every compound would clear itself.
+        let terms = extract(&[
+            "We run the model through sherpa-onnx on the laptop.",
+            "Every take goes through sherpa-onnx and nothing else.",
+        ]);
+        assert!(has(&terms, "sherpa-onnx"), "{terms:?}");
+        // Parts the script does say on their own are ordinary.
+        let terms = extract(&[
+            "Nothing was held back from the team.",
+            "The held-back budget went to hiring.",
+        ]);
+        assert!(!has(&terms, "held-back"), "{terms:?}");
     }
 
     #[test]
@@ -1092,11 +1129,10 @@ mod tests {
             "Before we get into the roadmap I want to introduce the people who built this.",
             "It is a good idea and we should do it today.",
         ]);
-        // `roadmap` is outside the NGSL, so it may appear as a low-scoring
-        // plain word; nothing capitalised or ordinary may.
-        for unwanted in ["Before", "It", "people", "today", "good"] {
-            assert!(!has(&terms, unwanted), "{unwanted} in {terms:?}");
-        }
+        // A capital that opens a sentence is grammar and a plain lowercase
+        // word is never sent, so ordinary prose offers nothing at all — not
+        // even `roadmap`, which no table of grammar words knows.
+        assert!(terms.is_empty(), "{terms:?}");
     }
 
     #[test]
@@ -1206,6 +1242,7 @@ mod tests {
     #[test]
     fn a_possessive_is_still_ordinary_english() {
         assert!(is_ordinary_word("nobody's"), "possessive must fold to its stem");
+        assert!(is_ordinary_word("nobody\u{2019}s"), "a curly apostrophe is still one");
         let terms = extract(&["Replacing them is nobody's favourite quarter."]);
         assert!(!has(&terms, "nobody's"), "{terms:?}");
     }
@@ -1216,6 +1253,7 @@ mod tests {
             ("NUMBER_WORDS", NUMBER_WORDS),
             ("UNIT_WORDS", UNIT_WORDS),
             ("ORDINARY_CAPITALISED", ORDINARY_CAPITALISED),
+            ("FUNCTION_WORDS", FUNCTION_WORDS),
         ] {
             assert!(
                 table.windows(2).all(|w| w[0] < w[1]),
