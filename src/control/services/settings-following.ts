@@ -21,10 +21,17 @@ import {
 /** Camel-cased twin of `settings::FollowingSettings` in Rust. */
 export interface RustFollowingSettings {
   feel: string;
+  /**
+   * Still in Rust's document and still validated there, but nothing on either
+   * side reads it (#218). The adapter neither maps it in nor sends it back, so
+   * Rust's merge keeps whatever it stored until its half of the removal lands.
+   */
   fidelityMode: string;
   motionProfileId: string;
-  /** `null` (Rust `None`) means "no cap" — see §42.1. */
-  semanticRequestLimit: number | null;
+  /*
+   * No `semanticRequestLimit`: Rust dropped it with the hosted sidecar it
+   * capped, and serde ignores it on documents that still carry one.
+   */
   developerDiagnostics: boolean;
 }
 
@@ -38,9 +45,7 @@ export function followingFromRust(
   if (!rust) return defaultFollowingSettings();
   return clampFollowing({
     feel: rust.feel,
-    fidelityMode: rust.fidelityMode,
     motionProfileId: rust.motionProfileId,
-    semanticRequestLimit: rust.semanticRequestLimit ?? null,
     developerDiagnostics: rust.developerDiagnostics,
   } as Partial<FollowingSettings>);
 }
@@ -58,11 +63,7 @@ export function followingToRustPatch(
   const clamped = clampFollowing({ ...defaultFollowingSettings(), ...patch });
   const out: Record<string, unknown> = {};
   if (patch.feel !== undefined) out.feel = clamped.feel;
-  if (patch.fidelityMode !== undefined) out.fidelityMode = clamped.fidelityMode;
   if (patch.motionProfileId !== undefined) out.motionProfileId = clamped.motionProfileId;
-  if (patch.semanticRequestLimit !== undefined) {
-    out.semanticRequestLimit = clamped.semanticRequestLimit;
-  }
   if (patch.developerDiagnostics !== undefined) {
     out.developerDiagnostics = clamped.developerDiagnostics;
   }

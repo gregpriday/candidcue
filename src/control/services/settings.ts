@@ -74,6 +74,11 @@ interface RustSettings {
     promptMode: string;
     manualWheelMultiplier: number;
     fixedSpeedWpm: number;
+    /**
+     * Still serialised by Rust, and read by nothing on either side (#218): the
+     * stage hides the pointer after a fixed 1.5 s whatever this says, so the
+     * Settings switch that wrote it is gone and nothing sends it any more.
+     */
     pointerHideDelaySeconds: number;
     manualMoveTrackingGraceSeconds: number;
     stageAcknowledgement: string;
@@ -297,8 +302,29 @@ function panelMirrorFromStored(stored: unknown): OpticalSettings['panelMirror'] 
 }
 
 /**
- * The teleprompter section without the retired global mirror (#206) or the
- * retired `stageMode` (#300).
+ * Overlay keys behind Settings rows that changed nothing (#218).
+ *
+ * Revision retention pruned nothing — revisions are kept however long the
+ * slider said. Nothing read the end-of-session choice. And the stage hides the
+ * pointer after a fixed 1.5 s whether the switch was on or off. The rows are
+ * gone, but every overlay that ever saved one of these sections still holds
+ * them, and `mergeSection` would spread them back onto a section whose type no
+ * longer has them. They are dropped on read, and from the stored section the
+ * next time that section is written.
+ */
+const RETIRED_GENERAL_ROWS = ['revisionRetentionDays'] as const;
+const RETIRED_TELEPROMPTER_ROWS = ['stageEndBehavior', 'hidePointer'] as const;
+
+/** The general section without the retired retention window (#218). */
+function withoutRetiredGeneralKeys<T extends object>(section: T): T {
+  const copy = { ...section } as Record<string, unknown>;
+  for (const key of RETIRED_GENERAL_ROWS) delete copy[key];
+  return copy as T;
+}
+
+/**
+ * The teleprompter section without the retired global mirror (#206), the
+ * retired `stageMode` (#300), or the rows that changed nothing (#218).
  *
  * Every overlay that ever held the old switches still carries `mirrorX` and
  * `mirrorY`, and `mergeSection` would spread them straight back onto a section
@@ -316,6 +342,7 @@ function withoutRetiredTeleprompterKeys<T extends object>(section: T): T {
   delete copy['mirrorX'];
   delete copy['mirrorY'];
   delete copy['stageMode'];
+  for (const key of RETIRED_TELEPROMPTER_ROWS) delete copy[key];
   return copy as T;
 }
 
@@ -593,7 +620,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     teleprompter: {
       ...defaults.teleprompter,
       fixedSpeedWpm: rust.stageBehavior.fixedSpeedWpm,
-      hidePointer: rust.stageBehavior.pointerHideDelaySeconds > 0,
     },
     // Following settings are Rust-owned end to end (§47) — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
@@ -734,11 +760,11 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // every save, and a document restored from a backup arrives without that
     // overlay changing — so a merge alone showed the pre-restore launch choice,
     // and the next save in this section wrote it back over the restored one.
-    general: {
+    general: withoutRetiredGeneralKeys({
       ...mergeSection(mapped.general, overlay.general),
       launchBehavior: mapped.general.launchBehavior,
       defaultSessionMode: mapped.general.defaultSessionMode,
-    },
+    }),
     // The recogniser name and locale are Rust-owned: they describe what
     // is built from, and an overlay disagreeing with the document would mean
     // the session declares one language and the settings screen shows another.
@@ -750,8 +776,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       vadSensitivity: mapped.audio.vadSensitivity,
     },
     // `fixedSpeedWpm` is Rust-owned and wins, for the same reason as the two in
-    // `general` (#271). `hidePointer` has the same shape and is deliberately
-    // left on the merge: #218 removes it.
+    // `general` (#271).
     teleprompter: withoutRetiredTeleprompterKeys({
       ...mergeSection(mapped.teleprompter, overlay.teleprompter),
       fixedSpeedWpm: mapped.teleprompter.fixedSpeedWpm,
@@ -833,9 +858,6 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     // (#206). The field stays in the document only as the source of the
     // one-time move, so writing it would change nothing anybody reads.
     put('stageBehavior', 'fixedSpeedWpm', patch.teleprompter.fixedSpeedWpm);
-    if (patch.teleprompter.hidePointer !== undefined) {
-      put('stageBehavior', 'pointerHideDelaySeconds', patch.teleprompter.hidePointer ? 1.5 : 0);
-    }
   }
   if (patch.following) {
     const following = followingToRustPatch(patch.following);
@@ -936,6 +958,8 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       // every restore and was read back over the restored document (#271).
       delete merged.launchBehavior;
       delete merged.defaultSessionMode;
+      // Rows that changed nothing (#218). Nothing reads the stored copy.
+      for (const retired of RETIRED_GENERAL_ROWS) delete merged[retired];
     }
     if (key === 'teleprompter') {
       // `stageBehavior.fixedSpeedWpm`, for the same reason as `general`.
@@ -948,6 +972,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       // Replaced by `diagnosticTake` (#300). Every stored copy is the old
       // default, saved alongside some other change, never a choice.
       delete merged.stageMode;
+      for (const retired of RETIRED_TELEPROMPTER_ROWS) delete merged[retired];
     }
     (overlay as Record<string, object>)[key] = merged;
   }
@@ -1095,22 +1120,20 @@ export async function restoreAllData(): Promise<RestoreResult> {
   };
 }
 
-export async function clearCache(
-  kind: 'analysis' | 'logs',
-): Promise<ClearResult> {
+export async function clearCache(kind: 'logs'): Promise<ClearResult> {
   if (!isTauriRuntime()) return mockSettings.clearCache(kind);
   /*
-   * UI kinds map onto the Rust kinds (§46.8).
+   * §46.8. Logs are the only thing Settings clears now: "Clear analysis cache"
+   * emptied `cache/vocabulary`, a directory nothing has ever written (#218).
    *
    * C6: `logs` used to map onto `all`, which empties the compiled, vocabulary,
    * thumbnail and download caches and never touches the log directory — so
    * "Clear logs" destroyed four caches, left the logs, and reported success.
    * There is a real `logs` arm now.
    */
-  const rustKind = kind === 'analysis' ? 'vocabulary' : 'logs';
   const result = await ipcInvoke<{ kind: string; removedFiles: number; removedBytes: number }>(
     'clear_cache',
-    { kind: rustKind },
+    { kind },
   );
   // `clearedBytes` used to be handed `removedFiles` — a count wearing the name
   // of a size. Rust reports both now.

@@ -232,7 +232,8 @@ describe('#271 the overlay stops caching what Rust persists', () => {
     expect(rustPatches()).toEqual([
       {
         general: { openTo: 'last_script' },
-        stageBehavior: { promptMode: 'fixed', fixedSpeedWpm: 190, pointerHideDelaySeconds: 1.5 },
+        // No `pointerHideDelaySeconds`: nothing reads it (#218), so nothing sends it.
+        stageBehavior: { promptMode: 'fixed', fixedSpeedWpm: 190 },
       },
     ]);
     const stored = overlay();
@@ -271,22 +272,7 @@ describe('#271 the overlay stops caching what Rust persists', () => {
     const stored = overlay();
     expect(stored.general).toEqual({ readHeadings: true, confirmEndSession: false });
     // `mirrorY` never reached Rust and the per-panel move still needs it;
-    // `hidePointer` is #218's to remove.
-    expect(stored.teleprompter).toEqual({ mirrorY: true, fontSizePx: 80, hidePointer: false });
-  });
-});
-
-describe('hidePointer keeps its overlay merge (#218 removes it)', () => {
-  it('still reads and stores the overlay copy', async () => {
-    // Rust says hide (1.5s); the overlay says show. Left exactly as it was.
-    seedOverlay({ teleprompter: { hidePointer: false } });
-
-    const loaded = await settings.getSettings();
-    expect(loaded.teleprompter.hidePointer).toBe(false);
-
-    await settings.updateSettings(loaded.revision, {
-      teleprompter: { ...loaded.teleprompter, fontSizePx: 80 },
-    });
-    expect(overlay().teleprompter).toMatchObject({ hidePointer: false, fontSizePx: 80 });
+    // `hidePointer` went with its row (#218).
+    expect(stored.teleprompter).toEqual({ mirrorY: true, fontSizePx: 80 });
   });
 });

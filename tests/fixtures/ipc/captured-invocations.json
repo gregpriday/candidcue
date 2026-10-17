@@ -9,12 +9,6 @@
       "command": "app_version",
       "args": null
     },
-    "clear_cache_analysis": {
-      "command": "clear_cache",
-      "args": {
-        "kind": "vocabulary"
-      }
-    },
     "clear_cache_logs": {
       "command": "clear_cache",
       "args": {

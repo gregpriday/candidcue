@@ -3374,8 +3374,7 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
  * Not every teleprompter field is a stage field. `fixedSpeedWpm` is the
  * transport's pace, read once at the take's opening; it is routed to the
  * transport here so a pace changed in Settings applies to the roll in
- * progress. The rest — what a take does at its end, whether the pointer hides
- * — are for the next take and are left alone.
+ * progress.
  *
  * Installed by the shell rather than at module scope: the Settings window has
  * its own copy of this store with no take in it, and the unit suites that mock

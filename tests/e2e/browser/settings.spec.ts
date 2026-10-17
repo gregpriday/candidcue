@@ -513,10 +513,10 @@ test('searching for what Diagnostic Take shows finds its row', async ({ page }) 
   await expect(row).not.toHaveAttribute('data-settings-search-miss');
   // And the search really narrowed the section rather than matching everything.
   // `includeHidden`, so the row is found whether or not a miss is hidden.
-  const pointer = page.locator('.content .toggle-row', {
-    has: page.getByRole('switch', { name: 'Hide the pointer on the stage', includeHidden: true }),
+  const highlight = page.locator('.content .toggle-row', {
+    has: page.getByRole('switch', { name: 'Current phrase highlight', includeHidden: true }),
   });
-  await expect(pointer).toHaveAttribute('data-settings-search-miss');
+  await expect(highlight).toHaveAttribute('data-settings-search-miss');
 });
 
 test('a rig with every step answered but no measured scale does not read as done', async ({ page }) => {

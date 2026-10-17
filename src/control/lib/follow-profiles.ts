@@ -26,27 +26,17 @@ import {
 
 /** §47.1 follow feel. */
 export type FollowFeel = 'calm' | 'balanced' | 'responsive';
-/** §45 fidelity modes — kept as stored vocabulary; nothing reads them now. */
-export type FidelityMode = 'conversational' | 'balanced' | 'exact';
 
 /** The persisted §47 settings block. */
 export interface FollowingSettings {
   feel: FollowFeel;
-  fidelityMode: FidelityMode;
   /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
-  /**
-   * §42.1. The old per-session cap on semantic-assist requests. The settings
-   * adapter still carries it, but Rust no longer stores it and nothing makes
-   * those requests now.
-   */
-  semanticRequestLimit: number | null;
   /** §15.2 / §64: reveals the diagnostics timeline in Take controls → Why did it move? */
   developerDiagnostics: boolean;
 }
 
 export const FOLLOW_FEELS: FollowFeel[] = ['calm', 'balanced', 'responsive'];
-export const FIDELITY_MODES: FidelityMode[] = ['conversational', 'balanced', 'exact'];
 
 /**
  * Defaults. Every value comes from the specification's stated default, and the
@@ -55,9 +45,7 @@ export const FIDELITY_MODES: FidelityMode[] = ['conversational', 'balanced', 'ex
 export function defaultFollowingSettings(): FollowingSettings {
   return {
     feel: 'balanced', // §47.1 "Balanced — default"
-    fidelityMode: 'balanced', // §45.2 "Balanced — default"
     motionProfileId: DEFAULT_SMOOTH_FOLLOW_PROFILE.id,
-    semanticRequestLimit: null,
     developerDiagnostics: false, // primary §15.2: developer panel off by default
   };
 }
@@ -102,11 +90,11 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
  * So the copy promised behaviour that could not happen, attached to a control
  * that changed nothing. The option list is gone with the control (#124).
  *
- * `FidelityMode`, `FIDELITY_MODES` and the clamp in `normalizeFollowing` all
- * stay. The field is still written by older builds and still validated by
- * `src-tauri/src/settings/mod.rs` against a closed vocabulary — dropping it
- * would turn every settings document that carries it into a load failure, at no
- * benefit. It is compatibility vocabulary now, with no behavioural consumer.
+ * The field went after it (#218), along with `semanticRequestLimit`, the cap on
+ * a hosted sidecar that no longer exists. A document that still carries either
+ * one loads as it always did: `AppSettings` does not deny unknown fields, and
+ * the adapter in `settings-following.ts` simply never reads or sends them, so
+ * Rust's merge leaves whatever it stored alone until its own half goes.
  */
 
 /* ---------------------------------------------------------------------------
@@ -289,15 +277,9 @@ function pick<T extends string>(value: unknown, allowed: T[], fallback: T): T {
 export function clampFollowing(value: Partial<FollowingSettings> | undefined | null): FollowingSettings {
   const defaults = defaultFollowingSettings();
   if (!value) return defaults;
-  const limit = value.semanticRequestLimit;
   return {
     feel: pick(value.feel, FOLLOW_FEELS, defaults.feel),
-    fidelityMode: pick(value.fidelityMode, FIDELITY_MODES, defaults.fidelityMode),
     motionProfileId: motionProfileFamily(value.motionProfileId ?? defaults.motionProfileId).id,
-    semanticRequestLimit:
-      typeof limit === 'number' && Number.isFinite(limit) && limit >= 1
-        ? Math.floor(limit)
-        : null,
     developerDiagnostics:
       typeof value.developerDiagnostics === 'boolean'
         ? value.developerDiagnostics
