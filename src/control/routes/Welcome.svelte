@@ -158,8 +158,8 @@
     detail: string;
     /** Only 'attention' tints the row; expected setup is accent, faults warn. */
     emphasis: 'quiet' | 'setup' | 'attention';
-    /** The fix control's label; the row always links somewhere useful. */
-    action: string;
+    /** The fix control's label. Speech has none while its picker is the action. */
+    action?: string;
   }
 
   const micState = $derived<RowState>(
@@ -216,6 +216,15 @@
 
   const speechState = $derived<RowState>(resolveSpeechState());
 
+  /*
+   * No fix link on this row. Every state that needs doing is done in the picker
+   * beneath it — Download, Stop, Download again — and a link to Settings › Speech
+   * beside it was a second door into the same component, one that also took you
+   * away from the screen.
+   *
+   * The details are short because the picker states the rest: the language in
+   * use, the sizes, what is missing. This line only says why the step exists.
+   */
   function resolveSpeechState(): RowState {
     if (!modelStatus) {
       return {
@@ -223,25 +232,26 @@
         pill: 'Checking…',
         detail: 'Looking for the speech model.',
         emphasis: 'quiet',
-        action: 'Open speech settings',
       };
     }
     if (isModelBusy(modelStatus)) {
       return {
         tone: 'neutral',
         pill: phaseLabel(modelStatus),
-        detail: 'The speech model is installing. You can carry on writing meanwhile.',
+        // Phase-neutral: the pill already names the phase, and "installing"
+        // under a pill reading "Downloading" was two answers to one question.
+        detail: 'You can carry on writing while this finishes.',
         emphasis: 'quiet',
-        action: 'View progress',
       };
     }
     if (modelStatus.installed) {
       return {
         tone: 'neutral',
         pill: 'Installed',
-        detail: 'Voice following is ready. Transcription happens on this machine.',
+        // The narrow claim, like every other row: the files are here. Whether
+        // a take follows also needs a microphone, which this row cannot see.
+        detail: 'Speech data is installed. Transcription happens on this machine.',
         emphasis: 'quiet',
-        action: 'Manage languages',
       };
     }
     if (isModelDamaged(modelStatus)) {
@@ -250,23 +260,48 @@
       return {
         tone: 'accent',
         pill: 'Damaged',
-        detail:
-          'The speech data on this machine is damaged. Download it again to restore voice following; everything else works without it.',
+        detail: 'Download it again to restore voice following. Writing works without it.',
         emphasis: 'setup',
-        action: 'Open speech settings',
       };
     }
     return {
       tone: 'accent',
       pill: 'Set up',
-      // The picker below states the size for the chosen language; this line
-      // says why the step exists rather than repeating the number.
-      detail:
-        'Choose the language you will speak. Voice following needs a one-time download; everything else works without it.',
+      detail: 'Voice following needs a one-time download. Writing works without it.',
       emphasis: 'setup',
-      action: 'Open speech settings',
     };
   }
+
+  /**
+   * Whether the picker is on screen.
+   *
+   * Folded only when the active language is KNOWN to be installed. What is
+   * left in it then is a language switch and a Remove button, which on a
+   * first-run checklist made one finished item four times the height of its
+   * neighbours — so it waits behind "Change language" instead.
+   *
+   * Every other answer shows it, unknown included: the download, the progress
+   * and Stop, and the repair all live in it, and so do its own load error and
+   * Try again. Folding while the status was still unknown would hide exactly
+   * the screen that explains why it never became known.
+   *
+   * Folded, never unmounted. The picker is what reports `modelStatus` to this
+   * row, so taking it out of the tree would freeze the row on its last answer.
+   */
+  let speechExpanded = $state(false);
+  const speechNeedsAction = $derived(modelStatus !== null && !modelStatus.installed);
+  const pickerOpen = $derived(speechExpanded || !modelStatus?.installed);
+
+  /*
+   * Once it has been open because something needed doing, it STAYS open. A
+   * download finishing must not fold the panel out from under somebody who is
+   * still looking at it — or who has focus in its language select — and
+   * shrink the screen around them. They fold it themselves; only a launch that
+   * finds the data already installed starts folded.
+   */
+  $effect(() => {
+    if (speechNeedsAction) speechExpanded = true;
+  });
 
   function resolveDisplayState(): RowState {
     if (readerMode) {
@@ -369,10 +404,6 @@
     openSettingsAt('stage');
   }
 
-  function openSpeechSettings(): void {
-    openSettingsAt('speech');
-  }
-
   function skipToLibrary(): void {
     markWelcomed();
     void navigate({ name: 'library', view: 'all' });
@@ -385,159 +416,245 @@
   }
 </script>
 
+<!--
+  Two regions, side by side: starting a script on the left, setting up for a
+  take on the right.
+
+  This was one centred column — a hero, a row of buttons, then the checklist
+  stacked under them — which is a landing page's rhythm around what is really a
+  setup utility. It left most of a desktop window empty at the sides and pushed
+  the speech download, the privacy link and the way out to the library below the
+  fold at every window size. Side by side, both answers are on screen at once,
+  and nothing in the setup column can push the way in further down.
+-->
 <div class="welcome">
   <div class="inner">
-    <p class="wordmark">CandidCue</p>
-    <h1 class="heading">Speak naturally. Keep your place.</h1>
-    <p class="body">
-      CandidCue is a voice-following teleprompter for your second screen. Write or import a
-      Markdown script, choose a microphone, and present while the text follows you.
-    </p>
+    <section class="start" aria-labelledby="welcome-heading">
+      <div class="intro">
+        <p class="wordmark">CandidCue</p>
+        <h1 id="welcome-heading" class="heading">Speak naturally. Keep your place.</h1>
+        <p class="body">
+          CandidCue is a voice-following teleprompter for your second screen. Write or import a
+          Markdown script, choose a microphone, and present while the text follows you.
+        </p>
+      </div>
 
-    <!--
-      §16.1: "Make 'Create a script' the primary action. Make 'Open sample'
-      secondary."
-
-      This was the other way round, and the reasoning was real: the sample is
-      the only one of the three that hands back something written to be read
-      ALOUD, and reading aloud is the only way to see what this app does. An
-      empty script cannot demonstrate following.
-
-      What settles it is which one is a DEAD END. Somebody who came here to
-      write their own script and is offered a demo as the loudest thing on the
-      screen has to decline it first; somebody who wanted the demo and is
-      offered "Create" first loses nothing — the sample is right beside it,
-      named, and one press away. The stronger argument was about teaching the
-      product, and a setup assistant's job is to get out of the way.
-    -->
-    <div class="actions">
-      <Button variant="primary" onclick={() => createAndOpenScript('new')}>
-        Create your first script
-      </Button>
-      <Button onclick={() => createAndOpenScript('sample')}>Open the sample script</Button>
+      <h2 class="region-title">Start a script</h2>
       <!--
-        Import is TERTIARY (§16.1): three equally weighted buttons is a screen
-        asking a question rather than offering a way in. It is also the one of
-        the three that a returning user reaches for, and they have File › Import
-        Markdown and ⇧⌘I — so it costs nothing to make it the quietest here.
-      -->
-      <Button variant="ghost" onclick={() => importMarkdown()}>Import Markdown</Button>
-    </div>
+        §16.1: "Make 'Create a script' the primary action. Make 'Open sample'
+        secondary."
 
-    <ul class="readiness">
-      <li class="readiness-item" class:setup={micState.emphasis === 'setup'}>
-        <span class="readiness-icon"><Icon name="mic" size={16} /></span>
-        <span class="readiness-text">
-          <span class="readiness-title">Microphone</span>
-          <span class="readiness-detail">{micState.detail}</span>
+        This was the other way round, and the reasoning was real: the sample is
+        the only one of the three that hands back something written to be read
+        ALOUD, and reading aloud is the only way to see what this app does. An
+        empty script cannot demonstrate following.
+
+        What settles it is which one is a DEAD END. Somebody who came here to
+        write their own script and is offered a demo as the loudest thing on the
+        screen has to decline it first; somebody who wanted the demo and is
+        offered "Create" first loses nothing — the sample is right beside it,
+        named, and one press away. The stronger argument was about teaching the
+        product, and a setup assistant's job is to get out of the way.
+      -->
+      <div class="actions">
+        <Button variant="primary" onclick={() => createAndOpenScript('new')}>
+          Create your first script
+        </Button>
+        <!--
+          The lesser two wrap TOGETHER. Left to wrap one at a time, the narrow
+          window put Import alone on a second line, where a borderless button
+          reads as a stray label rather than the third of a set.
+        -->
+        <span class="more-actions">
+          <Button onclick={() => createAndOpenScript('sample')}>Open the sample script</Button>
+          <!--
+            Import is TERTIARY (§16.1): three equally weighted buttons is a screen
+            asking a question rather than offering a way in. It is also the one of
+            the three that a returning user reaches for, and they have File › Import
+            Markdown and ⇧⌘I — so it costs nothing to make it the quietest here.
+          -->
+          <Button variant="ghost" onclick={() => importMarkdown()}>Import Markdown</Button>
         </span>
-        <span class="readiness-status">
-          <StatusPill tone={micState.tone} label={micState.pill} />
-          <button type="button" class="link" onclick={openMicrophoneSettings}>
+      </div>
+
+      <!-- The way past all of this, directly under the ways in, so it is on
+           screen whatever height the setup column has grown to. -->
+      <p class="skip">
+        <button type="button" class="link quiet" data-focus="control" onclick={skipToLibrary}>
+          Go to the library
+        </button>
+      </p>
+    </section>
+
+    <section class="setup-panel" aria-labelledby="setup-heading">
+      <header class="setup-header">
+        <h2 id="setup-heading" class="region-title">Before your first take</h2>
+        <p class="setup-note">Optional. You can write and import scripts without any of it.</p>
+      </header>
+
+      <!--
+        `role="list"` is not redundant here. WebKit drops list semantics from a
+        `<ul>` whose markers are styled away, and WebKit is the only engine this
+        app ships in — without it VoiceOver reads three loose rows with no count.
+
+        Each row is the same shape: title and status on one line, the sentence
+        under them at the full width of the row, then the control that changes
+        it. The status and its link used to share a right-hand column that never
+        shrank, so a long display name was squeezed into a narrow strip beside it.
+      -->
+      <ul class="readiness" role="list">
+        <li class="readiness-item" class:setup={micState.emphasis === 'setup'}>
+          <div class="readiness-head">
+            <h3 class="readiness-title">Microphone</h3>
+            <StatusPill tone={micState.tone} label={micState.pill} />
+          </div>
+          <!-- Polite, like the rows below: this answer changes when Settings
+               records a grant, and a sighted reader would see it change. -->
+          <p class="readiness-detail" role="status" aria-live="polite">{micState.detail}</p>
+          <button type="button" class="link" data-focus="control" onclick={openMicrophoneSettings}>
             {micState.action}
           </button>
-        </span>
-      </li>
+        </li>
 
-      <!--
-        This row's state ARRIVES: it starts at "Checking…" and changes when the
-        display probe answers. A sighted reader sees that happen; without a
-        polite live region a screen reader is under no obligation to revisit a
-        span it already passed, so the only readiness state on this screen that
-        moves would be the one state never announced. Polite, not assertive —
-        it must wait for a pause rather than interrupt the heading and CTAs
-        somebody is still hearing for the first time.
-      -->
-      <li class="readiness-item" class:attention={displayState.emphasis === 'attention'}>
-        <span class="readiness-icon"><Icon name="monitor" size={16} /></span>
-        <span class="readiness-text">
-          <span class="readiness-title">Teleprompter screen</span>
-          <span class="readiness-detail" role="status" aria-live="polite">
-            {displayState.detail}
-          </span>
-        </span>
-        <span class="readiness-status">
-          <StatusPill tone={displayState.tone} label={displayState.pill} />
-          <button type="button" class="link" onclick={openDisplaySettings}>
+        <!--
+          This row's state ARRIVES: it starts at "Checking…" and changes when the
+          display probe answers. A sighted reader sees that happen; without a
+          polite live region a screen reader is under no obligation to revisit a
+          span it already passed, so the only readiness state on this screen that
+          moves would be the one state never announced. Polite, not assertive —
+          it must wait for a pause rather than interrupt the heading and CTAs
+          somebody is still hearing for the first time.
+        -->
+        <li class="readiness-item" class:attention={displayState.emphasis === 'attention'}>
+          <div class="readiness-head">
+            <h3 class="readiness-title">Teleprompter screen</h3>
+            <StatusPill tone={displayState.tone} label={displayState.pill} />
+          </div>
+          <p class="readiness-detail" role="status" aria-live="polite">{displayState.detail}</p>
+          <button type="button" class="link" data-focus="control" onclick={openDisplaySettings}>
             {displayState.action}
           </button>
-        </span>
-      </li>
+        </li>
 
-      <!--
-        §153: the language choice belongs HERE, at first run, alongside the
-        other setup a good take needs — not behind a link to Settings. The row
-        above it still reports state (and, like the display row, that state
-        ARRIVES over IPC, so the detail stays a polite live region); the picker
-        beneath it is where the choice is actually made.
+        <!--
+          §153: the language choice belongs HERE, at first run, alongside the
+          other setup a good take needs — not behind a link to Settings. The
+          header reports state (and, like the display row, that state ARRIVES
+          over IPC, so the detail stays a polite live region); the picker beneath
+          it is where the choice is actually made.
 
-        Still not a gate. Writing, importing and the stage all work with no
-        recogniser at all, and nothing here blocks a CTA.
-      -->
-      <li class="readiness-item stacked" class:setup={speechState.emphasis === 'setup'}>
-        <div class="readiness-head">
-          <span class="readiness-icon"><Icon name="mic" size={16} /></span>
-          <span class="readiness-text">
-            <span class="readiness-title">Speech language</span>
-            <span class="readiness-detail" role="status" aria-live="polite">
-              {speechState.detail}
-            </span>
-          </span>
-          <span class="readiness-status">
+          Still not a gate. Writing, importing and the stage all work with no
+          recogniser at all, and nothing here blocks a CTA.
+        -->
+        <li class="readiness-item" class:setup={speechState.emphasis === 'setup'}>
+          <div class="readiness-head">
+            <h3 class="readiness-title">Speech language</h3>
             <StatusPill tone={speechState.tone} label={speechState.pill} />
-            <button type="button" class="link" onclick={openSpeechSettings}>
-              {speechState.action}
+          </div>
+          <p class="readiness-detail" role="status" aria-live="polite">{speechState.detail}</p>
+          {#if modelStatus?.installed}
+            <button
+              type="button"
+              class="link disclosure"
+              data-focus="control"
+              aria-expanded={speechExpanded}
+              aria-controls="welcome-speech-picker"
+              onclick={() => (speechExpanded = !speechExpanded)}
+            >
+              Change language
+              <span class="chevron" class:open={speechExpanded}>
+                <Icon name="chevron-down" size={14} />
+              </span>
             </button>
-          </span>
-        </div>
-        <div class="readiness-picker">
-          <SpeechLanguagePicker
-            compact
-            revision={$settings.revision}
-            onactivestatus={(status) => (modelStatus = status)}
-            onlanguagechange={async () => {
-              // Awaited: Rust has just superseded the revision this screen was
-              // handed, and the settings store is shared with every other
-              // screen. Leaving it stale would make the NEXT write anywhere in
-              // the app fail its conflict check.
-              await loadSettings(true);
-            }}
-          />
-        </div>
-      </li>
-    </ul>
+          {/if}
+          <div class="readiness-picker" id="welcome-speech-picker" hidden={!pickerOpen}>
+            <SpeechLanguagePicker
+              compact
+              revision={$settings.revision}
+              onactivestatus={(status) => (modelStatus = status)}
+              onlanguagechange={async () => {
+                // Awaited: Rust has just superseded the revision this screen was
+                // handed, and the settings store is shared with every other
+                // screen. Leaving it stale would make the NEXT write anywhere in
+                // the app fail its conflict check.
+                await loadSettings(true);
+              }}
+            />
+          </div>
+        </li>
+      </ul>
 
-    <div class="footer-links">
-      <button type="button" class="link" onclick={openPrivacy}>
-        How CandidCue handles your voice
-      </button>
-      <button type="button" class="link quiet" onclick={skipToLibrary}>Go to the library</button>
-    </div>
+      <footer class="setup-footer">
+        <button type="button" class="link quiet" data-focus="control" onclick={openPrivacy}>
+          How CandidCue handles your voice
+        </button>
+      </footer>
+    </section>
   </div>
 </div>
 
 <style>
+  /*
+   * The scroll container, and the query container the layout answers to.
+   *
+   * A container query rather than a media query because the width that matters
+   * is this region's, not the window's — the same answer today, since Welcome
+   * has no sidebar, but not a coincidence the layout should lean on.
+   */
   .welcome {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    display: grid;
-    place-items: center;
-    padding: var(--space-10) var(--page-x-wide);
-  }
-
-  .inner {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    text-align: center;
-    max-width: 560px;
-    gap: var(--space-4);
+    container-type: inline-size;
+    padding: clamp(var(--space-6), 6vh, var(--space-10)) var(--page-x-wide);
+  }
+
+  /*
+   * Anchored to the top, centred across.
+   *
+   * Not centred vertically, which it was for a round: the setup column
+   * changes height while somebody is using it — "Change language" unfolds the
+   * picker, a finished download folds a row — and a vertically centred page
+   * moved the WHOLE screen by the difference, start actions included, every
+   * time. A fixed top keeps everything above the change where it was.
+   */
+  .inner {
+    margin: 0 auto;
+    width: 100%;
+    max-width: 1080px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: clamp(var(--space-9), 4.5vw, 64px);
+    align-items: start;
+  }
+
+  /* ---- start ---- */
+
+  /*
+   * The top padding is the setup panel's hairline plus its header padding, and
+   * the wordmark shares the panel title's line height, so the first line of
+   * each column sits on one line across the gap.
+   */
+  .start {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    padding-top: calc(var(--space-4) + 1px);
+  }
+
+  .intro {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
   }
 
   .wordmark {
     margin: 0;
-    font-size: var(--text-sm);
+    line-height: var(--lh-body);
+    font-size: var(--text-xs);
     font-weight: 700;
     letter-spacing: var(--ls-caps);
     text-transform: uppercase;
@@ -545,137 +662,190 @@
   }
 
   /*
-   * 32px, from 40 (§16.1).
+   * The page-title size, from 32.
    *
    * The serif hero stays — this is the one screen where a little editorial
    * storytelling is right, and §3.3 keeps the display face as a brand accent
-   * for exactly this moment. What comes down is the SCALE: 40px is a landing
-   * page's opening line, and this is a setup assistant that has three actions
-   * and a checklist under it. It should read as the top of a window, not as the
-   * top of a marketing site.
+   * for exactly this moment. What comes down is the SCALE (§16.1): this is a
+   * setup assistant with three actions and a checklist beside it, and it
+   * should read as the top of a window, not as the top of a marketing site.
+   * The page-title token is what every other screen's title is set at.
    */
   .heading {
     margin: 0;
     font-family: var(--font-serif);
-    font-size: 32px;
-    line-height: 1.2;
+    font-size: var(--text-page-title);
+    line-height: var(--lh-page-title);
     font-weight: 600;
     letter-spacing: var(--ls-title);
     color: var(--text-primary);
+    text-wrap: balance;
   }
 
   .body {
     margin: 0;
-    font-size: var(--text-lg);
-    line-height: var(--lh-transcript);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
     color: var(--text-secondary);
     max-width: 46ch;
   }
 
-  .actions {
+  /* The two regions are named alike, so they read as peers. */
+  .region-title {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .start .region-title {
+    margin-top: var(--space-8);
+  }
+
+  .actions,
+  .more-actions {
     display: flex;
     align-items: center;
-    justify-content: center;
     flex-wrap: wrap;
     gap: var(--space-3);
-    margin-top: var(--space-2);
+  }
+  .actions {
+    margin-top: var(--space-3);
+  }
+
+  .skip {
+    margin: var(--space-6) 0 0;
+  }
+
+  /* ---- setup ---- */
+
+  /*
+   * One white panel on the paper canvas, and the only frame here: rows are
+   * divided by hairlines rather than boxed, so nothing is a bordered card
+   * inside a bordered card.
+   */
+  .setup-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+  }
+
+  .setup-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-4) var(--space-5) var(--space-3);
+  }
+
+  .setup-note {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+    text-wrap: pretty;
   }
 
   .readiness {
     list-style: none;
-    margin: var(--space-5) 0 0;
-    padding: var(--space-2);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    text-align: left;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    width: 100%;
-    max-width: 480px;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--border-faint);
   }
+
   .readiness-item {
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-3);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
+    gap: var(--space-1);
+    padding: var(--space-4) var(--space-5);
   }
-  /* A full-row wash, never a one-sided border: a leading rule on a rounded box
-     reads as a crescent wherever the corner radius cuts it. */
-  .readiness-item.setup {
-    background: var(--accent-wash);
+  .readiness-item + .readiness-item {
+    border-top: 1px solid var(--border-faint);
   }
+  /*
+   * Only a degraded rig tints its row, and it tints the whole row, edge to
+   * edge — never a one-sided border, which reads as a crescent wherever a
+   * radius cuts it. Expected setup is carried by its accent pill alone: on a
+   * first launch two of three rows are "set up", and washing them made the
+   * checklist look like a list of things already wrong.
+   */
   .readiness-item.attention {
     background: var(--warning-soft);
   }
-  .readiness-icon {
-    display: inline-flex;
-    color: var(--accent);
-    flex: 0 0 auto;
-    margin-top: 2px;
-  }
-  .readiness-text {
+
+  .readiness-head {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-self: stretch;
     min-width: 0;
-    flex: 1 1 auto;
   }
+
   .readiness-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
     font-weight: 600;
     color: var(--text-primary);
   }
+
   .readiness-detail {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
     color: var(--text-secondary);
-    line-height: var(--lh-body, 1.45);
-  }
-  .readiness-status {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-    flex: 0 0 auto;
-  }
-  /*
-    The speech row carries a control rather than only a readout (§153), so it
-    stacks: the same header as every other row, with the picker beneath it.
-  */
-  .readiness-item.stacked {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .readiness-head {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-  }
-  .readiness-picker {
-    /* Aligned under the title rather than the icon, so the block reads as
-       belonging to this row instead of starting a new one. */
-    padding-left: calc(16px + var(--space-3));
-    padding-top: var(--space-2);
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
   }
 
-  .footer-links {
-    display: flex;
-    align-items: center;
-    gap: var(--space-5);
+  .readiness-picker {
+    align-self: stretch;
     margin-top: var(--space-3);
+    min-width: 0;
   }
+  .readiness-picker[hidden] {
+    display: none;
+  }
+
+  .setup-footer {
+    margin-top: auto;
+    padding: var(--space-3) var(--space-5);
+    border-top: 1px solid var(--border-faint);
+  }
+
+  /* ---- links ---- */
+
+  /*
+   * Text buttons, inset by their own padding so the label sits on the text
+   * column above it while the focus ring still has room around it.
+   */
   .link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     border: none;
     background: transparent;
-    padding: 2px 4px;
+    margin: 0 calc(-1 * var(--space-1));
+    padding: 2px var(--space-1);
     font-size: var(--text-sm);
+    line-height: var(--lh-label);
     font-weight: 600;
     color: var(--accent-strong);
     border-radius: var(--radius-sm);
     text-decoration: underline;
+    text-decoration-thickness: 1px;
     text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .readiness-item .link {
+    margin-top: var(--space-1);
   }
   /* Small terracotta text must never drop to --accent (it sits right on the
      AA line); hover darkens to the primary text colour instead, which also
@@ -684,15 +854,34 @@
     color: var(--text-primary);
     text-decoration-thickness: 2px;
   }
+  /* The ways out of the screen are links too, just not setup actions. */
   .link.quiet {
-    color: var(--text-muted);
-    text-decoration: none;
+    font-weight: 500;
+    color: var(--text-secondary);
   }
   .link.quiet:hover {
     color: var(--text-primary);
   }
-  .readiness-status .link {
-    font-size: var(--text-xs);
-    white-space: nowrap;
+
+  .chevron {
+    display: inline-flex;
+    transition: transform var(--dur-med) var(--ease-out);
+  }
+  .chevron.open {
+    transform: rotate(180deg);
+  }
+
+  /* ---- one column ---- */
+
+  /*
+   * Below this the two columns would each be too narrow to read, so they
+   * stack, start first, because it is the way in.
+   */
+  @container (max-width: 760px) {
+    .inner {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-8);
+      max-width: 600px;
+    }
   }
 </style>
