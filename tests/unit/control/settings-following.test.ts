@@ -43,13 +43,14 @@ describe('#218 the following adapter carries only what something reads', () => {
       fidelityMode: 'conversational',
       semanticRequestLimit: 5,
     } as never);
-    expect(patch).toEqual({ feel: 'responsive' });
+    // Strict, so a writer that set either key to `undefined` still fails.
+    expect(patch).toStrictEqual({ feel: 'responsive' });
   });
 
   it('a patch of nothing but retired fields sends nothing', () => {
-    expect(followingToRustPatch({ fidelityMode: 'exact', semanticRequestLimit: null } as never)).toEqual(
-      {},
-    );
+    expect(
+      followingToRustPatch({ fidelityMode: 'exact', semanticRequestLimit: null } as never),
+    ).toStrictEqual({});
   });
 
   it('a whole-section save sends the surviving fields and nothing else', () => {
