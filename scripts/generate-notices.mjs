@@ -309,7 +309,9 @@ function provenanceProblems(provenance) {
  * inside somebody else's repository. A component nobody has traced says so.
  */
 function builtFrom(work) {
-  if (provenanceProblems(work.source).length > 0) return `unconfirmed; upstream <${work.upstream}>`;
+  if (provenanceProblems(work.source).length > 0) {
+    return work.upstream ? `unconfirmed; upstream <${work.upstream}>` : 'unconfirmed';
+  }
   const { repository, revision, path, prebuiltBy } = work.source;
   // Forty hex digits do not fit a table; the inventory keeps the full commit.
   const shown = /^[0-9a-f]{40}$/.test(revision) ? revision.slice(0, 12) : revision;
@@ -413,17 +415,18 @@ function nativeComponents() {
         );
       }
     }
-    const embeds = component.embeds ?? [];
-    if (!Array.isArray(embeds)) {
+    if (component.embeds === undefined) continue;
+    if (!Array.isArray(component.embeds)) {
       problems.push(`${component.component}: \`embeds\` in sbom/native-components.json is not a list.`);
       continue;
     }
-    for (const [index, work] of embeds.entries()) {
+    const named = (value) => typeof value === 'string' && value.trim() !== '';
+    for (const [index, work] of component.embeds.entries()) {
       const unusable =
         work !== null && typeof work === 'object'
           ? [
-              ...(typeof work.component === 'string' ? [] : ['component']),
-              ...(typeof work.spdx === 'string' ? [] : ['spdx']),
+              ...(named(work.component) ? [] : ['component']),
+              ...(named(work.spdx) ? [] : ['spdx']),
               ...provenanceProblems(work.source),
             ]
           : ['the entry itself'];

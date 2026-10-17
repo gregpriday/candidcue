@@ -968,7 +968,9 @@ echo '{}'
    * tests do not move every time a component does.
    */
   describe('and its native table says where each component was built from', () => {
-    function withNative(repo: Repo, components: Array<{ libraries?: string[] }>) {
+    type NativeFixture = Record<string, unknown> & { libraries?: string[] };
+
+    function withNative(repo: Repo, components: NativeFixture[]) {
       const libraries = components.flatMap((entry) => entry.libraries ?? []);
       writeFileSync(
         join(repo.dir, 'sbom/native-inputs.json'),
@@ -1028,6 +1030,7 @@ echo '{}'
       const result = generate(repo, []);
       expect(result.status, result.output).toBe(0);
       const notices = readFileSync(repo.notices, 'utf8');
+      expect(notices).toContain('from `fixture-static-lib`.');
       expect(notices).toContain(
         '| forked | MIT | <https://example.test/fork> @ `0123456789ab` ' +
           '(fork of <https://example.test/canonical>) |',
@@ -1049,29 +1052,62 @@ echo '{}'
       expect(notices, 'nothing here is unreviewed').not.toContain('†');
     });
 
-    it('still lists a component nobody has traced, and marks it', () => {
+    it('lists components nobody has finished reviewing beside those somebody has, and marks them', () => {
       /*
-       * An unreviewed entry with no source is honest — it is what the dagger is
-       * for — so it must not fail CI. Only the release review refuses it.
+       * An unreviewed entry is honest — it is what the dagger is for — so it
+       * must not fail CI, with a source or without one. Only the release review
+       * refuses it. A notices link needs a source it can be resolved against.
        */
       const repo = withNative(scratchNotices(), [
+        {
+          component: 'checked',
+          upstream: 'https://example.test/checked',
+          spdx: 'Apache-2.0',
+          reviewed: true,
+          libraries: ['libchecked.a'],
+          source: { repository: 'https://example.test/checked', revision: 'v3.0.0' },
+        },
+        {
+          component: 'traced-unchecked',
+          upstream: 'https://example.test/home',
+          spdx: 'BSD-3-Clause',
+          reviewed: false,
+          libraries: ['libtraced.a'],
+          source: { repository: 'https://example.test/home', revision: 'v1.2.3', path: 'third_party/x' },
+        },
         {
           component: 'untraced',
           upstream: 'https://example.test/untraced',
           spdx: 'MIT',
           reviewed: false,
           libraries: ['libuntraced.a'],
+          note: 'Somebody should look.',
+          source: { noticeFile: 'NOTICES.txt' },
         },
       ]);
 
       const result = generate(repo, []);
       expect(result.status, result.output).toBe(0);
       const notices = readFileSync(repo.notices, 'utf8');
+      expect(notices).toContain('| checked | Apache-2.0 | <https://example.test/checked> @ `v3.0.0` |');
+      // A path inside the project's own repository is not a fork of it.
+      expect(notices).toContain(
+        '| traced-unchecked | BSD-3-Clause † | `third_party/x` in <https://example.test/home> @ `v1.2.3` |',
+      );
       expect(notices).toContain('| untraced | MIT † | unconfirmed; upstream <https://example.test/untraced> |');
       expect(notices).toContain('† Recorded from the upstream project');
+      expect(notices).toContain('- **untraced** — Somebody should look.\n');
+      expect(notices).not.toContain('NOTICES.txt');
     });
 
-    it('refuses a reviewed component that does not say which source was read', () => {
+    it.each([
+      ['has no source', undefined, 'source.repository or source.revision'],
+      ['names a repository that is not on the web', { repository: 'ftp://x.test/y', revision: 'v1' }, 'source.repository'],
+      ['names a blank revision', { repository: 'https://example.test/x', revision: '  ' }, 'source.revision'],
+      ['names a revision that is not text', { repository: 'https://example.test/x', revision: 7 }, 'source.revision'],
+    ])('refuses a reviewed component that %s', (_label, source, unusable) => {
+      // This is the generator's own check, not the release review's: the
+      // notices print the source, so CI refuses a review that cannot name one.
       const repo = withNative(scratchNotices(), [
         {
           component: 'traceless',
@@ -1079,14 +1115,14 @@ echo '{}'
           spdx: 'MIT',
           reviewed: true,
           libraries: ['libtraceless.a'],
+          source,
         },
       ]);
 
       const result = generate(repo, []);
       expect(result.status).toBe(1);
       expect(result.output).toContain(
-        'traceless is marked reviewed in sbom/native-components.json but has no usable ' +
-          'source.repository or source.revision',
+        `traceless is marked reviewed in sbom/native-components.json but has no usable ${unusable}.`,
       );
       expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
     });
@@ -1100,7 +1136,24 @@ echo '{}'
           reviewed: true,
           libraries: ['libcarrier.a'],
           source: { repository: 'https://example.test/carrier', revision: 'v1.0.0' },
-          embeds: [{ component: 'header' }, null],
+          embeds: [
+            { component: 'header' },
+            null,
+            {
+              component: ' ',
+              spdx: '',
+              source: { repository: 'https://example.test/carrier', revision: 'v1.0.0' },
+            },
+          ],
+        },
+        {
+          component: 'mislisted',
+          upstream: 'https://example.test/mislisted',
+          spdx: 'MIT',
+          reviewed: true,
+          libraries: ['libmislisted.a'],
+          source: { repository: 'https://example.test/mislisted', revision: 'v1.0.0' },
+          embeds: {},
         },
       ]);
 
@@ -1108,9 +1161,13 @@ echo '{}'
       expect(result.status).toBe(1);
       expect(result.output).toContain(
         'carrier: embeds[0] in sbom/native-components.json has no usable spdx, ' +
-          'source.repository, source.revision',
+          'source.repository, source.revision.',
       );
       expect(result.output).toContain('carrier: embeds[1] in sbom/native-components.json');
+      expect(result.output).toContain(
+        'carrier: embeds[2] in sbom/native-components.json has no usable component, spdx.',
+      );
+      expect(result.output).toContain('mislisted: `embeds` in sbom/native-components.json is not a list.');
       expect(result.output).not.toContain('TypeError');
       expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
     });
@@ -1166,13 +1223,18 @@ describe('the native licence review refuses what it exists to refuse', () => {
     // is left alone — an honest `false` is a release question, not a CI one —
     // but a `true` that cannot say what was read is never honest.
     const committed = JSON.parse(readFileSync(join(REPO_ROOT, NATIVE_INVENTORY), 'utf8'));
-    expect(committed.components.length).toBeGreaterThan(0);
+    const total = committed.components.length;
+    expect(total).toBeGreaterThan(0);
+    const reviewed = committed.components.filter(
+      (entry: { reviewed?: unknown }) => entry.reviewed === true,
+    ).length;
 
     const { dir, script } = scratchNativeReview(committed);
-    const { output } = run(script, [], dir);
-    expect(output).toContain(`of ${committed.components.length} statically linked`);
+    const { status, output } = run(script, [], dir);
+    expect(output).toContain(`${reviewed} of ${total} statically linked native components reviewed`);
     expect(output).not.toContain('is marked reviewed but');
     expect(output).not.toContain('is not an object');
+    expect(status, output).toBe(reviewed === total ? 0 : 1);
   });
 
   it.each([
