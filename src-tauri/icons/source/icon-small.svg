@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The CandidCue app icon at 16 and 32 px, drawn on a 32-unit grid rather than
+  shrunk from icon.svg: a thinner margin, no shadow, lines a half-step thicker
+  and brighter, and the arrows held three units clear of the current line, so
+  at 16 px the read and waiting lines survive and the arrows do not fuse with
+  the line into one bar.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <path d="M30.00 16.00 L29.99 19.88 L29.97 21.24 L29.92 22.25 L29.87 23.07 L29.79 23.78 L29.70 24.40 L29.59 24.96 L29.46 25.47 L29.31 25.93 L29.15 26.36 L28.97 26.75 L28.77 27.11 L28.55 27.45 L28.30 27.76 L28.04 28.04 L27.76 28.30 L27.45 28.55 L27.11 28.77 L26.75 28.97 L26.36 29.15 L25.93 29.31 L25.47 29.46 L24.96 29.59 L24.40 29.70 L23.78 29.79 L23.07 29.87 L22.25 29.92 L21.24 29.97 L19.88 29.99 L16.00 30.00 L12.12 29.99 L10.76 29.97 L9.75 29.92 L8.93 29.87 L8.22 29.79 L7.60 29.70 L7.04 29.59 L6.53 29.46 L6.07 29.31 L5.64 29.15 L5.25 28.97 L4.89 28.77 L4.55 28.55 L4.24 28.30 L3.96 28.04 L3.70 27.76 L3.45 27.45 L3.23 27.11 L3.03 26.75 L2.85 26.36 L2.69 25.93 L2.54 25.47 L2.41 24.96 L2.30 24.40 L2.21 23.78 L2.13 23.07 L2.08 22.25 L2.03 21.24 L2.01 19.88 L2.00 16.00 L2.01 12.12 L2.03 10.76 L2.08 9.75 L2.13 8.93 L2.21 8.22 L2.30 7.60 L2.41 7.04 L2.54 6.53 L2.69 6.07 L2.85 5.64 L3.03 5.25 L3.23 4.89 L3.45 4.55 L3.70 4.24 L3.96 3.96 L4.24 3.70 L4.55 3.45 L4.89 3.23 L5.25 3.03 L5.64 2.85 L6.07 2.69 L6.53 2.54 L7.04 2.41 L7.60 2.30 L8.22 2.21 L8.93 2.13 L9.75 2.08 L10.76 2.03 L12.12 2.01 L16.00 2.00 L19.88 2.01 L21.24 2.03 L22.25 2.08 L23.07 2.13 L23.78 2.21 L24.40 2.30 L24.96 2.41 L25.47 2.54 L25.93 2.69 L26.36 2.85 L26.75 3.03 L27.11 3.23 L27.45 3.45 L27.76 3.70 L28.04 3.96 L28.30 4.24 L28.55 4.55 L28.77 4.89 L28.97 5.25 L29.15 5.64 L29.31 6.07 L29.46 6.53 L29.59 7.04 L29.70 7.60 L29.79 8.22 L29.87 8.93 L29.92 9.75 L29.97 10.76 L29.99 12.12 Z" fill="#b35a38"/>
+  <g fill="#fff7f1">
+    <rect x="11" y="8" width="10" height="3" rx="1.5" opacity="0.62"/>
+    <rect x="10.5" y="14.5" width="11" height="3" rx="1.5"/>
+    <rect x="12.5" y="21" width="7" height="3" rx="1.5" opacity="0.8"/>
+    <path d="M4.2 12.2 L7.8 16 L4.2 19.8 Z" stroke="#fff7f1" stroke-width="0.8" stroke-linejoin="round"/>
+    <path d="M27.8 12.2 L24.2 16 L27.8 19.8 Z" stroke="#fff7f1" stroke-width="0.8" stroke-linejoin="round"/>
+  </g>
+</svg>

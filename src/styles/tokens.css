@@ -185,7 +185,9 @@
      optional editorial serif is reserved for the live question and quotations
      only — every control / label / metric stays in the UI font. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Menlo before the generic: every Mac has it, and an engine that does not
+     resolve `ui-monospace` otherwise drops to Courier. */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Bundled via @fontsource (control entry) so it renders deterministically;
      Georgia is the only fallback if the bundle somehow fails to load. */
   --font-serif: 'Source Serif 4', Georgia, serif;
@@ -245,6 +247,10 @@
   --bg-toolbar: #14171d;
   --bg-statusbar: #12151a;
   --bg-row-selected: rgba(224, 138, 99, 0.18);
+  /* The current row of a SOURCE LIST (sidebar, Settings index): neutral, the
+     way a Finder sidebar marks where you are, with the accent left to the
+     row's icon. See the workspace value for why it is not the accent tint. */
+  --bg-source-selected: rgba(255, 255, 255, 0.08);
   /* Hover over an ALREADY-selected row: one step between the resting tint
      (--accent-wash) and the focused one above, so passing the pointer over the
      selection still does something without pretending the keyboard moved. */
@@ -279,6 +285,10 @@
   --border: #303641;
   --border-control: #3b424e; /* resting control outline (strengthens on hover/focus) */
   --border-strong: #474e5b; /* emphasis only: hover, focus, active drag */
+  /* The edge that tells you a control's STATE — an off switch's track, the
+     selected segment. 3.2:1 on --bg-hover-surface, the brightest surface it
+     sits on, so the state clears SC 1.4.11 by itself. */
+  --border-state: #6f7684;
   --border-faint: #262b33;
   --border-seam: #262b33;
 
@@ -371,6 +381,17 @@
   --bg-toolbar: #f1ede7;
   --bg-statusbar: #ece8e1;
   --bg-row-selected: rgba(183, 94, 59, 0.14);
+  /*
+   * A source list's current row, in neutral rather than in clay.
+   *
+   * The accent tint spread across a sidebar row on the warm-grey rail read as
+   * a peach wash — the combination this palette was rebuilt to avoid — and it
+   * said "selected item" in the same voice the Library uses for a selected
+   * DOCUMENT. A place you are is a quieter fact than a thing you picked: a
+   * darker step of the rail's own paper, with the accent kept for the row's
+   * icon, is how a Mac sidebar says it.
+   */
+  --bg-source-selected: rgba(24, 25, 29, 0.075);
   /* See the studio value: the step between resting and focused selection. */
   --bg-row-selected-hover: rgba(183, 94, 59, 0.09);
   /*
@@ -410,6 +431,15 @@
   --border: #dedad3; /* decorative divider */
   --border-control: #c7c1b6; /* resting control outline — medium-light warm gray */
   --border-strong: #99948c; /* emphasis only: hover, focus, active drag */
+  /*
+   * The edge that tells you a control's STATE: an off switch's track and knob,
+   * the selected segment's keyline. SC 1.4.11 wants 3:1 for that, and nothing
+   * above reaches it everywhere — --border-control is 1.63:1 on the canvas (it
+   * draws a control's outline, which the label already identifies), and
+   * --border-strong is 2.74:1. This is 3.11:1 on --bg-hover-chrome, the
+   * darkest surface it sits on, and 3.34:1 on a segmented track.
+   */
+  --border-state: #857f76;
   --border-faint: #e7e3dc;
   --border-seam: #e7e3dc;
 

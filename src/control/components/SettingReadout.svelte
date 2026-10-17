@@ -49,13 +49,19 @@
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    /* A setting's NAME, in the primary label colour at a regular weight —
+       the same as a Toggle's — so a row with a menu and a row with a switch
+       read as the same kind of thing. (Grey semibold beside Toggle's black
+       made "On launch" look like a caption and its neighbour a setting.) */
+    font-weight: 500;
+    color: var(--text-primary);
   }
   .value {
     font-size: var(--text-sm);
     font-weight: 500;
-    color: var(--text-primary);
+    /* Secondary, now that the name above it is primary: a readout is
+       "name: value", and two black lines read as two headings. */
+    color: var(--text-secondary);
   }
   .description {
     margin: 2px 0 0;

@@ -40,6 +40,13 @@
      */
     selected?: boolean;
     disabled?: boolean;
+    /**
+     * Starts a new group: a rule above this row and, when given, a small
+     * heading naming the group. The Present menu mixes three kinds of row —
+     * where to start, how to show it, and the rarer commands — and drawn as
+     * one undivided list they read as eight alternatives to the same question.
+     */
+    group?: { heading?: string };
     onselect: () => void;
   }
 
@@ -209,6 +216,11 @@
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="menu" role="menu" tabindex="-1" aria-label={menuLabel} bind:this={menu} onkeydown={onMenuKeydown}>
       {#each items as item, index (item.label)}
+        {#if item.group}
+          {#if index > 0}<div class="separator" role="separator"></div>{/if}
+          <!-- Visual only: every row's own label already says what it does. -->
+          {#if item.group.heading}<div class="group-label" aria-hidden="true">{item.group.heading}</div>{/if}
+        {/if}
         <button
           type="button"
           class="item"
@@ -241,8 +253,8 @@
     Two buttons would each carry their own rounded border, which is the
     "border inside a border" the workspace avoids — and butting two rounded
     rectangles together produces exactly the one-sided-border look that is
-    banned elsewhere in this app. So the container owns the border, the radius
-    and the shadow, and the two halves are transparent regions inside it.
+    banned elsewhere in this app. So the container owns the border and the
+    radius, and the two halves are transparent regions inside it.
   */
   .split {
     position: relative;
@@ -252,7 +264,6 @@
     border-radius: var(--radius-sm);
     border: 1px solid var(--border-control);
     background: var(--bg-elevated);
-    box-shadow: var(--shadow-card);
     transition:
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out),
@@ -313,14 +324,16 @@
     background: var(--bg-secondary);
   }
 
-  /* Primary — the same solid clay fill and 15px hero label as Button. */
+  /* Primary — the same flat clay fill and 13px label as Button: no lip, no
+     shadow, no bigger hero label (see the note at the top of Button.svelte). */
   .primary {
+    /* The hero action's height (36px, tokens.css §9.1): Present is the one
+       control on the route that is taller than its neighbours, and at 32px it
+       sat shorter than the Edit / Preview / Both track beside it. */
+    min-height: var(--control-h-lg);
     background: var(--accent);
-    border-color: var(--accent-strong);
+    border-color: var(--accent);
     color: var(--accent-contrast);
-  }
-  .primary .main {
-    font-size: var(--text-base);
   }
   .primary .divider {
     /* A wash of the contrast colour, so the rule reads on the clay fill
@@ -364,6 +377,17 @@
     right: 0;
     z-index: 40;
     min-width: 264px;
+    /*
+      Bounded by the window. The menu grows with the script — a start row per
+      part, "From here", "From last ending" — and at the 680px minimum window a
+      long script pushed Practise and Review take setup off the bottom. It
+      opens from the toolbar, so the room below is the window less the toolbar
+      band and a margin; past that it scrolls, and focusing an item (arrowing,
+      or the first one on open) scrolls it into view.
+    */
+    max-height: calc(100vh - var(--toolbar-h) - var(--space-5));
+    overflow-y: auto;
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
     padding: var(--space-2);
@@ -435,5 +459,20 @@
     font-size: var(--text-xs);
     color: var(--text-secondary);
     line-height: 1.35;
+  }
+
+  .separator {
+    height: 1px;
+    margin: var(--space-1) var(--space-2);
+    background: var(--divider);
+  }
+  .group-label {
+    /* Lines up with the item labels: the item's inset, the tick, the gap. */
+    padding: var(--space-1) var(--space-2) 2px calc(var(--space-2) + 15px + var(--space-2));
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+    color: var(--text-muted);
   }
 </style>

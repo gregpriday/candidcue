@@ -49,6 +49,7 @@ const MAPPING: Record<IconName, string> = {
   user: 'user',
   clock: 'clock',
   diagram: 'workflow',
+  'panel-right': 'panel-right',
 };
 
 const NAMES = Object.keys(MAPPING) as IconName[];
