@@ -127,7 +127,7 @@ const {
   togglePlayPause,
 } = await import('../../../src/control/stores/session');
 const { get } = await import('svelte/store');
-const { toasts } = await import('../../../src/control/stores/toasts');
+const { clearToasts, toasts } = await import('../../../src/control/stores/toasts');
 
 function compiledStub(): CompiledScript {
   return {
@@ -748,45 +748,49 @@ describe('speech status names an on-device recogniser, not a connection (#304)',
   // take reaches the network: the recogniser runs on this machine.
   const HOSTED = /connect|transcriber|network|wi-?fi/i;
 
+  // The toast store outlives a test, and an unkeyed toast's expiry timer dies
+  // with the fake clock — so each test reads only what it raised itself.
+  beforeEach(() => clearToasts());
+
   function messages(): string[] {
     return get(toasts).map((toast) => toast.message);
   }
 
-  it('says a long pause switched voice off, and names the control that brings it back', () => {
+  it('says a long pause switched voice off, and names the controls that bring it back', () => {
     start();
     pauseListening();
-    // The pipeline fires this as it closes the recogniser, always with 0.
+    // The pipeline fires this as it closes the recogniser, always with 0 — so
+    // the "disconnect in 0 min" countdown this replaced was always wrong.
     (deps().onPauseWarning as unknown as (msRemaining: number) => void)(0);
 
-    const message = 'Voice following switched off after a long pause. Press Resume to turn it back on.';
-    expect(messages()).toContain(message);
-    // No countdown: "disconnect in 0 min" arrived at the moment it disconnected.
-    expect(message).not.toMatch(/\bmin\b|\d/);
-    expect(message).not.toMatch(HOSTED);
+    expect(messages()).toEqual([
+      'Voice following switched off after a long pause. ' +
+        'Press Space or choose Session › Resume to turn it back on.',
+    ]);
   });
 
-  it('blames the recogniser falling behind for dropped audio, in the right number', () => {
+  it('reports dropped audio without inventing a connection, in the right number', () => {
     start();
     const onAudioDropped = deps().onAudioDropped as unknown as (frames: number) => void;
 
     onAudioDropped(1);
     expect(messages()).toContain(
-      'Speech recognition fell behind and skipped 1 moment of audio. ' +
-        'Anything said in that gap will not be followed.',
+      'Speech recognition missed 1 moment of audio. Anything said in that gap will not be followed.',
     );
     onAudioDropped(3);
     expect(messages()).toContain(
-      'Speech recognition fell behind and skipped 3 moments of audio. ' +
-        'Anything said in that gap will not be followed.',
+      'Speech recognition missed 3 moments of audio. Anything said in that gap will not be followed.',
     );
+    for (const message of messages()) expect(message).not.toMatch(HOSTED);
   });
 
   it('reads a closed recogniser as voice following being off, paused or not', async () => {
     start();
     const onConnectionState = deps().onConnectionState as unknown as (state: string) => void;
-    onConnectionState('connected');
+    // The order a real take announces: starting, then ready.
     onConnectionState('reconnecting');
     expect(get(liveStatusLabel)).toBe('Voice starting — position held');
+    onConnectionState('connected');
 
     onConnectionState('offline');
     expect(get(liveStatusLabel)).toBe('Voice following is off');

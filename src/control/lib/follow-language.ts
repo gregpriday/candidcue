@@ -407,13 +407,13 @@ export const FOLLOW_NOTICE_COPY: Record<
   Exclude<FollowNoticeId, 'budget_exceeded'>,
   FollowNoticeCopy
 > = {
-  // Not "Reconnecting": this is raised for every state but a running
-  // recogniser, including one that gave up, and nothing on this machine
-  // reconnects to anything.
+  // Not "Reconnecting", and not "interrupted" either: this is raised for every
+  // state but a ready recogniser — a first start still loading, one that gave
+  // up, a pause that closed it — and nothing on this machine reconnects.
   transcription_interrupted: {
-    title: 'Voice following interrupted — position held',
+    title: 'Voice following unavailable — position held',
     detail:
-      'Speech recognition is not running. The stage decelerates and holds your place; it does not keep scrolling on an old pace estimate.',
+      'Speech recognition is not ready. The stage decelerates and holds your place; it does not keep scrolling on an old pace estimate.',
     tone: 'warning',
   },
   low_transcript_confidence: {

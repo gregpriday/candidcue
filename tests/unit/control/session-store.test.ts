@@ -176,7 +176,7 @@ describe('live session store', () => {
     // `offline` is non-recoverable — nothing is retrying, so it must not read
     // as a warning-toned "Voice starting". And none of it may name a network:
     // the recogniser runs on this machine.
-    expect(connectionPill('connected')).toEqual({ tone: 'success', label: 'Voice on' });
+    expect(connectionPill('connected')).toEqual({ tone: 'success', label: 'Voice ready' });
     expect(connectionPill('reconnecting')).toEqual({ tone: 'warning', label: 'Voice starting' });
     expect(connectionPill('offline')).toEqual({ tone: 'danger', label: 'Voice off' });
   });

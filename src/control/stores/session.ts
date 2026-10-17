@@ -1075,8 +1075,10 @@ export function startLiveSession(input: StartSessionInput): string {
        */
       onAudioDropped: (frames) => {
         showToast(
-          `Speech recognition fell behind and skipped ${frames} ${frames === 1 ? 'moment' : 'moments'} ` +
-            'of audio. Anything said in that gap will not be followed.',
+          // "Missed", not "fell behind": a full recogniser queue is one source,
+          // but so are a stalled push and pre-roll shed while the model loads.
+          `Speech recognition missed ${frames} ${frames === 1 ? 'moment' : 'moments'} of audio. ` +
+            'Anything said in that gap will not be followed.',
           'danger',
           { key: TOAST_AUDIO_DROPPED },
         );
@@ -1135,7 +1137,7 @@ export function startLiveSession(input: StartSessionInput): string {
         // §59: an interrupted transcript is a first-class degraded state.
         smoothFollow.reportTranscriptStatus(
           connection === 'connected' ? 'live' : 'interrupted',
-          connection === 'offline' ? 'Speech recognition has stopped.' : null,
+          connection === 'offline' ? 'Speech recognition is off.' : null,
         );
       },
       // H5: transcription is untrustworthy — stop following visibly rather
@@ -1277,11 +1279,13 @@ export function startLiveSession(input: StartSessionInput): string {
        * M3: a soft pause keeps the microphone and the recogniser open, so one
        * that outlasts its limit closes the recogniser. This fires as it
        * closes, not before — and the wake word cannot reopen a recogniser that
-       * is gone, so the toast names the control that does.
+       * is gone, so the toast names the controls that do. Both of them: the
+       * stage has no Resume button, only Space.
        */
       onPauseWarning: () => {
         showToast(
-          'Voice following switched off after a long pause. Press Resume to turn it back on.',
+          'Voice following switched off after a long pause. ' +
+            'Press Space or choose Session › Resume to turn it back on.',
           'info',
         );
       },
@@ -3506,7 +3510,7 @@ export function connectionPill(connection: SessionState['connection']): {
 } {
   switch (connection) {
     case 'connected':
-      return { tone: 'success', label: 'Voice on' };
+      return { tone: 'success', label: 'Voice ready' };
     case 'reconnecting':
       return { tone: 'warning', label: 'Voice starting' };
     default:

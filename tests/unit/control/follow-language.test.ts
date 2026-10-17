@@ -194,8 +194,9 @@ describe('degraded-state copy (Part XI)', () => {
    */
   it('describes speech recognition, not a connection, when transcription stops', () => {
     const copy = FOLLOW_NOTICE_COPY.transcription_interrupted;
-    expect(copy.title).toBe('Voice following interrupted — position held');
-    expect(copy.detail).toMatch(/^Speech recognition is not running\./);
+    // Raised on a healthy first start too, so it cannot claim an interruption.
+    expect(copy.title).toBe('Voice following unavailable — position held');
+    expect(copy.detail).toMatch(/^Speech recognition is not ready\./);
     expect(FOLLOW_STATE_DETAIL.paused).toBe('Automatic movement is stopped. The take is still running.');
     for (const text of [copy.title, copy.detail, FOLLOW_STATE_DETAIL.paused, FOLLOW_STATE_LABELS.paused]) {
       expect(text).not.toMatch(/connect|transcriber|network/i);
