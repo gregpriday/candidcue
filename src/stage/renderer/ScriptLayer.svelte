@@ -116,6 +116,7 @@
     maxPathDisagreementPx,
     measureStageLayout,
     sameLayout,
+    tokenFragmentRects,
     type AlignmentReceiverStats,
     type FallbackTarget,
     type MeasuredTokenRect,
@@ -2933,7 +2934,10 @@
     const planeRect = planeEl.getBoundingClientRect();
     const el = planeEl.querySelector<HTMLElement>(`[data-t="${tokenIndex}"]`);
     if (el) {
-      const r = el.getBoundingClientRect();
+      // The row the token STARTS on, as the line map anchors it: a word too
+      // wide for the column breaks inside its span (#281), and its union box
+      // would put the band on the middle of a three-row word.
+      const r = tokenFragmentRects(el)[0] ?? el.getBoundingClientRect();
       return { topDoc: docTopOf(r, planeRect), height: r.height, measured: true };
     }
     // Off-window or unmapped: estimate from the block's offsets.
@@ -3274,9 +3278,13 @@
     const spanned = startEl && endEl ? lineRectsForRange(startEl, endEl) : [];
     // No sentence span, a sentence whose ends are outside the rendered window,
     // or a range that measured nothing: mark the word instead of guessing at
-    // the phrase around it.
-    const rects =
-      spanned.length > 0 ? spanned : curEl ? [curEl.getBoundingClientRect()] : [];
+    // the phrase around it — row by row, because a word wider than the column
+    // breaks across rows (#281) and its union box would cover the column.
+    let rects: DOMRect[] = spanned;
+    if (rects.length === 0 && curEl) {
+      rects = tokenFragmentRects(curEl);
+      if (rects.length === 0) rects = [curEl.getBoundingClientRect()];
+    }
     if (rects.length === 0) {
       if (underlay.length > 0) underlay = [];
       return;
@@ -3702,11 +3710,22 @@
     transition: none;
   }
 
+  /*
+   * Nothing drawn on the glass may run past the column (#281).
+   *
+   * The layer clips, so a run wider than the column — a URL, a compound word, a
+   * code identifier — used to lose its end silently, on the left under a mirror.
+   * `anywhere` breaks such a run only when the line has no ordinary break left,
+   * so prose wraps exactly where it did, and the break is drawn inside the one
+   * word span: the token, its index and the line map's anchor are unchanged.
+   * Inherited, so every block kind in the column gets it from here.
+   */
   .column {
     margin: 0 auto;
     font-weight: 500;
     display: flex;
     flex-direction: column;
+    overflow-wrap: anywhere;
   }
 
   .spacer {

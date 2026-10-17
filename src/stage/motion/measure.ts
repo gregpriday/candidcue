@@ -113,6 +113,7 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
   }
 
   const tokens: MeasuredTokenRect[] = [];
+  const brokenRows = new Map<MeasuredTokenRect, number[]>();
   const range = plane.ownerDocument.createRange();
   for (const el of Array.from(plane.querySelectorAll<HTMLElement>('[data-t]'))) {
     const raw = el.dataset.t;
@@ -131,29 +132,87 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
     // A zero-width rect means the token is not laid out (hidden block, empty
     // text run); it must not create a phantom line.
     if (!rect || rect.width <= 0) continue;
-    tokens.push({
+    const token: MeasuredTokenRect = {
       tokenIndex,
       blockId,
       ...toDocumentRect(rect, planeRect, mirrorX, mirrorY),
-    });
+    };
+    tokens.push(token);
+    if (rects.length > 1) {
+      // Only rows something is drawn on: an empty fragment is nowhere to read.
+      const rows = Array.from(rects)
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => toDocumentRect(r, planeRect, mirrorX, mirrorY).topY);
+      if (rows.length > 1) brokenRows.set(token, rows);
+    }
   }
   range.detach?.();
 
   return {
     tokens,
     blocks: measuredBlocks,
-    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx),
+    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx, brokenRows),
     contentHeightPx,
   };
 }
 
-function medianLinePitch(tokens: readonly MeasuredTokenRect[], fallbackPx: number): number {
+/**
+ * The boxes a token is drawn in, one per row, in reading order.
+ *
+ * Usually one. A word wider than the column breaks inside its span (#281) and
+ * is then drawn on several rows, and a caller asking where the token IS means
+ * the row it starts on — the line it belongs to, as the map anchors it — not
+ * the union box, whose middle is the middle of a three-row word. Empty
+ * fragments are dropped: nobody can read anything there.
+ */
+export function tokenFragmentRects(el: Element): DOMRect[] {
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  range.detach?.();
+  return rects;
+}
+
+/** Steps between the rows one token is drawn on, in document pixels. */
+export function rowStepsWithin(tops: readonly number[]): number[] {
+  const sorted = [...tops].sort((a, b) => a - b);
+  const steps: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const step = sorted[i]! - sorted[i - 1]!;
+    // Two fragments on one row (a bidi run, a ligature split) are not a step.
+    if (step > 1) steps.push(step);
+  }
+  return steps;
+}
+
+/**
+ * The median step from one drawn row to the next.
+ *
+ * A word broken across rows (#281) is anchored on the row it starts on, so
+ * measured start to start, the step over a three-row word reads as one line
+ * three rows tall. On a script made mostly of such words that outlier is the
+ * median, a pitch of three rows widens the map's grouping tolerance past a real
+ * row, and two lines are built as one. So a broken token contributes the steps
+ * between its own rows, and the next start is measured from its LAST row: every
+ * row transition counts once. With no broken token `brokenRows` is empty and
+ * this is the start-to-start median it always was.
+ */
+export function medianLinePitch(
+  tokens: readonly MeasuredTokenRect[],
+  fallbackPx: number,
+  brokenRows: ReadonlyMap<MeasuredTokenRect, readonly number[]> = new Map(),
+): number {
   const tops: number[] = [];
   let previousTop: number | null = null;
   for (const token of tokens) {
     if (previousTop === null || token.topY - previousTop > 1) {
       if (previousTop !== null) tops.push(token.topY - previousTop);
       previousTop = token.topY;
+    }
+    const rows = brokenRows.get(token);
+    if (rows !== undefined && rows.length > 1) {
+      tops.push(...rowStepsWithin(rows));
+      previousTop = Math.max(previousTop, ...rows);
     }
   }
   const positive = tops.filter((d) => d > 1);
