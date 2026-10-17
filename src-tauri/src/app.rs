@@ -571,21 +571,16 @@ fn install_window_frame_recorder(app: &tauri::AppHandle) {
             let Some(window) = handle.get_webview_window(CONTROL_LABEL) else {
                 continue;
             };
-            let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+            // In the units the restore reads back, not raw physical pixels:
+            // on a desk of mixed display scales those are a different size
+            // on every display (#270).
+            let Some(frame) = crate::commands::shell_cmds::measure_frame(&window) else {
                 continue;
             };
             let Some(paths) = handle.try_state::<crate::scripts::DataPaths>() else {
                 continue;
             };
-            if let Err(err) = crate::commands::shell_cmds::write_frame(
-                &paths,
-                crate::commands::shell_cmds::WindowFrame {
-                    x: position.x,
-                    y: position.y,
-                    width: size.width,
-                    height: size.height,
-                },
-            ) {
+            if let Err(err) = crate::commands::shell_cmds::write_frame(&paths, frame) {
                 tracing::debug!(error = ?err, "the window frame could not be recorded");
             }
         }
