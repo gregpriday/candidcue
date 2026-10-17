@@ -452,6 +452,10 @@ pub struct AlignmentConfig {
     pub rank_backward_factor: f64,
 }
 
+/// Upper bound on `max_lead_atoms` and `lead_margin_atoms` — see
+/// [`AlignmentConfig::sanitized`].
+pub const MAX_DISPLAY_REACH_ATOMS: f64 = 64.0;
+
 impl AlignmentConfig {
     /// Clamp pathological values to something the engine can run with.
     /// The engine is fed persisted/user-supplied configuration in the app;
@@ -481,10 +485,16 @@ impl AlignmentConfig {
         self.pause_onset_ms = self.pause_onset_ms.max(0.0);
         fix(&mut self.lead_floor_ms, d.lead_floor_ms);
         self.lead_floor_ms = self.lead_floor_ms.max(0.0);
+        // Bounded above as well, at the same 64 atoms `viewport_slack_atoms`
+        // gets: every snapshot ships the stretch of the token axis between
+        // `observed - margin` and `observed + max_lead`
+        // (`crate::project::DisplayAtoms`), and the stage refuses a window
+        // longer than 256 boundaries rather than iterate over whatever arrives.
+        // A lead or margin past a screen of text is not a tuning anyway.
         fix(&mut self.max_lead_atoms, d.max_lead_atoms);
-        self.max_lead_atoms = self.max_lead_atoms.max(0.0);
+        self.max_lead_atoms = self.max_lead_atoms.clamp(0.0, MAX_DISPLAY_REACH_ATOMS);
         fix(&mut self.lead_margin_atoms, d.lead_margin_atoms);
-        self.lead_margin_atoms = self.lead_margin_atoms.max(0.0);
+        self.lead_margin_atoms = self.lead_margin_atoms.clamp(0.0, MAX_DISPLAY_REACH_ATOMS);
         fix(&mut self.lead_ease_ms, d.lead_ease_ms);
         self.lead_ease_ms = self.lead_ease_ms.max(0.0);
         fix(&mut self.lead_hold_ms, d.lead_hold_ms);

@@ -123,6 +123,15 @@
    * the better part of a second. So a retreat is honoured at any distance once it
    * has lasted this long. 80 ms is comfortably more than a frame at 30 Hz (33 ms)
    * and far less than any retreat a person can produce.
+   *
+   * WHAT THIS LATCH ACTUALLY GOVERNS. Only the frontier the ramp FREEZES on:
+   * `dimCursor` below reads the live cursor while following, and the held one
+   * only once `dimFrozen` is set. Drawing from the latch while following too
+   * was measured on the rendered-stage model and rejected — it took the
+   * never-spoken safety gate from 2.629 to 2.751 word·s and added two
+   * disruptions per ten minutes, to save 5% of corrections, because holding the
+   * frontier forward through a retreat keeps darkness on text the engine has
+   * just stopped claiming (`bench/README.md`, "Measured and rejected").
    */
   const DIM_RETREAT_DEBOUNCE_MS = 80;
 

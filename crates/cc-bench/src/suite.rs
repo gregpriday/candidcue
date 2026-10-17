@@ -762,6 +762,20 @@ pub fn run_tier_b(
             );
         }
 
+        // `CC_BENCH_APP_TOKENS=1`: compile the script the way a take does and
+        // score against gold mapped into that compile's atoms. See
+        // `crate::app_tokens` for why the two compiles differ.
+        let (script, gold) = if std::env::var("CC_BENCH_APP_TOKENS").is_ok() {
+            let app = crate::app_tokens::compile_like_app(
+                &source,
+                cc_align::CompileOptions::default(),
+            );
+            let map = crate::app_tokens::AtomMap::between(&script, &app);
+            let gold = crate::app_tokens::map_gold(&gold, &map);
+            (app, gold)
+        } else {
+            (script, gold)
+        };
         let result = crate::replay::replay(script, config.clone(), &events, &gold.viewport_hints);
         let eval = evaluate(
             &manifest.name,
