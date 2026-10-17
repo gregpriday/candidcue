@@ -80,6 +80,13 @@ export const PRE_ROLL_MAX_FRAMES = 40;
  */
 let transportQueue: Promise<void> = Promise.resolve();
 
+/**
+ * Bound on STT frames held for a session whose generation is not known yet.
+ * Only its opening transport frames arrive in that window, so this is a
+ * ceiling on a misbehaving stream, not a budget anything is expected to use.
+ */
+const EARLY_FRAMES_MAX = 32;
+
 function serialiseTransport(task: () => Promise<void>): Promise<void> {
   const run = transportQueue.then(task);
   transportQueue = run.catch(() => {});
@@ -270,6 +277,12 @@ export class VoiceSessionPipeline {
    * holding locally, and leaves every field alone.
    */
   private lifecycle = 0;
+  /** The start that subscribed or last adopted `unlistenStt`. */
+  private sttOwner = -1;
+  /** The generation `closeSession` closed last, still finalizing its last utterance. */
+  private closingGeneration: number | null = null;
+  /** STT frames that arrived while `start()` was waiting for its generation. */
+  private earlyFrames: SttFrame[] = [];
   /** The start in flight for the current lifecycle, so a second one joins it. */
   private starting: { epoch: number; done: Promise<void> } | null = null;
   /**
@@ -438,33 +451,56 @@ export class VoiceSessionPipeline {
         }
         this.transportGeneration = generation;
         trace('session', `transport ${generation} on the bundled recogniser`);
+        const early = this.earlyFrames;
         // In the same turn as the assignment above, with no await between
         // them: a frame captured after this point cannot be queued ahead of
         // the backlog it follows. Opened only past the epoch check above, so
         // an attempt a stop or hard pause overtook never builds a queue.
         this.openSender(generation);
         this.releasePreRoll();
+        for (const frame of early) {
+          if (frame.generation === generation) this.handleSttFrame(frame);
+        }
       });
+      // Nothing is installed for a take that was stopped in the turns since.
+      this.assertCurrent(epoch);
     } catch (err) {
       trace('start-failed', err instanceof Error ? err.message : 'unknown');
       /*
        * Whatever this attempt failed on, if the take moved on meanwhile the
        * answer is `SESSION_STOPPED`, which the store treats as a teardown
-       * rather than a failure to report. Nothing shared is cleaned up here:
-       * the stop or hard pause that superseded this attempt already did that,
-       * and the fields may now belong to a resume.
+       * rather than a failure to report. The stop or hard pause that
+       * superseded it already closed what was published, and the fields may
+       * now belong to a resume — so the one shared thing it may release is a
+       * listener it subscribed that nothing newer has adopted.
        */
-      if (!this.isCurrent(epoch)) throw new Error('SESSION_STOPPED');
+      if (!this.isCurrent(epoch)) {
+        if (this.sttOwner === epoch) this.releaseStt();
+        throw new Error('SESSION_STOPPED');
+      }
+      /*
+       * A failure ends this lifecycle the way a stop does, and before anything
+       * else: a switch already half-way through opening a device under it must
+       * not finish into a take that has no session. Everything is detached
+       * before the first await, so a pause and resume that land while this is
+       * closing keep what they open.
+       */
+      const failed = ++this.lifecycle;
       this.running = false;
       // Audio held for a session that will now never open belongs to nobody.
       this.dropPreRoll();
-      // A session opened and then abandoned bills for audio nobody is reading,
-      // so it is closed on every failure after it exists — including the one
-      // where capture is what failed.
-      await this.closeSession();
-      await this.teardownAudio();
-      this.unlistenStt?.();
+      const unlisten = this.unlistenStt;
       this.unlistenStt = null;
+      try {
+        // A session opened and then abandoned bills for audio nobody is
+        // reading, so it is closed on every failure after it exists —
+        // including the one where capture is what failed.
+        await Promise.all([this.closeSession(), this.teardownAudio()]);
+      } finally {
+        unlisten?.();
+      }
+      // Paused or stopped while this closed: the take reports on that instead.
+      if (this.lifecycle !== failed) throw new Error('SESSION_STOPPED');
       throw err;
     }
     this.watchDevices();
@@ -484,14 +520,17 @@ export class VoiceSessionPipeline {
     // The busy-device retry alone can hold this open for 1.75 s, and a stop in
     // that window must not be followed by a new stream on a dead take (#289).
     const epoch = this.lifecycle;
-    await this.serialiseAudio(async () => {
-      this.assertCurrent(epoch);
-      // Queued behind a start that has since failed: there is no take to
-      // give a microphone to.
-      if (!this.running) return;
-      const stream = await this.acquireMicrophone(epoch, deviceId);
-      await this.startCapture(epoch, stream);
-    });
+    try {
+      await this.serialiseAudio(async () => {
+        this.assertCurrent(epoch);
+        const stream = await this.acquireMicrophone(epoch, deviceId);
+        await this.startCapture(epoch, stream);
+      });
+    } catch (err) {
+      // A device that failed to open after the take was paused or ended is
+      // not a failed switch; the pause or stop is what happened.
+      throw this.isCurrent(epoch) ? err : new Error('SESSION_STOPPED');
+    }
     try {
       this.deviceManager?.select({ mode: 'specific', deviceId });
     } catch {
@@ -533,7 +572,14 @@ export class VoiceSessionPipeline {
    * returns.
    */
   async resume(): Promise<void> {
-    if (this.stopped || !this.paused) return;
+    if (this.stopped) return;
+    if (!this.paused) {
+      // A second resume while the first is still reopening answers when it
+      // does. Returning now would let the caller report a live microphone the
+      // first has not opened yet.
+      if (this.starting?.epoch === this.lifecycle) await this.starting.done;
+      return;
+    }
     this.clearPauseTimer();
 
     const needsCapture = this.capture === null || this.activeStream === null;
@@ -541,7 +587,15 @@ export class VoiceSessionPipeline {
       // `start()` owns the whole acquire → open → capture sequence, including
       // its epoch checks; duplicating it here is how the two drift apart.
       this.paused = false;
-      await this.start();
+      try {
+        await this.start();
+      } catch (err) {
+        // Nothing reopened, so the take is still paused as far as the next
+        // resume is concerned — which would otherwise return at its first
+        // line and be reported live.
+        if (!this.stopped) this.paused = true;
+        throw err;
+      }
       return;
     }
     this.paused = false;
@@ -561,6 +615,9 @@ export class VoiceSessionPipeline {
     this.lifecycle += 1;
     this.running = false;
     this.dropPreRoll();
+    // Said even if this pipeline said it last: a resume this pause overtook
+    // may have told the screen `reconnecting` before it reached the pipeline.
+    this.lastConnectionState = null;
     this.setConnectionState('offline');
     // Both detach what they close before their first await, so a resume that
     // starts while this is still closing keeps everything it opens (#289).
@@ -580,8 +637,7 @@ export class VoiceSessionPipeline {
       await this.closeSession();
     } finally {
       await this.teardownAudio();
-      this.unlistenStt?.();
-      this.unlistenStt = null;
+      this.releaseStt();
       this.setConnectionState('offline');
     }
   }
@@ -615,7 +671,11 @@ export class VoiceSessionPipeline {
   }
 
   private async subscribeToStt(epoch: number): Promise<void> {
-    if (this.unlistenStt) return;
+    if (this.unlistenStt) {
+      // Adopted: a start abandoned after this one may no longer release it.
+      this.sttOwner = epoch;
+      return;
+    }
     if (!isTauriRuntime()) return; // plain-browser dev: nothing to subscribe to
     /*
      * NOT swallowed. Inside Tauri, a failed subscription means the session
@@ -626,17 +686,62 @@ export class VoiceSessionPipeline {
     const { listen } = await import('@tauri-apps/api/event');
     this.assertCurrent(epoch);
     const unlisten = await listen<SttFrame>(STT_EVENT, (event) => {
-      this.handleSttFrame(event.payload);
+      this.receiveSttFrame(event.payload);
     });
     /*
-     * A subscription that lands after `stop()` is nobody's: the stop already
-     * ran its unlisten, and found nothing to call. One that lands beside
-     * another (a resume that subscribed while this was pending) is surplus.
-     * A hard pause keeps it, as it keeps the one a running take had.
+     * One that lands beside another — a resume that subscribed while this was
+     * pending — is surplus. One that lands after a stop or hard pause is kept
+     * only until the check below sends this start to its catch, which
+     * releases it: the stop already ran its unlisten and found nothing to
+     * call.
      */
-    if (this.stopped || this.unlistenStt) unlisten();
-    else this.unlistenStt = unlisten;
+    if (this.unlistenStt) {
+      unlisten();
+    } else {
+      this.unlistenStt = unlisten;
+      this.sttOwner = epoch;
+    }
     this.assertCurrent(epoch);
+  }
+
+  private releaseStt(): void {
+    const unlisten = this.unlistenStt;
+    this.unlistenStt = null;
+    unlisten?.();
+  }
+
+  /**
+   * The listener's way in: which frames belong to this take while it has no
+   * session of its own.
+   *
+   * `handleSttFrame` filters by generation once a session is open. With none
+   * it accepted everything, so a take that was opening heard the last words
+   * of the one before it, and a hard-paused take heard a stale start's
+   * session announce itself connected (#289).
+   */
+  private receiveSttFrame(frame: SttFrame): void {
+    if (this.transportGeneration !== null) {
+      this.handleSttFrame(frame);
+      return;
+    }
+    // The session this take just closed may still finalize its last utterance
+    // into it: its words, not its transport.
+    if (
+      frame.generation === this.closingGeneration &&
+      (frame.kind === 'itemStarted' || frame.kind === 'partial' || frame.kind === 'final')
+    ) {
+      this.handleSttFrame(frame);
+      return;
+    }
+    // A session's first frames can arrive before `start_transcription` has
+    // returned its generation. They wait for it, and only that generation's
+    // are applied.
+    if (this.holdingFrames) {
+      this.earlyFrames.push(frame);
+      if (this.earlyFrames.length > EARLY_FRAMES_MAX) this.earlyFrames.shift();
+      return;
+    }
+    trace('rx-dropped', `generation ${frame.generation} with no session open`);
   }
 
   /**
@@ -1049,6 +1154,7 @@ export class VoiceSessionPipeline {
   /** Stop holding, and forget anything held. */
   private dropPreRoll(): void {
     this.holdingFrames = false;
+    this.earlyFrames = [];
     this.discardHeld();
   }
 
@@ -1110,6 +1216,7 @@ export class VoiceSessionPipeline {
     const generation = this.transportGeneration;
     this.transportGeneration = null;
     if (generation === null) return;
+    this.closingGeneration = generation;
     await this.closeTransport(generation);
   }
 

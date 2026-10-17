@@ -107,8 +107,10 @@ describe('provider frames reach the aligner', () => {
     expect(/listen<SttFrame>\(STT_EVENT/.test(body), 'nothing subscribes to stt://event').toBe(
       true,
     );
+    // Through the ownership filter (#289), which hands on what is this take's.
     expect(
-      /this\.handleSttFrame\(event\.payload\)/.test(body),
+      /this\.receiveSttFrame\(event\.payload\)/.test(body) &&
+        /receiveSttFrame\(frame: SttFrame\): void \{[\s\S]*?this\.handleSttFrame\(frame\)/.test(body),
       'the subscription must drive handleSttFrame — a listener that discards its ' +
         'payload is a session that hears everything and reports nothing',
     ).toBe(true);
