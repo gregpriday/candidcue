@@ -99,6 +99,20 @@ describe('followStatus', () => {
     ).toMatch(/not the microphone/i);
   });
 
+  it('names a refused microphone as a refusal, with neither other remedy (#303)', () => {
+    // A refusal leaves micState 'disconnected' with no device lost. Before
+    // #303 it reached the recogniser branch — "This is not the microphone" —
+    // which is exactly backwards; and offering another input cannot answer it.
+    const refused = followStatus(
+      healthy({ micState: 'disconnected', inputDeviceLost: false, microphoneRefused: true }),
+    );
+    expect(refused.line).toBe('Microphone not allowed');
+    expect(refused.detail).toMatch(/System Settings/);
+    expect(refused.detail).not.toMatch(/another input/i);
+    expect(refused.detail).not.toMatch(/not the microphone/i);
+    expect(refused.tone).toBe('warning');
+  });
+
   it('reports nothing-heard-yet without calling it a fault', () => {
     /*
      * At the top of every take this is simply true — the presenter has not

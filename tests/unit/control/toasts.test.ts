@@ -32,6 +32,30 @@ describe('toast store', () => {
     expect(get(toasts)).toHaveLength(0);
   });
 
+  it('carries an action, and keeps it on a keyed replacement (#303)', () => {
+    const run = vi.fn();
+    showToast('Not allowed', 'danger', {
+      key: 'mic-refused',
+      action: { label: 'Open System Settings', run },
+    });
+    showToast('Still not allowed', 'danger', {
+      key: 'mic-refused',
+      action: { label: 'Open System Settings', run },
+    });
+    const list = get(toasts);
+    expect(list).toHaveLength(1);
+    expect(list[0]!.message).toBe('Still not allowed');
+    list[0]!.action!.run();
+    expect(run).toHaveBeenCalledTimes(1);
+    // Running the action does not retract the notice; the condition does.
+    expect(get(toasts)).toHaveLength(1);
+  });
+
+  it('has no action unless one is given', () => {
+    showToast('Saved', 'success', { durationMs: 0 });
+    expect(get(toasts)[0]).not.toHaveProperty('action');
+  });
+
   it('stacks multiple toasts', () => {
     showToast('one', 'info', { durationMs: 0 });
     showToast('two', 'danger', { durationMs: 0 });

@@ -76,7 +76,12 @@ export interface VoiceFacade {
    * inputs is always an explicit choice, never automatic mid-take.
    */
   watchInputDevices(cb: (devices: AudioDeviceInfo[]) => void): Unsubscribe;
-  /** Explicit permission request (spec §9.1 — never at app launch). */
+  /**
+   * Explicit permission request (spec §9.1 — never at app launch).
+   *
+   * 'denied' is a refusal and nothing else; a missing or busy device rejects
+   * with its own `MIC_*` code (#303).
+   */
   requestMicrophoneAccess(): Promise<'granted' | 'denied'>;
   /**
    * Passively observe the microphone permission (spec §28.1). Reports the

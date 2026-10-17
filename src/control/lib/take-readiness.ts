@@ -28,6 +28,7 @@
  * Pure: facts in, findings out. No IPC, no stores, no rendering.
  */
 
+import type { MicrophonePermission } from '../../shared/contracts';
 import type { SettingsSection } from '../stores/router';
 
 /** How serious a finding is, which decides whether it can be launched past. */
@@ -54,7 +55,17 @@ export interface ReadinessFinding {
    * a closed set and a typo would be a dead button on the one screen whose job
    * is to be actionable.
    */
-  action?: { label: string; settingsSection?: SettingsSection };
+  action?: {
+    label: string;
+    settingsSection?: SettingsSection;
+    /**
+     * A microphone remedy rather than a Settings section (#303). `allow` asks
+     * the OS — an explicit action, so the prompt may appear, and it appears
+     * here rather than over the prompter. `privacy` opens the OS pane, and the
+     * sheet offers a re-check beside it for when the user comes back.
+     */
+    microphone?: 'allow' | 'privacy';
+  };
 }
 
 export interface ReadinessInput {
@@ -82,6 +93,15 @@ export interface ReadinessInput {
    */
   pinnedMicLabel: string | null;
   pinnedMicAvailable: boolean;
+  /**
+   * What the OS says about the microphone (#303), read without asking.
+   *
+   * Optional, and absent or `unsupported` says nothing: a platform that cannot
+   * answer is not a platform that refused, and a sheet on every take for
+   * everybody whose OS is silent would be the reflex-dismissal this module
+   * exists to avoid.
+   */
+  micPermission?: MicrophonePermission;
   /** Words the compiler found. Zero means there is nothing to read aloud. */
   spokenWordCount: number;
   /** Compile problems that stop a document rendering at all. */
@@ -142,12 +162,19 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
     const model = voiceModelFinding(input);
     if (model !== null) findings.push(model);
 
+    const access = microphoneAccessFinding(input.micPermission);
+    if (access !== null) findings.push(access);
+
     /*
      * Only a PINNED microphone can go missing. "Follow the system default" is
      * the ordinary configuration and has nothing to report — reporting it would
      * put a row on every take of every user who never opened audio settings.
+     *
+     * And not while access is the problem: without it the webview lists inputs
+     * with no labels and no stable ids, so the pin cannot be matched, and
+     * "not connected" would blame hardware for what the OS withheld.
      */
-    if (input.pinnedMicLabel !== null && !input.pinnedMicAvailable) {
+    if (access === null && input.pinnedMicLabel !== null && !input.pinnedMicAvailable) {
       findings.push({
         id: 'mic_missing',
         severity: 'warning',
@@ -258,6 +285,52 @@ export function voiceModelFinding(
     detail: 'No speech model is installed, so this take cannot follow your voice.',
     action: { label: 'Install a language', settingsSection: 'speech' },
   };
+}
+
+/**
+ * Why this application cannot use the microphone yet, or null when nothing is
+ * known to stand in the way (#303).
+ *
+ * WARNING, never blocking. A take with no microphone still rolls at a pace and
+ * can be driven by hand, and Start anyway is how somebody who knows what they
+ * are doing goes past it. What this changes is WHEN they find out: before
+ * Present turns the window into the prompter, rather than from a prompt or a
+ * refusal on top of it.
+ */
+export function microphoneAccessFinding(
+  permission: MicrophonePermission | undefined,
+): ReadinessFinding | null {
+  switch (permission) {
+    case 'denied':
+      return {
+        id: 'mic_permission_denied',
+        severity: 'warning',
+        label: 'Microphone',
+        detail:
+          'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen CandidCue.',
+        action: { label: 'Open System Settings', microphone: 'privacy' },
+      };
+    case 'restricted':
+      return {
+        id: 'mic_permission_restricted',
+        severity: 'warning',
+        label: 'Microphone',
+        detail:
+          'Microphone access is restricted on this Mac, by Screen Time or a device management profile, so this take cannot follow your voice.',
+        action: { label: 'Open System Settings', microphone: 'privacy' },
+      };
+    case 'prompt':
+      return {
+        id: 'mic_permission_prompt',
+        severity: 'warning',
+        label: 'Microphone',
+        detail:
+          'CandidCue has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
+        action: { label: 'Allow microphone', microphone: 'allow' },
+      };
+    default:
+      return null;
+  }
 }
 
 /**

@@ -17,6 +17,15 @@ import { get, type Writable } from 'svelte/store';
 const h = vi.hoisted(() => ({
   startTake: vi.fn(async () => true),
   listMicrophones: vi.fn(async (): Promise<unknown[]> => []),
+  requestMicrophoneAccess: vi.fn(async (): Promise<'granted' | 'denied'> => 'granted'),
+  readMicrophonePermission: vi.fn(async (): Promise<string> => 'unsupported'),
+}));
+
+/** The OS's answer about the microphone (#303), set per test. */
+vi.mock('../../../src/control/services/microphone-permission', () => ({
+  readMicrophonePermission: h.readMicrophonePermission,
+  openMicrophoneSettings: vi.fn(async () => {}),
+  isMicrophoneRefused: (p: string) => p === 'denied' || p === 'restricted',
 }));
 
 vi.mock('../../../src/control/lib/start-take', async () => {
@@ -40,7 +49,10 @@ vi.mock('../../../src/control/stores/speech-model-readiness', async () => {
 
 vi.mock('../../../src/control/services/voice-facade', async (orig) => ({
   ...(await orig<typeof import('../../../src/control/services/voice-facade')>()),
-  getVoiceFacade: () => ({ listMicrophones: h.listMicrophones }),
+  getVoiceFacade: () => ({
+    listMicrophones: h.listMicrophones,
+    requestMicrophoneAccess: h.requestMicrophoneAccess,
+  }),
 }));
 
 /** The editor's document and compile, which the check reads script facts from. */
@@ -67,6 +79,7 @@ vi.mock('../../../src/control/stores/settings', async (orig) => {
 });
 
 import {
+  allowMicrophoneForTake,
   checkThenStart,
   checkThenStartTake,
   dismissTakeReadiness,
@@ -134,6 +147,10 @@ beforeEach(() => {
   h.startTake.mockClear();
   h.listMicrophones.mockReset();
   h.listMicrophones.mockResolvedValue([]);
+  h.requestMicrophoneAccess.mockReset();
+  h.requestMicrophoneAccess.mockResolvedValue('granted');
+  h.readMicrophonePermission.mockReset();
+  h.readMicrophonePermission.mockResolvedValue('unsupported');
   dismissTakeReadiness();
   model.set(INSTALLED);
   settingsDoc.set(defaultAppSettings());
@@ -395,5 +412,142 @@ describe('checkThenStart', () => {
     expect(get(takeReadinessPrompt)?.verdict.findings).toEqual([]);
     await startAnyway();
     expect(launch).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * #303 — a refused or never-granted microphone is found out before Present
+ * turns the window into the prompter, and the sheet carries the way back.
+ */
+describe('microphone access before the take', () => {
+  it('launches at once when access is granted', async () => {
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    await checkThenStartTake('script-1');
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(get(takeReadinessPrompt)).toBeNull();
+  });
+
+  it('holds a refused launch, and Try again launches it once allowed', async () => {
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1', { presentationMode: 'prompter' });
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+
+    // Still refused: the sheet stays, nothing launches.
+    h.requestMicrophoneAccess.mockResolvedValue('denied');
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+
+    // Allowed in System Settings, then Try again: the SAME launch goes.
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    h.requestMicrophoneAccess.mockResolvedValue('granted');
+    await allowMicrophoneForTake();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { presentationMode: 'prompter' });
+    expect(get(takeReadinessPrompt)).toBeNull();
+  });
+
+  it('believes a refusal it witnessed over the OS saying allowed', async () => {
+    // macOS can show the switch on while this running app is still refused
+    // until it is reopened. Launching on the OS's word would meet that refusal
+    // over the prompter — the thing this sheet exists to prevent.
+    h.readMicrophonePermission.mockResolvedValue('denied');
+    await checkThenStartTake('script-1');
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    h.requestMicrophoneAccess.mockResolvedValue('denied');
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+    expect(get(takeReadinessPrompt)?.verdict.findings[0]?.detail).toMatch(/quit and reopen/i);
+
+    // And it is not sticky: a request that works launches.
+    h.requestMicrophoneAccess.mockResolvedValue('granted');
+    await allowMicrophoneForTake();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for a never-asked microphone from the sheet, then launches on a grant', async () => {
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1');
+    expect(findingIds()).toEqual(['mic_permission_prompt']);
+    // The readiness READ never asks: only the explicit action does.
+    expect(h.requestMicrophoneAccess).not.toHaveBeenCalled();
+
+    h.requestMicrophoneAccess.mockImplementation(async () => {
+      h.readMicrophonePermission.mockResolvedValue('granted');
+      return 'granted';
+    });
+    await allowMicrophoneForTake();
+    expect(h.requestMicrophoneAccess).toHaveBeenCalledTimes(1);
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(get(takeReadinessPrompt)).toBeNull();
+  });
+
+  it('turns a refusal at the prompt into the row that undoes it', async () => {
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1');
+    h.requestMicrophoneAccess.mockImplementation(async () => {
+      h.readMicrophonePermission.mockResolvedValue('denied');
+      return 'denied';
+    });
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(findingIds()).toEqual(['mic_permission_denied']);
+  });
+
+  it('lets a newer Present win over an older sheet’s Allow', async () => {
+    // Allow is pending on the OS when Present is pressed again, and the newer
+    // check is still reading its facts when Allow comes back. Re-running the
+    // old check would retire the new one and launch the older take.
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1', { presentationMode: 'reader' });
+    const answer = deferred<'granted' | 'denied'>();
+    h.requestMicrophoneAccess.mockReturnValue(answer.promise);
+    const allowing = allowMicrophoneForTake();
+
+    const devices = deferred<unknown[]>();
+    pinYeti();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    const newer = checkThenStartTake('script-1', { presentationMode: 'prompter' });
+
+    answer.resolve('granted');
+    await allowing;
+    expect(h.startTake, 'the older take must not launch').not.toHaveBeenCalled();
+
+    devices.resolve([YETI]);
+    await newer;
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { presentationMode: 'prompter' });
+  });
+
+  it('says why when Allow finds no microphone, rather than looping', async () => {
+    const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
+    clearToasts();
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1');
+    h.requestMicrophoneAccess.mockRejectedValue(new Error('MIC_DEVICE_MISSING'));
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    // The sheet stays, Start anyway with it; the reason is said.
+    expect(get(takeReadinessPrompt)?.verdict.blocked).toBe(false);
+    const said = get(toasts).map((t) => t.message);
+    expect(said.some((m) => m.startsWith('CandidCue could not open the microphone.'))).toBe(true);
+    expect(said.join(' ')).not.toContain('MIC_DEVICE_MISSING');
+  });
+
+  it('launches nothing when the sheet is dismissed while the OS is asking', async () => {
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1');
+    const answer = deferred<'granted' | 'denied'>();
+    h.requestMicrophoneAccess.mockReturnValue(answer.promise);
+    const allowing = allowMicrophoneForTake();
+    dismissTakeReadiness();
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    answer.resolve('granted');
+    await allowing;
+    expect(h.startTake).not.toHaveBeenCalled();
+    expect(get(takeReadinessPrompt)).toBeNull();
   });
 });

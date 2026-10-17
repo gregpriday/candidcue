@@ -299,3 +299,66 @@ describe('summariseReadiness', () => {
     expect(summariseReadiness(resolveReadiness(ready({ requested: true })))).toMatch(/ready/i);
   });
 });
+
+/*
+ * #303 — the OS's answer about the microphone, before the window becomes the
+ * prompter. A first take used to meet the macOS prompt over the prompter, and a
+ * refused one learned it only after Present had already reshaped the window.
+ */
+describe('microphone access', () => {
+  it('says nothing when access is granted, or the platform cannot say', () => {
+    // `unsupported` is not a refusal. A sheet on every take for everybody whose
+    // OS is silent is the reflex click this module exists to avoid.
+    for (const micPermission of ['granted', 'unsupported', undefined] as const) {
+      const verdict = resolveReadiness(ready({ micPermission }));
+      expect(verdict.show, String(micPermission)).toBe(false);
+      expect(verdict.findings).toEqual([]);
+    }
+  });
+
+  it('warns about a refusal, with the pane as the remedy — never blocks', () => {
+    const verdict = resolveReadiness(ready({ micPermission: 'denied' }));
+    expect(verdict.show).toBe(true);
+    expect(verdict.blocked).toBe(false);
+    expect(verdict.findings).toHaveLength(1);
+    const [finding] = verdict.findings;
+    expect(finding!.id).toBe('mic_permission_denied');
+    expect(finding!.severity).toBe('warning');
+    expect(finding!.detail).toContain('System Settings');
+    expect(finding!.action).toEqual({ label: 'Open System Settings', microphone: 'privacy' });
+  });
+
+  it('names a policy restriction as one, with the same pane', () => {
+    const verdict = resolveReadiness(ready({ micPermission: 'restricted' }));
+    expect(verdict.blocked).toBe(false);
+    expect(verdict.findings[0]!.id).toBe('mic_permission_restricted');
+    expect(verdict.findings[0]!.detail).toMatch(/restricted/i);
+    expect(verdict.findings[0]!.action?.microphone).toBe('privacy');
+  });
+
+  it('offers to ask before the take, for a microphone never asked for', () => {
+    const verdict = resolveReadiness(ready({ micPermission: 'prompt' }));
+    expect(verdict.show).toBe(true);
+    expect(verdict.blocked).toBe(false);
+    expect(verdict.findings[0]!.id).toBe('mic_permission_prompt');
+    expect(verdict.findings[0]!.action).toEqual({ label: 'Allow microphone', microphone: 'allow' });
+  });
+
+  it('says nothing about access in a manual take', () => {
+    expect(resolveReadiness(ready({ voiceTake: false, micPermission: 'denied' })).show).toBe(false);
+  });
+
+  it('does not call a pinned microphone missing while access is the problem', () => {
+    // Without access the webview lists inputs with no labels or stable ids, so
+    // the pin cannot be matched — "not connected" would blame the hardware.
+    const verdict = resolveReadiness(
+      ready({ micPermission: 'denied', pinnedMicLabel: 'Shure MV7', pinnedMicAvailable: false }),
+    );
+    expect(verdict.findings.map((f) => f.id)).toEqual(['mic_permission_denied']);
+    // And with access granted, a missing pin is still reported.
+    const granted = resolveReadiness(
+      ready({ micPermission: 'granted', pinnedMicLabel: 'Shure MV7', pinnedMicAvailable: false }),
+    );
+    expect(granted.findings.map((f) => f.id)).toEqual(['mic_missing']);
+  });
+});

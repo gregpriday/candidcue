@@ -88,7 +88,17 @@ export function createRealVoiceFacade(): VoiceFacade {
       const devices = mediaDevices();
       if (!devices) return 'denied';
       const result = await requestMicAccess(devices);
-      if (!result.ok) return 'denied';
+      if (!result.ok) {
+        /*
+         * Only a REFUSAL is 'denied' (#303). Every failure used to be, so a
+         * machine with no microphone plugged in, or one held by another app,
+         * was told its access was blocked and sent to System Settings to fix
+         * a permission that had been granted. Anything else is thrown as its
+         * own code, which the caller can describe as what it is.
+         */
+        if (result.code === 'MIC_PERMISSION_DENIED') return 'denied';
+        throw new Error(result.code);
+      }
       // Permission was the goal; release the probe stream immediately (§28.7).
       releaseStream(result.stream);
       return 'granted';

@@ -78,6 +78,8 @@
     type SpeechModelStatus,
   } from '../services/speech-models';
   import { getVoiceFacade } from '../services/voice-facade';
+  import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
+  import { openMicrophonePrivacySettings } from '../lib/open-settings';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
     DEFAULT_STAGE_APPEARANCE,
@@ -98,6 +100,7 @@
     type AudioDeviceInfo,
     type AudioLevelSnapshot,
     type FramingPreset,
+    type MicrophonePermission,
     type OpticalOverrides,
     type OpticalProfile,
     type ReadingCueStyle,
@@ -1393,6 +1396,26 @@
   /* ----------------------------------------------------------- microphone */
 
   let micPermission = $state<'unknown' | 'granted' | 'denied'>('unknown');
+  /**
+   * The OS's own answer (#303), read passively by Rust. What the webview cannot
+   * see — WKWebView has no Permissions API for the microphone — and so the only
+   * way this screen knows a refusal it did not witness, or a grant made in
+   * System Settings while it was in the background.
+   */
+  let micAccess = $state<MicrophonePermission>('unsupported');
+  /**
+   * Which native read may still land. Bumped by every read, by leaving the
+   * section, and by a grant witnessed here — a read that was already in flight
+   * then describes the OS from before the user said yes, and must not undo it.
+   */
+  let micAccessRead = 0;
+  /** A request is in flight; the OS prompt may be up. */
+  let micRequesting = $state(false);
+  /**
+   * "Try again" was refused again. Said, because macOS may not hand a running
+   * webview a grant made since launch, and the remedy then is a reopen.
+   */
+  let micRetryRefused = $state(false);
   /** Guards the one-shot adoption of an already-granted permission. */
   let micAdopted = false;
   let micDevices = $state<AudioDeviceInfo[]>([]);
@@ -1526,6 +1549,39 @@
     });
   });
 
+  /*
+   * #303. The OS's answer, on arriving here and on every return to the window.
+   *
+   * Focus is the moment that matters: "Open System Settings" sends the user to
+   * another application, and they come back having flipped the switch — or
+   * not. A refusal shows the remedy even to somebody who has never pressed a
+   * button here. A grant while the refusal is showing changes what it says,
+   * but does not clear it: the OS allowing CandidCue is not the same as this
+   * running webview being given the microphone, and only Try again — a real
+   * request — can tell the two apart. Passive throughout: nothing here opens a
+   * device.
+   */
+  $effect(() => {
+    if (section !== 'audio') return undefined;
+    const read = async (): Promise<void> => {
+      const mine = (micAccessRead += 1);
+      const access = await readMicrophonePermission();
+      if (mine !== micAccessRead) return;
+      micAccess = access;
+      if (isMicrophoneRefused(access)) {
+        micAdopted = false;
+        micPermission = 'denied';
+      }
+    };
+    void read();
+    const onFocus = (): void => void read();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      micAccessRead += 1;
+      window.removeEventListener('focus', onFocus);
+    };
+  });
+
   /**
    * §28.1. Adopt a grant this machine has already made.
    *
@@ -1549,7 +1605,9 @@
     if (section !== 'audio') return;
     if (
       !shouldAdoptRememberedMicrophone({
-        remembered: $settings.audio.microphoneGranted,
+        // The OS saying so is as good as remembering it (#303): a grant made
+        // from a take's prompt never set the flag, and asked again forever.
+        remembered: $settings.audio.microphoneGranted || micAccess === 'granted',
         attempted: micAdoptAttempted,
         adopted: micAdopted,
         permission: micPermission,
@@ -1671,6 +1729,12 @@
     micAdopted = true;
     try {
       const devices = await getVoiceFacade().listMicrophones();
+      // The OS said no while the list was coming back (#303). Listing inputs
+      // proves nothing about access, so the refusal stands.
+      if (isMicrophoneRefused(micAccess)) {
+        micAdopted = false;
+        return;
+      }
       micDevices = devices;
       micPermission = 'granted';
       micError = devices.length === 0
@@ -1732,11 +1796,19 @@
   }
 
   async function allowMicrophone(): Promise<void> {
+    if (micRequesting) return;
+    const retrying = micPermission === 'denied';
+    micRequesting = true;
     micError = null;
     try {
       const granted = await getVoiceFacade().requestMicrophoneAccess();
       if (granted === 'granted') {
         micAdopted = false;
+        micRetryRefused = false;
+        // Witnessed: the device opened, so the OS has said yes, whatever an
+        // earlier read said — or one still in flight is about to (#303).
+        micAccessRead += 1;
+        micAccess = 'granted';
         await adoptGrantedMicrophone();
         // Remember it. WKWebView cannot report permission state, so this flag
         // is the only way a returning user is not asked again (§28.1).
@@ -1745,11 +1817,16 @@
         }
       } else {
         micPermission = 'denied';
+        micRetryRefused = retrying;
       }
     } catch (err) {
-      // A rejected request used to leave the row at "Testing…" forever.
+      // A rejected request used to leave the row at "Testing…" forever. Only a
+      // refusal answers 'denied' (#303); a missing or busy device lands here,
+      // described as what it is rather than as blocked access.
       micPermission = 'unknown';
-      micError = `CandidCue could not ask for microphone access. ${describeError(err)}`;
+      micError = `CandidCue could not open the microphone. ${describeError(err)}`;
+    } finally {
+      micRequesting = false;
     }
   }
 
@@ -2178,18 +2255,40 @@
         >
           {#if micPermission === 'unknown'}
             <div class="row-actions">
-              <Button variant="primary" onclick={() => allowMicrophone()}>
+              <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
                 Allow and choose microphone
               </Button>
             </div>
           {:else if micPermission === 'denied'}
+            <!--
+              #303. macOS asks once per application; after a refusal, asking
+              again fails at once with no prompt. So the remedy is the privacy
+              pane, opened from here, and "Try again" is for afterwards — the
+              old single button repeated the refused request and landed back on
+              this same message.
+            -->
             <p class="inline-alert" role="alert">
-              Microphone access is blocked. Allow CandidCue in your system privacy settings, then
-              try again.
+              {#if micAccess === 'restricted'}
+                Microphone access is restricted on this Mac, by Screen Time or a device management
+                profile, so it may not be yours to change.
+              {:else if micAccess === 'granted' && micRetryRefused}
+                CandidCue is allowed in System Settings, but macOS is still refusing it the
+                microphone. Quit and reopen CandidCue.
+              {:else if micAccess === 'granted'}
+                CandidCue is allowed in System Settings now. Choose Try again to use the microphone.
+              {:else}
+                Microphone access is blocked. Allow CandidCue in System Settings → Privacy &amp;
+                Security → Microphone, then try again.
+                {#if micRetryRefused}
+                  If CandidCue is already allowed there, quit and reopen it.
+                {/if}
+              {/if}
             </p>
             <div class="row-actions">
-              <!-- Names the remedy rather than repeating the failed attempt. -->
-              <Button onclick={() => allowMicrophone()}>Fix microphone access</Button>
+              <Button variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
+                Open System Settings
+              </Button>
+              <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
             </div>
           {:else}
             <Select

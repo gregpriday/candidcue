@@ -44,7 +44,28 @@ const pipeline = vi.hoisted(() => {
     resumeError: unknown;
     /** Makes every microphone switch reject with this. */
     switchError: unknown;
-  } = { deps: null, failNextStart: false, startError: null, resumeError: null, switchError: null };
+    /**
+     * Whether a switch swaps a running capture. False is a pipeline whose start
+     * failed: it has nothing to swap and opens nothing (#303).
+     */
+    switchOpens: boolean;
+    /** Every `resume()` the store asked for. */
+    resumeCalls: number;
+    /** How long a successful resume takes to answer, as a real reopen does. */
+    resumeDelayMs: number;
+    /** Every `softPause()` the store asked for. */
+    softPauses: number;
+  } = {
+    deps: null,
+    failNextStart: false,
+    startError: null,
+    resumeError: null,
+    switchError: null,
+    switchOpens: true,
+    resumeCalls: 0,
+    resumeDelayMs: 0,
+    softPauses: 0,
+  };
   class FakePipeline {
     private readonly fails: boolean;
     private readonly error: unknown;
@@ -63,14 +84,23 @@ const pipeline = vi.hoisted(() => {
     }
     async stop(): Promise<void> {}
     startListening(): void {}
-    softPause(): void {}
+    softPause(): void {
+      captured.softPauses += 1;
+    }
     async hardPause(): Promise<void> {}
-    async switchMicrophone(): Promise<void> {
+    async switchMicrophone(): Promise<boolean> {
       if (captured.switchError !== null) throw captured.switchError;
+      return captured.switchOpens;
     }
     async resume(): Promise<void> {
+      captured.resumeCalls += 1;
       const error = captured.resumeError;
-      if (error === null) return;
+      if (error === null) {
+        if (captured.resumeDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, captured.resumeDelayMs));
+        }
+        return;
+      }
       // A refused resume re-ran the whole start, so it answers late too.
       await new Promise((resolve) => setTimeout(resolve, 150));
       throw error;
@@ -119,6 +149,7 @@ const {
   liveStatusLabel,
   pauseListening,
   resumeSession,
+  retryMicrophone,
   session,
   startLiveSession,
   stopSession,
@@ -199,6 +230,10 @@ beforeEach(() => {
   pipeline.captured.startError = null;
   pipeline.captured.resumeError = null;
   pipeline.captured.switchError = null;
+  pipeline.captured.switchOpens = true;
+  pipeline.captured.resumeCalls = 0;
+  pipeline.captured.resumeDelayMs = 0;
+  pipeline.captured.softPauses = 0;
   setInvokeForTesting(async () => undefined as never);
   published = [];
   stopRecording = session.subscribe((s) => {
@@ -567,6 +602,21 @@ describe('a take whose voice cannot be resumed', () => {
   const resumeToasts = () =>
     get(toasts).filter((toast) => toast.message.startsWith('Could not resume voice following'))
       .length;
+  /*
+   * A refused microphone is said on its own keyed notice instead (#303), with
+   * the way to the privacy pane on it. Keyed notices replace themselves rather
+   * than stack, so "said again" is a newer notice, not a longer list.
+   */
+  const refusalNotice = () => get(toasts).find((toast) => toast.key === 'mic-refused')?.id ?? 0;
+  const failureMark = () => ({ resumes: resumeToasts(), refusal: refusalNotice() });
+  const expectSaidAgain = (code: string, before: ReturnType<typeof failureMark>) => {
+    if (code === 'MIC_PERMISSION_DENIED') {
+      expect(refusalNotice()).toBeGreaterThan(before.refusal);
+      expect(resumeToasts()).toBe(before.resumes);
+    } else {
+      expect(resumeToasts()).toBe(before.resumes + 1);
+    }
+  };
 
   for (const code of ['STT_MODEL_NOT_INSTALLED', 'MIC_PERMISSION_DENIED']) {
     it(`lets Space bring auto-scroll back after ${code} refuses the resume`, async () => {
@@ -578,7 +628,7 @@ describe('a take whose voice cannot be resumed', () => {
       expect(get(session).paused).toBe('listening');
       expect(get(autoScrollLive).running, 'a pause stops the roll').toBe(false);
 
-      const toastsBefore = resumeToasts();
+      const toastsBefore = failureMark();
       pipeline.captured.resumeError = refusal(code);
       togglePlayPause();
       // The resume re-runs the whole start, and the take holds until it answers.
@@ -591,7 +641,7 @@ describe('a take whose voice cannot be resumed', () => {
       expect(s.micState).toBe('disconnected');
       expect(s.connection).toBe('offline');
       expect(s.voiceFollow, 'the transport still owns the follow pause').toBe(false);
-      expect(resumeToasts()).toBe(toastsBefore + 1);
+      expectSaidAgain(code, toastsBefore);
 
       // Not a one-off: the next Space pair stops the roll and starts it again.
       togglePlayPause();
@@ -666,14 +716,14 @@ describe('a take whose voice cannot be resumed', () => {
     pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
     togglePlayPause();
     hardPause();
-    const toastsBefore = resumeToasts();
+    const toastsBefore = failureMark();
 
     await vi.advanceTimersByTimeAsync(200);
     expect(get(session).paused).toBe('hard');
     expect(get(autoScrollLive).running, 'the roll stays stopped').toBe(false);
     // The failure is still a fact, and still said.
     expect(get(session).micState).toBe('disconnected');
-    expect(resumeToasts()).toBe(toastsBefore + 1);
+    expectSaidAgain('MIC_PERMISSION_DENIED', toastsBefore);
   });
 
   it('does not un-pause the take after it when a replaced take’s resume is refused', async () => {
@@ -821,5 +871,225 @@ describe('transcript words reach the transcript bar', () => {
     const onTranscriptLine = deps().onTranscriptLine as unknown as (line: string) => void;
     onTranscriptLine('hello there friend');
     expect(get(session).transcriptTail.at(-1)).toContain('hello there friend');
+  });
+});
+
+/**
+ * A refused microphone is a refusal (#303).
+ *
+ * Every `MIC_*` start failure used to raise `inputDeviceLost`, so the take
+ * offered an input picker — and another input cannot answer a refusal. Worse,
+ * choosing one on a pipeline whose start had failed opened nothing, and the
+ * store announced "voice following has resumed" anyway.
+ */
+describe('a refused microphone', () => {
+  beforeEach(() => clearToasts());
+
+  const notice = () => get(toasts).find((toast) => toast.key === 'mic-refused');
+  const said = (prefix: string) =>
+    get(toasts).filter((toast) => toast.message.startsWith(prefix)).length;
+
+  it('is recorded as a refusal, not a lost device, with the pane on its notice', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(true);
+    expect(s.inputDeviceLost, 'no picker: another input cannot answer it').toBe(false);
+    expect(s.micState).toBe('disconnected');
+    expect(notice()?.tone).toBe('danger');
+    expect(notice()?.action?.label).toBe('Open System Settings');
+    expect(said('Voice tracking is unavailable')).toBe(0);
+  });
+
+  it('keeps a device failure a device failure', async () => {
+    await refusedTake('MIC_DEVICE_MISSING');
+    const s = get(session);
+    expect(s.inputDeviceLost).toBe(true);
+    expect(s.microphoneRefused).toBe(false);
+    expect(notice()).toBeUndefined();
+  });
+
+  it('clears only once Try again has actually reopened capture', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    const first = notice()!.id;
+
+    // Still refused: still refused, said again on the same keyed notice.
+    pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
+    const retry = retryMicrophone();
+    expect(get(session).connection).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retry).toBe(false);
+    expect(get(session).microphoneRefused).toBe(true);
+    expect(get(session).connection).toBe('offline');
+    expect(notice()!.id).toBeGreaterThan(first);
+    expect(get(toasts).filter((t) => t.key === 'mic-refused')).toHaveLength(1);
+
+    // Allowed: capture reopens, and only now is the refusal cleared.
+    pipeline.captured.resumeError = null;
+    expect(await retryMicrophone()).toBe(true);
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(false);
+    expect(s.micState).toBe('live');
+    expect(s.connection).toBe('connected');
+    expect(notice()).toBeUndefined();
+    expect(said('CandidCue can use the microphone now.')).toBe(1);
+  });
+
+  it('hands a retry that finds no device to the input picker', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pipeline.captured.resumeError = refusal('MIC_DEVICE_MISSING');
+    const retry = retryMicrophone();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retry).toBe(false);
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(false);
+    expect(s.inputDeviceLost).toBe(true);
+    expect(notice()).toBeUndefined();
+  });
+
+  it('resumes a paused take rather than reopening capture under the pause', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pauseListening();
+    // Through the ordinary resume, which retried — and answered for it.
+    expect(await retryMicrophone()).toBe(true);
+    expect(get(session).paused).toBe('none');
+    expect(get(session).microphoneRefused).toBe(false);
+  });
+
+  it('takes the cross off the stage once capture is back', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('fault');
+
+    expect(await retryMicrophone()).toBe(true);
+    // The new capture's monitor never saw a dead input, so nothing else would
+    // ever retract the failed start's "no audio".
+    const onTranscriptText = deps().onTranscriptText as unknown as (
+      text: string,
+      final: boolean,
+    ) => void;
+    onTranscriptText('hello there', false);
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('confirmed');
+  });
+
+  it('keeps a Space pressed while Try again was reopening', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pipeline.captured.resumeDelayMs = 150;
+    const retry = retryMicrophone();
+    pauseListening();
+    const pausesBefore = pipeline.captured.softPauses;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retry).toBe(true);
+    // The start that finished cleared the pipeline's pause; the store puts the
+    // presenter's back rather than transcribing under "paused".
+    expect(get(session).paused).toBe('listening');
+    expect(pipeline.captured.softPauses).toBe(pausesBefore + 1);
+  });
+
+  it('answers a paused Try again only once the resume has', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pauseListening();
+    pipeline.captured.resumeDelayMs = 150;
+    let answered: boolean | null = null;
+    void retryMicrophone().then((ok) => {
+      answered = ok;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(answered, 'still reopening: the button must still say so').toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(answered).toBe(true);
+  });
+
+  it('classifies a paused Try again that finds no device as a device fault', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    pauseListening();
+    pipeline.captured.resumeError = refusal('MIC_DEVICE_MISSING');
+    const retry = retryMicrophone();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await retry).toBe(false);
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(false);
+    expect(s.inputDeviceLost, 'the picker answers a missing device').toBe(true);
+    expect(notice(), 'the refusal notice no longer describes the take').toBeUndefined();
+  });
+
+  it('keeps a genuinely lost input on the stage through a soft pause and resume', async () => {
+    // Space twice over a dead microphone un-pauses the capture it already had;
+    // nothing was reopened, so nothing about the input is news.
+    start();
+    (deps().onConnectionState as unknown as (state: string) => void)('connected');
+    (deps().onInputDeviceLost as unknown as (code: string) => void)('MIC_DEVICE_LOST');
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('fault');
+
+    pauseListening();
+    await resumeSession();
+    (deps().onTranscriptText as unknown as (text: string, final: boolean) => void)('hello', false);
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('fault');
+  });
+
+  it('carries the refusal onto the summary', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    expect(stopSession().microphoneRefused).toBe(true);
+  });
+});
+
+describe('switching input on a take whose voice never started (#303)', () => {
+  beforeEach(() => clearToasts());
+
+  const said = (prefix: string) =>
+    get(toasts).filter((toast) => toast.message.startsWith(prefix)).length;
+
+  it('never says following resumed when nothing opened', async () => {
+    await refusedTake('MIC_DEVICE_MISSING');
+    pipeline.captured.switchOpens = false;
+    pipeline.captured.resumeError = refusal('MIC_DEVICE_MISSING');
+    const switched = switchMicrophone('usb', 'USB microphone');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await switched).toBe(false);
+    expect(said('Microphone switched')).toBe(0);
+    expect(get(session).micState).toBe('disconnected');
+    expect(get(session).inputDeviceLost).toBe(true);
+  });
+
+  it('starts the voice on the chosen input, and only then says so', async () => {
+    await refusedTake('MIC_DEVICE_MISSING');
+    pipeline.captured.switchOpens = false;
+    expect(await switchMicrophone('usb', 'USB microphone')).toBe(true);
+    expect(pipeline.captured.resumeCalls).toBe(1);
+    const s = get(session);
+    expect(s.micState).toBe('live');
+    expect(s.connection).toBe('connected');
+    expect(s.inputDeviceLost).toBe(false);
+    expect(said('Microphone switched. Voice following has resumed.')).toBe(1);
+  });
+
+  it('reports a refusal met while opening the chosen input as a refusal', async () => {
+    // Started with no device; an input is chosen; the OS then refuses it. The
+    // picker cannot answer that, and "Could not switch" does not say it.
+    await refusedTake('MIC_DEVICE_MISSING');
+    pipeline.captured.switchOpens = false;
+    pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
+    const switched = switchMicrophone('usb', 'USB microphone');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await switched).toBe(false);
+    const s = get(session);
+    expect(s.microphoneRefused).toBe(true);
+    expect(s.inputDeviceLost, 'no picker for a refusal').toBe(false);
+    expect(s.connection).toBe('offline');
+    expect(get(toasts).find((t) => t.key === 'mic-refused')?.action?.label).toBe(
+      'Open System Settings',
+    );
+    expect(said('Could not switch')).toBe(0);
+  });
+
+  it('opens nothing under a pause — the resume will use the chosen input', async () => {
+    await refusedTake('MIC_DEVICE_MISSING');
+    hardPause();
+    pipeline.captured.switchOpens = false;
+    expect(await switchMicrophone('usb', 'USB microphone')).toBe(false);
+    expect(pipeline.captured.resumeCalls).toBe(0);
+    expect(said('Microphone switched')).toBe(0);
   });
 });

@@ -151,6 +151,12 @@ export interface FollowStatusInput {
    */
   inputDeviceLost: boolean;
   /**
+   * The OS refused the microphone (#303). Neither a device fault nor a
+   * recogniser one, so it gets neither of their remedies. Optional so a caller
+   * that cannot tell keeps the device/recogniser split it always had.
+   */
+  microphoneRefused?: boolean;
+  /**
    * Whether the recogniser has produced ANY words this take, partial or final.
    *
    * Partials count, and that is not a detail: Rust aligns on partials and
@@ -221,6 +227,13 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
     const stillMoving = input.rollingAtPace
       ? 'The text is still rolling at your set pace. '
       : 'The text is holding where you left it. ';
+    if (input.microphoneRefused) {
+      return {
+        line: 'Microphone not allowed',
+        detail: `${stillMoving}Allow CandidCue in System Settings, then choose Try again.`,
+        tone: 'warning',
+      };
+    }
     return input.inputDeviceLost
       ? {
           line: 'Microphone disconnected',

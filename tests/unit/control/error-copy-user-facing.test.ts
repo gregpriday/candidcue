@@ -290,7 +290,9 @@ describe('no code can reach a user-visible string', () => {
     // intervals so draining every timer would never terminate.
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
 
-    const message = toastMessages().find((m) => m.includes('Voice tracking is unavailable.'));
+    // A refusal has its own notice now (#303), with the pane on it; the code
+    // must stay out of that one just the same.
+    const message = toastMessages().find((m) => m.includes('not allowed to use the microphone'));
     expect(message).toBeDefined();
     expect(message).not.toContain('MIC_PERMISSION_DENIED');
     expect(message).not.toMatch(CODE_TOKEN);

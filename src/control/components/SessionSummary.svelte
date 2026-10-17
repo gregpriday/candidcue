@@ -33,6 +33,7 @@
 -->
 <script lang="ts">
   import Button from './Button.svelte';
+  import { openMicrophonePrivacySettings } from '../lib/open-settings';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
   import {
@@ -149,6 +150,7 @@
       : resolveTakeOutcome({
           mode: $session.summary.mode,
           voiceFollowingAvailable: $session.summary.voiceFollowingAvailable,
+          microphoneRefused: $session.summary.microphoneRefused,
           wordsHeard: $session.summary.wordsHeard,
           wordsInFlight: $session.summary.wordsInFlight,
           followingShare: $session.summary.followingShare,
@@ -197,6 +199,18 @@
         <p class="outcome-detail">{outcome.detail}</p>
         {#if outcome.suggestion}
           <p class="outcome-suggestion">{outcome.suggestion}</p>
+        {/if}
+        <!--
+          #303. The take's own notice and drawer go when the take ends, and a
+          suggestion to change System Settings with no way there is the dead
+          end this replaced. Present again is the retry: it checks first.
+        -->
+        {#if summary.microphoneRefused}
+          <div class="outcome-actions">
+            <Button size="sm" onclick={() => void openMicrophonePrivacySettings()}>
+              Open System Settings
+            </Button>
+          </div>
         {/if}
       </div>
 
@@ -414,6 +428,10 @@
     line-height: 1.45;
     color: var(--text-secondary);
   }
+  .outcome-actions {
+    margin-top: var(--space-2);
+  }
+
   .outcome-suggestion {
     margin: var(--space-2) 0 0;
     font-size: var(--text-sm);

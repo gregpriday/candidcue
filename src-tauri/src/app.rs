@@ -149,6 +149,10 @@ pub fn run() {
             // Help's web destinations. NOT an opener: the argument is a
             // name from a compile-time table (web.rs), never a url.
             commands::open_web_destination,
+            // Microphone access (#303): a passive read of the OS answer, and
+            // the privacy pane — a fixed per-platform url, never an argument.
+            commands::get_microphone_permission,
+            commands::open_microphone_settings,
             // No `check_for_update` / `install_update`. CandidCue 1.0 updates
             // manually (docs/updates.md); both used to be registered here and
             // always returned NOT_IMPLEMENTED, which put a dead command on the

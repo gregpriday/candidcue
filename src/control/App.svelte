@@ -24,6 +24,7 @@
   import { openSettingsWindow } from './lib/open-settings';
   import { takeStarting } from './lib/start-take';
   import {
+    allowMicrophoneForTake,
     checkThenStartTake,
     dismissTakeReadiness,
     startAnyway,
@@ -1368,6 +1369,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   <TakeReadinessSheet
     verdict={$takeReadinessPrompt?.verdict ?? null}
     onstart={() => void startAnyway()}
+    onallowmicrophone={allowMicrophoneForTake}
     onclose={dismissTakeReadiness}
   />
   <!--

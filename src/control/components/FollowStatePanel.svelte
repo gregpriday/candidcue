@@ -40,6 +40,8 @@
     micState?: 'live' | 'muted' | 'disconnected';
     /** Only a lost DEVICE may be answered with "choose another input". */
     inputDeviceLost?: boolean;
+    /** The OS refused the microphone (#303) — not the device, not the recogniser. */
+    microphoneRefused?: boolean;
     /**
      * Whether anything has been transcribed this take.
      *
@@ -67,6 +69,7 @@
     voiceInput = true,
     micState = 'live',
     inputDeviceLost = false,
+    microphoneRefused = false,
     heardAnything = true,
     heldByUser = false,
     rollingAtPace = false,
@@ -93,6 +96,7 @@
       voiceInput,
       micState,
       inputDeviceLost,
+      microphoneRefused,
       heardAnything,
     }),
   );

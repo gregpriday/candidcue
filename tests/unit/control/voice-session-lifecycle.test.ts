@@ -534,6 +534,23 @@ describe('a start that fails on its own still closes everything and keeps its re
     await expectOneLiveTake(reports);
   });
 
+  it('a switch after a refused start opens nothing, and says so (#303)', async () => {
+    const { p, reports } = pipeline();
+    env.state.gumError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+    await expect(p.start()).rejects.toThrow('MIC_PERMISSION_DENIED');
+
+    // It used to resolve like a successful swap, and the store announced that
+    // voice following had resumed over a take with no microphone open.
+    await expect(p.switchMicrophone('usb')).resolves.toBe(false);
+    expectNothingOpen();
+
+    // The failed start left it resumable: the resume is what opens it.
+    await p.resume();
+    await expectOneLiveTake(reports);
+    // And on a running take the swap is real, and reported as one.
+    await expect(p.switchMicrophone('usb')).resolves.toBe(true);
+  });
+
   for (const [at, err] of [
     ['meter', new Error('ANALYSER_FAILED')],
     ['tap', new Error('AUDIO_CONTEXT_FAILED')],

@@ -6,6 +6,7 @@
 
 pub mod align_cmds;
 pub mod assets_cmds;
+pub mod microphone_cmds;
 pub mod speech_cmds;
 pub mod scripts_cmds;
 pub mod sessions_cmds;
@@ -15,6 +16,7 @@ pub mod stage_cmds;
 
 pub use align_cmds::*;
 pub use assets_cmds::*;
+pub use microphone_cmds::*;
 pub use speech_cmds::*;
 pub use scripts_cmds::*;
 pub use sessions_cmds::*;

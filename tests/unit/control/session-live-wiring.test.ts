@@ -42,7 +42,9 @@ const pipeline = vi.hoisted(() => {
       captured.deps = deps;
       captured.instance = this;
     }
-    async switchMicrophone(): Promise<void> {}
+    async switchMicrophone(): Promise<boolean> {
+      return true;
+    }
     async start(): Promise<void> {}
     async stop(): Promise<void> {}
     startListening(): void {}
@@ -825,10 +827,11 @@ describe('§115 — the fallback-input notice is followable', () => {
 
     // The fake pipeline's `switchMicrophone` falls back while switching.
     const live = pipeline.captured.instance as unknown as {
-      switchMicrophone: (deviceId: string) => Promise<void>;
+      switchMicrophone: (deviceId: string) => Promise<boolean>;
     };
     live.switchMicrophone = async () => {
       deps.onInputFellBackToDefault?.();
+      return true;
     };
 
     const ok = await switchMicrophone('device-b', 'Interface B');

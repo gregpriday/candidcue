@@ -520,10 +520,17 @@ export class VoiceSessionPipeline {
    * The chosen id becomes this pipeline's device for everything after, not just
    * this one swap: re-opening the device that just vanished would put the take
    * straight back into the hold it was rescued from.
+   *
+   * Resolves whether capture was actually swapped. A pipeline that is not
+   * running — its start failed, or it is hard-paused — has no capture to swap
+   * and opens nothing here; it used to resolve all the same, and the store
+   * announced that voice following had resumed over a take with no microphone
+   * open at all (#303). The override still stands, so the next `resume()`
+   * opens the chosen device.
    */
-  async switchMicrophone(deviceId: string): Promise<void> {
+  async switchMicrophone(deviceId: string): Promise<boolean> {
     this.deviceOverride = deviceId;
-    if (!this.running) return;
+    if (!this.running) return false;
     // The busy-device retry alone can hold this open for 1.75 s, and a stop in
     // that window must not be followed by a new stream on a dead take (#289).
     const epoch = this.lifecycle;
@@ -543,6 +550,7 @@ export class VoiceSessionPipeline {
     } catch {
       // Enumeration is a nicety; the capture swap already succeeded.
     }
+    return true;
   }
 
   /**
