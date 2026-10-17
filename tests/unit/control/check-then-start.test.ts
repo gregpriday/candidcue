@@ -275,6 +275,50 @@ describe('a pinned microphone', () => {
     await checkThenStartTake('script-1');
     expect(h.startTake).toHaveBeenCalledTimes(1);
   });
+
+  it('is not reported for the legacy `default` pin, which is the system default', async () => {
+    // Older builds auto-pinned the browser's own `default` pseudo-device;
+    // Settings reads that as "follow the system default", and so must this.
+    const base = defaultAppSettings();
+    settingsDoc.set({
+      ...base,
+      audio: { ...base.audio, followSystemDefault: false, preferredDeviceId: 'default' },
+    });
+    await checkThenStartTake('script-1');
+    expect(get(takeReadinessPrompt)).toBeNull();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+  });
+
+  it('is judged as it is pinned when the device list arrives', async () => {
+    // Pinned and missing when the check began; switched back to the system
+    // default in Settings while the list was being fetched.
+    pinYeti();
+    const devices = deferred<unknown[]>();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+    const pending = checkThenStartTake('script-1');
+    settingsDoc.set(defaultAppSettings());
+    devices.resolve([]);
+    await pending;
+    expect(get(takeReadinessPrompt)).toBeNull();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns about the microphone the take will open, not the one it began with', async () => {
+    // The Yeti is connected; the pin moves to one that is not, mid-check.
+    pinYeti();
+    const devices = deferred<unknown[]>();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+    const pending = checkThenStartTake('script-1');
+    const base = get(settings);
+    settingsDoc.set({
+      ...base,
+      audio: { ...base.audio, preferredDeviceId: 'mic-2', preferredDeviceLabel: 'Røde NT-USB' },
+    });
+    devices.resolve([YETI]);
+    await pending;
+    expect(findingIds()).toEqual(['mic_missing']);
+    expect(get(takeReadinessPrompt)?.verdict.findings[0]?.detail).toContain('Røde NT-USB');
+  });
 });
 
 describe('checks that overlap', () => {

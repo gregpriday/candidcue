@@ -161,6 +161,14 @@ test('a model removed while a script is open is warned about at Present', async 
   await expect(sheet(page).getByRole('button', { name: 'Start anyway' })).toBeVisible();
   await sheet(page).getByRole('button', { name: 'Back to the script' }).click();
   await expect(sheet(page)).toBeHidden();
+
+  // A held launch belongs to the screen it was asked for on: leave it, and the
+  // sheet goes too rather than following with a launch for a gone context.
+  await presentButton(page).click();
+  await expect(sheet(page)).toBeVisible();
+  await menuCommand(page, 'view.library');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(sheet(page)).toBeHidden();
   errors.expectClean();
 });
 

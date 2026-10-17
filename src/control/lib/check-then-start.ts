@@ -21,6 +21,7 @@ import { isCompileSettledForScript } from './editor-readiness';
 import { matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
 import type { AppSettings, PresentationMode } from '../services/settings-types';
+import type { AudioDeviceInfo } from '../../shared/contracts';
 import { compiled } from '../stores/compiled';
 import { takeDestination } from '../stores/destination';
 import { editor } from '../stores/editor';
@@ -65,6 +66,20 @@ export const takeReadinessPrompt: Readable<TakeReadinessPrompt | null> = {
 };
 
 /**
+ * The microphone Settings pins, or undefined for "follow the system default".
+ *
+ * Older builds auto-pinned the browser's own `default` pseudo-device, which is
+ * the system-default choice spelled a second way — Settings reads it so, and
+ * so must this, or every take on such a profile is warned about a microphone
+ * nobody chose.
+ */
+function pinnedDeviceId(audio: AppSettings['audio']): string | undefined {
+  if (audio.followSystemDefault) return undefined;
+  const id = audio.preferredDeviceId;
+  return id === undefined || id === '' || id === 'default' ? undefined : id;
+}
+
+/**
  * The pinned microphone, and whether it is connected right now.
  *
  * Fetched the SAME way the take path fetches it — through
@@ -72,28 +87,36 @@ export const takeReadinessPrompt: Readable<TakeReadinessPrompt | null> = {
  * remembered label, because WKWebView salts device ids per origin and a
  * replug can change them. Comparing raw ids here would report a perfectly
  * present microphone as missing on some restarts.
+ *
+ * The list is fetched for the pin as it was when the check began, but judged
+ * against the pin as it is when the list arrives: Settings is another window,
+ * and a pin changed in between is the one the take will open.
  */
-async function pinnedMicrophone(
-  audio: AppSettings['audio'],
-): Promise<{ label: string | null; available: boolean }> {
-  const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
-  // Nothing pinned is "follow the system default", which is not a problem.
+async function pinnedMicrophone(): Promise<{ label: string | null; available: boolean }> {
+  let devices: AudioDeviceInfo[] | null = null;
+  if (pinnedDeviceId(get(settings).audio) !== undefined) {
+    try {
+      devices = await getVoiceFacade().listMicrophones();
+    } catch {
+      // Enumeration failed, so absence is not proven. `start-take.ts` honours
+      // the pin in exactly this case; accusing the hardware would be worse.
+      devices = null;
+    }
+  }
+
+  const audio = get(settings).audio;
+  const pinned = pinnedDeviceId(audio);
   if (pinned === undefined) return { label: null, available: true };
   const label = audio.preferredDeviceLabel ?? pinned;
-  try {
-    const devices = await getVoiceFacade().listMicrophones();
-    // `undefined`, not null, is the matcher's "not connected". Comparing with
-    // null was always true, so a missing microphone was never reported.
-    const match = matchRememberedMicrophone(devices, {
-      deviceId: pinned,
-      ...(audio.preferredDeviceLabel === undefined ? {} : { label: audio.preferredDeviceLabel }),
-    });
-    return { label, available: match !== undefined };
-  } catch {
-    // Enumeration failed, so absence is not proven. `start-take.ts` honours
-    // the pin in exactly this case; accusing the hardware would be worse.
-    return { label, available: true };
-  }
+  // No list — it failed, or the pin is newer than it. Not proven absent.
+  if (devices === null) return { label, available: true };
+  // `undefined`, not null, is the matcher's "not connected". Comparing with
+  // null was always true, so a missing microphone was never reported.
+  const match = matchRememberedMicrophone(devices, {
+    deviceId: pinned,
+    ...(audio.preferredDeviceLabel === undefined ? {} : { label: audio.preferredDeviceLabel }),
+  });
+  return { label, available: match !== undefined };
 }
 
 /**
@@ -105,7 +128,7 @@ export async function resolveTakeReadiness(
   scriptId: string,
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
-  const mic = await pinnedMicrophone(get(settings).audio);
+  const mic = await pinnedMicrophone();
 
   /*
    * Everything else is read AFTER the await. The model's answer is live, and
