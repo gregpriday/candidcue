@@ -16,6 +16,7 @@ import {
   NO_LENS_READING_BAND_FRACTION,
   resolveStageGeometry,
   resolveTargetCharacters,
+  UNCALIBRATED_COLUMN_FRACTION,
   UNCALIBRATED_FONT_SIZE_PX,
   UNCALIBRATED_READER_FONT_SIZE_PX,
 } from './optical-resolve';
@@ -24,8 +25,10 @@ import {
   charactersForBias,
   fallbackFontMetrics,
   hardwareFitCheck,
+  MAX_COLUMN_FRACTION,
   READER_READING_MEASURE,
   READING_MEASURE,
+  type FontMetrics,
 } from './optics';
 
 /**
@@ -348,5 +351,165 @@ describe('a reading window resolves against the window, not the panel', () => {
       readingContext: 'reader',
     });
     expect(narrow.optics.bodyFontSizePx).toBeCloseTo(wide.optics.bodyFontSizePx, 6);
+  });
+});
+
+describe('the uncalibrated reading window measure', () => {
+  /*
+   * The common reading case: no physical scale, so the fit check declines and
+   * the resolver has to choose a column on its own. It used to take the
+   * prompter's 68% of the width, which has no ceiling — over a hundred
+   * characters a line on a 2560 px window — and wasted the margin on a narrow
+   * one. It now asks for the reader's target measure, bounded by what the window
+   * holds at the calibrated fit's column fraction.
+   *
+   * Run against the measured proportions of the shipped face rather than the DIN
+   * fallbacks, because that is what the stage resolves with and because the two
+   * ratios differing (0.653 vs 0.472) is what catches a `ch`/character mix-up.
+   */
+  const ATKINSON: FontMetrics = {
+    capHeightRatio: 0.68,
+    xHeightRatio: 0.5,
+    avgCharWidthRatio: 0.472,
+    zeroAdvanceRatio: 0.653,
+    measured: true,
+  };
+  const uncalibrated = (overrides: OpticalProfile['overrides'] = {}): OpticalProfile => ({
+    ...defaultOpticalProfile(),
+    lensPlacement: 'none',
+    overrides,
+  });
+  const resolveAt = (widthPx: number, overrides: OpticalProfile['overrides'] = {}) =>
+    resolveStageGeometry({
+      profile: uncalibrated(overrides),
+      metrics: ATKINSON,
+      viewport: { widthPx, heightPx: 900 },
+      readingContext: 'reader',
+    }).optics;
+  /** The column as the stage draws it: `ch` times the SAME zero advance. */
+  const columnPx = (o: { columnCh: number; bodyFontSizePx: number }) =>
+    o.columnCh * ATKINSON.zeroAdvanceRatio * o.bodyFontSizePx;
+  const target = resolveTargetCharacters(uncalibrated(), 'reader');
+
+  it('caps a wide window at the reader target instead of a share of its width', () => {
+    for (const widthPx of [1440, 2560]) {
+      const o = resolveAt(widthPx);
+      expect(o.charactersPerLine!).toBeCloseTo(target, 6);
+      expect(columnPx(o)).toBeCloseTo(target * ATKINSON.avgCharWidthRatio * o.bodyFontSizePx, 6);
+    }
+    // The two windows draw the same column: growing past the measure only
+    // grows the margins.
+    expect(columnPx(resolveAt(2560))).toBeCloseTo(columnPx(resolveAt(1440)), 6);
+    // About 67 characters at the default bias — not the hundred-plus the 68%
+    // guess gave 2560 px.
+    expect(target).toBeGreaterThan(60);
+    expect(target).toBeLessThan(70);
+  });
+
+  it('gives a narrow window the full column fraction rather than 68% of it', () => {
+    const o = resolveAt(760);
+    expect(columnPx(o)).toBeCloseTo(760 * MAX_COLUMN_FRACTION, 6);
+    expect(columnPx(o)).toBeGreaterThan(760 * UNCALIBRATED_COLUMN_FRACTION);
+    expect(o.charactersPerLine!).toBeLessThan(target);
+  });
+
+  it('still calls itself uncalibrated, because the size is still a guess', () => {
+    for (const widthPx of [760, 2560]) {
+      const o = resolveAt(widthPx);
+      expect(o.fitVerdict).toBe('uncalibrated');
+      expect(o.calibrated).toBe(false);
+      expect(o.bodyFontSizePx).toBe(UNCALIBRATED_READER_FONT_SIZE_PX);
+    }
+  });
+
+  it('honours a pinned character measure as the cap', () => {
+    for (const characters of [55, 75]) {
+      const o = resolveAt(2560, { characters });
+      expect(o.charactersPerLine!).toBeCloseTo(characters, 6);
+      expect(o.overriddenFields).toContain('characters');
+    }
+    // And a window too narrow for the pin gives what it has, not the pin.
+    expect(resolveAt(760, { characters: 75 }).charactersPerLine!).toBeCloseTo(
+      (760 * MAX_COLUMN_FRACTION) / (ATKINSON.avgCharWidthRatio * UNCALIBRATED_READER_FONT_SIZE_PX),
+      6,
+    );
+  });
+
+  it('honours an override of the column fraction, the same one the fit would use', () => {
+    const o = resolveAt(760, { maxColumnFraction: 0.6 });
+    expect(columnPx(o)).toBeCloseTo(760 * 0.6, 6);
+  });
+
+  it('re-solves the column at a pinned size, larger or smaller, by the same rule', () => {
+    /*
+     * The reader appearance panel pins sizes from 20 to 96 px. At every one the
+     * column is "the target, or what the window holds at THIS size", and the
+     * reported measure describes that column rather than the 30 px one.
+     */
+    for (const widthPx of [760, 1240, 2560]) {
+      for (const fontSizePx of [20, 30, 48, 96]) {
+        const o = resolveAt(widthPx, { fontSizePx });
+        expect(o.bodyFontSizePx).toBe(fontSizePx);
+        const available =
+          (widthPx * MAX_COLUMN_FRACTION) / (ATKINSON.avgCharWidthRatio * fontSizePx);
+        const expected = Math.min(target, available);
+        expect(o.charactersPerLine!, `${widthPx}px at ${fontSizePx}px`).toBeCloseTo(expected, 6);
+        expect(columnPx(o)).toBeLessThanOrEqual(widthPx * MAX_COLUMN_FRACTION + 1e-6);
+      }
+    }
+  });
+
+  it('caps a LARGER pin at the target too, rather than carrying the 30 px column up', () => {
+    // 48 px on a 2560 px window holds ~86 characters; the target is ~67, and a
+    // larger pin is not a request for a longer line.
+    const o = resolveAt(2560, { fontSizePx: 48 });
+    expect(o.charactersPerLine!).toBeCloseTo(target, 6);
+  });
+
+  it('combines a pinned size with a pinned measure', () => {
+    const o = resolveAt(2560, { fontSizePx: 40, characters: 55 });
+    expect(o.charactersPerLine!).toBeCloseTo(55, 6);
+    const narrow = resolveAt(760, { fontSizePx: 40, characters: 75 });
+    expect(narrow.charactersPerLine!).toBeCloseTo(
+      (760 * MAX_COLUMN_FRACTION) / (ATKINSON.avgCharWidthRatio * 40),
+      6,
+    );
+  });
+
+  it('warns about a pinned size that leaves too short a line', () => {
+    const { warnings } = resolveStageGeometry({
+      profile: uncalibrated({ fontSizePx: 96 }),
+      metrics: ATKINSON,
+      viewport: { widthPx: 760, heightPx: 900 },
+      readingContext: 'reader',
+    });
+    expect(warnings.join(' ')).toContain('too few to carry a phrase');
+  });
+
+  it('leaves a calibrated reading window to the fit check', () => {
+    // The fit returned a column, so nothing here applies: the measure is the
+    // fit's, at the angular size.
+    const o = resolveStageGeometry({
+      profile: readerProfile(),
+      metrics: ATKINSON,
+      viewport: { widthPx: 1728, heightPx: 1117 },
+      readingContext: 'reader',
+    }).optics;
+    expect(o.fitVerdict).toBe('ok');
+    expect(o.charactersPerLine!).toBeCloseTo(
+      resolveTargetCharacters(readerProfile(), 'reader'),
+      6,
+    );
+  });
+
+  it('does not touch the uncalibrated PROMPTER, which keeps its 68%', () => {
+    for (const widthPx of [1024, 2560]) {
+      const o = resolveStageGeometry({
+        profile: defaultOpticalProfile(),
+        metrics: ATKINSON,
+        viewport: { widthPx, heightPx: 900 },
+      }).optics;
+      expect(columnPx(o)).toBeCloseTo(widthPx * UNCALIBRATED_COLUMN_FRACTION, 6);
+    }
   });
 });

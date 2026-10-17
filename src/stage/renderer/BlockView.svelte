@@ -7,6 +7,7 @@
 <script lang="ts">
   import type { CompiledBlock } from '../../shared/contracts';
   import { performanceCueKind, type PerformanceMode } from '../../shared/performance-view';
+  import { listMarker, listMarkerGeometry } from '../../shared/list-marker';
   import InlineNodes from './InlineNodes.svelte';
 
   let {
@@ -20,6 +21,7 @@
     dimRollback = false,
     performanceMode = 'rehearsal',
     breakAfterTokens = null,
+    reader = false,
   }: {
     block: CompiledBlock;
     zone: 'past' | 'current' | 'future';
@@ -59,6 +61,19 @@
      * what happened before the breaker existed.
      */
     breakAfterTokens?: ReadonlySet<number> | null;
+    /**
+     * This stage is a reading window rather than a teleprompter.
+     *
+     * A separate fact from `performanceMode`, and it has to be: a reading window
+     * shows the whole document, so it already arrives here as `rehearsal` — but
+     * so does a practice on the prompter and a Diagnostic Take, and those keep
+     * the prompter's headings exactly. What this changes is how a HEADING reads
+     * (see `readerHeading`); nothing else on the glass looks at it.
+     *
+     * `false` by default for the same reason `performanceMode` defaults to
+     * `rehearsal`: every mount site that predates it renders what it always did.
+     */
+    reader?: boolean;
   } = $props();
 
   const headingLevel = $derived(
@@ -93,8 +108,48 @@
    * would be shrinking body copy.
    */
   const compactHeading = $derived(
-    performanceMode === 'take' && block.kind === 'heading' && !block.spoken,
+    !reader && performanceMode === 'take' && block.kind === 'heading' && !block.spoken,
   );
+  /**
+   * A heading in a reading window reads as a heading, spoken or not.
+   *
+   * On the prompter an unspoken heading is quiet on purpose — a landmark the
+   * presenter glances at, at 0.8em and 0.45 opacity, or the compact gold label
+   * in a take — because every line it spends at display size is script pushed
+   * off a small glass. A reading window is read at a desk, as a document, and
+   * there the same treatment inverts the hierarchy: an H1 came out barely larger
+   * than body text at under half its brightness, so the page's structure was
+   * the faintest thing on it. Whether the follower listens for a heading's words
+   * is a fact about following, not about how important the heading is.
+   *
+   * So here a heading is never `.unspoken` and never compact. It keeps the level
+   * sizes below at the reading colour, takes only the zone opacity every block
+   * takes, and gets more room above it than below (`.reader-heading`) so it
+   * sits with the passage it introduces.
+   */
+  const readerHeading = $derived(reader && block.kind === 'heading');
+  /**
+   * In a reading window the quiet treatment is for ANNOTATIONS only.
+   *
+   * A reading window shows images, tables, code and diagrams in full, as part
+   * of the document — not as the reference cards a prompter rehearsal shows
+   * beside a script. Left `.unspoken`, a table's text sat at 0.45 over its own
+   * card, well under readable contrast, in the one surface built for reading it.
+   * Silent and stage-only notes, and the divider, keep the quiet look: they are
+   * direction and decoration, and their quietness is the information.
+   */
+  const readerContent = $derived(
+    reader &&
+      (block.kind === 'image' ||
+        block.kind === 'table' ||
+        block.kind === 'code' ||
+        block.kind === 'diagram'),
+  );
+  const unspoken = $derived(
+    !block.spoken && block.kind !== 'cue' && !readerHeading && !readerContent,
+  );
+  const marker = $derived(block.kind === 'list_item' ? listMarker(block.layoutHints) : null);
+  const markerGeometry = $derived(marker ? listMarkerGeometry(marker) : null);
 </script>
 
 {#if !hidden}
@@ -102,7 +157,10 @@
     class="block k-{block.kind}"
     class:zone-past={zone === 'past'}
     class:zone-future={zone === 'future'}
-    class:unspoken={!block.spoken && block.kind !== 'cue'}
+    class:unspoken
+    class:reader-heading={readerHeading}
+    class:reader-content={readerContent}
+    data-heading-level={readerHeading ? headingLevel : undefined}
     data-block-id={block.id}
     style:padding-bottom="{gapPx}px"
   >
@@ -148,9 +206,37 @@
       <div class="quote">
         <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} />
       </div>
-    {:else if block.kind === 'list_item'}
-      <div class="list-item">
-        <span class="bullet" aria-hidden="true"></span>
+    {:else if block.kind === 'list_item' && marker && markerGeometry}
+      <!-- The marker carries no `data-t`, and nothing inside it can: the motion
+           path measures anchored spans only, and `3.` is not a word anybody
+           says. Its widths come from `list-marker.ts`, which the line planner
+           reads too, so the column it planned is the column drawn. -->
+      <div
+        class="list-item"
+        data-marker={marker.kind}
+        data-depth={marker.depth}
+        style:padding-left="{markerGeometry.indentEm}em"
+        style:column-gap="{markerGeometry.gapEm}em"
+      >
+        {#if marker.kind === 'number'}
+          <span class="marker number" aria-hidden="true" style:width="{markerGeometry.markerEm}em">{marker.label}</span>
+        {:else if marker.kind === 'task'}
+          <span
+            class="marker checkbox"
+            class:checked={marker.checked}
+            aria-hidden="true"
+            data-checked={marker.checked ? 'true' : 'false'}
+            style:width="{markerGeometry.markerEm}em"
+            style:height="{markerGeometry.markerEm}em"
+          ></span>
+        {:else}
+          <span
+            class="marker bullet"
+            aria-hidden="true"
+            style:width="{markerGeometry.markerEm}em"
+            style:height="{markerGeometry.markerEm}em"
+          ></span>
+        {/if}
         <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} /></span>
       </div>
     {:else if block.kind === 'table'}
@@ -205,6 +291,16 @@
       <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} {breakAfterTokens} /></p>
     {/if}
   </div>
+{:else if reader}
+  <!-- A hidden cue still holds its place among its siblings in a reading window.
+       `.reader-heading:not(:first-child)` reads "is this the first block of the
+       document" off the DOM, and a block that rendered nothing would let a
+       heading below it be first while the window starts at the top and stop
+       being first once virtualization put a spacer there — padding that comes
+       and goes under the reader's eye as they scroll. Empty, unmeasured (no
+       `data-block-id`) and `display: none`, so it holds the position and
+       nothing else. The prompter never needs it and never draws it. -->
+  <div class="hidden-block" hidden></div>
 {/if}
 
 <style>
@@ -271,6 +367,28 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--stage-cue) 14%, transparent);
     margin-bottom: 0.45em;
+  }
+
+  /*
+   * More room above a heading than below it, in a reading window.
+   *
+   * The space below is the paragraph gap every block ends with; this adds to
+   * the gap above, so a heading reads as the start of what follows rather than
+   * the end of what came before. PADDING, on the block itself, and that is not
+   * a style choice: the stage measures each block's box to place every block
+   * after it, and a margin would sit outside that box (and collapse into its
+   * neighbour's), leaving the measured offsets short of where the text really
+   * is. Nothing above the first block on the glass, where there is no passage
+   * to separate it from.
+   */
+  .reader-heading:not(:first-child) {
+    padding-top: 0.6em;
+  }
+  .reader-heading[data-heading-level='2']:not(:first-child) {
+    padding-top: 0.8em;
+  }
+  .reader-heading[data-heading-level='1']:not(:first-child) {
+    padding-top: 1em;
   }
 
   .heading {
@@ -373,18 +491,67 @@
     background: color-mix(in srgb, var(--stage-text) 30%, transparent);
   }
 
+  /*
+   * A list item: its nesting, its marker, its text.
+   *
+   * Every width here — the indent, the marker column, the gap — is written
+   * inline from `list-marker.ts` rather than in this sheet, because the line
+   * planner reads the same function to know how much of the column the text
+   * gets. What stays here is how a marker LOOKS, which the planner has no use
+   * for. No marker sets a font size: the dot and the box are drawn, and the
+   * number is read at the size of the words it numbers.
+   */
   .list-item {
     display: flex;
-    gap: 0.55em;
     align-items: baseline;
   }
-  .bullet {
+  .marker {
     flex: none;
-    width: 0.28em;
-    height: 0.28em;
+  }
+  .bullet {
     border-radius: 50%;
     background: color-mix(in srgb, var(--stage-text) 55%, transparent);
     transform: translateY(-0.18em);
+  }
+  /* Right-aligned so the full stops line up down a list. The column is sized
+     to hold its label (`list-marker.ts`); a flex box rather than `text-align:
+     right` so that, in a face wider than the one it was sized for, the label
+     overflows to the LEFT and the text it numbers stays where it was planned. */
+  .number {
+    display: flex;
+    justify-content: flex-end;
+    white-space: nowrap;
+    /* Full ink: the block's zone opacity already dims a passed list, and a
+       second translucency on top took a passed item's number under 3:1. */
+    color: var(--stage-text);
+  }
+  /* Drawn, not a glyph: the stage face has no ballot-box characters, and a
+     fallback face's box would sit at a size nobody chose. Sits on the baseline
+     about a capital high. */
+  .checkbox {
+    position: relative;
+    box-sizing: border-box;
+    /* Full ink for the same reason as the number: the zone opacity dims it. */
+    border: 0.08em solid var(--stage-text);
+    border-radius: 0.16em;
+    transform: translateY(0.04em);
+  }
+  .checkbox.checked {
+    background: var(--stage-text);
+  }
+  /* The tick: two edges of an unrounded box, turned. */
+  .checkbox.checked::after {
+    content: '';
+    position: absolute;
+    left: 33%;
+    top: 12%;
+    width: 30%;
+    height: 54%;
+    box-sizing: border-box;
+    border-style: solid;
+    border-color: var(--stage-bg);
+    border-width: 0 0.09em 0.09em 0;
+    transform: rotate(45deg);
   }
   .list-body {
     flex: 1;
@@ -411,6 +578,11 @@
     font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     text-align: center;
+  }
+  /* In a reading window a missing image's description is the content it
+     stands in for, so it reads at full ink over its card. */
+  .reader-content .image-fallback {
+    color: var(--stage-text);
   }
 
   .table-card {

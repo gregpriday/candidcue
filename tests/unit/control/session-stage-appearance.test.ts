@@ -24,21 +24,34 @@ import { get } from 'svelte/store';
 import {
   adjustStageFontSize,
   adoptPresentationMode,
+  applyReaderAppearance,
+  applyReaderTheme,
   applyStageAppearance,
   clearSession,
+  noteStageRenderedFontSize,
   liveMirrorX,
   session,
   startLiveSession,
+  suspendReaderPaper,
+  takeReaderPreferenceSettings,
+  takeReaderThemeSetting,
   takeTeleprompterSettings,
   toggleStageMirror,
 } from '../../../src/control/stores/session';
+import { getSettingsSnapshot } from '../../../src/control/stores/settings';
 import { smoothFollow } from '../../../src/control/stores/smooth-follow';
 import {
+  PAPER_PAST_OPACITY,
+  READER_PAPER_THEME_ID,
+  STAGE_DARK_THEME_ID,
   buildStageEnvelope,
   buildStageSettings,
   stageSettingsFromSettings,
 } from '../../../src/control/services/stage-envelope';
-import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import {
+  defaultAppSettings,
+  readerPreferenceReplacement,
+} from '../../../src/control/services/settings-types';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
 import type { CompiledScript, StageSessionEnvelope } from '../../../src/shared/contracts';
 import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
@@ -72,8 +85,12 @@ function envelopeFor(stageSettings = stageSettingsFromSettings(SETTINGS)): Stage
   });
 }
 
-function start(stageSettings = stageSettingsFromSettings(SETTINGS)): void {
+function start(
+  stageSettings = stageSettingsFromSettings(SETTINGS),
+  presentationMode?: 'prompter' | 'reader',
+): void {
   startLiveSession({
+    ...(presentationMode ? { presentationMode } : {}),
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
     mode: 'manual',
@@ -616,5 +633,364 @@ describe('switching presentation mode mid-take', () => {
     adoptPresentationMode('reader');
 
     expect(rendered()).toEqual(composedFor('reader', LAPTOP));
+  });
+});
+
+/**
+ * A reading window, adjusted during a read.
+ *
+ * A reading window always runs a profile, so it used to be announced as
+ * rig-resolved: the sheet showed a read-only readout over a window nobody had
+ * calibrated, ⌘= and ⌘− were greyed out, and even had they not been, the only
+ * thing they could write was `takeTeleprompter` — the prompter's fallback,
+ * which a reading window never reads. Its appearance is the reader preference
+ * laid over its profile now, and these pin that the take-time path reaches the
+ * glass and stays out of the prompter's way.
+ */
+describe('a reading window, adjusted mid-read', () => {
+  const DESK: DisplayDescriptor = {
+    id: 'display-1',
+    name: 'Built-in Retina Display',
+    primary: true,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 3456, height: 2234 },
+    logicalSize: { width: 1728, height: 1117 },
+    scaleFactor: 2,
+    fingerprint: 'panel-desk',
+    topologyHash: 'topology-1',
+  };
+
+  const composedFor = (mode: 'prompter' | 'reader') =>
+    stageSettingsFromSettings(
+      { ...SETTINGS, stage: { ...SETTINGS.stage, presentationMode: mode } },
+      DESK,
+    );
+
+  function startReading(): void {
+    const opening = composedFor('reader');
+    startLiveSession({
+      scriptId: 'script-1',
+      scriptTitle: 'Launch video',
+      mode: 'manual',
+      displayLabel: 'This window',
+      outline: [],
+      sentences: [],
+      totalTokens: 200,
+      stageSettings: opening,
+      stageEnvelope: envelopeFor(opening),
+      teleprompter: SETTINGS.teleprompter,
+      presentationMode: 'reader',
+      stageDisplay: DESK,
+    });
+  }
+
+  it('is not announced as rig-resolved, so its controls and keys are offered', () => {
+    startReading();
+    expect(get(session).stageRigResolved).toBe(false);
+    const reader = get(session).stageReaderAppearance;
+    expect(reader).not.toBeNull();
+    expect(reader?.fontSizePx).toBe(rendered().fontSizePx);
+    expect(reader?.characters).toBeNull();
+  });
+
+  /*
+   * Control composes against the whole display with fallback metrics; the
+   * stage re-resolves against the window with the measured face. With a
+   * borrowed scale those can differ by more than a step, and "smaller" must
+   * still make the text smaller — so the readout and the steps start from the
+   * size the stage says it is drawing.
+   */
+  it('steps from the size the stage reports it is drawing', () => {
+    startReading();
+    const composed = rendered().fontSizePx;
+    // Drawn LARGER than composed: a step down from the composed size would
+    // have pinned something larger than the text on the glass.
+    noteStageRenderedFontSize(composed + 8.3);
+    expect(get(session).stageReaderAppearance?.fontSizePx).toBe(Math.round(composed + 8.3));
+    adjustStageFontSize(-2);
+    expect(takeReaderPreferenceSettings().fontSizePx).toBe(Math.round(composed + 8.3) - 2);
+  });
+
+  it('forgets the reported size when the take changes shape', () => {
+    startReading();
+    const composed = rendered().fontSizePx;
+    noteStageRenderedFontSize(composed + 9);
+    adoptPresentationMode('prompter', DESK);
+    adoptPresentationMode('reader', DESK);
+    expect(get(session).stageReaderAppearance?.fontSizePx).toBe(rendered().fontSizePx);
+  });
+
+  it('is not claimed for a prompter take', () => {
+    start();
+    expect(get(session).stageReaderAppearance).toBeNull();
+  });
+
+  it('reaches the glass through the profile the stage re-resolves from', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40, lineHeight: 1.6, characters: 55, readingCue: 'wash' });
+
+    expect(rendered().opticalProfile?.overrides).toEqual({
+      fontSizePx: 40,
+      lineHeight: 1.6,
+      characters: 55,
+    });
+    expect(rendered().fontSizePx).toBe(40);
+    expect(rendered().readingCue).toBe('wash');
+    expect(get(session).stageReaderAppearance).toMatchObject({
+      fontSizePx: 40,
+      lineHeight: 1.6,
+      characters: 55,
+      readingCue: 'wash',
+    });
+  });
+
+  it('leaves the prompter’s fallback alone, and saves nothing', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+    adjustStageFontSize(2);
+
+    expect(takeTeleprompterSettings()).toEqual(SETTINGS.teleprompter);
+    expect(takeReaderPreferenceSettings()).toEqual({ fontSizePx: 42 });
+    // Done is what saves; a nudge is the take's.
+    expect(getSettingsSnapshot().optical).toEqual(SETTINGS.optical);
+  });
+
+  it('steps its own size with ⌘= and ⌘−, inside the reader’s range', () => {
+    startReading();
+    const opening = rendered().fontSizePx;
+
+    expect(adjustStageFontSize(2)).toBe(opening + 2);
+    expect(rendered().fontSizePx).toBe(opening + 2);
+
+    applyReaderAppearance({ fontSizePx: 95 });
+    expect(adjustStageFontSize(2)).toBe(96);
+    expect(adjustStageFontSize(2)).toBe(96);
+    applyReaderAppearance({ fontSizePx: 21 });
+    expect(adjustStageFontSize(-2)).toBe(20);
+  });
+
+  it('keeps each mode’s nudges to itself across a switch', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+
+    // To the prompter: none of the reader's size comes with it...
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+
+    // ...a prompter nudge stays the prompter's...
+    applyStageAppearance({ fontSizePx: 96 });
+
+    // ...and back again, the reading window is where it was left.
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().fontSizePx).toBe(40);
+    expect(takeTeleprompterSettings().fontSizePx).toBe(96);
+  });
+
+  it('does not take an unsaved prompter intensity into the reading window', () => {
+    /*
+     * The reading window is seeded from Settings' intensity, and the section a
+     * take recomposes from is the take's — prompter nudges included. Tried on
+     * the prompter and never saved, a Soft belongs to the prompter.
+     */
+    startReading();
+    adoptPresentationMode('prompter', DESK);
+    applyStageAppearance({ textIntensity: 'soft' });
+    expect(rendered().textIntensity).toBe('soft');
+
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().textIntensity).toBe(SETTINGS.teleprompter.textIntensity);
+    expect(rendered()).toEqual(composedFor('reader'));
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered().textIntensity).toBe('soft');
+  });
+
+  it('goes back exactly when the sheet is cancelled, automatic fields and all', () => {
+    startReading();
+    const opening = rendered();
+    const onOpen = takeReaderPreferenceSettings();
+
+    applyReaderAppearance({ fontSizePx: 40, characters: 75, intensity: 'strong' });
+    applyReaderAppearance(readerPreferenceReplacement(onOpen));
+
+    // Not "pinned at the size it happened to be": automatic again.
+    expect(rendered()).toEqual(opening);
+    expect(takeReaderPreferenceSettings()).toEqual({});
+  });
+
+  it('puts a field back to automatic with null', () => {
+    startReading();
+    const opening = rendered();
+    applyReaderAppearance({ characters: 75 });
+    applyReaderAppearance({ characters: null });
+    expect(rendered()).toEqual(opening);
+  });
+
+  it('drops an unsaved nudge when the session is cleared', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+    clearSession();
+    startReading();
+    expect(takeReaderPreferenceSettings()).toEqual({});
+    expect(rendered()).toEqual(composedFor('reader'));
+  });
+
+  it('keeps the ordinary controls for a reading window with no panel to resolve against', () => {
+    /*
+     * Without a display there is no profile on the stage: the window prompts
+     * from the flat fields, the reader preference would reach nothing, and the
+     * controls that DO reach it are the prompter's.
+     */
+    start(
+      stageSettingsFromSettings({
+        ...SETTINGS,
+        stage: { ...SETTINGS.stage, presentationMode: 'reader' },
+      }),
+      'reader',
+    );
+    // The premise first: this IS a reading-window take, with no optics.
+    expect(get(session).stagePresentationMode).toBe('reader');
+    expect(rendered().optics).toBeUndefined();
+    expect(get(session).stageReaderAppearance).toBeNull();
+    expect(get(session).stageRigResolved).toBe(false);
+  });
+
+  /*
+   * Dark or Paper, chosen during the read.
+   *
+   * Through the same recomposition every other reader control takes, so the
+   * field, the past-text floor and the stage's theme arrive in one envelope —
+   * and held per take, apart from the prompter, which is composed black
+   * however often the take switches.
+   */
+  it('draws the reading window on paper, now, and saves nothing', () => {
+    startReading();
+    const before = get(session).stageEnvelope;
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+
+    expect(applyReaderTheme('paper')).toBe('paper');
+
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+    expect(rendered().background).toBe('#f6f2ea');
+    expect(rendered().pastOpacity).toBe(PAPER_PAST_OPACITY);
+    // A refresh in place, like every other mid-take change.
+    expect(get(session).stageEnvelope).not.toBe(before);
+    expect(get(session).stageEnvelope!.stageGeneration).toBe(before!.stageGeneration);
+    expect(takeReaderThemeSetting()).toBe('paper');
+    expect(getSettingsSnapshot().teleprompter.readerTheme).toBeUndefined();
+  });
+
+  it('comes back black on a switch to the prompter, and paper again on the way back', () => {
+    startReading();
+    applyReaderTheme('paper');
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+    expect(rendered().background).toBe('#000000');
+    // Held for the reading window while the prompter runs, not drawn on it.
+    expect(takeReaderThemeSetting()).toBe('paper');
+    applyStageAppearance({ fontSizePx: 96 });
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+  });
+
+  it('holds a choice made on a prompter take without drawing it', () => {
+    start(stageSettingsFromSettings(SETTINGS, DESK));
+    const opening = rendered();
+    applyReaderTheme('paper');
+    expect(rendered()).toEqual(opening);
+    expect(takeReaderThemeSetting()).toBe('paper');
+  });
+
+  it('goes back when the sheet is cancelled', () => {
+    startReading();
+    const opening = rendered();
+    const onOpen = takeReaderThemeSetting();
+    applyReaderTheme('paper');
+    applyReaderTheme(onOpen);
+    expect(rendered()).toEqual(opening);
+  });
+
+  it('ends with the take', () => {
+    startReading();
+    applyReaderTheme('paper');
+    clearSession();
+    startReading();
+    expect(takeReaderThemeSetting()).toBe('dark');
+    expect(rendered()).toEqual(composedFor('reader'));
+  });
+
+  it('changes nothing outside a take', () => {
+    expect(applyReaderTheme('paper')).toBe('dark');
+    expect(get(session).stageEnvelope).toBeNull();
+  });
+
+  /*
+   * The window moves before the geometry recomposes, and a switch to the
+   * prompter moves it onto the glass — so a paper reading window is put on
+   * the dark field FIRST, in place, and the switch landing lifts that.
+   */
+  it('goes dark in place ahead of a switch to the prompter, without re-wrapping', () => {
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+
+    suspendReaderPaper(true);
+
+    const held = rendered();
+    expect(held.themeId).toBe(STAGE_DARK_THEME_ID);
+    expect(held.background).toBe('#000000');
+    // Still the reading window's layout: nothing the line map depends on moved.
+    expect(held.readingContext).toBe('reader');
+    expect(held.fontSizePx).toBe(onPaper.fontSizePx);
+    expect(held.lineHeight).toBe(onPaper.lineHeight);
+    expect(held.optics).toEqual(onPaper.optics);
+    // The take still wants paper; this is only the switch.
+    expect(takeReaderThemeSetting()).toBe('paper');
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+
+    // Lifted by the switch landing: back in a reading window, paper again.
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+  });
+
+  it('stays dark after a switch that failed, until somebody picks Paper again', () => {
+    /*
+     * A failed switch may have put the window on the glass before the part
+     * that failed, and nothing in control can tell — so the hold is not
+     * lifted by failure. A deliberate choice at the window is what ends it.
+     */
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+    suspendReaderPaper(true);
+    // No `adoptPresentationMode`: the switch threw.
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+    applyReaderTheme('paper');
+    expect(rendered()).toEqual(onPaper);
+  });
+
+  it('gets its paper back when the switch lands on the mode it was already in', () => {
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+    suspendReaderPaper(true);
+    adoptPresentationMode('reader', DESK);
+    expect(rendered()).toEqual(onPaper);
+  });
+
+  it('does not carry a held switch into the next take', () => {
+    startReading();
+    applyReaderTheme('paper');
+    suspendReaderPaper(true);
+    clearSession();
+    startReading();
+    applyReaderTheme('paper');
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
   });
 });

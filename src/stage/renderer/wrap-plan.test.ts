@@ -17,6 +17,7 @@ import {
 import { compile } from '../../shared/markdown/compile';
 import { FONT_METRICS_PROSE_SAMPLE } from './fontMetrics';
 import { bestOf, budgetMessage } from '../../shared/perf-budget';
+import { listInsetEm } from '../../shared/list-marker';
 
 const BASE: AdvanceStyle = {
   fontStack: 'Test',
@@ -534,6 +535,46 @@ describe('planning a script', () => {
     expect(asListItem.breakAfterTokens.size).toBeGreaterThanOrEqual(
       asParagraph.breakAfterTokens.size,
     );
+  });
+
+  /*
+   * The inset is the marker's real column, not one bullet's worth for every
+   * item. A number is wider than a dot and a nested item is indented, and a
+   * planner that thought the text had more room than it does packs a line the
+   * browser wraps again — the stray short line this module refuses to cause.
+   * So each list item must plan EXACTLY as a paragraph in a column narrower by
+   * the inset `list-marker.ts` gives it, which is the inset `BlockView` draws.
+   */
+  describe('a list item is planned in the column its marker leaves', () => {
+    const LONG = `${SENTENCE} and then we shipped it again on Friday because the first one went so well`;
+    const options = { columnWidthPx: 900, baseStyle: BASE, measure: fake };
+    const asParagraphIn = (columnWidthPx: number) =>
+      planScriptBreaks([paragraph([text(LONG)], 'item')], { ...options, columnWidthPx }).signature;
+    const asListItem = (layoutHints: CompiledBlock['layoutHints']) =>
+      planScriptBreaks([{ ...paragraph([text(LONG)], 'item'), kind: 'list_item', layoutHints }], options)
+        .signature;
+
+    it.each([
+      ['a bullet', { ordered: false, index: 1, depth: 0 }],
+      ['a number', { ordered: true, index: 7, depth: 0 }],
+      ['a task', { ordered: false, index: 1, depth: 0, checked: true }],
+      ['a nested number', { ordered: true, index: 2, depth: 2 }],
+    ] as const)('%s', (_name, hints) => {
+      const insetPx = listInsetEm(hints) * BASE.fontSizePx;
+      expect(asListItem(hints)).toBe(asParagraphIn(900 - insetPx));
+    });
+
+    it('plans a numbered item and a bullet differently when the number costs a word', () => {
+      // 900px at 10px a glyph is ninety characters; a bullet leaves 86.7 and a
+      // number 82.4 — enough to move a word on a sentence this long.
+      expect(asListItem({ ordered: true, index: 1, depth: 0 })).not.toBe(
+        asListItem({ ordered: false, index: 1, depth: 0 }),
+      );
+    });
+
+    it('plans an item with no hints as the bullet the stage draws for one', () => {
+      expect(asListItem(undefined)).toBe(asListItem({ ordered: false, index: 1, depth: 0 }));
+    });
   });
 
   it('measures a blockquote in the italic it is drawn in', () => {

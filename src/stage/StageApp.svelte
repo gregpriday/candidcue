@@ -66,6 +66,7 @@
     type StageStatePayload,
     type StageSyncRequestPayload,
     type StageAlignmentPayload,
+    ALIGNMENT_RELOCATIONS,
   } from '../shared/contracts';
   import { subscribeStageEvent, emitStageEvent, isTauri, type Unsubscribe } from './events';
   import {
@@ -82,6 +83,7 @@
     type SnapshotRejectReason,
   } from './motion';
   import ScriptLayer, { type StageLayoutMeasurement } from './renderer/ScriptLayer.svelte';
+  import SuggestionChip from './renderer/SuggestionChip.svelte';
   import AckChip from './renderer/AckChip.svelte';
   import HoldStatus from './renderer/HoldStatus.svelte';
   import CalibrationCard from './renderer/CalibrationCard.svelte';
@@ -111,6 +113,23 @@
      * gets the same fact through `{ kind: 'follow' }`.
      */
     followPaused?: boolean;
+    /**
+     * The take itself is paused (Space, or a hard pause) — not the same thing
+     * as following being switched off, and deliberately not drawn as it.
+     *
+     * Pausing stops control forwarding snapshots, but the stage would otherwise
+     * go on playing the last one's prediction out — up to a few words, under a
+     * label that says "Paused". In a reading window the text holds instead: the
+     * motion engine is told to stand still, exactly as it is for Follow off,
+     * without the "Following off" chip or the dock's amber state. A prompter
+     * keeps its practised behaviour.
+     */
+    takePaused?: boolean;
+    /**
+     * The script's title, for the reading window's accessible name. A reading
+     * window is a document somebody reads, so it is named for what it shows.
+     */
+    scriptTitle?: string;
     /**
      * The fixed-pace transport. Null is "not running and never was", which is
      * the same instruction as a stopped one and is what an older host sends.
@@ -303,6 +322,24 @@
 
   const phase = $derived(displayPhase(app));
   const settings = $derived(app.settings);
+  /**
+   * The field this stage is drawn on: `reader-paper` for a reading window
+   * composed on paper, `stage-dark` for everything else.
+   *
+   * The reader check is a second lock rather than tidiness. Control only ever
+   * writes `reader-paper` with a reader `readingContext`
+   * (`READER_PAPER_THEME_ID` in `stage-envelope.ts`), but this is the last
+   * point before the glass, and a light field on a beamsplitter is the one
+   * failure the black field exists to prevent — so a prompter stays black here
+   * even if an envelope ever says otherwise. Any other id is dark too: there is
+   * no third theme, and an unknown one must not reach for tokens that do not
+   * exist.
+   */
+  const stageTheme = $derived(
+    settings?.readingContext === 'reader' && settings.themeId === 'reader-paper'
+      ? 'reader-paper'
+      : 'stage-dark',
+  );
   const doc = $derived(app.envelope?.renderDocument ?? null);
   /**
    * How much script this rig actually shows, as a diagnostic.
@@ -534,10 +571,45 @@
     Number.isFinite(secondaryMinPx) && secondaryMinPx > 0 ? Math.max(14, secondaryMinPx) : 18,
   );
 
+  /** This is a reading window, as the host presents it. */
+  const readingWindow = $derived(embedded?.presentationMode === 'reader');
+
+  /*
+   * The system's reduced-motion preference — watched in a reading window,
+   * read as before in a prompter take.
+   *
+   * `matchMedia(...).matches` inside a derived is read when something else
+   * makes the derived re-run, which for a whole take can be never — so turning
+   * Reduce motion on mid-read used to change nothing until the next take. A
+   * reader at a desk who asks for less motion gets it now.
+   *
+   * A prompter keeps its practised policy, deliberately. Reduced motion puts
+   * the follower in snap mode, and switching that on mid-take lands the glass
+   * at once on wherever it was still easing to — a jump in front of somebody
+   * reading aloud, who did not ask for one from a preference on another
+   * screen.
+   *
+   * The listener is guarded because test doubles of `matchMedia` often return
+   * a bare `{ matches }`.
+   */
+  function readSystemReducedMotion(): boolean {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      Boolean(window.matchMedia('(prefers-reduced-motion: reduce)')?.matches)
+    );
+  }
+  let systemReducedMotion = $state(readSystemReducedMotion());
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onChange = () => (systemReducedMotion = Boolean(query?.matches));
+    query?.addEventListener?.('change', onChange);
+    return () => query?.removeEventListener?.('change', onChange);
+  });
   const reducedMotion = $derived(
     (settings?.reducedMotion ?? false) ||
-      (typeof window !== 'undefined' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches),
+      (readingWindow ? systemReducedMotion : readSystemReducedMotion()),
   );
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
@@ -552,6 +624,166 @@
    * second opinion could only ever disagree with it.
    */
   const followPaused = $derived(embedded ? (embedded.followPaused ?? false) : app.followPaused);
+  /**
+   * A paused take holds a reading window's text still — see `takePaused` on the
+   * bridge. Only the motion engine hears it: the hold chip and the dock read
+   * `followPaused`, which is still the follow switch and nothing else.
+   */
+  const readerTakePaused = $derived(readingWindow && (embedded?.takePaused ?? false));
+
+  /* ------------------------------------------------- the off-screen suggestion
+   *
+   * The engine reports a match it refused because it was off the glass
+   * (`holdOffScreen`, `suggestionToken`). In a reading window that place is
+   * offered — never taken — as "Possible match below · <section>" with the
+   * reader's own words and a "Read from here" that asks control for one
+   * deliberate reposition.
+   *
+   * Latched, because the engine names the place only on the snapshots that
+   * refused it: the next hold may carry no suggestion, and a card that blinked
+   * out between partials would be unreadable. It is withdrawn when following
+   * resumes, when the document is moved on purpose (a relocation, or the
+   * reader's own hand — they are finding their place themselves), when it is
+   * ignored, and when nothing has renewed it for a while. The last is a timer,
+   * not a check on the next snapshot: a take that goes quiet sends none.
+   */
+  interface PendingSuggestion {
+    token: number;
+    seq: number;
+    sessionGeneration: number;
+    /** Wall clock of the latest refusal that named it — what control judges a press by. */
+    receivedAtMs: number;
+  }
+  const SUGGESTION_STALE_MS = 12_000;
+  /** Two places this close are the same place said twice. */
+  const SUGGESTION_SAME_PLACE_TOKENS = 3;
+  let pendingSuggestion = $state<PendingSuggestion | null>(null);
+  let ignoredSuggestionToken: number | null = null;
+  /*
+   * The last snapshot this has judged. `app` is replaced whole on every
+   * dispatch, so the effect below re-runs on a blank, a settings push, a
+   * heartbeat — and re-reading the same refusal then would bring back an offer
+   * that had expired or that the reader's own hand had withdrawn.
+   */
+  let lastJudgedSnapshot: { sessionGeneration: number; seq: number } | null = null;
+  let stageRootEl = $state<HTMLDivElement | undefined>();
+
+  /*
+   * Withdraw the offer, keeping the keyboard somewhere sensible.
+   *
+   * A focused button that is removed drops focus to the body, which leaves a
+   * keyboard or screen-reader user nowhere. The reading window itself takes it
+   * instead — it is the surface their next key is for.
+   */
+  function dropSuggestion(): void {
+    if (pendingSuggestion === null) return;
+    handFocusFromSuggestion();
+    pendingSuggestion = null;
+  }
+
+  /**
+   * Called BEFORE whatever is about to remove the chip — removal itself drops
+   * focus without an event every engine reports, so afterwards is too late.
+   */
+  function handFocusFromSuggestion(): void {
+    const focused = typeof document === 'undefined' ? null : document.activeElement;
+    if (focused instanceof Element && focused.closest('[data-suggestion-chip]') !== null) {
+      stageRootEl?.focus({ preventScroll: true });
+    }
+  }
+
+  $effect(() => {
+    const snapshot = app.alignment;
+    const reading = readingWindow;
+    untrack(() => {
+      if (!reading || !snapshot) {
+        dropSuggestion();
+        lastJudgedSnapshot = null;
+        return;
+      }
+      if (
+        lastJudgedSnapshot !== null &&
+        lastJudgedSnapshot.sessionGeneration === snapshot.sessionGeneration &&
+        lastJudgedSnapshot.seq === snapshot.seq
+      ) {
+        return;
+      }
+      lastJudgedSnapshot = { sessionGeneration: snapshot.sessionGeneration, seq: snapshot.seq };
+      if (snapshot.state === 'following') {
+        dropSuggestion();
+        ignoredSuggestionToken = null;
+        return;
+      }
+      if (ALIGNMENT_RELOCATIONS.has(snapshot.decision)) {
+        dropSuggestion();
+        return;
+      }
+      const token = snapshot.suggestionToken;
+      if (snapshot.decision === 'holdOffScreen' && token !== null && Number.isFinite(token)) {
+        const ignored =
+          ignoredSuggestionToken !== null &&
+          Math.abs(token - ignoredSuggestionToken) <= SUGGESTION_SAME_PLACE_TOKENS;
+        if (!ignored) {
+          pendingSuggestion = {
+            token,
+            seq: snapshot.seq,
+            sessionGeneration: snapshot.sessionGeneration,
+            receivedAtMs: Date.now(),
+          };
+        }
+      }
+    });
+  });
+
+  // Renewed by every refusal that names the place again: each one replaces
+  // the latch, which re-runs this and restarts the clock.
+  $effect(() => {
+    const suggestion = pendingSuggestion;
+    if (!suggestion) return;
+    const remaining = Math.max(0, suggestion.receivedAtMs + SUGGESTION_STALE_MS - Date.now());
+    const timer = window.setTimeout(() => untrack(dropSuggestion), remaining);
+    return () => clearTimeout(timer);
+  });
+
+  const suggestionDescription = $derived(
+    pendingSuggestion && scriptLayer ? scriptLayer.describeToken(pendingSuggestion.token) : null,
+  );
+
+  /*
+   * What a screen reader hears, once per offer.
+   *
+   * The chip mounts already filled, and a live region that arrives with its
+   * text is not reliably announced — so the announcement lives in a region
+   * that is always there, and changes only when the offered PLACE does (not
+   * when its direction flips as the document moves).
+   */
+  const suggestionAnnouncement = $derived.by(() => {
+    const description = suggestionDescription;
+    if (!description) return '';
+    const section = description.section ? `, in ${description.section}` : '';
+    return `Possible match${section}: ${description.excerpt}`;
+  });
+
+  function acceptSuggestion(): void {
+    const suggestion = pendingSuggestion;
+    const description = suggestionDescription;
+    if (!suggestion || !description) return;
+    dropSuggestion();
+    sendIntent({
+      kind: 'read_from',
+      token: description.sentenceStartToken,
+      sessionGeneration: suggestion.sessionGeneration,
+      seq: suggestion.seq,
+      // When the offer was last made, not when it was pressed: a deliberate
+      // reposition after it means the offer described a take that has moved on.
+      atMs: suggestion.receivedAtMs,
+    });
+  }
+
+  function ignoreSuggestion(): void {
+    if (pendingSuggestion) ignoredSuggestionToken = pendingSuggestion.token;
+    dropSuggestion();
+  }
   /**
    * Reported on every heartbeat ack and read by the coordinator (§40.5).
    *
@@ -644,6 +876,10 @@
      */
     const wantsBlanked = bridge.blanked ?? false;
     if (wantsBlanked !== app.blanked) {
+      // Blanking hides the suggestion by its template condition rather than
+      // withdrawing it, so the keyboard is handed over here, while it is
+      // still on the page.
+      if (wantsBlanked) untrack(handFocusFromSuggestion);
       dispatch({
         type: 'directive',
         stageGeneration: bridge.envelope.stageGeneration,
@@ -1593,6 +1829,8 @@
    * every arrow press into a look and leave the tracker behind.
    */
   let gestureByKey = false;
+  /** Home and End's own re-seed, for when the reading line lands on no spoken line. */
+  let gestureFallbackAnchor: number | null = null;
 
   /**
    * Quiet time that ends a gesture.
@@ -1701,6 +1939,33 @@
         event.preventDefault();
         const dir = event.key === 'PageDown' ? 1 : -1;
         moveByHand(dir * vh * 0.8, true);
+        break;
+      }
+      /*
+       * The two ends of the script. Keys, so they are always a MOVE: the
+       * tracker is re-seeded at the reading line wherever the document lands,
+       * exactly as for Page Down, rather than left behind at the old place.
+       */
+      case 'Home':
+      case 'End': {
+        event.preventDefault();
+        // A blanked stage is not moved by the whole length of the script
+        // behind the presenter's back, for the reason the wheel is not.
+        if (app.blanked || !scriptLayer) break;
+        const at = scriptLayer.scrollPositionPx();
+        const home = event.key === 'Home';
+        const target = home ? 0 : scriptLayer.endOfScriptScrollPx();
+        /*
+         * Already there is a key the document absorbed, as for Page Down at
+         * the foot — and End never pulls the document back UP. Once End has
+         * re-seeded the tracker, the follower lays the last line out at its
+         * own aim, a little past where End put it; a second End that dragged it
+         * back would only be undone by the follower a moment later.
+         */
+        const slack = scriptLayer.lineHeightPx() / 2;
+        if (home ? at < slack : at > target - slack) break;
+        const ends = scriptLayer.scriptEndTokens();
+        moveByHand(target - at, true, home ? ends.first : ends.lastSentenceStart);
         break;
       }
       case ' ': {
@@ -1858,11 +2123,14 @@
    * settles. `byKey` marks the gesture as a decision to move (see
    * `gestureByKey`).
    */
-  function moveByHand(deltaPx: number, byKey: boolean) {
+  function moveByHand(deltaPx: number, byKey: boolean, fallbackAnchorToken: number | null = null) {
     // Read the position BEFORE the scroll lands, so the gesture's travel is
     // measured from where it actually started.
     const fromPx = scriptLayer?.scrollPositionPx() ?? 0;
-    scriptLayer?.manualScrollBy(deltaPx);
+    // Their hand is on the script: they are finding their place themselves,
+    // and an offer made before they moved no longer describes what they see.
+    if (deltaPx !== 0) dropSuggestion();
+    scriptLayer?.manualScrollBy(deltaPx, fallbackAnchorToken);
     /*
      * A key the document absorbed entirely is not a gesture.
      *
@@ -1880,6 +2148,14 @@
     if (byKey && Math.abs((scriptLayer?.scrollPositionPx() ?? fromPx) - fromPx) < 1) return;
     if (gestureStartPx === null) gestureStartPx = fromPx;
     if (byKey) gestureByKey = true;
+    /*
+     * Where a key that goes to an END of the script re-seeds the tracker when
+     * the reading line cannot say: Home onto an opening heading or image, or
+     * End into a run-out, leave the mark on no spoken line, and the move would
+     * otherwise land the document with the aligner still where it was. The
+     * latest key decides — an arrow after Home is a move from there.
+     */
+    gestureFallbackAnchor = fallbackAnchorToken;
     gestureLastInputAtMs = Date.now();
 
     const now = performance.now();
@@ -1906,8 +2182,10 @@
     gestureByKey = false;
     if (startPx === null) return;
     const deltaPx = (scriptLayer?.scrollPositionPx() ?? startPx) - startPx;
+    const fallback = gestureFallbackAnchor;
+    gestureFallbackAnchor = null;
     const anchorToken = byKey
-      ? (scriptLayer?.readingAnchorToken() ?? null)
+      ? (scriptLayer?.readingAnchorToken() ?? fallback)
       : relocationAnchorToken();
     // Nothing moved and nowhere to send anybody: a wheel event the document
     // absorbed entirely is not news.
@@ -2008,15 +2286,24 @@
 <svelte:window onkeydown={onKeyDown} bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
 
 <!-- The stage is a non-interactive display surface: keyboard input is handled
-     at the window level (§16.9), and the click handler only reports focus. -->
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+     at the window level (§16.9), and the click handler only reports focus.
+     A reading window is focusable by script only (-1, never in the tab order),
+     so focus has somewhere to go when the suggestion that held it is removed. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
 <div
   class="stage-root"
   role={embedded ? 'region' : undefined}
-  aria-label={embedded ? 'Teleprompter' : undefined}
+  aria-label={embedded
+    ? readingWindow
+      ? `Reading: ${embedded.scriptTitle?.trim() || 'script'}`
+      : 'Teleprompter'
+    : undefined}
   data-phase={phase}
   data-pointer-hidden={cursorHidden}
+  data-theme={stageTheme}
   data-text-intensity={settings?.textIntensity ?? 'standard'}
+  tabindex={readingWindow ? -1 : undefined}
+  bind:this={stageRootEl}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
   style:--stage-secondary-min={secondaryMinCss}
@@ -2043,7 +2330,7 @@
             {settings}
             alignment={app.alignment}
             frozen={motionFrozen}
-            {followPaused}
+            followPaused={followPaused || readerTakePaused}
             {reducedMotion}
             sessionId={app.envelope?.sessionId ?? ''}
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
@@ -2423,6 +2710,18 @@
         the take being under way hid the indicator during precisely the failure
         it exists to explain.
       -->
+      {#if readingWindow}
+        <p class="stage-announcer" aria-live="polite">{suggestionAnnouncement}</p>
+      {/if}
+      {#if !app.blanked && suggestionDescription}
+        <SuggestionChip
+          description={suggestionDescription}
+          fontSizePx={overlayFontSizePx}
+          onread={acceptSuggestion}
+          onignore={ignoreSuggestion}
+        />
+      {/if}
+
       {#if !app.blanked}
         <StageDock
           pill={app.envelope !== null ? presenterVoicePill : null}
@@ -2453,9 +2752,23 @@
 </div>
 
 <style>
+  .stage-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
   .stage-root {
     position: absolute;
     inset: 0;
+    /* Focus lands here only when a stage control that held it goes away; it
+       is a surface, not a control, and draws no ring. */
+    outline: none;
     --stage-bg: #000000;
     --stage-text: #f5f3ef;
     --stage-text-past: rgba(245, 243, 239, 0.42);
@@ -2516,6 +2829,127 @@
     --stage-text: #fffefb;
     --stage-text-past: rgba(255, 254, 251, 0.5);
     --stage-text-future: rgba(255, 254, 251, 0.94);
+  }
+
+  /*
+   * PAPER — A READING WINDOW ONLY.
+   *
+   * Dark type on a warm light field, for a window read at a desk, where the
+   * reason the prompter is black (stray light on a beamsplitter, `stage.css`)
+   * does not exist. `stageTheme` above only ever says `reader-paper` for a
+   * reading window, so none of this can reach glass.
+   *
+   * A complete set of roles, not black swapped for cream: the same alpha does
+   * not give the same contrast with dark ink on a light field. Past text is
+   * floored at 0.72 by `buildStageSettings` (`PAPER_PAST_OPACITY`), and the
+   * four-word ramp gets its own steps between that floor and full ink, so the
+   * dim still grades rather than collapsing onto the floor. Every composed
+   * reading state — each intensity, at full, upcoming, each ramp step and the
+   * far past, under the Wash band and the phrase underlay, stage directions,
+   * and an authored cue on its own chip — is held at 4.5:1 or better by
+   * `tests/unit/control/reader-theme.test.ts`, which reads these values from
+   * this block. (A cue or heading inside a PAST block or a stage direction is
+   * the one state that does not reach it: about 3.3:1, against the dark
+   * field's 2.6–2.8:1 for the same states. The block's own opacity sits over
+   * the chip, and clay dark enough to clear it there stops reading as a cue.)
+   *
+   * The chrome is warm paper with a quiet border: no grey slab, no peach wash,
+   * and the clay of the control palette for anything that has to read as the
+   * app talking. The `--stage-dock-*`, `--stage-flag-*`, `--stage-danger-*`,
+   * `--stage-wash-*` and remaining `--stage-chrome-*` roles have no dark
+   * declaration on purpose: each is used with today's dark literal as its
+   * `var()` fallback, so a dark stage resolves to exactly the colour it always
+   * drew.
+   *
+   * Mirrored in `stage.css` for the separate stage window, as the tokens above
+   * are.
+   */
+  .stage-root[data-theme='reader-paper'] {
+    color-scheme: light;
+    --stage-bg: #f6f2ea;
+    --stage-text: #242424;
+    --stage-text-past: rgba(36, 36, 36, 0.68);
+    --stage-text-future: rgba(36, 36, 36, 0.86);
+    /* The phrase underlay, in a warm neutral rather than the dark field's
+       lavender. Still an underlay: the element runs it at 0.1. */
+    --stage-accent: rgba(96, 84, 70, 0.3);
+    /* A dark clay, dark enough to hold 4.5:1 on its own 12-14% chip in an
+       upcoming block. The dark field's gold is about 1.7:1 on paper. */
+    --stage-cue: #7a412e;
+    --stage-overlay: rgba(232, 227, 219, 0.96);
+    --stage-chrome-border: rgba(36, 30, 20, 0.14);
+    --stage-chrome-bg: rgba(252, 250, 246, 0.88);
+    --stage-chrome-text: rgba(36, 36, 36, 0.88);
+    --stage-chrome-shadow:
+      0 10px 30px rgba(24, 25, 29, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    --stage-dim-1: 0.92;
+    --stage-dim-2: 0.84;
+    --stage-dim-3: 0.77;
+    /* Silent and stage-only material — see the rule below this block. */
+    --stage-unspoken-opacity: 0.72;
+
+    /* Roles whose dark value is the fallback at the point of use. */
+    --stage-wash-clear: rgb(96 84 70 / 0%);
+    --stage-wash: rgb(96 84 70 / 8%);
+    --stage-wash-hollow: rgb(96 84 70 / 3%);
+    --stage-wash-rule: rgb(96 84 70 / 24%);
+    --stage-mark-ink: #f6f2ea;
+    --stage-diag-fault: #a6342b;
+    --stage-chrome-bg-solid: rgb(252 250 246 / 96%);
+    --stage-chrome-bg-hover: rgb(241 237 230 / 94%);
+    --stage-chrome-border-hover: rgb(36 30 20 / 30%);
+    --stage-chrome-text-hover: #18191d;
+    --stage-chrome-text-strong: #18191d;
+    --stage-chrome-text-muted: rgb(36 36 36 / 68%);
+    --stage-chrome-text-faint: rgb(36 36 36 / 52%);
+    --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
+    --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
+    --stage-chrome-highlight: rgb(36 30 20 / 7%);
+    --stage-chrome-control-border: rgb(36 30 20 / 18%);
+    --stage-chrome-control-hover: rgb(36 30 20 / 6%);
+    --stage-focus-ring: rgb(36 36 36 / 70%);
+    --stage-dock-icon: rgb(36 36 36 / 72%);
+    --stage-dock-end: rgb(36 36 36 / 58%);
+    --stage-flag: #7a5310;
+    --stage-flag-hover: #5f400b;
+    --stage-flag-bg: rgb(154 103 22 / 10%);
+    --stage-flag-bg-hover: rgb(154 103 22 / 16%);
+    --stage-flag-border: rgb(154 103 22 / 38%);
+    --stage-flag-border-hover: rgb(154 103 22 / 52%);
+    --stage-flag-ring: rgb(252 250 246 / 92%);
+    --stage-danger: #a6342b;
+    --stage-danger-bg: rgb(185 65 56 / 10%);
+    --stage-danger-border: rgb(166 52 43 / 38%);
+    --stage-danger-strong-bg: rgb(185 65 56 / 12%);
+    --stage-danger-strong-bg-hover: rgb(185 65 56 / 20%);
+    --stage-danger-strong-border: rgb(166 52 43 / 55%);
+    --stage-danger-text: #8e2922;
+    --stage-danger-text-hover: #7a211b;
+  }
+  /* Intensity on paper moves the INK, opaque, rather than fading it: an alpha
+     on dark ink would stack with every past/ramp opacity below it. */
+  .stage-root[data-theme='reader-paper'][data-text-intensity='soft'] {
+    --stage-text: #33312e;
+    --stage-text-past: rgba(51, 49, 46, 0.7);
+    --stage-text-future: rgba(51, 49, 46, 0.86);
+  }
+  .stage-root[data-theme='reader-paper'][data-text-intensity='strong'] {
+    --stage-text: #141414;
+    --stage-text-past: rgba(20, 20, 20, 0.66);
+    --stage-text-future: rgba(20, 20, 20, 0.94);
+  }
+  /*
+   * Stage directions on paper.
+   *
+   * The renderer draws silent and stage-only blocks at a flat 0.45 opacity —
+   * about 4:1 for warm white on black, and about 2.7:1 for dark ink on paper,
+   * which is a direction somebody has to act on gone too faint to read. It is
+   * a literal in the block renderer rather than a role, so the paper field
+   * overrides it here, by class, and only on paper: a dark stage never matches
+   * this selector and keeps its 0.45 exactly.
+   */
+  .stage-root[data-theme='reader-paper'] :global(.unspoken) {
+    opacity: var(--stage-unspoken-opacity, 0.72);
   }
   .stage-root[data-pointer-hidden='true'] {
     cursor: none;
@@ -2731,7 +3165,7 @@
    * working — and the readout is scanned in a dark room at a glance.
    */
   .diag-fault {
-    color: #ffb4a2;
+    color: var(--stage-diag-fault, #ffb4a2);
     font-weight: 600;
   }
 

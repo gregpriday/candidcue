@@ -18,7 +18,9 @@
  *     coming back to the app is exactly when somebody is about to press
  *     Present;
  *   - the pinned prompter display, the rigs or the presentation mode change in
- *     Settings.
+ *     Settings — or the reading window's remembered frame does, which every
+ *     reading take rewrites on its way out, and "Restore windows" decides
+ *     whether it is used at all.
  *
  * Everything the resolution DECIDES lives in `lib/take-destination.ts` and is
  * pure. This module only fetches and schedules.
@@ -30,7 +32,12 @@ import {
   type TakeDestination,
 } from '../lib/take-destination';
 import { currentWindowDisplay, listDisplays, watchDisplayChanges } from '../services/stage';
-import { activeOpticalProfile, type OpticalSettings, type PresentationMode } from '../services/settings-types';
+import {
+  activeOpticalProfile,
+  type OpticalSettings,
+  type PresentationMode,
+  type ReaderFrame,
+} from '../services/settings-types';
 
 /**
  * Null until the first resolution completes.
@@ -61,11 +68,25 @@ export interface DestinationContext {
    * on, while Present filled the pinned panel (#302).
    */
   pinnedFingerprint: string | null;
+  /**
+   * `settings.stage.readerFrame` — where a reading take will come back to, when
+   * the next one is restored. Without it the readout said a reading window
+   * "opens where this window is" while Present moved it to another panel.
+   */
+  readerFrame: ReaderFrame | null;
+  /** `settings.general.restoreWindows` — whether that frame is used at all. */
+  restoreWindows: boolean;
 }
 
 const NO_OPTICAL: OpticalSettings = { profiles: {}, activeRig: {}, panelMirror: {} };
 
-let context: DestinationContext = { mode: 'prompter', optical: NO_OPTICAL, pinnedFingerprint: null };
+let context: DestinationContext = {
+  mode: 'prompter',
+  optical: NO_OPTICAL,
+  pinnedFingerprint: null,
+  readerFrame: null,
+  restoreWindows: true,
+};
 /** Guards against overlapping refreshes landing out of order. */
 let inFlight = 0;
 
@@ -111,6 +132,8 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
         pinnedFingerprint: pinned,
         calibratedRigs,
         pinnedRigName,
+        readerFrame: context.readerFrame,
+        restoreWindows: context.restoreWindows,
       }),
     );
   } catch {

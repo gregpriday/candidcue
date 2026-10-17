@@ -374,6 +374,77 @@ describe('skipped regions', () => {
   });
 });
 
+/*
+ * A line that is only a bracket is silent only when the COMPILER says so.
+ *
+ * The lint used to skip every whole-line `[…]` as an annotation. A take aligns
+ * against the app compiler's tokens, and that compiler speaks any bracket that
+ * is not one of its directives — `[Todo: …]` is spoken, and the spoken-count
+ * fixture pins it — so the lint was going quiet over words the presenter will
+ * be followed through.
+ */
+describe('whole-line brackets', () => {
+  it('still skips a line of recognised directives, one or several', () => {
+    for (const line of ['[Beat]', '[Pause]', '[Breathe]', '[Take: Opening]', '[Pause] [Beat]', '[Cue: smile]  [Beat]']) {
+      expect(lintScriptSource(`${line}\n`), line).toEqual([]);
+    }
+  });
+
+  it('skips a malformed directive, which the compiler does not speak either', () => {
+    expect(lintScriptSource('[Cue:]\n')).toEqual([]);
+  });
+
+  it('lints an unrecognised bracket on its own line as the words it is', () => {
+    const findings = lintScriptSource('[Todo: tighten this opening]\n');
+    expect(codes(findings)).toEqual(['no-terminal-punctuation']);
+    expect(findings[0]!.line).toBe(1);
+    expect(findings[0]!.column).toBe('[Todo: tighten this '.length + 1);
+
+    expect(codes(lintScriptSource('[SOMEONE CHECK THIS FIGURE]\n'))).toContain('all-caps-run');
+  });
+
+  it('counts its words into the paragraph around it', () => {
+    // Joined to the prose either side by single line breaks, so it is one
+    // paragraph to the compiler and must be one paragraph here.
+    const under = `${prose(LONG_PARAGRAPH_WORDS - 2)}\n[note to self]\n`;
+    const findings = only(lintScriptSource(under), 'long-paragraph');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain(String(LONG_PARAGRAPH_WORDS + 1));
+  });
+
+  it('reads only what the compiler reads on a line it now lints', () => {
+    // A footnote marker draws and speaks nothing; a reference link reads its
+    // label and never its identifier. Both used to hide behind the old skip.
+    expect(lintScriptSource('[^note]\n\n[^note]: A footnote.\n')).toEqual([]);
+    const reference = lintScriptSource('[Continue.][FOUR WORDS IN REF]\n\n[four words in ref]: https://example.com\n');
+    expect(codes(reference)).not.toContain('all-caps-run');
+    expect(reference.filter((f) => f.line === 1)).toEqual([]);
+    // Two directives back to back are still two cues, not a reference link.
+    expect(lintScriptSource('[Pause][Beat]\n')).toEqual([]);
+    expect(lintScriptSource('Say it [Pause][Beat] and go.\n')).toEqual([]);
+  });
+
+  it('reads an unresolved footnote or reference as the prose the compiler speaks', () => {
+    // With no definition the parser resolves nothing: `[^…]` and `[a][b]` are
+    // bracketed text, spoken word for word, so their words count here too.
+    const footnote = lintScriptSource('Say [^ALPHA BRAVO CHARLIE DELTA] now.\n');
+    expect(codes(footnote)).toContain('all-caps-run');
+    const reference = lintScriptSource('Say [label][ALPHA BRAVO CHARLIE DELTA] now.\n');
+    expect(codes(reference)).toContain('all-caps-run');
+    // Defined, the same identifier is hidden again.
+    const defined = lintScriptSource(
+      'Say [label][ALPHA BRAVO CHARLIE DELTA] now.\n\n[alpha bravo charlie delta]: https://example.com\n',
+    );
+    expect(defined.filter((f) => f.line === 1 && f.code === 'all-caps-run')).toEqual([]);
+  });
+
+  it('treats a line that mixes a directive and an unknown bracket as prose', () => {
+    // The directive is hidden, the unknown bracket is read.
+    expect(codes(lintScriptSource('[Beat] [aside]\n'))).toEqual(['no-terminal-punctuation']);
+    expect(lintScriptSource('[Beat] [aside].\n')).toEqual([]);
+  });
+});
+
 describe('positions against the original source', () => {
   it('reports the right line when a paragraph follows a fenced code block', () => {
     const source = [

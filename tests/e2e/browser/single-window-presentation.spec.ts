@@ -1045,7 +1045,7 @@ test.describe('on a page that identifies as macOS', () => {
       .getByRole('menu', { name: 'How to present' })
       .getByRole('menuitemradio', { name: /Present in a window/ })
       .click();
-    await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+    await expect(page.getByRole('region', { name: /^Reading: / })).toBeVisible({
       timeout: 20_000,
     });
 
@@ -1175,7 +1175,7 @@ test('choosing a shape presents in it and makes it the default for next time', a
     .getByRole('menuitemradio', { name: /Present in a window/ })
     .click();
 
-  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+  await expect(page.getByRole('region', { name: /^Reading: / })).toBeVisible({
     timeout: 20_000,
   });
 

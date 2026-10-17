@@ -86,7 +86,8 @@ export const READ_HEADINGS_SETTING = { section: 'General', label: 'Read headings
 
 const READ_HEADINGS_PATH = `Settings › ${READ_HEADINGS_SETTING.section} › ${READ_HEADINGS_SETTING.label}`;
 
-const IN_FULL_ELSEWHERE = 'Shown in full in the preview, in practice and in a Diagnostic Take.';
+const IN_FULL_ELSEWHERE =
+  'Shown in full in a reading window, in the preview, in practice and in a Diagnostic Take.';
 
 export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
   {
@@ -441,7 +442,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'image',
         title: 'Image',
         example: '![Product shot](images/product.png)',
-        glass: `On a line of its own, in a take: a one-line ${PERFORMANCE_CUE_LABELS.image} cue. ${IN_FULL_ELSEWHERE}`,
+        glass: `On a line of its own, in a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.image} cue. ${IN_FULL_ELSEWHERE}`,
         following: 'Not spoken.',
         note: 'Images must be files added to the script. Web addresses are not loaded.',
         expect: {
@@ -463,7 +464,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'table',
         title: 'Table',
         example: '| Plan | Price |\n| --- | --- |\n| Pro | 12 |',
-        glass: `In a take: a one-line ${PERFORMANCE_CUE_LABELS.table} cue. ${IN_FULL_ELSEWHERE}`,
+        glass: `In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.table} cue. ${IN_FULL_ELSEWHERE}`,
         following: 'Not spoken.',
         expect: {
           spoken: [],
@@ -476,7 +477,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'code',
         title: 'Code',
         example: '```js\nconsole.log("hello");\n```',
-        glass: `In a take: a one-line ${PERFORMANCE_CUE_LABELS.code} cue. ${IN_FULL_ELSEWHERE}`,
+        glass: `In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.code} cue. ${IN_FULL_ELSEWHERE}`,
         following: 'Not spoken.',
         expect: {
           spoken: [],
@@ -489,7 +490,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'diagram',
         title: 'Diagram',
         example: '```mermaid\ngraph LR\n  Idea --> Script\n```',
-        glass: `A mermaid fence marks a diagram; its source is what shows. In a take: a one-line ${PERFORMANCE_CUE_LABELS.diagram} cue.`,
+        glass: `A mermaid fence marks a diagram; its source is what shows. In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.diagram} cue. ${IN_FULL_ELSEWHERE}`,
         following: 'Not spoken.',
         expect: {
           spoken: [],

@@ -199,16 +199,47 @@ function blank(chars: string[], start: number, end: number): void {
 }
 
 /**
+ * A reference label as Markdown matches it: case-folded, with runs of
+ * whitespace collapsed, trimmed.
+ */
+function referenceLabel(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Link-reference and footnote definition lines: `[label]: …` / `[^note]: …`. */
+const DEFINITION_LINE = /^ {0,3}\[([^\]]+)\]:/;
+
+/**
+ * Every label the document defines, so the mask can tell a reference the
+ * parser resolves (an identifier, never spoken) from bracketed prose that only
+ * looks like one (spoken, and counted).
+ */
+function definedLabels(lines: SourceLine[]): Set<string> {
+  const out = new Set<string>();
+  for (const line of lines) {
+    const match = DEFINITION_LINE.exec(line.text);
+    if (match) out.add(referenceLabel(match[1]!));
+  }
+  return out;
+}
+
+/**
  * Blank inline markup that is not read aloud: image references, link
- * destinations, inline code, emphasis markers, bracket directives and
- * `{say="…"}` aliases.
+ * destinations and reference identifiers, footnote markers, inline code,
+ * emphasis markers, bracket directives and `{say="…"}` aliases.
  *
  * Link *labels* survive because the presenter reads them; the destination does
  * not, and leaving it in was worth fixing on its own — `https://example.com/a`
  * tokenises into five words and quietly pushed short paragraphs over the long
  * paragraph threshold.
  */
-function maskInline(chars: string[], text: string, base: number, from: number): void {
+function maskInline(
+  chars: string[],
+  text: string,
+  base: number,
+  from: number,
+  defined: ReadonlySet<string> = new Set(),
+): void {
   const hide = (start: number, end: number) => blank(chars, base + start, base + end);
   let i = from;
   while (i < text.length) {
@@ -251,6 +282,15 @@ function maskInline(chars: string[], text: string, base: number, from: number): 
             continue;
           }
         }
+        // A footnote marker, `[^1]`: the compiler draws and speaks nothing for
+        // it (its definition is reported instead) — but only when the document
+        // defines it. An undefined `[^x]` is ordinary bracketed prose to the
+        // parser, so its words are spoken and stay in the count.
+        if (text.charAt(i + 1) === '^' && defined.has(referenceLabel(text.slice(i + 1, close)))) {
+          hide(i, close + 1);
+          i = close + 1;
+          continue;
+        }
         // The compiler's own classifier decides directive-or-not, so an
         // authored `[Cue: LOOK AT THE LENS]` is exempt from the caps rule for
         // the same reason it is exempt from being spoken.
@@ -258,6 +298,22 @@ function maskInline(chars: string[], text: string, base: number, from: number): 
           hide(i, close + 1);
           i = close + 1;
           continue;
+        }
+        // A reference link, `[label][ref]`: the label is read, the reference is
+        // an identifier, exactly like an inline link's destination. After the
+        // directive test, so `[Pause][Beat]` stays two cues.
+        if (text.charAt(close + 1) === '[') {
+          const refClose = text.indexOf(']', close + 2);
+          // Only a reference the document defines: an unresolved `[a][b]` is
+          // two runs of bracketed prose to the parser, and both are spoken.
+          const ref = refClose >= 0 ? text.slice(close + 2, refClose) : '';
+          const label = referenceLabel(ref === '' ? text.slice(i + 1, close) : ref);
+          if (refClose >= 0 && defined.has(label)) {
+            hide(i, i + 1);
+            hide(close, refClose + 1);
+            i += 1;
+            continue;
+          }
         }
         hide(i, i + 1);
         hide(close, close + 1);
@@ -285,9 +341,35 @@ function maskInline(chars: string[], text: string, base: number, from: number): 
   }
 }
 
+/** One bracket span and whatever whitespace follows it, anchored at the start. */
+const LEADING_BRACKET_SPAN = /^\[([^\[\]\n]*)\][ \t]*/;
+
+/**
+ * Whether a trimmed line is nothing but bracket directives the compiler
+ * recognises.
+ *
+ * Span by span rather than one test of the whole line: `[Pause] [Beat]` starts
+ * with `[` and ends with `]`, but its inside, `Pause] [Beat`, is not a label
+ * anything would classify. A span the classifier calls `none` is ordinary text
+ * to the compiler — spoken — so one such span makes the line prose, and
+ * `maskInline` then hides the directives on it and keeps the words.
+ */
+function isDirectiveOnlyLine(trimmed: string): boolean {
+  let rest = trimmed;
+  if (!rest.startsWith('[')) return false;
+  while (rest.length > 0) {
+    const span = LEADING_BRACKET_SPAN.exec(rest);
+    if (!span) return false;
+    if (classifyBracketDirective(span[1]!).kind === 'none') return false;
+    rest = rest.slice(span[0].length);
+  }
+  return true;
+}
+
 /** Line-by-line scan producing the mask and the spoken/blank classification. */
 function scanSource(source: string): { masked: string; scans: LineScan[]; lines: SourceLine[] } {
   const lines = splitLines(source);
+  const defined = definedLabels(lines);
   // split('') keeps UTF-16 indexing; spreading would split by code point and
   // shift every offset after an astral character.
   const chars = source.split('');
@@ -407,10 +489,21 @@ function scanSource(source: string): { masked: string; scans: LineScan[]; lines:
       continue;
     }
 
-    // A whole-line bracket span is a stage annotation, exactly as the aligner
-    // reads it — including `[some note to self]`, which is not a known
-    // directive but is plainly not something the presenter says out loud.
-    if (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.includes('](')) {
+    /*
+     * A line made only of bracket DIRECTIVES — `[Beat]`, `[Cue: smile]`,
+     * `[Pause] [Breathe]` — is stage direction, and nothing on it is spoken.
+     *
+     * Only directives. This used to skip any whole-line `[…]` as an annotation,
+     * `[Todo: tighten this]` included, which is how the bench's Markdown reader
+     * treats one; but a take aligns against the APP compiler's tokens, and that
+     * compiler speaks every bracket it does not recognise as a directive
+     * (`directives.ts` knows Pause, Beat, Breathe, Cue and Take). So the lint
+     * went quiet over words the presenter will be followed through, and said
+     * nothing about the one thing worth saying — that they are in the script.
+     * The question is now answered by the compiler's own classifier, the same
+     * one `maskInline` asks about a bracket in the middle of a line.
+     */
+    if (isDirectiveOnlyLine(trimmed)) {
       scans.push(skip());
       continue;
     }
@@ -427,7 +520,7 @@ function scanSource(source: string): { masked: string; scans: LineScan[]; lines:
       blank(chars, line.start + markerStart, line.start + markerStart + list[2]!.length);
       from += list[0].length;
     }
-    maskInline(chars, line.text, line.start, from);
+    maskInline(chars, line.text, line.start, from, defined);
     // Only bare prose can be retitled by an underline: a `=====` under a list
     // item or a quote is the parser's problem, and guessing at it here could
     // silence a paragraph the author can still see on the stage.

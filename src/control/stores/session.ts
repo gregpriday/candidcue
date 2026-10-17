@@ -34,17 +34,29 @@ import {
 import {
   DEFAULT_STAGE_APPEARANCE,
   panelMirrorFor,
+  readerPreferenceFrom,
+  readerThemeFor,
+  withReaderPreference,
   type FollowingSettings,
   type PanelMirror,
   type PresentationMode,
+  type ReaderPreference,
+  type ReaderPreferencePatch,
+  type ReaderTheme,
   type SessionMode,
 } from '../services/settings-types';
 import type { DisplayDescriptor } from '../services/stage-types';
-import { isRigResolvedStage, stageSettingsFromSettings } from '../services/stage-envelope';
+import {
+  isReaderPreferenceStage,
+  isRigResolvedStage,
+  stageSettingsFromSettings,
+} from '../services/stage-envelope';
 import {
   clampStageAppearance,
   readStageAppearance,
+  stepReaderFontSize,
   typeCeilingPx,
+  type ReaderAppearance,
   type StageAppearance,
   type TeleprompterSettings,
 } from '../lib/stage-appearance';
@@ -494,8 +506,23 @@ export interface SessionState {
   /**
    * §17.2: a saved rig decided this take's appearance, so none of it is the
    * in-session sheet's to set — see `isRigResolvedStage`.
+   *
+   * Never true for a reading window, though one always runs a profile: its
+   * appearance is the reader preference laid over that profile, which the
+   * sheet and ⌘= / ⌘− set. This is what Larger/Smaller Stage Text are greyed
+   * on, so it has to say "nothing here to set", not "a profile is in play".
    */
   stageRigResolved: boolean;
+  /**
+   * The reading window's own appearance, when this take is one whose text runs
+   * through the reader preference — or null, for every other take.
+   *
+   * Null is what puts the sheet back on its prompter controls, so it follows
+   * the composition rather than the mode: a reading window with no panel to
+   * resolve against prompts from the flat fields, and the ordinary controls
+   * are the ones that reach it (`isReaderPreferenceStage`).
+   */
+  stageReaderAppearance: ReaderAppearance | null;
   /**
    * Whether this take is on the full display or in a reading window.
    *
@@ -565,6 +592,7 @@ const initial: SessionState = {
     readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
   },
   stageRigResolved: false,
+  stageReaderAppearance: null,
   // Matches `defaultAppSettings`, and matches what every take did before reader
   // mode existed. A take overwrites it at `startLiveSession`.
   stagePresentationMode: 'prompter',
@@ -610,6 +638,53 @@ let stageSettings: StageSettings | null = null;
  * them into tomorrow's take. Null outside a take.
  */
 let takeTeleprompter: TeleprompterSettings | null = null;
+/**
+ * What the in-session sheet and ⌘= / ⌘− have changed about the READING
+ * WINDOW this take, over the saved reader preference — or null for nothing.
+ *
+ * Its own field, never a corner of `takeTeleprompter`, because the two
+ * describe different windows. `takeTeleprompter` is the prompter's fallback
+ * and a reading window never reads it; writing a reader's 34 px there would
+ * make a mid-take switch to the prompter open at 34 px, and switching back
+ * would forget it. Held apart, each mode keeps its own nudges across a switch.
+ *
+ * A PATCH over the saved preference rather than a copy of it, in the
+ * vocabulary `withReaderPreference` speaks (a value sets, null clears back to
+ * automatic), so Done saving the preference mid-take — or anything else
+ * committing the optical section — lands under it rather than being shadowed
+ * by a snapshot taken at the opening. Null outside a take, and at the start of
+ * every one: an unsaved nudge ends with the take, like every other.
+ */
+let takeReaderPreference: ReaderPreferencePatch | null = null;
+/**
+ * The reading window's Dark or Paper for THIS take, when the in-session sheet
+ * has chosen one — or null, which means the saved `teleprompter.readerTheme`.
+ *
+ * Its own field for the reason `takeReaderPreference` is: the choice belongs
+ * to the reading window, and it has to survive a switch to the prompter and
+ * back without ever being drawn on the prompter in between. Not a field of
+ * `takeReaderPreference` either — that patch is written into an
+ * `OpticalProfile`, and a theme is not optics. Null outside a take and at the
+ * start of every one; Done is what saves it.
+ */
+let takeReaderTheme: ReaderTheme | null = null;
+/**
+ * Paper held back from the reading window while a switch to the prompter is in
+ * flight, and after one that failed — see `suspendReaderPaper`. Reset with
+ * every take.
+ */
+let readerPaperSuspended = false;
+/**
+ * The body size the reading window is actually drawn at, as the stage last
+ * reported it, or null before it has said.
+ *
+ * Control composes a reading window against the whole display with fallback
+ * metrics; the stage re-resolves against the window with the measured face.
+ * With a borrowed physical scale those two can differ by more than a size step,
+ * so the reader's readout and its larger/smaller steps start from THIS — the
+ * size on the glass — or "smaller" could pin a size larger than the text.
+ */
+let stageRenderedFontSizePx: number | null = null;
 /**
  * The presentation mode THIS take is running, which is not always the saved one.
  *
@@ -929,6 +1004,10 @@ export function startLiveSession(input: StartSessionInput): string {
   stageSettings = input.stageSettings ?? null;
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
+  takeReaderPreference = null;
+  takeReaderTheme = null;
+  readerPaperSuspended = false;
+  stageRenderedFontSizePx = null;
   // The panel's own mirroring until somebody flips it — see `takeMirror`.
   takeMirror = null;
   // The take adopts the saved mode at its opening and owns it from then on.
@@ -979,6 +1058,7 @@ export function startLiveSession(input: StartSessionInput): string {
     stageEnvelope: input.stageEnvelope ?? null,
     stageAppearance: liveStageAppearance(),
     stageRigResolved: isRigResolvedStage(stageSettings),
+    stageReaderAppearance: liveReaderAppearance(),
     stagePresentationMode: takePresentationMode ?? 'prompter',
     stageFontCeilingPx: takeFontCeilingPx,
     /*
@@ -2891,6 +2971,83 @@ export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
+/** Why a "Read from here" press moves nothing, or null when it should move. */
+export type SuggestedPlaceRefusal =
+  | 'inactive'
+  | 'another-take'
+  | 'outside-script'
+  | 'found-again'
+  | 'overtaken';
+
+/**
+ * Whether an accepted off-screen suggestion still describes this take.
+ *
+ * Pure, so every guard can be shown to bite from a press that would otherwise
+ * be honoured. The press is refused when it no longer describes this take:
+ * another take's suggestion (a different session generation); a token that is
+ * not a word of this script once rounded; a take whose follower has found the
+ * reader again since (following resumed, so taking it would move somebody who
+ * is no longer lost); or an offer that a deliberate reposition — a sentence
+ * step, an outline jump, a restart — has overtaken since the stage last saw it.
+ */
+export function suggestedPlaceRefusal(check: {
+  active: boolean;
+  sessionGeneration: number;
+  suggestionGeneration: number;
+  token: number;
+  scriptWordCount: number;
+  following: boolean;
+  offeredAtMs: number;
+  lastRepositionAtMs: number;
+}): SuggestedPlaceRefusal | null {
+  if (!check.active) return 'inactive';
+  if (check.suggestionGeneration !== check.sessionGeneration) return 'another-take';
+  const index = Math.round(check.token);
+  if (!Number.isFinite(check.token) || index < 0 || index >= check.scriptWordCount) {
+    return 'outside-script';
+  }
+  if (check.following) return 'found-again';
+  if (Number.isFinite(check.offeredAtMs) && check.offeredAtMs <= check.lastRepositionAtMs) {
+    return 'overtaken';
+  }
+  return null;
+}
+
+/**
+ * The reader accepted the off-screen suggestion: read from that sentence.
+ *
+ * The engine refused to move the document there on its own — the place was off
+ * the glass — and named it instead. Accepting is the deliberate manual
+ * reposition that refusal leaves open, so it goes through `goToToken` like a
+ * sentence step: one explicit move, stamped as a reposition so a stale hand
+ * report cannot drag it back. `offeredAtMs` is when the stage last saw the
+ * offer; see `suggestedPlaceRefusal` for what refuses it. Returns whether it
+ * moved.
+ */
+export function acceptSuggestedPlace(
+  token: number,
+  suggestionGeneration: number,
+  offeredAtMs: number,
+): boolean {
+  const s = get(state);
+  const refusal = suggestedPlaceRefusal({
+    active: s.active,
+    sessionGeneration,
+    suggestionGeneration,
+    token,
+    scriptWordCount,
+    following: s.snapshot?.state === 'following',
+    offeredAtMs,
+    lastRepositionAtMs,
+  });
+  if (refusal !== null) {
+    trace('suggestion', `dropped: ${refusal}`);
+    return false;
+  }
+  goToToken(Math.round(token));
+  return true;
+}
+
 /**
  * When the operator last put the aligner somewhere by command, wall clock — a
  * sentence step, an outline jump, a restart, a re-find.
@@ -3403,6 +3560,15 @@ export function installLiveSettingsFollow(): () => void {
     if (!samePanelMirror(panelMirrorFor(next.optical, panel), panelMirrorFor(last.optical, panel))) {
       takeMirror = null;
     }
+    /*
+     * The reading window's Dark/Paper, chosen in Settings while the take runs,
+     * replaces one chosen in the sheet — the same rule as a slider moved there.
+     * The field is in `LIVE_STAGE_FIELDS`, so the rebuild below is what applies
+     * it; the composition reads the SAVED value whenever the take holds none.
+     */
+    if (readerThemeFor(next.teleprompter) !== readerThemeFor(last.teleprompter)) {
+      takeReaderTheme = null;
+    }
     const rigChanged = JSON.stringify(next.optical) !== JSON.stringify(last.optical);
     if (Object.keys(patch).length > 0 || rigChanged) applyStageAppearance(patch);
 
@@ -3433,6 +3599,9 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'textIntensity',
   'diagnosticTake',
   'readingCue',
+  // A reading window's field. A prompter's composition never reads it, so on
+  // a prompter take the rebuild changes nothing on the glass.
+  'readerTheme',
   // Seeded into the automatic profile by `stageSettingsFromSettings`, exactly
   // as the two above it are, so a change to it is a change to the glass. On a
   // take running a calibrated rig the recomposition is a no-op, because the
@@ -3471,10 +3640,29 @@ function takeMirrorAxes(): PanelMirror {
 }
 
 function recomposeStageSettings(): StageAppearance {
+  const saved = getSettingsSnapshot();
   const rebuilt = stageSettingsFromSettings(
     {
-      ...getSettingsSnapshot(),
-      ...(takeTeleprompter ? { teleprompter: takeTeleprompter } : {}),
+      ...saved,
+      /*
+       * The reading window's theme is the take's choice when the sheet made
+       * one, else the SAVED one — never `takeTeleprompter`'s copy, which is a
+       * snapshot of the opening and would hold a theme Settings has since
+       * changed. A prompter composition never reads it.
+       */
+      teleprompter: withReaderTheme(
+        takeTeleprompter ?? saved.teleprompter,
+        readerPaperSuspended ? 'dark' : (takeReaderTheme ?? saved.teleprompter.readerTheme),
+      ),
+      /*
+       * The take's reader nudges, over the saved preference — see
+       * `takeReaderPreference`. Only the fingerprint-less preference entry
+       * changes, so a prompter composition, which never looks there, is
+       * composed from exactly the rigs it always was.
+       */
+      ...(takeReaderPreference
+        ? { optical: withReaderPreference(saved.optical, takeReaderPreference) }
+        : {}),
       /*
        * The TAKE's mode, over the saved one.
        *
@@ -3486,7 +3674,7 @@ function recomposeStageSettings(): StageAppearance {
       ...(takePresentationMode
         ? {
             stage: {
-              ...getSettingsSnapshot().stage,
+              ...saved.stage,
               presentationMode: takePresentationMode,
             },
           }
@@ -3495,6 +3683,13 @@ function recomposeStageSettings(): StageAppearance {
     stageDisplay,
     // Null leaves it to the panel's saved answer, read off the same snapshot.
     takeMirror,
+    /*
+     * A reading window seeded from the SAVED intensity and cue, never the
+     * take's: `takeTeleprompter` holds the prompter's own unsaved nudges, and
+     * one tried on the prompter must not come with a switch to the reading
+     * window. A change made in Settings is saved, so it still arrives.
+     */
+    { intensity: saved.teleprompter.textIntensity, readingCue: saved.teleprompter.readingCue },
   );
   stageSettings = rebuilt;
   const appearance = liveStageAppearance();
@@ -3503,6 +3698,7 @@ function recomposeStageSettings(): StageAppearance {
     stageFontSizePx: rebuilt.fontSizePx,
     stageAppearance: appearance,
     stageRigResolved: isRigResolvedStage(rebuilt),
+    stageReaderAppearance: liveReaderAppearance(),
     stagePresentationMode: takePresentationMode ?? s.stagePresentationMode,
     stageEnvelope:
       s.stageEnvelope === null ? null : { ...s.stageEnvelope, stageSettings: rebuilt },
@@ -3555,14 +3751,26 @@ export function adoptPresentationMode(
   // Not `mode`: nothing was adopted, so answering with the request would report a
   // state the store is not in.
   if (!get(state).active) return livePresentationMode();
+  // The switch has landed, whichever way: paper held back for it is the
+  // reading window's again, and is drawn only if the take is still one.
+  const paperLifted = readerPaperSuspended;
+  readerPaperSuspended = false;
   const nextDisplay = landed ?? stageDisplay;
   // The panel is half of what the geometry is composed from, so "nothing
   // changed" has to account for it — a switch that lands on another monitor
   // still has to recompose even if the mode somehow came back the same.
   const movedPanel = nextDisplay?.fingerprint !== stageDisplay?.fingerprint;
-  if (takePresentationMode === mode && !movedPanel) return mode;
+  if (takePresentationMode === mode && !movedPanel) {
+    if (paperLifted && !(stageSettings?.optics && stageDisplay === null)) {
+      recomposeStageSettings();
+    }
+    return mode;
+  }
   takePresentationMode = mode;
   stageDisplay = nextDisplay;
+  // The stage's last report described the other shape; the new one reports its
+  // own size once it has laid out, and until then the composed size is honest.
+  stageRenderedFontSizePx = null;
   // A flip was made at the glass the take WAS on. The panel it has landed on
   // has its own answer, and carrying the flip across is #206 mid-take.
   if (movedPanel) takeMirror = null;
@@ -3617,11 +3825,193 @@ export function takeTeleprompterSettings(): TeleprompterSettings {
 }
 
 export function adjustStageFontSize(deltaPx: number): number {
+  /*
+   * A reading window steps its OWN size: the reader preference, from the size
+   * on the glass now, in the reader's range. Through `takeTeleprompter` it
+   * would move the prompter's fallback and nothing in the window.
+   */
+  if (isReaderPreferenceStage(stageSettings)) {
+    const next = stepReaderFontSize(readerRenderedFontSizePx(), deltaPx);
+    return applyReaderAppearance({ fontSizePx: next })?.fontSizePx ?? next;
+  }
   const current = get(state).stageAppearance.fontSizePx;
   // Clamped by `clampStageAppearance`, which is the same ceiling the sliders
   // draw against. It used to stop at 160px — below what this product's own
   // hardware asks for, and a different limit from the one Settings offered.
   return applyStageAppearance({ fontSizePx: current + deltaPx }).fontSizePx;
+}
+
+/**
+ * The reader preference this take is running — the saved one with the take's
+ * own nudges over it — for the sheet to restore on Cancel and save on Done.
+ */
+export function takeReaderPreferenceSettings(): ReaderPreference {
+  const saved = getSettingsSnapshot().optical;
+  return readerPreferenceFrom(
+    takeReaderPreference ? withReaderPreference(saved, takeReaderPreference) : saved,
+  );
+}
+
+/**
+ * The size a reading window's text is drawn at: the stage's own report when it
+ * has made one, else the composed size. Whole pixels, because that is the step
+ * the reader preference stores.
+ */
+function readerRenderedFontSizePx(): number {
+  const composed = stageSettings?.fontSizePx ?? 0;
+  return stageRenderedFontSizePx !== null ? Math.round(stageRenderedFontSizePx) : composed;
+}
+
+/**
+ * Record the body size the stage reports it is drawing, and refresh the
+ * reading window's readout when that moved what it should say.
+ */
+export function noteStageRenderedFontSize(px: number | null | undefined): void {
+  const next = typeof px === 'number' && Number.isFinite(px) && px > 0 ? px : null;
+  if (next === stageRenderedFontSizePx) return;
+  stageRenderedFontSizePx = next;
+  if (!get(state).active || !stageSettings || !isReaderPreferenceStage(stageSettings)) return;
+  state.update((s) => ({ ...s, stageReaderAppearance: liveReaderAppearance() }));
+}
+
+/**
+ * What a reading window is showing now, for its sheet — or null when this take
+ * is not one whose text runs through the reader preference.
+ *
+ * Size, spacing, intensity and cue off the RENDERED settings, for the reason
+ * `liveStageAppearance` gives: the readout has to say what is on the glass.
+ * The measure is the one the reader asked for; what the window actually fits
+ * is the stage's to measure.
+ */
+function liveReaderAppearance(): ReaderAppearance | null {
+  if (!stageSettings || !isReaderPreferenceStage(stageSettings)) return null;
+  return {
+    fontSizePx: readerRenderedFontSizePx(),
+    lineHeight: stageSettings.lineHeight,
+    characters: takeReaderPreferenceSettings().characters ?? null,
+    textIntensity: stageSettings.textIntensity ?? 'standard',
+    readingCue: stageSettings.readingCue ?? 'ticks',
+  };
+}
+
+/**
+ * Change how the reading window looks, now, for this take.
+ *
+ * The reader's sibling of `applyStageAppearance`, and kept apart from it on
+ * purpose: that one patches `takeTeleprompter`, which is what Settings'
+ * follower writes too, and a reading window never reads it. This patches the
+ * take's reader preference — a value sets a field, null puts it back to
+ * automatic — and recomposes through the same `recomposeStageSettings`, so the
+ * window adjusted mid-read and a window opened with those numbers are the same
+ * window.
+ *
+ * Nothing is saved: Done does that, with `withReaderPreference`.
+ *
+ * Returns what the reading window is now showing, or null when this take is
+ * not one (a prompter, or a reading window with no panel to resolve against).
+ * On a prompter take the nudge is still held, untouched by the prompter's own
+ * composition, and the reading window opens on it if the take switches.
+ */
+export function applyReaderAppearance(patch: ReaderPreferencePatch): ReaderAppearance | null {
+  if (!get(state).active) return liveReaderAppearance();
+  // The guard `applyStageAppearance` states: a profile with no panel cannot be
+  // recomposed without demoting it to the uncalibrated layout.
+  if (stageSettings?.optics && stageDisplay === null) return liveReaderAppearance();
+  const merged: ReaderPreferencePatch = { ...(takeReaderPreference ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    // An absent value means "leave it", and a spread would turn it into one.
+    if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+  }
+  takeReaderPreference = merged;
+  recomposeStageSettings();
+  return liveReaderAppearance();
+}
+
+/**
+ * Draw a reading window dark for the length of a switch to the prompter.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WINDOW MOVES FIRST, AND IT MOVES ONTO THE GLASS
+ * ---------------------------------------------------------------------------
+ * `adoptPresentationMode` recomposes only after the window has finished
+ * changing shape — the ordering that keeps reader geometry from being measured
+ * twice. For a reading window on paper that ordering has a cost: between the
+ * window filling the prompter's panel and the recomposition landing, the glass
+ * shows the reading window's paper, a full-screen light field on a
+ * beamsplitter. So the caller calls this BEFORE it moves the window, and the
+ * reading window is recomposed on the dark field in place — same geometry, so
+ * nothing re-wraps; only the theme and the past opacity change, and neither
+ * is a layout input.
+ *
+ * Lifted by `adoptPresentationMode` when the switch lands, and by a
+ * deliberate choice in Reading appearance (`applyReaderTheme`). NOT by a
+ * switch that failed: the window may already be on the glass, so the reading
+ * window stays dark rather than guess. Reset with every take.
+ */
+export function suspendReaderPaper(suspended: boolean): void {
+  if (readerPaperSuspended === suspended) return;
+  readerPaperSuspended = suspended;
+  if (!get(state).active) return;
+  // The guard `applyStageAppearance` states.
+  if (stageSettings?.optics && stageDisplay === null) return;
+  recomposeStageSettings();
+}
+
+/**
+ * A teleprompter section carrying exactly `theme` as its reading-window
+ * theme — or none, when nothing chose one, so absent stays absent.
+ */
+function withReaderTheme(
+  section: TeleprompterSettings,
+  theme: ReaderTheme | undefined,
+): TeleprompterSettings {
+  const next: TeleprompterSettings = { ...section };
+  if (theme === undefined) delete next.readerTheme;
+  else next.readerTheme = theme;
+  return next;
+}
+
+/**
+ * The reading window's Dark or Paper this take is running — the sheet's
+ * choice, else the saved one — for the sheet to restore on Cancel and save on
+ * Done. Answered for a prompter take too: it is what the reading window would
+ * open on if the take switched.
+ */
+export function takeReaderThemeSetting(): ReaderTheme {
+  return takeReaderTheme ?? readerThemeFor(getSettingsSnapshot().teleprompter);
+}
+
+/**
+ * Draw the reading window in Dark or Paper, now, for this take.
+ *
+ * Through `recomposeStageSettings`, the same path every other reader control
+ * takes, so the paper field, its past-text floor and the stage's `data-theme`
+ * arrive together in one envelope. On a PROMPTER take the choice is held and
+ * nothing on the glass changes: the prompter is composed black whatever this
+ * says, and the reading window opens on it if the take switches.
+ *
+ * Nothing is saved; Done does that, into `teleprompter.readerTheme`.
+ *
+ * Returns the reading window's theme for this take.
+ */
+export function applyReaderTheme(
+  theme: ReaderTheme,
+  options: { restoring?: boolean } = {},
+): ReaderTheme {
+  if (!get(state).active) return takeReaderThemeSetting();
+  // The guard `applyStageAppearance` states: a profile with no panel cannot be
+  // recomposed without demoting it to the uncalibrated layout.
+  if (stageSettings?.optics && stageDisplay === null) return takeReaderThemeSetting();
+  takeReaderTheme = theme === 'paper' ? 'paper' : 'dark';
+  /*
+   * Chosen at the window itself, so a hold left by a switch that failed is
+   * over — see `suspendReaderPaper`. A RESTORE is not a choice: Cancel putting
+   * back the theme the sheet opened on says nothing about whether the window
+   * is safe to turn paper again, so it leaves the hold where it is.
+   */
+  if (!options.restoring) readerPaperSuspended = false;
+  recomposeStageSettings();
+  return takeReaderTheme;
 }
 
 /**
@@ -3905,6 +4295,10 @@ function stopInternals(): void {
    * settings again, which is where OK put anything worth keeping.
    */
   takeTeleprompter = null;
+  takeReaderPreference = null;
+  takeReaderTheme = null;
+  readerPaperSuspended = false;
+  stageRenderedFontSizePx = null;
   takeMirror = null;
   takePresentationMode = null;
   stageDisplay = null;
@@ -3953,8 +4347,14 @@ export function connectionPill(connection: SessionState['connection']): {
   }
 }
 
-const PAUSED_LISTENING_LABEL = 'Paused — still listening for “CandidCue, resume”';
-/** No microphone in this take, so nothing is listening for a wake word. */
+/*
+ * No wake phrase. This used to promise "still listening for “CandidCue,
+ * resume”", and nothing in the app has ever answered that phrase — a presenter
+ * who said it would have stood there waiting. What is true is that the
+ * microphone is still open, which is what makes Resume immediate.
+ */
+const PAUSED_LISTENING_LABEL = 'Paused — still listening';
+/** No microphone in this take, so nothing is listening at all. */
 const PAUSED_MANUAL_LABEL = 'Paused — the script stays where it is';
 
 /**

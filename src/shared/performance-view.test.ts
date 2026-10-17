@@ -393,6 +393,42 @@ describe('the compact heading wins at every level', () => {
   });
 });
 
+describe('a reading window never compacts a heading', () => {
+  it('leaves an unspoken heading at reading size, even in a take', () => {
+    // A reading window arrives as `rehearsal`, but the reader treatment must
+    // hold whatever projection it is handed.
+    const heading = blockOfKind(take, 'heading');
+    expect(heading.spoken).toBe(false);
+    const markup = html(heading, { reader: true });
+    expect(markup).not.toContain('compact');
+    expect(markup).not.toContain('unspoken');
+    expect(markup).toContain('reader-heading');
+  });
+
+  /*
+   * The reader rules SPACE a heading and must never size it. A size there
+   * would be another rule the compact one has to out-rank, and a margin would
+   * sit outside the box the stage measures to place the blocks below.
+   */
+  it('spaces it with padding on the block, and nothing else', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../stage/renderer/BlockView.svelte', import.meta.url)),
+      'utf8',
+    );
+    const css = source.slice(source.indexOf('<style>')).replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((m) => ({ selector: m[1]!.trim(), body: m[2]! }))
+      .filter((rule) => rule.selector.includes('.reader-heading'));
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      const properties = [...rule.body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);
+      expect(properties, rule.selector).toEqual(['padding-top']);
+      // Never above the first block on the glass.
+      expect(rule.selector, rule.selector).toContain(':not(:first-child)');
+    }
+  });
+});
+
 describe('it is a projection, not a compile step', () => {
   it('does not mutate the blocks it was given', () => {
     const before = JSON.stringify(script.blocks);

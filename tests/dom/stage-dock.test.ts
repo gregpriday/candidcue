@@ -180,13 +180,19 @@ describe('the menu holds whatever this window can actually offer', () => {
   });
 
   /*
-   * The two shapes are not interchangeable. A row that flips a mode where it
+   * The three shapes are not interchangeable. A row that flips a mode where it
    * stands reports `aria-checked`; the row that opens a panel of SLIDERS says
    * `aria-haspopup="dialog"`, because a slider inside `role="menu"` loses its
-   * own left/right arrows to the menu's and stops being operable at all.
+   * own left/right arrows to the menu's and stops being operable at all; and,
+   * in a reading window, the row that switches to the teleprompter is a
+   * command, which claims neither.
    */
-  it('says which rows are switches and which one opens another level', async () => {
-    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+  it('says which rows are switches, which is a command and which opens another level', async () => {
+    const { container } = mount({
+      appearancePanel: PANEL,
+      onpresentationtoggle: vi.fn(),
+      presentationMode: 'reader',
+    });
     await openMenu(container);
 
     const appearance = menuRow(container, 'appearance')!;
@@ -194,51 +200,101 @@ describe('the menu holds whatever this window can actually offer', () => {
     expect(appearance.getAttribute('aria-haspopup')).toBe('dialog');
     expect(appearance.getAttribute('aria-checked')).toBeNull();
 
+    const present = menuRow(container, 'present')!;
+    expect(present.getAttribute('role')).toBe('menuitem');
+    expect(present.getAttribute('aria-checked')).toBeNull();
+    expect(present.getAttribute('aria-haspopup')).toBeNull();
+    expect(present.querySelector('.menu-mark svg'), 'a command draws no tick').toBeNull();
+
     const follow = menuRow(container, 'follow')!;
     expect(follow.getAttribute('role')).toBe('menuitemcheckbox');
     expect(follow.getAttribute('aria-checked')).toBe('true');
     expect(follow.getAttribute('aria-haspopup')).toBeNull();
   });
 
-  it('reports how the two modes are set', async () => {
-    const off = mount({
-      onpresentationtoggle: vi.fn(),
-      presentationMode: 'reader',
-      followPaused: true,
-    });
+  it('reports how following is set', async () => {
+    const off = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'reader', followPaused: true });
     await openMenu(off.container);
-    expect(menuRow(off.container, 'present')!.getAttribute('aria-checked')).toBe('false');
     expect(menuRow(off.container, 'follow')!.getAttribute('aria-checked')).toBe('false');
+    expect(menuRow(off.container, 'follow')!.querySelector('.menu-mark svg')).toBeNull();
     document.body.innerHTML = '';
 
     const on = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'prompter' });
     await openMenu(on.container);
-    expect(menuRow(on.container, 'present')!.getAttribute('aria-checked')).toBe('true');
+    expect(menuRow(on.container, 'follow')!.getAttribute('aria-checked')).toBe('true');
     // The tick is the same state said to an eye. A row that reported `checked`
     // to a screen reader and drew nothing would look like a menu of verbs.
-    expect(menuRow(on.container, 'present')!.querySelector('.menu-mark svg')).not.toBeNull();
-    expect(menuRow(on.container, 'follow')!.getAttribute('aria-checked')).toBe('true');
+    expect(menuRow(on.container, 'follow')!.querySelector('.menu-mark svg')).not.toBeNull();
   });
 
   /*
-   * A switch that reports but does not act, or acts but does not report, looks
-   * identical from a single snapshot — so this drives the host prop the way the
-   * real host does and watches the row turn over underneath the pointer.
+   * "Fill the display" described a different operation from a reading window:
+   * there the row can move the window onto the pinned prompter panel,
+   * re-resolve its optics and apply that panel's saved mirroring, so it names
+   * the switch. A prompter take keeps the ticked switch it has always had — it
+   * IS filling the display, and a control used at the glass keeps its shape.
    */
-  it('turns over where it stands when the host answers', async () => {
+  it('names the switch in a reading window and keeps the prompter’s tick', async () => {
+    const reading = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'reader' });
+    await openMenu(reading.container);
+    expect(menuRow(reading.container, 'present')!.textContent?.trim()).toBe('Switch to teleprompter');
+    expect(reading.container.textContent).not.toContain('Fill the display');
+    document.body.innerHTML = '';
+
+    const prompting = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'prompter' });
+    await openMenu(prompting.container);
+    const present = menuRow(prompting.container, 'present')!;
+    expect(present.textContent?.trim()).toBe('Fill the display');
+    expect(present.getAttribute('role')).toBe('menuitemcheckbox');
+    expect(present.getAttribute('aria-checked')).toBe('true');
+    expect(present.querySelector('.menu-mark svg'), 'the tick is drawn').not.toBeNull();
+  });
+
+  it('calls the appearance panel a prompter’s only on a prompter', async () => {
+    const reading = mount({ appearancePanel: PANEL, presentationMode: 'reader' });
+    await openMenu(reading.container);
+    expect(menuRow(reading.container, 'appearance')!.textContent?.trim()).toBe('Reading appearance…');
+    document.body.innerHTML = '';
+
+    const prompting = mount({ appearancePanel: PANEL, presentationMode: 'prompter' });
+    await openMenu(prompting.container);
+    expect(menuRow(prompting.container, 'appearance')!.textContent?.trim()).toBe('Adjust the prompter…');
+  });
+
+  /*
+   * A command does its one thing and the menu goes, the way any menu command
+   * does — the switch reshapes the window and can move it to another panel, so
+   * a menu left open would hang from where the window used to be. It hands the
+   * keyboard to the trigger on the way out, and the next opening says the way
+   * back.
+   */
+  it('closes on the switch, gives the trigger the keyboard, and offers the way back', async () => {
     const onpresentationtoggle = vi.fn();
-    const { container, rerender } = mount({ onpresentationtoggle, presentationMode: 'prompter' });
+    const { container, rerender } = mount({ onpresentationtoggle, presentationMode: 'reader' });
     await openMenu(container);
 
     menuRow(container, 'present')!.click();
     flushSync();
     expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
-    expect(menuRow(container, 'present'), 'the menu stays up').not.toBeNull();
+    expect(container.querySelector('.menu-popover'), 'the menu has gone').toBeNull();
+    expect(document.activeElement).toBe(menuTrigger(container));
 
-    await rerender({ onpresentationtoggle, presentationMode: 'reader' } as never);
+    await rerender({ onpresentationtoggle, presentationMode: 'prompter' } as never);
     flushSync();
-    expect(menuRow(container, 'present')!.getAttribute('aria-checked')).toBe('false');
-    expect(menuRow(container, 'present')!.querySelector('.menu-mark svg')).toBeNull();
+    await openMenu(container);
+    expect(menuRow(container, 'present')!.textContent?.trim()).toBe('Fill the display');
+    expect(menuRow(container, 'present')!.getAttribute('aria-checked')).toBe('true');
+    expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips the prompter’s switch where it stands, as it always has', async () => {
+    const onpresentationtoggle = vi.fn();
+    const { container } = mount({ onpresentationtoggle, presentationMode: 'prompter' });
+    await openMenu(container);
+    menuRow(container, 'present')!.click();
+    flushSync();
+    expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
+    expect(menuRow(container, 'present'), 'the menu stays up').not.toBeNull();
   });
 
   /*

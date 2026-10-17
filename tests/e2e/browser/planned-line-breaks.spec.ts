@@ -1,6 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 import { FONT_METRICS_PROSE_SAMPLE } from '../../../src/stage/renderer/fontMetrics';
 import { MIN_PLANNED_COLUMN_CHARS } from '../../../src/stage/renderer/wrap-plan';
+import { listInsetEm } from '../../../src/shared/list-marker';
+import { installTauriShim } from './fixtures/tauri-shim';
+import { watchPageErrors } from './fixtures/page-errors';
+import { openScript } from './fixtures/library';
 
 /**
  * The chosen line breaks, on glass, in a real engine.
@@ -420,5 +424,237 @@ test.describe('a column too narrow to plan', () => {
       );
     });
     expect(rewrapped.length, 'no block present at both widths gained a line').toBeGreaterThan(0);
+  });
+});
+
+/*
+ * A READING WINDOW'S DOCUMENT: real list markers, real headings, full content.
+ *
+ * The preview above has no list in it, so the inset claim was only ever made
+ * for a bullet. A list item now draws its real marker — a number column, a
+ * checkbox, a nesting indent — and the planner is told the inset by the same
+ * function the renderer draws it from. If the two disagreed the planner would
+ * pack a line the browser then wrapped again, and the N+1 identity below is
+ * exactly what catches that: a list item that planned N breaks and drew more
+ * lines is a list item planned against the wrong column.
+ *
+ * A reading window rather than the preview because it is where lists and
+ * headings are read as a document, and because its 55-75 character measure
+ * clears the planning floor on an ordinary laptop window — so the planner runs
+ * here, against real markers, in a real engine.
+ */
+test.describe('a reading window draws the document', () => {
+  const LISTS = {
+    id: '70707070-7070-4070-8070-707070707070',
+    title: 'Reading window lists',
+    source: [
+      '# Getting set up',
+      '',
+      'Before you record anything at all, it is worth ten minutes to get the room, the light and the sound working together rather than against you.',
+      '',
+      '9. Put the panel at eye height and square to your face, so that reading it never tips your head away from the lens in the middle of a sentence.',
+      '10. Check the level on a whole paragraph read aloud rather than a quick count to three, because a count is never as loud as you are when you are actually talking.',
+      '    - Leave a little room at the top for the moments you get excited about something and lean towards the microphone without noticing that you did it.',
+      '11. Record ten seconds of the empty room before you start, so that whoever edits this later has a clean sample of the background to work with.',
+      '',
+      '- [x] Charge both microphones the night before, and put the spare batteries somewhere you will actually be able to find them in the morning.',
+      '- [ ] Write the opening line on a card you can see without looking down, in case the panel decides to have a bad day just when you need it.',
+      '',
+      '## Recording',
+      '',
+      '| Setting | Value |',
+      '| --- | --- |',
+      '| Gain | 40 dB |',
+      '',
+      'Read the first paragraph once for the level and then go straight into the take, while the voice you warmed up is still the one you have.',
+      '',
+    ].join('\n'),
+  };
+
+  test.beforeEach(async ({ page }) => {
+    await installTauriShim(page, {
+      welcomed: true,
+      seedScripts: [LISTS],
+      presentationMode: 'reader',
+      engineStatus: {
+        available: true,
+        loaded: true,
+        model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
+      },
+      promptMode: 'voice',
+    });
+    await page.setViewportSize({ width: 1240, height: 820 });
+  });
+
+  async function presentInWindow(page: Page): Promise<void> {
+    await page.goto('/control.html');
+    await openScript(page, /Reading window lists/);
+    await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+    await page.getByRole('button', { name: 'How to present' }).click();
+    await page
+      .getByRole('menu', { name: 'How to present' })
+      .getByRole('menuitemradio', { name: /Present in a window/ })
+      .click();
+    await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', /ready|live/, {
+      timeout: 20_000,
+    });
+    await expect(page.locator('.stage-root .column')).toContainText('Getting set up');
+    await page.evaluate(() => document.fonts.ready);
+  }
+
+  test('plans every list item against the column its marker leaves', async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await presentInWindow(page);
+
+    const first = await snapshot(page);
+    expect(
+      first.columnChars,
+      `a reading window this size must clear the ${MIN_PLANNED_COLUMN_CHARS}-character floor`,
+    ).toBeGreaterThanOrEqual(MIN_PLANNED_COLUMN_CHARS);
+    await expect
+      .poll(async () => (await snapshot(page)).plannedBreaks, {
+        message: 'a reading window this wide must plan at least one break',
+      })
+      .toBeGreaterThan(0);
+
+    const shot = await snapshot(page);
+    expectWholePopulation(shot, 'reading window');
+    const items = await page.locator('.stage-root .column .k-list_item').evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-block-id') ?? ''),
+    );
+    expect(items, 'the script compiles to six list items').toHaveLength(6);
+    const listBlocks = shot.blocks.filter((b) => items.includes(b.id));
+    expect(listBlocks.map((b) => b.id).sort()).toEqual([...items].sort());
+    // Every item is long enough to wrap, so containment is tested on real lines.
+    expect(listBlocks.filter((b) => b.lines.length >= 2).length).toBe(items.length);
+
+    for (const block of listBlocks) {
+      expect(
+        block.lines.length,
+        `list item ${block.id} planned ${block.plannedBreaks} breaks but rendered ${block.lines.length} lines`,
+      ).toBe(block.plannedBreaks + 1);
+      expectLinesInside(block, shot.column);
+    }
+    errors.expectClean();
+  });
+
+  test('draws numbers, nesting and task state outside the words', async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await presentInWindow(page);
+
+    const column = await page.locator('.stage-root .column').evaluate((el) => ({
+      left: el.getBoundingClientRect().left,
+      fontPx: Number.parseFloat(getComputedStyle(el).fontSize),
+    }));
+    const drawn = await page.locator('.stage-root .column .k-list_item').evaluateAll((els) =>
+      els.map((el) => {
+        const row = el.querySelector('.list-item')!;
+        const marker = row.querySelector('.marker')!;
+        const body = row.querySelector('.list-body')!;
+        return {
+          kind: row.getAttribute('data-marker'),
+          label: marker.textContent,
+          checked: marker.getAttribute('data-checked'),
+          hidden: marker.getAttribute('aria-hidden'),
+          anchored: marker.querySelectorAll('[data-t]').length + (marker.hasAttribute('data-t') ? 1 : 0),
+          bodyLeft: body.getBoundingClientRect().left,
+          markerRight: marker.getBoundingClientRect().right,
+        };
+      }),
+    );
+    expect(drawn.map((d) => `${d.kind}:${d.label}${d.checked ? `:${d.checked}` : ''}`)).toEqual([
+      'number:9.',
+      'number:10.',
+      'bullet:',
+      'number:11.',
+      'task::true',
+      'task::false',
+    ]);
+    for (const d of drawn) {
+      expect(d.hidden).toBe('true');
+      expect(d.anchored, 'a marker carries no spoken token').toBe(0);
+      expect(d.markerRight, 'the marker never runs into its text').toBeLessThanOrEqual(d.bodyLeft + 0.5);
+    }
+    /*
+     * The renderer's half of the planner's contract: every item's text starts
+     * exactly where `list-marker.ts` says it does, because that inset is the
+     * one the planner subtracted from the column (`wrap-plan.test.ts` pins the
+     * planner's half). The hints are the ones the source above compiles to.
+     */
+    const hints: Record<string, string | number | boolean>[] = [
+      { ordered: true, index: 9, depth: 0 },
+      { ordered: true, index: 10, depth: 0 },
+      { ordered: false, index: 1, depth: 1 },
+      { ordered: true, index: 11, depth: 0 },
+      { ordered: false, index: 1, depth: 0, checked: true },
+      { ordered: false, index: 2, depth: 0, checked: false },
+    ];
+    drawn.forEach((d, i) => {
+      expect(d.bodyLeft - column.left, `item ${i + 1}'s text inset`).toBeCloseTo(
+        listInsetEm(hints[i]!) * column.fontPx,
+        0,
+      );
+    });
+    // One number column, whatever the label: 9 and 10 start their text together.
+    expect(drawn[1]!.bodyLeft).toBeCloseTo(drawn[0]!.bodyLeft, 1);
+    expect(drawn[3]!.bodyLeft).toBeCloseTo(drawn[0]!.bodyLeft, 1);
+    // The nested bullet's text sits to the right of its parent's.
+    expect(drawn[2]!.bodyLeft).toBeGreaterThan(drawn[1]!.bodyLeft);
+    errors.expectClean();
+  });
+
+  test('shows headings as headings and the table in full', async ({ page }) => {
+    const errors = watchPageErrors(page);
+    await presentInWindow(page);
+
+    const read = await page.locator('.stage-root .column').evaluate((column) => {
+      const bodyPx = Number.parseFloat(getComputedStyle(column).fontSize);
+      const headings = Array.from(column.querySelectorAll<HTMLElement>('.k-heading')).map((block) => {
+        const inner = block.querySelector<HTMLElement>('.heading')!;
+        const css = getComputedStyle(block);
+        return {
+          level: inner.getAttribute('data-level'),
+          unspoken: block.classList.contains('unspoken'),
+          compact: inner.classList.contains('compact'),
+          sizeRatio: Number.parseFloat(getComputedStyle(inner).fontSize) / bodyPx,
+          paddingTop: Number.parseFloat(css.paddingTop),
+          // The space around the heading's own text: from the end of the block
+          // above it, and to the start of the text below it.
+          before: (() => {
+            const prev = block.previousElementSibling?.querySelector('.para, .list-body');
+            return prev ? inner.getBoundingClientRect().top - prev.getBoundingClientRect().bottom : null;
+          })(),
+          after: (() => {
+            const next = block.nextElementSibling?.querySelector('.para, .list-body, .table-card');
+            return next ? next.getBoundingClientRect().top - inner.getBoundingClientRect().bottom : null;
+          })(),
+        };
+      });
+      return {
+        headings,
+        tables: column.querySelectorAll('.k-table table').length,
+        chips: column.querySelectorAll('[data-performance-cue]').length,
+      };
+    });
+
+    expect(read.headings.map((h) => h.level)).toEqual(['1', '2']);
+    for (const h of read.headings) {
+      expect(h.unspoken, `h${h.level} is quieted as unspoken`).toBe(false);
+      expect(h.compact, `h${h.level} is the compact take label`).toBe(false);
+    }
+    expect(read.headings[0]!.sizeRatio).toBeCloseTo(1.3, 2);
+    expect(read.headings[1]!.sizeRatio).toBeCloseTo(1.16, 2);
+    // The first block on the glass gets no room above it; the second heading does,
+    // and more above than below.
+    expect(read.headings[0]!.paddingTop).toBe(0);
+    const second = read.headings[1]!;
+    expect(second.paddingTop).toBeGreaterThan(0);
+    expect(second.before).not.toBeNull();
+    expect(second.after).not.toBeNull();
+    expect(second.before!).toBeGreaterThan(second.after!);
+
+    expect(read.tables, 'the table is drawn as a table').toBe(1);
+    expect(read.chips, 'nothing is replaced by a take-time chip').toBe(0);
+    errors.expectClean();
   });
 });

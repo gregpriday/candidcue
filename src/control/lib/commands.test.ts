@@ -20,6 +20,8 @@ import {
   type CommandContext,
   type CommandId,
 } from './commands';
+import { defaultAppSettings } from '../services/settings-types';
+import { isRigResolvedStage, stageSettingsFromSettings } from '../services/stage-envelope';
 
 function context(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -511,5 +513,36 @@ describe('stage type size on a calibrated rig (§17.2)', () => {
   it('offers them on a take that is not rig-resolved', () => {
     expect(COMMANDS['view.zoom-in'].available(LIVE_FREE)).toBe(true);
     expect(COMMANDS['view.zoom-out'].available(LIVE_FREE)).toBe(true);
+  });
+
+  /*
+   * A reading window always runs a profile, and it used to be reported as
+   * rig-resolved because of it — so both items were greyed over a window whose
+   * size had no other key. Its size is the reader preference, which these step.
+   */
+  it('offers them in a reading window, which always runs a profile', () => {
+    const base = defaultAppSettings();
+    const reader = stageSettingsFromSettings(
+      { ...base, stage: { ...base.stage, presentationMode: 'reader' } },
+      {
+        id: 'display-1',
+        name: 'Built-in Display',
+        primary: true,
+        physicalPosition: { x: 0, y: 0 },
+        physicalSize: { width: 3456, height: 2234 },
+        logicalSize: { width: 1728, height: 1117 },
+        scaleFactor: 2,
+        fingerprint: 'panel-1',
+        topologyHash: 'topology-1',
+      },
+    );
+    expect(reader.optics).toBeDefined();
+    const live = context({
+      route: { name: 'live', sessionId: 's', scriptId: 'a' },
+      sessionActive: true,
+      stageRigResolved: isRigResolvedStage(reader),
+    });
+    expect(COMMANDS['view.zoom-in'].available(live)).toBe(true);
+    expect(COMMANDS['view.zoom-out'].available(live)).toBe(true);
   });
 });

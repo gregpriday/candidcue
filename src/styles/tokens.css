@@ -526,6 +526,23 @@ html[data-presenting='true'] body {
   background: #000;
 }
 
+/*
+ * …and paper, while the take is a reading window drawn on paper.
+ *
+ * The same strip, the other colour: a resize drag on a paper reading window
+ * painted black along its growing edge, which on a light field is the loudest
+ * thing on screen. `Live.svelte` sets `data-presenting-theme` from the take's
+ * RENDERED settings, so it follows a mid-take switch to the prompter back to
+ * black, and clears it when the take ends. The transition cover stays black
+ * either way — it is opaque and brief, and it is `App.svelte`'s.
+ *
+ * The value is `PAPER_FIELD_BACKGROUND` in `stage-envelope.ts`.
+ */
+html[data-presenting='true'][data-presenting-theme='reader-paper'],
+html[data-presenting='true'][data-presenting-theme='reader-paper'] body {
+  background: #f6f2ea;
+}
+
 ::selection {
   background: var(--selection);
 }

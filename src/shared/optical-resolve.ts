@@ -124,7 +124,13 @@ export const UNCALIBRATED_FONT_SIZE_PX = 64;
  */
 export const UNCALIBRATED_READER_FONT_SIZE_PX = 30;
 
-/** The column measure used when nothing has been calibrated, as a fraction. */
+/**
+ * The column measure an uncalibrated PROMPTER gets, as a fraction.
+ *
+ * Prompter only. An uncalibrated reading window is solved in characters instead
+ * — see `uncalibratedReaderColumnCh` — because a share of the window has no
+ * ceiling, and a window, unlike a panel, can be dragged to 2560 px.
+ */
 export const UNCALIBRATED_COLUMN_FRACTION = 0.68;
 
 /**
@@ -243,9 +249,12 @@ export interface ResolveInput {
    * own screen. Defaults to `prompter`, which is what every existing caller
    * meant.
    *
-   * It changes exactly two things — the character band the width solver aims at,
-   * and whether the framing multiplier applies — and nothing else. See
-   * `READER_READING_MEASURE` for why those two and no others.
+   * On a calibrated rig it moves exactly two pieces of geometry — the character
+   * band the width solver aims at, and whether the framing multiplier applies —
+   * and otherwise only the wording of the advice. See `READER_READING_MEASURE`
+   * for why those two and no others. On an uncalibrated rig it also picks the
+   * guessed body size and the column rule: a reading window gets its target
+   * measure, capped by the width, where a prompter gets 68% of the width.
    */
   readingContext?: ReadingContext;
 }
@@ -305,6 +314,14 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   const columnFraction = usable(profile.overrides?.maxColumnFraction)
     ? clamp(profile.overrides.maxColumnFraction, 0.1, 1)
     : MAX_COLUMN_FRACTION;
+  /*
+   * The width a column may actually occupy — the same quantity `hardwareFitCheck`
+   * solves against, restated here because the column has to be re-solved when a
+   * pinned size changes what a `ch` is worth, and because an uncalibrated reading
+   * window is solved against it directly. Kept in one expression so the paths
+   * cannot drift: an override of the fraction is honoured in all of them.
+   */
+  const usableWidthPx = safeWidthPx * columnFraction;
 
   const fit = hardwareFitCheck({
     safeWidthPx,
@@ -333,10 +350,29 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
         ? UNCALIBRATED_READER_FONT_SIZE_PX
         : UNCALIBRATED_FONT_SIZE_PX;
 
+  /*
+   * A reading window the fit check declined to size — no physical scale, which
+   * is the ordinary case: `readerOpticalProfile` only has one when a prompter rig
+   * on the same panel lends it.
+   *
+   * It does NOT get the prompter's 68% guess. A share of the width has no
+   * ceiling, and a window can be dragged to 2560 px, where 68% at the reader's
+   * 30 px is over a hundred characters a line: the eye loses its place on every
+   * return sweep. It gets the reader's own target measure instead, bounded by
+   * what the window can hold at the calibrated fit's column fraction — so a wide
+   * window stops stretching the prose and a narrow one uses the margin the 68%
+   * guess left empty. The verdict stays `uncalibrated`: the SIZE is still a guess
+   * about a display nobody has measured, and only the measure is now principled.
+   */
+  const uncalibratedReader =
+    readingContext === 'reader' && !(fit.columnCh !== null && fit.columnCh > 0);
+
   const columnCh =
     fit.columnCh !== null && fit.columnCh > 0
       ? fit.columnCh
-      : uncalibratedColumnCh(safeWidthPx, bodyFontSizePx, metrics);
+      : uncalibratedReader
+        ? uncalibratedReaderColumnCh(usableWidthPx, bodyFontSizePx, targetCharacters, metrics)
+        : uncalibratedColumnCh(safeWidthPx, bodyFontSizePx, metrics);
 
   const angularContext: AngularContext | null = calibrated
     ? { distanceMm: distanceMm as number, mmPerCssPx: mmPerCssPx as number, metrics }
@@ -347,7 +383,7 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     : null;
 
   const charactersPerLine = charactersForWidthPx(
-    Math.min(safeWidthPx * columnFraction, columnCh * metrics.zeroAdvanceRatio * bodyFontSizePx),
+    Math.min(usableWidthPx, columnCh * metrics.zeroAdvanceRatio * bodyFontSizePx),
     bodyFontSizePx,
     metrics,
   );
@@ -385,13 +421,6 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    */
   const o = profile.overrides ?? {};
   const overriddenFields: string[] = [];
-  /*
-   * The width a column may actually occupy — the same quantity `hardwareFitCheck`
-   * solves against, restated here because the column has to be re-solved when a
-   * pinned size changes what a `ch` is worth. Kept in one expression so the two
-   * cannot drift: an override of the fraction is honoured in both places.
-   */
-  const usableWidthPx = safeWidthPx * columnFraction;
 
   /*
    * Three overrides act BEFORE the fit check — they change what the model is
@@ -460,11 +489,19 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    * panel binds first and the two agree, but a 1920px XL pinned to 64px would
    * run to ~49 characters against a profile that asked for 37, and a pinned
    * reader window to 90 against a 67-character target.
+   *
+   * An uncalibrated reading window asks for its target at EVERY size, larger
+   * pins included. Its column was never a fit's answer to keep — it is "the
+   * target, or what the window holds" — so carrying its `ch` count to a larger
+   * pin would grow the line in pixels until the width cap caught it, and a pin
+   * of 20 px and one of 96 px have to land on that same rule, re-run at the size
+   * actually rendered. A pinned `characters` is already inside the target.
    */
   const boughtWidthWithSize = finalFontSizePx > 0 && finalFontSizePx < bodyFontSizePx;
-  const requestedCharacters = boughtWidthWithSize
-    ? targetCharacters
-    : charactersForCh(columnCh, metrics);
+  const requestedCharacters =
+    boughtWidthWithSize || uncalibratedReader
+      ? targetCharacters
+      : charactersForCh(columnCh, metrics);
   const derivedColumnCh = chForCharacters(
     Math.min(widthCapCharacters, requestedCharacters),
     metrics,
@@ -733,7 +770,7 @@ function usableSigned(value: number | undefined): value is number {
 }
 
 /**
- * The column an uncalibrated rig gets: the historical 68% of the safe width,
+ * The column an uncalibrated PROMPTER gets: the historical 68% of the safe width,
  * expressed in `ch` so that the renderer has exactly one column mechanism
  * rather than a calibrated path and a legacy path that can drift apart.
  */
@@ -746,6 +783,26 @@ function uncalibratedColumnCh(
   const advancePx = metrics.zeroAdvanceRatio * fontSizePx;
   if (!(advancePx > 0)) return chForCharacters(READING_MEASURE.idealMin, metrics);
   return widthPx / advancePx;
+}
+
+/**
+ * The column an uncalibrated READING WINDOW gets: its target measure, or what
+ * the window can hold at this size if that is less.
+ *
+ * In characters of prose (the average advance), converted to `ch` (the zero's
+ * advance) only at the end, so the cap is a count a reader would recognise
+ * rather than a count of zeros. Both bounds come from the caller — the target
+ * already carries `overrides.characters`, and the usable width already carries
+ * `overrides.maxColumnFraction` — so this decides nothing of its own.
+ */
+function uncalibratedReaderColumnCh(
+  usableWidthPx: number,
+  fontSizePx: number,
+  targetCharacters: number,
+  metrics: FontMetrics,
+): number {
+  const availableCharacters = charactersForWidthPx(usableWidthPx, fontSizePx, metrics);
+  return chForCharacters(Math.min(targetCharacters, availableCharacters), metrics);
 }
 
 /**

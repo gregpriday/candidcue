@@ -29,7 +29,8 @@
   import StatusPill from '../components/StatusPill.svelte';
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
-  import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
+  import { chooseStageDisplay } from '../lib/start-take';
+  import { stagePreviewSettingsFromSettings } from '../services/stage-envelope';
   import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import { displayNumbers, identificationMatches } from '../lib/display-numbers';
   import {
@@ -86,9 +87,11 @@
     activeOpticalProfile,
     opticalRigsForDisplay,
     panelMirrorFor,
+    readerThemeFor,
     withOpticalProfile,
     withoutOpticalProfile,
     withPanelMirror,
+    type ReaderTheme,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
   import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
@@ -106,7 +109,8 @@
     type StageEscapePayload,
     type TextIntensity,
   } from '../../shared/contracts';
-  import { presentationModeShortcutLabel } from '../lib/shortcuts';
+  import { isMacPlatform, presentationModeShortcutLabel } from '../lib/shortcuts';
+  import { formatAccelerator } from '../lib/commands';
   import { automaticProfile, discoverProfile } from '../../shared/optical-discovery';
   import {
     DEFAULT_BOTTOM_FADE_LINES,
@@ -575,8 +579,14 @@
    * uses. Deriving it — rather than assembling one for the preview — is what
    * makes the window trustworthy: there is no arrangement of settings that can
    * look one way here and another way when the presenter hits Present.
+   *
+   * With one exception, and it is the glass: the preview fills the stage
+   * display, so it is never drawn on a reading window's paper — see
+   * `stagePreviewSettingsFromSettings`.
    */
-  const previewStageSettings = $derived(stageSettingsFromSettings($settings, effectiveDisplay));
+  const previewStageSettings = $derived(
+    stagePreviewSettingsFromSettings($settings, effectiveDisplay),
+  );
 
   /**
    * Push every change straight to the glass.
@@ -1233,6 +1243,17 @@
     readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
     fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
   };
+
+  /**
+   * The reading window owns these four in its own way: not through a rig
+   * somebody can open, but through the reader preference, which is set in
+   * Reading appearance during a read. Named separately so the sliders can say
+   * where that is rather than "controlled by the reading window", which sends
+   * somebody looking for a control on this screen.
+   */
+  const readerOwnsGeometry = $derived($settings.stage.presentationMode === 'reader');
+  /** The size keys as this platform writes them — the native menu's own spelling. */
+  const readerSizeKeys = `${formatAccelerator('Mod+=', isMacPlatform())} and ${formatAccelerator('Mod+-', isMacPlatform())}`;
 
   /**
    * Who decides the four geometry fields right now — or null for nobody.
@@ -3380,7 +3401,9 @@
               {format}
               disabled={owned}
               description={owner
-                ? `Controlled by ${owner.label} — the number here is the fallback for a display CandidCue cannot size, not what a take prompts at.`
+                ? readerOwnsGeometry
+                  ? `A reading window does not use this: during a read, its text is set in Reading appearance, and ${readerSizeKeys} change its size. Here it is the prompter's fallback.`
+                  : `Controlled by ${owner.label} — the number here is the fallback for a display CandidCue cannot size, not what a take prompts at.`
                 : undefined}
               onchange={(next) => void patchSettings('teleprompter', { [key]: next })}
             />
@@ -3497,8 +3520,37 @@
           />
           <p class="hint-line">
             How bright the words burn over the stage's black field. A calibrated rig carries its
-            own choice, made at the glass; this is what everything else runs with.
+            own choice, made at the glass; this is what everything else runs with, reading windows
+            included — until you pick an intensity for them in Reading appearance.
           </p>
+          <!--
+            The one field choice there is, and it is a reading window's.
+
+            A prompter stays black whatever this says — a bright field pours
+            light onto the beamsplitter — so the control names the surface it
+            reaches rather than pretending to be a stage background. Reading
+            appearance offers the same choice during a read, and its Done saves
+            here. Absent means Dark: nothing is written until somebody picks.
+          -->
+          <div class="control-block">
+            <span class="control-label">Reading window appearance</span>
+            <SegmentedControl
+              label="Reading window appearance"
+              value={readerThemeFor($settings.teleprompter)}
+              options={[
+                { value: 'dark', label: 'Dark' },
+                { value: 'paper', label: 'Paper' },
+              ]}
+              onchange={(value) =>
+                void patchSettings('teleprompter', {
+                  readerTheme: (value === 'paper' ? 'paper' : 'dark') satisfies ReaderTheme,
+                })}
+            />
+            <p class="hint-line">
+              Reading windows only — light text on black, or dark text on warm paper. A
+              teleprompter take always stays black.
+            </p>
+          </div>
           <!--
             The ceiling was 160px, which is not a taste limit — it was short of
             what the product's own hardware needs. A Prompter XL at its rated
@@ -3640,11 +3692,12 @@
             onchange={(value) => void patchSettings('teleprompter', { semanticLineBreaks: value })}
           />
           <p class="hint-line">
-            On a wide column — about 48 characters a line and up, which a reader window or a
-            large panel gives you — the stage ends each line where a phrase ends rather than at
-            the last word that fits, so the sweep back to the left edge lands somewhere natural.
-            A small prompter panel holds too few words a line for that to read well, so it wraps
-            the way a browser does whatever this says. Turn it off to wrap that way everywhere.
+            Uses phrase boundaries when the column is wide enough — about 48 characters a line
+            or more, which most reading windows are. The stage then ends each line where a phrase
+            ends rather than at the last word that fits, so the sweep back to the left edge lands
+            somewhere natural. A teleprompter sized automatically never has a column that wide,
+            so it wraps the way a browser does whatever this says. Turn it off to wrap that way
+            everywhere.
           </p>
           <!-- #218 removed "When a session ends" and "Hide the pointer on the
                stage". Nothing read the first, and a take runs in the control

@@ -44,6 +44,28 @@
     linePitchMeasured: boolean;
     /** Median characters per rendered line, or null before anything is measured. */
     charactersPerLine: number | null;
+    /**
+     * The body size the column is actually drawn at.
+     *
+     * A reading window re-resolves its own geometry against the window with the
+     * measured face, so this can differ from the size control composed against
+     * the whole display — and the reader's size controls have to step from what
+     * is on the glass, or "smaller" can make the text larger. Optional because
+     * the separate stage window's handshake predates it.
+     */
+    bodyFontSizePx?: number;
+  }
+
+  /** What a suggested place is, in words the reader can recognise. */
+  export interface TokenDescription {
+    /** The start of the sentence the token is in — where "read from here" goes. */
+    sentenceStartToken: number;
+    /** The first words of that sentence, as written. */
+    excerpt: string;
+    /** The nearest heading above it, or null. */
+    section: string | null;
+    /** Where it is relative to the glass now. */
+    direction: 'above' | 'below' | 'visible';
   }
 </script>
 
@@ -67,7 +89,8 @@
     VIEWPORT_HINT_INTERVAL_MS,
     VIEWPORT_HINT_REFRESH_MS,
   } from '../../shared/contracts';
-  import { resolveStageGeometry } from '../../shared/optical-resolve';
+  import { DEFAULT_LINE_HEIGHT, resolveStageGeometry } from '../../shared/optical-resolve';
+  import { FALLBACK_ZERO_ADVANCE_RATIO, normalizeFontMetrics } from '../../shared/optics';
   import { emitStageEvent } from '../events';
   import {
     computeReadingBand,
@@ -469,9 +492,19 @@
    * It cannot move a spoken token — `projectForPerformance` only touches blocks
    * that carry none — which is what makes it safe to apply after the compiler
    * has assigned the indices the aligner tracks against.
+   *
+   * A reading window always shows the whole document. The chips exist for a
+   * nine-inch glass read from two metres; a reading window is read at a desk,
+   * where the table is something to read and REFER TO TABLE is a table that went
+   * missing. Practice and Diagnostic Take still select the same view on the
+   * prompter, and a prompter take is unchanged.
    */
   const performanceMode = $derived<PerformanceMode>(
-    rehearsal || (settings.stageMode ?? 'clean') === 'diagnostic' ? 'rehearsal' : 'take',
+    rehearsal ||
+      (settings.stageMode ?? 'clean') === 'diagnostic' ||
+      settings.readingContext === 'reader'
+      ? 'rehearsal'
+      : 'take',
   );
 
   /**
@@ -915,6 +948,20 @@
    */
   const STRONG_SENTENCE_END = /[.!?…][)\]"'”’]*$/;
 
+  /** How many of the reader's own words an off-screen suggestion quotes. */
+  const EXCERPT_WORDS = 9;
+
+  /** A block's words as plain text, for naming the section a place is in. */
+  function plainTextOf(nodes: readonly SafeRenderNode[]): string {
+    let out = '';
+    for (const node of nodes) {
+      if (node.type === 'text') out += node.text;
+      else if (node.type === 'link') out += plainTextOf(node.label);
+      else if (node.type === 'line_break') out += ' ';
+    }
+    return out.replace(/\s+/g, ' ');
+  }
+
   /** Rendered text per spoken token, for punctuation and character counting. */
   const tokenTextByIndex = $derived.by(() => {
     const out = new Map<number, string>();
@@ -936,9 +983,28 @@
     return out;
   });
 
+  /*
+   * The gap is horizontal, and in a reading window it is NOT sized off the line
+   * pitch.
+   *
+   * It is expressed in lines, and on a prompter the pitch is a constant of the
+   * rig, so `lines × pitch` is a fixed number of pixels. A reading window lets
+   * the reader change the line spacing, and then the same multiplication made a
+   * VERTICAL choice widen every sentence gap and re-wrap the paragraph under
+   * them. So the reader holds the pitch the gap was tuned against — the
+   * resolver's default line height at the size actually rendered — which is
+   * today's value exactly at the default, and stays put when spacing moves.
+   *
+   * The prompter keeps `linePx`: its line height is fixed per rig, and its
+   * geometry is the one every benchmark number was measured against.
+   */
+  const microgapPitchPx = $derived(
+    readerOptics ? readerOptics.bodyFontSizePx * DEFAULT_LINE_HEIGHT : linePx,
+  );
+
   const microgapPx = $derived(
     optics && optics.sentenceMicrogapLines > 0
-      ? Math.max(0, optics.sentenceMicrogapLines) * linePx
+      ? Math.max(0, optics.sentenceMicrogapLines) * microgapPitchPx
       : 0,
   );
 
@@ -969,6 +1035,28 @@
   });
 
   /**
+   * What one `ch` of the resolved column is worth — and it depends on WHO
+   * resolved it.
+   *
+   * `columnCh` is a pixel width the resolver divided by its own zero advance, so
+   * it has to be multiplied back by the same one or the column renders at a
+   * width nobody chose. Control resolves the envelope against the DIN fallbacks
+   * (it cannot measure a font it does not render), so 0.55 is exact for every
+   * prompter take. A reading window resolves HERE, against the measured face,
+   * and Atkinson Hyperlegible Next's "0" is about 0.653 em: rebuilt with 0.55, a
+   * reader column drew at 84% of its resolved width, and the character count
+   * the resolver reported described a line about 19% longer than the one drawn.
+   *
+   * Through `normalizeFontMetrics`, as the resolver does, so a measurement it
+   * refused is refused here too and both sides fall back to the same 0.55.
+   * Gated on `readerOptics` rather than on the reading context: a reading window
+   * with no profile renders the envelope's column, which was resolved at 0.55.
+   */
+  const chAdvanceRatio = $derived(
+    readerOptics ? normalizeFontMetrics(fontMetrics).zeroAdvanceRatio : FALLBACK_ZERO_ADVANCE_RATIO,
+  );
+
+  /**
    * The column, measured in characters rather than in a share of the window.
    *
    * A viewport percentage means a different number of characters per line on
@@ -979,7 +1067,7 @@
    */
   const columnWidthPx = $derived(
     optics
-      ? Math.min(safeRect.width, optics.columnCh * 0.55 * optics.bodyFontSizePx)
+      ? Math.min(safeRect.width, optics.columnCh * chAdvanceRatio * optics.bodyFontSizePx)
       : (vw * settings.columnWidthPercent) / 100,
   );
 
@@ -1253,6 +1341,10 @@
    */
   $effect(() => {
     void performanceMode;
+    // A reading window draws headings at their own scale with room above them,
+    // and a prompter does not — so flipping the context moves heading heights
+    // even when the projection stays `rehearsal` (Practise, Diagnostic Take).
+    void settings.readingContext;
     untrack(() => {
       if (measuredHeights.size === 0) return;
       measuredHeights.clear();
@@ -1626,6 +1718,7 @@
       linePitchPx: measuredLinePitchPx ?? linePx,
       linePitchMeasured: measuredLinePitchPx !== null,
       charactersPerLine: measuredCharactersPerLine,
+      bodyFontSizePx: effective.fontSizePx,
     };
   }
 
@@ -3354,7 +3447,7 @@
    * Manual navigation (spec §16.5, companion §30.6): immediate authority,
    * automatic correction suspended for a short grace interval.
    */
-  export function manualScrollBy(deltaPx: number) {
+  export function manualScrollBy(deltaPx: number, fallbackAnchorToken: number | null = null) {
     const y = clamp(scrollY + deltaPx, 0, maxScroll);
     const now = performance.now();
     setScroll(y);
@@ -3363,8 +3456,14 @@
      * where the presenter now is. It is handed to the engine so a relayout
      * arriving during the hold preserves their position rather than the
      * aligner's — see `manualOverride`.
+     *
+     * Home and End supply their own for when the reading line lands on no
+     * spoken line. It has to be the SAME token the stage then reports to
+     * control: the engine recognises the manual anchor that comes back as the
+     * hand's own echo only by that token, and an echo it does not recognise is
+     * spent as a re-anchor that undoes where the key put the document.
      */
-    engine.manualOverride(y, now, readingAnchorToken());
+    engine.manualOverride(y, now, readingAnchorToken() ?? fallbackAnchorToken);
     manualUntilMs = now + MANUAL_GRACE_MS;
     // Their hand is on the script; the opening has nothing left to say about
     // where it should be, now or after any later relayout. And unlike the other
@@ -3471,6 +3570,145 @@
   /** Where the document currently sits, for measuring a gesture's real travel. */
   export function scrollPositionPx(): number {
     return scrollY;
+  }
+
+  /** The furthest the document can be scrolled. */
+  export function maxScrollPx(): number {
+    return maxScroll;
+  }
+
+  /**
+   * Where End should leave the document.
+   *
+   * The script's last spoken line ON the reading line — not the bottom of the
+   * scroll range, which runs on past it by the run-out and would leave the
+   * mark in blank space. Two things push it further:
+   *
+   * - an ending that is not spoken (a table, an image, a closing note) and is
+   *   taller than what the glass shows below the mark. End then goes as far as
+   *   it takes to show the foot of the document and the "End of script" under
+   *   it, because the reader asked for the end, not the last sentence;
+   * - nothing else: it never goes past the end of the range.
+   *
+   * On a virtualized script the last block is usually not measured yet, so the
+   * last line is placed from block geometry instead — the estimate of the
+   * final block's height is the only error, and every block before it keeps
+   * the offset it already had. The tracker does not depend on that estimate:
+   * End re-seeds it from `scriptEndTokens` when the mark lands on no line.
+   */
+  export function endOfScriptScrollPx(): number {
+    const count = performanceBlocks.length;
+    if (count === 0) return 0;
+    const map = lineMap;
+    const readingLineY = map && map.valid ? map.readingLineStartY : readingBand.centerPx + lineEntryPx;
+    const ends = spokenEnds();
+    let spokenTarget = 0;
+    if (ends.lastBlock >= 0) {
+      const last = map && map.valid ? map.lines[map.lines.length - 1] : undefined;
+      const lastLineTopY =
+        last && last.lastTokenIndex >= ends.lastToken
+          ? last.topY
+          : (offsets[ends.lastBlock + 1] ?? 0) - linePx;
+      spokenTarget = lastLineTopY - readingLineY + 1;
+    }
+    // The foot of the document plus the marker that hangs below it.
+    const documentFootY = (offsets[count] ?? 0) + gapPx * 0.5 + linePx;
+    const showFoot = documentFootY - vh;
+    return Math.max(0, Math.min(maxScroll, Math.max(spokenTarget, showFoot)));
+  }
+
+  /**
+   * The two ends of the spoken script, for Home and End to re-seed the tracker
+   * when the reading line cannot: the first spoken token, and the start of the
+   * last sentence. Null for a script with nothing spoken.
+   */
+  export function scriptEndTokens(): { first: number | null; lastSentenceStart: number | null } {
+    const ends = spokenEnds();
+    if (ends.lastBlock < 0) return { first: null, lastSentenceStart: null };
+    const sentence = sentenceForToken(ends.lastToken);
+    return { first: ends.firstToken, lastSentenceStart: sentence?.startTokenIndex ?? ends.lastToken };
+  }
+
+  /** Where speech starts and stops in the document, by token and by block. */
+  function spokenEnds(): { firstToken: number; lastToken: number; lastBlock: number } {
+    let firstToken = Number.POSITIVE_INFINITY;
+    let lastToken = -1;
+    let lastBlock = -1;
+    performanceBlocks.forEach((block, index) => {
+      if (typeof block.startTokenIndex !== 'number' || typeof block.endTokenIndex !== 'number') return;
+      // Inclusive at both ends: a one-word block starts and ends on its word.
+      if (block.endTokenIndex < block.startTokenIndex) return;
+      if (block.startTokenIndex < firstToken) firstToken = block.startTokenIndex;
+      if (block.endTokenIndex > lastToken) {
+        lastToken = block.endTokenIndex;
+        lastBlock = index;
+      }
+    });
+    return { firstToken: Number.isFinite(firstToken) ? firstToken : 0, lastToken, lastBlock };
+  }
+
+  /**
+   * The spoken-token range on the glass now, from the measured lines — the same
+   * question the viewport hint asks, answered for the stage's own use. Null
+   * when there is no honest answer (no valid map, no viewport).
+   */
+  function visibleTokenRange(): [number, number] | null {
+    const map = lineMap;
+    if (!map || !map.valid || vh === 0) return null;
+    let first = Number.POSITIVE_INFINITY;
+    let last = Number.NEGATIVE_INFINITY;
+    for (const line of map.lines) {
+      if (line.bottomY < scrollY || line.topY > scrollY + vh) continue;
+      if (line.firstTokenIndex < first) first = line.firstTokenIndex;
+      if (line.lastTokenIndex > last) last = line.lastTokenIndex;
+    }
+    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return null;
+    return [first, last];
+  }
+
+  /**
+   * Describe a script position for the off-screen suggestion: the sentence it
+   * starts, a short excerpt of the reader's own words, the section it is in,
+   * and whether it lies above or below the glass.
+   *
+   * Pure lookup over what this layer already knows. It never judges whether
+   * the place is a good match — that is the engine's decision, and it was made
+   * before the token arrived here.
+   */
+  export function describeToken(token: number): TokenDescription | null {
+    if (!Number.isFinite(token)) return null;
+    const at = Math.max(0, Math.round(token));
+    const sentence = sentenceForToken(at);
+    const start = sentence ? sentence.startTokenIndex : at;
+    const words: string[] = [];
+    for (let i = start; words.length < EXCERPT_WORDS; i++) {
+      const word = tokenTextByIndex.get(i);
+      if (word === undefined) break;
+      words.push(word);
+      if (sentence && i >= sentence.endTokenIndex) break;
+    }
+    if (words.length === 0) return null;
+    const truncated = sentence ? start + words.length - 1 < sentence.endTokenIndex : false;
+    let section: string | null = null;
+    const blockIndex = blockIndexForToken(at);
+    if (blockIndex !== undefined) {
+      for (let i = blockIndex; i >= 0; i--) {
+        const candidate = performanceBlocks[i];
+        if (candidate?.kind !== 'heading') continue;
+        const text = plainTextOf(candidate.renderNodes).trim();
+        if (text) section = text;
+        break;
+      }
+    }
+    const range = visibleTokenRange();
+    const direction: TokenDescription['direction'] =
+      range === null ? 'below' : at > range[1] ? 'below' : at < range[0] ? 'above' : 'visible';
+    return {
+      sentenceStartToken: start,
+      excerpt: words.join(' ') + (truncated ? '…' : ''),
+      section,
+      direction,
+    };
   }
 
   /** Operator diagnostics (§64) — never rendered on the presenter's glass. */
@@ -3631,10 +3869,26 @@
           showCues={settings.showCues}
           {gapPx}
           breakAfterTokens={wrapPlan.breakAfterTokens}
+          reader={settings.readingContext === 'reader'}
         />
       {/each}
       {#if renderWindow.trailingSpacePx > 0}
         <div class="spacer" style:height="{renderWindow.trailingSpacePx}px"></div>
+      {/if}
+      <!--
+        The end of the script, said quietly, in a reading window.
+
+        Without it the last line reached the reading mark and the page simply
+        stopped, which reads the same as a stage that is waiting for you. It is
+        drawn in the run-out below the last block at zero height, so it adds no
+        line to the map, no token, and no scroll range — the document is exactly
+        as long as it was — and it carries no `data-t` or `data-block-id`, so the
+        measurement pass never sees it. A prompter keeps its plain black run-out.
+      -->
+      {#if settings.readingContext === 'reader' && renderWindow.endIndex >= performanceBlocks.length}
+        <div class="end-of-script">
+          <p class="end-of-script-label" style:top="{gapPx * 0.5}px">End of script</p>
+        </div>
       {/if}
     </div>
   </div>
@@ -3659,6 +3913,10 @@
     the one that can be dragged off by paragraph gaps. It is also the number the
     padding and the fades are already solved against, so the cue cannot end up
     describing a pitch the rest of the vertical layout does not use.
+
+    `hugColumn` in a reading window: its column is capped at a reading measure,
+    so the margins grow with the window, and a tick centred in one would drift
+    hundreds of pixels from the text it marks.
   -->
   <ReadingCue
     style={settings.readingCue ?? 'ticks'}
@@ -3668,6 +3926,7 @@
     hollow={cueHollow}
     sizePx={capHeightPx}
     linePitchPx={linePx}
+    hugColumn={settings.readingContext === 'reader'}
   />
 
   <!-- Focus fades (layer 6): quiet ramps into the background at both edges. -->
@@ -3685,6 +3944,24 @@
     inset: 0;
     overflow: hidden;
     color: var(--stage-text);
+  }
+
+  /* Zero height, so the run-out below the last block is still exactly the
+     run-out the padding solved for; the label hangs into it. */
+  .end-of-script {
+    position: relative;
+    height: 0;
+  }
+  .end-of-script-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.8em);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    /* 74%: clears 4.5:1 at the smallest reader size on Paper, Soft included. */
+    color: color-mix(in srgb, var(--stage-text) 74%, transparent);
   }
 
   /* §61 step 1: nonessential visual effects off under frame pressure.

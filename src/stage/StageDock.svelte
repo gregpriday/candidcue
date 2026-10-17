@@ -251,15 +251,19 @@
    * the host handed in and `menu-nav`'s arithmetic walks this array to work out
    * what the arrow keys do. A row that is not offered may not occupy an index.
    *
-   * `kind` separates the two ARIA shapes below: a `menuitemcheckbox` reports
-   * `aria-checked` and flips a mode where it stands, and the panel row is a
-   * plain `menuitem` that says `aria-haspopup="dialog"` because the level it
-   * opens is a dialog with sliders in it — form controls inside `role="menu"`
-   * lose their own arrow keys to the menu's.
+   * `kind` separates the three ARIA shapes below: a `menuitemcheckbox` reports
+   * `aria-checked` and flips a mode where it stands; the panel row is a plain
+   * `menuitem` that says `aria-haspopup="dialog"` because the level it opens is
+   * a dialog with sliders in it — form controls inside `role="menu"` lose their
+   * own arrow keys to the menu's; and an action row is a plain `menuitem` that
+   * does one thing and closes the menu, the way any menu command does.
    */
   type MenuRow =
     | { kind: 'panel'; id: 'appearance'; label: string; select: () => void }
-    | { kind: 'checkbox'; id: 'present' | 'follow'; label: string; checked: boolean; select: () => void };
+    | { kind: 'action'; id: 'present'; label: string; select: () => void }
+    | { kind: 'checkbox'; id: 'follow' | 'present'; label: string; checked: boolean; select: () => void };
+
+  const reading = $derived(presentationMode === 'reader');
 
   const rows = $derived<MenuRow[]>([
     ...(appearancePanel
@@ -268,21 +272,43 @@
             kind: 'panel' as const,
             id: 'appearance' as const,
             // The ellipsis is the desktop convention it has always been: this
-            // row asks for more input rather than doing something.
-            label: 'Adjust the prompter…',
+            // row asks for more input rather than doing something. A reading
+            // window is not a prompter, so it is not called one here.
+            label: reading ? 'Reading appearance…' : 'Adjust the prompter…',
             select: openAppearance,
           },
         ]
       : []),
+    /*
+     * IN A READING WINDOW, NAMED FOR WHAT IT DOES — WHICH IS NOT "FILL THE DISPLAY".
+     *
+     * From a reading window this row switches the take's presentation MODE: it
+     * can move the window onto the pinned prompter panel, re-resolve the optics
+     * for that panel and apply that panel's saved mirroring. Nobody reading
+     * "fill the display" expects their script to jump to another monitor and
+     * turn back to front, so there it names the switch — an action, not a
+     * state, which is why it is a plain `menuitem` with no `aria-checked`.
+     *
+     * A prompter take keeps the ticked "Fill the display" it has always had: it
+     * IS filling the display, unticking it gives the window back, and a control
+     * presenters use at the glass does not change shape under them.
+     */
     ...(onpresentationtoggle
       ? [
-          {
-            kind: 'checkbox' as const,
-            id: 'present' as const,
-            label: 'Fill the display',
-            checked: presentationMode === 'prompter',
-            select: () => onpresentationtoggle?.(),
-          },
+          reading
+            ? {
+                kind: 'action' as const,
+                id: 'present' as const,
+                label: 'Switch to teleprompter',
+                select: () => onpresentationtoggle?.(),
+              }
+            : {
+                kind: 'checkbox' as const,
+                id: 'present' as const,
+                label: 'Fill the display',
+                checked: true,
+                select: () => onpresentationtoggle?.(),
+              },
         ]
       : []),
     {
@@ -430,13 +456,23 @@
   /**
    * A checkbox row flips its mode and the menu STAYS OPEN.
    *
-   * These are settings, not commands: "fill the display" and "follow my voice"
-   * are things somebody may want to see take effect and then reconsider, and a
-   * menu that closes on every tick makes reconsidering a second hunt for the
-   * cog. The panel row is the other way round — it replaces the menu with the
-   * level it opens — which is why the two paths are not one.
+   * "Follow voice" is a setting, not a command: somebody may want to see it
+   * take effect and then reconsider, and a menu that closes on every tick makes
+   * reconsidering a second hunt for the cog. The other two rows are the other
+   * way round. The panel row replaces the menu with the level it opens, and the
+   * action row closes it — switching between a reading window and the
+   * teleprompter reshapes the window, and can move it to another panel, so a
+   * menu left hanging open over the result would be hanging from a place the
+   * window has just left.
    */
   function chooseRow(row: MenuRow): void {
+    if (row.kind === 'action') {
+      // Focus back on the trigger first, as for the panel row: the row is
+      // about to unmount, and focus dropped on `<body>` is focus nobody can see.
+      closeMenu(true);
+      row.select();
+      return;
+    }
     if (row.kind === 'panel') {
       /*
        * Focus goes back to the TRIGGER before the level below opens, and that
@@ -702,7 +738,8 @@
       THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
 
       Everything behind it is a verb somebody reaches for and then forgets:
-      adjust the prompter, take the display, hand it back. One of them is not —
+      adjust the appearance, switch to the teleprompter and back. One of them
+      is not —
       voice following sets a MODE, and a mode that hides itself is how a
       presenter ends up staring at a script that will not move, with the control
       that explains it invisible until they happen to move the mouse.
@@ -1005,8 +1042,14 @@
     height: 16px;
   }
 
+  /*
+   * Every colour below is a role with today's dark literal as its fallback, so
+   * a dark stage draws exactly what it always did and a paper reading window
+   * swaps them all at once (the paper block in `StageApp.svelte`). The roles
+   * that already existed — `--stage-chrome-*` — are declared for both.
+   */
   .menu-trigger {
-    color: rgb(245 243 239 / 72%);
+    color: var(--stage-dock-icon, rgb(245 243 239 / 72%));
   }
 
   /*
@@ -1020,16 +1063,16 @@
    * pixels on a non-Retina panel.
    */
   .menu-trigger.flagged {
-    color: #e8b661;
-    background: rgb(232 182 97 / 12%);
-    border-color: rgb(232 182 97 / 38%);
+    color: var(--stage-flag, #e8b661);
+    background: var(--stage-flag-bg, rgb(232 182 97 / 12%));
+    border-color: var(--stage-flag-border, rgb(232 182 97 / 38%));
   }
 
   .menu-trigger.flagged:hover,
   .menu-trigger.flagged:focus-visible {
-    color: #f2c97e;
-    background: rgb(232 182 97 / 18%);
-    border-color: rgb(232 182 97 / 52%);
+    color: var(--stage-flag-hover, #f2c97e);
+    background: var(--stage-flag-bg-hover, rgb(232 182 97 / 18%));
+    border-color: var(--stage-flag-border-hover, rgb(232 182 97 / 52%));
   }
 
   .flag {
@@ -1039,35 +1082,35 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #e8b661;
+    background: var(--stage-flag, #e8b661);
     /* A ring in the dock's own material, so the disc reads as a mark ON the
        button rather than as a speck of script showing through it. */
-    box-shadow: 0 0 0 2px rgb(12 14 18 / 92%);
+    box-shadow: 0 0 0 2px var(--stage-flag-ring, rgb(12 14 18 / 92%));
   }
 
   .end {
     /* Quietest of the three at rest. It is not tinted at all until somebody is
        actually pointing at it: a persistent red mark in the corner of a take
        would be the loudest thing on a black field, reporting nothing. */
-    color: rgb(245 243 239 / 58%);
+    color: var(--stage-dock-end, rgb(245 243 239 / 58%));
   }
 
   .dock-button:hover,
   .dock-button:focus-visible {
-    background: rgb(24 28 35 / 88%);
-    border-color: rgb(255 255 255 / 30%);
-    color: #fff;
+    background: var(--stage-chrome-bg-hover, rgb(24 28 35 / 88%));
+    border-color: var(--stage-chrome-border-hover, rgb(255 255 255 / 30%));
+    color: var(--stage-chrome-text-hover, #fff);
   }
 
   .end:hover,
   .end:focus-visible {
-    color: #ef7168;
-    background: rgb(239 113 104 / 12%);
-    border-color: rgb(239 113 104 / 38%);
+    color: var(--stage-danger, #ef7168);
+    background: var(--stage-danger-bg, rgb(239 113 104 / 12%));
+    border-color: var(--stage-danger-border, rgb(239 113 104 / 38%));
   }
 
   .dock-button:focus-visible {
-    outline: 2px solid rgb(245 243 239 / 70%);
+    outline: 2px solid var(--stage-focus-ring, rgb(245 243 239 / 70%));
     outline-offset: 2px;
   }
 
@@ -1160,7 +1203,7 @@
     border-radius: var(--stage-chrome-radius);
     /* The same slightly-more-opaque glass the confirmation uses. This one
        carries prose over moving white type too. */
-    background: rgb(12 14 18 / 90%);
+    background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
     -webkit-backdrop-filter: blur(18px) saturate(130%);
     backdrop-filter: blur(18px) saturate(130%);
@@ -1180,7 +1223,7 @@
     border: none;
     border-radius: 8px;
     background: transparent;
-    color: #f5f3ef;
+    color: var(--stage-chrome-text-strong, #f5f3ef);
     font: inherit;
     font-size: 13px;
     font-weight: 500;
@@ -1204,7 +1247,7 @@
     outline: none;
   }
   .menu-row.active {
-    background: rgb(255 255 255 / 12%);
+    background: var(--stage-chrome-highlight, rgb(255 255 255 / 12%));
   }
 
   .menu-mark {
@@ -1227,7 +1270,7 @@
     flex: 0 0 auto;
     width: 14px;
     height: 14px;
-    color: rgb(245 243 239 / 52%);
+    color: var(--stage-chrome-text-faint, rgb(245 243 239 / 52%));
   }
 
   /*
@@ -1253,7 +1296,7 @@
     /* A little more opaque than the dock: this one carries prose and two
        buttons over moving white type, and glass that reads is worth more here
        than glass that is see-through. */
-    background: rgb(12 14 18 / 90%);
+    background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
     -webkit-backdrop-filter: blur(18px) saturate(130%);
     backdrop-filter: blur(18px) saturate(130%);
@@ -1264,14 +1307,14 @@
     margin: 0;
     font-size: 14px;
     font-weight: 650;
-    color: #f5f3ef;
+    color: var(--stage-chrome-text-strong, #f5f3ef);
   }
 
   .confirm-body {
     margin: 4px 0 0;
     font-size: 12px;
     line-height: 1.4;
-    color: rgb(245 243 239 / 62%);
+    color: var(--stage-chrome-text-muted, rgb(245 243 239 / 62%));
   }
 
   .confirm-actions {
@@ -1292,26 +1335,26 @@
   }
 
   .confirm-cancel {
-    border-color: rgb(255 255 255 / 18%);
+    border-color: var(--stage-chrome-control-border, rgb(255 255 255 / 18%));
     background: transparent;
-    color: rgb(245 243 239 / 88%);
+    color: var(--stage-chrome-text, rgb(245 243 239 / 88%));
   }
   .confirm-cancel:hover {
-    background: rgb(255 255 255 / 10%);
+    background: var(--stage-chrome-control-hover, rgb(255 255 255 / 10%));
   }
 
   .confirm-end {
-    border-color: rgb(239 113 104 / 55%);
-    background: rgb(239 113 104 / 18%);
-    color: #ffb4a2;
+    border-color: var(--stage-danger-strong-border, rgb(239 113 104 / 55%));
+    background: var(--stage-danger-strong-bg, rgb(239 113 104 / 18%));
+    color: var(--stage-danger-text, #ffb4a2);
   }
   .confirm-end:hover {
-    background: rgb(239 113 104 / 30%);
-    color: #fff;
+    background: var(--stage-danger-strong-bg-hover, rgb(239 113 104 / 30%));
+    color: var(--stage-danger-text-hover, #fff);
   }
 
   .confirm-actions button:focus-visible {
-    outline: 2px solid rgb(245 243 239 / 70%);
+    outline: 2px solid var(--stage-focus-ring, rgb(245 243 239 / 70%));
     outline-offset: 2px;
   }
 
@@ -1342,11 +1385,11 @@
   /* Where the glass cannot be made, the material is simply darker. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .dock-button {
-      background: rgb(12 14 18 / 92%);
+      background: var(--stage-chrome-bg-solid, rgb(12 14 18 / 92%));
     }
     .menu-popover,
     .confirm-popover {
-      background: rgb(12 14 18 / 96%);
+      background: var(--stage-chrome-popover-bg-solid, rgb(12 14 18 / 96%));
     }
   }
 </style>

@@ -888,6 +888,12 @@ import type { PresentationMode } from '../services/settings-types';
       // Where a prompter take actually opens when that panel is connected
       // (#302) — read here so pinning another panel restarts the watcher too.
       pinnedFingerprint: $settings.stage.displayFingerprint,
+      // Where a reading take actually opens: back at the frame the last one
+      // was left at, when "Restore windows" is on. Read here for the same
+      // reason — a take ending rewrites the frame, and toggling the setting
+      // decides whether it counts, so either has to restart the watcher.
+      readerFrame: $settings.stage.readerFrame,
+      restoreWindows: $settings.general.restoreWindows,
     }),
   );
 

@@ -394,6 +394,16 @@ function shimBody(config: ShimConfig): void {
     setWindowDisplay(fingerprint: string | null) {
       this.windowDisplay = fingerprint;
     },
+    /**
+     * Test seam: the next alignment sequence number, off the same counter the
+     * shim's own manual-anchor snapshots use. A spec that injects snapshots
+     * with numbers of its own either has them dropped as stale or leaves every
+     * later shim response behind them — and then never sees a move land.
+     */
+    nextAlignmentSeq(): number {
+      alignment.seq += 1;
+      return alignment.seq;
+    },
     /** Test seam: force a command to reject with the given AppError (or clear). */
     setFail(command: string, error: unknown) {
       if (error === null || error === undefined) delete this.fail[command];

@@ -21,6 +21,7 @@ import {
   RIG_PRESETS,
   opticalProfileFieldsForPreset,
 } from '../../shared/optical-rig-presets';
+import { READER_READING_MEASURE } from '../../shared/optics';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 
 export type { FollowFeel, FollowingSettings } from '../lib/follow-profiles';
@@ -53,6 +54,29 @@ export function migrateStageMode(stored: unknown): PresentationMode {
   }
   if (section.fullscreen === false) return 'reader';
   return 'prompter';
+}
+
+/**
+ * How a READING WINDOW is drawn: light type on black, or dark type on paper.
+ *
+ * A reading window only. A teleprompter take is always the black field, for
+ * the reason `src/styles/stage.css` sets out — a bright full-screen field pours
+ * light onto the beamsplitter — and `stageSettingsFromSettings` never composes
+ * a prompter in anything else, whatever is stored here.
+ */
+export type ReaderTheme = 'dark' | 'paper';
+
+/**
+ * The reading-window theme a stored teleprompter section asks for.
+ *
+ * Validated at the point of use rather than on the way in, because the
+ * teleprompter section is overlay-backed and `mergeSection` spreads whatever a
+ * stored copy holds. Only a stored `'paper'` opts in; absent, misspelt, or a
+ * value from some later build all mean dark, which is what every reading
+ * window drew before there was a choice.
+ */
+export function readerThemeFor(teleprompter: { readerTheme?: unknown } | null | undefined): ReaderTheme {
+  return teleprompter?.readerTheme === 'paper' ? 'paper' : 'dark';
 }
 
 export interface AppSettings {
@@ -257,6 +281,9 @@ export interface AppSettings {
      * go looking for a background control on a prompter is how hot the type
      * burns against the glass — a bright rig washes out a soft face, a dark
      * studio makes a strong one bloom — so that is the control that exists now.
+     *
+     * (A READING WINDOW has a field choice now, `readerTheme` below, and the
+     * stage reads `themeId` for it. A prompter's field is still black only.)
      */
     textIntensity: TextIntensity;
     fixedSpeedWpm: number;
@@ -278,6 +305,25 @@ export interface AppSettings {
     diagnosticTake: boolean;
     /** What marks the reading position: fixed side ticks, a soft wash, or nothing. */
     readingCue: ReadingCueStyle;
+    /**
+     * A reading window's appearance — Dark or Paper. ABSENT MEANS DARK.
+     *
+     * Optional, and deliberately missing from `defaultAppSettings`. The store
+     * saves this section whole, so a default written there would ride into the
+     * overlay on the next unrelated teleprompter change and become
+     * indistinguishable from somebody's choice — the trap `diagnosticTake`
+     * had to be renamed out of. Absent stays absent through every whole-section
+     * save, and `readerThemeFor` reads it, so an unrecognised stored value is
+     * dark rather than whatever it happens to say.
+     *
+     * Not part of the reader preference in `optical.profiles`: that carrier is
+     * an `OpticalProfile`, normalised field by field on every read, and a theme
+     * is not a property of optics. It lives beside `textIntensity` because it is
+     * the same kind of choice — how the type sits on its field.
+     *
+     * Never reaches a prompter take; see `ReaderTheme`.
+     */
+    readerTheme?: ReaderTheme;
     /**
      * Larger type, or more of the sentence — on a panel that cannot have both.
      *
@@ -502,8 +548,86 @@ export function activeOpticalProfile(
 export const READER_RIG_NAME = 'Reading window';
 
 /**
- * The reading rig for a panel: the stored one if it has been calibrated,
- * otherwise one derived on the spot.
+ * The physical scale a reading window may borrow from a prompter rig, or null.
+ *
+ * Exported so the rule is testable on its own: it is a one-line policy about
+ * provenance, and provenance is exactly the kind of thing that is easy to get
+ * right once and lose in a later refactor. See the call site for why `'ruler'`
+ * is excluded.
+ */
+export function inheritableReaderScale(
+  profile: OpticalProfile | null,
+): OpticalProfile['scale'] {
+  const scale = profile?.scale ?? null;
+  if (scale === null) return null;
+  return scale.source === 'ruler' ? null : scale;
+}
+
+/**
+ * The loose Settings › Teleprompter preferences a DERIVED reading profile
+ * starts from — the reader's twin of `AutomaticProfileSeed`.
+ *
+ * `sizeBias` is deliberately not here. It is shared by every automatically
+ * sized prompter display, and a reading window has its own size control now;
+ * seeding it would let a slider moved for the Elgato resize a window on the
+ * desk.
+ */
+export interface ReaderProfileSeed {
+  intensity?: TextIntensity;
+  readingCue?: ReadingCueStyle;
+}
+
+/**
+ * The reading rig for a panel, with the reader's own preference laid over it.
+ *
+ * Two steps, in this order, and the order is the point. The rig is derived
+ * exactly as it always was — `derivedReaderProfile` below, which keeps its
+ * borrowed scale live rather than freezing it — and only THEN does the reader
+ * preference go on top: its size, line spacing and measure as overrides, which
+ * the resolver applies after its own model has run, and its intensity and cue
+ * outright.
+ *
+ * Intensity and cue fall back to the seed (Settings › Teleprompter) for a
+ * derived profile, the way `automaticProfile` seeds a prompter, and NOT for a
+ * stored reading rig: a rig carries the choice that was made calibrating it,
+ * and the note on `buildStageSettings`'s `textIntensity` is why that outranks
+ * a global default. The reader preference outranks both — it was made at the
+ * window, in Reading appearance, by the person reading from it.
+ */
+export function readerOpticalProfile(
+  optical: OpticalSettings,
+  displayFingerprint: string | null,
+  seed: ReaderProfileSeed = {},
+): OpticalProfile {
+  const { profile, stored } = derivedReaderProfile(optical, displayFingerprint);
+  const preference = readerPreferenceFrom(optical);
+  const overrides: OpticalOverrides = { ...profile.overrides };
+  if (preference.fontSizePx !== undefined) overrides.fontSizePx = preference.fontSizePx;
+  if (preference.lineHeight !== undefined) overrides.lineHeight = preference.lineHeight;
+  if (preference.characters !== undefined) {
+    overrides.characters = preference.characters;
+    /*
+     * An explicit column pin outranks a character count in the resolver, so a
+     * stored reading rig that carries one would quietly defeat Narrower and
+     * Wider — the choice saved, the line unmoved. The reader's measure is the
+     * newer and more specific answer, so it takes the column with it. The
+     * stored rig itself is untouched; only this composition drops the pin.
+     */
+    delete overrides.columnCh;
+  }
+  return {
+    ...profile,
+    overrides,
+    intensity:
+      preference.intensity ?? (stored ? profile.intensity : seed.intensity ?? profile.intensity),
+    readingCue:
+      preference.readingCue ?? (stored ? profile.readingCue : seed.readingCue ?? profile.readingCue),
+  };
+}
+
+/**
+ * The reading rig for a panel before the reader preference is laid over it:
+ * the stored one if it has been calibrated, otherwise one derived on the spot.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS SYNTHESISES AND `activeOpticalProfile` REFUSES TO
@@ -527,26 +651,10 @@ export const READER_RIG_NAME = 'Reading window';
  * measurement is better than any model lookup. Everything else comes from the
  * `desk-reading` preset.
  */
-/**
- * The physical scale a reading window may borrow from a prompter rig, or null.
- *
- * Exported so the rule is testable on its own: it is a one-line policy about
- * provenance, and provenance is exactly the kind of thing that is easy to get
- * right once and lose in a later refactor. See the call site for why `'ruler'`
- * is excluded.
- */
-export function inheritableReaderScale(
-  profile: OpticalProfile | null,
-): OpticalProfile['scale'] {
-  const scale = profile?.scale ?? null;
-  if (scale === null) return null;
-  return scale.source === 'ruler' ? null : scale;
-}
-
-export function readerOpticalProfile(
+function derivedReaderProfile(
   optical: OpticalSettings,
   displayFingerprint: string | null,
-): OpticalProfile {
+): { profile: OpticalProfile; stored: boolean } {
   const stored =
     displayFingerprint === null || displayFingerprint === ''
       ? null
@@ -568,11 +676,11 @@ export function readerOpticalProfile(
    * now falls through to the derived profile, which is the right answer for a
    * reading window whether or not the collision was deliberate.
    */
-  if (stored !== null && stored.lensPlacement === 'none') return stored;
+  if (stored !== null && stored.lensPlacement === 'none') return { profile: stored, stored: true };
 
   const preset = RIG_PRESETS.find((candidate) => candidate.id === 'desk-reading');
   const base = defaultOpticalProfile();
-  return {
+  const profile: OpticalProfile = {
     ...base,
     rigName: READER_RIG_NAME,
     ...(preset ? opticalProfileFieldsForPreset(preset) : {}),
@@ -608,6 +716,241 @@ export function readerOpticalProfile(
      * would make the calibration screen show a reading rig as further along than
      * it is, and the whole point of that list is that it does not lie.
      */
+  };
+  return { profile, stored: false };
+}
+
+/* ---------------------------------------------------------------------------
+ * The reader preference
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How somebody likes a reading window's text, on whatever display it is on.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE PREFERENCE, NOT ONE PER PANEL OR PER RIG
+ * ---------------------------------------------------------------------------
+ * A rig is a measurement of an arrangement, which is why there are several per
+ * panel and why each is chosen before it is used. "I like 34 px with a bit
+ * more space between the lines" is not a measurement of anything: it is the
+ * same answer on the laptop and on the desk monitor, and it has nothing to go
+ * stale. So it is one reader-wide value, kept apart from every prompter rig —
+ * the size a presenter wants on the Elgato says nothing about the size they
+ * want reading at a desk, and the reverse.
+ *
+ * Every field is optional, and ABSENT MEANS NOT CHOSEN. That is the rule the
+ * settings store learned the hard way (a whole-section save freezes every
+ * default beside the one field that changed), and it is what lets the derived
+ * profile — and Settings › Teleprompter's intensity — keep deciding whatever
+ * the reader never touched. New fields join this interface the same way: an
+ * optional key, cleared by a `null` in a `ReaderPreferencePatch`.
+ */
+export interface ReaderPreference {
+  /** Body size in CSS px. Pinned over the derived size. */
+  fontSizePx?: number;
+  /** Line pitch as a multiple of the size. */
+  lineHeight?: number;
+  /** The measure asked for, in characters per line. Absent is the standard measure. */
+  characters?: number;
+  intensity?: TextIntensity;
+  readingCue?: ReadingCueStyle;
+}
+
+/**
+ * A change to the reader preference: a value sets a field, `null` clears it
+ * back to automatic, and an absent key leaves it as it is.
+ */
+export type ReaderPreferencePatch = {
+  [K in keyof ReaderPreference]?: ReaderPreference[K] | null;
+};
+
+/**
+ * The ranges a reader preference is held inside, on the way in AND out.
+ *
+ * Wide enough to double the reading window's opening size (30 px) and then
+ * some, which is the least an accessibility setting owes anybody; narrow enough
+ * that a corrupted store cannot hand a reading window 4 px or 400 px type. The
+ * measure runs from the reader floor — below which a line stops being prose —
+ * to the top of the band the reader measure accepts.
+ */
+export const READER_PREFERENCE_LIMITS = {
+  fontSizePx: { min: 20, max: 96 },
+  lineHeight: { min: 1.2, max: 1.8 },
+  characters: { min: READER_READING_MEASURE.hardFloor, max: READER_READING_MEASURE.bandMax },
+} as const;
+
+const READER_PREFERENCE_FIELDS: readonly (keyof ReaderPreference)[] = [
+  'fontSizePx',
+  'lineHeight',
+  'characters',
+  'intensity',
+  'readingCue',
+];
+
+/**
+ * Where the reader preference is stored: a profile under a key no panel owns.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY IT IS A PROFILE, AND WHY THE FINGERPRINT IS EMPTY
+ * ---------------------------------------------------------------------------
+ * The optical section is Rust's, and Rust round-trips it through a typed
+ * struct: a new top-level field would be dropped on the first read back. The
+ * one part it keeps as opaque JSON is `profiles`, and the frontend keeps any
+ * entry there that normalizes. So the preference rides as one complete, valid
+ * profile under `opticalRigKey('', READER_RIG_NAME)`.
+ *
+ * The empty fingerprint is what keeps it out of everything that lists rigs:
+ * `opticalRigsForDisplay` matches `<fingerprint>::`, and no panel's fingerprint
+ * is empty (it refuses one outright). Nothing writes `activeRig['']`, so
+ * `activeOpticalProfile` can never adopt it either — which is also why this is
+ * written with `withReaderPreference` and never `withOpticalProfile`, which
+ * would make it the prompter rig of whatever panel it was handed.
+ */
+export const READER_PREFERENCE_KEY = opticalRigKey('', READER_RIG_NAME);
+
+/**
+ * Which of the two styling choices the reader actually made.
+ *
+ * A profile always carries an `intensity` and a `readingCue` —
+ * `normalizeOpticalProfile` fills them in — so their values alone cannot say
+ * whether anybody chose them, and "not chosen" has to mean the seed decides.
+ * `completedSteps` is the field that records what a person confirmed, and it
+ * survives the round trip, so it carries the answer: the step that owns each
+ * choice on a calibrated rig. Brightness is intensity's own step; the reading
+ * cue marks the reading line, which on a rig is placed at the lens step. The
+ * carrier is never resolved as a rig, so these tokens mean nothing else here.
+ */
+const READER_CHOICE_STEPS = {
+  intensity: 'brightness',
+  readingCue: 'lens',
+} as const satisfies Record<'intensity' | 'readingCue', OpticalCalibrationStep>;
+
+/**
+ * The reader preference stored in this optical section, or `{}` when there is
+ * none. Values are re-clamped on the way out: the section is rebuilt from
+ * stored JSON, and a hand-edited 4 px must not reach a reading window.
+ */
+export function readerPreferenceFrom(optical: OpticalSettings): ReaderPreference {
+  const stored = normalizeOpticalProfile(optical.profiles?.[READER_PREFERENCE_KEY]);
+  if (stored === null) return {};
+  const steps = stored.completedSteps;
+  return clampReaderPreference({
+    fontSizePx: stored.overrides.fontSizePx,
+    lineHeight: stored.overrides.lineHeight,
+    characters: stored.overrides.characters,
+    intensity: steps.includes(READER_CHOICE_STEPS.intensity) ? stored.intensity : undefined,
+    readingCue: steps.includes(READER_CHOICE_STEPS.readingCue) ? stored.readingCue : undefined,
+  });
+}
+
+/**
+ * Change the reader preference and leave every rig alone.
+ *
+ * Returns the whole section, for the reason `withPanelMirror` gives: an
+ * optical write takes ownership of the section in Rust, so callers write it
+ * whole. A preference with nothing left in it is removed rather than stored
+ * empty, so "never touched" and "put everything back" are the same document.
+ */
+export function withReaderPreference(
+  optical: OpticalSettings,
+  patch: ReaderPreferencePatch,
+): OpticalSettings {
+  const next: Record<string, unknown> = { ...readerPreferenceFrom(optical) };
+  for (const key of READER_PREFERENCE_FIELDS) {
+    const value = patch[key];
+    if (value === null) delete next[key];
+    else if (value !== undefined) next[key] = value;
+  }
+  const preference = clampReaderPreference(next as ReaderPreference);
+  const profiles = { ...optical.profiles };
+  if (Object.keys(preference).length === 0) delete profiles[READER_PREFERENCE_KEY];
+  else profiles[READER_PREFERENCE_KEY] = readerPreferenceCarrier(preference);
+  return { ...optical, profiles };
+}
+
+/**
+ * The patch that makes a stored preference exactly this one — every field it
+ * lacks cleared, rather than left at whatever was stored.
+ */
+export function readerPreferenceReplacement(preference: ReaderPreference): ReaderPreferencePatch {
+  const patch: ReaderPreferencePatch = {};
+  for (const key of READER_PREFERENCE_FIELDS) {
+    (patch as Record<string, unknown>)[key] = preference[key] ?? null;
+  }
+  return patch;
+}
+
+/**
+ * Do these two describe the same preference? Line height is compared inside
+ * half a slider step, because it arrives off a range input as a float.
+ */
+export function readerPreferenceEquals(a: ReaderPreference, b: ReaderPreference): boolean {
+  const sameLineHeight =
+    a.lineHeight === undefined || b.lineHeight === undefined
+      ? a.lineHeight === b.lineHeight
+      : Math.abs(a.lineHeight - b.lineHeight) < 0.005;
+  return (
+    a.fontSizePx === b.fontSizePx &&
+    sameLineHeight &&
+    a.characters === b.characters &&
+    a.intensity === b.intensity &&
+    a.readingCue === b.readingCue
+  );
+}
+
+/**
+ * Hold every field inside its range and drop anything that is not a value at
+ * all. Sizes and measures are whole numbers — the controls step in whole
+ * pixels and characters — and line height keeps two places.
+ */
+function clampReaderPreference(candidate: ReaderPreference): ReaderPreference {
+  const l = READER_PREFERENCE_LIMITS;
+  const preference: ReaderPreference = {};
+  const fontSizePx = clampedNumber(candidate.fontSizePx, l.fontSizePx.min, l.fontSizePx.max);
+  if (fontSizePx !== null) preference.fontSizePx = Math.round(fontSizePx);
+  const lineHeight = clampedNumber(candidate.lineHeight, l.lineHeight.min, l.lineHeight.max);
+  if (lineHeight !== null) preference.lineHeight = Math.round(lineHeight * 100) / 100;
+  const characters = clampedNumber(candidate.characters, l.characters.min, l.characters.max);
+  if (characters !== null) preference.characters = Math.round(characters);
+  const intensity = TEXT_INTENSITIES.find((i) => i === candidate.intensity);
+  if (intensity) preference.intensity = intensity;
+  const readingCue = READING_CUES.find((c) => c === candidate.readingCue);
+  if (readingCue) preference.readingCue = readingCue;
+  return preference;
+}
+
+function clampedNumber(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * The profile the preference is stored as.
+ *
+ * A COMPLETE one, from `defaultOpticalProfile()`, because `opticalFromStored`
+ * keeps only entries that normalize — and a reading profile in every other
+ * respect (`lensPlacement: 'none'`, no mirror), so that if anything ever did
+ * resolve it, it would describe a window on a desk rather than a hood.
+ */
+function readerPreferenceCarrier(preference: ReaderPreference): OpticalProfile {
+  const base = defaultOpticalProfile();
+  const overrides: OpticalOverrides = {};
+  if (preference.fontSizePx !== undefined) overrides.fontSizePx = preference.fontSizePx;
+  if (preference.lineHeight !== undefined) overrides.lineHeight = preference.lineHeight;
+  if (preference.characters !== undefined) overrides.characters = preference.characters;
+  const chosen: OpticalCalibrationStep[] = [];
+  if (preference.intensity !== undefined) chosen.push(READER_CHOICE_STEPS.intensity);
+  if (preference.readingCue !== undefined) chosen.push(READER_CHOICE_STEPS.readingCue);
+  return {
+    ...base,
+    rigName: READER_RIG_NAME,
+    lensPlacement: 'none',
+    overrides,
+    intensity: preference.intensity ?? base.intensity,
+    readingCue: preference.readingCue ?? base.readingCue,
+    // In the declared order, which is the order `normalizeOpticalProfile`
+    // reads them back in, so a stored preference round-trips unchanged.
+    completedSteps: CALIBRATION_STEPS.filter((step) => chosen.includes(step)),
   };
 }
 

@@ -170,3 +170,69 @@ describe('preview image rendering', () => {
     expect(html).toContain('src="asset://localhost/In a link.png"');
   });
 });
+
+/*
+ * Lists. The preview had no list branch at all: every item fell through to a
+ * plain paragraph, so a numbered procedure, an outline and a checklist were
+ * three runs of unmarked lines. It now draws the marker the stage draws, from
+ * the same `list-marker.ts`.
+ */
+describe('preview list rendering', () => {
+  const lists = compile(
+    [
+      '3. Plug in the panel.',
+      '4. Open the app.',
+      '   - Check the level.',
+      '',
+      '- [x] Ship the recorder.',
+      '- [ ] Write the docs.',
+      '',
+      '- Works offline.',
+      '',
+    ].join('\n'),
+    { scriptId: 'lists' },
+  );
+  const items = lists.blocks.filter((b) => b.kind === 'list_item');
+  const html = render(RenderBlocks, { props: { blocks: items } }).body;
+
+  /** Each item's marker, in document order, as `kind:label`. */
+  function markers(markup: string): string[] {
+    return [...markup.matchAll(/<span class="marker (number|checkbox|bullet)[^"]*"[^>]*>([^<]*)<\/span>/g)].map(
+      (m) => `${m[1]}:${m[2]}`,
+    );
+  }
+
+  it('compiles the fixture into the items it claims', () => {
+    expect(items).toHaveLength(6);
+  });
+
+  it('numbers an ordered list from where it starts, and draws boxes and dots', () => {
+    expect(markers(html)).toEqual([
+      'number:3.',
+      'number:4.',
+      'bullet:',
+      'checkbox:',
+      'checkbox:',
+      'bullet:',
+    ]);
+    expect(html.match(/data-checked="(true|false)"/g)).toEqual([
+      'data-checked="true"',
+      'data-checked="false"',
+    ]);
+  });
+
+  it('indents a nested item by its depth', () => {
+    const depths = [...html.matchAll(/data-depth="(\d+)"/g)].map((m) => Number(m[1]));
+    expect(depths).toEqual([0, 0, 1, 0, 0, 0]);
+    expect(html).toMatch(/data-depth="1"[^>]*style="[^"]*padding-left: 1\.5em/);
+  });
+
+  it('hides every marker from assistive tech and keeps the words intact', () => {
+    const tags = [...html.matchAll(/<span class="marker[^>]*>/g)].map((m) => m[0]);
+    expect(tags).toHaveLength(6);
+    for (const tag of tags) expect(tag).toContain('aria-hidden="true"');
+    expect(text(html)).toContain('Plug in the panel.');
+    expect(text(html)).toContain('Check the level.');
+    expect(text(html)).toContain('Ship the recorder.');
+  });
+});

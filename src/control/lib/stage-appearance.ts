@@ -16,8 +16,9 @@
  * not judgements made at the glass with the prompter running, and putting them
  * on the in-session sheet would bury the four that have to be there.
  */
-import type { AppSettings } from '../services/settings-types';
-import type { TextIntensity } from '../../shared/contracts';
+import { READER_PREFERENCE_LIMITS, type AppSettings } from '../services/settings-types';
+import type { ReadingCueStyle, TextIntensity } from '../../shared/contracts';
+import { READER_READING_MEASURE } from '../../shared/optics';
 
 /** The whole saved teleprompter section, named for readability. */
 export type TeleprompterSettings = AppSettings['teleprompter'];
@@ -191,6 +192,79 @@ export function stageAppearanceEquals(a: StageAppearance, b: StageAppearance): b
     a.columnWidthPercent === b.columnWidthPercent &&
     a.readingBandCenterPercent === b.readingBandCenterPercent
   );
+}
+
+/* ---------------------------------------------------------------------------
+ * A reading window's appearance
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What a reading window's sheet shows and sets.
+ *
+ * NOT a `StageAppearance`, and the difference is the reason this exists. Those
+ * five fields are patched straight back into `teleprompter` — the prompter's
+ * fallback — and a reading window never reads them: its text comes from the
+ * reading rig with the reader preference laid over it. A sheet that wrote a
+ * reading window's numbers into `teleprompter` would put reader sizes on the
+ * next uncalibrated prompter take and change nothing in the window.
+ *
+ * Size, spacing, intensity and cue are what is on the glass; `characters` is
+ * what the reader ASKED for, because the measured answer only the stage can
+ * give — it arrives at the sheet separately, as `charactersPerLine`.
+ */
+export interface ReaderAppearance {
+  fontSizePx: number;
+  lineHeight: number;
+  /** The measure the reader chose, or null for the standard one. */
+  characters: number | null;
+  textIntensity: TextIntensity;
+  readingCue: ReadingCueStyle;
+}
+
+/** The bounds the reading window's controls draw against — the preference's own. */
+export const READER_APPEARANCE_LIMITS = {
+  fontSizePx: { ...READER_PREFERENCE_LIMITS.fontSizePx, step: 1 },
+  lineHeight: { ...READER_PREFERENCE_LIMITS.lineHeight, step: 0.01 },
+} as const;
+
+/** The three line widths the sheet offers. */
+export type ReaderLineWidth = 'narrower' | 'standard' | 'wider';
+
+/**
+ * The measures behind Narrower and Wider: the two ends of the reader measure's
+ * ideal band, so neither is a line anybody would call cramped or a long one.
+ * Standard asks for nothing and leaves the measure to the profile.
+ */
+export const READER_LINE_WIDTH_CHARACTERS = {
+  narrower: READER_READING_MEASURE.idealMin,
+  wider: READER_READING_MEASURE.idealMax,
+} as const;
+
+export function readerCharactersFor(width: ReaderLineWidth): number | null {
+  return width === 'standard' ? null : READER_LINE_WIDTH_CHARACTERS[width];
+}
+
+/**
+ * Which segment a stored measure belongs to. Only the sheet writes one, so it
+ * is one of the two exact values — but a value from anywhere else still lands
+ * on the nearer side rather than on no segment at all.
+ */
+export function readerLineWidthFor(characters: number | null): ReaderLineWidth {
+  if (characters === null) return 'standard';
+  const { narrower, wider } = READER_LINE_WIDTH_CHARACTERS;
+  return characters <= (narrower + wider) / 2 ? 'narrower' : 'wider';
+}
+
+/**
+ * One step of a reading window's size, from where it is now.
+ *
+ * Held to the reader preference's range rather than the prompter's: a reading
+ * window at 320 px is a dozen words a screen, and the prompter's 24 px floor is
+ * larger than somebody at a desk may want.
+ */
+export function stepReaderFontSize(currentPx: number, deltaPx: number): number {
+  const { min, max } = READER_APPEARANCE_LIMITS.fontSizePx;
+  return clamp(Math.round(currentPx + deltaPx), min, max);
 }
 
 /**

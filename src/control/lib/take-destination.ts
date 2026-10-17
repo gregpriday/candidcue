@@ -35,7 +35,7 @@
  * out — so the wording is testable without a window, a monitor or a rig.
  */
 import type { DisplayDescriptor } from '../services/stage-types';
-import type { PresentationMode } from '../services/settings-types';
+import type { PresentationMode, ReaderFrame } from '../services/settings-types';
 
 /* ---------------------------------------------------------------------------
  * WHERE PRESENT PUTS A PROMPTER TAKE
@@ -102,8 +102,8 @@ export function findPinnedDisplay(
  * first-run user with a second monitor that the take would open there, moments
  * before the monitor in front of them became the prompter.
  *
- * Prompter takes only. A reading window ignores the pin and opens where the
- * window is, so it makes no claim about a panel at all.
+ * Prompter takes only. A reading window ignores the pin: it opens where the
+ * window is, or where a remembered frame puts it — `resolveReaderDisplay`.
  */
 export function resolvePrompterDisplay(input: {
   /** Every connected panel, in the order Rust lists them. */
@@ -120,6 +120,124 @@ export function resolvePrompterDisplay(input: {
   const pinned = findPinnedDisplay(displays, pinnedFingerprint);
   if (pinned !== null) return { display: pinned, reason: 'pinned' };
   return { display: windowDisplay, reason: 'pin-missing' };
+}
+
+/* ---------------------------------------------------------------------------
+ * WHERE PRESENT PUTS A READING WINDOW
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Why a reading window is opening where it is.
+ *
+ *   in-place    no remembered frame, or "Restore windows" is off, so the
+ *               window presents where it already is;
+ *   remembered  the panel holding the frame's origin is connected, the frame
+ *               fits on it, and the window goes back exactly where it was;
+ *   fitted      the panel is connected but the frame runs off its right or
+ *               bottom edge — left straddling two panels, or saved against a
+ *               bigger one — so Present pulls it back onto that panel, and it
+ *               does not come back where it was left;
+ *   rescued     no connected panel holds the frame's origin — the panel it was
+ *               left on is gone — so Present fits it onto another one.
+ */
+export type ReaderDisplayReason = 'in-place' | 'remembered' | 'fitted' | 'rescued';
+
+export interface ReaderDisplay {
+  /**
+   * The panel the reading window will be on, or null when nobody could name
+   * it: the window's own monitor is unknown, or the machine listed no panels.
+   */
+  display: DisplayDescriptor | null;
+  reason: ReaderDisplayReason;
+}
+
+/**
+ * A panel's rectangle in its own logical pixels — the `logical` half of Rust's
+ * `MonitorRect`.
+ *
+ * The panel's PHYSICAL origin and size divided by its OWN scale, never by the
+ * scale of whatever panel the editor is on. That is the whole of the mixed-DPI
+ * rule `reader_placement` exists for: dividing by one shared scale, or pairing
+ * `logicalSize` with an origin from a different space, puts a frame on the
+ * wrong panel exactly when a laptop and an external disagree about scale. A
+ * scale that is not positive counts as 1, as it does there.
+ */
+function logicalRect(display: DisplayDescriptor): { x: number; y: number; width: number; height: number } {
+  const scale = display.scaleFactor > 0 ? display.scaleFactor : 1;
+  return {
+    x: display.physicalPosition.x / scale,
+    y: display.physicalPosition.y / scale,
+    width: display.physicalSize.width / scale,
+    height: display.physicalSize.height / scale,
+  };
+}
+
+/**
+ * The panel Present will put a reading window on: `Enter(Reader)` in
+ * `windows/present.rs`, restated for the line beside the Present button.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT RUST DOES WITH A REMEMBERED FRAME, AND WHICH PART DECIDES THE PANEL
+ * ---------------------------------------------------------------------------
+ * A remembered frame is handed to Present only when one is stored and "Restore
+ * windows" is on (`restoreFrameFor` in `start-take.ts`). Rust then:
+ *
+ *   1. picks the panel whose LOGICAL rectangle holds the frame's logical
+ *      origin — half-open, so a frame at a panel's right edge is on the next
+ *      one — or the FIRST panel listed when none does
+ *      (`fit_reader_monitor_index`). The first, not the primary;
+ *   2. fits the frame onto that panel: size clamped to it, origin kept inside
+ *      it, converted with THAT panel's scale (`fit_reader_frame`). A frame
+ *      that already fits comes through untouched; one that does not is moved,
+ *      which is the difference between `remembered` and `fitted`;
+ *   3. keeps the fitted origin if a connected panel holds it and moves it to
+ *      the primary's otherwise (`restore_position`);
+ *   4. reports the landed panel by physical containment (`monitor_index_at`,
+ *      via `control_frame_display`), for the take's optics.
+ *
+ * Only step 1 chooses. Step 2 leaves the origin on the panel step 1 chose by
+ * construction, so step 3 always passes it through — Rust says as much at
+ * `fit_reader_monitor_index`, which is why the primary is never the rescue
+ * and "the first panel listed" is the answer when the frame's panel is gone.
+ * `listDisplays` returns `available_monitors()` order, the order step 1 walks.
+ *
+ * Step 4 is deliberately NOT restated. On macOS tao gives a panel's physical
+ * origin as its global point origin times its OWN scale, so a 2x laptop and a
+ * 1x external beside it overlap in physical space, and physical containment
+ * can name the laptop for a window that step 2 has just put on the external.
+ * This readout says where the window GOES, and that is step 1's panel.
+ */
+export function resolveReaderDisplay(input: {
+  /** Every connected panel, in the order Rust lists them. */
+  displays: readonly DisplayDescriptor[];
+  /** The panel the control window is on right now, or null if unknown. */
+  windowDisplay: DisplayDescriptor | null;
+  /** `settings.stage.readerFrame`. */
+  readerFrame: ReaderFrame | null;
+  /** `settings.general.restoreWindows`. */
+  restoreWindows: boolean;
+}): ReaderDisplay {
+  const { displays, windowDisplay, readerFrame: frame, restoreWindows } = input;
+  if (frame === null || !restoreWindows) return { display: windowDisplay, reason: 'in-place' };
+  /*
+   * No panels at all. Rust passes the frame through unplaced, and nothing here
+   * can say which panel that turns out to be — but the frame is still what the
+   * window comes back at, so this is not "in place".
+   */
+  if (displays.length === 0) return { display: null, reason: 'remembered' };
+
+  const rects = displays.map(logicalRect);
+  const holding = rects.findIndex(
+    (m) => frame.x >= m.x && frame.y >= m.y && frame.x < m.x + m.width && frame.y < m.y + m.height,
+  );
+  if (holding === -1) return { display: displays[0]!, reason: 'rescued' };
+  /*
+   * The origin is already on the panel, so the clamp can only bite on the far
+   * edges: the frame comes back as it was left exactly when it ends inside it.
+   */
+  const m = rects[holding]!;
+  const fits = frame.x + frame.width <= m.x + m.width && frame.y + frame.height <= m.y + m.height;
+  return { display: displays[holding]!, reason: fits ? 'remembered' : 'fitted' };
 }
 
 /* ---------------------------------------------------------------------------
@@ -166,6 +284,17 @@ export interface TakeDestinationInput {
    * Null when nothing is pinned or no rig was chosen for it.
    */
   pinnedRigName: string | null;
+  /**
+   * `settings.stage.readerFrame` — where the last reading window was left.
+   *
+   * A reading window used to be described as opening "where this window is"
+   * whatever this said, while Present was busy putting it back where it was
+   * left — on another panel, if that is where the reader had dragged it. A
+   * prompter take ignores it, exactly as Rust does.
+   */
+  readerFrame: ReaderFrame | null;
+  /** `settings.general.restoreWindows`, without which the frame is never read. */
+  restoreWindows: boolean;
 }
 
 export interface CalibratedRig {
@@ -177,7 +306,11 @@ export interface CalibratedRig {
 export type DestinationConfidence =
   /** The panel is known by name. */
   | 'known'
-  /** A reading window, which opens where the window already is by definition. */
+  /**
+   * A reading window presenting in place, which is where the window already is
+   * by definition. One coming back to a remembered frame is `known`: it names
+   * the panel it is going to.
+   */
   | 'window'
   /** Nobody could name the panel. Say so; do not guess. */
   | 'unknown';
@@ -216,15 +349,23 @@ export function displayName(display: DisplayDescriptor | null): string {
  * The mismatch is deliberately NOT raised for a reading window. A reader is an
  * ordinary desktop window that the user places by dragging it, and it makes no
  * claim to be on calibrated glass — warning that it is on the "wrong" panel
- * would be warning about the thing they just did on purpose.
+ * would be warning about the thing they just did on purpose. That holds when a
+ * remembered frame carries it to another panel too: the reader put it there.
  */
 export function resolveTakeDestination(input: TakeDestinationInput): TakeDestination {
   const { mode, currentDisplay, displays, pinnedFingerprint } = input;
 
   if (mode === 'reader') {
+    const placement = resolveReaderDisplay({
+      displays,
+      windowDisplay: currentDisplay,
+      readerFrame: input.readerFrame,
+      restoreWindows: input.restoreWindows,
+    });
     return {
-      summary: 'Reading window · opens where this window is',
-      confidence: 'window',
+      summary: readerSummary(placement, currentDisplay),
+      confidence:
+        placement.reason === 'in-place' ? 'window' : placement.display === null ? 'unknown' : 'known',
       mismatch: null,
     };
   }
@@ -241,6 +382,36 @@ export function resolveTakeDestination(input: TakeDestinationInput): TakeDestina
     confidence: landing === null ? 'unknown' : 'known',
     mismatch: resolveMismatch(target, input),
   };
+}
+
+/**
+ * Where a reading window is going, in the words beside Present.
+ *
+ * "Opens where this window is" was true only while nothing was remembered.
+ * With "Restore windows" on — the default — every reading take after the first
+ * comes back to the frame the last one was left at, and that can be a panel
+ * the operator is not looking at. So the line says which of the four it is:
+ *
+ *   in place                       opens here
+ *   back on this window's panel    last size and position
+ *   back on another panel          last position on <panel>
+ *   its panel is gone              opens on <the panel it is fitted onto>
+ *
+ * "Opens on", not "last position on", for the last: the frame is clamped onto
+ * a panel it was never on, so the position it comes back at is not the one it
+ * was left at. A frame whose panel is connected but which no longer fits on it
+ * is clamped too, and says the same thing for the same reason. A panel nobody
+ * could name — a machine that listed none — still gets the one fact that is
+ * known, that the remembered frame is being used.
+ */
+function readerSummary(placement: ReaderDisplay, current: DisplayDescriptor | null): string {
+  const { display, reason } = placement;
+  if (reason === 'in-place') return 'Reading window · opens here';
+  if (reason === 'rescued' || reason === 'fitted') return `Reading window · opens on ${displayName(display)}`;
+  if (display === null || (current !== null && display.fingerprint === current.fingerprint)) {
+    return 'Reading window · last size and position';
+  }
+  return `Reading window · last position on ${displayName(display)}`;
 }
 
 /** A rig's name in quotes, or a rig-neutral phrase when it has none. */

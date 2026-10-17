@@ -23,9 +23,12 @@ import {
   opticalRigKey,
   opticalRigsForDisplay,
   panelMirrorFor,
+  readerPreferenceFrom,
+  READER_PREFERENCE_KEY,
   withOpticalProfile,
   withoutOpticalProfile,
   withPanelMirror,
+  withReaderPreference,
   type OpticalSettings,
 } from '../../../src/control/services/settings-types';
 
@@ -683,6 +686,58 @@ describe('the whole migration lifecycle, through the real store', () => {
     expect(loaded.optical.profiles, 'a deleted rig must stay deleted').toEqual({});
     expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toBeNull();
     expect(settings.pendingOpticalAdoption()).toBeNull();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * The reader preference, which rides in the rigs map
+ * ------------------------------------------------------------------------- */
+
+describe('the reader preference survives the trip through Rust', () => {
+  /*
+   * Rust round-trips the optical section through a typed struct, so a new
+   * top-level field would be dropped on the first read back. The preference is
+   * stored as one profile in the opaque `profiles` map instead — which only
+   * works if the frontend's read path keeps it (`opticalFromStored` drops any
+   * entry that does not normalize) and nothing that lists rigs picks it up.
+   */
+  const PREFERENCE = {
+    fontSizePx: 36,
+    lineHeight: 1.55,
+    characters: 75,
+    intensity: 'soft' as const,
+    readingCue: 'wash' as const,
+  };
+
+  it('is written, reloaded and read back exactly, through the real store', async () => {
+    ipc.applyPatch = true;
+    rustSettings.optical = { migrated: true, profiles: {}, activeRig: {} };
+    const settingsStore = await import('../../../src/control/stores/settings');
+    let loaded = await settingsStore.loadSettings(true);
+
+    await settingsStore.patchSettings('optical', withReaderPreference(loaded.optical, PREFERENCE));
+    loaded = await settingsStore.loadSettings(true);
+
+    expect(readerPreferenceFrom(loaded.optical)).toEqual(PREFERENCE);
+    // Kept as a profile, under the key no panel owns, and chosen by no panel.
+    expect(Object.keys(loaded.optical.profiles)).toEqual([READER_PREFERENCE_KEY]);
+    expect(loaded.optical.activeRig).toEqual({});
+  });
+
+  it('sits beside a calibrated rig without becoming one', async () => {
+    const key = opticalRigKey('dsp-1', 'Desk hood');
+    const stored = withReaderPreference(
+      { profiles: { [key]: rig() }, activeRig: { 'dsp-1': 'Desk hood' }, panelMirror: {} },
+      PREFERENCE,
+    );
+    rustSettings.optical = { migrated: true, ...stored };
+
+    const loaded = await settings.getSettings();
+    expect(readerPreferenceFrom(loaded.optical)).toEqual(PREFERENCE);
+    expect(opticalRigsForDisplay(loaded.optical, 'dsp-1').map((r) => r.profile.rigName)).toEqual([
+      'Desk hood',
+    ]);
+    expect(activeOpticalProfile(loaded.optical, 'dsp-1')).toEqual(rig());
   });
 });
 

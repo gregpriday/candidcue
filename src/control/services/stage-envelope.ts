@@ -34,8 +34,11 @@ import {
   DEFAULT_STAGE_APPEARANCE,
   panelMirrorFor,
   readerOpticalProfile,
+  readerThemeFor,
   type AppSettings,
   type PanelMirror,
+  type ReaderProfileSeed,
+  type ReaderTheme,
 } from './settings-types';
 import type { DisplayDescriptor } from './stage-types';
 
@@ -96,21 +99,76 @@ export interface StageSettingsOverrides {
    * measure band control did rather than reverting to the prompter's.
    */
   readingContext?: ReadingContext;
+  /**
+   * A reading window's appearance. Honoured ONLY with `readingContext:
+   * 'reader'`: a prompter is composed on the black field whatever this says,
+   * so no caller can put paper on a beamsplitter by passing it.
+   */
+  readerTheme?: ReaderTheme;
 }
 
 /**
- * The stage field is black, and only black.
+ * The PROMPTER's field is black, and only black.
  *
  * `themeId`, `background` and `foreground` stay on the wire as required fields
  * of `StageSettings`. They were kept because §52 `display_profiles` rows
  * persisted that document; the rows are gone (#232), so dropping the fields is
- * now a contract change rather than a data migration. Nothing READS them: `src/styles/stage.css` hard-codes `--stage-bg`, which is
- * why the two-option "Stage background" menu rendered identically on both of
- * its options for as long as it existed. What replaces it is `textIntensity`,
+ * now a contract change rather than a data migration. For a prompter nothing
+ * READS `background`/`foreground` — the stage's tokens are the colours — which
+ * is why the two-option "Stage background" menu rendered identically on both of
+ * its options for as long as it existed. What replaced it is `textIntensity`,
  * which changes the thing a presenter is actually reaching for when they go
  * looking for that control: how hot the type burns, not what colour the dark is.
+ *
+ * `themeId` IS read now, for one case: a reading window drawn on paper. The
+ * stage sets it on `.stage-root` as `data-theme`, and the paper token block is
+ * keyed on it. The two colour fields are written honestly for that theme too —
+ * the field and the body ink the paper tokens declare — so the envelope
+ * describes the glass rather than a black that is not there; the stage still
+ * paints from its tokens, not from these.
  */
 const STAGE_FIELD_BACKGROUND = '#000000';
+const STAGE_FIELD_FOREGROUND = '#f5f3ef';
+
+/** The theme every prompter take, and every Dark reading window, runs. */
+export const STAGE_DARK_THEME_ID = 'stage-dark';
+
+/**
+ * A reading window on paper: dark type on a warm light field.
+ *
+ * Reader-only by construction — `buildStageSettings` writes it only with a
+ * reader `readingContext`, and the stage refuses it for anything else.
+ */
+export const READER_PAPER_THEME_ID = 'reader-paper';
+
+/**
+ * The paper field and its body ink, as the stage's paper token block declares
+ * them (`--stage-bg`, `--stage-text`). 13.9:1, and `reader-theme.test.ts`
+ * holds the two sides together so the envelope cannot drift from the glass.
+ */
+export const PAPER_FIELD_BACKGROUND = '#f6f2ea';
+export const PAPER_FIELD_FOREGROUND = '#242424';
+
+/**
+ * The past-text opacity a paper reading window is floored at.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SAME ALPHA IS NOT THE SAME CONTRAST
+ * ---------------------------------------------------------------------------
+ * Past text is dimmed by opacity, and opacity composes toward the FIELD. On
+ * black, the reader's 0.48 leaves warm white at about 4.5:1. On paper the same
+ * 0.48 composes dark ink to roughly 2.9:1 — words that are still meant to be
+ * reread, gone grey enough to fail the 4.5:1 a reading surface owes them. The
+ * Standard ink needs about 0.64 to clear it and the Soft intensity's lighter
+ * ink about 0.68. 0.72 clears all three (Soft 5.0, Standard 5.8, Strong 7.0)
+ * and keeps the Soft past above 4.5:1 even under the Wash cue's band, which is
+ * drawn over the line being read — `reader-theme.test.ts` composes each case.
+ *
+ * A FLOOR, not a replacement: a rig that asked for a lighter dim (a higher
+ * opacity) keeps it. And only while past dimming is ON — "off" is written as
+ * `PAST_DIMMING_OFF_OPACITY`, which is already above it.
+ */
+export const PAPER_PAST_OPACITY = 0.72;
 
 /**
  * The panel an uncalibrated take is measured against.
@@ -216,11 +274,15 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     ? optics.lineHeight
     : overrides.lineHeight ?? DEFAULT_STAGE_APPEARANCE.lineHeight;
 
+  // Paper only for a reading window that asked for it — never a prompter.
+  const paper = overrides.readingContext === 'reader' && overrides.readerTheme === 'paper';
+  const dimmedPastOpacity = optics ? optics.pastOpacity : UNCALIBRATED_PAST_OPACITY;
+
   return {
     schemaVersion: 1,
-    themeId: 'stage-dark',
-    background: STAGE_FIELD_BACKGROUND,
-    foreground: '#f5f3ef',
+    themeId: paper ? READER_PAPER_THEME_ID : STAGE_DARK_THEME_ID,
+    background: paper ? PAPER_FIELD_BACKGROUND : STAGE_FIELD_BACKGROUND,
+    foreground: paper ? PAPER_FIELD_FOREGROUND : STAGE_FIELD_FOREGROUND,
     fontFamilyId: overrides.fontFamilyId ?? DEFAULT_STAGE_APPEARANCE.fontFamilyId,
     fontSizePx,
     lineHeight,
@@ -242,9 +304,10 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     pastOpacity:
       overrides.pastDimming === false
         ? PAST_DIMMING_OFF_OPACITY
-        : optics
-          ? optics.pastOpacity
-          : UNCALIBRATED_PAST_OPACITY,
+        : paper
+          ? // See `PAPER_PAST_OPACITY`: the dark-field alpha fails on paper.
+            Math.max(dimmedPastOpacity, PAPER_PAST_OPACITY)
+          : dimmedPastOpacity,
     futureOpacity: optics ? optics.futureOpacity : UNCALIBRATED_FUTURE_OPACITY,
     currentUnderlayOpacity: overrides.phraseHighlight === false ? 0 : 0.1,
     /*
@@ -273,7 +336,9 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
      * A calibrated rig's own brightness and cue choice outrank the global
      * default, because they were made by somebody standing at that glass
      * looking at that reflection. The Settings control is what an uncalibrated
-     * rig gets, not a second opinion about a calibrated one.
+     * rig gets, not a second opinion about a calibrated one — and a profile
+     * nobody calibrated (the automatic prompter profile, a derived reading
+     * rig) already carries it, as the seed it was built from.
      */
     textIntensity: optical ? optical.profile.intensity : overrides.textIntensity ?? 'standard',
     // The rig's own choice when there is one, the explicit override otherwise.
@@ -325,6 +390,15 @@ export function stageSettingsFromSettings(
    * been flipped live from the Session menu. Absent means the panel's own.
    */
   mirror?: PanelMirror | null,
+  /**
+   * What a reading window's derived profile is seeded with, when it is not the
+   * `teleprompter` section being composed. A take passes its SAVED section's
+   * choices here: the section it composes from carries the take's prompter
+   * nudges, and an intensity tried on the prompter and never saved belongs to
+   * the prompter — it must not follow a mid-take switch into the reading
+   * window. Absent means `s.teleprompter`'s, which is what a take opens with.
+   */
+  readerSeed?: ReaderProfileSeed,
 ): StageSettings {
   const t = s.teleprompter;
   const reader = s.stage.presentationMode === 'reader';
@@ -345,8 +419,25 @@ export function stageSettingsFromSettings(
    * is "not mirrored". It used to find the glass's, and read backwards.
    */
   const mirrorAxes = mirror ?? panelMirrorFor(s.optical, display?.fingerprint ?? null);
+  /*
+   * A reading window is seeded too, and with less.
+   *
+   * Intensity and cue, because `buildStageSettings` takes both off the profile
+   * whenever there is one — so without a seed, Settings › Teleprompter's "Text
+   * intensity" moved and every reading window went on burning at the derived
+   * profile's 'standard'. The defaults are the same values, so nobody who never
+   * changed either sees a difference.
+   *
+   * Not `sizeBias`: that slider belongs to every automatically sized prompter
+   * display, and a reading window sizes its type from the reader preference
+   * that `readerOpticalProfile` lays over the rig.
+   */
   const profile = reader
-    ? readerOpticalProfile(s.optical, display?.fingerprint ?? null)
+    ? readerOpticalProfile(
+        s.optical,
+        display?.fingerprint ?? null,
+        readerSeed ?? { intensity: t.textIntensity, readingCue: t.readingCue },
+      )
     : prompterOpticalProfile(s.optical, display, {
         intensity: t.textIntensity,
         readingCue: t.readingCue,
@@ -382,7 +473,13 @@ export function stageSettingsFromSettings(
     // the way in, and anything else has to mean the default.
     stageMode: t.diagnosticTake === true ? 'diagnostic' : 'clean',
     readingCue: t.readingCue,
-    ...(reader ? { readingContext: 'reader' as const } : {}),
+    /*
+     * Dark or Paper, for a reading window only — and validated here, because
+     * the section is overlay-backed and an unrecognised stored value has to
+     * mean dark. A prompter is never given one: a mid-take switch to the
+     * prompter recomposes through this same function and comes back black.
+     */
+    ...(reader ? { readingContext: 'reader' as const, readerTheme: readerThemeFor(t) } : {}),
     ...(profile && display
       ? {
           optical: {
@@ -407,6 +504,27 @@ export function stageSettingsFromSettings(
         }
       : {}),
   });
+}
+
+/**
+ * What Settings' live preview shows: the take's own composition, on the dark
+ * field.
+ *
+ * The preview is a separate stage window FILLING the chosen stage display —
+ * which is the teleprompter — so it is drawn black even when the saved mode is
+ * a reading window on paper. A reading window never opens a stage window; its
+ * paper is judged in the window itself, from Reading appearance. Everything
+ * else is `stageSettingsFromSettings` unchanged, which is the whole reason the
+ * preview can be trusted.
+ */
+export function stagePreviewSettingsFromSettings(
+  s: AppSettings,
+  display?: DisplayDescriptor | null,
+): StageSettings {
+  return stageSettingsFromSettings(
+    { ...s, teleprompter: { ...s.teleprompter, readerTheme: 'dark' } },
+    display,
+  );
 }
 
 /**
@@ -461,9 +579,44 @@ export function prompterOpticalProfile(
  * profile still produces an optics block, and `buildStageSettings` still
  * ignores every flat value in its presence. The controls' authority follows the
  * composition, not the quality of the measurement.
+ *
+ * A READING WINDOW IS NEVER THIS, though it always carries an optics block.
+ * Its profile is the reading rig with the reader preference laid over it, and
+ * that preference is exactly what the sheet and ⌘= / ⌘− set — so the window's
+ * size, spacing, measure, intensity and cue all answer to controls, just not to
+ * the flat Settings ones. See `isReaderPreferenceStage`.
  */
 export function isRigResolvedStage(settings: StageSettings | null): boolean {
-  return Boolean(settings?.optics);
+  return Boolean(settings?.optics) && !isReaderPreferenceStage(settings);
+}
+
+/**
+ * True when this take is a reading window whose appearance runs through the
+ * reader preference — the in-session sheet's reader controls, and the size
+ * keys, reach the glass.
+ *
+ * Only with an optics block, for the same reason a prompter needs one to be
+ * rig-resolved: without a display there is no profile on the stage at all, the
+ * window prompts from the flat fields, and the reader preference reaches
+ * nothing. That take keeps the ordinary controls, which DO move those fields.
+ */
+export function isReaderPreferenceStage(settings: StageSettings | null): boolean {
+  return settings?.readingContext === 'reader' && Boolean(settings.optics);
+}
+
+/**
+ * The theme a composed stage is drawn in, as the reading-window vocabulary
+ * says it: paper only for a reading window composed on paper, dark for
+ * everything else — every prompter included.
+ *
+ * Read off the RENDERED settings, so a control that reports it (the
+ * appearance sheet's Dark/Paper, the page canvas) says what is on the glass
+ * rather than what was saved.
+ */
+export function readerThemeOfStage(settings: StageSettings | null | undefined): ReaderTheme {
+  return settings?.readingContext === 'reader' && settings.themeId === READER_PAPER_THEME_ID
+    ? 'paper'
+    : 'dark';
 }
 
 /**

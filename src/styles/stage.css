@@ -1,9 +1,11 @@
 /* ============================================================================
    CandidCue stage palette (spec §11.3) — layered on top of the studio tokens.
 
-   The stage window sets no data-theme attribute, so it inherits the dark
-   studio defaults from tokens.css; these variables define the near-black
-   presentation surface for teleprompter glass and camera-facing use.
+   The stage window's document sets no data-theme attribute, so it inherits
+   the dark studio defaults from tokens.css; these variables define the
+   near-black presentation surface for teleprompter glass and camera-facing
+   use. (`.stage-root` carries its own `data-theme` — `stage-dark` or
+   `reader-paper` — which names a STAGE theme and matches none of the studio's.)
 
    WHY THE FIELD STAYS BLACK
    -------------------------
@@ -20,6 +22,18 @@
    neither was ever applied — `StageSettings.background`, `.foreground` and
    `.themeId` were carried the whole way to the stage and then read by nothing.
    The honest replacement is text intensity, below.
+
+   AND WHY A READING WINDOW MAY BE PAPER
+   -------------------------------------
+   Everything above is about glass. A reading window has none: it is an
+   ordinary window on a desk monitor, read directly, which is the case the
+   screen-reading research is actually about — and people's rooms, displays
+   and eyes differ enough that neither field is right for everybody. So a
+   reading window offers Paper beside Dark (Settings › Teleprompter, and
+   Reading appearance during a read), and only a reading window: control
+   writes `themeId: 'reader-paper'` for nothing else, and the stage refuses it
+   without a reader `readingContext`. A prompter take is this black field,
+   always. The paper roles are below, after text intensity.
    ============================================================================ */
 
 :root {
@@ -104,6 +118,89 @@
   --stage-text: #fffefb;
   --stage-text-past: rgba(255, 254, 251, 0.5);
   --stage-text-future: rgba(255, 254, 251, 0.94);
+}
+
+/*
+ * Paper, for a reading window only.
+ *
+ * The same block `StageApp.svelte` declares on `.stage-root`, mirrored for the
+ * reason the chrome tokens above are: this file is loaded by the stage WINDOW,
+ * the component's block by both. `reader-theme.test.ts` compares the two
+ * token for token, and composes every reading state against them — see the
+ * note in `StageApp.svelte` for what is pinned and why the past floor is 0.72.
+ *
+ * After the intensity rules on purpose: `.stage-root[data-theme]` and
+ * `.stage-root[data-text-intensity]` are the same specificity, so the paper
+ * field has to win by order, and its own intensity variants by specificity.
+ */
+.stage-root[data-theme='reader-paper'] {
+  color-scheme: light;
+  --stage-bg: #f6f2ea;
+  --stage-text: #242424;
+  --stage-text-past: rgba(36, 36, 36, 0.68);
+  --stage-text-future: rgba(36, 36, 36, 0.86);
+  --stage-accent: rgba(96, 84, 70, 0.3);
+  --stage-cue: #7a412e;
+  --stage-overlay: rgba(232, 227, 219, 0.96);
+  --stage-chrome-border: rgba(36, 30, 20, 0.14);
+  --stage-chrome-bg: rgba(252, 250, 246, 0.88);
+  --stage-chrome-text: rgba(36, 36, 36, 0.88);
+  --stage-chrome-shadow:
+    0 10px 30px rgba(24, 25, 29, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --stage-dim-1: 0.92;
+  --stage-dim-2: 0.84;
+  --stage-dim-3: 0.77;
+  --stage-unspoken-opacity: 0.72;
+
+  /* Roles whose dark value is the fallback at the point of use. */
+  --stage-wash-clear: rgb(96 84 70 / 0%);
+  --stage-wash: rgb(96 84 70 / 8%);
+  --stage-wash-hollow: rgb(96 84 70 / 3%);
+  --stage-wash-rule: rgb(96 84 70 / 24%);
+  --stage-mark-ink: #f6f2ea;
+  --stage-diag-fault: #a6342b;
+  --stage-chrome-bg-solid: rgb(252 250 246 / 96%);
+  --stage-chrome-bg-hover: rgb(241 237 230 / 94%);
+  --stage-chrome-border-hover: rgb(36 30 20 / 30%);
+  --stage-chrome-text-hover: #18191d;
+  --stage-chrome-text-strong: #18191d;
+  --stage-chrome-text-muted: rgb(36 36 36 / 68%);
+  --stage-chrome-text-faint: rgb(36 36 36 / 52%);
+  --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
+  --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
+  --stage-chrome-highlight: rgb(36 30 20 / 7%);
+  --stage-chrome-control-border: rgb(36 30 20 / 18%);
+  --stage-chrome-control-hover: rgb(36 30 20 / 6%);
+  --stage-focus-ring: rgb(36 36 36 / 70%);
+  --stage-dock-icon: rgb(36 36 36 / 72%);
+  --stage-dock-end: rgb(36 36 36 / 58%);
+  --stage-flag: #7a5310;
+  --stage-flag-hover: #5f400b;
+  --stage-flag-bg: rgb(154 103 22 / 10%);
+  --stage-flag-bg-hover: rgb(154 103 22 / 16%);
+  --stage-flag-border: rgb(154 103 22 / 38%);
+  --stage-flag-border-hover: rgb(154 103 22 / 52%);
+  --stage-flag-ring: rgb(252 250 246 / 92%);
+  --stage-danger: #a6342b;
+  --stage-danger-bg: rgb(185 65 56 / 10%);
+  --stage-danger-border: rgb(166 52 43 / 38%);
+  --stage-danger-strong-bg: rgb(185 65 56 / 12%);
+  --stage-danger-strong-bg-hover: rgb(185 65 56 / 20%);
+  --stage-danger-strong-border: rgb(166 52 43 / 55%);
+  --stage-danger-text: #8e2922;
+  --stage-danger-text-hover: #7a211b;
+}
+
+.stage-root[data-theme='reader-paper'][data-text-intensity='soft'] {
+  --stage-text: #33312e;
+  --stage-text-past: rgba(51, 49, 46, 0.7);
+  --stage-text-future: rgba(51, 49, 46, 0.86);
+}
+
+.stage-root[data-theme='reader-paper'][data-text-intensity='strong'] {
+  --stage-text: #141414;
+  --stage-text-past: rgba(20, 20, 20, 0.66);
+  --stage-text-future: rgba(20, 20, 20, 0.94);
 }
 
 html,
