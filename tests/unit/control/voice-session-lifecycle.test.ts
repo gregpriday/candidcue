@@ -857,7 +857,13 @@ describe('the STT listener hears only the take it belongs to (#289)', () => {
     await p.start();
     await p.hardPause();
 
-    deliver({ kind: 'final', generation: 1, itemId: 'last', text: 'the last words', audioEndMs: 900 });
+    deliver({
+      kind: 'final',
+      generation: 1,
+      itemId: 'last',
+      text: 'the last words',
+      audioEndMs: 900,
+    });
     deliver({ kind: 'audioDropped', generation: 1, frames: 3 });
     deliver({ kind: 'transport', generation: 1, state: 'closed' });
     deliver({ kind: 'partial', generation: 2, itemId: 'other', text: 'someone else' });
