@@ -135,8 +135,8 @@ function positionAt(lines: SourceLine[], offset: number): { line: number; column
  * direction for a lint: at worst it stays quiet about a block the author
  * explicitly marked as a directive.
  *
- * Front matter is treated more broadly than `scanFrontMatter`, which only
- * recognises a leading `---` block when it carries a top-level `coach:` key
+ * Front matter is treated more broadly than `maskLegacyCoachFrontMatter`, which
+ * only hides a leading `---` block when it carries a top-level `coach:` key
  * (that narrowness protects the compiler from re-interpreting an existing
  * document; it buys this file nothing). Any leading `---` … `---` block whose
  * body reads like YAML is skipped here. A lint that stays quiet about a

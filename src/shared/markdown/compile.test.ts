@@ -1116,12 +1116,94 @@ describe('compile: a leading byte-order mark (#247)', () => {
     const body = ['---', 'coach:', '  mode: minimal', '---', '', 'All good here.', ''].join('\n');
     const plain = compile(body, OPTS);
     const marked = compile(BOM + body, OPTS);
-    expect(marked.coaching?.frontMatter).toEqual(plain.coaching?.frontMatter);
-    expect(marked.coaching?.frontMatter?.mode).toBe('minimal');
+    expect(marked.blocks.map((b) => b.kind)).toEqual(['paragraph']);
+    expect(marked.diagnostics).toEqual([]);
     expect(normalizedWords(marked)).toEqual(normalizedWords(plain));
     for (const token of marked.spokenTokens) {
       expect((BOM + body).slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
     }
+    expect(marked.spokenTokens.map((t) => t.source.utf16Start)).toEqual(
+      plain.spokenTokens.map((t) => t.source.utf16Start + 1),
+    );
+  });
+});
+
+describe('compile: a leading `coach:` block stays hidden (#208)', () => {
+  // The retired coaching rail read a `coach:` front-matter block, and scripts
+  // written for it still open with one. The block must stay off the glass and
+  // out of the spoken stream with nothing reported about it — and only that
+  // block: a leading `---` without the key is ordinary Markdown, as it always
+  // was, so a script that opens with a rule keeps its rule.
+  const BOM = '﻿';
+  const kinds = (script: CompiledScript) => script.blocks.map((b) => b.kind);
+  const lines = (...rows: string[]) => [...rows, '', 'Hello world.', ''].join('\n');
+
+  it.each([
+    ['a mapping', lines('---', 'coach:', '  mode: studio', '  style: calm', '  target_wpm: [130, 165]', '---')],
+    ['a scalar', lines('---', 'coach: off', '---')],
+    ['an empty key', ['---', 'coach:', '---', 'Hello world.', ''].join('\n')],
+    ['other keys beside it', lines('---', 'title: Launch', 'coach:', '  mode: minimal', '---')],
+    ['a `...` closer', lines('---', 'coach:', '  mode: minimal', '...')],
+    ['spaces after the delimiters', lines('--- ', 'coach:', '  mode: minimal', '---  ')],
+    ['CRLF line endings', lines('---', 'coach:', '  mode: minimal', '---').replace(/\n/g, '\r\n')],
+    ['a byte-order mark', `${BOM}${lines('---', 'coach:', '  mode: minimal', '---')}`],
+    [
+      'values the coaching parser used to reject',
+      lines('---', 'coach:', '  mode: turbo', '  target_wpm: fast', '  filler_detection: wide', '---'),
+    ],
+  ])('hides %s', (_name, source) => {
+    const script = compile(source, OPTS);
+    expect(kinds(script)).toEqual(['paragraph']);
+    expect(flattenText(script.blocks[0]!.renderNodes)).toBe('Hello world.');
+    expect(script.diagnostics).toEqual([]);
+    expect(normalizedWords(script)).toEqual(['hello', 'world']);
+    for (const token of script.spokenTokens) {
+      expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
+    }
+  });
+
+  // Headings are not spoken by default, so the words alone could not tell a
+  // hidden block from one that became a heading; the block kinds can.
+  const heading = ['divider', 'heading', 'paragraph'];
+  it.each([
+    ['no `coach:` key', lines('---', 'coaching_off_key:', '  mode: studio', '---'), heading, ['hello', 'world']],
+    ['an indented key', lines('---', '  coach:', '    style: calm', '---'), heading, ['hello', 'world']],
+    ['a capitalised key', lines('---', 'Coach:', '  style: calm', '---'), heading, ['hello', 'world']],
+    ['a blank line before it', `\n${lines('---', 'coach:', '  style: calm', '---')}`, heading, ['hello', 'world']],
+    [
+      'no closing line',
+      lines('---', 'coach:', '  style: calm'),
+      ['divider', 'paragraph', 'paragraph'],
+      ['coach', 'style', 'calm', 'hello', 'world'],
+    ],
+    [
+      'the key after the block closes',
+      lines('---', 'title: Launch', '---', '', 'coach: off'),
+      ['divider', 'heading', 'paragraph', 'paragraph'],
+      ['coach', 'off', 'hello', 'world'],
+    ],
+    [
+      'a rule, a heading and a rule',
+      lines('---', '# Heading', '---'),
+      ['divider', 'heading', 'divider', 'paragraph'],
+      ['hello', 'world'],
+    ],
+    [
+      'a rule, the text and a rule',
+      lines('---', '', 'Note: something', '', '---'),
+      ['divider', 'paragraph', 'divider', 'paragraph'],
+      ['note', 'something', 'hello', 'world'],
+    ],
+  ])('renders a leading block with %s as Markdown', (_name, source, expectedKinds, words) => {
+    const script = compile(source, OPTS);
+    expect(kinds(script)).toEqual(expectedKinds);
+    expect(script.diagnostics).toEqual([]);
+    expect(normalizedWords(script)).toEqual(words);
+  });
+
+  it('no longer reports a coaching result at all', () => {
+    const script = compile(lines('---', 'coach:', '  mode: minimal', '---'), OPTS);
+    expect('coaching' in script).toBe(false);
   });
 });
 

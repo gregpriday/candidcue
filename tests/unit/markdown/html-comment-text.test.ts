@@ -1,5 +1,5 @@
 /**
- * §22.2 / §19.4 — text that follows an HTML comment on the same line.
+ * §22.2 — text that follows an HTML comment on the same line.
  *
  * `- <!-- note --> and then the line` is a single CommonMark *HTML block*: the
  * comment does not end at `-->`, it ends at the end of the line, so the
@@ -12,7 +12,8 @@
  * all three survive:
  *
  *  1. the words after the comment are spoken;
- *  2. a `cc:` directive in front of them is still silent, and still applies;
+ *  2. a comment in the retired `cc:` coaching syntax is an ordinary comment —
+ *     silent, and reported nowhere, since nothing it says has an effect;
  *  3. the spoken token stream is byte- and index-identical to the same script
  *     written without the comment — the property every downstream alignment
  *     anchor rests on.
@@ -27,13 +28,6 @@ function compileSource(source: string): CompiledScript {
 
 function surfaces(result: CompiledScript): string[] {
   return result.spokenTokens.map((token) => token.surface);
-}
-
-function spanTexts(result: CompiledScript, predicate: (spanId: string) => boolean): string[] {
-  const byId = new Map(result.sentences.map((s) => [s.id, s.normalizedText]));
-  return (result.coaching?.spans ?? [])
-    .filter((span) => predicate(span.spanId))
-    .map((span) => byId.get(span.spanId) ?? `<unknown ${span.spanId}>`);
 }
 
 /* ------------------------------------------------------------------ */
@@ -88,35 +82,56 @@ describe('a comment never eats the rest of the line', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 2. The directive still works, and is still silent                   */
+/* 2. A retired directive is an ordinary comment                       */
 /* ------------------------------------------------------------------ */
 
-describe('§19.4 a directive in a list item is silent and still applies', () => {
-  const source = ['- First item is coached.', '- <!-- cc:coach off --> Second item.', ''].join('\n');
+describe('a retired `cc:` directive is an ordinary comment', () => {
+  // Every form the coaching rail understood, the three it only reported as
+  // unsupported, and the malformed ones it used to warn about. Old scripts
+  // carry all of them, and a warning on each would be noise about a feature
+  // that no longer exists.
+  const retired = [
+    'cc:style calm',
+    'cc:pace 150-190',
+    'cc:coach off',
+    'cc:coach on',
+    'cc:filler intentional',
+    'cc:end',
+    'cc:pause 3s',
+    'cc:emphasis high',
+    'cc:duration 2:00',
+    'cc:',
+    'cc:wobble',
+    'cc:pace fast',
+  ];
 
-  it('applies the directive to the item it is written in', () => {
-    const result = compileSource(source);
-    expect(spanTexts(result, () => true)).toEqual(['second item']);
-    expect(result.coaching?.spans[0]?.coachingOff).toBe(true);
+  it.each(retired)('keeps <!-- %s --> in a list item silent and unreported', (directive) => {
+    const bare = compileSource(['- First item.', '- Second item.', ''].join('\n'));
+    const result = compileSource(
+      ['- First item.', `- <!-- ${directive} --> Second item.`, ''].join('\n'),
+    );
+    expect(surfaces(result)).toEqual(['First', 'item', 'Second', 'item']);
+    expect(result.spokenTokens.map((t) => t.index)).toEqual(bare.spokenTokens.map((t) => t.index));
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it.each(retired)('reports nothing for <!-- %s --> on a line of its own', (directive) => {
+    // Once before the paragraph and once after it, where the old resolver
+    // complained that a directive covered no spoken text.
+    const comment = `<!-- ${directive} -->`;
+    const result = compileSource([comment, '', 'A paragraph.', '', comment, ''].join('\n'));
+    expect(surfaces(result)).toEqual(['A', 'paragraph']);
     expect(result.diagnostics).toEqual([]);
   });
 
   it('leaks no directive keyword into the spoken stream', () => {
+    const source = ['- First item.', '- <!-- cc:coach off --> Second item.', ''].join('\n');
     const spoken = ` ${compileSource(source)
       .spokenTokens.map((t) => t.normalized)
       .join(' ')} `;
     for (const leaked of ['cc', 'coach', 'off']) {
       expect(spoken.includes(` ${leaked} `), `"${leaked}" leaked`).toBe(false);
     }
-  });
-
-  it('applies a pace directive written inline in a list item', () => {
-    const result = compileSource(
-      ['- <!-- cc:pace 150-190 --> Rattle through this bit.', '- But not this bit.', ''].join('\n'),
-    );
-    expect(spanTexts(result, () => true)).toEqual(['rattle through this bit']);
-    expect(result.coaching?.spans[0]?.paceLowWpm).toBe(150);
-    expect(result.coaching?.spans[0]?.paceHighWpm).toBe(190);
   });
 });
 
@@ -149,8 +164,8 @@ describe('the spoken stream is identical with and without the comment', () => {
     expect(annotated.sentences.map((s) => s.normalizedText)).toEqual(
       plain.sentences.map((s) => s.normalizedText),
     );
-    // Sentence ids are content hashes, so equal ids prove the *scope* a
-    // directive names is the same span the bare script produces.
+    // Sentence ids are content hashes, so equal ids prove the comment left
+    // every span exactly as the bare script produces it.
     expect(annotated.sentences.map((s) => s.id)).toEqual(plain.sentences.map((s) => s.id));
     expect(annotated.statistics.spokenWordCount).toBe(plain.statistics.spokenWordCount);
   });

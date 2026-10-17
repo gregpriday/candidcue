@@ -65,29 +65,11 @@ describe('sample script', () => {
     }
   });
 
-  it('demonstrates a §19.4 coaching directive on the line that needs one', () => {
-    // The "slow right down" paragraph carries the sample's one directive, and
-    // the compiler resolves it to the spans it covers.
-    expect(SAMPLE_SCRIPT_SOURCE).toMatch(/<!-- cc:style calm -->/);
-
-    const result = compileSource(SAMPLE_SCRIPT_SOURCE);
-    expect(result.coaching?.spans.length).toBeGreaterThan(0);
-    expect(result.coaching?.spans.every((span) => span.style === 'calm')).toBe(true);
-
-    const slowSentence = result.sentences.find((sentence) =>
-      sentence.normalizedText.startsWith('now try slowing right down'),
-    );
-    expect(slowSentence).toBeDefined();
-    expect(result.coaching?.spans.map((span) => span.spanId)).toContain(slowSentence?.id);
-
-    // Silent, like every other directive in this file.
-    const spoken = ` ${result.spokenTokens.map((token) => token.normalized).join(' ')} `;
-    for (const leaked of ['cc', 'style', 'calm']) {
-      expect(
-        spoken.includes(` ${leaked} `),
-        `directive keyword "${leaked}" leaked into the spoken stream`,
-      ).toBe(false);
-    }
+  it('teaches none of the retired coaching syntax', () => {
+    // The coaching rail is gone, and a `cc:` comment in the first script a user
+    // opens would teach a directive that does nothing.
+    expect(SAMPLE_SCRIPT_SOURCE).not.toMatch(/cc:/);
+    expect(SAMPLE_SCRIPT_SOURCE).not.toMatch(/^coach\s*:/m);
   });
 
   it('has a title that says what to do with it', () => {
