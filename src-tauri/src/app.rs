@@ -479,7 +479,7 @@ pub fn run() {
             // Never let the display-sleep assertion outlive the app, and take
             // any lingering identification overlay down with us (§52.4, §52.7).
             if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
-                crate::windows::sleep::release(handle);
+                crate::windows::sleep::release_all(handle);
                 crate::windows::close_identify_overlays(handle);
             }
         });

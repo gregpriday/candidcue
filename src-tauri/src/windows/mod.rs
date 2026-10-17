@@ -739,10 +739,14 @@ pub fn open_stage<R: Runtime>(
             // And grey Window › Stage again. This covers the crash and the
             // user-closed cases as well as the orderly one below.
             crate::menu::refresh_stage_item(&app_handle);
-            // The display-sleep assertion is created when the stage presents;
-            // release it here so a crash or an unexpected close can never leak
-            // it (spec §52.7).
-            crate::windows::sleep::release(&app_handle);
+            // The stage's display-sleep claim is made when it presents;
+            // withdraw it here so a crash or an unexpected close can never leak
+            // it (spec §52.7). Only this window's: a take presenting in the
+            // control window holds its own, and so does a replacement stage.
+            crate::windows::sleep::release(
+                &app_handle,
+                crate::windows::sleep::SleepHolder::Stage(generation),
+            );
             let _ = app_handle.emit_to(
                 CONTROL_LABEL,
                 events::STAGE_CLOSED,
@@ -918,7 +922,7 @@ pub fn close_stage<R: Runtime>(app: &AppHandle<R>, session_id: &str) -> Result<(
         window.destroy()?;
     }
     coordinator.stage_closed(snapshot.stage.generation);
-    sleep::release(app);
+    sleep::release(app, sleep::SleepHolder::Stage(snapshot.stage.generation));
     Ok(())
 }
 
@@ -966,12 +970,12 @@ pub fn set_stage_fullscreen<R: Runtime>(
         // Block display sleep for the take: the operator deliberately stops
         // touching the keyboard for 20+ minutes, and macOS sleeps the display
         // at 10–20 (spec §52.7).
-        sleep::acquire(app);
+        sleep::acquire(app, sleep::SleepHolder::Stage(generation));
     } else {
         // Windowed stage (preview/test): still make it visible (§43.3).
         window.set_fullscreen(false)?;
         window.show()?;
-        sleep::release(app);
+        sleep::release(app, sleep::SleepHolder::Stage(generation));
     }
 
     let visible = window.is_visible().unwrap_or(false);
