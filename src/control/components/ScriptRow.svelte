@@ -12,7 +12,8 @@
 
   This is a 52px row on one continuous surface, separated by hairlines, with the
   metadata in stable columns. §10.1's anatomy, in order: selection background,
-  title, one line of excerpt, duration, modified, readiness, trailing action.
+  title (with readiness beside it, when there is any), one line of excerpt,
+  duration, modified, trailing action.
 
   ---------------------------------------------------------------------------
   SELECTION AND FOCUS ARE DIFFERENT THINGS, DRAWN DIFFERENTLY
@@ -98,6 +99,22 @@
   }: Props = $props();
 
   const interactive = $derived(Boolean(onopen ?? onselect));
+
+  let titleElement: HTMLElement | null = $state(null);
+  /**
+   * The full title as a tooltip, offered only when the row has cut it short.
+   *
+   * Measured when the pointer arrives rather than kept up to date, because
+   * the pointer arriving is the only moment the answer is wanted — and a long
+   * title beside a "Needs attention" pill in a narrow window is exactly the
+   * one a reader cannot otherwise finish without selecting the row.
+   */
+  let titleTip: string | undefined = $state(undefined);
+
+  function measureTitle(): void {
+    titleTip =
+      titleElement !== null && titleElement.scrollWidth > titleElement.clientWidth ? title : undefined;
+  }
 
   /**
    * Whether the duration column holds a measurement or a placeholder.
@@ -211,27 +228,41 @@
   ondblclick={interactive ? dblclick : undefined}
   oncontextmenu={oncontextmenu}
   onkeydown={interactive ? keydown : undefined}
+  onpointerenter={measureTitle}
 >
   <div class="main">
-    <span class="title">{title}</span>
+    <!--
+      The status rides on the title's line, after it. It used to have a column
+      of its own, which was empty on every healthy row and too narrow for the
+      pill on the rest — so "Needs attention" printed over the date beside it.
+      Here the title truncates before the pill does.
+    -->
+    <span class="title-line">
+      <span class="title" bind:this={titleElement} title={titleTip}>{title}</span>
+      {@render status?.()}
+    </span>
     <!--
       ONE line of excerpt, and only outside compact density. §10.1: two full
       lines in the default list is harder to scan than one, and the second line
       is what turned every card into a paragraph.
+
+      The line is kept even when there is no excerpt, so every title sits at the
+      same height in its row. A script with nothing in it used to centre its
+      title, and the column of titles stepped up and down as the eye ran it.
     -->
-    {#if excerpt && !compact}
-      <span class="excerpt">{excerpt}</span>
+    {#if !compact}
+      <span class="excerpt" aria-hidden={excerpt ? undefined : 'true'}>{excerpt || '\u00a0'}</span>
     {/if}
   </div>
 
   <!--
     Stable columns, tabular numerals, fixed widths. The point of a column is
     that the eye can run down it; a duration that starts at a different x on
-    every row is not a column, it is trailing text.
+    every row is not a column, it is trailing text. The widths come from the
+    list, which draws the column headings over them.
   -->
   <span class="col duration" class:empty={!hasDuration}>{duration}</span>
   <span class="col modified">{modified}</span>
-  <span class="col status">{@render status?.()}</span>
 
   {#if actions}
     <div class="actions">{@render actions()}</div>
@@ -253,9 +284,10 @@
     position: relative;
     transition: background var(--dur-fast) var(--ease-out);
   }
+  /* Same gap as comfortable, so switching density does not slide the columns
+     sideways under the headings. */
   .compact {
     height: var(--list-row-h-compact);
-    gap: var(--space-3);
   }
   .interactive {
     cursor: default;
@@ -289,8 +321,14 @@
      * Dimmed while the keyboard is elsewhere. Opacity rather than a second
      * colour, so the two states are visibly the same mark at two strengths —
      * which is the distinction §23.3 actually wants drawn.
+     *
+     * Dimmed, not faded out: the selection is still what every File command
+     * acts on, so it must still be findable. 0.85 keeps the bar at 3.4:1
+     * against the resting tint (SC 1.4.11's 3:1 for a state); the 0.45 it
+     * used to be was 1.8:1, and with search focused the selected script was
+     * barely distinguishable from its neighbours.
      */
-    opacity: 0.45;
+    opacity: 0.85;
     transition: opacity var(--dur-fast) var(--ease-out);
   }
   .selected {
@@ -321,8 +359,21 @@
     min-width: 0;
   }
 
+  /* A fixed line box, so a row carrying a status pill puts its title at the
+     same height as one that does not. */
+  .title-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 20px;
+    min-width: 0;
+  }
+
   .title {
+    flex: 0 1 auto;
+    min-width: 0;
     font-size: var(--text-sm);
+    line-height: 20px;
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
@@ -351,7 +402,7 @@
     text-align: right;
   }
   .duration {
-    width: 68px;
+    width: var(--col-length, 72px);
   }
   /*
    * A script with nothing in it has no duration, and a column of em dashes at
@@ -362,23 +413,22 @@
     color: var(--text-faint);
   }
   .modified {
-    width: 104px;
-  }
-  .status {
-    width: 92px;
-    display: flex;
-    justify-content: flex-end;
+    width: var(--col-modified, 112px);
   }
 
   /*
    * Hidden until hover, focus or selection — but still occupying their space,
-   * so nothing reflows as the pointer travels down the list.
+   * so nothing reflows as the pointer travels down the list. A fixed width
+   * rather than the width of whatever is in it, so the columns to its left
+   * line up under their headings whether the row offers Present or Restore.
    */
   .actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: var(--space-1);
     flex: 0 0 auto;
+    width: var(--col-actions, 120px);
     visibility: hidden;
   }
   .row:hover .actions,
@@ -396,11 +446,6 @@
    */
   @media (max-width: 900px) {
     .duration {
-      display: none;
-    }
-  }
-  @media (max-width: 760px) {
-    .status {
       display: none;
     }
   }

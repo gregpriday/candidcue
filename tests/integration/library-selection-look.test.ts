@@ -65,7 +65,7 @@ describe('a selected row is a marker, not a wash', () => {
      * "selected, and the keyboard is here".
      */
     expect(ROW_CSS).toMatch(/\.selected\.list-focused::before\s*\{[^}]*opacity:\s*1/);
-    expect(ROW_CSS).toMatch(/\.selected::before\s*\{[\s\S]*?opacity:\s*0\.45/);
+    expect(ROW_CSS).toMatch(/\.selected::before\s*\{[\s\S]*?opacity:\s*0\.85/);
     expect(ROW_CSS).toMatch(/\.selected\.list-focused[\s\S]*?background:\s*var\(--bg-row-selected\)/);
   });
 

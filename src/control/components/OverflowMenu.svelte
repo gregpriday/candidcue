@@ -87,28 +87,53 @@
   const MENU_PAD = 8;
 
   /**
+   * The vertical band the menu can actually be seen in: the window, narrowed
+   * by every ancestor that clips its overflow.
+   *
+   * Measuring the window alone was wrong by exactly the chrome under the list.
+   * In the Library the rows scroll inside `.list-area`, which ends at the
+   * status bar, so a row's menu with 230px of window below it but only 206px
+   * of list opened downwards and lost its last item under the status bar.
+   * The clip is the padding box, so the band is taken from the client area.
+   */
+  function visibleBand(from: HTMLElement): { top: number; bottom: number } {
+    let top = 0;
+    let bottom = window.innerHeight;
+    for (let el = from.parentElement; el; el = el.parentElement) {
+      const style = getComputedStyle(el);
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+      const rect = el.getBoundingClientRect();
+      top = Math.max(top, rect.top + el.clientTop);
+      bottom = Math.min(bottom, rect.top + el.clientTop + el.clientHeight);
+    }
+    return { top, bottom };
+  }
+
+  /**
    * Open upwards when there is not enough room below.
    *
-   * The menu is absolutely positioned, so it is clipped by the nearest
-   * scrolling ancestor — and in the library that is `.page`, which scrolls. A
-   * menu opened on the last visible row was cut off by the bottom of the list
-   * rather than merely running past the window.
+   * The menu is absolutely positioned, so it is clipped by every ancestor that
+   * clips — see `visibleBand` for the one that bit. A menu opened on the last
+   * visible row was cut off by the bottom of the list rather than merely
+   * running past the window.
    *
    * The height is COMPUTED from the item count rather than measured, because
    * measuring means rendering downwards first and correcting on the next frame,
    * which the operator sees as the menu jumping. Items are `nowrap` and a fixed
-   * height, so the arithmetic is exact.
+   * height, so the arithmetic is exact. The 8px is the 6px gap to the trigger
+   * plus the menu's two 1px borders.
    */
   function decideDirection(): void {
-    const trigger = root?.getBoundingClientRect();
-    if (!trigger) return;
+    if (!root) return;
+    const trigger = root.getBoundingClientRect();
+    const band = visibleBand(root);
     const height =
       MENU_PAD * 2 +
       items.length * ITEM_H +
       items.filter((item) => item.separated).length * SEPARATOR_H;
-    const below = window.innerHeight - trigger.bottom - 8;
-    const above = trigger.top - 8;
-    // Only flip when up is genuinely better: a menu taller than the window
+    const below = band.bottom - trigger.bottom - 8;
+    const above = trigger.top - band.top - 8;
+    // Only flip when up is genuinely better: a menu taller than the band
     // stays put rather than swapping one clipped edge for the other.
     dropUp = height > below && above > below;
   }
@@ -364,8 +389,17 @@
   .item:focus-visible {
     outline: none;
   }
+  /*
+   * The highlight is the menu's focus indicator — the only one, since an
+   * outline would draw a second selection under it — so it has to be seen:
+   * a solid clay fill with an inverse label, the way a Mac menu marks the item
+   * Return would choose. The faint surface wash it replaces measured 1.1:1
+   * against the menu, which is no indicator at all to a keyboard user. The
+   * same treatment in OverflowMenu, ContextMenu and SplitButton.
+   */
   .item.active:not(:disabled) {
-    background: var(--bg-hover-surface);
+    background: var(--accent-strong);
+    color: var(--accent-contrast);
   }
   .item:disabled {
     opacity: 0.45;
@@ -375,7 +409,12 @@
     color: var(--danger);
   }
   .item.danger.active:not(:disabled) {
-    background: var(--danger-soft);
+    background: var(--danger);
+    color: var(--danger-contrast);
+  }
+  .item.active:not(:disabled) .check,
+  .item.active:not(:disabled) .shortcut {
+    color: inherit;
   }
 
   .check {
