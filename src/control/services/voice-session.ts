@@ -66,6 +66,26 @@ import {
  */
 export const PRE_ROLL_MAX_FRAMES = 40;
 
+/**
+ * Every pipeline's `start_transcription`, one at a time.
+ *
+ * Rust holds ONE recogniser session, and a start replaces whatever is running
+ * (`SpeechEngine::start_stream`). A start that a stop or a hard pause has
+ * overtaken is still in flight there — a cold load runs for seconds — and if
+ * it landed after the take that followed it, it would abandon that take's
+ * session for one nobody is reading (#289). Module scope rather than per
+ * pipeline, because "Present again" builds a new pipeline while the old one's
+ * load is still running. Waiting costs nothing: the next start would block on
+ * the same load in Rust anyway.
+ */
+let transportQueue: Promise<void> = Promise.resolve();
+
+function serialiseTransport(task: () => Promise<void>): Promise<void> {
+  const run = transportQueue.then(task);
+  transportQueue = run.catch(() => {});
+  return run;
+}
+
 /** Timer seam so tests drive a virtual clock instead of waiting. */
 export interface PipelineTimers {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -239,11 +259,24 @@ export class VoiceSessionPipeline {
    */
   private audioOriginMs = 0;
   /**
-   * Bumped by every teardown. Any `await` inside `start()` re-checks it, so a
-   * stop that lands mid-start cannot be overtaken by the start it interrupted
-   * and leave a microphone open on a session nobody asked for.
+   * Bumped by every teardown. Every operation that opens something reads it
+   * before its FIRST await and re-checks it after each one, so a stop that
+   * lands mid-start cannot be overtaken by the start it interrupted and leave
+   * a microphone open on a session nobody asked for (#289).
+   *
+   * An attempt that finds it has moved owns nothing shared any more: `stop()`
+   * or `hardPause()` already took down what was published, and a resume may
+   * have opened its own since. It releases only the handles it is still
+   * holding locally, and leaves every field alone.
    */
   private lifecycle = 0;
+  /** The start in flight for the current lifecycle, so a second one joins it. */
+  private starting: { epoch: number; done: Promise<void> } | null = null;
+  /**
+   * Orders microphone acquisitions, so a switch and a start (or two switches)
+   * cannot both open the device and leave one stream with no owner.
+   */
+  private audioChain: Promise<void> = Promise.resolve();
   private unlistenStt: (() => void) | null = null;
   private stopped = false;
   private running = false;
@@ -324,72 +357,104 @@ export class VoiceSessionPipeline {
     this.now = deps.now ?? (() => Date.now());
   }
 
-  /** §29.2 start sequence. Billable streaming begins here. */
-  async start(): Promise<void> {
-    if (this.stopped) throw new Error('SESSION_STOPPED');
-    // Steps 1–2 first: nothing billable begins on a session whose script or
-    // compile was not ready.
-    if (this.deps.startSequence) {
-      await this.deps.startSequence.flushScriptSave();
-      await this.deps.startSequence.ensureCompiled();
-    }
-    // Step 4, passive: only an explicit `denied` stops the sequence. Plenty of
-    // WebViews do not answer the query at all, and `getUserMedia` resolves
-    // permission implicitly there.
-    if (!(await this.checkMicrophonePermission())) {
-      throw new Error('MIC_PERMISSION_DENIED');
-    }
-
+  /**
+   * §29.2 start sequence. Billable streaming begins here.
+   *
+   * One start per lifecycle: a resume that arrives while this one is still
+   * opening joins it rather than running a second acquire that would tear the
+   * first one's capture down underneath it.
+   */
+  start(): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error('SESSION_STOPPED'));
+    if (this.starting?.epoch === this.lifecycle) return this.starting.done;
     const epoch = this.lifecycle;
-    traceBegin();
-    trace('start', `sessionGeneration ${this.deps.sessionGeneration}`);
-    this.running = true;
-    this.paused = false;
-    this.setConnectionState('reconnecting');
-    // Before the microphone and before the session: a Tauri event is delivered
-    // by evaluating JS in the target webview and is never queued, so a frame
-    // emitted before this returns is lost outright.
-    await this.subscribeToStt();
+    const done = this.openSession(epoch).finally(() => {
+      if (this.starting?.done === done) this.starting = null;
+    });
+    this.starting = { epoch, done };
+    return done;
+  }
 
+  private async openSession(epoch: number): Promise<void> {
     try {
-      // Every continuation re-checks the epoch. Without it a `stop()` that
-      // lands between two awaits is overtaken by the start it interrupted, and
-      // the take ends holding an open microphone and a billing socket.
-      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
-      const stream = await this.acquireMicrophone(this.preferredDeviceId);
-      trace('microphone', 'stream acquired');
+      // Steps 1–2 first: nothing billable begins on a session whose script or
+      // compile was not ready.
+      if (this.deps.startSequence) {
+        await this.deps.startSequence.flushScriptSave();
+        this.assertCurrent(epoch);
+        await this.deps.startSequence.ensureCompiled();
+        this.assertCurrent(epoch);
+      }
+      // Step 4, passive: only an explicit `denied` stops the sequence. Plenty
+      // of WebViews do not answer the query at all, and `getUserMedia`
+      // resolves permission implicitly there.
+      const permitted = await this.checkMicrophonePermission();
+      this.assertCurrent(epoch);
+      if (!permitted) throw new Error('MIC_PERMISSION_DENIED');
 
-      /*
-       * CAPTURE FIRST, THEN THE RECOGNISER (#257).
-       *
-       * `start_transcription` loads the model when it is not resident, which
-       * takes over a second on the first take after launch and the first after
-       * a model change. Capture used to wait for it, so the microphone sat open
-       * for that second recording nothing, and the presenter's opening words —
-       * the ones that place the first lock — were never heard at all. The
-       * frames captured meanwhile are held (`preRoll`) and handed over the
-       * moment the session has a generation to stamp them with.
-       */
-      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
-      this.audioOriginMs = this.now();
-      this.holdingFrames = true;
-      await this.startCapture(stream);
-      trace('capture', `started at ${this.capture?.contextSampleRate ?? 0} Hz`);
+      traceBegin();
+      trace('start', `sessionGeneration ${this.deps.sessionGeneration}`);
+      this.running = true;
+      this.paused = false;
+      this.setConnectionState('reconnecting');
+      // Before the microphone and before the session: a Tauri event is
+      // delivered by evaluating JS in the target webview and is never queued,
+      // so a frame emitted before this returns is lost outright.
+      await this.subscribeToStt(epoch);
 
-      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
-      // Assigned before the epoch check below, so a stop that landed during the
-      // load still has a generation for the catch to close.
-      this.transportGeneration = await startTranscription();
-      trace('session', `transport ${this.transportGeneration} on the bundled recogniser`);
+      await this.serialiseAudio(async () => {
+        this.assertCurrent(epoch);
+        const stream = await this.acquireMicrophone(epoch, this.preferredDeviceId);
+        trace('microphone', 'stream acquired');
 
-      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
-      // In the same turn as the assignment above, with no await between them:
-      // a frame captured after this point cannot be queued ahead of the
-      // backlog it follows.
-      this.openSender(this.transportGeneration);
-      this.releasePreRoll();
+        /*
+         * CAPTURE FIRST, THEN THE RECOGNISER (#257).
+         *
+         * `start_transcription` loads the model when it is not resident, which
+         * takes over a second on the first take after launch and the first
+         * after a model change. Capture used to wait for it, so the microphone
+         * sat open for that second recording nothing, and the presenter's
+         * opening words — the ones that place the first lock — were never
+         * heard at all. The frames captured meanwhile are held (`preRoll`) and
+         * handed over the moment the session has a generation to stamp them
+         * with.
+         */
+        this.assertCurrent(epoch);
+        this.audioOriginMs = this.now();
+        this.holdingFrames = true;
+        await this.startCapture(epoch, stream);
+        trace('capture', `started at ${this.capture?.contextSampleRate ?? 0} Hz`);
+      });
+
+      await serialiseTransport(async () => {
+        this.assertCurrent(epoch);
+        const generation = await startTranscription();
+        if (!this.isCurrent(epoch)) {
+          // Closed here and never published. The take it was opened for has
+          // ended, and assigning it would overwrite the generation of a
+          // resume that has since opened its own.
+          await this.closeTransport(generation);
+          throw new Error('SESSION_STOPPED');
+        }
+        this.transportGeneration = generation;
+        trace('session', `transport ${generation} on the bundled recogniser`);
+        // In the same turn as the assignment above, with no await between
+        // them: a frame captured after this point cannot be queued ahead of
+        // the backlog it follows. Opened only past the epoch check above, so
+        // an attempt a stop or hard pause overtook never builds a queue.
+        this.openSender(generation);
+        this.releasePreRoll();
+      });
     } catch (err) {
       trace('start-failed', err instanceof Error ? err.message : 'unknown');
+      /*
+       * Whatever this attempt failed on, if the take moved on meanwhile the
+       * answer is `SESSION_STOPPED`, which the store treats as a teardown
+       * rather than a failure to report. Nothing shared is cleaned up here:
+       * the stop or hard pause that superseded this attempt already did that,
+       * and the fields may now belong to a resume.
+       */
+      if (!this.isCurrent(epoch)) throw new Error('SESSION_STOPPED');
       this.running = false;
       // Audio held for a session that will now never open belongs to nobody.
       this.dropPreRoll();
@@ -416,8 +481,17 @@ export class VoiceSessionPipeline {
   async switchMicrophone(deviceId: string): Promise<void> {
     this.deviceOverride = deviceId;
     if (!this.running) return;
-    const stream = await this.acquireMicrophone(deviceId);
-    await this.startCapture(stream);
+    // The busy-device retry alone can hold this open for 1.75 s, and a stop in
+    // that window must not be followed by a new stream on a dead take (#289).
+    const epoch = this.lifecycle;
+    await this.serialiseAudio(async () => {
+      this.assertCurrent(epoch);
+      // Queued behind a start that has since failed: there is no take to
+      // give a microphone to.
+      if (!this.running) return;
+      const stream = await this.acquireMicrophone(epoch, deviceId);
+      await this.startCapture(epoch, stream);
+    });
     try {
       this.deviceManager?.select({ mode: 'specific', deviceId });
     } catch {
@@ -467,7 +541,6 @@ export class VoiceSessionPipeline {
       // `start()` owns the whole acquire → open → capture sequence, including
       // its epoch checks; duplicating it here is how the two drift apart.
       this.paused = false;
-      this.stopped = false;
       await this.start();
       return;
     }
@@ -486,11 +559,12 @@ export class VoiceSessionPipeline {
     this.clearPauseTimer();
     this.paused = true;
     this.lifecycle += 1;
-    this.dropPreRoll();
-    await this.closeSession();
-    await this.teardownAudio();
     this.running = false;
+    this.dropPreRoll();
     this.setConnectionState('offline');
+    // Both detach what they close before their first await, so a resume that
+    // starts while this is still closing keeps everything it opens (#289).
+    await Promise.all([this.closeSession(), this.teardownAudio()]);
   }
 
   async stop(): Promise<void> {
@@ -525,7 +599,22 @@ export class VoiceSessionPipeline {
 
   /* ---------------------------------------------------------------------- */
 
-  private async subscribeToStt(): Promise<void> {
+  private isCurrent(epoch: number): boolean {
+    return epoch === this.lifecycle;
+  }
+
+  private assertCurrent(epoch: number): void {
+    if (!this.isCurrent(epoch)) throw new Error('SESSION_STOPPED');
+  }
+
+  /** Run `task` after every microphone acquisition queued before it. */
+  private serialiseAudio(task: () => Promise<void>): Promise<void> {
+    const run = this.audioChain.then(task);
+    this.audioChain = run.catch(() => {});
+    return run;
+  }
+
+  private async subscribeToStt(epoch: number): Promise<void> {
     if (this.unlistenStt) return;
     if (!isTauriRuntime()) return; // plain-browser dev: nothing to subscribe to
     /*
@@ -535,9 +624,19 @@ export class VoiceSessionPipeline {
      * at by a different route. Failing the start is the only honest outcome.
      */
     const { listen } = await import('@tauri-apps/api/event');
-    this.unlistenStt = await listen<SttFrame>(STT_EVENT, (event) => {
+    this.assertCurrent(epoch);
+    const unlisten = await listen<SttFrame>(STT_EVENT, (event) => {
       this.handleSttFrame(event.payload);
     });
+    /*
+     * A subscription that lands after `stop()` is nobody's: the stop already
+     * ran its unlisten, and found nothing to call. One that lands beside
+     * another (a resume that subscribed while this was pending) is surplus.
+     * A hard pause keeps it, as it keeps the one a running take had.
+     */
+    if (this.stopped || this.unlistenStt) unlisten();
+    else this.unlistenStt = unlisten;
+    this.assertCurrent(epoch);
   }
 
   /**
@@ -674,8 +773,17 @@ export class VoiceSessionPipeline {
     return this.deviceOverride ?? this.deps.deviceId;
   }
 
-  private async acquireMicrophone(deviceId?: string): Promise<MediaStreamLike> {
+  /**
+   * Open the device and its level meter, and publish them.
+   *
+   * Nothing is published until the take is known to still want it. The stream
+   * and the monitor stay local across every await, so a stop that lands inside
+   * one (a permission prompt, the busy retry, the analyser graph) leaves this
+   * holding the only reference — and this is what closes them.
+   */
+  private async acquireMicrophone(epoch: number, deviceId?: string): Promise<MediaStreamLike> {
     await this.teardownAudio();
+    this.assertCurrent(epoch);
     const mediaDevices = navigator.mediaDevices as unknown as Parameters<
       typeof requestMicrophoneAccess
     >[0];
@@ -705,8 +813,25 @@ export class VoiceSessionPipeline {
          * presenter can undo rather than a substitution they never learn about.
          */
         allowDefaultFallback: true,
+        /*
+         * The only wait in the retry loop, so it is where a stop ends it: a
+         * take that has been stopped must not ask for the device again.
+         * Rejecting here abandons the loop with no stream open.
+         */
+        sleep: async (ms) => {
+          await new Promise<void>((resolve) => {
+            this.timers.setTimeout(resolve, ms);
+          });
+          this.assertCurrent(epoch);
+        },
       },
     );
+    if (!this.isCurrent(epoch)) {
+      // Resolved for a take that has ended. The track is live — the system's
+      // microphone indicator is on — and no one else has a reference to it.
+      if (result.ok) releaseStream(result.stream);
+      throw new Error('SESSION_STOPPED');
+    }
     if (!result.ok) {
       trace('microphone-failed', `${result.code} after ${result.attempts} attempts`);
       throw new Error(result.code);
@@ -720,9 +845,9 @@ export class VoiceSessionPipeline {
       trace('microphone', 'pinned device was busy — fell back to the system default');
       this.deps.onInputFellBackToDefault?.();
     }
-    this.activeStream = result.stream;
+    const stream = result.stream;
 
-    this.monitor = new MicrophoneMonitor({
+    const monitor = new MicrophoneMonitor({
       createGraph: createAnalyserGraph,
       ...(this.deps.vadSensitivity === undefined
         ? {}
@@ -733,7 +858,9 @@ export class VoiceSessionPipeline {
     // Reported only on the TRANSITION, because `onLevel` fires several times a
     // second and "the microphone is back" is not news forty times over.
     let inputWasDead = false;
-    this.monitor.onLevel((snapshot) => {
+    monitor.onLevel((snapshot) => {
+      // A meter this take has replaced or released reports on nothing.
+      if (this.monitor !== monitor) return;
       /*
        * First, and outside the dead-input logic below: the pill has to keep
        * drawing through a silent stretch — that IS the reading — so it must not
@@ -787,21 +914,45 @@ export class VoiceSessionPipeline {
         this.setFollowingHold(true, code);
       }
     });
-    await this.monitor.start(result.stream);
+    try {
+      await monitor.start(stream);
+      this.assertCurrent(epoch);
+    } catch (err) {
+      // A stop during the analyser's setup found no graph to close; the one
+      // that has since been built is closed by this second stop.
+      releaseStream(stream);
+      await monitor.stop().catch(() => {});
+      throw err;
+    }
+    this.activeStream = stream;
+    this.monitor = monitor;
 
     // §5.3: fan the SAME capture out to any extra consumer, so every reader
     // shares one track and one clock.
-    this.deps.onCaptureStream?.(result.stream);
-    return result.stream;
+    this.deps.onCaptureStream?.(stream);
+    return stream;
   }
 
   /** Open the PCM tap and start forwarding frames to the Rust session. */
-  private async startCapture(stream: MediaStreamLike): Promise<void> {
-    await this.capture?.stop();
-    this.capture = new PcmCapture({
-      onFrame: (samples) => this.forwardFrame(samples),
+  private async startCapture(epoch: number, stream: MediaStreamLike): Promise<void> {
+    const previous = this.capture;
+    this.capture = null;
+    await previous?.stop();
+    this.assertCurrent(epoch);
+    const capture: PcmCapture = new PcmCapture({
+      onFrame: (samples) => {
+        // A tap this take has replaced or released forwards nothing.
+        if (capture === this.capture) this.forwardFrame(samples);
+      },
     });
-    await this.capture.start(stream);
+    try {
+      await capture.start(stream);
+      this.assertCurrent(epoch);
+    } catch (err) {
+      await capture.stop();
+      throw err;
+    }
+    this.capture = capture;
   }
 
   /**
@@ -959,6 +1110,10 @@ export class VoiceSessionPipeline {
     const generation = this.transportGeneration;
     this.transportGeneration = null;
     if (generation === null) return;
+    await this.closeTransport(generation);
+  }
+
+  private async closeTransport(generation: number): Promise<void> {
     try {
       await stopTranscription(generation);
     } catch {
@@ -968,15 +1123,19 @@ export class VoiceSessionPipeline {
   }
 
   private async teardownAudio(): Promise<void> {
+    // All three detached before the first await, so an acquisition that
+    // begins while this is still closing cannot have its own collected.
     const capture = this.capture;
-    this.capture = null;
-    await capture?.stop();
-
     const monitor = this.monitor;
+    const stream = this.activeStream;
+    this.capture = null;
     this.monitor = null;
-    if (monitor) await monitor.stop();
-
-    releaseStream(this.activeStream);
     this.activeStream = null;
+    try {
+      await capture?.stop();
+      await monitor?.stop();
+    } finally {
+      releaseStream(stream);
+    }
   }
 }

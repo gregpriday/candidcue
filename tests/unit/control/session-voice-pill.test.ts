@@ -42,7 +42,9 @@ const pipeline = vi.hoisted(() => {
     startError: unknown;
     /** Makes every resume reject with this, as a refused restart would. */
     resumeError: unknown;
-  } = { deps: null, failNextStart: false, startError: null, resumeError: null };
+    /** Makes every microphone switch reject with this. */
+    switchError: unknown;
+  } = { deps: null, failNextStart: false, startError: null, resumeError: null, switchError: null };
   class FakePipeline {
     private readonly fails: boolean;
     private readonly error: unknown;
@@ -63,6 +65,9 @@ const pipeline = vi.hoisted(() => {
     startListening(): void {}
     softPause(): void {}
     async hardPause(): Promise<void> {}
+    async switchMicrophone(): Promise<void> {
+      if (captured.switchError !== null) throw captured.switchError;
+    }
     async resume(): Promise<void> {
       const error = captured.resumeError;
       if (error === null) return;
@@ -116,6 +121,7 @@ const {
   session,
   startLiveSession,
   stopSession,
+  switchMicrophone,
   toggleAutoScroll,
   togglePlayPause,
 } = await import('../../../src/control/stores/session');
@@ -191,6 +197,7 @@ beforeEach(() => {
   pipeline.captured.failNextStart = false;
   pipeline.captured.startError = null;
   pipeline.captured.resumeError = null;
+  pipeline.captured.switchError = null;
   setInvokeForTesting(async () => undefined as never);
   published = [];
   stopRecording = session.subscribe((s) => {
@@ -687,6 +694,54 @@ describe('a take whose voice cannot be resumed', () => {
  * once read "listening — no words yet" through a take that heard eleven words,
  * because its words travelled a road to a window that was not there.
  */
+describe('a take paused again while voice was reopening (#289)', () => {
+  function toastsStartingWith(prefix: string): number {
+    return get(toasts).filter((toast) => toast.message.startsWith(prefix)).length;
+  }
+
+  it('does not report a resume that a second hard pause overtook', async () => {
+    /*
+     * After a hard pause `resume()` re-runs the whole start, and a hard pause
+     * that lands inside it ends that attempt as `SESSION_STOPPED`. The take is
+     * paused, which the pause already said; the old handler overwrote it with
+     * a lost microphone and a "could not resume" toast.
+     */
+    start();
+    hardPause();
+    const before = toastsStartingWith('Could not resume');
+    pipeline.captured.resumeError = new Error('SESSION_STOPPED');
+    resumeSession();
+    hardPause();
+    await vi.advanceTimersByTimeAsync(200);
+
+    const s = get(session);
+    expect(s.paused).toBe('hard');
+    expect(s.micState).toBe('muted');
+    expect(toastsStartingWith('Could not resume')).toBe(before);
+  });
+
+  it('does not report a switch that a hard pause overtook as a failure', async () => {
+    start();
+    const before = toastsStartingWith('Could not switch');
+    pipeline.captured.switchError = new Error('SESSION_STOPPED');
+    const switched = switchMicrophone('usb', 'USB microphone');
+    hardPause();
+
+    expect(await switched).toBe(false);
+    expect(toastsStartingWith('Could not switch')).toBe(before);
+    expect(get(session).micState).toBe('muted');
+  });
+
+  it('still reports a switch that genuinely failed', async () => {
+    start();
+    const before = toastsStartingWith('Could not switch');
+    pipeline.captured.switchError = new Error('MIC_DEVICE_LOST');
+
+    expect(await switchMicrophone('usb', 'USB microphone')).toBe(false);
+    expect(toastsStartingWith('Could not switch')).toBe(before + 1);
+  });
+});
+
 describe('transcript words reach the transcript bar', () => {
   it('lands each recogniser line on the session tail the stage reads', () => {
     start();
