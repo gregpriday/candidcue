@@ -28,8 +28,8 @@
 //!
 //! What is deliberately NOT replayed
 //! ---------------------------------------------------------------------------
-//!  - `import_script` / `export_script` / `export_all_data` / `import_image` /
-//!    `import_remote_image`: these open a native picker or reach the network.
+//!  - `import_script` / `export_script` / `export_all_data` / `import_image`:
+//!    these open a native picker.
 //!    The commands themselves are now runtime-generic and CAN be registered on
 //!    the MockRuntime; what cannot be driven headlessly is a modal file dialog.
 //!    Their argument shapes are covered by `ipc_contract_tests.rs` instead.

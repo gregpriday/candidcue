@@ -52,43 +52,6 @@ pub async fn import_image<R: Runtime>(
     Ok(Some(imported))
 }
 
-/*
- * Compiled out for 1.0.
- *
- * The URL-based image import has no UI caller: the editor imports local files
- * and the compiler rejects remote images. The 1.0 readiness review named it as
- * dormant authority — the Rust implementation is strongly hardened (scheme,
- * public-address, redirect, content-type, dimension and decode limits), so
- * this is not a claim that it is unsafe. It is that a registered command with
- * a live network path and no caller is standing permission nobody is watching.
- *
- * Gated rather than deleted, because the hardening is real work and the
- * feature is a plausible thing to want back. Turning the feature on is
- * therefore a deliberate act that also has to add the command to the registry
- * in `app.rs`, to `permissions/app-commands.toml`, and to a UI.
- */
-#[cfg(feature = "remote-images")]
-#[tauri::command]
-pub async fn import_remote_image<R: Runtime>(
-    boot: State<'_, crate::database::BootStatus>,
-    app: AppHandle<R>,
-    db: State<'_, Database>,
-    paths: State<'_, DataPaths>,
-    script_id: String,
-    url: String,
-) -> Result<ImportedAsset, AppError> {
-    // Recovery mode owns no writable database (database::BootStatus).
-    boot.require_ready()?;
-    let script_id = ScriptId::parse(&script_id)?;
-    // A dedicated, credential-free, redirect-disabled client is built per hop
-    // inside `assets::remote`. Nothing here may be given a client that follows
-    // redirects on its own: this URL is operator-supplied, and a hop only
-    // counts as refused if it is checked before the request goes out.
-    let imported = assets::import_remote_image(db.pool(), &paths, &script_id, &url).await?;
-    allow_script_assets(&app, &paths, &script_id);
-    Ok(imported)
-}
-
 #[tauri::command]
 pub async fn resolve_asset_urls<R: Runtime>(
     app: AppHandle<R>,

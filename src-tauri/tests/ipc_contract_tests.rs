@@ -502,19 +502,12 @@ fn the_typescript_error_contract_matches_the_rust_codes() {
     )
     .expect("errors.ts");
 
-    for code in [
-        // H4 — remote image fetch
-        "ASSET_URL_INSECURE",
-        "ASSET_URL_BLOCKED",
-        "ASSET_DOWNLOAD_FAILED",
-        // M1 — stale stage protection
-        "STAGE_SESSION_MISMATCH",
-    ] {
-        assert!(
-            ts.contains(&format!("'{code}'")),
-            "{code} is raised by Rust but missing from src/shared/contracts/errors.ts"
-        );
-    }
+    // M1 — stale stage protection
+    let code = "STAGE_SESSION_MISMATCH";
+    assert!(
+        ts.contains(&format!("'{code}'")),
+        "{code} is raised by Rust but missing from src/shared/contracts/errors.ts"
+    );
 }
 
 // ---------------------------------------------------------------------------

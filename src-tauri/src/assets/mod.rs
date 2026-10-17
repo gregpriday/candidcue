@@ -13,10 +13,6 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::scripts::{DataPaths, ScriptId};
 use crate::util::{new_uuid, now_iso, sha256_hex};
 
-pub mod remote;
-
-pub use remote::{fetch_remote_image, FetchPolicy};
-
 /// Hard limit for an imported image (spec Appendix A.10).
 pub const MAX_IMPORTED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
 
@@ -300,54 +296,6 @@ pub async fn import_image(
         markdown_path: format!("assets/{file_name}"),
         url: asset_url(&dest),
         original_name,
-    })
-}
-
-/// Download a remote image and store it like a local import
-/// (spec §24.2, §46.3 `import_remote_image`).
-///
-/// All of the transport hardening lives in [`remote::fetch_remote_image`]:
-/// https on every hop, publicly-routable resolved addresses, pinned DNS,
-/// manual redirect revalidation, a streamed body with a hard cap, an allowed
-/// `Content-Type` that must agree with the magic bytes, and a real decode under
-/// dimension limits. This function only persists what came back.
-pub async fn import_remote_image(
-    pool: &SqlitePool,
-    paths: &DataPaths,
-    script_id: &ScriptId,
-    url: &str,
-) -> Result<ImportedAsset, AppError> {
-    if !crate::scripts::repo::script_exists(pool, script_id).await? {
-        return Err(AppError::not_found("script"));
-    }
-    let fetched = remote::fetch_remote_image(url, &remote::FetchPolicy::strict()).await?;
-    let bytes = fetched.bytes;
-
-    let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
-    let rel_path = format!("scripts/{}/assets/{file_name}", script_id.as_str());
-    let asset_id = register_asset(
-        pool,
-        script_id,
-        &sha,
-        &mime,
-        extension_for_mime(&mime),
-        bytes.len() as u64,
-        &rel_path,
-        None,
-        // The url that was actually fetched, after redirects — recording the
-        // requested one would misattribute where the bytes came from.
-        Some(fetched.final_url.as_str()),
-    )
-    .await?;
-    Ok(ImportedAsset {
-        asset_id,
-        sha256: sha,
-        mime: mime.clone(),
-        extension: extension_for_mime(&mime).to_string(),
-        size_bytes: bytes.len() as u64,
-        markdown_path: format!("assets/{file_name}"),
-        url: asset_url(&dest),
-        original_name: None,
     })
 }
 
@@ -961,6 +909,46 @@ pub(crate) async fn register_recovered_assets(
 mod tests {
     use super::*;
 
+    /// A real, decodable 1×1 PNG.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xF7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// A 30000×30000 PNG header (900 megapixels) with a trivial payload — the
+    /// classic decompression bomb.
+    fn huge_png_header() -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut table = [0u32; 256];
+            for (i, entry) in table.iter_mut().enumerate() {
+                let mut c = i as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                }
+                *entry = c;
+            }
+            let mut c = 0xFFFF_FFFFu32;
+            for b in bytes {
+                c = table[((c ^ u32::from(*b)) & 0xFF) as usize] ^ (c >> 8);
+            }
+            c ^ 0xFFFF_FFFF
+        }
+        let mut ihdr = b"IHDR".to_vec();
+        ihdr.extend_from_slice(&30_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&30_000u32.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        out.extend_from_slice(&13u32.to_be_bytes());
+        out.extend_from_slice(&ihdr);
+        out.extend_from_slice(&crc(&ihdr).to_be_bytes());
+        // Enough trailing bytes that sniffing and header parsing both succeed.
+        out.extend_from_slice(&[0u8; 64]);
+        out
+    }
+
     #[test]
     fn sniffs_common_formats() {
         assert_eq!(
@@ -995,7 +983,7 @@ mod tests {
     /// header that declares 900 megapixels must never reach a decoder.
     #[test]
     fn payload_validation_needs_a_real_decodable_image() {
-        assert!(validate_image_payload(remote::tests_support::TINY_PNG, "image/png").is_ok());
+        assert!(validate_image_payload(TINY_PNG, "image/png").is_ok());
 
         let mut fake = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
         fake.extend_from_slice(&[0u8; 64]);
@@ -1005,7 +993,7 @@ mod tests {
             "magic bytes alone must not be enough to enter an asset directory"
         );
 
-        let bomb = remote::tests_support::huge_png_header();
+        let bomb = huge_png_header();
         assert_eq!(sniff_mime(&bomb), Some("image/png"));
         let err = validate_image_payload(&bomb, "image/png")
             .expect_err("a 30000x30000 header must be refused");

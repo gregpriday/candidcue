@@ -35,12 +35,6 @@ inventory and the source of truth for every claim in this section. If you find
 CandidCue transmitting user content with no clear user action behind it, that is
 a bug and we want to hear about it.
 
-The Rust core also contains a hardened remote-image importer, and 1.0 ships with
-**no way to reach it**: its IPC command is compiled out, it is in neither the
-command registry nor the permissions file, and nothing in the interface invokes
-it. Reports about it are still welcome, and are in scope as source rather than
-as a live path.
-
 ### In scope
 
 Examples rather than an exhaustive list:
@@ -54,9 +48,8 @@ Examples rather than an exhaustive list:
 - Bypasses of the content security policy or the asset-protocol scope that reach
   script bodies, revisions, the database, logs, or anything else outside the
   intended media scope.
-- Remote image fetching and decoding: URL validation, redirect handling, SSRF
-  controls, content checks and storage. Unreachable in 1.0, and in scope as
-  source because the implementation is still in the tree.
+- The speech model download transport: URL validation, redirect handling and
+  SSRF controls.
 - The speech model supply and loading path: archive and per-file digest
   verification, catalogue-limited extraction, staged installation,
   install-marker checks, resolution, and ONNX loading and inference.

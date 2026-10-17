@@ -65,7 +65,7 @@ use sha2::{Digest as _, Sha256};
 use super::catalogue::{Catalogue, ModelEntry};
 use super::model_store as store;
 use crate::errors::{AppError, ErrorCategory};
-use crate::net::{self, Deadline, HopPolicy};
+use crate::net::{self, HopPolicy};
 
 /// The codes the MODEL path reports a refused url under.
 ///
@@ -406,7 +406,7 @@ async fn open_transfer(
         let hop = net::check_hop(&current, policy)
             .await
             .map_err(FetchFailure::Interrupted)?;
-        let client = net::client_for(&hop, Deadline::Idle(IDLE_TIMEOUT))
+        let client = net::client_for(&hop, IDLE_TIMEOUT)
             .map_err(FetchFailure::Interrupted)?;
         let mut request = client.get(hop.url.clone());
         // A range is only ever asked for WITH a validator. Without one there is
@@ -1633,9 +1633,12 @@ mod tests {
 
     /// A dependency-free HTTP/1.1 origin that understands `Range`.
     ///
-    /// The same shape as `assets::remote`'s mock and for the same reason: it
-    /// drives the REAL reqwest client, so the range handling, the redirect
+    /// It drives the REAL reqwest client, so the range handling, the redirect
     /// revalidation and the chunk loop under test are the ones that ship.
+    ///
+    /// The `/redirect*` paths answer 302 to a fixed `Location` and nothing
+    /// else, before any range handling. `/redirect` is the one hop the test
+    /// policy allows; every other target is one the guard has to refuse.
     struct MockOrigin {
         port: u16,
         /// How many times a body has been served. Proves a resumed run sent a
@@ -1672,6 +1675,12 @@ mod tests {
             assert!(!script.is_empty(), "a mock origin needs a behaviour");
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock origin");
             let port = listener.local_addr().unwrap().port();
+            // A loopback port that is NOT the exempt authority, and that
+            // nothing listens on: a redirect there has to be refused by the
+            // guard before a socket opens, because there is nothing to answer.
+            let spare = TcpListener::bind("127.0.0.1:0").expect("bind spare port");
+            let other_port = spare.local_addr().unwrap().port();
+            drop(spare);
             let requests = Arc::new(AtomicU64::new(0));
             let served = Arc::new(AtomicU64::new(0));
             let seen: Arc<std::sync::Mutex<Vec<SeenRequest>>> = Arc::default();
@@ -1702,10 +1711,23 @@ mod tests {
                     }
 
                     let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
-                    if path == "/redirect" {
+                    let location = match path.as_str() {
+                        "/redirect" => Some(format!("http://127.0.0.1:{port}/archive")),
+                        "/redirect-http" => Some(format!("http://127.0.0.1:{other_port}/archive")),
+                        "/redirect-loopback" => {
+                            Some(format!("https://127.0.0.1:{other_port}/archive"))
+                        }
+                        "/redirect-private" => Some("https://10.1.2.3/archive".to_string()),
+                        "/redirect-metadata" => {
+                            Some("https://169.254.169.254/latest/meta-data/".to_string())
+                        }
+                        "/redirect-self" => Some(format!("http://127.0.0.1:{port}/redirect-self")),
+                        _ => None,
+                    };
+                    if let Some(location) = location {
                         let _ = stream.write_all(
                             format!(
-                                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/archive\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                             )
                             .as_bytes(),
                         );
@@ -2106,6 +2128,71 @@ mod tests {
         .await
         .expect_err("plaintext loopback must be refused in production");
         assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+    }
+
+    /// Install from `path` on the exempt mock, where the first hop is allowed
+    /// and whatever it redirects to must not be. Returns the error and how many
+    /// requests the origin took.
+    ///
+    /// No mirror: `install` reports the LAST candidate's error, so a second
+    /// candidate could answer for the refusal under test.
+    async fn install_refused_at(path: &str) -> (AppError, u64) {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(fixture_entry(&archive, &files, "bundle-root"), origin.url(path));
+        let catalogue = fixture_catalogue(model);
+        let temp = tempfile::tempdir().unwrap();
+
+        let err = install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect_err("a redirect the guard refuses must not install");
+        (err, origin.requests.load(Ordering::SeqCst))
+    }
+
+    /// https is re-required on every hop, not only the url the catalogue names.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_that_downgrades_to_http_is_refused() {
+        let (err, requests) = install_refused_at("/redirect-http").await;
+        assert_eq!(err.code(), "STT_MODEL_URL_INSECURE", "{err:?}");
+        // The redirect itself was served, so the refusal is the second hop's.
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_to_loopback_is_refused() {
+        let (err, requests) = install_refused_at("/redirect-loopback").await;
+        assert_eq!(err.code(), "STT_MODEL_URL_BLOCKED", "{err:?}");
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_into_a_private_range_is_refused() {
+        let (err, requests) = install_refused_at("/redirect-private").await;
+        assert_eq!(err.code(), "STT_MODEL_URL_BLOCKED", "{err:?}");
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_to_cloud_metadata_is_refused() {
+        let (err, requests) = install_refused_at("/redirect-metadata").await;
+        assert_eq!(err.code(), "STT_MODEL_URL_BLOCKED", "{err:?}");
+        assert_eq!(requests, 1);
+    }
+
+    /// Every hop of the loop is allowed on its own, so only the budget stops it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redirect_loop_terminates() {
+        let (err, requests) = install_refused_at("/redirect-self").await;
+        assert_eq!(err.code(), "STT_MODEL_URL_BLOCKED", "{err:?}");
+        assert_eq!(requests, u64::from(net::MAX_REDIRECTS) + 1);
     }
 
     /// Accepting what a fake-IP proxy or a DNS64 resolver synthesises for the

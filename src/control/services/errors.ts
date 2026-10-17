@@ -220,12 +220,6 @@ const ERROR_COPY: Record<string, string> = {
   /* -- assets ------------------------------------------------------------- */
   ASSET_UNSUPPORTED: 'That file type is not supported as a script image.',
   ASSET_TOO_LARGE: 'That file is too large to add to a script. Use a smaller image.',
-  ASSET_URL_INSECURE:
-    'That link is not https, so CandidCue will not download it. Use an https address, or add the image from a file.',
-  ASSET_URL_BLOCKED:
-    'That link does not point at a publicly reachable address, so CandidCue will not download it. Add the image from a file instead.',
-  ASSET_DOWNLOAD_FAILED:
-    'CandidCue could not download that image. Check the link and your connection, then try again.',
 
   /* -- database ----------------------------------------------------------- */
   DATABASE_MIGRATION_FAILED:

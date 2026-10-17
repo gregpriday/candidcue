@@ -7,11 +7,11 @@
  * are all written from it. A source of truth nothing checks is a comment.
  *
  * The pre-promotion review found the exact drift this closes: the stock build
- * compiles the remote-image importer's command out and `.github/SECURITY.md`
- * still described it as one of two live network paths. Nothing was exploitable;
- * the policy simply overstated the binary, which is the direction that matters,
- * because a reader who checks one claim and finds it false stops believing the
- * true ones.
+ * compiled a since-removed remote-image importer's command out and
+ * `.github/SECURITY.md` still described it as one of two live network paths.
+ * Nothing was exploitable; the policy simply overstated the binary, which is
+ * the direction that matters, because a reader who checks one claim and finds
+ * it false stops believing the true ones.
  *
  * ---------------------------------------------------------------------------
  * WHAT THIS IS, AND WHAT IT IS NOT
@@ -170,10 +170,10 @@ export function maskRustLiterals(source: string): string {
  * The file with its `#[cfg(test)]` modules removed, on masked source.
  *
  * Test code is not a shipping network path. The obvious "cut at the first
- * `#[cfg(test)]`" is wrong twice over: `net.rs` and `assets/remote.rs` both
- * carry `#[cfg(test)]` on struct FIELDS a long way above the code being
- * scanned, so cutting there truncates the file and stops seeing the only client
- * construction in the tree — an assertion that then passes on nothing.
+ * `#[cfg(test)]`" is wrong: `net.rs` carries `#[cfg(test)]` on a struct FIELD
+ * a long way above the code being scanned, so cutting there truncates the file
+ * and stops seeing the only client construction in the tree — an assertion
+ * that then passes on nothing.
  *
  * Nested `#[cfg(test)] mod` blocks are handled by only ever moving forwards; a
  * match inside an already-removed region is skipped rather than rewinding the
@@ -420,92 +420,46 @@ describe('outbound network call sites', () => {
   });
 });
 
-/* --------------------------------------------------- the remote-image importer */
+/* ------------------------------------------------- no image is fetched by URL */
 
-/**
- * Resolve a Cargo feature set transitively.
- *
- * `default = ["shipping"]` with `shipping = ["remote-images"]` enables the
- * importer just as surely as naming it directly, and the first version of this
- * gate only looked at the `default` line.
- */
-export function enabledByDefault(cargoToml: string): Set<string> {
-  // The header may carry trailing space or a comment; entries may be quoted
-  // with either kind of quote. TOML allows both and Cargo does not care, so a
-  // parser that only knows one of them is a silent hole in this gate.
-  const featuresBlock =
-    /\n\[features\][^\n]*\n([\s\S]*?)(?=\n\[[^\n]*\]|$)/.exec(`\n${cargoToml}`)?.[1] ?? '';
-  const table = new Map<string, string[]>();
-  for (const match of featuresBlock.matchAll(/^\s*([\w-]+)\s*=\s*\[([^\]]*)\]/gm)) {
-    table.set(
-      match[1]!,
-      [...match[2]!.matchAll(/["']([^"']+)["']/g)].map((entry) => entry[1]!),
+describe('no image is fetched by URL', () => {
+  /*
+   * There used to be a URL-based image importer, compiled into every build with
+   * only its command gated off, and every privacy claim had to footnote it. It
+   * was deleted rather than kept dormant. Bringing it back is a new network
+   * path, so it has to arrive through the inventory, not past it.
+   */
+  const IMPORTER = /\b(?:import_remote_image|fetch_remote_image)\b/;
+
+  it('the shipping Rust has no importer and no build switch for one', () => {
+    const scanned = SHIPPING_RUST_DIRS.flatMap(rustFiles);
+    expect(scanned.length, 'the Rust scan found almost no files').toBeGreaterThan(30);
+
+    const found = scanned.filter((relPath) =>
+      IMPORTER.test(withoutTestModules(maskRustLiterals(read(relPath)))),
     );
-  }
-  const enabled = new Set<string>();
-  const walk = (name: string) => {
-    for (const next of table.get(name) ?? []) {
-      // `dep/feature` enables a feature of a dependency, not one of ours.
-      const own = next.includes('/') ? '' : next;
-      if (!own || enabled.has(own)) continue;
-      enabled.add(own);
-      walk(own);
-    }
-  };
-  walk('default');
-  return enabled;
-}
-
-describe('the remote-image importer stays unreachable', () => {
-  const cargoToml = read('src-tauri/Cargo.toml');
-
-  it('is a feature, and no default set reaches it', () => {
     expect(
-      cargoToml,
-      `src-tauri/Cargo.toml no longer declares the remote-images feature. That ` +
-        `may mean the importer was deleted, or that its gate was — and ` +
-        `${INVENTORY} still tells readers a build switch is what keeps it out ` +
-        `of reach. Read the code and correct whichever is wrong.`,
-    ).toMatch(/^remote-images\s*=/m);
+      found,
+      `These files define or call a URL-based image importer:\n` +
+        found.map((relPath) => `  ${relPath}`).join('\n') +
+        `\n\n${INVENTORY} says no image is fetched by URL, and the privacy ` +
+        `policy and .github/SECURITY.md say the same. Revise them first.`,
+    ).toEqual([]);
 
     expect(
-      [...enabledByDefault(cargoToml)],
-      `A default feature set now reaches remote-images, directly or through ` +
-        `another feature, so a stock build ships a URL-based image fetcher. ` +
-        `That is a new live network path: revise ${INVENTORY}, the privacy ` +
-        `policy and .github/SECURITY.md first.`,
-    ).not.toContain('remote-images');
+      read('src-tauri/Cargo.toml'),
+      `src-tauri/Cargo.toml mentions remote-images again. A feature that gates ` +
+        `a network path is one the inventory has to describe — see ${INVENTORY}.`,
+    ).not.toMatch(/remote-images/);
   });
 
-  it('still carries the cfg that compiles the command out', () => {
-    const source = read('src-tauri/src/commands/assets_cmds.rs');
-    const declaration = /#\[cfg\(feature = "remote-images"\)\]\s*\n\s*#\[tauri::command\]\s*\n\s*pub async fn import_remote_image/;
-    expect(
-      declaration.test(source),
-      `import_remote_image is no longer directly behind ` +
-        `#[cfg(feature = "remote-images")]. ${INVENTORY} tells readers the ` +
-        `command does not exist in a stock binary; that claim now rests on ` +
-        `nothing this test can see.`,
-    ).toBe(true);
-  });
-
-  it('is not in the command registry or the permissions file', () => {
-    // Comment-stripped: app.rs carries a comment explaining the command's
-    // ABSENCE, and it names the command to do so.
-    const registry = stripSourceComments('src-tauri/src/app.rs');
-    expect(
-      registry.includes('import_remote_image'),
-      `import_remote_image appears in the command registry in ` +
-        `src-tauri/src/app.rs. A registered command is reachable from the ` +
-        `control window — see ${INVENTORY}.`,
-    ).toBe(false);
-
+  it('no permission grants the importer’s command', () => {
     const permissions = read('src-tauri/permissions/app-commands.toml');
     expect(
       permissions.includes('import_remote_image'),
       `import_remote_image appears in src-tauri/permissions/app-commands.toml. ` +
-        `The inventory calls it unreachable; a permission entry is the second ` +
-        `half of making it reachable.`,
+        `A permission entry is half of making a command reachable from the ` +
+        `control window — see ${INVENTORY}.`,
     ).toBe(false);
   });
 });
@@ -807,24 +761,5 @@ describe('the Rust scanners', () => {
     const source = 'pub const A: &CStr = c"reqwest::Client::new(";\npub const N: u8 = 1;';
     expect(usesOutboundRust(maskRustLiterals(source))).toBe(false);
     expect(maskRustLiterals(source)).toContain('pub const N');
-  });
-
-  it('resolves a feature enabled through another feature', () => {
-    const toml = [
-      '[features]',
-      'default = ["shipping"]',
-      'shipping = ["remote-images"]',
-      'remote-images = []',
-    ].join('\n');
-    expect([...enabledByDefault(toml)]).toContain('remote-images');
-    expect([...enabledByDefault('[features]\nremote-images = []')]).toEqual([]);
-  });
-
-  it('reads a feature list however TOML spells it', () => {
-    // Single quotes and a comment on the table header are both valid TOML, and
-    // both used to make the whole block invisible — which reads as "no default
-    // feature reaches remote-images".
-    const toml = ["[features] # what we ship", "default = ['remote-images']"].join('\n');
-    expect([...enabledByDefault(toml)]).toContain('remote-images');
   });
 });

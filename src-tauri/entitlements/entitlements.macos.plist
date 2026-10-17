@@ -32,9 +32,7 @@
 
   <!-- Outbound HTTPS for the speech-model download offered by the Welcome
        screen and Settings › Speech, which is the only network activity the
-       shipped app has in normal use (§152, docs/network-inventory.md) —
-       `import_remote_image` (src-tauri/src/assets/remote.rs) is compiled out
-       and is in neither the command registry nor the permissions file.
+       shipped app has (§152, docs/network-inventory.md).
        Transcription itself is on-device and
        needs no network at all — this key predates that change and used to name
        a hosted STT provider, which no code has talked to since. Strictly it is

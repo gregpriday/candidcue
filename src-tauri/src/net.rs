@@ -1,17 +1,8 @@
-//! The hardened outbound-HTTP discipline, shared by everything that fetches.
+//! The hardened outbound-HTTP discipline, for everything that fetches.
 //!
-//! This is a straight lift of the transport half of `assets::remote`, which
-//! grew it for remote images (spec §24.2, §50.7) and is still its largest
-//! caller. Nothing about the policy changed in the move; what changed is who
-//! can reach it, because the speech-model downloader (§152) has to make the
-//! same guarantees about the same class of URL and reimplementing them would
-//! mean maintaining two SSRF guards that are only accidentally identical.
-//!
-//! What stayed behind in `assets::remote` is everything that is about IMAGES:
-//! the 25 MB cap, the four allowed content types, the magic-byte agreement
-//! check and the real decode under allocation limits. None of that means
-//! anything to a `.tar.bz2` of ONNX graphs, which is verified by SHA-256
-//! against a catalogue the binary compiles in.
+//! Its one caller is the speech-model downloader (§152). It lives apart from
+//! that downloader because it is the SSRF guard: a second caller should reuse
+//! this rather than grow a guard that is only accidentally identical.
 //!
 //! On EVERY hop:
 //!   * https only, no credentials in the url, no proxy, no cookies, no referer;
@@ -23,10 +14,9 @@
 //!     download also accepts the addresses a fake-IP proxy or a DNS64 resolver
 //!     synthesises for a name ([`AddressRule::PublicOrSynthesised`]).
 //!
-//! Bounding the BODY is the caller's job and deliberately not done here: an
-//! image is capped at a constant, and a model archive is capped at the exact
-//! byte count its catalogue entry promises. One shared "max bytes" would have
-//! to be the larger of the two, which is the same as not having one.
+//! Bounding the BODY is the caller's job and deliberately not done here: a
+//! model archive is capped at the exact byte count its catalogue entry
+//! promises, and only the caller knows what a sensible bound for its bytes is.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
@@ -38,32 +28,13 @@ pub const MAX_REDIRECTS: u8 = 5;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long one request may take, end to end.
-///
-/// Two shapes, because a total timeout is the right bound for one caller and a
-/// fatal one for the other. A 25 MB image either arrives inside 30 seconds or
-/// is not worth waiting for; a 128 MB model archive on a domestic connection
-/// legitimately takes many minutes, and a total deadline would abort it for
-/// being slow rather than for being stuck.
-#[derive(Debug, Clone, Copy)]
-pub enum Deadline {
-    /// Abort the whole request after this long, however healthy it is.
-    Total(Duration),
-    /// Abort only when this long passes with NO bytes arriving.
-    ///
-    /// The honest test for a stalled transfer: it bounds how long a dead
-    /// connection can be held open without bounding how long a live one may
-    /// take. Requires reqwest ≥ 0.12.5 for `read_timeout`.
-    Idle(Duration),
-}
-
 /// How a caller names a refusal — and a host it could not reach.
 ///
-/// Parameterised rather than fixed because an error code is a contract: images
-/// have reported `ASSET_URL_BLOCKED` since spec §24.2, that code reaches a
-/// support bundle and the Settings error list, and a shared guard is not a
-/// reason to renumber it. The checks are identical for every caller but the
-/// [`AddressRule`]; only the label on the way out differs.
+/// Parameterised rather than fixed because an error code is a contract: it
+/// reaches a support bundle and the Settings error list, and it names the
+/// caller (`STT_MODEL_URL_BLOCKED`), not this guard. The checks are identical
+/// for every caller but the [`AddressRule`]; only the label on the way out
+/// differs.
 ///
 /// `unreachable_*` is not a refusal. A lookup that fails is what a machine with
 /// no network sees first, and telling that user the address was refused (or
@@ -415,7 +386,12 @@ where
 
 /// A credential-free client for exactly one hop, pinned to the addresses that
 /// were just validated.
-pub fn client_for(hop: &Hop, deadline: Deadline) -> Result<reqwest::Client, AppError> {
+///
+/// `idle_timeout` aborts the request only when that long passes with NO bytes
+/// arriving. It is the honest test for a stalled transfer: it bounds how long a
+/// dead connection can be held open without bounding how long a live one may
+/// take. Requires reqwest ≥ 0.12.5 for `read_timeout`.
+pub fn client_for(hop: &Hop, idle_timeout: Duration) -> Result<reqwest::Client, AppError> {
     let mut builder = reqwest::Client::builder()
         // Manual redirect handling: the client must never follow a Location we
         // have not re-validated.
@@ -425,11 +401,8 @@ pub fn client_for(hop: &Hop, deadline: Deadline) -> Result<reqwest::Client, AppE
         .no_proxy()
         .referer(false)
         .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(idle_timeout)
         .user_agent(concat!("CandidCue/", env!("CARGO_PKG_VERSION")));
-    builder = match deadline {
-        Deadline::Total(after) => builder.timeout(after),
-        Deadline::Idle(after) => builder.read_timeout(after),
-    };
     if !hop.addrs.is_empty() {
         if let Some(host) = hop.url.host_str() {
             builder = builder.resolve_to_addrs(host, &hop.addrs);

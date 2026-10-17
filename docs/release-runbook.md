@@ -226,8 +226,8 @@ absolute path from the build machine.
 
 **Contents** — walk the payload and confirm what is *not* there: no `.onnx`
 weights, no model archive, no `.env`, no signing material, no source control
-metadata, no test corpus, no localhost or dev-server reference, no
-remote-image command, no updater resources. The notices and font licences the
+metadata, no test corpus, no localhost or dev-server reference, no updater
+resources. The notices and font licences the
 bundle is supposed to carry must be present.
 
 **The DMG itself**
