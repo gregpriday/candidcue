@@ -127,9 +127,9 @@ export interface AutoScrollScale {
  * `blocks` is the measured block boxes the map was built from, in document
  * order, and it is what lets the span describe words rather than paper. Any
  * block that produced no rendered line has nothing on it to read, and its
- * height is subtracted from the span (see `wordlessSpanPx`). Without it — or in
- * a script with nothing wordless in it — the answer is exactly the plain
- * baseline ratio.
+ * height is subtracted from the span (see `wordlessSpan`). Without it — or in a
+ * script with nothing wordless in it — the answer is exactly the plain baseline
+ * ratio.
  */
 export function measureAutoScrollScale(
   lines: readonly RenderedLine[],
@@ -140,8 +140,9 @@ export function measureAutoScrollScale(
   const last = lines[lines.length - 1];
   if (!first || !last) return null;
 
-  const spanPx = last.baselineY - first.baselineY - wordlessSpanPx(lines, blocks);
-  const spanWords = last.firstTokenIndex - first.firstTokenIndex;
+  const wordless = wordlessSpan(lines, blocks);
+  const spanPx = last.baselineY - first.baselineY - wordless.px;
+  const spanWords = last.firstTokenIndex - first.firstTokenIndex - wordless.words;
   // Both must advance. A non-positive span is a map that is empty, reversed, or
   // measured before layout settled; none of them describe a document that can
   // be rolled at a readable rate.
@@ -155,13 +156,13 @@ export function measureAutoScrollScale(
 export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bottomY'>;
 
 /**
- * Document height inside the line map's span that carries no spoken word.
+ * What inside the line map's span is not text on the glass: the height of the
+ * blocks with nothing to read, and any spoken tokens that never reached a line.
  *
  * Wordless is decided by the lines themselves, not by block kind or by the
  * compiler's `spoken` flag: a block is wordless here precisely when it produced
  * no rendered line. That is the question the scale is asking — a kind list would
- * miss the silent block, the cue and the unread heading, and an image whose alt
- * text IS read aloud produces lines and so is, correctly, not wordless.
+ * miss the silent block, the cue and the unread heading.
  *
  * Each such run is taken as one envelope, from the top of its first box to the
  * bottom of its last, so the margins between two adjacent wordless blocks go
@@ -172,6 +173,16 @@ export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bo
  * what an ordinary paragraph break costs. The words still get the travel a
  * paragraph boundary would have given them; the screenshot does not.
  *
+ * The words come out with the height, and for the same reason. An image whose
+ * alt text is read aloud (`readImageAltText`) owns spoken tokens with no anchor
+ * on the glass — the picture is their visual form — so they sit between the two
+ * lines' token indices exactly as the picture sits between their baselines.
+ * Taking the height out and leaving those words in would have the text roll
+ * SLOWER than the dial by however much alt text there was. Only on a step that
+ * loses height, though: tokens with no geometry inside a paragraph (an inline
+ * image's alt text) are paid for by the same paragraph's unremoved height, as
+ * they always were.
+ *
  * The removed height is not skipped, and it is not hurried either: the transport
  * crosses it at the same pixel rate as the text. A faster crossing is a velocity
  * step at each end of the block, and the plant comes out of one under its jerk
@@ -180,18 +191,21 @@ export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bo
  * worth getting the next sentence wrong for, and a presenter who wants past a
  * tall screenshot has the step keys.
  */
-function wordlessSpanPx(
+function wordlessSpan(
   lines: readonly RenderedLine[],
   blocks: readonly AutoScrollBlockBox[],
-): number {
-  if (blocks.length === 0) return 0;
+): { px: number; words: number } {
+  if (blocks.length === 0) return { px: 0, words: 0 };
+  // Block ids are unique per compiled document and each block renders one
+  // `[data-block-id]` wrapper, so first-seen is the only index there is.
   const order = new Map<string, number>();
   blocks.forEach((box, index) => {
     if (!order.has(box.blockId)) order.set(box.blockId, index);
   });
   const voiced = new Set(lines.map((line) => line.blockId));
 
-  let total = 0;
+  let px = 0;
+  let words = 0;
   for (let i = 1; i < lines.length; i++) {
     const above = lines[i - 1];
     const below = lines[i];
@@ -213,9 +227,13 @@ function wordlessSpanPx(
       bottomY = Math.max(bottomY, box.bottomY);
     }
     const removed = Math.min(bottomY, below.topY) - Math.max(topY, above.bottomY);
-    if (removed > 0 && Number.isFinite(removed)) total += removed;
+    if (!(removed > 0) || !Number.isFinite(removed)) continue;
+    px += removed;
+    // Tokens after the last one on the line above and before the first one on
+    // the line below: spoken, and nowhere on the glass.
+    words += Math.max(0, below.firstTokenIndex - above.lastTokenIndex - 1);
   }
-  return total;
+  return { px, words };
 }
 
 /**

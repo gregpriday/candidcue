@@ -442,15 +442,22 @@ describe('a script with an image in it', () => {
     { kind: 'paragraph', tokens: 120 },
   ];
 
-  /** The density of the words alone: the same prose with nothing between it. */
-  function proseDensity(): number {
+  /**
+   * The density of the words alone: the same prose with nothing between it.
+   *
+   * An average over that prose — paragraph spacing, short closing lines and
+   * all — which is what the dial's words a minute are an average of too. The
+   * claim is that an image does not change it, not that every line of the
+   * prose carries the same number of words.
+   */
+  const PROSE_PX_PER_WORD = (() => {
     const { map, layout } = engineOnLayout(PROSE);
     return measureAutoScrollScale(map.lines, layout.blocks)!.pxPerWord;
-  }
+  })();
 
   /** Words a minute crossing the glass at `pxPerSecond`, over that prose. */
   function wordsPerMinuteOverText(pxPerSecond: number): number {
-    return (pxPerSecond / proseDensity()) * 60;
+    return (pxPerSecond / PROSE_PX_PER_WORD) * 60;
   }
 
   it('measures the words, not the screenshot', () => {
@@ -463,7 +470,8 @@ describe('a script with an image in it', () => {
     expect(pace).toBeGreaterThan(130 * 0.95);
     expect(pace).toBeLessThan(130 * 1.05);
     // The same map measured the old way, which is the bug.
-    expect(wordsPerMinuteOverText(autoScrollPxPerSecond(130, uncorrected))).toBeGreaterThan(130 * 1.3);
+    const old = wordsPerMinuteOverText(autoScrollPxPerSecond(130, uncorrected));
+    expect(old).toBeGreaterThan(130 * 1.3);
   });
 
   it('crosses the image at the pace of the text, and reaches the next line still at it', () => {
@@ -485,7 +493,9 @@ describe('a script with an image in it', () => {
     const { trace } = roll(engine, { pxPerSecond, durationMs, maxScrollPx });
 
     expect(trace[trace.length - 1]!.scrollPx).toBeGreaterThan(arrivePx + layout.lineHeightPx * 2);
-    const settled = trace.slice(3 * 60);
+    // Three seconds in, by which any starting ramp is long spent.
+    const settled = trace.slice(Math.round(3000 / FRAME_MS));
+    expect(settled.length).toBeGreaterThan(0);
     for (const frame of settled) {
       expect(frame.velocityPxS).toBeGreaterThan(pxPerSecond * 0.9);
       expect(frame.velocityPxS).toBeLessThan(pxPerSecond * 1.1);
@@ -496,12 +506,18 @@ describe('a script with an image in it', () => {
       expect(step).toBeLessThan(20);
     }
 
-    // And the words after the image go by at the pace on the dial.
+    /*
+     * And the words after the image go by at the prose's own pace. Measured off
+     * the distance the document actually travelled, not the velocity the engine
+     * reports — a plant that reported the right speed while integrating the
+     * wrong one would pass the checks above.
+     */
     const afterImage = settled.filter((frame) => frame.scrollPx > arrivePx);
     expect(afterImage.length).toBeGreaterThan(60);
-    const meanPxPerSecond =
-      afterImage.reduce((sum, frame) => sum + frame.velocityPxS, 0) / afterImage.length;
-    expect(wordsPerMinuteOverText(meanPxPerSecond)).toBeGreaterThan(130 * 0.95);
-    expect(wordsPerMinuteOverText(meanPxPerSecond)).toBeLessThan(130 * 1.05);
+    const travelledPx = afterImage[afterImage.length - 1]!.scrollPx - afterImage[0]!.scrollPx;
+    const elapsedS = ((afterImage.length - 1) * FRAME_MS) / 1000;
+    const pace = wordsPerMinuteOverText(travelledPx / elapsedS);
+    expect(pace).toBeGreaterThan(130 * 0.95);
+    expect(pace).toBeLessThan(130 * 1.05);
   });
 });

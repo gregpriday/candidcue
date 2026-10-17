@@ -142,7 +142,12 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
   it('measures a script with nothing wordless in it exactly as before', () => {
     // Two paragraphs, back to back. Every block has lines, so nothing comes
     // out, and the answer is the plain baseline ratio to the last digit.
-    const lines = [lineIn('p1', 0, 100), lineIn('p1', 8, 164), lineIn('p2', 16, 260), lineIn('p2', 24, 324)];
+    const lines = [
+      lineIn('p1', 0, 100),
+      lineIn('p1', 8, 164),
+      lineIn('p2', 16, 260),
+      lineIn('p2', 24, 324),
+    ];
     const blocks = [box('p1', 60, 176), box('p2', 220, 336)];
     expect(measureAutoScrollScale(lines, blocks)).toEqual(measureAutoScrollScale(lines));
   });
@@ -150,7 +155,12 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
   it('takes out every wordless block between two lines, and the margins between them', () => {
     // A cue chip, a table and a silent block in a row. The spacing between
     // them is as wordless as they are.
-    const lines = [lineIn('p1', 0, 100), lineIn('p1', 8, 160), lineIn('p2', 16, 1000), lineIn('p2', 24, 1060)];
+    const lines = [
+      lineIn('p1', 0, 100),
+      lineIn('p1', 8, 160),
+      lineIn('p2', 16, 1000),
+      lineIn('p2', 24, 1060),
+    ];
     const blocks = [
       box('p1', 60, 172),
       box('cue', 200, 230),
@@ -171,11 +181,61 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
     expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo((160 - 30) / 16, 6);
   });
 
-  it('leaves alone a block whose words are read, whatever kind of block it is', () => {
-    // An image with its alt text read aloud produces a line, and a line is
-    // words: nothing about it is wordless.
-    const lines = [lineIn('p1', 0, 100), lineIn('image', 8, 400), lineIn('p2', 12, 700)];
-    const blocks = [box('p1', 60, 112), box('image', 150, 650), box('p2', 660, 712)];
+  it('takes out each wordless stretch, and charges the words between them to the words', () => {
+    // Paragraph, image, paragraph, table, paragraph: two separate removals,
+    // and the middle paragraph's own pitch still counted as text.
+    const lines = [
+      lineIn('p1', 0, 100),
+      lineIn('p2', 8, 600),
+      lineIn('p2', 16, 660),
+      lineIn('p3', 24, 1100),
+      lineIn('p3', 32, 1160),
+    ];
+    const blocks = [
+      box('p1', 60, 112),
+      box('image', 120, 520),
+      box('p2', 560, 672),
+      box('table', 680, 1000),
+      box('p3', 1060, 1172),
+    ];
+    // 1060 px of span, 400 + 320 of it wordless: 340 px for 32 words.
+    expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo(340 / 32, 6);
+  });
+
+  it('takes the alt text out with the image it is the spoken form of', () => {
+    /*
+     * With `readImageAltText` on, an image owns spoken tokens that have no
+     * anchor on the glass — the picture is their visual form — so they never
+     * reach a line. Removing the picture's height and leaving its words in
+     * would roll the text SLOWER than the dial: here, 76 words of alt text
+     * would turn 130 wpm into under 90.
+     */
+    const lines: RenderedLine[] = [];
+    let y = 100;
+    for (let i = 0; i < 20; i++) {
+      if (i === 10) y += 600;
+      // Tokens 80..155 are the alt text, spoken and unrendered.
+      const first = i < 10 ? i * 8 : 156 + (i - 10) * 8;
+      lines.push(lineIn(i < 10 ? 'p1' : 'p2', first, y));
+      y += 60;
+    }
+    const blocks = [
+      box('p1', lines[0]!.topY, lines[9]!.bottomY),
+      box('image', lines[9]!.bottomY + 4, lines[9]!.bottomY + 604),
+      box('p2', lines[10]!.topY, lines[19]!.bottomY),
+    ];
+    const scale = measureAutoScrollScale(lines, blocks);
+
+    expect(scale?.pxPerWord).toBeCloseTo(7.5, 6);
+    expect(scale?.sampledWords).toBe(152);
+    expect(paceOverText(130, scale)).toBeCloseTo(130, 6);
+  });
+
+  it('leaves tokens with no geometry alone on a step that loses no height', () => {
+    // Alt text of an image inside a paragraph: the paragraph's own height pays
+    // for it, as it always did, so neither side of the ratio changes.
+    const lines = [lineIn('p1', 0, 100), lineIn('p1', 20, 300), lineIn('p2', 28, 400)];
+    const blocks = [box('p1', 60, 312), box('p2', 360, 412)];
     expect(measureAutoScrollScale(lines, blocks)).toEqual(measureAutoScrollScale(lines));
   });
 
@@ -202,12 +262,13 @@ describe('measureAutoScrollScale over a script with things in it that are not wo
     const plain = measureAutoScrollScale(lines);
     // Lines whose blocks were never measured, and a box with no usable rect.
     expect(measureAutoScrollScale(lines, [box('elsewhere', 0, 9000)])).toEqual(plain);
-    expect(
-      measureAutoScrollScale(lines, [box('p1', 0, 652), box('image', Number.NaN, 1256), box('p2', 1260, 2000)]),
-    ).toEqual(plain);
-    expect(
-      measureAutoScrollScale(lines, [box('p1', 0, 652), box('image', 1256, 656), box('p2', 1260, 2000)]),
-    ).toEqual(plain);
+    const around = (image: ReturnType<typeof box>) => [
+      box('p1', 0, 652),
+      image,
+      box('p2', 1260, 2000),
+    ];
+    expect(measureAutoScrollScale(lines, around(box('image', Number.NaN, 1256)))).toEqual(plain);
+    expect(measureAutoScrollScale(lines, around(box('image', 1256, 656)))).toEqual(plain);
   });
 
   it('still refuses what it refused before', () => {
