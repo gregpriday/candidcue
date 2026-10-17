@@ -164,7 +164,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         following:
           'Not spoken. Divides the script into parts the Present menu can start one at a time.',
         note:
-          'Part breaks win over headings. Without any, the script is divided at its biggest headings, if there are at least two of them. A --- line only draws a divider. A part break needs a name, and a nameless one stops the script being presented; give each part a different name.',
+          'Part breaks with words after them win over headings. Without any, the script is divided at its biggest headings, and any text before the first one is an opening part; a script that comes out as one part is not divided. A --- line only draws a divider. A part break needs a name, and a nameless one stops the script being presented; give each part a different name.',
         expect: {
           spoken: ['welcome', 'to', 'the', 'show', 'here', 'is', 'how', 'it', 'works'],
           cues: [
@@ -190,6 +190,16 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
             what: 'one biggest heading over smaller ones makes no parts',
             source: '# Launch\n\n## Opening\n\nWelcome to the show.\n\n## Demo\n\nHere is how it works.',
             parts: [],
+          },
+          {
+            what: 'text before the first heading is an opening part',
+            source: 'Welcome back.\n\n## Demo\n\nHere is how it works.',
+            parts: ['Opening', 'Demo'],
+          },
+          {
+            what: 'a part break with nothing after it does not replace the headings',
+            source: '# One\n\nFirst words.\n\n# Two\n\nSecond words.\n\n[Take: End]',
+            parts: ['One', 'Two'],
           },
           {
             what: 'part breaks win over headings',
