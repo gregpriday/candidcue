@@ -39,6 +39,9 @@ test.beforeEach(async ({ page }) => {
       model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
     },
     promptMode: 'voice',
+    // The `.diagnostics` readout's `token:` line is how these specs read where
+    // the stage says it is, and it is drawn only in Diagnostic Take (#300).
+    diagnosticTake: true,
   });
   await page.setViewportSize({ width: 1280, height: 720 });
 });
