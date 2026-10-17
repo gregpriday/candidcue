@@ -301,3 +301,153 @@ describe('what the report claims', () => {
     expect(reported!.deltaPx).toBeLessThan(5_000_000);
   });
 });
+
+/**
+ * A key, pressed the way a browser delivers it: on the window, where the stage
+ * listens.
+ */
+function key(name: string, init: KeyboardEventInit = {}) {
+  window.dispatchEvent(
+    new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...init }),
+  );
+}
+
+const kinds = (onintent: ReturnType<typeof vi.fn>) =>
+  onintent.mock.calls.map(([intent]) => (intent as StageIntent).kind);
+
+describe('the arrow and Page keys report where they put the document (#282)', () => {
+  /*
+   * The keys used to send a DIRECTION — "one step forward" — which control
+   * spent as exactly one sentence from wherever the aligner was. Page Down
+   * moved the glass most of a screen and the answer for one sentence on then
+   * dragged it back. The fix is that a key is a gesture like any other: the
+   * stage says where the document went, and only the stage can.
+   *
+   * The token that report carries comes off the line map, which jsdom cannot
+   * build, so the anchor itself is proved in the browser
+   * (`tests/e2e/browser/keyboard-manual-scroll.spec.ts`). What this pins is the
+   * shape: what is reported, how much, and how often.
+   */
+  it('Page Down reports the travel it made, once the keys go quiet', async () => {
+    const { onintent } = await mount();
+
+    key('PageDown');
+    vi.advanceTimersByTime(150);
+    expect(kinds(onintent)).toEqual([]);
+
+    vi.advanceTimersByTime(100);
+    // A position, never a step request: nothing else is sent for a key.
+    expect(kinds(onintent)).toEqual(['manual_scroll']);
+    const [down] = scrolls(onintent) as { deltaPx: number }[];
+    expect(down!.deltaPx).toBeGreaterThan(0);
+
+    // Page Up from there comes back as far: the report is the document's
+    // travel, so the two presses are the same distance. Within a pixel, because
+    // a resting plant is snapped to whole device pixels between them.
+    key('PageUp');
+    vi.advanceTimersByTime(400);
+    const reported = scrolls(onintent) as { deltaPx: number }[];
+    expect(reported).toHaveLength(2);
+    expect(Math.abs(reported[1]!.deltaPx + down!.deltaPx)).toBeLessThan(1);
+  });
+
+  it('a held Page Down is one gesture and one report', async () => {
+    /*
+     * A held key repeats every few tens of milliseconds. A report per repeat is
+     * a race: the engine's answer to one press can arrive after the next has
+     * landed, name a line the hand has already left, and pull the document
+     * back a page.
+     */
+    const { onintent } = await mount();
+    key('PageDown');
+    vi.advanceTimersByTime(400);
+    const [single] = scrolls(onintent) as { deltaPx: number }[];
+
+    // Held for longer than the settle interval, so a report timed from the
+    // FIRST press rather than the last would show up mid-hold.
+    key('PageDown');
+    for (let i = 0; i < 8; i++) {
+      vi.advanceTimersByTime(40);
+      key('PageDown', { repeat: true });
+    }
+    vi.advanceTimersByTime(150);
+    expect(scrolls(onintent)).toHaveLength(1);
+
+    vi.advanceTimersByTime(100);
+    const reported = scrolls(onintent) as { deltaPx: number }[];
+    expect(reported).toHaveLength(2);
+    expect(Math.abs(reported[1]!.deltaPx - 9 * single!.deltaPx)).toBeLessThan(9);
+  });
+
+  it('the arrow keys report a line of travel the same way', async () => {
+    const { onintent } = await mount();
+    key('ArrowDown');
+    vi.advanceTimersByTime(400);
+    expect(kinds(onintent)).toEqual(['manual_scroll']);
+    const [line] = scrolls(onintent) as { deltaPx: number }[];
+    expect(line!.deltaPx).toBeGreaterThan(0);
+
+    key('ArrowUp');
+    vi.advanceTimersByTime(400);
+    const back = (scrolls(onintent)[1] as { deltaPx: number }).deltaPx;
+    expect(Math.abs(back + line!.deltaPx)).toBeLessThan(1);
+  });
+
+  it('says nothing for a key the document could not answer', async () => {
+    // Already at the top: Page Up and the up arrow move nothing, and a key that
+    // moved nothing must not re-anchor the tracker on the reading line.
+    const { onintent } = await mount();
+    key('ArrowUp');
+    key('PageUp');
+    vi.advanceTimersByTime(400);
+    expect(kinds(onintent)).toEqual([]);
+  });
+
+  it('a key the document absorbed does not join the gesture', async () => {
+    /*
+     * Against the foot of the script Page Down moves nothing, so it is not part
+     * of the gesture. The wheel's report goes out when the WHEEL went quiet —
+     * not 200 ms after a key that did nothing — and keeps the wheel's own
+     * look-or-move judgement rather than taking the key's "always a move".
+     */
+    const { onintent, root } = await mount();
+    wheel(root, 5_000_000);
+    vi.advanceTimersByTime(150);
+    key('PageDown');
+    vi.advanceTimersByTime(60);
+    expect(scrolls(onintent)).toHaveLength(1);
+  });
+
+  it('is stamped with the last thing the hand did, not with the settle', async () => {
+    /*
+     * Control drops a report that a deliberate move has overtaken — a restart
+     * or a sentence step pressed inside the settle window. The report is SENT
+     * after that move, so a settle-time stamp always looked newer than it and
+     * dragged the aligner back over it.
+     */
+    const { onintent } = await mount();
+    key('PageDown');
+    vi.advanceTimersByTime(100);
+    const lastKeyAt = Date.now();
+    key('PageDown');
+    vi.advanceTimersByTime(400);
+    // The clock really did move on, so a settle-time stamp would differ.
+    expect(Date.now() - lastKeyAt).toBeGreaterThanOrEqual(400);
+    const [reported] = scrolls(onintent) as { atMs: number }[];
+    expect(reported!.atMs).toBe(lastKeyAt);
+  });
+
+  it('a wheel and a key in one breath are one gesture', async () => {
+    // Two reports for one movement would also put two corrections in the
+    // summary, and the first would be a claim the second immediately revises.
+    const { onintent, root } = await mount();
+    wheel(root, 100);
+    vi.advanceTimersByTime(50);
+    key('PageDown');
+    vi.advanceTimersByTime(400);
+
+    const reported = scrolls(onintent) as { deltaPx: number }[];
+    expect(reported).toHaveLength(1);
+    expect(reported[0]!.deltaPx).toBeGreaterThan(100);
+  });
+});
