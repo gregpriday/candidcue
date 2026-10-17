@@ -33,6 +33,28 @@ function frame(partial: Partial<AudioLevelSnapshot> & { generatedAtMs: number })
   };
 }
 
+/**
+ * The text of every live region in server-rendered markup — anything a screen
+ * reader would speak when it changes: `role="status" | "alert" | "log"` or an
+ * explicit `aria-live` other than "off". Svelte's hydration comments and any
+ * nested tags are dropped, so an empty region reads as ''.
+ */
+function liveRegionTexts(html: string): string[] {
+  const regions = html.matchAll(
+    /<(\w+)\b[^>]*\b(?:role="(?:status|alert|log)"|aria-live="(?:polite|assertive)")[^>]*>([\s\S]*?)<\/\1>/g,
+  );
+  return [...regions].map((m) =>
+    (m[2] ?? '').replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]*>/g, '').trim(),
+  );
+}
+
+/** No live region may carry text. Present-but-empty is fine; speaking is not. */
+function expectNothingAnnounced(html: string): void {
+  for (const text of liveRegionTexts(html)) {
+    expect(text, 'a live region carries text for a meter with nothing to act on').toBe('');
+  }
+}
+
 /** Feed a sequence of frames and return the final held state. */
 function feed(frames: AudioLevelSnapshot[]): MicAdviceState {
   return frames.reduce(
@@ -152,13 +174,41 @@ describe('rendered meter', () => {
   });
 
   it('shows a line when there is nothing to act on, but does not announce it', () => {
-    // Both halves matter and they used to be one decision. The line is always
-    // visible, so the panel cannot jitter; the live region is attached only to
-    // conditions with a remedy, so a screen reader is not made to narrate
-    // every breath the speaker takes.
-    const html = render(MicMeter, { props: { level: null } }).body;
-    expect(html).toContain('No signal yet');
-    expect(html).toContain('Say a few words');
-    expect(html).not.toContain('role="status"');
+    /*
+     * Both halves matter and they used to be one decision. The line is always
+     * visible, so the panel cannot jitter; and a screen reader is not made to
+     * narrate every breath the speaker takes.
+     *
+     * The live region is now mounted permanently — a region created at the
+     * same moment as its text is the case assistive technology is least
+     * reliable about — so "not announced" means what it always meant at the
+     * listener's end: no live region carries any text. Checked for the idle
+     * meter AND for a healthy one, since a speaking frame is the condition that
+     * arrives ~11 times a second.
+     */
+    const idle = render(MicMeter, { props: { level: null } }).body;
+    expect(idle).toContain('No signal yet');
+    expect(idle).toContain('Say a few words');
+    expectNothingAnnounced(idle);
+
+    const healthy = render(MicMeter, {
+      props: { level: frame({ generatedAtMs: 1000, rms: 0.3, peak: 0.5, speaking: true }) },
+    }).body;
+    expect(healthy).toContain('Hearing you');
+    expect(healthy).toContain(MIC_ADVICE.speaking);
+    expectNothingAnnounced(healthy);
+
+    // And the visible line itself is never the live region, so its text can
+    // change without being read out.
+    expect(idle).not.toMatch(/<p class="advice[^"]*"[^>]*\b(?:role|aria-live)=/);
+  });
+
+  it('announces the remedy itself when there is something to act on', () => {
+    // The other half of the same decision: the persistent region is not just
+    // present for a fault, it carries the remedy text.
+    const html = render(MicMeter, {
+      props: { level: frame({ generatedAtMs: 1000, clipped: true, peak: 1 }) },
+    }).body;
+    expect(liveRegionTexts(html)).toContain(MIC_ADVICE.clipping);
   });
 });

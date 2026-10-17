@@ -63,7 +63,6 @@
   } from '../services/audio';
   import {
     MicTestSession,
-    micTestStopNotice,
     shouldAdoptRememberedMicrophone,
     type MicTestSnapshot,
   } from '../services/mic-test-session';
@@ -1432,7 +1431,6 @@
   const micTestRunning = $derived(
     micTest === 'opening' || micTest === 'listening' || micTest === 'waiting',
   );
-  const micTestNotice = $derived(micTestStopNotice(micTestSnapshot.stoppedReason));
   /**
    * The pin as REMEMBERED — whether or not that microphone is plugged in now.
    * `undefined` means the choice is "follow the system default".
@@ -1487,6 +1485,172 @@
   const micSelectValue = $derived(
     micPinned ? (micPinnedDevice?.deviceId ?? micPinned.deviceId) : SYSTEM_DEFAULT_OPTION,
   );
+  /** The Mac's own input, as it names it — without Chromium's "Default - ". */
+  const micSystemDefaultLabel = $derived(
+    micDevices
+      .find((d) => d.isDefault)
+      ?.label.replace(/^default\s+-\s+/i, '')
+      .trim() || null,
+  );
+  /**
+   * The physical microphone a take would open right now, by name.
+   *
+   * The picker can show a remembered microphone that is not plugged in, and a
+   * native select clips a long name, so neither answers "which microphone is
+   * this?" on its own. This does, and the meter and the test below are both
+   * reading it.
+   */
+  const micActiveLabel = $derived(micPinnedDevice?.label ?? micSystemDefaultLabel);
+  const micPickerDescription = $derived(
+    micPinned && !micPinnedDevice
+      ? 'Remembered for when it is plugged back in.'
+      : micPinned
+        ? 'Every take uses this microphone.'
+        : 'Follows the input chosen in macOS.',
+  );
+  /**
+   * What changed about access or the input, as one sentence for the section's
+   * permanent status region. The visible notices are mounted with their text
+   * already in them, which is the case a screen reader is least reliable about.
+   */
+  const micAnnouncement = $derived.by((): string => {
+    if (micPermission === 'granted') {
+      return micPinned && !micPinnedDevice
+        ? `${micPinned.label} is not connected. Takes use ${micSystemDefaultLabel ?? "your Mac's default input"} until it is back.`
+        : '';
+    }
+    if (micPermission === 'unknown') return micRequesting ? 'Answer the macOS prompt to continue.' : '';
+    if (micAccess === 'restricted') return 'Microphone access is managed on this Mac.';
+    if (micAccess === 'granted') {
+      return micRetryRefused
+        ? 'Quit and reopen CandidCue to use the microphone.'
+        : 'Microphone access is on.';
+    }
+    return micRetryRefused ? 'Microphone access is still off.' : 'Microphone access is off.';
+  });
+
+  /**
+   * The microphone the last transcription test ran on.
+   *
+   * A pass is evidence about one input. Without its name beside it, a verdict
+   * earned on the laptop microphone sat under a picker that had since been
+   * changed to the headset, and read as though the headset had passed.
+   */
+  let micTestedLabel = $state<string | null>(null);
+  /** A failure the test itself reported, as opposed to one opening the device. */
+  const micTestError = $derived(
+    micTestSnapshot.stoppedReason === 'error' ? micTestSnapshot.error : null,
+  );
+  /**
+   * The failure as this screen shows it.
+   *
+   * The recogniser's messages are written for a take, and several end with
+   * what to press during one ("In a take, press A to start or stop
+   * auto-scroll…"). That is the wrong advice in Settings, where nothing is
+   * scrolling; the rest of the sentence is still the diagnosis.
+   */
+  const micTestErrorText = $derived(
+    micTestError
+      ?.replace(/\s*In a take, press A to start or stop auto-scroll(?:, then [^.]*)?\./, '')
+      .trim() ?? null,
+  );
+  /** The failure says to fix it in Speech, so offer the way there. */
+  const micTestNeedsSpeech = $derived(
+    micTestError !== null && /Settings\s*[→›]\s*Speech/.test(micTestError),
+  );
+  /**
+   * One sentence for where the test is, in one place that never moves.
+   *
+   * These used to share the action row with the buttons and arrive one after
+   * another underneath it, so the page grew and shrank by 120px across a single
+   * test and the outcome of an automatic stop was a grey footnote.
+   */
+  const micVerdict = $derived.by(
+    (): { tone: 'idle' | 'live' | 'good' | 'warn' | 'bad'; icon: 'check' | 'alert' | 'clock' | null; text: string } => {
+      switch (micTest) {
+        case 'opening':
+          return { tone: 'live', icon: null, text: 'Starting speech recognition…' };
+        case 'listening':
+          return { tone: 'live', icon: null, text: 'Listening — say the sentence above' };
+        case 'waiting':
+          return { tone: 'live', icon: null, text: 'Receiving words…' };
+        case 'success':
+          return {
+            tone: 'good',
+            icon: 'check',
+            text: micTestedLabel
+              ? `Transcription is working with ${micTestedLabel}`
+              : 'Transcription is working',
+          };
+      }
+      switch (micTestSnapshot.stoppedReason) {
+        case 'error':
+          return { tone: 'bad', icon: 'alert', text: 'The test could not run' };
+        case 'idle_timeout':
+          return { tone: 'warn', icon: 'clock', text: 'Nothing was transcribed in 30 seconds' };
+        case 'max_duration':
+          return { tone: 'warn', icon: 'clock', text: 'The test stopped after two minutes' };
+        case 'user':
+          return { tone: 'idle', icon: null, text: 'Test stopped' };
+        default:
+          return { tone: 'idle', icon: null, text: 'Not tested yet' };
+      }
+    },
+  );
+  /** What the test asks for — said in the row, and spoken while it listens. */
+  const MIC_TEST_SENTENCE = 'CandidCue is following my voice.';
+  /** What the well under the verdict holds: words, a next step, or room for them. */
+  const micTestWords = $derived.by((): { kind: 'final' | 'partial' | 'message' | 'empty'; text: string } => {
+    if (micTestErrorText) return { kind: 'message', text: micTestErrorText };
+    if (micTestSnapshot.final) return { kind: 'final', text: micTestSnapshot.final };
+    if (micTestSnapshot.partial) return { kind: 'partial', text: micTestSnapshot.partial };
+    if (micTestSnapshot.stoppedReason === 'idle_timeout') {
+      return {
+        kind: 'message',
+        text: 'If the level above moves when you speak, the microphone is hearing you. Run the test again and say the sentence clearly.',
+      };
+    }
+    if (micTestSnapshot.stoppedReason === 'max_duration') {
+      return { kind: 'message', text: 'Start it again if you need another look.' };
+    }
+    return { kind: 'empty', text: 'Your words will appear here.' };
+  });
+
+  /**
+   * The rest of the verdict, for the announcement only.
+   *
+   * The eye reads the sentence to say and the words that came back in the
+   * well; somebody who pressed Test from the keyboard and stayed there hears
+   * only the status region, so it carries them too — the final words once,
+   * never the partials streaming in.
+   */
+  const micVerdictDetail = $derived.by((): string | null => {
+    if (micTestWords.kind === 'message') return micTestWords.text;
+    if (micTest === 'listening') return `Say: ${MIC_TEST_SENTENCE}`;
+    if (micTest === 'success' && micTestSnapshot.final) return `Heard: ${micTestSnapshot.final}`;
+    return null;
+  });
+
+  /**
+   * A verdict belongs to the input that earned it, so choosing another one
+   * clears it — and stops a test still listening on the old one.
+   */
+  function resetMicTest(): void {
+    micTestStarts += 1;
+    if (micTestRunning) micTestSession.stop('restart');
+    micTestSnapshot = { state: 'idle', partial: '', final: '', error: null, stoppedReason: null };
+    micTestedLabel = null;
+  }
+
+  /**
+   * Capture tuning is folded away: it is rare, expert work, and it sat between
+   * nothing and everything as a second section of equal weight. A search opens
+   * it, because the row filter marks rows it cannot show inside a closed fold.
+   */
+  let captureTuningOpen = $state(false);
+  $effect(() => {
+    if (sectionQuery.trim() !== '') captureTuningOpen = true;
+  });
 
   /**
    * One capture at a time, and the next one waits for the last to let go.
@@ -1525,6 +1689,16 @@
   $effect(() => {
     if (section === 'audio') return;
     micTestSession.dispose();
+    // A press still waiting for the meter never reached the session, so the
+    // dispose above cannot cancel it: bump the start token so it never opens,
+    // and clear the "opening" it left, or the meter would stay closed when the
+    // section is opened again.
+    micTestStarts += 1;
+    untrack(() => {
+      if (micTestSnapshot.state === 'opening') {
+        micTestSnapshot = { state: 'idle', partial: '', final: '', error: null, stoppedReason: null };
+      }
+    });
   });
   $effect(() => {
     return () => micTestSession.dispose();
@@ -1717,10 +1891,58 @@
    * exactly where the contention lives.
    */
   async function runTranscriptionTest(): Promise<void> {
+    const mine = (micTestStarts += 1);
     micError = null;
-    micTestSnapshot = { ...micTestSnapshot, state: 'opening' };
+    micTestedLabel = micActiveLabel;
+    // Fresh, not the last run's words under a new "Starting…".
+    micTestSnapshot = { state: 'opening', partial: '', final: '', error: null, stoppedReason: null };
     await microphoneQuiet();
+    if (mine !== micTestStarts) return;
     await micTestSession.start(micDeviceId);
+  }
+
+  /**
+   * Which press of Test may still open the session.
+   *
+   * Between the press and `start` there is the wait for the meter to let go,
+   * and the session knows nothing of the test yet — so Stop pressed there
+   * reached a session with nothing to stop, and the test opened anyway once
+   * the meter was free. Stop, a new input and leaving the section all bump
+   * this, and a start that finds it moved does not happen.
+   */
+  let micTestStarts = 0;
+
+  /**
+   * The Test/Stop slot, and whether focus was in it when the test started or
+   * stopped.
+   *
+   * Start and Stop are two buttons, so the one that was pressed leaves the
+   * page the moment it does its job. Somebody working from the keyboard would
+   * be dropped to the top of the document mid-test; this puts focus on the
+   * button that replaced it instead. Read BEFORE the swap (`$effect.pre`),
+   * restored after it.
+   */
+  let micTestSlot = $state<HTMLElement | null>(null);
+  let micTestFocusCarry = false;
+  $effect.pre(() => {
+    void micTestRunning;
+    micTestFocusCarry = micTestSlot?.contains(document.activeElement) ?? false;
+  });
+  $effect(() => {
+    void micTestRunning;
+    if (!micTestFocusCarry) return;
+    micTestFocusCarry = false;
+    micTestSlot?.querySelector('button')?.focus();
+  });
+
+  function stopTranscriptionTest(): void {
+    micTestStarts += 1;
+    if (micTestSession.running) {
+      micTestSession.stop('user');
+      return;
+    }
+    // Still waiting for the meter: nothing opened, so it is simply stopped.
+    micTestSnapshot = { state: 'idle', partial: '', final: '', error: null, stoppedReason: 'user' };
   }
 
   /** Enumerate inputs for an already-granted permission — never prompts. */
@@ -1781,6 +2003,7 @@
    * The one place the input choice is made — the system-default row included.
    */
   function chooseMicrophone(value: string): void {
+    resetMicTest();
     if (value === SYSTEM_DEFAULT_OPTION) {
       void patchSettings('audio', { followSystemDefault: true }).catch(() => {});
       return;
@@ -2246,146 +2469,272 @@
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="CandidCue opens your microphone briefly when you grant access, while a test or a voice-tracking take is running, and while the input meter below is on screen. Audio from a test or a take is transcribed on this machine; the meter only measures how loud you are. Neither is recorded, saved, or uploaded."
+          description="Choose the microphone your takes listen to and check it on the input meter, which listens while this page is open. Then make sure CandidCue understands what you say."
         >
-          {#if micPermission === 'unknown'}
-            <div class="row-actions">
-              <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
-                Allow and choose microphone
-              </Button>
-            </div>
-          {:else if micPermission === 'denied'}
+          <!-- Mounted for as long as the section is, so a notice that arrives
+               is spoken into a region that was already there (the cards and
+               the fallback below carry no live role of their own). -->
+          <p class="visually-hidden" role="status" aria-atomic="true">{micAnnouncement}</p>
+          {#if micPermission !== 'granted'}
             <!--
               #303. macOS asks once per application; after a refusal, asking
               again fails at once with no prompt. So the remedy is the privacy
-              pane, opened from here, and "Try again" is for afterwards — the
-              old single button repeated the refused request and landed back on
-              this same message.
+              pane, opened from here, and "Try again" is for afterwards. Each
+              branch leads with the one thing to do next, and its buttons are
+              weighted the same way — the refusal that has since been lifted is
+              good news, not another red error.
             -->
-            <p class="inline-alert" role="alert">
-              {#if micAccess === 'restricted'}
-                Microphone access is restricted on this Mac, by Screen Time or a device management
-                profile, so it may not be yours to change.
-              {:else if micAccess === 'granted' && micRetryRefused}
-                CandidCue is allowed in System Settings, but macOS is still refusing it the
-                microphone. Quit and reopen CandidCue.
-              {:else if micAccess === 'granted'}
-                CandidCue is allowed in System Settings now. Choose Try again to use the microphone.
-              {:else}
-                Microphone access is blocked. Allow CandidCue in System Settings → Privacy &amp;
-                Security → Microphone, then try again.
-                {#if micRetryRefused}
-                  If CandidCue is already allowed there, quit and reopen it.
-                {/if}
-              {/if}
-            </p>
-            <div class="row-actions">
-              <Button variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
-                Open System Settings
-              </Button>
-              <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
-            </div>
+            {#if micPermission === 'unknown'}
+              <div class="mic-access">
+                <span class="mic-access-icon"><Icon name="mic" size={18} /></span>
+                <div class="mic-access-body">
+                  <p class="mic-access-title">Let CandidCue hear you</p>
+                  <p class="mic-access-text">
+                    {#if micRequesting}
+                      Answer the macOS prompt to continue.
+                    {:else}
+                      Voice following needs the microphone, and macOS will ask you once.
+                    {/if}
+                  </p>
+                  <div class="row-actions">
+                    <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
+                      Allow and choose microphone
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            {:else if micAccess === 'restricted'}
+              <div class="mic-access warn">
+                <span class="mic-access-icon"><Icon name="alert" size={18} /></span>
+                <div class="mic-access-body">
+                  <p class="mic-access-title">Microphone access is managed on this Mac</p>
+                  <p class="mic-access-text">
+                    Screen Time or a device management profile is blocking the microphone, so the
+                    setting may not be yours to change. Ask whoever manages this Mac to allow
+                    CandidCue.
+                  </p>
+                  <div class="row-actions">
+                    <Button onclick={() => void openMicrophonePrivacySettings()}>Open System Settings</Button>
+                    <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
+                  </div>
+                </div>
+              </div>
+            {:else if micAccess === 'granted' && micRetryRefused}
+              <div class="mic-access warn">
+                <span class="mic-access-icon"><Icon name="refresh" size={18} /></span>
+                <div class="mic-access-body">
+                  <p class="mic-access-title">Quit and reopen CandidCue</p>
+                  <p class="mic-access-text">
+                    System Settings allows CandidCue, but macOS has not handed this window the
+                    microphone yet. It will once CandidCue restarts.
+                  </p>
+                  <div class="row-actions">
+                    <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
+                  </div>
+                </div>
+              </div>
+            {:else if micAccess === 'granted'}
+              <div class="mic-access good">
+                <span class="mic-access-icon"><Icon name="check" size={18} /></span>
+                <div class="mic-access-body">
+                  <p class="mic-access-title">Microphone access is on</p>
+                  <p class="mic-access-text">CandidCue is allowed in System Settings.</p>
+                  <div class="row-actions">
+                    <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
+                      Use the microphone
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            {:else}
+              <div class="mic-access warn">
+                <span class="mic-access-icon"><Icon name="alert" size={18} /></span>
+                <div class="mic-access-body">
+                  <p class="mic-access-title">
+                    {micRetryRefused ? 'Microphone access is still off' : 'Microphone access is off'}
+                  </p>
+                  <p class="mic-access-text">
+                    macOS will not ask again. Turn on CandidCue in System Settings, then choose Try
+                    again.
+                    {#if micRetryRefused}
+                      If it is already on there, quit and reopen CandidCue.
+                    {/if}
+                  </p>
+                  <!-- Where, as its own line: a path is one name, and set
+                       inside the sentence it broke at the arrow or inside
+                       "Privacy &". -->
+                  <p class="mic-path">System Settings › Privacy &amp; Security › Microphone</p>
+                  <div class="row-actions">
+                    <Button variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
+                      Open System Settings
+                    </Button>
+                    <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
+                  </div>
+                </div>
+              </div>
+            {/if}
           {:else}
-            <Select
-          layout="row"
-              label="Input device"
-              value={micSelectValue}
-              options={micOptions}
-              onchange={(value) => chooseMicrophone(value)}
-            />
-            {#if micPinned && !micPinnedDevice}
-              <!--
-                The pin is kept, not quietly dropped: this is a microphone that
-                is coming back, and saying so beats a picker that silently
-                reverts to the default and leaves the presenter to notice on
-                stage.
-              -->
-              <p class="hint-line">
-                {micPinned.label} is not connected. CandidCue is using the system default until it
-                is plugged back in.
-              </p>
-            {/if}
-            <MicMeter level={micLevel} />
             <!--
-              Costs nothing but holds the microphone, so it can always be
-              stopped and it closes itself if it is forgotten (see
-              services/mic-test-session.ts for the two deadlines).
+              The setup is one sequence — choose, check, confirm — and reads
+              top to bottom in that order. Each block keeps its height whatever
+              state it is in, so nothing below it moves while you are using it.
             -->
-            <div class="row-actions">
-              <Button onclick={() => void runTranscriptionTest()} disabled={micTestRunning}>
-                Test transcription
-              </Button>
-              {#if micTestRunning}
-                <Button variant="danger" onclick={() => micTestSession.stop('user')}>Stop test</Button>
-              {/if}
-              {#if micTest !== 'idle'}
-                <span class="mic-test-state" class:live={micTestRunning} aria-live="polite">
-                  {#if micTestRunning}<span class="mic-test-dot" aria-hidden="true"></span>{/if}
-                  {#if micTest === 'opening'}
-                    Starting speech recognition…
-                  {:else if micTest === 'listening'}
-                    Say: “CandidCue is following my voice.” — Listening…
-                  {:else if micTest === 'waiting'}
-                    Audio detected. Waiting for transcription…
-                  {:else}
-                    Transcription is working.
-                  {/if}
-                </span>
-              {/if}
+            <div class="mic-flow" style="--settings-control-w: 320px">
+              <div class="mic-input">
+                <Select
+                  layout="row"
+                  label="Input device"
+                  description={micPickerDescription}
+                  value={micSelectValue}
+                  options={micOptions}
+                  onchange={(value) => chooseMicrophone(value)}
+                />
+                {#if micPinned && !micPinnedDevice}
+                  <!--
+                    The pin is kept, not quietly dropped: this is a microphone
+                    that is coming back. But until it does, a DIFFERENT microphone
+                    is the one a take opens, and that is the fact a presenter
+                    must not discover on stage — so it is named, here, as a
+                    warning rather than a footnote.
+                  -->
+                  <div class="mic-fallback">
+                    <span class="mic-fallback-icon"><Icon name="alert" size={16} /></span>
+                    <div class="mic-fallback-body">
+                      <p class="mic-fallback-title">{micPinned.label} is not connected</p>
+                      <p class="mic-fallback-text">
+                        Takes, the level and the test use {micSystemDefaultLabel ?? "your Mac's default input"}
+                        until it is back.
+                        <button
+                          type="button"
+                          class="inline-link"
+                          onclick={() => chooseMicrophone(SYSTEM_DEFAULT_OPTION)}
+                        >
+                          Use the system default instead
+                        </button>
+                      </p>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <MicMeter level={micLevel} paused={micTestRunning} />
+
+              <!--
+                Costs nothing but holds the microphone, so it can always be
+                stopped and it closes itself if it is forgotten (see
+                services/mic-test-session.ts for the two deadlines). One button,
+                mounted throughout, so the hand and keyboard focus stay where
+                they are when Test becomes Stop.
+              -->
+              <div class="mic-test" data-tone={micVerdict.tone} data-phase={micTest}>
+                <div class="mic-test-head">
+                  <div class="mic-test-label">
+                    <span class="mic-test-name">Transcription test</span>
+                    <span class="mic-test-prompt">Say “{MIC_TEST_SENTENCE}”</span>
+                  </div>
+                  <!-- One slot that holds the wider label's width, so Stop lands
+                       exactly where Test was pressed. Start and Stop are separate
+                       buttons — the start always goes through
+                       runTranscriptionTest and its wait for the meter — and focus
+                       is carried from one to the other (see `micTestSlot`). -->
+                  <div class="mic-test-button" bind:this={micTestSlot}>
+                    {#if micTestRunning}
+                      <Button onclick={() => stopTranscriptionTest()}>
+                        <span class="mic-stop-glyph" aria-hidden="true"></span>
+                        Stop test
+                      </Button>
+                    {:else}
+                      <Button onclick={() => void runTranscriptionTest()}>
+                        <Icon name="mic" size={14} />
+                        Test transcription
+                      </Button>
+                    {/if}
+                  </div>
+                </div>
+                <div class="mic-test-well">
+                  <div class="mic-test-verdict-row">
+                    <p class="mic-test-verdict" role="status" aria-atomic="true">
+                      {#if micVerdict.tone === 'live'}
+                        <span class="mic-test-dot" aria-hidden="true"></span>
+                      {:else if micVerdict.icon}
+                        <span class="mic-test-icon" aria-hidden="true">
+                          <Icon name={micVerdict.icon} size={14} />
+                        </span>
+                      {/if}
+                      <span>{micVerdict.text}</span>
+                      {#if micVerdictDetail}<span class="visually-hidden">. {micVerdictDetail}</span>{/if}
+                    </p>
+                    {#if micTestNeedsSpeech}
+                      <Button size="sm" onclick={() => navigate({ name: 'settings', section: 'speech' })}>
+                        Open Speech settings
+                      </Button>
+                    {/if}
+                  </div>
+                  <!-- Two lines are reserved, which holds the test sentence and
+                       every message; only an unusually long utterance grows it. -->
+                  <p class="mic-test-words {micTestWords.kind}">{micTestWords.text}</p>
+                </div>
+                <p class="mic-test-note">
+                  Stops by itself after 30 seconds with nothing transcribed, or after two minutes at
+                  most.
+                </p>
+              </div>
             </div>
-            {#if micTestRunning}
-              <p class="hint-line">
-                Listening on this machine. It stops on its own after 30 seconds with nothing
-                transcribed, and after two minutes in any case.
-              </p>
-            {:else if micTestNotice}
-              <p class="hint-line">{micTestNotice}</p>
-            {/if}
-            {#if micTestSnapshot.partial || micTestSnapshot.final}
-              <p class="transcript" class:final={Boolean(micTestSnapshot.final)}>
-                {micTestSnapshot.final || micTestSnapshot.partial}
-              </p>
-            {/if}
           {/if}
-          {#if micError}
+          {#if micError && micError !== micTestError}
             <p class="inline-alert" role="alert">{micError}</p>
           {/if}
-        </Section>
-        <!--
-          "Follow system default microphone" used to be a toggle here, three
-          controls away from the picker it disabled and blanked. One control
-          now: it is the first row of the input picker above.
-        -->
-        <Section title="Capture">
-          <Toggle
-            checked={$settings.audio.noiseSuppression}
-            label="Noise suppression"
-            onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
-          />
-          <Toggle
-            checked={$settings.audio.echoCancellation}
-            label="Echo cancellation"
-            onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
-          />
-          <Toggle
-            checked={$settings.audio.autoGainControl}
-            label="Automatic gain control"
-            onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
-          />
+          <p class="mic-privacy">
+            <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
+            <span>
+              Speech is transcribed on this Mac and never recorded, saved or uploaded. CandidCue
+              uses the microphone while a test or a take runs, and while the input meter is on
+              screen here; the meter only measures loudness.
+            </span>
+          </p>
           <!--
-            §28.4. It is a property of a room and a microphone, not of a take,
-            and the meter above observes at this value — so a change to it shows
-            immediately instead of being discovered mid-take.
+            "Follow system default microphone" used to be a toggle here, three
+            controls away from the picker it disabled and blanked. One control
+            now: it is the first row of the input picker above.
           -->
-          <Slider
-            label={VAD_SENSITIVITY_COPY.label}
-            description={VAD_SENSITIVITY_COPY.description}
-            value={Math.round($settings.audio.vadSensitivity * 100)}
-            min={0}
-            max={100}
-            format={VAD_SENSITIVITY_COPY.format}
-            onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
-          />
+          <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
+            <p class="mic-tuning-lead">
+              For difficult rooms. The level meter above uses these too, so a change shows there
+              straight away.
+            </p>
+            <Toggle
+              checked={$settings.audio.noiseSuppression}
+              label="Noise suppression"
+              description="Filters out steady background noise, such as a fan or air conditioning."
+              onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
+            />
+            <Toggle
+              checked={$settings.audio.echoCancellation}
+              label="Echo cancellation"
+              description="Removes sound from your speakers that the microphone picks up."
+              onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
+            />
+            <Toggle
+              checked={$settings.audio.autoGainControl}
+              label="Automatic gain control"
+              description="Evens out your level as you move nearer to or further from the microphone."
+              onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
+            />
+            <!--
+              §28.4. It is a property of a room and a microphone, not of a take,
+              and the meter above observes at this value — so a change to it shows
+              immediately instead of being discovered mid-take.
+            -->
+            <Slider
+              label={VAD_SENSITIVITY_COPY.label}
+              description={VAD_SENSITIVITY_COPY.description}
+              value={Math.round($settings.audio.vadSensitivity * 100)}
+              min={0}
+              max={100}
+              format={VAD_SENSITIVITY_COPY.format}
+              onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
+            />
+          </Disclosure>
         </Section>
       {:else if section === 'stage'}
         <!--
@@ -4121,27 +4470,241 @@
   }
 
   /* --- microphone --- */
-  .mic-test-state {
+
+  /* Permission. One card per remedy: an icon in the remedy's tone, a title
+     that names the next step, one or two sentences, and the buttons weighted
+     the same way. Tone colours the icon and title only — never the body. */
+  .mic-access {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+  }
+  .mic-access-icon {
     display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
+    flex: 0 0 auto;
+    margin-top: 1px;
+    color: var(--text-muted);
+  }
+  .mic-access.warn .mic-access-icon {
+    color: var(--warning);
+  }
+  .mic-access.good .mic-access-icon {
+    color: var(--success);
+  }
+  .mic-access-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .mic-access-title {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .mic-access-text {
+    margin: 0 0 var(--space-2);
     font-size: var(--text-sm);
+    line-height: var(--lh-label);
     color: var(--text-secondary);
   }
-  /* A live billable session must be unmistakable at a glance. */
-  .mic-test-state.live {
-    color: var(--accent-strong);
+  /* A path is one name; it must not break at the arrow or inside "Privacy &". */
+  .mic-path {
+    margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .mic-flow {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+    min-width: 0;
+  }
+  .mic-input {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  /* A short window spends its height on the sequence, not the air between. */
+  @media (max-height: 560px) {
+    .mic-flow {
+      gap: var(--space-5);
+    }
+  }
+
+  /* The remembered microphone is missing and another one is standing in. */
+  .mic-fallback {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+  }
+  .mic-fallback-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 1px;
+    color: var(--warning);
+  }
+  .mic-fallback-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+  }
+  .mic-fallback-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
     font-weight: 600;
+    color: var(--warning);
+  }
+  .mic-fallback-text {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-primary);
+  }
+
+  /* The transcription test: a label row like every other row, then one well
+     whose height is reserved for any state, then a note that never changes. */
+  .mic-test {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .mic-test-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .mic-test-label {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .mic-test-button {
+    display: flex;
+    flex: 0 0 auto;
+    min-width: 164px;
+  }
+  .mic-test-button :global(.button) {
+    flex: 1 1 auto;
+  }
+  /* Stop, drawn as the transport's filled square — the outline glyph read as
+     an empty checkbox at this size. */
+  .mic-stop-glyph {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: currentColor;
+  }
+  .mic-test-name {
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .mic-test-prompt {
+    font-size: var(--text-xs);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+  }
+  .mic-test-well {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    /* Verdict + two lines of transcript, so words arriving never push the
+       page and a pass never pulls it back up. */
+    min-height: calc(var(--control-h-sm) + var(--space-2) + 2 * var(--lh-transcript) + 2 * var(--space-3));
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+  }
+  /* As tall as the small button that can sit on it, in every state, so the
+     words below start on the same line whether or not it is there. */
+  .mic-test-verdict-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: var(--control-h-sm);
+    min-width: 0;
+  }
+  .mic-test-verdict {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .mic-test[data-tone='idle'] .mic-test-verdict {
+    font-weight: 500;
+  }
+  /* A live session must be unmistakable at a glance. */
+  .mic-test[data-tone='live'] .mic-test-verdict {
+    color: var(--accent-strong);
+  }
+  .mic-test[data-tone='good'] .mic-test-verdict {
+    color: var(--success);
+  }
+  .mic-test[data-tone='warn'] .mic-test-verdict {
+    color: var(--warning);
+  }
+  .mic-test[data-tone='bad'] .mic-test-verdict {
+    color: var(--danger);
+  }
+  .mic-test-icon {
+    display: inline-flex;
+  }
+  /* The verdict's leading mark sits in a 14px slot whatever it is, so the
+     words start at the same x in every state. */
+  .mic-test-icon,
+  .mic-test-dot {
+    flex: 0 0 14px;
+    justify-content: center;
   }
   .mic-test-dot {
+    display: inline-flex;
+    align-items: center;
+  }
+  .mic-test-dot::before {
+    content: '';
     width: 8px;
     height: 8px;
     border-radius: 50%;
     background: var(--accent-strong);
-    animation: mic-test-pulse 1.4s ease-in-out infinite;
+    animation: mic-test-pulse 1.4s var(--ease-inout) infinite;
+  }
+  /* Starting is not yet listening: a hollow mark until the microphone is live. */
+  .mic-test[data-phase='opening'] .mic-test-dot::before {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--accent-strong);
+    animation: none;
   }
   @media (prefers-reduced-motion: reduce) {
-    .mic-test-dot {
+    .mic-test-dot::before {
       animation: none;
     }
   }
@@ -4154,18 +4717,55 @@
       opacity: 0.35;
     }
   }
-  .transcript {
+  .mic-test-words {
     margin: 0;
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
-    border: 1px solid var(--border-faint);
-    font-size: var(--text-lg);
+    font-size: var(--text-transcript);
     line-height: var(--lh-transcript);
+    color: var(--prose-text-warm);
+    overflow-wrap: anywhere;
+  }
+  .mic-test-words.partial {
     color: var(--prose-secondary-warm);
   }
-  .transcript.final {
-    color: var(--prose-text-warm);
+  /* Room for words, set apart from words: smaller, and the faint ramp. */
+  .mic-test-words.empty {
+    font-size: var(--text-base);
+    color: var(--text-faint);
+  }
+  /* A next step or a failure is an instruction, not a transcript. */
+  .mic-test-words.message {
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+    max-width: var(--prose-measure-narrow);
+  }
+  .mic-test-note {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+  }
+
+  .mic-privacy {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+    max-width: var(--prose-measure);
+  }
+  .mic-privacy-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+  .mic-tuning-lead {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
   }
 
 </style>
