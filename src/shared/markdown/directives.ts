@@ -438,15 +438,10 @@ export type CoachDirective =
  *
  * These are reported rather than silently accepted. A directive that parses
  * and does nothing is worse than one that is missing, because the author
- * believes it worked:
- *
- * - `cc:pause` would have to reach the cadence lane's pause *location* input,
- *   which is an alignment fact nothing currently supplies;
- * - `cc:emphasis` would have to reach the variety lane's emphasis-contrast
- *   term, which the orchestrator hard-codes to `null` (§17.5 redistributes it);
- * - `cc:duration` is a per-section budget, and the only duration projection
- *   that exists (§14.10) is whole-script — that one is settable from §19.5
- *   front matter instead.
+ * believes it worked. None of the three was ever wired to anything: `cc:pause`
+ * needed a pause *location* nothing supplies, `cc:emphasis` an emphasis
+ * measure nothing computes, and `cc:duration` a per-section budget where only
+ * a whole-script one (§19.5 front matter) was ever defined.
  */
 const UNSUPPORTED_COACH_DIRECTIVES: ReadonlySet<string> = new Set([
   'pause',

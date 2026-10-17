@@ -188,10 +188,11 @@
      */
     followProfile?: SmoothFollowProfile;
     /**
-     * §7.1. Extra bottom inset the script must give up for the Coaching Rail's
-     * reserved band. Applied by the mount site before the take begins and held
-     * for the whole take; the reading band and every measurement fold it into
-     * the bottom padding, so the script never scrolls under the rail.
+     * §7.1. Extra bottom inset the script gives up to whatever the mount site
+     * reserves below it. Applied before the take begins and held for the whole
+     * take; the reading band and every measurement fold it into the bottom
+     * padding, so the script never scrolls under it. Nothing reserves a band
+     * today, so the stage passes `0`.
      */
     bottomInsetPx?: number;
     /**

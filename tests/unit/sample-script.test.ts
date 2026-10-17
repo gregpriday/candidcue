@@ -66,8 +66,8 @@ describe('sample script', () => {
   });
 
   it('demonstrates a §19.4 coaching directive on the line that needs one', () => {
-    // The "slow right down" paragraph is the one place in the sample where the
-    // rail would otherwise coach against the script's own instruction.
+    // The "slow right down" paragraph carries the sample's one directive, and
+    // the compiler resolves it to the spans it covers.
     expect(SAMPLE_SCRIPT_SOURCE).toMatch(/<!-- cc:style calm -->/);
 
     const result = compileSource(SAMPLE_SCRIPT_SOURCE);

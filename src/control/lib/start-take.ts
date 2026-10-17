@@ -820,7 +820,6 @@ export async function startTake(
       nextPart: takeNextPart,
       sessionId,
       compiled: compiled.script,
-      scriptRevision: doc.scriptRevision,
       sessionGeneration: record.sessionGeneration,
       stageSettings,
       stageEnvelope,

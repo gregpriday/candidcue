@@ -31,10 +31,8 @@ export const SAMPLE_SCRIPT_TITLE = 'Sample: read this aloud';
  *    that reads like prose is a script the aligner will fight you on.
  *
  * It also carries one §19.4 coaching directive, on the paragraph that asks the
- * presenter to slow right down. Without it the coaching rail would offer to
- * lift the pace on the exact line whose instruction is to drop it — which is
- * both the clearest demonstration of what the directive is for and the fastest
- * way to make someone turn the rail off on their first take.
+ * presenter to slow right down, so the sample shows how a directive is written
+ * and that the compiler keeps it out of the spoken stream.
  */
 export const SAMPLE_SCRIPT_SOURCE = `# Getting started
 

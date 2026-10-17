@@ -26,6 +26,8 @@ import {
   stageFollowProfile,
 } from '../../../src/stage/motion';
 import {
+  FOLLOW_FEELS,
+  MOTION_PROFILE_FAMILIES,
   defaultFollowingSettings,
   resolveFollowProfile,
 } from '../../../src/control/lib/follow-profiles';
@@ -39,6 +41,37 @@ describe('stageFollowProfile — version fallback (§55)', () => {
     const responsive = profileFor('responsive');
     expect(responsive.version).toBe(SMOOTH_FOLLOW_PROFILE_VERSION);
     expect(stageFollowProfile(responsive)).toBe(responsive);
+  });
+
+  it('accepts every Follow feel exactly as control resolved it', () => {
+    // The stage walks the default as the required shape and falls back without
+    // a word on a mismatch, so a block the default and `applyFeel` disagree
+    // about would cost every take its feel — and look like a working take.
+    for (const family of MOTION_PROFILE_FAMILIES) {
+      for (const feel of FOLLOW_FEELS) {
+        const profile = resolveFollowProfile({
+          ...defaultFollowingSettings(),
+          motionProfileId: family.id,
+          feel,
+        });
+        expect(isInterpretableSmoothFollowProfile(profile), `${family.id}/${feel}`).toBe(true);
+        expect(stageFollowProfile(profile)).toBe(profile);
+      }
+    }
+  });
+
+  it('still accepts a profile carrying the removed coaching block (#207)', () => {
+    // The rail's tip cooldowns used to ride on every profile. Nothing sends
+    // them now, and a stage must not turn a control that still does into a
+    // take on the default feel: keys the default does not have are ignored.
+    expect(DEFAULT_SMOOTH_FOLLOW_PROFILE).not.toHaveProperty('coaching');
+    expect(profileFor('calm')).not.toHaveProperty('coaching');
+
+    const fromAnOlderControl = {
+      ...profileFor('calm'),
+      coaching: { stageCooldownMs: 8000, controlCooldownMs: 15000, minimumConfidence: 0.8 },
+    };
+    expect(stageFollowProfile(fromAnOlderControl)).toBe(fromAnOlderControl);
   });
 
   it('falls back to the default for a version it cannot interpret', () => {

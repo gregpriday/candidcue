@@ -177,8 +177,7 @@ export interface StageSessionEnvelope {
    * the script does, under the same session/generation checks, and it must be
    * in force before the first frame is followed. A late or out-of-band profile
    * would mean the take's first seconds ran on different dynamics from the
-   * rest — the coaching rail can afford that (§5.2 makes it advisory), the
-   * controller cannot.
+   * rest, and the controller cannot afford that.
    *
    * Optional, and a stage that cannot interpret the version it receives falls
    * back to `DEFAULT_SMOOTH_FOLLOW_PROFILE` (see

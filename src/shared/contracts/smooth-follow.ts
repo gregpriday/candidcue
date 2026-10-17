@@ -405,12 +405,6 @@ export interface SmoothFollowProfile {
    * replaces, and the viewport bound sits outside that promise on purpose.
    */
   lineUnits?: SmoothFollowLineUnits;
-
-  coaching: {
-    stageCooldownMs: number;
-    controlCooldownMs: number;
-    minimumConfidence: number;
-  };
 }
 
 /**
@@ -496,13 +490,6 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     fadeSkipLines: 1,
     catchUpCeilingLines: 1,
   },
-
-  coaching: {
-    // A.5: 6–10 s stage cooldown, one visible tip, never from provisional evidence.
-    stageCooldownMs: 8000,
-    controlCooldownMs: 15000,
-    minimumConfidence: 0.8,
-  },
 };
 
 /**
@@ -512,8 +499,8 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
  * `lineUnits` earns it because leaving it out is a request, not a truncation:
  * the pixel bounds are a complete and tuned description of the same motion, and
  * a control that never learned to send lines is asking for exactly them. There
- * is no equivalent argument for `motion` or `coaching`, where a missing block
- * means a payload lost something on the way.
+ * is no equivalent argument for `motion`, where a missing block means a payload
+ * lost something on the way.
  *
  * Optional applies to PRESENCE only. A block that is there is walked in full,
  * so a half-written `lineUnits` is still rejected outright — half a block is the
