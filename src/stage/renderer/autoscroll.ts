@@ -34,6 +34,15 @@
  * for the type currently on the glass, and it re-derives itself for free when
  * the operator changes the size mid-take.
  *
+ * Except that a line map only knows about words. An image, a table, a silent
+ * block, a heading nobody reads aloud — none of them has a spoken token, so none
+ * of them is a line, and the height each one takes up sits inside a single
+ * baseline-to-baseline step between the spoken lines either side of it. Counted
+ * as distance the words bought, a 600 px screenshot in a twenty-line script
+ * turns 130 wpm into nearly 200 over the text. So that height is taken back out
+ * of the measurement (`measureAutoScrollScale`), and what is left describes the
+ * words alone.
+ *
  * Pure and separate from the component for the usual reason: the interesting
  * behaviour is at the edges — one line, zero-height spans, a map that ran
  * backwards, a frame delta of four seconds because the window was occluded —
@@ -41,6 +50,7 @@
  */
 
 import type { RenderedLine } from '../../shared/contracts';
+import type { MeasuredBlockBox } from '../motion/lineMap';
 
 /**
  * Largest frame delta that may be integrated in one step, milliseconds.
@@ -113,14 +123,24 @@ export interface AutoScrollScale {
  * Auto-scroll simply does not run in those states, which is the honest outcome —
  * a made-up density would move the document at a speed with no relationship to
  * the words on it, and the presenter has no way to tell that from a real one.
+ *
+ * `blocks` is the measured block boxes the map was built from, in document
+ * order, and it is what lets the span describe words rather than paper. Any
+ * block that produced no rendered line has nothing on it to read, and its
+ * height is subtracted from the span (see `wordlessSpanPx`). Without it — or in
+ * a script with nothing wordless in it — the answer is exactly the plain
+ * baseline ratio.
  */
-export function measureAutoScrollScale(lines: readonly RenderedLine[]): AutoScrollScale | null {
+export function measureAutoScrollScale(
+  lines: readonly RenderedLine[],
+  blocks: readonly AutoScrollBlockBox[] = [],
+): AutoScrollScale | null {
   if (lines.length < 2) return null;
   const first = lines[0];
   const last = lines[lines.length - 1];
   if (!first || !last) return null;
 
-  const spanPx = last.baselineY - first.baselineY;
+  const spanPx = last.baselineY - first.baselineY - wordlessSpanPx(lines, blocks);
   const spanWords = last.firstTokenIndex - first.firstTokenIndex;
   // Both must advance. A non-positive span is a map that is empty, reversed, or
   // measured before layout settled; none of them describe a document that can
@@ -129,6 +149,73 @@ export function measureAutoScrollScale(lines: readonly RenderedLine[]): AutoScro
   if (!Number.isFinite(spanPx) || !Number.isFinite(spanWords)) return null;
 
   return { pxPerWord: spanPx / spanWords, sampledWords: spanWords };
+}
+
+/** The parts of a measured block box the wordless correction reads. */
+export type AutoScrollBlockBox = Pick<MeasuredBlockBox, 'blockId' | 'topY' | 'bottomY'>;
+
+/**
+ * Document height inside the line map's span that carries no spoken word.
+ *
+ * Wordless is decided by the lines themselves, not by block kind or by the
+ * compiler's `spoken` flag: a block is wordless here precisely when it produced
+ * no rendered line. That is the question the scale is asking — a kind list would
+ * miss the silent block, the cue and the unread heading, and an image whose alt
+ * text IS read aloud produces lines and so is, correctly, not wordless.
+ *
+ * Each such run is taken as one envelope, from the top of its first box to the
+ * bottom of its last, so the margins between two adjacent wordless blocks go
+ * with them — there is nothing to read in those either. And it is clipped to the
+ * space between the two spoken lines it sits between, so a box that measured
+ * oddly can never eat into the lines themselves: what survives of each step is
+ * at least the descent of one line and the ascent of the next, which is about
+ * what an ordinary paragraph break costs. The words still get the travel a
+ * paragraph boundary would have given them; the screenshot does not.
+ *
+ * The removed height is not skipped, and it is not hurried either: the transport
+ * crosses it at the same pixel rate as the text. A faster crossing is a velocity
+ * step at each end of the block, and the plant comes out of one under its jerk
+ * limits — which means arriving at the first line after the image still carrying
+ * the faster speed. The one stretch of the script with nothing to read is not
+ * worth getting the next sentence wrong for, and a presenter who wants past a
+ * tall screenshot has the step keys.
+ */
+function wordlessSpanPx(
+  lines: readonly RenderedLine[],
+  blocks: readonly AutoScrollBlockBox[],
+): number {
+  if (blocks.length === 0) return 0;
+  const order = new Map<string, number>();
+  blocks.forEach((box, index) => {
+    if (!order.has(box.blockId)) order.set(box.blockId, index);
+  });
+  const voiced = new Set(lines.map((line) => line.blockId));
+
+  let total = 0;
+  for (let i = 1; i < lines.length; i++) {
+    const above = lines[i - 1];
+    const below = lines[i];
+    if (!above || !below || above.blockId === below.blockId) continue;
+    const from = order.get(above.blockId);
+    const to = order.get(below.blockId);
+    if (from === undefined || to === undefined || to <= from + 1) continue;
+
+    let topY = Infinity;
+    let bottomY = -Infinity;
+    for (let k = from + 1; k < to; k++) {
+      const box = blocks[k];
+      if (!box || voiced.has(box.blockId)) continue;
+      // A box that cannot be measured removes nothing: the scale falls back to
+      // counting that step as text, which is what it did before any of this.
+      if (!Number.isFinite(box.topY) || !Number.isFinite(box.bottomY)) continue;
+      if (!(box.bottomY > box.topY)) continue;
+      topY = Math.min(topY, box.topY);
+      bottomY = Math.max(bottomY, box.bottomY);
+    }
+    const removed = Math.min(bottomY, below.topY) - Math.max(topY, above.bottomY);
+    if (removed > 0 && Number.isFinite(removed)) total += removed;
+  }
+  return total;
 }
 
 /**

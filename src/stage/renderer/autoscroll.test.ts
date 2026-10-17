@@ -75,6 +75,150 @@ describe('measureAutoScrollScale', () => {
   });
 });
 
+/** A line in a named block — the wordless correction is all about block edges. */
+function lineIn(blockId: string, firstTokenIndex: number, baselineY: number): RenderedLine {
+  return { ...line(firstTokenIndex, baselineY), blockId };
+}
+
+function box(blockId: string, topY: number, bottomY: number) {
+  return { blockId, topY, bottomY };
+}
+
+/**
+ * The script from #278: twenty lines 60 px apart, eight words on each, and an
+ * image of `imagePx` between the tenth and the eleventh. Paragraph spacing is
+ * left at zero so the arithmetic is the issue's arithmetic.
+ */
+function scriptWithImage(imagePx: number) {
+  const lines: RenderedLine[] = [];
+  let y = 100;
+  for (let i = 0; i < 20; i++) {
+    if (i === 10) y += imagePx;
+    lines.push(lineIn(i < 10 ? 'p1' : 'p2', i * 8, y));
+    y += 60;
+  }
+  const tenth = lines[9]!;
+  const eleventh = lines[10]!;
+  const blocks = [
+    box('p1', lines[0]!.topY, tenth.bottomY),
+    box('image', tenth.bottomY + 4, tenth.bottomY + 4 + imagePx),
+    box('p2', eleventh.topY, lines[19]!.bottomY),
+  ];
+  return { lines, blocks };
+}
+
+/**
+ * What a pace on the dial actually reads at over the fixture's text, whose own
+ * density is 60 px of pitch over eight words — 7.5 px a word.
+ */
+function paceOverText(wordsPerMinute: number, scale: ReturnType<typeof measureAutoScrollScale>) {
+  return (autoScrollPxPerSecond(wordsPerMinute, scale) / 7.5) * 60;
+}
+
+describe('measureAutoScrollScale over a script with things in it that are not words', () => {
+  it('rolls the text at the pace on the dial when the script has an image in it (#278)', () => {
+    const { lines, blocks } = scriptWithImage(600);
+    const scale = measureAutoScrollScale(lines, blocks);
+
+    expect(scale?.pxPerWord).toBeCloseTo(7.5, 6);
+    expect(scale?.sampledWords).toBe(152);
+    expect(paceOverText(130, scale)).toBeCloseTo(130, 6);
+  });
+
+  it('is the bug without the block boxes, which is what makes it the fix', () => {
+    // The same lines measured the old way: the image's 600 px are charged to
+    // the words, and the text runs at nearly 200 wpm.
+    const { lines } = scriptWithImage(600);
+    expect(paceOverText(130, measureAutoScrollScale(lines))).toBeGreaterThan(198);
+  });
+
+  it('does not care how tall the image is', () => {
+    for (const imagePx of [40, 300, 600, 2400]) {
+      const { lines, blocks } = scriptWithImage(imagePx);
+      expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo(7.5, 6);
+    }
+  });
+
+  it('measures a script with nothing wordless in it exactly as before', () => {
+    // Two paragraphs, back to back. Every block has lines, so nothing comes
+    // out, and the answer is the plain baseline ratio to the last digit.
+    const lines = [lineIn('p1', 0, 100), lineIn('p1', 8, 164), lineIn('p2', 16, 260), lineIn('p2', 24, 324)];
+    const blocks = [box('p1', 60, 176), box('p2', 220, 336)];
+    expect(measureAutoScrollScale(lines, blocks)).toEqual(measureAutoScrollScale(lines));
+  });
+
+  it('takes out every wordless block between two lines, and the margins between them', () => {
+    // A cue chip, a table and a silent block in a row. The spacing between
+    // them is as wordless as they are.
+    const lines = [lineIn('p1', 0, 100), lineIn('p1', 8, 160), lineIn('p2', 16, 1000), lineIn('p2', 24, 1060)];
+    const blocks = [
+      box('p1', 60, 172),
+      box('cue', 200, 230),
+      box('table', 260, 700),
+      box('silent', 740, 940),
+      box('p2', 960, 1072),
+    ];
+    // 960 px of span, 740 of it from the top of the cue to the bottom of the
+    // silent block: 220 px of travel for 24 words.
+    expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo(220 / 24, 6);
+  });
+
+  it('takes out a wordless block too small for any gap threshold to notice', () => {
+    // A one-line cue between paragraphs is a few dozen pixels — nothing a
+    // geometry heuristic would flag, and still height with nothing to read.
+    const lines = [lineIn('p1', 0, 100), lineIn('p2', 8, 200), lineIn('p2', 16, 260)];
+    const blocks = [box('p1', 60, 112), box('cue', 120, 150), box('p2', 160, 272)];
+    expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo((160 - 30) / 16, 6);
+  });
+
+  it('leaves alone a block whose words are read, whatever kind of block it is', () => {
+    // An image with its alt text read aloud produces a line, and a line is
+    // words: nothing about it is wordless.
+    const lines = [lineIn('p1', 0, 100), lineIn('image', 8, 400), lineIn('p2', 12, 700)];
+    const blocks = [box('p1', 60, 112), box('image', 150, 650), box('p2', 660, 712)];
+    expect(measureAutoScrollScale(lines, blocks)).toEqual(measureAutoScrollScale(lines));
+  });
+
+  it('removes nothing outside the span the lines measure', () => {
+    // An image above the first line or below the last is not between any two
+    // words the span counts, so it is not in the span to begin with.
+    const { lines, blocks } = scriptWithImage(600);
+    const framed = [box('lead', 0, 50), ...blocks, box('tail', 2000, 2600)];
+    expect(measureAutoScrollScale(lines, framed)?.pxPerWord).toBeCloseTo(7.5, 6);
+  });
+
+  it('never lets a box that measured oddly eat into the lines either side of it', () => {
+    // A wordless box claiming to overlap both lines. Only the space BETWEEN
+    // them comes out, so the step keeps the descent of one line and the ascent
+    // of the next.
+    const lines = [lineIn('p1', 0, 100), lineIn('p2', 8, 800), lineIn('p2', 16, 860)];
+    const blocks = [box('p1', 60, 112), box('image', 0, 2000), box('p2', 760, 872)];
+    const removed = 760 - 112;
+    expect(measureAutoScrollScale(lines, blocks)?.pxPerWord).toBeCloseTo((760 - removed) / 16, 6);
+  });
+
+  it('counts a step as text when it cannot measure what is in it', () => {
+    const { lines } = scriptWithImage(600);
+    const plain = measureAutoScrollScale(lines);
+    // Lines whose blocks were never measured, and a box with no usable rect.
+    expect(measureAutoScrollScale(lines, [box('elsewhere', 0, 9000)])).toEqual(plain);
+    expect(
+      measureAutoScrollScale(lines, [box('p1', 0, 652), box('image', Number.NaN, 1256), box('p2', 1260, 2000)]),
+    ).toEqual(plain);
+    expect(
+      measureAutoScrollScale(lines, [box('p1', 0, 652), box('image', 1256, 656), box('p2', 1260, 2000)]),
+    ).toEqual(plain);
+  });
+
+  it('still refuses what it refused before', () => {
+    const blocks = [box('b1', 0, 1000)];
+    expect(measureAutoScrollScale([], blocks)).toBeNull();
+    expect(measureAutoScrollScale([line(0, 100)], blocks)).toBeNull();
+    expect(measureAutoScrollScale([line(0, 200), line(8, 100)], blocks)).toBeNull();
+    expect(measureAutoScrollScale([line(8, 100), line(8, 164)], blocks)).toBeNull();
+  });
+});
+
 describe('autoScrollPxPerSecond', () => {
   it('converts a pace into a pixel rate', () => {
     // 120 wpm is two words a second; at 8 px a word that is 16 px/s.

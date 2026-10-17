@@ -25,26 +25,25 @@
 import { describe, expect, it } from 'vitest';
 import { buildRenderedLineMap, createStageMotionEngine } from '../../../src/stage/motion';
 import type { StageMotionEngine } from '../../../src/stage/motion';
-import { advanceAutoScrollTarget, autoScrollPxPerSecond } from '../../../src/stage/renderer/autoscroll';
+import {
+  advanceAutoScrollTarget,
+  autoScrollPxPerSecond,
+  measureAutoScrollScale,
+} from '../../../src/stage/renderer/autoscroll';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
+import type { SyntheticBlockSpec } from '../../fixtures/layout';
 import { snapshot } from '../../helpers/alignment';
 
 const FRAME_MS = 1000 / 60;
+const READING_LINE_START_Y = 400;
 
-function engineWithMap(): { engine: StageMotionEngine; maxScrollPx: number; linesPx: number } {
-  const layout = syntheticLayout({
-    blocks: [
-      { kind: 'paragraph', tokens: 120 },
-      { kind: 'paragraph', tokens: 120 },
-    ],
-    columnWidthPx: 800,
-    startY: 800,
-  });
+function engineOnLayout(blocks: SyntheticBlockSpec[], startY = 800) {
+  const layout = syntheticLayout({ blocks, columnWidthPx: 800, startY });
   const map = buildRenderedLineMap({
     fingerprint: fixtureFingerprint(),
     tokens: layout.tokens,
     blocks: layout.blocks,
-    readingLineStartY: 400,
+    readingLineStartY: READING_LINE_START_Y,
     lineHeightPx: layout.lineHeightPx,
     viewportHeightPx: 1080,
     maxScrollPx: layout.contentHeightPx,
@@ -53,7 +52,15 @@ function engineWithMap(): { engine: StageMotionEngine; maxScrollPx: number; line
   engine.configureSession(1, 0);
   engine.setLineMap(map);
   engine.setBounds(0, layout.contentHeightPx);
-  return { engine, maxScrollPx: layout.contentHeightPx, linesPx: layout.lineHeightPx };
+  return { engine, map, layout, maxScrollPx: layout.contentHeightPx };
+}
+
+function engineWithMap(): { engine: StageMotionEngine; maxScrollPx: number; linesPx: number } {
+  const { engine, layout, maxScrollPx } = engineOnLayout([
+    { kind: 'paragraph', tokens: 120 },
+    { kind: 'paragraph', tokens: 120 },
+  ]);
+  return { engine, maxScrollPx, linesPx: layout.lineHeightPx };
 }
 
 /**
@@ -413,5 +420,88 @@ describe('the transport respects what the engine is for', () => {
 
     expect(trace.every((f) => f.source === 'hold')).toBe(true);
     expect(trace[trace.length - 1]!.scrollPx).toBe(0);
+  });
+});
+
+describe('a script with an image in it', () => {
+  /*
+   * #278. The pace is measured off the line map, and a line map only has lines
+   * where there are words — so an image's height sat inside one baseline step,
+   * was charged to the words either side of it, and the text rolled faster than
+   * the dial said. Measured here through the real map builder over a real block
+   * layout, because that is where the block boxes the correction reads come
+   * from in production.
+   */
+  const PROSE: SyntheticBlockSpec[] = [
+    { kind: 'paragraph', tokens: 24 },
+    { kind: 'paragraph', tokens: 120 },
+  ];
+  const WITH_IMAGE: SyntheticBlockSpec[] = [
+    { kind: 'paragraph', tokens: 24 },
+    { kind: 'image', heightPx: 600 },
+    { kind: 'paragraph', tokens: 120 },
+  ];
+
+  /** The density of the words alone: the same prose with nothing between it. */
+  function proseDensity(): number {
+    const { map, layout } = engineOnLayout(PROSE);
+    return measureAutoScrollScale(map.lines, layout.blocks)!.pxPerWord;
+  }
+
+  /** Words a minute crossing the glass at `pxPerSecond`, over that prose. */
+  function wordsPerMinuteOverText(pxPerSecond: number): number {
+    return (pxPerSecond / proseDensity()) * 60;
+  }
+
+  it('measures the words, not the screenshot', () => {
+    const { map, layout } = engineOnLayout(WITH_IMAGE);
+    const corrected = measureAutoScrollScale(map.lines, layout.blocks);
+    const uncorrected = measureAutoScrollScale(map.lines);
+
+    // Within what the image's own paragraph margin costs the step either side.
+    const pace = wordsPerMinuteOverText(autoScrollPxPerSecond(130, corrected));
+    expect(pace).toBeGreaterThan(130 * 0.95);
+    expect(pace).toBeLessThan(130 * 1.05);
+    // The same map measured the old way, which is the bug.
+    expect(wordsPerMinuteOverText(autoScrollPxPerSecond(130, uncorrected))).toBeGreaterThan(130 * 1.3);
+  });
+
+  it('crosses the image at the pace of the text, and reaches the next line still at it', () => {
+    /*
+     * The other half of the claim: the transport does not hurry across the
+     * image and then arrive at the first line after it with speed to shed. The
+     * whole crossing is one constant goal rate, so the plant should be settled
+     * at that rate from the ramp-in to the last frame — on the prose before the
+     * image, across it, and on the prose after it.
+     */
+    // Opened near the top so the image arrives within a reasonable run.
+    const { engine, map, layout, maxScrollPx } = engineOnLayout(WITH_IMAGE, READING_LINE_START_Y);
+    const pxPerSecond = autoScrollPxPerSecond(130, measureAutoScrollScale(map.lines, layout.blocks));
+    const firstAfter = map.lines.find((line) => line.blockId === 'b2')!;
+    const arrivePx = firstAfter.baselineY - READING_LINE_START_Y;
+    // Long enough to put several lines of the second paragraph past the mark.
+    const durationMs = (arrivePx / pxPerSecond) * 1000 + 8000;
+
+    const { trace } = roll(engine, { pxPerSecond, durationMs, maxScrollPx });
+
+    expect(trace[trace.length - 1]!.scrollPx).toBeGreaterThan(arrivePx + layout.lineHeightPx * 2);
+    const settled = trace.slice(3 * 60);
+    for (const frame of settled) {
+      expect(frame.velocityPxS).toBeGreaterThan(pxPerSecond * 0.9);
+      expect(frame.velocityPxS).toBeLessThan(pxPerSecond * 1.1);
+    }
+    for (let i = 1; i < trace.length; i++) {
+      const step = trace[i]!.scrollPx - trace[i - 1]!.scrollPx;
+      expect(step).toBeGreaterThanOrEqual(0);
+      expect(step).toBeLessThan(20);
+    }
+
+    // And the words after the image go by at the pace on the dial.
+    const afterImage = settled.filter((frame) => frame.scrollPx > arrivePx);
+    expect(afterImage.length).toBeGreaterThan(60);
+    const meanPxPerSecond =
+      afterImage.reduce((sum, frame) => sum + frame.velocityPxS, 0) / afterImage.length;
+    expect(wordsPerMinuteOverText(meanPxPerSecond)).toBeGreaterThan(130 * 0.95);
+    expect(wordsPerMinuteOverText(meanPxPerSecond)).toBeLessThan(130 * 1.05);
   });
 });

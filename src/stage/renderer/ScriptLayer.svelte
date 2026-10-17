@@ -88,6 +88,7 @@
     autoScrollNowhereToGo,
     autoScrollPxPerSecond,
     measureAutoScrollScale,
+    type AutoScrollScale,
   } from './autoscroll';
   import {
     shouldVirtualize,
@@ -1137,6 +1138,15 @@
   let loopRunning = false;
   let layoutGeneration = 0;
   let lineMap: StageRenderedLineMap | null = null;
+  /**
+   * The transport's words-to-pixels scale for `lineMap`, measured with it.
+   *
+   * Built at the rebuild rather than in `driveAutoScroll`, because the block
+   * boxes it needs to tell words from screenshots exist only there — the map
+   * keeps the lines and drops the measurement. Replaced on every rebuild along
+   * with the map it describes, so a size change mid-roll still re-derives it.
+   */
+  let autoScrollScale: AutoScrollScale | null = null;
   let lineMapPending = false;
   let lastMapBuildAtMs = 0;
   const MAP_REBUILD_THROTTLE_MS = 250;
@@ -1924,6 +1934,7 @@
     const geometryMoved = disagreementPx > GEOMETRY_DRIFT_TOLERANCE_PX;
 
     lineMap = next;
+    autoScrollScale = measureAutoScrollScale(next.lines, measurement.blocks);
     /*
      * VALID, not merely built. The reveal gate reads this as "the stage now
      * knows where the script is", and an unusable measurement knows nothing —
@@ -2709,15 +2720,14 @@
     }
 
     /*
-     * Re-measured every frame rather than cached, because the answer changes
-     * under the operator's hand: the size control is live during a take, and a
-     * pace that stayed pinned to the density of the type that WAS on the glass
-     * would silently become a different reading speed the moment they used it.
-     * It is a subtraction and a divide over two array ends — the map is already
-     * built, and nothing here touches the DOM.
+     * Read off the map's own rebuild rather than pinned at the start of the
+     * roll, because the answer changes under the operator's hand: the size
+     * control is live during a take, and a pace that stayed pinned to the
+     * density of the type that WAS on the glass would silently become a
+     * different reading speed the moment they used it. Every relayout rebuilds
+     * the map, and `autoScrollScale` is measured with it.
      */
-    const scale = measureAutoScrollScale(lineMap?.lines ?? []);
-    const pxPerSecond = autoScrollPxPerSecond(autoScroll.wordsPerMinute, scale);
+    const pxPerSecond = autoScrollPxPerSecond(autoScroll.wordsPerMinute, autoScrollScale);
     const dtMs = autoLastFrameMs === null ? 0 : now - autoLastFrameMs;
     autoLastFrameMs = now;
 
