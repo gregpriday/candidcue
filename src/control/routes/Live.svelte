@@ -191,10 +191,19 @@ import { onShortcut } from '../lib/shortcuts';
    */
   let micRequest = 0;
 
+  /**
+   * Where the latest listing got to, so the picker can say it. An empty,
+   * disabled `<select>` used to stand for all three of "still looking", "found
+   * nothing" and "could not look", and only one of those is fixed by plugging
+   * something in.
+   */
+  let micListing = $state<'idle' | 'scanning' | 'done' | 'failed'>('idle');
+
   async function refreshMicInputs(): Promise<void> {
     const request = (micRequest += 1);
     const forSession = $session.sessionId;
     const stale = (): boolean => micRequest !== request || $session.sessionId !== forSession;
+    micListing = 'scanning';
     try {
       const found = await getVoiceFacade().listMicrophones();
       if (stale()) return;
@@ -203,15 +212,23 @@ import { onShortcut } from '../lib/shortcuts';
         micChoice =
           micInputs.find((device) => device.isDefault)?.deviceId ?? micInputs[0]?.deviceId ?? '';
       }
+      micListing = 'done';
     } catch (err) {
       if (stale()) return;
       micInputs = [];
+      // The choice goes with the list: left standing, "Use this input" stayed
+      // live beside an empty picker, offering a device nobody can see.
+      micChoice = '';
+      micListing = 'failed';
       showToast(`Could not list microphones. ${describeError(err)}`, 'danger');
     }
   }
 
+  /** The choice is one the latest listing still offers. */
+  const micChoiceListed = $derived(micInputs.some((device) => device.deviceId === micChoice));
+
   async function useMicrophone(): Promise<void> {
-    if (micChoice === '' || micSwitching) return;
+    if (!micChoiceListed || micSwitching) return;
     /*
      * Tokened for the same reason the listing is. `micSwitching` disables both
      * recovery buttons, and an unconditional `finally` meant a switch left over
@@ -1118,12 +1135,98 @@ import { onShortcut } from '../lib/shortcuts';
    * at the top of this script, next to the microphone state.)
    */
 
-  /** Something needs the operator, and the drawer is the only place it shows. */
+  /**
+   * The speech model was refused (#286): not the device, not the permission.
+   * Its remedy is the Speech pane, for the next take — nothing in this one.
+   */
+  const voiceModelRefused = $derived(
+    hasVoiceTransport &&
+      !$session.voiceFollowingAvailable &&
+      !$session.inputDeviceLost &&
+      !$session.microphoneRefused,
+  );
+
+  /** Whether the status block has a remedy to carry; see `takeRemedy`. */
+  const takeRemedyOffered = $derived(
+    micAccessRecoveryOffered ||
+      micRecoveryOffered ||
+      voiceModelRefused ||
+      $smoothFollow.candidates.length > 0,
+  );
+
+  /**
+   * Something needs the operator, and the drawer is the only place it shows.
+   *
+   * A refused speech model is in here too: it is the one fault whose whole
+   * explanation and remedy live only in the drawer — the status line, and the
+   * way to the Speech pane — so a tab that stayed quiet about it pointed nowhere.
+   */
   const takeControlsAttention = $derived(
     micRecoveryOffered ||
       micAccessRecoveryOffered ||
+      voiceModelRefused ||
       $smoothFollow.notices.some((notice) => notice.action),
   );
+
+  /**
+   * The fault, said once, OUTSIDE the drawer.
+   *
+   * A closed drawer is inert, so nothing inside it can be heard; the tab's
+   * accessible name changes, but a name is read only when somebody lands on it.
+   * This is the one announcement a fault makes while the drawer is shut, and it
+   * falls silent once the drawer is open, where the status block says it.
+   */
+  const takeControlsAnnouncement = $derived.by((): string => {
+    if (takeControlsOpen) return '';
+    if (micAccessRecoveryOffered) return 'Microphone not allowed. Open Take controls to fix it.';
+    if (micRecoveryOffered) {
+      return $session.inputDeviceLost
+        ? 'Microphone disconnected. Open Take controls to choose another input.'
+        : 'CandidCue is using a fallback input. Open Take controls to choose another.';
+    }
+    if (voiceModelRefused) return 'Voice unavailable for this take. Take controls has the details.';
+    const actionable = $smoothFollow.notices.find((notice) => notice.action);
+    return actionable ? `${actionable.title}. Open Take controls to fix it.` : '';
+  });
+
+  /** A Rescan's result, heard: the visible note under the picker is not a live region. */
+  const micListingAnnouncement = $derived(
+    !micRecoveryOffered
+      ? ''
+      : micListing === 'failed'
+        ? 'Could not list microphones.'
+        : micListing === 'done'
+          ? micInputs.length === 0
+            ? 'No microphones found.'
+            : micInputs.length === 1
+              ? '1 microphone found.'
+              : `${micInputs.length} microphones found.`
+          : '',
+  );
+
+  let takeControlsBody = $state<HTMLElement | null>(null);
+
+  /**
+   * Open on the fault, not on wherever the body was left.
+   *
+   * The drawer keeps its scroll position on purpose (see `.take-controls`), and
+   * that is exactly what hid a remedy: read the diagnostics, close, then open
+   * again for a dead microphone, and the body came back scrolled past the block
+   * that explains it. Opened with attention up, it starts at the top, where the
+   * status block and its remedy are. Focus is not moved.
+   */
+  function openTakeControls(): void {
+    takeControlsOpen = true;
+    if (takeControlsAttention) takeControlsBody?.scrollTo({ top: 0 });
+  }
+
+  /** And a fault that arrives while it is open is brought into view the same way. */
+  let attentionWas = false;
+  $effect(() => {
+    const attention = takeControlsAttention;
+    if (attention && !attentionWas && takeControlsOpen) takeControlsBody?.scrollTo({ top: 0 });
+    attentionWas = attention;
+  });
 
   function closeTakeControls(restoreFocus = true): void {
     if (!takeControlsOpen) return;
@@ -1207,6 +1310,7 @@ import { onShortcut } from '../lib/shortcuts';
      * bump retires any listing that is still coming.
      */
     micSwitching = false;
+    micListing = 'idle';
     micRequest += 1;
   });
 </script>
@@ -1259,7 +1363,7 @@ import { onShortcut } from '../lib/shortcuts';
   ("Mic live", "Mic lost"), so the state survives a monochrome display and a
   colour-blind reader.
 -->
-{#snippet partStatus()}
+{#snippet partStatus(stacked = false)}
   <!--
     §parts. Which piece of the script this take is recording, and whether the
     presenter has read to the end of it.
@@ -1279,18 +1383,47 @@ import { onShortcut } from '../lib/shortcuts';
     reserved for faults.
   -->
   {#if $session.part}
-    <span class="take-part" class:complete={$session.partComplete} role="status" aria-live="polite">
-      Part {$session.part.ordinal} of {$session.part.totalParts} · {$session.part.label}
-      {#if $session.partComplete}<span class="part-done">— end reached</span>{/if}
-    </span>
+    <!--
+      `stacked` is the drawer's form: the ordinal and the name on their own
+      lines, the name wrapping. The drawer is a third of a prompter panel wide,
+      and on one line "Quarterly results f…" left the part unreadable and the
+      status beside it running into the close button.
+    -->
+    {#if stacked}
+      <span
+        class="take-part stacked"
+        class:complete={$session.partComplete}
+        role="status"
+        aria-live="polite"
+      >
+        <span class="part-ordinal">
+          Part {$session.part.ordinal} of {$session.part.totalParts}
+          {#if $session.partComplete}<span class="part-done">· end reached</span>{/if}
+        </span>
+        <span class="part-label">{$session.part.label}</span>
+      </span>
+    {:else}
+      <span class="take-part" class:complete={$session.partComplete} role="status" aria-live="polite">
+        Part {$session.part.ordinal} of {$session.part.totalParts} · {$session.part.label}
+        {#if $session.partComplete}<span class="part-done">— end reached</span>{/if}
+      </span>
+    {/if}
   {/if}
 {/snippet}
 
-{#snippet statusPills()}
-  <span class="live-status">
-    <span class="status-dot accent" aria-hidden="true"></span>
-    {modeLabel}
-  </span>
+{#snippet statusPills(withMode = true)}
+  <!--
+    The drawer leaves the mode out. In a voice take it read "Follow voice" — the
+    same words as the button that resumes following — beside a status saying
+    "Text held", so a light describing what the take was OPENED as read as a
+    claim about what the text was doing. The drawer's status line says that.
+  -->
+  {#if withMode}
+    <span class="live-status">
+      <span class="status-dot accent" aria-hidden="true"></span>
+      {modeLabel}
+    </span>
+  {/if}
   <!--
     Only a voice take has a realtime connection and an open microphone to
     report. Anything else says so plainly instead of showing the
@@ -1351,9 +1484,26 @@ import { onShortcut } from '../lib/shortcuts';
   transport can replace its sender track without renegotiating, so the
   recovery is a picker right where the failure is reported.
 -->
-{#snippet micRecovery()}
+{#snippet micRecovery(stacked = false)}
   {#if micRecoveryOffered}
-    <div class="mic-recovery">
+    <!--
+      `stacked` in the drawer: the picker on its own full-width line and the
+      two actions under it. Squeezed into one row at a third of a 1024px panel,
+      "Use this input" overflowed its own button and ran into Rescan.
+    -->
+    <div class="mic-recovery" class:stacked>
+      {#if stacked && !$session.inputDeviceLost}
+        <p class="lf-note">
+          CandidCue is using a fallback input. Choose the microphone you meant to use.
+        </p>
+      {/if}
+      {#if stacked && micListing === 'failed'}
+        <p class="lf-note listing">Could not list microphones. Choose Rescan to try again.</p>
+      {:else if stacked && micListing === 'done' && micInputs.length === 0}
+        <p class="lf-note listing">No microphones found. Connect one, then choose Rescan.</p>
+      {:else if stacked && micListing === 'scanning' && micInputs.length === 0}
+        <p class="lf-note listing">Looking for microphones…</p>
+      {/if}
       <select
         class="mic-picker"
         aria-label="Input device"
@@ -1364,33 +1514,43 @@ import { onShortcut } from '../lib/shortcuts';
           <option value={input.deviceId}>{input.label}</option>
         {/each}
       </select>
-      <Button
-        size="sm"
-        variant="primary"
-        disabled={micSwitching || micChoice === ''}
-        onclick={() => useMicrophone()}
-      >
-        {micSwitching ? 'Switching…' : 'Use this input'}
-      </Button>
-      <Button size="sm" variant="ghost" disabled={micSwitching} onclick={() => refreshMicInputs()}>
-        Rescan
-      </Button>
+      <span class="mic-recovery-actions">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={micSwitching || !micChoiceListed}
+          onclick={() => useMicrophone()}
+        >
+          {micSwitching ? 'Switching…' : 'Use this input'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={micSwitching || micListing === 'scanning'}
+          onclick={() => refreshMicInputs()}
+        >
+          {micListing === 'scanning' ? 'Scanning…' : 'Rescan'}
+        </Button>
+      </span>
     </div>
   {/if}
 {/snippet}
 
 {#snippet micAccessRecovery()}
   <!--
-    #303. What happened, and both halves of the way back: the pane where it is
-    allowed, and the retry once it has been. Not the input picker — that is the
-    remedy for a device, and this is not one.
+    #303. Both halves of the way back: the pane where it is allowed, and the
+    retry once it has been. Not the input picker — that is the remedy for a
+    device, and this is not one.
+
+    No title and no status role of its own. It renders inside the status block
+    that already says "Microphone not allowed", and its own heading said the
+    same thing a second time, a few pixels above a third.
   -->
   {#if micAccessRecoveryOffered}
-    <div class="mic-access" role="status">
-      <p class="lf-title">CandidCue is not allowed to use the microphone</p>
+    <div class="mic-access">
       <p class="lf-note">
-        Allow CandidCue in System Settings → Privacy &amp; Security → Microphone, then try again. If
-        it is already allowed there, quit and reopen CandidCue.
+        The switch is in Privacy &amp; Security → Microphone. If CandidCue is already on there,
+        quit and reopen CandidCue.
       </p>
       <div class="mic-access-actions">
         <Button size="sm" variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
@@ -1401,6 +1561,27 @@ import { onShortcut } from '../lib/shortcuts';
         </Button>
       </div>
     </div>
+  {/if}
+{/snippet}
+
+<!--
+  What the operator can do about the drawer's status, rendered INSIDE the
+  status block rather than above it. Each arm is exclusive with the others by
+  the session's own flags: a refusal is not a lost device (#303), and a refused
+  speech model is neither (#286).
+-->
+{#snippet takeRemedy()}
+  {@render micAccessRecovery()}
+  {@render micRecovery(true)}
+  {#if voiceModelRefused}
+    <div class="mic-access-actions">
+      <Button size="sm" onclick={() => void openSettingsWindow('speech')}>
+        Open Speech settings
+      </Button>
+    </div>
+  {/if}
+  {#if $smoothFollow.candidates.length > 0}
+    <FollowControls follow={$smoothFollow} part="candidates" />
   {/if}
 {/snippet}
 
@@ -1837,7 +2018,7 @@ import { onShortcut } from '../lib/shortcuts';
     aria-controls="take-controls-panel"
     aria-label={takeControlsAttention ? 'Take controls — needs attention' : 'Take controls'}
     bind:this={takeControlsTab}
-    onclick={() => (takeControlsOpen ? closeTakeControls() : (takeControlsOpen = true))}
+    onclick={() => (takeControlsOpen ? closeTakeControls() : openTakeControls())}
   >
     <Icon name={takeControlsOpen ? 'chevron-right' : 'chevron-left'} size={14} />
     <span class="tc-tab-label">Take controls</span>
@@ -1856,6 +2037,10 @@ import { onShortcut } from '../lib/shortcuts';
     {/if}
   </button>
 
+  <!-- Always mounted, outside the inert panel, so a change in them is heard. -->
+  <span class="sr-only" role="status" aria-live="polite">{takeControlsAnnouncement}</span>
+  <span class="sr-only" role="status" aria-live="polite">{micListingAnnouncement}</span>
+
   <section
     class="tc-panel"
     class:open={takeControlsOpen}
@@ -1865,65 +2050,78 @@ import { onShortcut } from '../lib/shortcuts';
     inert={!takeControlsOpen}
     bind:this={takeControlsPanel}
   >
+    <!--
+      THREE BANDS: a header that never scrolls away, a body that scrolls, and a
+      footer that holds End take on its own.
+
+      The panel used to be one scroller with End take pushed down by
+      `margin-top: auto`, so expanding the diagnostics carried the clock, the
+      close button and the only way to end the take out of view together.
+    -->
     <header class="tc-head">
-      <span class="tc-elapsed">{formatClock($session.elapsedSeconds)}</span>
-      {@render partStatus()}
-      <span class="tc-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
-      <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
+      <div class="tc-head-row">
+        <span class="tc-elapsed">{formatClock($session.elapsedSeconds)}</span>
+        <span class="tc-close">
+          <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
+        </span>
+      </div>
+      {@render partStatus(true)}
+      <div class="tc-lights">{@render statusPills(false)}</div>
     </header>
 
-    <div class="tc-pills">{@render statusPills()}</div>
+    <div class="tc-body" bind:this={takeControlsBody}>
+      <!--
+        The answer FIRST, with its remedy inside it. When this drawer is opened
+        during a take it is usually because the tab was showing attention, and
+        a dead microphone is the fault with the shortest fuse — so the picker or
+        the privacy-pane buttons sit under the sentence that explains them, not
+        in a block of their own above it.
+      -->
+      <FollowStatePanel
+        follow={$smoothFollow}
+        sectionTitle={currentSectionTitle}
+        voiceInput={hasVoiceTransport}
+        micState={$session.micState}
+        inputDeviceLost={$session.inputDeviceLost}
+        microphoneRefused={$session.microphoneRefused}
+        voiceAvailable={$session.voiceFollowingAvailable}
+        connection={$session.connection}
+        heardAnything={$session.heardAnything}
+        heldByUser={$session.followPausedByUser}
+        rollingAtPace={$autoScrollLive.running}
+        takePaused={$session.paused}
+        remedy={takeRemedyOffered ? takeRemedy : undefined}
+        onnoticeaction={handleNoticeAction}
+      />
 
-    <!--
-      FIRST, and that is deliberate. When this drawer is opened during a take it
-      is usually because the tab was showing attention, and a dead microphone is
-      the fault with the shortest fuse and the only one whose remedy lives here.
-    -->
-    {@render micAccessRecovery()}
-    {@render micRecovery()}
+      <FollowControls follow={$smoothFollow} part="routine" heldByUser={$session.followPausedByUser} />
 
-    <p class="region-label">Tracking</p>
-    <FollowStatePanel
-      follow={$smoothFollow}
-      sectionTitle={currentSectionTitle}
-      voiceInput={hasVoiceTransport}
-      micState={$session.micState}
+      {@render stageFaultNotice()}
 
-      inputDeviceLost={$session.inputDeviceLost}
-      microphoneRefused={$session.microphoneRefused}
+      <!--
+        "Why did it move?" and Copy diagnostics, HERE because this is the only
+        place a take can reach them. They used to live only in the console's
+        Tracking rail, which a take replaces with the stage — so the explanation
+        of an odd movement, and the export written for a bug report, were on a
+        panel nobody could open while the movement was happening. Collapsed by
+        its own disclosure; nothing about it is in the presenter's way.
+      -->
+      <FollowDiagnostics
+        follow={$smoothFollow}
+        developerMode={$settings.following.developerDiagnostics}
+      />
+    </div>
 
-      heardAnything={$session.heardAnything}
-
-      heldByUser={$session.followPausedByUser}
-
-      rollingAtPace={$autoScrollLive.running}
-      onnoticeaction={handleNoticeAction}
-    />
-
-    <p class="region-label">Following</p>
-    <FollowControls follow={$smoothFollow} />
-
-    <!--
-      "Why did it move?" and Copy diagnostics, HERE because this is the only
-      place a take can reach them. They used to live only in the console's
-      Tracking rail, which a take replaces with the stage — so the explanation
-      of an odd movement, and the export written for a bug report, were on a
-      panel nobody could open while the movement was happening. Collapsed by
-      its own disclosure; nothing about it is in the presenter's way.
-    -->
-    <FollowDiagnostics
-      follow={$smoothFollow}
-      developerMode={$settings.following.developerDiagnostics}
-    />
-
-    {@render stageFaultNotice()}
-
-    <div class="tc-end">
-      <Button variant="danger" onclick={() => void requestEndSession()}>
-        <Icon name="stop" size={14} />
+    <footer class="tc-foot">
+      <Button
+        variant="danger"
+        title={`End take (${transportKey('Mod+.')})`}
+        onclick={() => void requestEndSession()}
+      >
         End take
       </Button>
-    </div>
+      <kbd class="tc-key">{transportKey('Mod+.')}</kbd>
+    </footer>
   </section>
 </div>
 
@@ -2073,6 +2271,19 @@ import { onShortcut } from '../lib/shortcuts';
     align-items: center;
     gap: var(--space-2);
   }
+  .mic-recovery-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .mic-recovery.stacked {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .mic-recovery.stacked .mic-picker {
+    max-width: none;
+    min-height: var(--toolbar-control-h);
+  }
   .mic-picker {
     max-width: 180px;
     padding: 3px var(--space-2);
@@ -2087,38 +2298,23 @@ import { onShortcut } from '../lib/shortcuts';
   .mic-picker:focus-visible {
     outline: none;
     background: var(--bg-elevated);
-    border-color: var(--border-strong);
+    border-color: var(--focus-quiet);
   }
   .mic-picker:disabled {
     opacity: 0.6;
   }
 
   /* --- #303 the microphone was refused --- */
+  /* Inside the status block, which draws the frame and the bar. */
   .mic-access {
-    position: relative;
-    margin-bottom: var(--space-3);
-    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-  }
-  /* Inset bar, never a one-sided border on a rounded box. Danger, unlike the
-     moved-panel notice: this take cannot follow a voice until it is fixed. */
-  .mic-access::before {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: var(--space-3);
-    bottom: var(--space-3);
-    width: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--danger);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
   }
   .mic-access-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    margin-top: var(--space-2);
   }
 
   .lf-title {
@@ -2188,15 +2384,25 @@ import { onShortcut } from '../lib/shortcuts';
     visibility: visible;
   }
 
+  /*
+   * The way in. Full opacity, a readable label and an edge that holds against
+   * black glass.
+   *
+   * It was 12px at 55% opacity — about 2.9:1 for its label — on the reasoning
+   * that it should not compete with the script. It is the only route to the
+   * microphone picker mid-take, and a recovery surface nobody can find is worse
+   * than a quiet tab. It stays small and grey; it just stays readable.
+   */
   .tc-tab {
     position: absolute;
     top: var(--space-4);
     right: 0;
     display: flex;
     align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border);
+    gap: 6px;
+    min-height: var(--button-h);
+    padding: 0 var(--space-3) 0 10px;
+    border: 1px solid var(--focus-quiet);
     /* No crescent: the tab is flush to the right edge, so it is genuinely
        three-sided rather than a rounded box missing a border. */
     border-right: none;
@@ -2204,35 +2410,51 @@ import { onShortcut } from '../lib/shortcuts';
     background: var(--bg-elevated);
     color: var(--text-secondary);
     font: inherit;
-    font-size: var(--text-xs);
+    font-size: var(--text-sm);
+    font-weight: 600;
     cursor: pointer;
     pointer-events: auto;
-    /* Quiet over a running read: it is legible when looked for and does not
-       compete with the script the rest of the time. */
-    opacity: 0.55;
-    transition: opacity 120ms ease;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
-  .tc-tab:hover,
-  .tc-tab:focus-visible,
-  .tc-tab.open {
-    opacity: 1;
+  .tc-tab:hover {
+    background: var(--bg-hover-surface);
+    color: var(--text-primary);
   }
   /* Quiet focus: a background/border shift, never an accent ring. */
   .tc-tab:focus-visible {
     outline: none;
-    background: var(--bg-sunken);
-    border-color: var(--border-strong);
+    background: var(--bg-hover-surface);
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
   }
+  /*
+   * Needs attention: the edge and the marker turn, and the words brighten.
+   * Colour is not the whole signal — the marker is a shape that is otherwise
+   * absent, and the accessible name says it in words.
+   */
   .tc-tab.attention {
-    opacity: 1;
+    border-color: var(--danger);
     color: var(--text-primary);
   }
   .tc-tab-label {
     white-space: nowrap;
   }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .tc-dot {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-pill);
     background: var(--danger);
   }
@@ -2242,55 +2464,130 @@ import { onShortcut } from '../lib/shortcuts';
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(340px, 92vw);
+    width: min(clamp(340px, 28vw, 400px), 92vw);
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
-    padding: var(--space-4);
-    overflow-y: auto;
     border-left: 1px solid var(--border);
     background: var(--bg-elevated);
-    box-shadow: var(--shadow-card);
+    box-shadow: var(--shadow-pop);
     pointer-events: auto;
     /* Off-canvas rather than removed — see `.take-controls`. */
     transform: translateX(100%);
-    transition: transform 140ms ease;
+    transition: transform var(--dur-med) var(--ease-out);
   }
   .tc-panel.open {
     transform: translateX(0);
   }
   @media (prefers-reduced-motion: reduce) {
-    .tc-panel {
+    .tc-panel,
+    .tc-tab {
       transition: none;
     }
   }
 
+  /* --- header: the take, and the way out of the drawer ------------------ */
   .tc-head {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--divider);
+  }
+  .tc-head-row {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-3);
+    min-height: 32px;
   }
   .tc-elapsed {
+    flex: 0 0 auto;
     font-variant-numeric: tabular-nums;
-    font-size: var(--text-sm);
+    font-size: var(--text-2xl);
+    line-height: 1;
     font-weight: 600;
+    letter-spacing: var(--ls-title);
     color: var(--text-primary);
   }
-  .tc-status {
-    flex: 1 1 auto;
-    min-width: 0;
-    font-size: var(--text-xs);
+  /* The close button never shrinks and never shares its space with words. */
+  .tc-close {
+    flex: 0 0 auto;
+    margin-left: auto;
+    display: inline-flex;
+  }
+  .take-part.stacked {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    white-space: normal;
+    overflow: visible;
+  }
+  .part-ordinal {
+    font-size: var(--text-meta);
     color: var(--text-muted);
   }
-  .tc-pills {
+  .part-label {
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+  .tc-lights {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-1);
+    gap: var(--space-1) var(--space-4);
   }
-  .tc-end {
-    margin-top: auto;
-    padding-top: var(--space-3);
+
+  /* --- body: the answer, the routine, the record ------------------------ */
+  .tc-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding: var(--space-4) var(--space-4) var(--space-2);
+  }
+  /* The disclosure draws its own rule; the body's gap is the space above it. */
+  .tc-body > :global(.disclosure) {
+    margin-top: calc(-1 * var(--space-2));
+  }
+  .tc-body .stage-window-fault {
+    margin-bottom: 0;
+    background: var(--bg-panel);
+  }
+  .tc-body .lf-title {
+    font-size: var(--text-sm);
+  }
+  .tc-body .lf-note {
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-secondary);
+    text-wrap: pretty;
+  }
+
+  /* --- footer: ending the take, on its own ------------------------------ */
+  .tc-foot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--divider);
+  }
+  /* The ghost button's own inset, cancelled so its words sit on the column. */
+  .tc-foot :global(.button) {
+    margin-left: calc(-1 * var(--space-2));
+  }
+  .tc-key {
+    font-family: inherit;
+    font-size: var(--text-meta);
+    color: var(--text-muted);
   }
 
   /* --- main regions --- */
