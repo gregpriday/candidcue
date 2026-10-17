@@ -62,6 +62,16 @@
   const lastExplanation = $derived(follow.lastMovement ? describeMovement(follow.lastMovement) : null);
   /** Newest first — the interesting record is always the most recent one. */
   const recentMovements = $derived([...follow.movements].reverse().slice(0, 12));
+  /**
+   * The history UNDER the lead, without it. The newest record is the lead
+   * explanation above, and listing it again first put the same headline on
+   * screen twice, one line apart.
+   */
+  const earlierMovements = $derived(
+    follow.lastMovement !== null && recentMovements[0]?.seq === follow.lastMovement.seq
+      ? recentMovements.slice(1)
+      : recentMovements,
+  );
   const recentTimeline = $derived([...follow.timeline].reverse().slice(0, 40));
 
   async function copyDiagnostics(): Promise<void> {
@@ -101,23 +111,53 @@
       </p>
     {/if}
 
+    <!--
+      The export comes straight after the answer, before the history. It is
+      the one thing in here somebody does on purpose — for a bug report, often
+      mid-take — and it used to sit under forty timeline rows, with its
+      fallback further down still.
+    -->
+    <div class="export">
+      <div class="actions">
+        <Button size="sm" onclick={() => void copyDiagnostics()}>Copy diagnostics</Button>
+        <!-- Always mounted, so the result is announced: focus stays on the button. -->
+        <span class="note" class:failed={manualPayload !== null} role="status">{exportNote}</span>
+      </div>
+      {#if manualPayload !== null}
+        <textarea
+          class="manual-export"
+          aria-label="Follow diagnostics export"
+          readonly
+          rows="6"
+          wrap="off"
+          value={manualPayload}
+          onfocus={(event) => event.currentTarget.select()}
+        ></textarea>
+      {/if}
+    </div>
+
+    {#if earlierMovements.length > 0}
+      <div class="history">
+        <p class="section-label">Earlier</p>
+        <ol class="records">
+          {#each earlierMovements as record (`${record.seq}-${record.audioMs}`)}
+            {@const explanation = describeMovement(record)}
+            <li class="record">
+              <p class="record-head">
+                <span class="stamp">{formatSessionTime(record.audioMs)}</span>
+                <span class="record-summary">{explanation.headline}</span>
+              </p>
+              <ul class="facts">
+                {#each explanation.facts as fact (fact.label)}
+                  <li><span class="fact-label">{fact.label}</span> {fact.value}</li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        </ol>
+      </div>
+    {/if}
     {#if recentMovements.length > 0}
-      <ol class="records">
-        {#each recentMovements as record (`${record.seq}-${record.audioMs}`)}
-          {@const explanation = describeMovement(record)}
-          <li class="record">
-            <p class="record-head">
-              <span class="stamp">{formatSessionTime(record.audioMs)}</span>
-              <span class="record-summary">{explanation.headline}</span>
-            </p>
-            <ul class="facts">
-              {#each explanation.facts as fact (fact.label)}
-                <li><span class="fact-label">{fact.label}</span> {fact.value}</li>
-              {/each}
-            </ul>
-          </li>
-        {/each}
-      </ol>
       <p class="bounded">
         Showing the most recent {recentMovements.length} of {follow.movements.length} kept records.
       </p>
@@ -129,10 +169,12 @@
         <ol>
           {#each recentTimeline as entry (entry.seq)}
             <li class="entry {entry.kind}">
-              <span class="stamp">
-                {entry.sessionTimeMs === null ? '—' : formatSessionTime(entry.sessionTimeMs)}
+              <span class="entry-meta">
+                <span class="stamp">
+                  {entry.sessionTimeMs === null ? '—' : formatSessionTime(entry.sessionTimeMs)}
+                </span>
+                <span class="entry-kind">{entry.kind}</span>
               </span>
-              <span class="entry-kind">{entry.kind}</span>
               <span class="entry-summary">
                 {entry.summary}
                 {#if entry.detail}<span class="entry-detail">{entry.detail}</span>{/if}
@@ -151,22 +193,6 @@
         stage reports, and assist decisions.
       </p>
     {/if}
-
-    <div class="actions">
-      <Button size="sm" onclick={() => void copyDiagnostics()}>Copy diagnostics</Button>
-      <!-- Always mounted, so the result is announced: focus stays on the button. -->
-      <span class="note" role="status">{exportNote}</span>
-    </div>
-    {#if manualPayload !== null}
-      <textarea
-        class="manual-export"
-        aria-label="Follow diagnostics export"
-        readonly
-        rows="6"
-        value={manualPayload}
-        onfocus={(event) => event.currentTarget.select()}
-      ></textarea>
-    {/if}
   </div>
 </Disclosure>
 
@@ -174,28 +200,64 @@
   .follow-diagnostics {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-4);
     min-width: 0;
   }
 
+  .last {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .headline {
     margin: 0;
-    font-size: var(--text-xs);
+    font-size: var(--text-sm);
     font-weight: 650;
     color: var(--text-primary);
+    text-wrap: pretty;
   }
   .detail,
   .empty,
   .bounded,
   .note {
     margin: 0;
-    font-size: var(--text-2xs);
-    line-height: 1.5;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
     color: var(--text-muted);
+    text-wrap: pretty;
+  }
+  .detail {
+    color: var(--text-secondary);
   }
 
-  .records,
-  .timeline ol {
+  .export {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  /* The result under its button, full width: beside it, a refusal wrapped
+     into five lines of a column narrower than the words it was explaining. */
+  .actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .note {
+    max-width: 100%;
+  }
+  /* A refusal reads as one: the words are the signal, the colour backs them. */
+  .note.failed {
+    color: var(--warning);
+  }
+
+  .history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .records {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -207,28 +269,29 @@
   .record {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    padding: var(--space-2);
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--border-faint);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
   }
   .record-head {
     display: flex;
-    gap: var(--space-2);
+    flex-direction: column;
+    gap: 2px;
     margin: 0;
-    font-size: var(--text-2xs);
-    color: var(--text-secondary);
   }
   .record-summary {
+    font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-primary);
+    text-wrap: pretty;
   }
   .stamp {
     flex: 0 0 auto;
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
-    color: var(--text-faint);
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
 
@@ -238,16 +301,17 @@
     padding: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 2px var(--space-2);
-    font-size: var(--text-2xs);
-    color: var(--text-muted);
+    gap: 2px var(--space-3);
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-secondary);
   }
   .fact-label {
     color: var(--text-faint);
   }
 
   .section-label {
-    margin: 0 0 var(--space-1);
+    margin: 0;
     font-size: var(--text-2xs);
     font-weight: 600;
     text-transform: uppercase;
@@ -255,36 +319,56 @@
     color: var(--text-muted);
   }
 
-  .timeline ol {
-    gap: 2px;
-    max-height: 240px;
-    overflow-y: auto;
-  }
-  .entry {
-    display: grid;
-    grid-template-columns: 62px 58px minmax(0, 1fr);
+  /*
+   * No scroller of its own. The drawer's body scrolls, and a second scroller
+   * inside it cut entries in half at its edge — a row showing its detail with
+   * no time and no kind above it.
+   */
+  .timeline {
+    display: flex;
+    flex-direction: column;
     gap: var(--space-2);
-    font-size: var(--text-2xs);
+  }
+  .timeline ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* Stacked, not three narrow columns: "MOVEMENT" ran into its own summary. */
+  .entry {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border-faint);
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
     color: var(--text-secondary);
   }
+  .entry:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+  .entry-meta {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
   .entry-kind {
+    font-size: var(--text-2xs);
     color: var(--text-faint);
     text-transform: uppercase;
     letter-spacing: var(--ls-caps);
   }
   .entry-summary {
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   .entry-detail {
     display: block;
-    color: var(--text-faint);
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
+    color: var(--text-muted);
   }
 
   .manual-export {
@@ -292,12 +376,19 @@
     box-sizing: border-box;
     resize: vertical;
     padding: var(--space-2);
-    border: 1px solid var(--border-faint);
+    border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
-    background: var(--bg-panel);
+    background: var(--bg-sunken);
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
     line-height: 1.5;
+    white-space: pre;
+    overflow: auto;
+  }
+  /* Quiet focus: a border shift, never an accent ring on a field. */
+  .manual-export:focus-visible {
+    outline: none;
+    border-color: var(--focus-quiet);
   }
 </style>

@@ -8,13 +8,31 @@
 -->
 <script lang="ts">
   import Button from './Button.svelte';
+  import Icon from './Icon.svelte';
   import { MOVEMENT_DETAIL, TAKE_ACTIONS } from '../../shared/take-vocabulary';
   import { smoothFollow, type SmoothFollowState } from '../stores/smooth-follow';
 
   interface Props {
     follow: SmoothFollowState;
+    /**
+     * Which half to render. The take-controls drawer puts the candidate lines
+     * INSIDE the status block they answer and the routine controls below it,
+     * so it asks for each separately; anything else gets both.
+     */
+    part?: 'all' | 'candidates' | 'routine';
+    /**
+     * Following was switched off by somebody (see `FollowStatePanel`).
+     *
+     * `follow.followingPaused` is also raised by a dead input, and painting
+     * "Follow voice" as the primary action there offered a button as the cure
+     * for a microphone it cannot fix. Only a decision is undone with emphasis.
+     * Unwired callers keep the old reading of the store flag.
+     */
+    heldByUser?: boolean;
   }
-  let { follow }: Props = $props();
+  let { follow, part = 'all', heldByUser }: Props = $props();
+
+  const userHold = $derived(heldByUser ?? follow.followingPaused);
 </script>
 
 <!--
@@ -33,114 +51,134 @@
   the only thing anybody needs before pressing it.
 -->
 <div class="follow-controls">
-  <div class="row">
-    <Button
-      size="sm"
-      variant={follow.followingPaused ? 'primary' : 'default'}
-      onclick={() => smoothFollow.toggleFollowingPaused()}
-    >
-      {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
-    </Button>
-    <Button size="sm" onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
-  </div>
-  <p class="hint">
-    {follow.followingPaused ? MOVEMENT_DETAIL.hold : MOVEMENT_DETAIL.follow}
-  </p>
+  <!--
+    §48: offer the local candidates instead of guessing when lost.
 
-  <div class="row">
-    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('back')}>
-      {TAKE_ACTIONS.previousSentence}
-    </Button>
-    <Button size="sm" variant="ghost" onclick={() => smoothFollow.nudge('forward')}>
-      {TAKE_ACTIONS.nextSentence}
-    </Button>
-  </div>
-
-  <!-- §48: offer the local candidates instead of guessing when lost. -->
-  {#if follow.candidates.length > 0}
-    <div class="candidates">
-      <p class="hint">CandidCue is not sure where you are. Pick the line you are on:</p>
-      <ul>
-        {#each follow.candidates as candidate (candidate.id)}
-          <li>
-            <button type="button" class="candidate" onclick={() => smoothFollow.acceptCandidate(candidate.id)}>
+    The WHOLE line, wrapped. These are near-identical sentences by
+    construction — that is why the tracker could not choose — and an ellipsis
+    cut them at exactly the words that tell them apart.
+  -->
+  {#if part !== 'routine' && follow.candidates.length > 0}
+    <ol class="candidates" aria-label="Lines you might be on">
+      {#each follow.candidates as candidate (candidate.id)}
+        <li>
+          <button
+            type="button"
+            class="candidate"
+            onclick={() => smoothFollow.acceptCandidate(candidate.id)}
+          >
+            <span class="candidate-text">
               <span class="candidate-label">{candidate.label}</span>
               {#if candidate.sectionTitle}
                 <span class="candidate-section">{candidate.sectionTitle}</span>
               {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
-    </div>
+            </span>
+            <span class="candidate-go" aria-hidden="true">
+              <Icon name="chevron-right" size={16} />
+            </span>
+          </button>
+        </li>
+      {/each}
+    </ol>
   {/if}
 
+  <!--
+    Four equal controls in two rows: the movement switch and the assertion,
+    then the two single steps. The promise each one makes is on its tooltip;
+    the status above already says what the text is doing, and repeating it
+    under the buttons put the same sentence on screen twice.
+  -->
+  {#if part !== 'candidates'}
+    <div class="routine">
+      <Button
+        variant={follow.followingPaused && userHold ? 'primary' : 'default'}
+        title={follow.followingPaused ? MOVEMENT_DETAIL.follow : MOVEMENT_DETAIL.hold}
+        onclick={() => smoothFollow.toggleFollowingPaused()}
+      >
+        {follow.followingPaused ? TAKE_ACTIONS.follow : TAKE_ACTIONS.hold}
+      </Button>
+      <Button onclick={() => smoothFollow.reAnchorHere()}>{TAKE_ACTIONS.setPlace}</Button>
+      <Button onclick={() => smoothFollow.nudge('back')}>{TAKE_ACTIONS.previousSentence}</Button>
+      <Button onclick={() => smoothFollow.nudge('forward')}>{TAKE_ACTIONS.nextSentence}</Button>
+    </div>
+  {/if}
 </div>
 
 <style>
   .follow-controls {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
     min-width: 0;
   }
 
-  .row {
-    display: flex;
-    align-items: center;
+  .routine {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
-    flex-wrap: wrap;
   }
 
-  .hint {
-    margin: 0;
-    font-size: var(--text-2xs);
-    line-height: 1.45;
-    color: var(--text-muted);
-  }
-
-
-
-  .candidates ul {
+  .candidates {
     list-style: none;
-    margin: var(--space-1) 0 0;
+    margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 6px;
   }
   .candidate {
     display: flex;
-    flex-direction: column;
-    gap: 1px;
+    align-items: center;
+    gap: var(--space-3);
     width: 100%;
     text-align: left;
-    padding: var(--space-2) var(--space-3);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
     border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
     color: var(--text-primary);
-    font-size: var(--text-xs);
+    font: inherit;
     cursor: pointer;
-    transition: background var(--dur-fast) var(--ease-out);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
   }
   .candidate:hover {
     background: var(--bg-hover-surface);
+    border-color: var(--border-strong);
+  }
+  .candidate-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .candidate-label {
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: var(--text-base);
+    line-height: 1.4;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
   }
   .candidate-section {
-    font-size: var(--text-2xs);
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
     color: var(--text-muted);
   }
-
+  .candidate-go {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .candidate:hover .candidate-go {
+    color: var(--text-primary);
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .candidate {
+    .candidate,
+    .candidate-go {
       transition: none;
     }
   }
