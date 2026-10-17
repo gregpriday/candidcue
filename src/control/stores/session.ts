@@ -35,12 +35,14 @@ import {
   DEFAULT_STAGE_APPEARANCE,
   panelMirrorFor,
   readerPreferenceFrom,
+  readerThemeFor,
   withReaderPreference,
   type FollowingSettings,
   type PanelMirror,
   type PresentationMode,
   type ReaderPreference,
   type ReaderPreferencePatch,
+  type ReaderTheme,
   type SessionMode,
 } from '../services/settings-types';
 import type { DisplayDescriptor } from '../services/stage-types';
@@ -655,6 +657,24 @@ let takeTeleprompter: TeleprompterSettings | null = null;
  */
 let takeReaderPreference: ReaderPreferencePatch | null = null;
 /**
+ * The reading window's Dark or Paper for THIS take, when the in-session sheet
+ * has chosen one — or null, which means the saved `teleprompter.readerTheme`.
+ *
+ * Its own field for the reason `takeReaderPreference` is: the choice belongs
+ * to the reading window, and it has to survive a switch to the prompter and
+ * back without ever being drawn on the prompter in between. Not a field of
+ * `takeReaderPreference` either — that patch is written into an
+ * `OpticalProfile`, and a theme is not optics. Null outside a take and at the
+ * start of every one; Done is what saves it.
+ */
+let takeReaderTheme: ReaderTheme | null = null;
+/**
+ * Paper held back from the reading window while a switch to the prompter is in
+ * flight, and after one that failed — see `suspendReaderPaper`. Reset with
+ * every take.
+ */
+let readerPaperSuspended = false;
+/**
  * The body size the reading window is actually drawn at, as the stage last
  * reported it, or null before it has said.
  *
@@ -985,6 +1005,8 @@ export function startLiveSession(input: StartSessionInput): string {
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
   takeReaderPreference = null;
+  takeReaderTheme = null;
+  readerPaperSuspended = false;
   stageRenderedFontSizePx = null;
   // The panel's own mirroring until somebody flips it — see `takeMirror`.
   takeMirror = null;
@@ -3461,6 +3483,15 @@ export function installLiveSettingsFollow(): () => void {
     if (!samePanelMirror(panelMirrorFor(next.optical, panel), panelMirrorFor(last.optical, panel))) {
       takeMirror = null;
     }
+    /*
+     * The reading window's Dark/Paper, chosen in Settings while the take runs,
+     * replaces one chosen in the sheet — the same rule as a slider moved there.
+     * The field is in `LIVE_STAGE_FIELDS`, so the rebuild below is what applies
+     * it; the composition reads the SAVED value whenever the take holds none.
+     */
+    if (readerThemeFor(next.teleprompter) !== readerThemeFor(last.teleprompter)) {
+      takeReaderTheme = null;
+    }
     const rigChanged = JSON.stringify(next.optical) !== JSON.stringify(last.optical);
     if (Object.keys(patch).length > 0 || rigChanged) applyStageAppearance(patch);
 
@@ -3491,6 +3522,9 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'textIntensity',
   'diagnosticTake',
   'readingCue',
+  // A reading window's field. A prompter's composition never reads it, so on
+  // a prompter take the rebuild changes nothing on the glass.
+  'readerTheme',
   // Seeded into the automatic profile by `stageSettingsFromSettings`, exactly
   // as the two above it are, so a change to it is a change to the glass. On a
   // take running a calibrated rig the recomposition is a no-op, because the
@@ -3533,7 +3567,16 @@ function recomposeStageSettings(): StageAppearance {
   const rebuilt = stageSettingsFromSettings(
     {
       ...saved,
-      ...(takeTeleprompter ? { teleprompter: takeTeleprompter } : {}),
+      /*
+       * The reading window's theme is the take's choice when the sheet made
+       * one, else the SAVED one — never `takeTeleprompter`'s copy, which is a
+       * snapshot of the opening and would hold a theme Settings has since
+       * changed. A prompter composition never reads it.
+       */
+      teleprompter: withReaderTheme(
+        takeTeleprompter ?? saved.teleprompter,
+        readerPaperSuspended ? 'dark' : (takeReaderTheme ?? saved.teleprompter.readerTheme),
+      ),
       /*
        * The take's reader nudges, over the saved preference — see
        * `takeReaderPreference`. Only the fingerprint-less preference entry
@@ -3631,12 +3674,21 @@ export function adoptPresentationMode(
   // Not `mode`: nothing was adopted, so answering with the request would report a
   // state the store is not in.
   if (!get(state).active) return livePresentationMode();
+  // The switch has landed, whichever way: paper held back for it is the
+  // reading window's again, and is drawn only if the take is still one.
+  const paperLifted = readerPaperSuspended;
+  readerPaperSuspended = false;
   const nextDisplay = landed ?? stageDisplay;
   // The panel is half of what the geometry is composed from, so "nothing
   // changed" has to account for it — a switch that lands on another monitor
   // still has to recompose even if the mode somehow came back the same.
   const movedPanel = nextDisplay?.fingerprint !== stageDisplay?.fingerprint;
-  if (takePresentationMode === mode && !movedPanel) return mode;
+  if (takePresentationMode === mode && !movedPanel) {
+    if (paperLifted && !(stageSettings?.optics && stageDisplay === null)) {
+      recomposeStageSettings();
+    }
+    return mode;
+  }
   takePresentationMode = mode;
   stageDisplay = nextDisplay;
   // The stage's last report described the other shape; the new one reports its
@@ -3796,6 +3848,86 @@ export function applyReaderAppearance(patch: ReaderPreferencePatch): ReaderAppea
   takeReaderPreference = merged;
   recomposeStageSettings();
   return liveReaderAppearance();
+}
+
+/**
+ * Draw a reading window dark for the length of a switch to the prompter.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WINDOW MOVES FIRST, AND IT MOVES ONTO THE GLASS
+ * ---------------------------------------------------------------------------
+ * `adoptPresentationMode` recomposes only after the window has finished
+ * changing shape — the ordering that keeps reader geometry from being measured
+ * twice. For a reading window on paper that ordering has a cost: between the
+ * window filling the prompter's panel and the recomposition landing, the glass
+ * shows the reading window's paper, a full-screen light field on a
+ * beamsplitter. So the caller calls this BEFORE it moves the window, and the
+ * reading window is recomposed on the dark field in place — same geometry, so
+ * nothing re-wraps; only the theme and the past opacity change, and neither
+ * is a layout input.
+ *
+ * Lifted by `adoptPresentationMode` when the switch lands, and by a
+ * deliberate choice in Reading appearance (`applyReaderTheme`). NOT by a
+ * switch that failed: the window may already be on the glass, so the reading
+ * window stays dark rather than guess. Reset with every take.
+ */
+export function suspendReaderPaper(suspended: boolean): void {
+  if (readerPaperSuspended === suspended) return;
+  readerPaperSuspended = suspended;
+  if (!get(state).active) return;
+  // The guard `applyStageAppearance` states.
+  if (stageSettings?.optics && stageDisplay === null) return;
+  recomposeStageSettings();
+}
+
+/**
+ * A teleprompter section carrying exactly `theme` as its reading-window
+ * theme — or none, when nothing chose one, so absent stays absent.
+ */
+function withReaderTheme(
+  section: TeleprompterSettings,
+  theme: ReaderTheme | undefined,
+): TeleprompterSettings {
+  const next: TeleprompterSettings = { ...section };
+  if (theme === undefined) delete next.readerTheme;
+  else next.readerTheme = theme;
+  return next;
+}
+
+/**
+ * The reading window's Dark or Paper this take is running — the sheet's
+ * choice, else the saved one — for the sheet to restore on Cancel and save on
+ * Done. Answered for a prompter take too: it is what the reading window would
+ * open on if the take switched.
+ */
+export function takeReaderThemeSetting(): ReaderTheme {
+  return takeReaderTheme ?? readerThemeFor(getSettingsSnapshot().teleprompter);
+}
+
+/**
+ * Draw the reading window in Dark or Paper, now, for this take.
+ *
+ * Through `recomposeStageSettings`, the same path every other reader control
+ * takes, so the paper field, its past-text floor and the stage's `data-theme`
+ * arrive together in one envelope. On a PROMPTER take the choice is held and
+ * nothing on the glass changes: the prompter is composed black whatever this
+ * says, and the reading window opens on it if the take switches.
+ *
+ * Nothing is saved; Done does that, into `teleprompter.readerTheme`.
+ *
+ * Returns the reading window's theme for this take.
+ */
+export function applyReaderTheme(theme: ReaderTheme): ReaderTheme {
+  if (!get(state).active) return takeReaderThemeSetting();
+  // The guard `applyStageAppearance` states: a profile with no panel cannot be
+  // recomposed without demoting it to the uncalibrated layout.
+  if (stageSettings?.optics && stageDisplay === null) return takeReaderThemeSetting();
+  takeReaderTheme = theme === 'paper' ? 'paper' : 'dark';
+  // Chosen at the window itself, so a hold left by a switch that failed is
+  // over — see `suspendReaderPaper`.
+  readerPaperSuspended = false;
+  recomposeStageSettings();
+  return takeReaderTheme;
 }
 
 /**
@@ -4080,6 +4212,8 @@ function stopInternals(): void {
    */
   takeTeleprompter = null;
   takeReaderPreference = null;
+  takeReaderTheme = null;
+  readerPaperSuspended = false;
   stageRenderedFontSizePx = null;
   takeMirror = null;
   takePresentationMode = null;

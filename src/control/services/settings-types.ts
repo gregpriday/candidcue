@@ -56,6 +56,29 @@ export function migrateStageMode(stored: unknown): PresentationMode {
   return 'prompter';
 }
 
+/**
+ * How a READING WINDOW is drawn: light type on black, or dark type on paper.
+ *
+ * A reading window only. A teleprompter take is always the black field, for
+ * the reason `src/styles/stage.css` sets out — a bright full-screen field pours
+ * light onto the beamsplitter — and `stageSettingsFromSettings` never composes
+ * a prompter in anything else, whatever is stored here.
+ */
+export type ReaderTheme = 'dark' | 'paper';
+
+/**
+ * The reading-window theme a stored teleprompter section asks for.
+ *
+ * Validated at the point of use rather than on the way in, because the
+ * teleprompter section is overlay-backed and `mergeSection` spreads whatever a
+ * stored copy holds. Only a stored `'paper'` opts in; absent, misspelt, or a
+ * value from some later build all mean dark, which is what every reading
+ * window drew before there was a choice.
+ */
+export function readerThemeFor(teleprompter: { readerTheme?: unknown } | null | undefined): ReaderTheme {
+  return teleprompter?.readerTheme === 'paper' ? 'paper' : 'dark';
+}
+
 export interface AppSettings {
   schemaVersion: 1;
   revision: number;
@@ -258,6 +281,9 @@ export interface AppSettings {
      * go looking for a background control on a prompter is how hot the type
      * burns against the glass — a bright rig washes out a soft face, a dark
      * studio makes a strong one bloom — so that is the control that exists now.
+     *
+     * (A READING WINDOW has a field choice now, `readerTheme` below, and the
+     * stage reads `themeId` for it. A prompter's field is still black only.)
      */
     textIntensity: TextIntensity;
     fixedSpeedWpm: number;
@@ -279,6 +305,25 @@ export interface AppSettings {
     diagnosticTake: boolean;
     /** What marks the reading position: fixed side ticks, a soft wash, or nothing. */
     readingCue: ReadingCueStyle;
+    /**
+     * A reading window's appearance — Dark or Paper. ABSENT MEANS DARK.
+     *
+     * Optional, and deliberately missing from `defaultAppSettings`. The store
+     * saves this section whole, so a default written there would ride into the
+     * overlay on the next unrelated teleprompter change and become
+     * indistinguishable from somebody's choice — the trap `diagnosticTake`
+     * had to be renamed out of. Absent stays absent through every whole-section
+     * save, and `readerThemeFor` reads it, so an unrecognised stored value is
+     * dark rather than whatever it happens to say.
+     *
+     * Not part of the reader preference in `optical.profiles`: that carrier is
+     * an `OpticalProfile`, normalised field by field on every read, and a theme
+     * is not a property of optics. It lives beside `textIntensity` because it is
+     * the same kind of choice — how the type sits on its field.
+     *
+     * Never reaches a prompter take; see `ReaderTheme`.
+     */
+    readerTheme?: ReaderTheme;
     /**
      * Larger type, or more of the sentence — on a panel that cannot have both.
      *

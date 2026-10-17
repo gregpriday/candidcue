@@ -29,7 +29,8 @@
   import StatusPill from '../components/StatusPill.svelte';
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
-  import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
+  import { chooseStageDisplay } from '../lib/start-take';
+  import { stagePreviewSettingsFromSettings } from '../services/stage-envelope';
   import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import { displayNumbers, identificationMatches } from '../lib/display-numbers';
   import {
@@ -86,9 +87,11 @@
     activeOpticalProfile,
     opticalRigsForDisplay,
     panelMirrorFor,
+    readerThemeFor,
     withOpticalProfile,
     withoutOpticalProfile,
     withPanelMirror,
+    type ReaderTheme,
   } from '../services/settings-types';
   import { describeCalibrationProgress } from '../lib/optical-calibration';
   import { SESSION_MODE_LABELS, sessionModeLabel } from '../../shared/take-vocabulary';
@@ -576,8 +579,14 @@
    * uses. Deriving it — rather than assembling one for the preview — is what
    * makes the window trustworthy: there is no arrangement of settings that can
    * look one way here and another way when the presenter hits Present.
+   *
+   * With one exception, and it is the glass: the preview fills the stage
+   * display, so it is never drawn on a reading window's paper — see
+   * `stagePreviewSettingsFromSettings`.
    */
-  const previewStageSettings = $derived(stageSettingsFromSettings($settings, effectiveDisplay));
+  const previewStageSettings = $derived(
+    stagePreviewSettingsFromSettings($settings, effectiveDisplay),
+  );
 
   /**
    * Push every change straight to the glass.
@@ -3514,6 +3523,34 @@
             own choice, made at the glass; this is what everything else runs with, reading windows
             included — until you pick an intensity for them in Reading appearance.
           </p>
+          <!--
+            The one field choice there is, and it is a reading window's.
+
+            A prompter stays black whatever this says — a bright field pours
+            light onto the beamsplitter — so the control names the surface it
+            reaches rather than pretending to be a stage background. Reading
+            appearance offers the same choice during a read, and its Done saves
+            here. Absent means Dark: nothing is written until somebody picks.
+          -->
+          <div class="control-block">
+            <span class="control-label">Reading window appearance</span>
+            <SegmentedControl
+              label="Reading window appearance"
+              value={readerThemeFor($settings.teleprompter)}
+              options={[
+                { value: 'dark', label: 'Dark' },
+                { value: 'paper', label: 'Paper' },
+              ]}
+              onchange={(value) =>
+                void patchSettings('teleprompter', {
+                  readerTheme: (value === 'paper' ? 'paper' : 'dark') satisfies ReaderTheme,
+                })}
+            />
+            <p class="hint-line">
+              Reading windows only — light text on black, or dark text on warm paper. A
+              teleprompter take always stays black.
+            </p>
+          </div>
           <!--
             The ceiling was 160px, which is not a taste limit — it was short of
             what the product's own hardware needs. A Prompter XL at its rated

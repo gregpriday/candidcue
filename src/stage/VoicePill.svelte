@@ -264,7 +264,10 @@
      a positive state reads as solid, not as an outline. */
   .voice-pill[data-reading='confirmed'] .mark {
     background: var(--stage-text, #f5f3ef);
-    color: #000;
+    /* The FIELD's colour, cut out of the disc: black on a dark stage, as it
+       always was, and paper on a paper reading window — where black on a disc
+       of near-black ink would be no mark at all. */
+    color: var(--stage-mark-ink, #000);
     border-radius: 50%;
   }
 
@@ -273,7 +276,7 @@
      app talking to them. Emphatically not red. */
   .voice-pill[data-reading='fault'] .mark {
     background: var(--stage-cue, #d8b46a);
-    color: #000;
+    color: var(--stage-mark-ink, #000);
   }
   .voice-pill[data-reading='fault'] .bar {
     background: var(--stage-cue, #d8b46a);
@@ -334,7 +337,7 @@
 
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .voice-pill {
-      background: rgb(12 14 18 / 92%);
+      background: var(--stage-chrome-bg-solid, rgb(12 14 18 / 92%));
     }
   }
 </style>

@@ -52,8 +52,10 @@ import { onShortcut } from '../lib/shortcuts';
     adoptPresentationMode,
     anchorManualScroll,
     applyReaderAppearance,
+    applyReaderTheme,
     noteStageRenderedFontSize,
     applyStageAppearance,
+    suspendReaderPaper,
     autoScrollLive,
     awaitPendingPersistence,
     autoScrollReachedEnd,
@@ -75,6 +77,7 @@ import { onShortcut } from '../lib/shortcuts';
     switchMicrophone,
     retryMicrophone,
     takeReaderPreferenceSettings,
+    takeReaderThemeSetting,
     toggleBlankStage,
     togglePlayPause,
     toggleStageMirror,
@@ -85,9 +88,12 @@ import { onShortcut } from '../lib/shortcuts';
     readerPreferenceEquals,
     readerPreferenceFrom,
     readerPreferenceReplacement,
+    readerThemeFor,
     withReaderPreference,
     type ReaderPreference,
+    type ReaderTheme,
   } from '../services/settings-types';
+  import { READER_PAPER_THEME_ID, readerThemeOfStage } from '../services/stage-envelope';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
   import { showToast } from '../stores/toasts';
   import type { AudioDeviceInfo, OutlineNode, StageIntent } from '../../shared/contracts';
@@ -699,6 +705,27 @@ import { onShortcut } from '../lib/shortcuts';
      */
     const forSession = $session.sessionId;
     try {
+      /*
+       * A reading window goes dark BEFORE the window moves to the prompter.
+       *
+       * The geometry waits for the new shape (below), so without this a paper
+       * reading window would fill the prompter's panel — glass — for the length
+       * of the settle. Theme only, in place: nothing re-wraps. One painted
+       * frame when it is on paper now, so the black is on screen before the
+       * window moves. Held for a DARK reading window too, so Paper saved in
+       * Settings while the switch is in flight cannot light the glass either.
+       *
+       * `adoptPresentationMode` lifts it when the switch lands. A switch that
+       * fails does NOT: the window may have reached the glass before the part
+       * that failed, and nothing here can tell, so the reading window stays dark
+       * until the next switch lands or somebody picks Paper again in Reading
+       * appearance — while looking at the window it would be drawn on.
+       */
+      if (next === 'prompter') {
+        const wasPaper = paperTake;
+        suspendReaderPaper(true);
+        if (wasPaper) await painted();
+      }
       const switched = await switchPresentationMode(next, $settings.stage.displayFingerprint);
       /*
        * Switching AWAY from reader mode reports the bounds the reading window
@@ -981,6 +1008,12 @@ import { onShortcut } from '../lib/shortcuts';
    */
   let readerOnOpen: ReaderPreference | null = null;
   /**
+   * The reading window's Dark or Paper when the panel opened. Its own snapshot
+   * because the theme is not part of the reader preference — see
+   * `takeReaderTheme` in the session store.
+   */
+  let readerThemeOnOpen: ReaderTheme | null = null;
+  /**
    * Which controls the panel opened with. Cancel undoes what THOSE controls
    * could have changed — and nothing else, so a prompter's Cancel stays the
    * single `applyStageAppearance` it has always been.
@@ -992,6 +1025,42 @@ import { onShortcut } from '../lib/shortcuts';
    * what the panel shows, what it changes, and what Done saves.
    */
   const readerSurface = $derived($session.stageReaderAppearance !== null);
+  /**
+   * The reading window's Dark or Paper as the glass is drawing it now — off the
+   * RENDERED settings, so the sheet's control and the canvas below say what is
+   * on screen. Always dark for a prompter.
+   */
+  const stageReaderTheme = $derived(readerThemeOfStage($session.stageEnvelope?.stageSettings));
+  /**
+   * This take is a reading window on paper — or, before its envelope exists,
+   * is about to open as one, which is what the "Preparing script…" plate needs
+   * to know to avoid flashing black over a paper read.
+   */
+  const paperTake = $derived(
+    $session.active &&
+      ($session.stageEnvelope
+        ? stageReaderTheme === 'paper'
+        : $session.stagePresentationMode === 'reader' &&
+          readerThemeFor($settings.teleprompter) === 'paper'),
+  );
+  /*
+   * The page canvas follows the take's field (see `tokens.css`).
+   *
+   * `data-presenting` turns the canvas black for the whole take, so that a
+   * window growing faster than its layout shows the stage's colour in the gap.
+   * On a paper read that colour is paper, and a black strip down the edge of
+   * every resize would be the loudest thing on the screen. Keyed on the
+   * rendered settings, so a mid-take switch to the prompter puts the black
+   * back, and removed with the take.
+   */
+  $effect(() => {
+    if (!paperTake) return undefined;
+    const root = document.documentElement;
+    root.dataset['presentingTheme'] = READER_PAPER_THEME_ID;
+    return () => {
+      delete root.dataset['presentingTheme'];
+    };
+  });
   /**
    * What the stage measured off the face it is drawing — see `onmeasurement`.
    *
@@ -1046,6 +1115,7 @@ import { onShortcut } from '../lib/shortcuts';
     if (appearanceOpen) return;
     appearanceOnOpen = $session.stageAppearance;
     readerOnOpen = takeReaderPreferenceSettings();
+    readerThemeOnOpen = takeReaderThemeSetting();
     surfaceOnOpen = readerSurface ? 'reader' : 'prompter';
     appearanceOpen = true;
   }
@@ -1054,6 +1124,7 @@ import { onShortcut } from '../lib/shortcuts';
     appearanceOpen = false;
     appearanceOnOpen = null;
     readerOnOpen = null;
+    readerThemeOnOpen = null;
     surfaceOnOpen = null;
   }
 
@@ -1113,18 +1184,43 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * Compared against the saved preference for the reason `keepAppearance`
    * gives — a ⌘= before the panel opened is still something to keep.
+   *
+   * The one thing that does go into `teleprompter` is Dark/Paper, as
+   * `readerTheme`: it is not optics, so the preference's carrier cannot hold
+   * it, and no prompter composition ever reads it. Written only when it moved,
+   * so a Done that changed the size alone writes nothing there — and an absent
+   * theme stays absent rather than being frozen in as a default.
    */
   async function keepReaderAppearance(): Promise<void> {
     const live = takeReaderPreferenceSettings();
+    const theme = takeReaderThemeSetting();
     closeAppearanceSheet();
-    if (readerPreferenceEquals(readerPreferenceFrom($settings.optical), live)) return;
-    try {
-      await patchSettings(
-        'optical',
-        withReaderPreference($settings.optical, readerPreferenceReplacement(live)),
+    const preferenceChanged = !readerPreferenceEquals(readerPreferenceFrom($settings.optical), live);
+    const themeChanged = readerThemeFor($settings.teleprompter) !== theme;
+    if (!preferenceChanged && !themeChanged) return;
+    /*
+     * Two sections, so two saves — the store queues them one behind the other
+     * and either can be refused while the other lands. Settled rather than
+     * raced, so the toast says which happened instead of claiming nothing was
+     * saved over a preference that was.
+     */
+    const saves: Array<Promise<void>> = [];
+    if (preferenceChanged) {
+      saves.push(
+        patchSettings(
+          'optical',
+          withReaderPreference($settings.optical, readerPreferenceReplacement(live)),
+        ),
       );
+    }
+    if (themeChanged) saves.push(patchSettings('teleprompter', { readerTheme: theme }));
+    const results = await Promise.allSettled(saves);
+    const refused = results.filter((result) => result.status === 'rejected').length;
+    if (refused === 0) {
       showToast('Reading appearance saved', 'info', { durationMs: 1600 });
-    } catch {
+    } else if (refused < results.length) {
+      showToast('Only part of the reading appearance was saved. This read keeps its look.', 'danger');
+    } else {
       // The same split `keepAppearance` reports: the save was refused, the
       // read keeps what is on the screen.
       showToast('Saved reading appearance was not changed. This read keeps its look.', 'danger');
@@ -1135,6 +1231,11 @@ import { onShortcut } from '../lib/shortcuts';
   function revertAppearance(): void {
     if (surfaceOnOpen === 'reader') {
       if (readerOnOpen) applyReaderAppearance(readerPreferenceReplacement(readerOnOpen));
+      // Only when it moved: a Cancel that touched nothing must not leave the
+      // take holding a choice of its own over the saved one.
+      if (readerThemeOnOpen && readerThemeOnOpen !== takeReaderThemeSetting()) {
+        applyReaderTheme(readerThemeOnOpen);
+      }
     } else if (appearanceOnOpen) {
       applyStageAppearance(appearanceOnOpen);
     }
@@ -1409,12 +1510,14 @@ import { onShortcut } from '../lib/shortcuts';
     surface={readerSurface ? 'reader' : 'prompter'}
     appearance={$session.stageAppearance}
     reader={$session.stageReaderAppearance}
+    readerTheme={stageReaderTheme}
     rigResolved={$session.stageRigResolved}
     automatic={stageSizedAutomatically}
     maxFontSizePx={$session.stageFontCeilingPx}
     charactersPerLine={stageCharactersPerLine}
     onchange={(patch) => applyStageAppearance(patch)}
     onreaderchange={(patch) => applyReaderAppearance(patch)}
+    onreaderthemechange={(theme) => applyReaderTheme(theme)}
     onok={() => void keepAppearance()}
     oncancel={revertAppearance}
   />
@@ -1745,7 +1848,7 @@ import { onShortcut } from '../lib/shortcuts';
       }}
     />
   {:else}
-    <div class="stage-preparing">Preparing script…</div>
+    <div class="stage-preparing" class:paper={paperTake}>Preparing script…</div>
   {/if}
 {:else}
 <div class="live">
@@ -2094,7 +2197,17 @@ import { onShortcut } from '../lib/shortcuts';
   clickable; claiming a modal would tell assistive technology the opposite of
   what the layer actually does.
 -->
-<div class="take-controls" class:presenting={$session.active} inert={!$session.active}>
+<!--
+  On a paper read the drawer and its tab take the light workspace palette, so
+  the one control surface over the page is not a dark slab on it. Unset — the
+  studio palette, exactly as before — for every other take.
+-->
+<div
+  class="take-controls"
+  class:presenting={$session.active}
+  inert={!$session.active}
+  data-theme={paperTake ? 'workspace' : undefined}
+>
   <button
     type="button"
     class="tc-tab"
@@ -2219,6 +2332,12 @@ import { onShortcut } from '../lib/shortcuts';
     place-items: center;
     background: #000;
     color: #777;
+  }
+  /* A paper read opens on paper: the stage's field and its secondary ink
+     (4.9:1, a shade above the dark plate's 4.7:1). */
+  .stage-preparing.paper {
+    background: #f6f2ea;
+    color: #6d6961;
   }
 
   /*
@@ -2563,6 +2682,14 @@ import { onShortcut } from '../lib/shortcuts';
   }
   .tc-panel.open {
     transform: translateX(0);
+  }
+  /*
+   * A closed drawer sits just off the right edge, and its drop shadow does
+   * not: on black it falls on black, on paper it is a grey bar down the side
+   * of the read. So on paper the shadow is only there while it is open.
+   */
+  .take-controls[data-theme='workspace'] .tc-panel:not(.open) {
+    box-shadow: none;
   }
   @media (prefers-reduced-motion: reduce) {
     .tc-panel,

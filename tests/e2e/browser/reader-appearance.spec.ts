@@ -107,8 +107,14 @@ test('the reading appearance panel applies live, Escape puts it back, and Done s
   await expect(panel).toHaveCount(0);
   await expect.poll(() => columnFontSize(page)).toBeCloseTo(opened + 4, 0);
 
+  // Done closes the panel and THEN saves, through an asynchronous queue, so
+  // the write is waited for rather than read the instant the panel is gone.
+  await expect
+    .poll(async () => (await opticalWrites(page)).length, {
+      message: 'Done writes the reader preference',
+    })
+    .toBeGreaterThan(0);
   const writes = await opticalWrites(page);
-  expect(writes.length, 'Done writes the reader preference').toBeGreaterThan(0);
   expect(writes.at(-1)).toContain('Reading');
   expect(writes.at(-1)).toContain(`"fontSizePx":${Math.round(opened + 4)}`);
   const teleprompterWrites = await page.evaluate(() =>

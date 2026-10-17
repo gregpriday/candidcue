@@ -303,6 +303,24 @@
 
   const phase = $derived(displayPhase(app));
   const settings = $derived(app.settings);
+  /**
+   * The field this stage is drawn on: `reader-paper` for a reading window
+   * composed on paper, `stage-dark` for everything else.
+   *
+   * The reader check is a second lock rather than tidiness. Control only ever
+   * writes `reader-paper` with a reader `readingContext`
+   * (`READER_PAPER_THEME_ID` in `stage-envelope.ts`), but this is the last
+   * point before the glass, and a light field on a beamsplitter is the one
+   * failure the black field exists to prevent — so a prompter stays black here
+   * even if an envelope ever says otherwise. Any other id is dark too: there is
+   * no third theme, and an unknown one must not reach for tokens that do not
+   * exist.
+   */
+  const stageTheme = $derived(
+    settings?.readingContext === 'reader' && settings.themeId === 'reader-paper'
+      ? 'reader-paper'
+      : 'stage-dark',
+  );
   const doc = $derived(app.envelope?.renderDocument ?? null);
   /**
    * How much script this rig actually shows, as a diagnostic.
@@ -2016,6 +2034,7 @@
   aria-label={embedded ? 'Teleprompter' : undefined}
   data-phase={phase}
   data-pointer-hidden={cursorHidden}
+  data-theme={stageTheme}
   data-text-intensity={settings?.textIntensity ?? 'standard'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
@@ -2517,6 +2536,127 @@
     --stage-text-past: rgba(255, 254, 251, 0.5);
     --stage-text-future: rgba(255, 254, 251, 0.94);
   }
+
+  /*
+   * PAPER — A READING WINDOW ONLY.
+   *
+   * Dark type on a warm light field, for a window read at a desk, where the
+   * reason the prompter is black (stray light on a beamsplitter, `stage.css`)
+   * does not exist. `stageTheme` above only ever says `reader-paper` for a
+   * reading window, so none of this can reach glass.
+   *
+   * A complete set of roles, not black swapped for cream: the same alpha does
+   * not give the same contrast with dark ink on a light field. Past text is
+   * floored at 0.72 by `buildStageSettings` (`PAPER_PAST_OPACITY`), and the
+   * four-word ramp gets its own steps between that floor and full ink, so the
+   * dim still grades rather than collapsing onto the floor. Every composed
+   * reading state — each intensity, at full, upcoming, each ramp step and the
+   * far past, under the Wash band and the phrase underlay, stage directions,
+   * and an authored cue on its own chip — is held at 4.5:1 or better by
+   * `tests/unit/control/reader-theme.test.ts`, which reads these values from
+   * this block. (A cue or heading inside a PAST block or a stage direction is
+   * the one state that does not reach it: about 3.3:1, against the dark
+   * field's 2.6–2.8:1 for the same states. The block's own opacity sits over
+   * the chip, and clay dark enough to clear it there stops reading as a cue.)
+   *
+   * The chrome is warm paper with a quiet border: no grey slab, no peach wash,
+   * and the clay of the control palette for anything that has to read as the
+   * app talking. The `--stage-dock-*`, `--stage-flag-*`, `--stage-danger-*`,
+   * `--stage-wash-*` and remaining `--stage-chrome-*` roles have no dark
+   * declaration on purpose: each is used with today's dark literal as its
+   * `var()` fallback, so a dark stage resolves to exactly the colour it always
+   * drew.
+   *
+   * Mirrored in `stage.css` for the separate stage window, as the tokens above
+   * are.
+   */
+  .stage-root[data-theme='reader-paper'] {
+    color-scheme: light;
+    --stage-bg: #f6f2ea;
+    --stage-text: #242424;
+    --stage-text-past: rgba(36, 36, 36, 0.68);
+    --stage-text-future: rgba(36, 36, 36, 0.86);
+    /* The phrase underlay, in a warm neutral rather than the dark field's
+       lavender. Still an underlay: the element runs it at 0.1. */
+    --stage-accent: rgba(96, 84, 70, 0.3);
+    /* A dark clay, dark enough to hold 4.5:1 on its own 12-14% chip in an
+       upcoming block. The dark field's gold is about 1.7:1 on paper. */
+    --stage-cue: #7a412e;
+    --stage-overlay: rgba(232, 227, 219, 0.96);
+    --stage-chrome-border: rgba(36, 30, 20, 0.14);
+    --stage-chrome-bg: rgba(252, 250, 246, 0.88);
+    --stage-chrome-text: rgba(36, 36, 36, 0.88);
+    --stage-chrome-shadow:
+      0 10px 30px rgba(24, 25, 29, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    --stage-dim-1: 0.92;
+    --stage-dim-2: 0.84;
+    --stage-dim-3: 0.77;
+    /* Silent and stage-only material — see the rule below this block. */
+    --stage-unspoken-opacity: 0.72;
+
+    /* Roles whose dark value is the fallback at the point of use. */
+    --stage-wash-clear: rgb(96 84 70 / 0%);
+    --stage-wash: rgb(96 84 70 / 8%);
+    --stage-wash-hollow: rgb(96 84 70 / 3%);
+    --stage-wash-rule: rgb(96 84 70 / 24%);
+    --stage-mark-ink: #f6f2ea;
+    --stage-diag-fault: #a6342b;
+    --stage-chrome-bg-solid: rgb(252 250 246 / 96%);
+    --stage-chrome-bg-hover: rgb(241 237 230 / 94%);
+    --stage-chrome-border-hover: rgb(36 30 20 / 30%);
+    --stage-chrome-text-hover: #18191d;
+    --stage-chrome-text-strong: #18191d;
+    --stage-chrome-text-muted: rgb(36 36 36 / 68%);
+    --stage-chrome-text-faint: rgb(36 36 36 / 52%);
+    --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
+    --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
+    --stage-chrome-highlight: rgb(36 30 20 / 7%);
+    --stage-chrome-control-border: rgb(36 30 20 / 18%);
+    --stage-chrome-control-hover: rgb(36 30 20 / 6%);
+    --stage-focus-ring: rgb(36 36 36 / 70%);
+    --stage-dock-icon: rgb(36 36 36 / 72%);
+    --stage-dock-end: rgb(36 36 36 / 58%);
+    --stage-flag: #7a5310;
+    --stage-flag-hover: #5f400b;
+    --stage-flag-bg: rgb(154 103 22 / 10%);
+    --stage-flag-bg-hover: rgb(154 103 22 / 16%);
+    --stage-flag-border: rgb(154 103 22 / 38%);
+    --stage-flag-border-hover: rgb(154 103 22 / 52%);
+    --stage-flag-ring: rgb(252 250 246 / 92%);
+    --stage-danger: #a6342b;
+    --stage-danger-bg: rgb(185 65 56 / 10%);
+    --stage-danger-border: rgb(166 52 43 / 38%);
+    --stage-danger-strong-bg: rgb(185 65 56 / 12%);
+    --stage-danger-strong-bg-hover: rgb(185 65 56 / 20%);
+    --stage-danger-strong-border: rgb(166 52 43 / 55%);
+    --stage-danger-text: #8e2922;
+    --stage-danger-text-hover: #7a211b;
+  }
+  /* Intensity on paper moves the INK, opaque, rather than fading it: an alpha
+     on dark ink would stack with every past/ramp opacity below it. */
+  .stage-root[data-theme='reader-paper'][data-text-intensity='soft'] {
+    --stage-text: #33312e;
+    --stage-text-past: rgba(51, 49, 46, 0.7);
+    --stage-text-future: rgba(51, 49, 46, 0.86);
+  }
+  .stage-root[data-theme='reader-paper'][data-text-intensity='strong'] {
+    --stage-text: #141414;
+    --stage-text-past: rgba(20, 20, 20, 0.66);
+    --stage-text-future: rgba(20, 20, 20, 0.94);
+  }
+  /*
+   * Stage directions on paper.
+   *
+   * The renderer draws silent and stage-only blocks at a flat 0.45 opacity —
+   * about 4:1 for warm white on black, and about 2.7:1 for dark ink on paper,
+   * which is a direction somebody has to act on gone too faint to read. It is
+   * a literal in the block renderer rather than a role, so the paper field
+   * overrides it here, by class, and only on paper: a dark stage never matches
+   * this selector and keeps its 0.45 exactly.
+   */
+  .stage-root[data-theme='reader-paper'] :global(.unspoken) {
+    opacity: var(--stage-unspoken-opacity, 0.72);
+  }
   .stage-root[data-pointer-hidden='true'] {
     cursor: none;
   }
@@ -2731,7 +2871,7 @@
    * working — and the readout is scanned in a dark room at a glance.
    */
   .diag-fault {
-    color: #ffb4a2;
+    color: var(--stage-diag-fault, #ffb4a2);
     font-weight: 600;
   }
 

@@ -371,12 +371,18 @@
        skirts are 0.45 of one on each side. The percentages come in as custom
        properties because they follow from that ratio rather than from a pair of
        chosen stops, and the rules below are pinned to the same two edges. */
+    /*
+     * The colours are roles, with the dark field's values as their fallbacks —
+     * so a dark stage draws exactly the band it always did, and a paper one
+     * swaps the cream for a warm ink (`--stage-wash*` in the paper block). A
+     * 6% cream wash on paper is not a quiet band; it is nothing at all.
+     */
     background: linear-gradient(
       180deg,
-      rgb(245 243 239 / 0%) 0%,
-      rgb(245 243 239 / 6%) var(--plateau-top, 24%),
-      rgb(245 243 239 / 6%) var(--plateau-bottom, 76%),
-      rgb(245 243 239 / 0%) 100%
+      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 0%,
+      var(--stage-wash, rgb(245 243 239 / 6%)) var(--plateau-top, 24%),
+      var(--stage-wash, rgb(245 243 239 / 6%)) var(--plateau-bottom, 76%),
+      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 100%
     );
     transition: background var(--stage-fx-ms, 200ms) linear;
   }
@@ -384,10 +390,10 @@
   .wash[data-hollow='true'] .wash-band {
     background: linear-gradient(
       180deg,
-      rgb(245 243 239 / 0%) 0%,
-      rgb(245 243 239 / 2%) var(--plateau-top, 24%),
-      rgb(245 243 239 / 2%) var(--plateau-bottom, 76%),
-      rgb(245 243 239 / 0%) 100%
+      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 0%,
+      var(--stage-wash-hollow, rgb(245 243 239 / 2%)) var(--plateau-top, 24%),
+      var(--stage-wash-hollow, rgb(245 243 239 / 2%)) var(--plateau-bottom, 76%),
+      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 100%
     );
   }
 
@@ -396,7 +402,7 @@
     left: 0;
     right: 0;
     height: 1px;
-    background: rgb(245 243 239 / 16%);
+    background: var(--stage-wash-rule, rgb(245 243 239 / 16%));
   }
   .wash-rule-top {
     top: var(--plateau-top, 24%);

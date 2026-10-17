@@ -474,4 +474,41 @@ describe('a reading window', () => {
     const { getByRole } = openReader({ reader: null, rigResolved: false });
     expect(getByRole('heading').textContent?.trim()).toBe('Prompter appearance');
   });
+
+  /*
+   * Dark or Paper. A reading window's field, offered beside the intensity of
+   * the ink on it, applied on the way past like every other control here — and
+   * a choice the prompter's panel never offers, because a prompter is black.
+   */
+  it('offers Dark and Paper, showing the one on the glass, and reports a choice', () => {
+    const onreaderthemechange = vi.fn();
+    const { container } = openReader({ readerTheme: 'dark', onreaderthemechange });
+    expect(radio(container, 'Appearance', 'Dark').getAttribute('aria-checked')).toBe('true');
+    expect(radio(container, 'Appearance', 'Paper').getAttribute('aria-checked')).toBe('false');
+
+    radio(container, 'Appearance', 'Paper').click();
+    flushSync();
+    expect(onreaderthemechange).toHaveBeenCalledWith('paper');
+  });
+
+  it('reads as dark when nobody says otherwise', () => {
+    const { container } = openReader();
+    expect(radio(container, 'Appearance', 'Dark').getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('turns into a sheet of paper over a paper reading window', () => {
+    // The workspace palette, by the attribute every light surface in the app
+    // already uses — so its controls are the light ones, not dark glass.
+    const onPaper = openReader({ readerTheme: 'paper' });
+    expect(onPaper.getByRole('dialog').getAttribute('data-theme')).toBe('workspace');
+
+    const onDark = openReader({ readerTheme: 'dark' });
+    expect(onDark.getAllByRole('dialog').at(-1)!.hasAttribute('data-theme')).toBe(false);
+  });
+
+  it('is never offered on the prompter’s panel, which stays dark glass', () => {
+    const { container, getByRole } = open({ readerTheme: 'paper' });
+    expect(container.querySelector('[role="radiogroup"][aria-label="Appearance"]')).toBeNull();
+    expect(getByRole('dialog').hasAttribute('data-theme')).toBe(false);
+  });
 });

@@ -1042,8 +1042,14 @@
     height: 16px;
   }
 
+  /*
+   * Every colour below is a role with today's dark literal as its fallback, so
+   * a dark stage draws exactly what it always did and a paper reading window
+   * swaps them all at once (the paper block in `StageApp.svelte`). The roles
+   * that already existed — `--stage-chrome-*` — are declared for both.
+   */
   .menu-trigger {
-    color: rgb(245 243 239 / 72%);
+    color: var(--stage-dock-icon, rgb(245 243 239 / 72%));
   }
 
   /*
@@ -1057,16 +1063,16 @@
    * pixels on a non-Retina panel.
    */
   .menu-trigger.flagged {
-    color: #e8b661;
-    background: rgb(232 182 97 / 12%);
-    border-color: rgb(232 182 97 / 38%);
+    color: var(--stage-flag, #e8b661);
+    background: var(--stage-flag-bg, rgb(232 182 97 / 12%));
+    border-color: var(--stage-flag-border, rgb(232 182 97 / 38%));
   }
 
   .menu-trigger.flagged:hover,
   .menu-trigger.flagged:focus-visible {
-    color: #f2c97e;
-    background: rgb(232 182 97 / 18%);
-    border-color: rgb(232 182 97 / 52%);
+    color: var(--stage-flag-hover, #f2c97e);
+    background: var(--stage-flag-bg-hover, rgb(232 182 97 / 18%));
+    border-color: var(--stage-flag-border-hover, rgb(232 182 97 / 52%));
   }
 
   .flag {
@@ -1076,35 +1082,35 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #e8b661;
+    background: var(--stage-flag, #e8b661);
     /* A ring in the dock's own material, so the disc reads as a mark ON the
        button rather than as a speck of script showing through it. */
-    box-shadow: 0 0 0 2px rgb(12 14 18 / 92%);
+    box-shadow: 0 0 0 2px var(--stage-flag-ring, rgb(12 14 18 / 92%));
   }
 
   .end {
     /* Quietest of the three at rest. It is not tinted at all until somebody is
        actually pointing at it: a persistent red mark in the corner of a take
        would be the loudest thing on a black field, reporting nothing. */
-    color: rgb(245 243 239 / 58%);
+    color: var(--stage-dock-end, rgb(245 243 239 / 58%));
   }
 
   .dock-button:hover,
   .dock-button:focus-visible {
-    background: rgb(24 28 35 / 88%);
-    border-color: rgb(255 255 255 / 30%);
-    color: #fff;
+    background: var(--stage-chrome-bg-hover, rgb(24 28 35 / 88%));
+    border-color: var(--stage-chrome-border-hover, rgb(255 255 255 / 30%));
+    color: var(--stage-chrome-text-hover, #fff);
   }
 
   .end:hover,
   .end:focus-visible {
-    color: #ef7168;
-    background: rgb(239 113 104 / 12%);
-    border-color: rgb(239 113 104 / 38%);
+    color: var(--stage-danger, #ef7168);
+    background: var(--stage-danger-bg, rgb(239 113 104 / 12%));
+    border-color: var(--stage-danger-border, rgb(239 113 104 / 38%));
   }
 
   .dock-button:focus-visible {
-    outline: 2px solid rgb(245 243 239 / 70%);
+    outline: 2px solid var(--stage-focus-ring, rgb(245 243 239 / 70%));
     outline-offset: 2px;
   }
 
@@ -1197,7 +1203,7 @@
     border-radius: var(--stage-chrome-radius);
     /* The same slightly-more-opaque glass the confirmation uses. This one
        carries prose over moving white type too. */
-    background: rgb(12 14 18 / 90%);
+    background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
     -webkit-backdrop-filter: blur(18px) saturate(130%);
     backdrop-filter: blur(18px) saturate(130%);
@@ -1217,7 +1223,7 @@
     border: none;
     border-radius: 8px;
     background: transparent;
-    color: #f5f3ef;
+    color: var(--stage-chrome-text-strong, #f5f3ef);
     font: inherit;
     font-size: 13px;
     font-weight: 500;
@@ -1241,7 +1247,7 @@
     outline: none;
   }
   .menu-row.active {
-    background: rgb(255 255 255 / 12%);
+    background: var(--stage-chrome-highlight, rgb(255 255 255 / 12%));
   }
 
   .menu-mark {
@@ -1264,7 +1270,7 @@
     flex: 0 0 auto;
     width: 14px;
     height: 14px;
-    color: rgb(245 243 239 / 52%);
+    color: var(--stage-chrome-text-faint, rgb(245 243 239 / 52%));
   }
 
   /*
@@ -1290,7 +1296,7 @@
     /* A little more opaque than the dock: this one carries prose and two
        buttons over moving white type, and glass that reads is worth more here
        than glass that is see-through. */
-    background: rgb(12 14 18 / 90%);
+    background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
     -webkit-backdrop-filter: blur(18px) saturate(130%);
     backdrop-filter: blur(18px) saturate(130%);
@@ -1301,14 +1307,14 @@
     margin: 0;
     font-size: 14px;
     font-weight: 650;
-    color: #f5f3ef;
+    color: var(--stage-chrome-text-strong, #f5f3ef);
   }
 
   .confirm-body {
     margin: 4px 0 0;
     font-size: 12px;
     line-height: 1.4;
-    color: rgb(245 243 239 / 62%);
+    color: var(--stage-chrome-text-muted, rgb(245 243 239 / 62%));
   }
 
   .confirm-actions {
@@ -1329,26 +1335,26 @@
   }
 
   .confirm-cancel {
-    border-color: rgb(255 255 255 / 18%);
+    border-color: var(--stage-chrome-control-border, rgb(255 255 255 / 18%));
     background: transparent;
-    color: rgb(245 243 239 / 88%);
+    color: var(--stage-chrome-text, rgb(245 243 239 / 88%));
   }
   .confirm-cancel:hover {
-    background: rgb(255 255 255 / 10%);
+    background: var(--stage-chrome-control-hover, rgb(255 255 255 / 10%));
   }
 
   .confirm-end {
-    border-color: rgb(239 113 104 / 55%);
-    background: rgb(239 113 104 / 18%);
-    color: #ffb4a2;
+    border-color: var(--stage-danger-strong-border, rgb(239 113 104 / 55%));
+    background: var(--stage-danger-strong-bg, rgb(239 113 104 / 18%));
+    color: var(--stage-danger-text, #ffb4a2);
   }
   .confirm-end:hover {
-    background: rgb(239 113 104 / 30%);
-    color: #fff;
+    background: var(--stage-danger-strong-bg-hover, rgb(239 113 104 / 30%));
+    color: var(--stage-danger-text-hover, #fff);
   }
 
   .confirm-actions button:focus-visible {
-    outline: 2px solid rgb(245 243 239 / 70%);
+    outline: 2px solid var(--stage-focus-ring, rgb(245 243 239 / 70%));
     outline-offset: 2px;
   }
 
@@ -1379,11 +1385,11 @@
   /* Where the glass cannot be made, the material is simply darker. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .dock-button {
-      background: rgb(12 14 18 / 92%);
+      background: var(--stage-chrome-bg-solid, rgb(12 14 18 / 92%));
     }
     .menu-popover,
     .confirm-popover {
-      background: rgb(12 14 18 / 96%);
+      background: var(--stage-chrome-popover-bg-solid, rgb(12 14 18 / 96%));
     }
   }
 </style>

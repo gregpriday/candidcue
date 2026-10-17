@@ -25,19 +25,25 @@ import {
   adjustStageFontSize,
   adoptPresentationMode,
   applyReaderAppearance,
+  applyReaderTheme,
   applyStageAppearance,
   clearSession,
   noteStageRenderedFontSize,
   liveMirrorX,
   session,
   startLiveSession,
+  suspendReaderPaper,
   takeReaderPreferenceSettings,
+  takeReaderThemeSetting,
   takeTeleprompterSettings,
   toggleStageMirror,
 } from '../../../src/control/stores/session';
 import { getSettingsSnapshot } from '../../../src/control/stores/settings';
 import { smoothFollow } from '../../../src/control/stores/smooth-follow';
 import {
+  PAPER_PAST_OPACITY,
+  READER_PAPER_THEME_ID,
+  STAGE_DARK_THEME_ID,
   buildStageEnvelope,
   buildStageSettings,
   stageSettingsFromSettings,
@@ -847,5 +853,144 @@ describe('a reading window, adjusted mid-read', () => {
     expect(rendered().optics).toBeUndefined();
     expect(get(session).stageReaderAppearance).toBeNull();
     expect(get(session).stageRigResolved).toBe(false);
+  });
+
+  /*
+   * Dark or Paper, chosen during the read.
+   *
+   * Through the same recomposition every other reader control takes, so the
+   * field, the past-text floor and the stage's theme arrive in one envelope —
+   * and held per take, apart from the prompter, which is composed black
+   * however often the take switches.
+   */
+  it('draws the reading window on paper, now, and saves nothing', () => {
+    startReading();
+    const before = get(session).stageEnvelope;
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+
+    expect(applyReaderTheme('paper')).toBe('paper');
+
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+    expect(rendered().background).toBe('#f6f2ea');
+    expect(rendered().pastOpacity).toBe(PAPER_PAST_OPACITY);
+    // A refresh in place, like every other mid-take change.
+    expect(get(session).stageEnvelope).not.toBe(before);
+    expect(get(session).stageEnvelope!.stageGeneration).toBe(before!.stageGeneration);
+    expect(takeReaderThemeSetting()).toBe('paper');
+    expect(getSettingsSnapshot().teleprompter.readerTheme).toBeUndefined();
+  });
+
+  it('comes back black on a switch to the prompter, and paper again on the way back', () => {
+    startReading();
+    applyReaderTheme('paper');
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+    expect(rendered().background).toBe('#000000');
+    // Held for the reading window while the prompter runs, not drawn on it.
+    expect(takeReaderThemeSetting()).toBe('paper');
+    applyStageAppearance({ fontSizePx: 96 });
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+  });
+
+  it('holds a choice made on a prompter take without drawing it', () => {
+    start(stageSettingsFromSettings(SETTINGS, DESK));
+    const opening = rendered();
+    applyReaderTheme('paper');
+    expect(rendered()).toEqual(opening);
+    expect(takeReaderThemeSetting()).toBe('paper');
+  });
+
+  it('goes back when the sheet is cancelled', () => {
+    startReading();
+    const opening = rendered();
+    const onOpen = takeReaderThemeSetting();
+    applyReaderTheme('paper');
+    applyReaderTheme(onOpen);
+    expect(rendered()).toEqual(opening);
+  });
+
+  it('ends with the take', () => {
+    startReading();
+    applyReaderTheme('paper');
+    clearSession();
+    startReading();
+    expect(takeReaderThemeSetting()).toBe('dark');
+    expect(rendered()).toEqual(composedFor('reader'));
+  });
+
+  it('changes nothing outside a take', () => {
+    expect(applyReaderTheme('paper')).toBe('dark');
+    expect(get(session).stageEnvelope).toBeNull();
+  });
+
+  /*
+   * The window moves before the geometry recomposes, and a switch to the
+   * prompter moves it onto the glass — so a paper reading window is put on
+   * the dark field FIRST, in place, and the switch landing lifts that.
+   */
+  it('goes dark in place ahead of a switch to the prompter, without re-wrapping', () => {
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+
+    suspendReaderPaper(true);
+
+    const held = rendered();
+    expect(held.themeId).toBe(STAGE_DARK_THEME_ID);
+    expect(held.background).toBe('#000000');
+    // Still the reading window's layout: nothing the line map depends on moved.
+    expect(held.readingContext).toBe('reader');
+    expect(held.fontSizePx).toBe(onPaper.fontSizePx);
+    expect(held.lineHeight).toBe(onPaper.lineHeight);
+    expect(held.optics).toEqual(onPaper.optics);
+    // The take still wants paper; this is only the switch.
+    expect(takeReaderThemeSetting()).toBe('paper');
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+
+    // Lifted by the switch landing: back in a reading window, paper again.
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
+  });
+
+  it('stays dark after a switch that failed, until somebody picks Paper again', () => {
+    /*
+     * A failed switch may have put the window on the glass before the part
+     * that failed, and nothing in control can tell — so the hold is not
+     * lifted by failure. A deliberate choice at the window is what ends it.
+     */
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+    suspendReaderPaper(true);
+    // No `adoptPresentationMode`: the switch threw.
+    expect(rendered().themeId).toBe(STAGE_DARK_THEME_ID);
+    applyReaderTheme('paper');
+    expect(rendered()).toEqual(onPaper);
+  });
+
+  it('gets its paper back when the switch lands on the mode it was already in', () => {
+    startReading();
+    applyReaderTheme('paper');
+    const onPaper = rendered();
+    suspendReaderPaper(true);
+    adoptPresentationMode('reader', DESK);
+    expect(rendered()).toEqual(onPaper);
+  });
+
+  it('does not carry a held switch into the next take', () => {
+    startReading();
+    applyReaderTheme('paper');
+    suspendReaderPaper(true);
+    clearSession();
+    startReading();
+    applyReaderTheme('paper');
+    expect(rendered().themeId).toBe(READER_PAPER_THEME_ID);
   });
 });

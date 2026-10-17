@@ -64,6 +64,12 @@
   Done saving them for every reading window. There is no reading line here,
   because a window has no lens to align it to, and no percentage width: the
   measure a reader feels is characters, and only the stage can count them.
+
+  A reading window also chooses its FIELD — Dark or Paper — which a prompter
+  never does (the prompter's black is the point of `stage.css`). On paper the
+  panel is a sheet of warm paper rather than dark glass: it takes the
+  workspace palette by carrying `data-theme="workspace"`, so every control in
+  it is the light one, and a dark slab is not dropped onto a light page.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -80,7 +86,7 @@
     type ReaderLineWidth,
     type StageAppearance,
   } from '../lib/stage-appearance';
-  import type { ReaderPreferencePatch } from '../services/settings-types';
+  import type { ReaderPreferencePatch, ReaderTheme } from '../services/settings-types';
   import type { ReadingCueStyle, TextIntensity } from '../../shared/contracts';
 
   interface Props {
@@ -99,6 +105,12 @@
      * offering controls with nothing behind them.
      */
     reader?: ReaderAppearance | null;
+    /**
+     * The reading window's field as it is drawn now: Dark or Paper. A reading
+     * window only — the prompter panel offers no such control. Absent means
+     * dark.
+     */
+    readerTheme?: ReaderTheme;
     /**
      * §17.2: a saved rig decided this take's appearance, so none of it is the
      * panel's to set. It reports and points at the wizard instead.
@@ -139,6 +151,8 @@
      * field back to automatic (the Standard line width).
      */
     onreaderchange?: (patch: ReaderPreferencePatch) => void;
+    /** Draw the running reading window in Dark or Paper. Called on every choice. */
+    onreaderthemechange?: (theme: ReaderTheme) => void;
     /** Keep it: save to settings and close. */
     onok: () => void;
     /** Put the take back and close. */
@@ -149,18 +163,22 @@
     surface = 'prompter',
     appearance,
     reader = null,
+    readerTheme = 'dark',
     rigResolved,
     automatic = false,
     maxFontSizePx,
     charactersPerLine = null,
     onchange,
     onreaderchange,
+    onreaderthemechange,
     onok,
     oncancel,
   }: Props = $props();
 
   /** The reading window's panel is up — and has something to drive. */
   const readerView = $derived(surface === 'reader' ? reader : null);
+  /** A reading window drawn on paper: the panel goes light with it. */
+  const onPaper = $derived(readerView !== null && readerTheme === 'paper');
 
   const uid = $props.id();
   let panel: HTMLElement | null = $state(null);
@@ -284,6 +302,7 @@
   tabindex="-1"
   aria-modal="true"
   aria-labelledby="{uid}-title"
+  data-theme={onPaper ? 'workspace' : undefined}
   bind:this={panel}
 >
   <header class="sheet-head">
@@ -371,6 +390,25 @@
         format={(v) => v.toFixed(2)}
         onchange={(value) => onreaderchange?.({ lineHeight: value })}
       />
+
+      <!--
+        The field itself, beside the one control that changes the ink on it.
+        Neither is offered as the healthier choice: rooms, displays and eyes
+        differ, and the reader is the one who can tell.
+      -->
+      <div class="field">
+        <span class="field-label" aria-hidden="true">Appearance</span>
+        <SegmentedControl
+          label="Appearance"
+          size="sm"
+          value={readerTheme}
+          options={[
+            { value: 'dark', label: 'Dark' },
+            { value: 'paper', label: 'Paper' },
+          ]}
+          onchange={(value) => onreaderthemechange?.(value === 'paper' ? 'paper' : 'dark')}
+        />
+      </div>
 
       <div class="field">
         <span class="field-label" aria-hidden="true">Intensity</span>
@@ -604,6 +642,34 @@
     .sheet {
       background: rgba(9, 11, 15, 0.96);
     }
+    .sheet[data-theme='workspace'] {
+      background: rgba(252, 250, 246, 0.98);
+    }
+  }
+
+  /*
+   * On paper: a sheet of warm paper, not a pane of dark glass.
+   *
+   * `data-theme="workspace"` hands everything inside the light palette — the
+   * title, the labels, the sliders and segmented controls. What is left here is
+   * the panel's own surfaces, which were written as white-on-dark literals and
+   * would otherwise draw white hairlines on a light sheet. Translucent for the
+   * reason the glass is (the read behind it stays visible), and lifted a shade
+   * above the paper field so it reads as a sheet laid over the page, with the
+   * stage's quiet chrome border, rather than as a hole in it.
+   */
+  .sheet[data-theme='workspace'] {
+    background: rgba(252, 250, 246, 0.9);
+  }
+  .sheet[data-theme='workspace'] .nudge button {
+    border-color: var(--border-control);
+    background: var(--bg-elevated);
+  }
+  .sheet[data-theme='workspace'] .nudge button:hover:not(:disabled) {
+    background: var(--bg-hover-surface);
+  }
+  .sheet[data-theme='workspace'] .foot {
+    border-top-color: var(--divider);
   }
 
   .sheet-head {
