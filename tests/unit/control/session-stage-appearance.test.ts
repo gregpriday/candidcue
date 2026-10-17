@@ -27,6 +27,7 @@ import {
   applyReaderAppearance,
   applyStageAppearance,
   clearSession,
+  noteStageRenderedFontSize,
   liveMirrorX,
   session,
   startLiveSession,
@@ -78,8 +79,12 @@ function envelopeFor(stageSettings = stageSettingsFromSettings(SETTINGS)): Stage
   });
 }
 
-function start(stageSettings = stageSettingsFromSettings(SETTINGS)): void {
+function start(
+  stageSettings = stageSettingsFromSettings(SETTINGS),
+  presentationMode?: 'prompter' | 'reader',
+): void {
   startLiveSession({
+    ...(presentationMode ? { presentationMode } : {}),
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
     mode: 'manual',
@@ -682,6 +687,33 @@ describe('a reading window, adjusted mid-read', () => {
     expect(reader?.characters).toBeNull();
   });
 
+  /*
+   * Control composes against the whole display with fallback metrics; the
+   * stage re-resolves against the window with the measured face. With a
+   * borrowed scale those can differ by more than a step, and "smaller" must
+   * still make the text smaller — so the readout and the steps start from the
+   * size the stage says it is drawing.
+   */
+  it('steps from the size the stage reports it is drawing', () => {
+    startReading();
+    const composed = rendered().fontSizePx;
+    // Drawn LARGER than composed: a step down from the composed size would
+    // have pinned something larger than the text on the glass.
+    noteStageRenderedFontSize(composed + 8.3);
+    expect(get(session).stageReaderAppearance?.fontSizePx).toBe(Math.round(composed + 8.3));
+    adjustStageFontSize(-2);
+    expect(takeReaderPreferenceSettings().fontSizePx).toBe(Math.round(composed + 8.3) - 2);
+  });
+
+  it('forgets the reported size when the take changes shape', () => {
+    startReading();
+    const composed = rendered().fontSizePx;
+    noteStageRenderedFontSize(composed + 9);
+    adoptPresentationMode('prompter', DESK);
+    adoptPresentationMode('reader', DESK);
+    expect(get(session).stageReaderAppearance?.fontSizePx).toBe(rendered().fontSizePx);
+  });
+
   it('is not claimed for a prompter take', () => {
     start();
     expect(get(session).stageReaderAppearance).toBeNull();
@@ -803,10 +835,16 @@ describe('a reading window, adjusted mid-read', () => {
      * from the flat fields, the reader preference would reach nothing, and the
      * controls that DO reach it are the prompter's.
      */
-    start(stageSettingsFromSettings({
-      ...SETTINGS,
-      stage: { ...SETTINGS.stage, presentationMode: 'reader' },
-    }));
+    start(
+      stageSettingsFromSettings({
+        ...SETTINGS,
+        stage: { ...SETTINGS.stage, presentationMode: 'reader' },
+      }),
+      'reader',
+    );
+    // The premise first: this IS a reading-window take, with no optics.
+    expect(get(session).stagePresentationMode).toBe('reader');
+    expect(rendered().optics).toBeUndefined();
     expect(get(session).stageReaderAppearance).toBeNull();
     expect(get(session).stageRigResolved).toBe(false);
   });

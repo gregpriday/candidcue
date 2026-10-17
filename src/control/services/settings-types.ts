@@ -559,7 +559,17 @@ export function readerOpticalProfile(
   const overrides: OpticalOverrides = { ...profile.overrides };
   if (preference.fontSizePx !== undefined) overrides.fontSizePx = preference.fontSizePx;
   if (preference.lineHeight !== undefined) overrides.lineHeight = preference.lineHeight;
-  if (preference.characters !== undefined) overrides.characters = preference.characters;
+  if (preference.characters !== undefined) {
+    overrides.characters = preference.characters;
+    /*
+     * An explicit column pin outranks a character count in the resolver, so a
+     * stored reading rig that carries one would quietly defeat Narrower and
+     * Wider — the choice saved, the line unmoved. The reader's measure is the
+     * newer and more specific answer, so it takes the column with it. The
+     * stored rig itself is untouched; only this composition drops the pin.
+     */
+    delete overrides.columnCh;
+  }
   return {
     ...profile,
     overrides,

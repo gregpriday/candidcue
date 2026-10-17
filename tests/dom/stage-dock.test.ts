@@ -183,12 +183,16 @@ describe('the menu holds whatever this window can actually offer', () => {
    * The three shapes are not interchangeable. A row that flips a mode where it
    * stands reports `aria-checked`; the row that opens a panel of SLIDERS says
    * `aria-haspopup="dialog"`, because a slider inside `role="menu"` loses its
-   * own left/right arrows to the menu's and stops being operable at all; and
-   * the row that switches between a reading window and the teleprompter is a
+   * own left/right arrows to the menu's and stops being operable at all; and,
+   * in a reading window, the row that switches to the teleprompter is a
    * command, which claims neither.
    */
   it('says which rows are switches, which is a command and which opens another level', async () => {
-    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    const { container } = mount({
+      appearancePanel: PANEL,
+      onpresentationtoggle: vi.fn(),
+      presentationMode: 'reader',
+    });
     await openMenu(container);
 
     const appearance = menuRow(container, 'appearance')!;
@@ -224,21 +228,26 @@ describe('the menu holds whatever this window can actually offer', () => {
   });
 
   /*
-   * "Fill the display" described a different operation. From a reading window
-   * the row can move the window onto the pinned prompter panel, re-resolve its
-   * optics and apply that panel's saved mirroring — so it says which way it
-   * switches, from whichever side of the switch the take is on.
+   * "Fill the display" described a different operation from a reading window:
+   * there the row can move the window onto the pinned prompter panel,
+   * re-resolve its optics and apply that panel's saved mirroring, so it names
+   * the switch. A prompter take keeps the ticked switch it has always had — it
+   * IS filling the display, and a control used at the glass keeps its shape.
    */
-  it('names the switch for the side of it the take is on', async () => {
+  it('names the switch in a reading window and keeps the prompter’s tick', async () => {
     const reading = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'reader' });
     await openMenu(reading.container);
     expect(menuRow(reading.container, 'present')!.textContent?.trim()).toBe('Switch to teleprompter');
+    expect(reading.container.textContent).not.toContain('Fill the display');
     document.body.innerHTML = '';
 
     const prompting = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'prompter' });
     await openMenu(prompting.container);
-    expect(menuRow(prompting.container, 'present')!.textContent?.trim()).toBe('Switch to reading window');
-    expect(prompting.container.textContent).not.toContain('Fill the display');
+    const present = menuRow(prompting.container, 'present')!;
+    expect(present.textContent?.trim()).toBe('Fill the display');
+    expect(present.getAttribute('role')).toBe('menuitemcheckbox');
+    expect(present.getAttribute('aria-checked')).toBe('true');
+    expect(present.querySelector('.menu-mark svg'), 'the tick is drawn').not.toBeNull();
   });
 
   it('calls the appearance panel a prompter’s only on a prompter', async () => {
@@ -261,7 +270,7 @@ describe('the menu holds whatever this window can actually offer', () => {
    */
   it('closes on the switch, gives the trigger the keyboard, and offers the way back', async () => {
     const onpresentationtoggle = vi.fn();
-    const { container, rerender } = mount({ onpresentationtoggle, presentationMode: 'prompter' });
+    const { container, rerender } = mount({ onpresentationtoggle, presentationMode: 'reader' });
     await openMenu(container);
 
     menuRow(container, 'present')!.click();
@@ -270,11 +279,22 @@ describe('the menu holds whatever this window can actually offer', () => {
     expect(container.querySelector('.menu-popover'), 'the menu has gone').toBeNull();
     expect(document.activeElement).toBe(menuTrigger(container));
 
-    await rerender({ onpresentationtoggle, presentationMode: 'reader' } as never);
+    await rerender({ onpresentationtoggle, presentationMode: 'prompter' } as never);
     flushSync();
     await openMenu(container);
-    expect(menuRow(container, 'present')!.textContent?.trim()).toBe('Switch to teleprompter');
+    expect(menuRow(container, 'present')!.textContent?.trim()).toBe('Fill the display');
+    expect(menuRow(container, 'present')!.getAttribute('aria-checked')).toBe('true');
     expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips the prompter’s switch where it stands, as it always has', async () => {
+    const onpresentationtoggle = vi.fn();
+    const { container } = mount({ onpresentationtoggle, presentationMode: 'prompter' });
+    await openMenu(container);
+    menuRow(container, 'present')!.click();
+    flushSync();
+    expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
+    expect(menuRow(container, 'present'), 'the menu stays up').not.toBeNull();
   });
 
   /*

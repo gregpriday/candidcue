@@ -261,7 +261,7 @@
   type MenuRow =
     | { kind: 'panel'; id: 'appearance'; label: string; select: () => void }
     | { kind: 'action'; id: 'present'; label: string; select: () => void }
-    | { kind: 'checkbox'; id: 'follow'; label: string; checked: boolean; select: () => void };
+    | { kind: 'checkbox'; id: 'follow' | 'present'; label: string; checked: boolean; select: () => void };
 
   const reading = $derived(presentationMode === 'reader');
 
@@ -280,25 +280,35 @@
         ]
       : []),
     /*
-     * NAMED FOR WHAT IT DOES, WHICH IS NOT "FILL THE DISPLAY".
+     * IN A READING WINDOW, NAMED FOR WHAT IT DOES — WHICH IS NOT "FILL THE DISPLAY".
      *
-     * It was a checkbox called that, ticked while the take was a prompter. What
-     * it actually does is switch the take's presentation MODE: from a reading
-     * window it can move the window onto the pinned prompter panel, re-resolve
-     * the optics for that panel and apply that panel's saved mirroring. Nobody
-     * reading "fill the display" expects their script to jump to another
-     * monitor and turn back to front. So the row names the switch, from
-     * whichever side of it the take is on — an action, not a state, which is
-     * why it is a plain `menuitem` and no longer reports `aria-checked`.
+     * From a reading window this row switches the take's presentation MODE: it
+     * can move the window onto the pinned prompter panel, re-resolve the optics
+     * for that panel and apply that panel's saved mirroring. Nobody reading
+     * "fill the display" expects their script to jump to another monitor and
+     * turn back to front, so there it names the switch — an action, not a
+     * state, which is why it is a plain `menuitem` with no `aria-checked`.
+     *
+     * A prompter take keeps the ticked "Fill the display" it has always had: it
+     * IS filling the display, unticking it gives the window back, and a control
+     * presenters use at the glass does not change shape under them.
      */
     ...(onpresentationtoggle
       ? [
-          {
-            kind: 'action' as const,
-            id: 'present' as const,
-            label: reading ? 'Switch to teleprompter' : 'Switch to reading window',
-            select: () => onpresentationtoggle?.(),
-          },
+          reading
+            ? {
+                kind: 'action' as const,
+                id: 'present' as const,
+                label: 'Switch to teleprompter',
+                select: () => onpresentationtoggle?.(),
+              }
+            : {
+                kind: 'checkbox' as const,
+                id: 'present' as const,
+                label: 'Fill the display',
+                checked: true,
+                select: () => onpresentationtoggle?.(),
+              },
         ]
       : []),
     {

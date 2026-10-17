@@ -655,6 +655,17 @@ let takeTeleprompter: TeleprompterSettings | null = null;
  */
 let takeReaderPreference: ReaderPreferencePatch | null = null;
 /**
+ * The body size the reading window is actually drawn at, as the stage last
+ * reported it, or null before it has said.
+ *
+ * Control composes a reading window against the whole display with fallback
+ * metrics; the stage re-resolves against the window with the measured face.
+ * With a borrowed physical scale those two can differ by more than a size step,
+ * so the reader's readout and its larger/smaller steps start from THIS — the
+ * size on the glass — or "smaller" could pin a size larger than the text.
+ */
+let stageRenderedFontSizePx: number | null = null;
+/**
  * The presentation mode THIS take is running, which is not always the saved one.
  *
  * Held per-take for exactly the reason `takeTeleprompter` is: the mid-take
@@ -974,6 +985,7 @@ export function startLiveSession(input: StartSessionInput): string {
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
   takeReaderPreference = null;
+  stageRenderedFontSizePx = null;
   // The panel's own mirroring until somebody flips it — see `takeMirror`.
   takeMirror = null;
   // The take adopts the saved mode at its opening and owns it from then on.
@@ -3627,6 +3639,9 @@ export function adoptPresentationMode(
   if (takePresentationMode === mode && !movedPanel) return mode;
   takePresentationMode = mode;
   stageDisplay = nextDisplay;
+  // The stage's last report described the other shape; the new one reports its
+  // own size once it has laid out, and until then the composed size is honest.
+  stageRenderedFontSizePx = null;
   // A flip was made at the glass the take WAS on. The panel it has landed on
   // has its own answer, and carrying the flip across is #206 mid-take.
   if (movedPanel) takeMirror = null;
@@ -3687,7 +3702,7 @@ export function adjustStageFontSize(deltaPx: number): number {
    * would move the prompter's fallback and nothing in the window.
    */
   if (isReaderPreferenceStage(stageSettings)) {
-    const next = stepReaderFontSize(stageSettings!.fontSizePx, deltaPx);
+    const next = stepReaderFontSize(readerRenderedFontSizePx(), deltaPx);
     return applyReaderAppearance({ fontSizePx: next })?.fontSizePx ?? next;
   }
   const current = get(state).stageAppearance.fontSizePx;
@@ -3709,6 +3724,28 @@ export function takeReaderPreferenceSettings(): ReaderPreference {
 }
 
 /**
+ * The size a reading window's text is drawn at: the stage's own report when it
+ * has made one, else the composed size. Whole pixels, because that is the step
+ * the reader preference stores.
+ */
+function readerRenderedFontSizePx(): number {
+  const composed = stageSettings?.fontSizePx ?? 0;
+  return stageRenderedFontSizePx !== null ? Math.round(stageRenderedFontSizePx) : composed;
+}
+
+/**
+ * Record the body size the stage reports it is drawing, and refresh the
+ * reading window's readout when that moved what it should say.
+ */
+export function noteStageRenderedFontSize(px: number | null | undefined): void {
+  const next = typeof px === 'number' && Number.isFinite(px) && px > 0 ? px : null;
+  if (next === stageRenderedFontSizePx) return;
+  stageRenderedFontSizePx = next;
+  if (!get(state).active || !stageSettings || !isReaderPreferenceStage(stageSettings)) return;
+  state.update((s) => ({ ...s, stageReaderAppearance: liveReaderAppearance() }));
+}
+
+/**
  * What a reading window is showing now, for its sheet — or null when this take
  * is not one whose text runs through the reader preference.
  *
@@ -3720,7 +3757,7 @@ export function takeReaderPreferenceSettings(): ReaderPreference {
 function liveReaderAppearance(): ReaderAppearance | null {
   if (!stageSettings || !isReaderPreferenceStage(stageSettings)) return null;
   return {
-    fontSizePx: stageSettings.fontSizePx,
+    fontSizePx: readerRenderedFontSizePx(),
     lineHeight: stageSettings.lineHeight,
     characters: takeReaderPreferenceSettings().characters ?? null,
     textIntensity: stageSettings.textIntensity ?? 'standard',
@@ -4043,6 +4080,7 @@ function stopInternals(): void {
    */
   takeTeleprompter = null;
   takeReaderPreference = null;
+  stageRenderedFontSizePx = null;
   takeMirror = null;
   takePresentationMode = null;
   stageDisplay = null;

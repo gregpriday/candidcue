@@ -52,6 +52,7 @@ import { onShortcut } from '../lib/shortcuts';
     adoptPresentationMode,
     anchorManualScroll,
     applyReaderAppearance,
+    noteStageRenderedFontSize,
     applyStageAppearance,
     autoScrollLive,
     awaitPendingPersistence,
@@ -1736,8 +1737,11 @@ import { onShortcut } from '../lib/shortcuts';
          * them gone.
          */
         onappearanceclose: revertAppearance,
-        onmeasurement: (measurement) =>
-          (stageCharactersPerLine = measurement.charactersPerLine ?? null),
+        onmeasurement: (measurement) => {
+          stageCharactersPerLine = measurement.charactersPerLine ?? null;
+          // What the window is actually drawn at, for the reader's size controls.
+          noteStageRenderedFontSize(measurement.bodyFontSizePx);
+        },
       }}
     />
   {:else}

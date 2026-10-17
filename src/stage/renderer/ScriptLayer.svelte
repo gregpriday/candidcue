@@ -44,6 +44,16 @@
     linePitchMeasured: boolean;
     /** Median characters per rendered line, or null before anything is measured. */
     charactersPerLine: number | null;
+    /**
+     * The body size the column is actually drawn at.
+     *
+     * A reading window re-resolves its own geometry against the window with the
+     * measured face, so this can differ from the size control composed against
+     * the whole display — and the reader's size controls have to step from what
+     * is on the glass, or "smaller" can make the text larger. Optional because
+     * the separate stage window's handshake predates it.
+     */
+    bodyFontSizePx?: number;
   }
 </script>
 
@@ -1668,6 +1678,7 @@
       linePitchPx: measuredLinePitchPx ?? linePx,
       linePitchMeasured: measuredLinePitchPx !== null,
       charactersPerLine: measuredCharactersPerLine,
+      bodyFontSizePx: effective.fontSizePx,
     };
   }
 

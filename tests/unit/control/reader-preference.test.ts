@@ -46,6 +46,7 @@ import {
   stepReaderFontSize,
 } from '../../../src/control/lib/stage-appearance';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
+import { AUTOMATIC_RIG_NAME } from '../../../src/shared/optical-discovery';
 import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 
 const FINGERPRINT = 'panel-1';
@@ -170,6 +171,28 @@ describe('storing the reader preference', () => {
       profiles: { [READER_PREFERENCE_KEY]: carrier },
     };
     expect(readerPreferenceFrom(optical)).toEqual({ fontSizePx: 20, lineHeight: 1.8 });
+  });
+
+  it('lets a chosen measure win over a stored reading rig’s column pin', () => {
+    // The resolver ranks an explicit `columnCh` above a character count, so a
+    // stored rig carrying one would otherwise make Narrower and Wider inert.
+    const storedRig = {
+      ...defaultOpticalProfile(),
+      rigName: READER_RIG_NAME,
+      lensPlacement: 'none' as const,
+      overrides: { columnCh: 30, fontSizePx: 40 },
+    };
+    const rigged: OpticalSettings = {
+      ...empty(),
+      profiles: { [opticalRigKey(FINGERPRINT, READER_RIG_NAME)]: storedRig },
+    };
+    expect(readerOpticalProfile(rigged, FINGERPRINT).overrides.columnCh).toBe(30);
+    const wider = withReaderPreference(rigged, { characters: 75 });
+    const composed = readerOpticalProfile(wider, FINGERPRINT);
+    expect(composed.overrides.characters).toBe(75);
+    expect(composed.overrides.columnCh).toBeUndefined();
+    // Only the composition drops it: the stored rig is untouched.
+    expect(wider.profiles[opticalRigKey(FINGERPRINT, READER_RIG_NAME)]).toEqual(storedRig);
   });
 
   it('drops a choice that is not one of the offered values', () => {
@@ -373,6 +396,36 @@ describe('what a reading window is sent', () => {
         stageSettingsFromSettings(settingsWith(optical, 'prompter'), DISPLAY),
       );
     }
+  });
+
+  /*
+   * The guard above runs on a display that reports no millimetres, so its
+   * empty-optical case is the uncalibrated prompter, not the automatic one. A
+   * panel that reports its own size is what builds the automatic profile, and
+   * that is the prompter most people actually run — so it gets its own guard,
+   * with the fixture's premise asserted before the behaviour is.
+   */
+  it('leaves an automatically sized prompter take exactly as it was', () => {
+    const measured: DisplayDescriptor = {
+      ...DISPLAY,
+      name: 'Studio Display',
+      physicalSizeMm: { width: 597, height: 336 },
+      physicalSize: { width: 5120, height: 2880 },
+      logicalSize: { width: 2560, height: 1440 },
+    };
+    const before = stageSettingsFromSettings(settingsWith(empty(), 'prompter'), measured);
+    expect(before.opticalProfile?.rigName, 'the fixture must build the automatic profile').toBe(
+      AUTOMATIC_RIG_NAME,
+    );
+    expect(before.readingContext).toBeUndefined();
+    const preferred = withReaderPreference(empty(), {
+      fontSizePx: 40,
+      lineHeight: 1.6,
+      characters: 55,
+      intensity: 'soft',
+      readingCue: 'none',
+    });
+    expect(stageSettingsFromSettings(settingsWith(preferred, 'prompter'), measured)).toEqual(before);
   });
 });
 
