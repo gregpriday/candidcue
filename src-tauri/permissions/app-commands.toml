@@ -131,8 +131,8 @@ commands.allow = [
   # NOT_IMPLEMENTED, which left an updater's ACL surface pre-approved.
   "start_session",
   "end_session",
-  "append_session_transcript",
   "list_sessions",
-  "record_session_take",
-  "list_session_takes",
+  # No "append_session_transcript" / "record_session_take" /
+  # "list_session_takes": take history and retained transcripts were removed
+  # with their storage (#217).
 ]

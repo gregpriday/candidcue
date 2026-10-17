@@ -1021,9 +1021,9 @@ pub async fn permanently_delete_script(
             .execute(&mut *tx)
             .await?;
         // Sessions RESTRICT deletion of their script, so a script that was
-        // ever presented could not be deleted until they go. Takes and
-        // transcript items cascade from the session rows. This is inside the
-        // transaction so a failed delete keeps the history with the script.
+        // ever presented could not be deleted until they go. This is inside
+        // the transaction so a failed delete keeps the history with the
+        // script.
         sqlx::query("DELETE FROM sessions WHERE script_id = ?")
             .bind(script_id.as_str())
             .execute(&mut *tx)

@@ -257,7 +257,6 @@ beforeEach(() => {
   calls.startSessionRecord.mockResolvedValue({
     id: 'session-1',
     sessionGeneration: 9,
-    transcriptRetained: false,
   });
   calls.endSessionRecord.mockResolvedValue(null);
   calls.navigate.mockResolvedValue(true);

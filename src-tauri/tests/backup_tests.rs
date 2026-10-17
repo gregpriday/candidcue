@@ -1309,7 +1309,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
         .fetch_all(&pool)
         .await
         .expect("migrations");
-    assert_eq!(applied, vec![1, 2]);
+    assert_eq!(applied, vec![1, 2, 3]);
     // The snapshot taken first is of the database as the baseline left it.
     let snapshot = fs::read_dir(dir.path().join("backups"))
         .expect("a pending migration takes a backup first")
@@ -1367,6 +1367,331 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
     assert_eq!(after.script_revision, before.script_revision, "a rebuild is not an edit");
     assert_eq!(after.updated_at, before.updated_at);
     assert_eq!(fs::read_to_string(dir.path().join(&rel_path)).expect("read"), source);
+}
+
+/* ------------------------------------ retired take and transcript storage */
+
+/// Words a presenter allowed a pre-#217 build to keep. Distinctive enough that
+/// finding them in the raw bytes of a file cannot be a coincidence.
+const RETAINED_WORDS: &str = "retained-words-7f3a91c2 thank you all for coming";
+/// Words the old retention sweep had already DELETED before the upgrade —
+/// gone from every query, still sitting in a free page.
+const SWEPT_WORDS: &str = "swept-words-4be06d18 we will take questions at the end";
+const OLD_SESSION: &str = "5d2c1a40-8b6e-4f1d-9a37-c0ffee000217";
+const OLD_SCRIPT: &str = "0f6c6a52-7a51-4f43-9b4a-2b8cbb4b2c1e";
+
+/// A database exactly as a build before #217 left it: the real `0001` and
+/// `0002` applied by sqlx with their own checksums, a presented script, a
+/// session that kept its transcript, a take, and a settings document that
+/// still carries `saveTranscript`.
+async fn a_version_two_database_with_retained_transcripts(root: &Path) {
+    let migrations = root.join("v2-migrations");
+    fs::create_dir_all(&migrations).expect("migrations dir");
+    fs::write(
+        migrations.join("0001_initial.sql"),
+        include_str!("../migrations/0001_initial.sql"),
+    )
+    .expect("migration 1");
+    fs::write(
+        migrations.join("0002_search_full_source.sql"),
+        include_str!("../migrations/0002_search_full_source.sql"),
+    )
+    .expect("migration 2");
+
+    let source = "# Keynote\n\nThank you all for coming.\n";
+    let rel_path = format!("scripts/{OLD_SCRIPT}/script.md");
+    fs::create_dir_all(root.join(format!("scripts/{OLD_SCRIPT}"))).expect("script dir");
+    fs::write(root.join(&rel_path), source).expect("canonical file");
+
+    // One connection, so the pragma below governs every write that follows.
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(root.join("candidcue.sqlite3"))
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open");
+    sqlx::migrate::Migrator::new(migrations.as_path())
+        .await
+        .expect("v2 migrator")
+        .run(&pool)
+        .await
+        .expect("apply 0001 + 0002");
+    // What every pre-#217 build ran with, stated rather than assumed: a delete
+    // that leaves its bytes behind.
+    sqlx::query("PRAGMA secure_delete = OFF").execute(&pool).await.expect("secure_delete");
+
+    let statements = [
+        format!(
+            "INSERT INTO scripts
+                (id, title, canonical_rel_path, source_hash, created_at, updated_at)
+             VALUES ('{OLD_SCRIPT}', 'Keynote', '{rel_path}', '{}',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            candidcue_lib::util::sha256_hex(source.as_bytes())
+        ),
+        "INSERT INTO settings (key, value_json, revision, updated_at)
+         VALUES ('app', '{\"schemaVersion\":1,\"general\":{\"wordsPerMinuteEstimate\":155,\"saveTranscript\":\"forever\"}}',
+                 7, '2026-01-01T00:00:00Z')"
+            .to_string(),
+        "INSERT INTO display_profiles (id, name, stage_settings_json, created_at, updated_at)
+         VALUES ('profile-1', 'Elgato', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+            .to_string(),
+        format!(
+            "INSERT INTO sessions
+                (id, script_id, script_source_hash, started_at, ended_at, mode,
+                 end_token_index, command_count, metrics_json, transcript_retained, created_at)
+             VALUES ('{OLD_SESSION}', '{OLD_SCRIPT}', 'abc', '2026-01-01T09:00:00Z',
+                     '2026-01-01T09:04:00Z', 'voice', 412, 3, '{{\"sectionsReached\":4}}', 1,
+                     '2026-01-01T09:00:00Z')"
+        ),
+        format!(
+            "INSERT INTO session_takes (id, session_id, take_pass_id, pass_ordinal, started_at, created_at)
+             VALUES ('take-1', '{OLD_SESSION}', '{OLD_SESSION}:1', 1, '2026-01-01T09:00:00Z',
+                     '2026-01-01T09:00:00Z')"
+        ),
+    ];
+    for statement in &statements {
+        sqlx::query(statement).execute(&pool).await.expect("seed");
+    }
+    // Enough rows that each marker fills pages of its own.
+    for (sequence, words) in (1..=40).map(|n| (n, RETAINED_WORDS)).chain((41..=80).map(|n| (n, SWEPT_WORDS))) {
+        sqlx::query(
+            "INSERT INTO session_transcript_items
+                (id, session_id, commit_sequence, transcript, disposition, created_at)
+             VALUES (?, ?, ?, ?, 'script', '2026-01-01T09:00:00Z')",
+        )
+        .bind(format!("item-{sequence}"))
+        .bind(OLD_SESSION)
+        .bind(sequence)
+        .bind(words.repeat(8))
+        .execute(&pool)
+        .await
+        .expect("seed transcript");
+    }
+    sqlx::query("DELETE FROM session_transcript_items WHERE commit_sequence > 40")
+        .execute(&pool)
+        .await
+        .expect("the old retention sweep");
+    pool.close().await;
+
+    let applied = applied_migrations_at(&root.join("candidcue.sqlite3")).await;
+    assert_eq!(applied, vec![1, 2], "the seed is a version-2 database");
+    let on_disk = fs::read(root.join("candidcue.sqlite3")).expect("seeded file");
+    assert!(contains(&on_disk, RETAINED_WORDS), "the seed must hold the retained words");
+    assert!(
+        contains(&on_disk, SWEPT_WORDS),
+        "and the swept words, in a free page — or the scrub below proves nothing"
+    );
+}
+
+async fn applied_migrations_at(path: &Path) -> Vec<i64> {
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(path).read_only(true),
+    )
+    .await
+    .expect("open read-only");
+    let applied = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+        .fetch_all(&pool)
+        .await
+        .expect("migrations");
+    pool.close().await;
+    applied
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle.as_bytes())
+}
+
+/// The live files, read while the pool is still open — after a close, SQLite's
+/// own last-connection checkpoint would hide a scrub that never truncated the
+/// log.
+fn live_bytes(root: &Path) -> Vec<u8> {
+    let mut bytes = fs::read(root.join("candidcue.sqlite3")).expect("live database");
+    if let Ok(wal) = fs::read(root.join("candidcue.sqlite3-wal")) {
+        bytes.extend(wal);
+    }
+    bytes
+}
+
+/// What #217 promises about a database that went through migration 3: the
+/// storage is gone from the schema AND from the file, and nothing else is.
+async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
+    let live = live_bytes(root);
+    assert!(!contains(&live, RETAINED_WORDS), "retained words must leave the live files");
+    assert!(!contains(&live, SWEPT_WORDS), "and so must words swept before the upgrade");
+    let wal = root.join("candidcue.sqlite3-wal");
+    assert!(
+        fs::metadata(&wal).map(|m| m.len() == 0).unwrap_or(true),
+        "the write-ahead log must be emptied, not merely ignored"
+    );
+    assert!(
+        !root.join("retired-storage-scrub.pending").exists(),
+        "a finished scrub retires its marker"
+    );
+
+    let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+        .fetch_all(pool)
+        .await
+        .expect("migrations");
+    assert_eq!(applied, vec![1, 2, 3]);
+    let leftovers: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+         WHERE name IN ('session_takes', 'session_transcript_items', 'idx_session_takes_session')",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("schema");
+    assert!(leftovers.is_empty(), "retired storage still in the schema: {leftovers:?}");
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('sessions')")
+        .fetch_all(pool)
+        .await
+        .expect("sessions columns");
+    assert!(!columns.iter().any(|c| c == "transcript_retained"), "got {columns:?}");
+
+    // Everything else survives.
+    let sessions = candidcue_lib::sessions::list_sessions(pool, Some(OLD_SCRIPT.into()), 10)
+        .await
+        .expect("sessions");
+    assert_eq!(sessions.len(), 1, "every session row survives");
+    assert_eq!(sessions[0].id, OLD_SESSION);
+    assert_eq!(sessions[0].end_token_index, Some(412));
+    assert_eq!(sessions[0].command_count, 3);
+    let script = repo::get_summary(
+        pool,
+        &candidcue_lib::scripts::ScriptId::parse(OLD_SCRIPT).expect("id"),
+    )
+    .await
+    .expect("the script survives");
+    assert_eq!(script.title, "Keynote");
+    let settings = candidcue_lib::settings::get_settings(pool).await.expect("settings");
+    assert_eq!(settings.revision, 7);
+    assert_eq!(settings.value.general.words_per_minute_estimate, 155);
+    let profiles: i64 = sqlx::query_scalar("SELECT count(*) FROM display_profiles")
+        .fetch_one(pool)
+        .await
+        .expect("profiles");
+    assert_eq!(profiles, 1);
+}
+
+/// The one copy that is meant to keep them: the verified pre-migration backup
+/// is the rollback for this upgrade, so it is taken whole and left whole.
+async fn assert_rollback_copy_kept(root: &Path) {
+    let snapshot = fs::read_dir(root.join("backups"))
+        .expect("a pending migration takes a backup first")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with("pre-migration-") && name.ends_with(".sqlite3")
+        })
+        .expect("a pre-migration snapshot");
+    assert_eq!(applied_migrations_at(&snapshot).await, vec![1, 2]);
+    assert!(
+        contains(&fs::read(&snapshot).expect("snapshot"), RETAINED_WORDS),
+        "the rollback copy must still hold what the upgrade removed"
+    );
+}
+
+#[tokio::test]
+async fn upgrading_removes_take_history_and_transcripts_from_the_live_files() {
+    /*
+     * #217. With the retention sweep gone, rows left in place would have kept a
+     * "1 day" transcript forever, where nobody could see or delete it. Dropping
+     * the tables is not enough on its own: SQLite frees a dropped table's pages
+     * without overwriting them, and so did every delete the old sweep made.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    a_version_two_database_with_retained_transcripts(dir.path()).await;
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+
+    assert_retired_storage_removed(dir.path(), &pool).await;
+    assert_rollback_copy_kept(dir.path()).await;
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
+    /*
+     * An export is a database snapshot validated only by its export format, so
+     * one made before #217 restores — and must not bring the transcripts back
+     * to stay. The restored file is applied before anything opens it, then goes
+     * through the same backup, migration and scrub as a live database.
+     */
+    let old = tempfile::tempdir().expect("old install");
+    a_version_two_database_with_retained_transcripts(old.path()).await;
+    let old_pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("candidcue.sqlite3")),
+    )
+    .await
+    .expect("open the old install");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&old_pool, &DataPaths::new(old.path().to_path_buf()), dest.path())
+        .await
+        .expect("export from the old install");
+    old_pool.close().await;
+    assert!(export.complete);
+    let exported_database = Path::new(&export.path).join("candidcue.sqlite3");
+    assert_eq!(applied_migrations_at(&exported_database).await, vec![1, 2]);
+
+    let h = harness().await;
+    backup::restore_all_data(&h.paths, Path::new(&export.path))
+        .await
+        .expect("an old export still restores");
+    h.pool.close().await;
+
+    let pool = candidcue_lib::database::init(h.dir.path())
+        .await
+        .expect("the next launch applies the restore and upgrades it");
+
+    assert_retired_storage_removed(h.dir.path(), &pool).await;
+    assert_rollback_copy_kept(h.dir.path()).await;
+    pool.close().await;
+    assert!(
+        contains(&fs::read(&exported_database).expect("export"), RETAINED_WORDS),
+        "the export itself is the user's file, and is left exactly as it was"
+    );
+}
+
+#[tokio::test]
+async fn an_interrupted_scrub_is_finished_on_the_next_launch() {
+    /*
+     * Migration 3 commits on its own and the scrub runs after it, so a crash or
+     * a failed VACUUM in between leaves a database with nothing pending. The
+     * marker written before the migration is what remembers the scrub; the next
+     * launch must finish it, and must not take another backup to do so.
+     */
+    let h = harness().await;
+    assert!(
+        !h.dir.path().join("retired-storage-scrub.pending").exists(),
+        "a fresh database has nothing to scrub"
+    );
+    for statement in [
+        "CREATE TABLE leftover (words TEXT)".to_string(),
+        format!("INSERT INTO leftover VALUES ('{}')", RETAINED_WORDS.repeat(64)),
+        "DROP TABLE leftover".to_string(),
+    ] {
+        sqlx::query(&statement).execute(&h.pool).await.expect("leave freed words behind");
+    }
+    h.pool.close().await;
+    assert!(
+        contains(&fs::read(h.dir.path().join("candidcue.sqlite3")).expect("db"), RETAINED_WORDS),
+        "the freed words must be on disk before the retry, or it proves nothing"
+    );
+    // As the interrupted launch left it: migration 3 applied, marker still there.
+    fs::write(h.dir.path().join("retired-storage-scrub.pending"), "3\n").expect("marker");
+
+    let pool = candidcue_lib::database::init(h.dir.path()).await.expect("relaunch");
+
+    assert!(!contains(&live_bytes(h.dir.path()), RETAINED_WORDS));
+    assert!(!h.dir.path().join("retired-storage-scrub.pending").exists());
+    assert!(
+        !h.dir.path().join("backups").exists(),
+        "nothing was pending, so finishing the scrub takes no backup"
+    );
+    pool.close().await;
 }
 
 /* ------------------------------------------------- the recovery-mode guard */
@@ -1485,7 +1810,6 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("reveal_script_folder", "opens Finder"),
         ("resolve_asset_urls", "read-only"),
         ("list_sessions", "read-only"),
-        ("list_session_takes", "read-only"),
         ("list_displays", "read-only"),
         ("current_window_display", "read-only; asks the window manager, not the database"),
         ("identify_displays", "shows overlays; no persistence"),
@@ -2470,8 +2794,8 @@ fn the_database_commits_durably_because_some_of_it_exists_nowhere_else() {
      * WAL + `synchronous = NORMAL` does not fsync on commit: a transaction that
      * returned success can be lost to a power cut. For a script that is
      * survivable — the Markdown file is the authority and the row is rebuilt
-     * from it. For settings, session and take history, and a retained
-     * transcript there is no such copy: "saved" has to mean saved.
+     * from it. For settings and session history there is no such copy:
+     * "saved" has to mean saved.
      *
      * A source assertion, because the alternative is cutting power to a
      * machine. It is worth having anyway: this is one word in one builder, and

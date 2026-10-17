@@ -675,7 +675,6 @@ async fn settings_defaults_patch_and_conflict() {
     let initial = settings::get_settings(&h.pool).await.expect("defaults");
     assert_eq!(initial.revision, 1);
     assert_eq!(initial.value.general.words_per_minute_estimate, 130);
-    assert_eq!(initial.value.general.save_transcript, "off");
     assert_eq!(
         initial.value.audio.transcription_model,
         candidcue_lib::speech::default_model().id
@@ -1186,7 +1185,7 @@ async fn an_import_with_two_marks_stores_one_text() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn session_records_and_transcript_gating() {
+async fn session_records_start_end_and_list() {
     use candidcue_lib::sessions;
 
     let h = harness().await;
@@ -1202,24 +1201,14 @@ async fn session_records_and_transcript_gating() {
     }))
     .unwrap();
 
-    // Retention off → transcript writes refused.
-    let record = sessions::start_session(&h.pool, &input, false).await.unwrap();
-    assert!(!record.transcript_retained);
-    let items: Vec<sessions::TranscriptItemInput> = serde_json::from_value(serde_json::json!([
-        { "commitSequence": 1, "transcript": "hello", "disposition": "script" }
-    ]))
-    .unwrap();
-    let err = sessions::append_transcript_items(&h.pool, &record.id, items.clone())
-        .await
-        .expect_err("gated");
-    assert_eq!(err.code(), "VALIDATION_FAILED");
+    let record = sessions::start_session(&h.pool, &input).await.unwrap();
+    // #217: the retention latch went with retained transcripts, so the record
+    // no longer claims anything about them.
+    let wire = serde_json::to_value(&record).unwrap();
+    assert!(wire.get("transcriptRetained").is_none(), "got {wire}");
 
-    // Retention on → items stored; end_session fills aggregates.
-    let record2 = sessions::start_session(&h.pool, &input, true).await.unwrap();
-    let stored = sessions::append_transcript_items(&h.pool, &record2.id, items)
-        .await
-        .unwrap();
-    assert_eq!(stored, 1);
+    // end_session fills aggregates.
+    let record2 = sessions::start_session(&h.pool, &input).await.unwrap();
     let ended = sessions::end_session(
         &h.pool,
         &record2.id,
@@ -1236,14 +1225,14 @@ async fn session_records_and_transcript_gating() {
         .await
         .unwrap();
     assert_eq!(listed.len(), 2);
+    assert!(listed.iter().any(|session| session.id == record.id));
 }
 
 // ---------------------------------------------------------------------------
 // Permanently deleting a script that has been presented (#216)
 // ---------------------------------------------------------------------------
 
-/// The history one presented take leaves: a session with retained
-/// transcripts, one take and one transcript item. Returns the session id.
+/// The history one presented take leaves: an ended session. Returns its id.
 async fn present_once(h: &Harness, script_id: &str) -> String {
     use candidcue_lib::sessions;
 
@@ -1254,21 +1243,7 @@ async fn present_once(h: &Harness, script_id: &str) -> String {
         "startTokenIndex": 0,
     }))
     .unwrap();
-    let session = sessions::start_session(&h.pool, &input, true).await.unwrap();
-    let take: sessions::SessionTakeInput = serde_json::from_value(serde_json::json!({
-        "takePassId": "pass-1",
-        "passOrdinal": 1,
-        "startedAt": "2026-07-25T09:00:00.000Z",
-    }))
-    .unwrap();
-    sessions::record_take(&h.pool, &session.id, take).await.unwrap();
-    let items: Vec<sessions::TranscriptItemInput> = serde_json::from_value(serde_json::json!([
-        { "commitSequence": 1, "transcript": "hello", "disposition": "script" }
-    ]))
-    .unwrap();
-    sessions::append_transcript_items(&h.pool, &session.id, items)
-        .await
-        .unwrap();
+    let session = sessions::start_session(&h.pool, &input).await.unwrap();
     sessions::end_session(
         &h.pool,
         &session.id,
@@ -1279,22 +1254,13 @@ async fn present_once(h: &Harness, script_id: &str) -> String {
     session.id
 }
 
-/// (session rows, takes, transcript items) for one session id. Counted by
-/// session id rather than through `sessions`, so an orphaned take could not
-/// hide behind its deleted parent.
-async fn session_history(pool: &sqlx::SqlitePool, session_id: &str) -> (i64, i64, i64) {
-    let count = |sql: &'static str| async move {
-        sqlx::query_scalar::<_, i64>(sql)
-            .bind(session_id)
-            .fetch_one(pool)
-            .await
-            .unwrap()
-    };
-    (
-        count("SELECT count(*) FROM sessions WHERE id = ?").await,
-        count("SELECT count(*) FROM session_takes WHERE session_id = ?").await,
-        count("SELECT count(*) FROM session_transcript_items WHERE session_id = ?").await,
-    )
+/// Session rows for one session id.
+async fn session_history(pool: &sqlx::SqlitePool, session_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 /// Make deleting one script's row fail inside the permanent-delete
@@ -1328,18 +1294,18 @@ async fn a_presented_script_deletes_permanently_with_its_history_and_nothing_els
     repo::trash_script(&h.pool, &h.locks, &doomed_id, doomed.script_revision)
         .await
         .expect("trash");
-    // Trash on its own keeps the history: Restore must bring the takes back.
-    assert_eq!(session_history(&h.pool, &doomed_session).await, (1, 1, 1));
+    // Trash on its own keeps the history: Restore must bring the sessions back.
+    assert_eq!(session_history(&h.pool, &doomed_session).await, 1);
 
     repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &doomed_id)
         .await
         .expect("a presented script must delete permanently");
     assert!(repo::get_summary(&h.pool, &doomed_id).await.is_err());
     assert!(!h.paths.script_dir(&doomed_id).exists());
-    assert_eq!(session_history(&h.pool, &doomed_session).await, (0, 0, 0));
+    assert_eq!(session_history(&h.pool, &doomed_session).await, 0);
 
     // "Start where the last take ended" reads the other script's sessions.
-    assert_eq!(session_history(&h.pool, &survivor_session).await, (1, 1, 1));
+    assert_eq!(session_history(&h.pool, &survivor_session).await, 1);
     assert_eq!(
         fs::read_to_string(h.paths.canonical_file(&sid(&survivor.id))).unwrap(),
         "Said again."
@@ -1378,7 +1344,7 @@ async fn a_failed_permanent_delete_keeps_the_history_and_the_folder() {
         ScriptStatus::Trash
     );
     // The session delete ran in the same transaction, so it rolled back too.
-    assert_eq!(session_history(&h.pool, &session).await, (1, 1, 1));
+    assert_eq!(session_history(&h.pool, &session).await, 1);
     assert_eq!(
         fs::read_to_string(h.paths.canonical_file(&doomed_id)).unwrap(),
         "Cannot go."

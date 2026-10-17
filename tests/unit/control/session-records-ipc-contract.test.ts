@@ -17,7 +17,7 @@ vi.mock('../../../src/control/services/ipc', () => ({
   invokeOrMock: async (command: string, payload: unknown) => {
     calls.push({ command, payload });
     return command === 'start_session'
-      ? { id: 'rust-assigned-id', sessionGeneration: 3, transcriptRetained: true }
+      ? { id: 'rust-assigned-id', sessionGeneration: 3 }
       : {};
   },
 }));

@@ -54,13 +54,10 @@ export interface SessionRecord {
    * No `estimatedCostUsd`. It was per-take API spend from the hosted
    * transcription era; the column went with the 1.0 schema baseline.
    * Transcription runs on this machine, so a take costs nothing.
+   *
+   * No `transcriptRetained` either: it said whether the session kept its
+   * transcript, and nothing keeps one any more (#217).
    */
-  /**
-   * False when `general.saveTranscript` is 'off' — fixed at session start.
-   * Mirrored because Rust still sends it; the frontend no longer keeps a
-   * transcript, so nothing here reads it.
-   */
-  transcriptRetained: boolean;
 }
 
 /** Mirror of `sessions::EndSessionSummary`. */
@@ -97,7 +94,6 @@ export async function startSessionRecord(
     retakeCount: 0,
     reconnectCount: 0,
     manualCorrectionCount: 0,
-    transcriptRetained: false,
   }));
 }
 

@@ -199,14 +199,13 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
          * returned success can be lost to a power cut, and the database is
          * still consistent afterwards — just missing it. That is the standard
          * trade and it is the wrong one here, because several things live ONLY
-         * in this file. Settings, session and take history, and a retained
-         * transcript have no canonical copy on disk to rebuild from, unlike a
-         * script, whose Markdown file is the authority. "Saved" has to mean
-         * saved for them.
+         * in this file. Settings and session history have no canonical copy on
+         * disk to rebuild from, unlike a script, whose Markdown file is the
+         * authority. "Saved" has to mean saved for them.
          *
          * The cost is one fsync per commit on a workload of a few writes a
-         * minute: a debounced script save, a transcript append every fifteen
-         * seconds, the odd settings patch. That is not a hot path, and it is
+         * minute: a debounced script save, a session record at each end of a
+         * take, the odd settings patch. That is not a hot path, and it is
          * measured by nothing this application does in a take.
          */
         .synchronous(SqliteSynchronous::Full)
@@ -257,6 +256,8 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
      */
     let migrator = sqlx::migrate!("./migrations");
 
+    let scrub_marker = app_data_dir.join(RETIRED_STORAGE_SCRUB_MARKER);
+    let mut scrub_now = false;
     if pre_existing {
         let pending = pending_migrations(&pool, &migrator).await?;
         if pending.is_empty() {
@@ -272,11 +273,92 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
                 .map_err(|err| backup_required_error(&err))?;
             tracing::info!(path = %backup.display(), "pre-migration backup verified");
         }
+        /*
+         * Written down BEFORE the migration that frees the pages, because the
+         * migration commits on its own and the scrub cannot share its
+         * transaction. A crash or a failed VACUUM in between would otherwise
+         * leave migration 3 applied — so never pending again — with the words
+         * still in the free pages, and nothing anywhere remembering that.
+         */
+        if pending.contains(&RETIRED_STORAGE_MIGRATION) {
+            scrub_now = true;
+            if let Err(err) = crate::util::atomic_write(&scrub_marker, b"3\n") {
+                tracing::warn!(error = %err, "could not record the storage scrub; it runs now, without a retry");
+            }
+        }
     }
 
     migrator.run(&pool).await?;
 
+    if scrub_now || scrub_marker.exists() {
+        scrub_retired_storage(&pool, &scrub_marker).await;
+    }
+
     Ok(pool)
+}
+
+/// The migration that dropped take history and retained transcripts (#217).
+const RETIRED_STORAGE_MIGRATION: i64 = 3;
+
+/// Present while the live database may still hold the words of that storage.
+const RETIRED_STORAGE_SCRUB_MARKER: &str = "retired-storage-scrub.pending";
+
+/// Overwrite what migration 3 freed, so the words leave the file and not only
+/// the schema.
+///
+/// `DROP TABLE` moves a table's pages to the freelist and leaves their bytes
+/// where they were, and so did every row the old retention sweep deleted. In
+/// WAL mode the same bytes can also sit in old log frames. `VACUUM` rebuilds the
+/// file from live rows only, and a TRUNCATE checkpoint copies that back and
+/// empties the log. Neither can run inside sqlx's per-migration transaction,
+/// which is why this is here rather than in the migration.
+///
+/// The verified pre-migration backup is deliberately NOT scrubbed: it is the
+/// rollback copy, and it rotates out with the next five migrations.
+///
+/// ## Why a failure only warns
+///
+/// By the time this runs the rows are already gone — the migration committed —
+/// and nothing can read what is left in the free pages. Refusing to start over
+/// it would put somebody in recovery mode, whose only remedy quarantines the
+/// whole database (words included), for something a retry fixes. So the marker
+/// stays, and the next launch scrubs again.
+async fn scrub_retired_storage(pool: &SqlitePool, marker: &Path) {
+    match vacuum_and_truncate_wal(pool).await {
+        Ok(()) => {
+            tracing::info!("retired take and transcript storage scrubbed from the live database");
+            if let Err(err) = std::fs::remove_file(marker) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    // Harmless: the next launch scrubs a clean file again.
+                    tracing::warn!(error = %err, "storage scrubbed, but its marker was not removed");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "retired storage not scrubbed yet; retrying at the next launch");
+        }
+    }
+}
+
+async fn vacuum_and_truncate_wal(pool: &SqlitePool) -> Result<(), AppError> {
+    // One connection for both: nothing else is using the pool yet, and the
+    // checkpoint has to see the log VACUUM just wrote.
+    let mut conn = pool.acquire().await?;
+    sqlx::query("VACUUM").execute(&mut *conn).await?;
+    /*
+     * A blocked checkpoint is not an error to SQLite: the statement succeeds
+     * and says so in its first column. Treated as success, it would leave the
+     * old frames in the log and retire the marker that would have retried.
+     */
+    let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&mut *conn)
+        .await?;
+    if busy != 0 {
+        return Err(AppError::Internal(
+            "the write-ahead log could not be checkpointed".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Move a pre-1.0-baseline database aside so the baseline can be applied

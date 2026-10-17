@@ -23,7 +23,7 @@
 
 use candidcue_lib::coordinator::AppCoordinator;
 use candidcue_lib::scripts::{repo, CreateScriptInput, DataPaths, ScriptId, ScriptLocks};
-use candidcue_lib::sessions::{self, EndSessionSummary, StartSessionInput, TranscriptItemInput};
+use candidcue_lib::sessions::{self, EndSessionSummary, StartSessionInput};
 use candidcue_lib::windows::{self, STAGE_LABEL};
 use std::sync::mpsc;
 use tauri::{Listener, Manager};
@@ -109,7 +109,7 @@ async fn start_session_returns_the_coordinator_generation_it_just_assigned() {
     );
 
     let input = start_input(&f, &script_id);
-    let mut record = sessions::start_session(&h.pool, &input, false)
+    let mut record = sessions::start_session(&h.pool, &input)
         .await
         .expect("session row");
     record.session_generation = coordinator.begin_session(
@@ -127,7 +127,7 @@ async fn start_session_returns_the_coordinator_generation_it_just_assigned() {
 
     // A second take: the generation advances, and a control that kept using the
     // first one would be publishing under a stale generation.
-    let second = sessions::start_session(&h.pool, &input, false)
+    let second = sessions::start_session(&h.pool, &input)
         .await
         .expect("second session row");
     let second_generation =
@@ -203,127 +203,6 @@ fn the_hydration_envelope_reaches_the_stage_under_the_live_generation() {
     );
 }
 
-
-// ---------------------------------------------------------------------------
-// Invariant 5 — transcript retention follows the setting, both ways.
-// ---------------------------------------------------------------------------
-
-/// §36.2: retention is decided ONCE, at session start, from
-/// `general.saveTranscript`, and stamped on the row. A session started with it
-/// off must refuse transcript text afterwards — the guarantee is not "the
-/// frontend will not ask", it is "asking does not work".
-#[tokio::test]
-async fn transcripts_are_persisted_only_when_retention_was_enabled_at_start() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let input = start_input(&f, &script_id);
-    let items: Vec<TranscriptItemInput> =
-        serde_json::from_value(f["append_session_transcript"]["items"].clone())
-            .expect("transcript items deserialize");
-
-    // Retention ON.
-    let kept = sessions::start_session(&h.pool, &input, true)
-        .await
-        .expect("session with retention");
-    assert!(kept.transcript_retained);
-    let written = sessions::append_transcript_items(&h.pool, &kept.id, items.clone())
-        .await
-        .expect("items accepted");
-    assert_eq!(written as usize, items.len());
-    let stored: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM session_transcript_items WHERE session_id = ?")
-            .bind(&kept.id)
-            .fetch_one(&h.pool)
-            .await
-            .unwrap();
-    assert_eq!(stored, items.len() as i64);
-
-    // Retention OFF.
-    let quiet = sessions::start_session(&h.pool, &input, false)
-        .await
-        .expect("session without retention");
-    assert!(!quiet.transcript_retained);
-    let refused = sessions::append_transcript_items(&h.pool, &quiet.id, items.clone()).await;
-    assert!(
-        refused.is_err(),
-        "a session started with retention off must refuse transcript text"
-    );
-    let stored_off: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM session_transcript_items WHERE session_id = ?")
-            .bind(&quiet.id)
-            .fetch_one(&h.pool)
-            .await
-            .unwrap();
-    assert_eq!(stored_off, 0, "not one word may reach disk");
-}
-
-/// §36.2, the other direction: turning retention OFF has to reach a take that
-/// is already running.
-///
-/// The latch that makes retention un-enableable mid-session made it
-/// un-DISABLEABLE too. `append_transcript_items` consults the session row, not
-/// the setting, so switching to off deleted the rows collected so far and then
-/// went straight on collecting more — Settings is deliberately usable during a
-/// take, so this is a sequence a presenter can actually perform. "Off" that
-/// only empties the table and lets it refill is not off.
-#[tokio::test]
-async fn turning_retention_off_stops_a_take_that_is_already_retaining() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let input = start_input(&f, &script_id);
-    let items: Vec<TranscriptItemInput> =
-        serde_json::from_value(f["append_session_transcript"]["items"].clone())
-            .expect("transcript items deserialize");
-
-    let live = sessions::start_session(&h.pool, &input, true)
-        .await
-        .expect("session with retention");
-    sessions::append_transcript_items(&h.pool, &live.id, items.clone())
-        .await
-        .expect("items accepted while retention is on");
-
-    sessions::enforce_transcript_retention(&h.pool, "off")
-        .await
-        .expect("retention enforcement");
-
-    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM session_transcript_items")
-        .fetch_one(&h.pool)
-        .await
-        .unwrap();
-    assert_eq!(remaining, 0, "what was already written must go");
-
-    let refused = sessions::append_transcript_items(&h.pool, &live.id, items.clone()).await;
-    assert!(
-        refused.is_err(),
-        "and the running take must stop being allowed to write more"
-    );
-}
-
-/// Consent fails CLOSED on a value this build does not recognise.
-///
-/// `!= "off"` read an unknown window as permission, which is the wrong
-/// direction for the one setting that decides whether speech reaches disk: a
-/// document written by a later build and opened by this one would retain
-/// transcripts while the frontend, which projects anything unknown to 'off',
-/// showed the setting as off.
-#[test]
-fn an_unrecognised_retention_window_is_not_consent() {
-    for allowed in ["1d", "7d", "30d", "forever"] {
-        assert!(
-            sessions::retention_permits_collection(allowed),
-            "{allowed} is a real window and must permit collection"
-        );
-    }
-    for refused in ["off", "90d", "", "FOREVER", "true", "1"] {
-        assert!(
-            !sessions::retention_permits_collection(refused),
-            "{refused:?} must not be read as consent"
-        );
-    }
-}
-
 /// §21.4: the pre-session snapshot is taken by Rust inside `start_session`
 /// precisely so a frontend cannot skip it. Now that the frontend calls the
 /// command, this is the assertion that the snapshot is actually produced.
@@ -356,7 +235,7 @@ async fn ending_a_session_closes_the_row_and_records_the_summary() {
     let script_id = a_script(&h).await;
     let f = fixture();
     let input = start_input(&f, &script_id);
-    let record = sessions::start_session(&h.pool, &input, false)
+    let record = sessions::start_session(&h.pool, &input)
         .await
         .expect("session row");
 
@@ -389,7 +268,7 @@ async fn startup_closes_sessions_that_were_never_ended() {
     let script_id = a_script(&h).await;
     let f = fixture();
     let input = start_input(&f, &script_id);
-    let crashed = sessions::start_session(&h.pool, &input, false)
+    let crashed = sessions::start_session(&h.pool, &input)
         .await
         .expect("session row");
 
@@ -409,185 +288,4 @@ async fn startup_closes_sessions_that_were_never_ended() {
 
     // Idempotent: a clean launch closes nothing.
     assert_eq!(sessions::close_orphaned_sessions(&h.pool).await.unwrap(), 0);
-}
-
-// ---------------------------------------------------------------------------
-// §36.3 take history
-//
-// `sessions` is one row per SESSION with scalar counters. `retake_count` could
-// say four takes happened and nothing about any of them — not when they ran,
-// not where they started or stopped, not which sections they covered, not where
-// the presenter marked a checkpoint. `session_takes` is that detail, and the
-// thing worth pinning is that it is a HISTORY: a second take must never
-// overwrite the first.
-// ---------------------------------------------------------------------------
-
-fn take_input(ordinal: i64, take_pass_id: &str) -> sessions::SessionTakeInput {
-    serde_json::from_value(serde_json::json!({
-        "takePassId": take_pass_id,
-        "passOrdinal": ordinal,
-        "startedAt": "2026-07-25T09:00:00.000Z",
-        "endedAt": "2026-07-25T09:04:00.000Z",
-        "durationMs": 240_000,
-        "startTokenIndex": 0,
-        "endTokenIndex": 412,
-        "sections": ["block-1", "block-2"],
-        "checkpoints": [
-            { "atMs": 12_000, "tokenIndex": 40, "blockId": "block-1", "sentenceId": "s-3", "kind": "take" },
-            { "atMs": 96_000, "tokenIndex": 300, "blockId": "block-2", "sentenceId": "s-19", "kind": "manual" }
-        ]
-    }))
-    .expect("take input deserializes")
-}
-
-#[tokio::test]
-async fn a_take_round_trips_with_its_times_sections_and_checkpoints() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
-        .await
-        .expect("session started");
-
-    let written = sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
-        .await
-        .expect("take recorded");
-    assert_eq!(written.pass_ordinal, 1);
-    assert_eq!(written.take_pass_id, "pass-1");
-
-    let takes = sessions::list_takes(&h.pool, &session.id)
-        .await
-        .expect("takes listed");
-    assert_eq!(takes.len(), 1);
-    let take = &takes[0];
-    assert_eq!(take.duration_ms, Some(240_000));
-    assert_eq!(take.start_token_index, 0);
-    assert_eq!(take.end_token_index, Some(412));
-    assert_eq!(take.sections, vec!["block-1".to_string(), "block-2".to_string()]);
-    assert_eq!(take.checkpoints.len(), 2);
-    assert_eq!(take.checkpoints[0].kind, "take");
-    assert_eq!(take.checkpoints[0].at_ms, 12_000);
-    assert_eq!(take.checkpoints[0].token_index, 40);
-    assert_eq!(take.checkpoints[1].kind, "manual");
-    assert_eq!(take.checkpoints[1].sentence_id.as_deref(), Some("s-19"));
-}
-
-/// The assertion the whole table exists for.
-#[tokio::test]
-async fn a_second_take_does_not_overwrite_the_first() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
-        .await
-        .expect("session started");
-
-    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
-        .await
-        .expect("first take");
-
-    let mut second = take_input(2, "pass-2");
-    second.duration_ms = Some(61_000);
-    second.end_token_index = Some(90);
-    second.sections = vec!["block-1".into()];
-    second.checkpoints.clear();
-    sessions::record_take(&h.pool, &session.id, second)
-        .await
-        .expect("second take");
-
-    let takes = sessions::list_takes(&h.pool, &session.id)
-        .await
-        .expect("takes listed");
-    assert_eq!(takes.len(), 2, "both passes survive");
-    // Ascending by ordinal, and the first take is untouched.
-    assert_eq!(takes[0].pass_ordinal, 1);
-    assert_eq!(takes[0].take_pass_id, "pass-1");
-    assert_eq!(takes[0].duration_ms, Some(240_000));
-    assert_eq!(takes[0].checkpoints.len(), 2);
-    assert_eq!(takes[1].pass_ordinal, 2);
-    assert_eq!(takes[1].duration_ms, Some(61_000));
-    assert!(takes[1].checkpoints.is_empty());
-}
-
-/// A take may be written while it is still open and completed later, so a crash
-/// mid-session costs the tail of the current take rather than the whole history.
-#[tokio::test]
-async fn re_recording_the_same_ordinal_completes_it_rather_than_duplicating() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
-        .await
-        .expect("session started");
-
-    let mut open = take_input(1, "pass-1");
-    open.ended_at = None;
-    open.duration_ms = None;
-    open.end_token_index = None;
-    sessions::record_take(&h.pool, &session.id, open)
-        .await
-        .expect("open take");
-
-    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
-        .await
-        .expect("completed take");
-
-    let takes = sessions::list_takes(&h.pool, &session.id)
-        .await
-        .expect("takes listed");
-    assert_eq!(takes.len(), 1, "one row, not two");
-    assert_eq!(takes[0].ended_at.as_deref(), Some("2026-07-25T09:04:00.000Z"));
-    assert_eq!(takes[0].end_token_index, Some(412));
-}
-
-#[tokio::test]
-async fn take_history_is_refused_for_a_session_that_does_not_exist() {
-    let h = harness().await;
-    let err = sessions::record_take(&h.pool, "11111111-1111-4111-8111-111111111111", take_input(1, "p"))
-        .await
-        .expect_err("no such session");
-    assert!(format!("{err:?}").to_lowercase().contains("session"));
-}
-
-#[tokio::test]
-async fn take_history_rejects_a_checkpoint_kind_it_does_not_know() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
-        .await
-        .expect("session started");
-    let mut bad = take_input(1, "pass-1");
-    bad.checkpoints[0].kind = "whatever".into();
-    assert!(sessions::record_take(&h.pool, &session.id, bad).await.is_err());
-}
-
-/// Deleting a session takes its takes with it — the history must not outlive
-/// the thing it is a history of.
-#[tokio::test]
-async fn takes_are_removed_with_their_session() {
-    let h = harness().await;
-    let script_id = a_script(&h).await;
-    let f = fixture();
-    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
-        .await
-        .expect("session started");
-    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
-        .await
-        .expect("take recorded");
-
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&h.pool)
-        .await
-        .expect("fk on");
-    sqlx::query("DELETE FROM sessions WHERE id = ?")
-        .bind(&session.id)
-        .execute(&h.pool)
-        .await
-        .expect("session deleted");
-
-    let takes = sessions::list_takes(&h.pool, &session.id)
-        .await
-        .expect("takes listed");
-    assert!(takes.is_empty());
 }

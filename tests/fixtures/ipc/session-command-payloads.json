@@ -46,28 +46,6 @@
     }
   },
 
-  "append_session_transcript": {
-    "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
-    "items": [
-      {
-        "commitSequence": 1,
-        "providerItemId": "item_a1",
-        "audioStartMs": 0,
-        "audioEndMs": 2400,
-        "transcript": "Good morning, everyone.",
-        "disposition": "script"
-      },
-      {
-        "commitSequence": 2,
-        "providerItemId": "item_a2",
-        "audioStartMs": 2400,
-        "audioEndMs": 4100,
-        "transcript": "CandidCue, next section.",
-        "disposition": "command"
-      }
-    ]
-  },
-
   "list_sessions": {
     "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
     "limit": 100

@@ -197,7 +197,6 @@ function shimBody(config: ShimConfig): void {
         revisionIntervalMinutes: 10,
         wordsPerMinuteEstimate: 150,
         analyticsEnabled: false,
-        saveTranscript: 'off',
       },
       editor: {},
       ...(config.following ? { following: config.following } : {}),
@@ -297,7 +296,6 @@ function shimBody(config: ShimConfig): void {
     retakeCount: number;
     reconnectCount: number;
     manualCorrectionCount: number;
-    transcriptRetained: boolean;
   }
   const sessions = new Map<string, SessionRow>();
 
@@ -968,9 +966,6 @@ function shimBody(config: ShimConfig): void {
           retakeCount: 0,
           reconnectCount: 0,
           manualCorrectionCount: 0,
-          // `general.saveTranscript` is 'off' in this settings document, and
-          // Rust fixes retention at session start — so this stays false.
-          transcriptRetained: false,
         };
         sessions.set(id, row);
         control.lastSession = { id, sessionGeneration: row.sessionGeneration };
@@ -983,10 +978,6 @@ function shimBody(config: ShimConfig): void {
         row.endedAt = nowIso();
         return row;
       }
-
-      case 'append_session_transcript':
-        // Rust REFUSES retention that was not enabled at session start.
-        throw { code: 'INVALID_INPUT', userMessage: 'This session does not retain transcripts.' };
 
       case 'list_revisions':
         return [];

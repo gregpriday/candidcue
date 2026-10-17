@@ -325,9 +325,9 @@ export interface AppSettings {
    * of it — neither was ever read, so both were a stored preference that
    * decided nothing behind a control that implied otherwise. #215 took the last
    * field, `saveTranscript`: takes stopped writing transcripts (#214), so the
-   * retention window had nothing left to keep. Rust still carries
-   * `general.saveTranscript` until #217 and nothing here reads or writes it; a
-   * `privacy` section still sitting in the localStorage overlay is ignored.
+   * retention window had nothing left to keep, and Rust dropped
+   * `general.saveTranscript` with that storage (#217). A `privacy` section
+   * still sitting in the localStorage overlay is ignored.
    *
    * If a privacy setting genuinely ships, it comes back Rust-owned, and must
    * NOT adopt whatever stale value that overlay still holds.

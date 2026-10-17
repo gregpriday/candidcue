@@ -32,11 +32,11 @@ const FORBIDDEN_BINDING =
 /**
  * A name that reads like user content but is not.
  *
- * `script_id` is a UUID, `transcript_retained` is a boolean, `markdown_path`
- * is a path the redactor already handles. Listing them keeps the rule narrow
+ * `script_id` is a UUID and `markdown_path` is a path the redactor already
+ * handles. Listing them keeps the rule narrow
  * enough that nobody is tempted to switch it off.
  */
-const ALLOWED = /\b(script_id|scriptId|markdown_path|markdownPath|transcript_retained|transcriptRetained|markdown_error|has_markdown)\b/;
+const ALLOWED = /\b(script_id|scriptId|markdown_path|markdownPath|markdown_error|has_markdown)\b/;
 
 interface Site {
   file: string;

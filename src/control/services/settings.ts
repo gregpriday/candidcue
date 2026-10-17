@@ -64,10 +64,9 @@ interface RustSettings {
      */
     analyticsEnabled: boolean;
     /*
-     * No `saveTranscript` either. Takes stopped writing transcripts (#214), so
-     * the retention window decides nothing; Rust still carries the field until
-     * #217, and every document on disk has it, but nothing on this side of the
-     * boundary reads or writes it.
+     * No `saveTranscript` either. Takes stopped writing transcripts (#214) and
+     * Rust dropped the field with the storage it governed (#217). Documents
+     * written before that still carry it; serde ignores it there too.
      */
   };
   editor: Record<string, unknown>;
