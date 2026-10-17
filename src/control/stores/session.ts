@@ -3001,7 +3001,7 @@ const LIVE_STAGE_FIELDS: ReadonlyArray<keyof TeleprompterSettings> = [
   'pastDimming',
   'semanticLineBreaks',
   'textIntensity',
-  'stageMode',
+  'diagnosticTake',
   'readingCue',
   // Seeded into the automatic profile by `stageSettingsFromSettings`, exactly
   // as the two above it are, so a change to it is a change to the glass. On a

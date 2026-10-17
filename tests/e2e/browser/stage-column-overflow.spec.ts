@@ -77,6 +77,10 @@ test.beforeEach(async ({ page }) => {
       model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
     },
     promptMode: 'voice',
+    // The code block has to be on the glass as code for its `pre-wrap` run to
+    // be measured, and only Diagnostic Take draws reference blocks in full —
+    // Clean Take, the default since #300, shows it as a DEMO CODE cue.
+    diagnosticTake: true,
   });
   // The Elgato Prompter's own geometry: the panel this was found on.
   await page.setViewportSize({ width: 1024, height: 600 });

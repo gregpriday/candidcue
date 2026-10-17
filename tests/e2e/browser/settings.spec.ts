@@ -455,6 +455,70 @@ test('a changed slider offers its way back to the default', async ({ page }) => 
     .toBe(64);
 });
 
+/*
+ * #300 — Diagnostic Take is a switch somebody can find, off until they turn it
+ * on.
+ *
+ * Every take used to open with the engine's readout and a strip of raw
+ * transcript on the glass, and no control wrote the setting behind it. The two
+ * controls that say "diagnostics" elsewhere do not touch the stage, so this one
+ * is named for the take, and it has to be found by searching for what it shows.
+ */
+function storedDiagnosticTake(page: import('@playwright/test').Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('candidcue.settings-overlay.v1');
+    if (raw === null) return null;
+    const overlay = JSON.parse(raw) as { teleprompter?: Record<string, unknown> };
+    return overlay.teleprompter?.['diagnosticTake'] ?? null;
+  });
+}
+
+test('Diagnostic Take is off on a fresh profile, and its switch turns it on and off', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Teleprompter');
+
+  const diagnostic = page.getByRole('switch', { name: 'Diagnostic Take' });
+  await expect(diagnostic).toHaveAttribute('aria-checked', 'false');
+  // The same switch every other row uses, so it takes the control focus ring.
+  await expect(diagnostic).toHaveAttribute('data-focus', 'control');
+
+  await diagnostic.click();
+  await expect(diagnostic).toHaveAttribute('aria-checked', 'true');
+  // The overlay is the document for this field: no Rust write carries it.
+  await expect.poll(() => storedDiagnosticTake(page)).toBe(true);
+
+  // Read back on a fresh load, not just held by the screen that set it.
+  await page.reload();
+  await page.getByRole('button', { name: 'Teleprompter', exact: true }).click();
+  await expect(diagnostic).toHaveAttribute('aria-checked', 'true');
+
+  await diagnostic.click();
+  await expect(diagnostic).toHaveAttribute('aria-checked', 'false');
+  await expect.poll(() => storedDiagnosticTake(page)).toBe(false);
+});
+
+test('searching for what Diagnostic Take shows finds its row', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('transcript');
+  await gotoSection(page, 'Teleprompter');
+
+  const row = page.locator('.content .toggle-row', {
+    has: page.getByRole('switch', { name: 'Diagnostic Take' }),
+  });
+  await expect(row).toBeVisible();
+  await expect(row).not.toHaveAttribute('data-settings-search-miss');
+  // And the search really narrowed the section rather than matching everything.
+  // `includeHidden`, so the row is found whether or not a miss is hidden.
+  const pointer = page.locator('.content .toggle-row', {
+    has: page.getByRole('switch', { name: 'Hide the pointer on the stage', includeHidden: true }),
+  });
+  await expect(pointer).toHaveAttribute('data-settings-search-miss');
+});
+
 test('a rig with every step answered but no measured scale does not read as done', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: false });

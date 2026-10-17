@@ -413,6 +413,40 @@ describe('Clean Take against Diagnostic Take', () => {
     expect(planeOf(container, '.hold-status'), 'mirrored, so it reads in the glass').toBe('talent');
   });
 
+  it('still says when following is off, or the recogniser is not connected (#300)', async () => {
+    /*
+     * Clean Take is the default now, so everything the presenter can act on has
+     * to read without the instruments. A take paused by hand and a take with no
+     * recogniser behind it both hold the script still, and neither clears by
+     * itself — so both are named in the mirrored chip, in Clean Take.
+     */
+    const container = await mountStage('clean');
+    await settleLayout();
+
+    directive({ kind: 'follow', paused: true });
+    await settle();
+    const chip = container.querySelector('.hold-status');
+    expect(chip?.getAttribute('data-visible'), 'a paused take must say so').toBe('true');
+    expect(chip?.textContent).toContain('Following off');
+
+    directive({ kind: 'follow', paused: false });
+    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
+      stageGeneration: STAGE_GENERATION,
+      reading: 'fault',
+      levels: [0, 0],
+      label: 'Not connected',
+      visible: true,
+      sentAtMs: 1000,
+    });
+    await settle();
+    expect(container.querySelector('.hold-status')?.textContent).toContain('Not connected');
+    expect(planeOf(container, '.hold-status')).toBe('talent');
+
+    // And neither brought the instruments back with it.
+    expect(container.querySelector('.diagnostics')).toBeNull();
+    expect(container.querySelector('.transcript-tap')).toBeNull();
+  });
+
   it('carries only the tail of a long utterance, not everything since the last final', async () => {
     /*
      * The bar answers "is CandidCue hearing me?", and the words that answer it

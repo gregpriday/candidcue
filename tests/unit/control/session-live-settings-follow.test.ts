@@ -190,6 +190,7 @@ let originalFontSizePx: number;
 let originalLineHeight: number;
 let originalPace: number;
 let originalSizeBias: number;
+let originalDiagnosticTake: boolean;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -197,6 +198,7 @@ beforeEach(() => {
   originalLineHeight = get(settings).teleprompter.lineHeight;
   originalPace = get(settings).teleprompter.fixedSpeedWpm;
   originalSizeBias = get(settings).teleprompter.sizeBias;
+  originalDiagnosticTake = get(settings).teleprompter.diagnosticTake;
 });
 
 afterEach(async () => {
@@ -210,6 +212,7 @@ afterEach(async () => {
     lineHeight: originalLineHeight,
     fixedSpeedWpm: originalPace,
     sizeBias: originalSizeBias,
+    diagnosticTake: originalDiagnosticTake,
   });
 });
 
@@ -275,6 +278,21 @@ describe('saved settings follow into the running take', () => {
     await patchSettings('teleprompter', { sizeBias: 0 });
 
     expect(get(session).stageEnvelope).not.toBe(envelope);
+  });
+
+  it('switches the glass into Diagnostic Take and back mid-take (#300)', async () => {
+    // The Settings switch is the only writer, and the presenter reaching for
+    // it is usually doing so because the take in front of them will not
+    // follow — so it has to reach that take, not just the next one.
+    start();
+    teardown = installLiveSettingsFollow();
+    expect(rendered().stageMode).toBe('clean');
+
+    await patchSettings('teleprompter', { diagnosticTake: true });
+    expect(rendered().stageMode).toBe('diagnostic');
+
+    await patchSettings('teleprompter', { diagnosticTake: false });
+    expect(rendered().stageMode).toBe('clean');
   });
 
   it('leaves the glass alone for a commit that changed nothing the stage reads', async () => {

@@ -74,9 +74,11 @@ test('Present mounts the production stage in this webview and never opens anothe
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
   await expect(page.locator('.script-layer')).toBeVisible();
   await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
-  await expect(page.locator('.diagnostics')).toBeVisible();
-  await expect(page.locator('.transcript-tap')).toContainText('listening — no words yet');
   await expect(page.locator('.voice-pill')).toBeAttached({ timeout: 10_000 });
+  // A fresh profile presents in Clean Take (#300): the script and the voice
+  // pill, and none of the engine's instruments.
+  await expect(page.locator('.diagnostics')).toHaveCount(0);
+  await expect(page.locator('.transcript-tap')).toHaveCount(0);
 
   const calls = await page.evaluate(() => window.__E2E__.calls.map((call) => call.command));
   expect(calls).toContain('start_session');
@@ -161,8 +163,49 @@ test('nothing of the take is on screen until the window has finished changing sh
   errors.expectClean();
 });
 
+/*
+ * #300 — Clean Take by default, Diagnostic Take by choice.
+ *
+ * The teleprompter section is saved whole, so every profile that changed any
+ * teleprompter setting under an older build stored the old `stageMode:
+ * 'diagnostic'` default with it. That copy is nobody's choice and must not keep
+ * the instruments on the glass; `diagnosticTake` is the field a choice lives in.
+ */
+async function seedTeleprompterOverlay(
+  page: Page,
+  teleprompter: Record<string, unknown>,
+): Promise<void> {
+  await page.addInitScript((section) => {
+    localStorage.setItem('candidcue.settings-overlay.v1', JSON.stringify({ teleprompter: section }));
+  }, teleprompter);
+}
+
+test('Diagnostic Take, once chosen, draws the readout and the transcript bar', async ({ page }) => {
+  await seedTeleprompterOverlay(page, { diagnosticTake: true });
+  await present(page);
+
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await expect(page.locator('.diagnostics')).toBeVisible();
+  await expect(page.locator('.transcript-tap')).toContainText('listening — no words yet');
+});
+
+test('a profile carrying the old stored default still presents in Clean Take', async ({ page }) => {
+  // Exactly what an older build left behind after a font-size change.
+  await seedTeleprompterOverlay(page, { stageMode: 'diagnostic', fontSizePx: 72 });
+  await present(page);
+
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+  await expect(page.locator('.voice-pill')).toBeAttached({ timeout: 10_000 });
+  await expect(page.locator('.diagnostics')).toHaveCount(0);
+  await expect(page.locator('.transcript-tap')).toHaveCount(0);
+});
+
 test('the one-screen script follows the control alignment position', async ({ page }) => {
   const errors = watchPageErrors(page);
+  // The `token:` line below is the stage's own report of where it is, and only
+  // Diagnostic Take draws it.
+  await seedTeleprompterOverlay(page, { diagnosticTake: true });
   await present(page);
 
   await expect(page.locator('[data-t=\"0\"]')).not.toHaveClass(/past/);

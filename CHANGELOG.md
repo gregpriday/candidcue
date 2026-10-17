@@ -39,6 +39,18 @@ engine decides where in the script you are.
 - **Recognition is probabilistic.** It makes mistakes, and the prompter is
   built to trail you rather than guess ahead when it is unsure.
 
+### On the stage
+
+- **Takes open in Clean Take: just your script.** Pre-release builds opened
+  every take in Diagnostic Take, with engine readouts and a strip of raw
+  transcript on the glass, and nothing turned it off. Profiles carried over
+  from those builds move to Clean Take as well.
+- **Diagnostic Take is a switch in Settings › Teleprompter.** It brings back
+  the readouts and the transcript, and shows tables, code and images in full
+  instead of as one-line cues. Use it to check a rig or a script that will not
+  follow; it applies to a take that is already running. Hold and fault
+  messages show in either mode.
+
 ### Your data
 
 - **Local, and yours.** Scripts are Markdown files on your disk; settings,

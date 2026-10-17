@@ -205,7 +205,8 @@
     {
       id: 'teleprompter',
       label: 'Teleprompter',
-      keywords: 'font size text mirror flip safe area column line height reading band optics rig calibration',
+      keywords:
+        'font size text mirror flip safe area column line height reading band optics rig calibration diagnostic clean take readout transcript debug',
     },
     {
       id: 'following',
@@ -3114,6 +3115,16 @@
             checked={$settings.teleprompter.hidePointer}
             label="Hide the pointer on the stage"
             onchange={(value) => void patchSettings('teleprompter', { hidePointer: value })}
+          />
+          <!-- The only writer of `diagnosticTake` (#300), and it reaches a take
+               that is already running through `installLiveSettingsFollow`.
+               Named for what it changes on the stage, because two other
+               controls already say "diagnostics" and neither touches it. -->
+          <Toggle
+            checked={$settings.teleprompter.diagnosticTake}
+            label="Diagnostic Take"
+            description="Adds the follow engine's readouts and the recogniser's raw transcript to the stage, and shows tables, code, images and diagrams in full instead of as one-line cues. For checking a rig, or a script that will not follow. Hold and fault messages show either way."
+            onchange={(value) => void patchSettings('teleprompter', { diagnosticTake: value })}
           />
         </Section>
       {:else if section === 'following'}

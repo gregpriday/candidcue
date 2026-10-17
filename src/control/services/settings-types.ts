@@ -14,7 +14,6 @@ import {
   type PresentationMode,
   type ReaderFrame,
   type ReadingCueStyle,
-  type StageMode,
   type OpticalProfile,
   type TextIntensity,
 } from '../../shared/contracts';
@@ -257,15 +256,21 @@ export interface AppSettings {
     stageEndBehavior: 'close' | 'blank';
     hidePointer: boolean;
     /**
-     * Clean Take hides the instrumentation; Diagnostic Take shows it.
+     * Diagnostic Take when true, Clean Take when false (#300).
      *
-     * Here rather than nowhere because the stage already READS
-     * `StageSettings.stageMode` — it derives the transcript bar, the waveform
-     * and the alignment readout from it — and until something wrote it the
-     * diagnostic take was unreachable outside the dev preview. A live read with
-     * no writer is the same defect as a writer with no reader.
+     * `stageSettingsFromSettings` turns it into `StageSettings.stageMode`, which
+     * draws the alignment readout and the raw transcript on the glass and
+     * renders reference blocks in full rather than as take cues. Settings ›
+     * Teleprompter is its writer.
+     *
+     * A boolean under a new name rather than the `stageMode` this replaced. The
+     * store saves a whole section at a time, so every profile that ever changed
+     * a teleprompter setting stored the old `'diagnostic'` default alongside it
+     * — a value nobody chose, indistinguishable from one somebody did. Ignoring
+     * that key and starting a fresh one is the only way the new default reaches
+     * those profiles; see `withoutRetiredTeleprompterKeys`.
      */
-    stageMode: StageMode;
+    diagnosticTake: boolean;
     /** What marks the reading position: fixed side ticks, a soft wash, or nothing. */
     readingCue: ReadingCueStyle;
     /**
@@ -1010,20 +1015,19 @@ export function defaultAppSettings(): AppSettings {
       stageEndBehavior: 'close',
       hidePointer: true,
       /*
-       * Diagnostic, not Clean.
+       * Clean, not Diagnostic (#300).
        *
-       * Clean Take is the right stage for a finished recording and the wrong
-       * default for a product still being trusted. What Diagnostic adds is the
-       * transcript bar — the recogniser's own words, upstream of every judgement
-       * the app makes — and the `feed:` line, which says whether alignment
-       * snapshots are arriving and being applied. Between them they separate
-       * "the microphone was never captured" from "the recogniser heard nothing"
-       * from "the aligner would not match" from "the stage is discarding what it
-       * is sent", and those four have one symptom: a script that sits still.
-       *
-       * Turned off in Settings the moment a take is being kept.
+       * Diagnostic used to be the default, so that the transcript bar and the
+       * `feed:` line could tell a microphone that was never captured from a
+       * recogniser that heard nothing, an aligner that would not match, and a
+       * stage discarding what it is sent. The presenter no longer needs them for
+       * that: a named fault, "Not hearing you", "Holding here" and "Following
+       * off" reach the mirrored hold chip in either mode. What was left was a
+       * first take that looked like a debug build, with moving text beside the
+       * script. The instruments are one switch away for whoever is validating a
+       * rig or chasing a script that will not follow.
        */
-      stageMode: 'diagnostic',
+      diagnosticTake: false,
       readingCue: 'ticks',
       // The same value a fresh rig starts at, so turning the automatic profile
       // into a calibrated one changes nothing about the type by itself.
