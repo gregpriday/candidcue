@@ -422,6 +422,18 @@ describe('runCommand', () => {
     expect(calls).toEqual(['exportMarkdown:["open-1"]']);
   });
 
+  it('opens the syntax reference while writing, and refuses it once a take is starting or running', () => {
+    const idle = recordingActions();
+    expect(runCommand('help.syntax-reference', idle.actions, context())).toBe(true);
+    expect(idle.calls).toEqual(['syntaxReference']);
+
+    for (const presenting of [context({ takeStarting: true }), context({ sessionActive: true })]) {
+      const refused = recordingActions();
+      expect(runCommand('help.syntax-reference', refused.actions, presenting)).toBe(false);
+      expect(refused.calls).toEqual([]);
+    }
+  });
+
   it('sends Close Script to the script off the editor and to the window elsewhere', () => {
     const inEditor = recordingActions();
     runCommand('file.close-script', inEditor.actions, context({ route: { name: 'editor', scriptId: 'a' } }));

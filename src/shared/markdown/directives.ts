@@ -70,7 +70,8 @@ export interface ContainerScanResult {
   diagnostics: CompileDiagnostic[];
 }
 
-const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
+/** Every container name the scanner recognises; the syntax reference documents each. */
+export const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
   'spoken',
   'silent',
   'stage',
@@ -345,50 +346,62 @@ export type InlineDirective =
   | { kind: 'malformed'; code: string; message: string; blocking: boolean }
   | { kind: 'none' };
 
-const SHORTHAND_CUES: Readonly<Record<string, 'pause' | 'beat' | 'breathe'>> = {
+/** The bare-word cues, keyed by lowercased label; the syntax reference documents each. */
+export const SHORTHAND_CUES: Readonly<Record<string, 'pause' | 'beat' | 'breathe'>> = {
   pause: 'pause',
   beat: 'beat',
   breathe: 'breathe',
 };
 
 /**
+ * The `[Name: value]` directives, keyed by lowercased name.
+ *
+ * The one place a named directive is defined: `classifyBracketDirective` knows
+ * no name that is not here, so the syntax reference can require an example of
+ * every entry and a new directive cannot reach users undocumented (#305).
+ */
+export const NAMED_DIRECTIVES: Readonly<Record<string, (value: string) => InlineDirective>> = {
+  cue: (value) =>
+    value
+      ? { kind: 'cue', cueType: 'cue', label: value }
+      : {
+          kind: 'malformed',
+          code: 'directive_cue_empty',
+          message: 'A [Cue: …] directive needs a label.',
+          blocking: false,
+        },
+  take: (value) =>
+    value
+      ? { kind: 'take', name: value }
+      : {
+          kind: 'malformed',
+          code: 'directive_take_empty',
+          message: 'A part break ([Take: …]) needs a name to be a navigation target.',
+          blocking: true,
+        },
+};
+
+/**
  * Classify the label text of a bracketed span ("Cue: smile", "Pause",
  * "Take: Opening"). Directive names are case-insensitive; user text is
  * preserved (spec §23.1).
+ *
+ * Both tables are looked up by OWN property only. They are plain objects, and
+ * the label is user text: `[constructor]` used to find `Object.prototype`'s
+ * constructor and come back a cue.
  */
 export function classifyBracketDirective(label: string): InlineDirective {
   const trimmed = label.trim();
-  const shorthand = SHORTHAND_CUES[trimmed.toLowerCase()];
-  if (shorthand) return { kind: 'cue', cueType: shorthand, label: trimmed };
+  const key = trimmed.toLowerCase();
+  if (Object.hasOwn(SHORTHAND_CUES, key)) {
+    return { kind: 'cue', cueType: SHORTHAND_CUES[key]!, label: trimmed };
+  }
 
   const named = /^([A-Za-z][A-Za-z-]*)\s*:\s*([\s\S]*)$/.exec(trimmed);
   if (!named) return { kind: 'none' };
   const name = named[1]!.toLowerCase();
-  const value = named[2]!.trim();
-
-  if (name === 'cue') {
-    if (!value) {
-      return {
-        kind: 'malformed',
-        code: 'directive_cue_empty',
-        message: 'A [Cue: …] directive needs a label.',
-        blocking: false,
-      };
-    }
-    return { kind: 'cue', cueType: 'cue', label: value };
-  }
-  if (name === 'take') {
-    if (!value) {
-      return {
-        kind: 'malformed',
-        code: 'directive_take_empty',
-        message: 'A part break ([Take: …]) needs a name to be a navigation target.',
-        blocking: true,
-      };
-    }
-    return { kind: 'take', name: value };
-  }
-  return { kind: 'none' };
+  if (!Object.hasOwn(NAMED_DIRECTIVES, name)) return { kind: 'none' };
+  return NAMED_DIRECTIVES[name]!(named[2]!.trim());
 }
 
 /** Inline spoken alias: Word{say="Spoken Form"} (spec §23.4). */

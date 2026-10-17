@@ -666,6 +666,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &item("help.keyboard-shortcuts", "Keyboard Shortcuts", Some(keys::SHORTCUTS))?,
+            &item("help.syntax-reference", "Script Syntax Reference", None)?,
             &item("help.setup-assistant", "Setup Assistant", None)?,
             &item("help.guide", "Project README", None)?,
             &sep()?,

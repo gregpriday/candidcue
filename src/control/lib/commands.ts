@@ -167,6 +167,7 @@ export interface CommandActions {
   /** Window › Stage — bring the preview/calibration stage window forward. */
   showStageWindow(): void;
   keyboardShortcuts(): void;
+  syntaxReference(): void;
   setupAssistant(): void;
   exportSupportBundle(): void;
   revealLogs(): void;
@@ -752,6 +753,17 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     accelerator: 'Mod+/',
     available: () => true,
     run: (a) => a.keyboardShortcuts(),
+  },
+  /*
+   * Unavailable while presenting, unlike Keyboard Shortcuts above. It is for
+   * writing, and in single-window presentation this window IS the prompter, so
+   * a modal opened over a take would cover the script being read.
+   */
+  'help.syntax-reference': {
+    id: 'help.syntax-reference',
+    label: 'Script Syntax Reference',
+    available: (c) => !presenting(c),
+    run: (a) => a.syntaxReference(),
   },
   'help.setup-assistant': {
     id: 'help.setup-assistant',

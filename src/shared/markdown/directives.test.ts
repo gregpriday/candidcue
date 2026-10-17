@@ -46,6 +46,12 @@ describe('classifyBracketDirective (spec §23.2/§23.3)', () => {
     expect(classifyBracketDirective('external monitors')).toEqual({ kind: 'none' });
     expect(classifyBracketDirective('Todo: fix later')).toEqual({ kind: 'none' });
   });
+
+  it('does not mistake inherited object properties for directives', () => {
+    expect(classifyBracketDirective('constructor')).toEqual({ kind: 'none' });
+    expect(classifyBracketDirective('__proto__')).toEqual({ kind: 'none' });
+    expect(classifyBracketDirective('Constructor: x')).toEqual({ kind: 'none' });
+  });
 });
 
 describe('scanContainers (spec §23.4-§23.7)', () => {
