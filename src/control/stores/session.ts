@@ -2124,6 +2124,23 @@ const followActions = {
     // deliberate pause" rule, because it is the one funnel every road into
     // pausing goes through and its own state has to agree with the outcome.
     trace('follow-pause', paused ? 'paused by the follow store' : 'resumed by the follow store');
+    /*
+     * Turning following on hands the document back from the transport (#277).
+     *
+     * The two never drive the take together, and the switch is the presenter's
+     * latest word, so it wins: the roll stops and the voice takes over. Here
+     * rather than in `toggleVoiceFollow` because the drawer's control reaches
+     * the follow store without passing through it. Only a decision does this —
+     * a hold releasing is not anybody asking for the voice back. The transport
+     * stands down by itself first, so its own give-back never comes through
+     * here still running.
+     */
+    const handover = !paused && deliberate && get(state).autoScroll.running;
+    if (handover) {
+      publishAutoScroll({ ...get(state).autoScroll, running: false });
+      // The pause it took is the one being lifted, so there is none to give back.
+      autoScrollPausedFollowing = false;
+    }
     if (paused) driver?.pause();
     else driver?.resume();
     state.update((s) => ({
@@ -2144,6 +2161,7 @@ const followActions = {
        */
       ...(deliberate ? { followPausedByUser: paused } : {}),
     }));
+    if (handover) showToast(autoScrollOffMessage(), 'info', { durationMs: 1800 });
   },
   /**
    * §62 recovery. Re-issuing the current stage settings ASKS the stage to
@@ -2257,7 +2275,11 @@ export function resumeSession(): void {
   const s0 = get(state);
   if (!s0.active) return;
   state.update((s) => ({ ...s, connection: 'reconnecting' }));
-  driver?.resume();
+  // Un-pausing the take is not switching following back on. A presenter who
+  // turned it off, or a transport rolling in its place, still has it off after
+  // Space, and reopening the driver here let the voice carry a take the
+  // switch said it was not carrying.
+  if (!s0.followPausedByUser) driver?.resume();
   if (!pipeline) {
     // Manual/mock mode: there is no session to negotiate.
     state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
@@ -2639,7 +2661,6 @@ export function toggleAutoScroll(): void {
   const s = get(state);
   if (!s.active) return;
   const running = !s.autoScroll.running;
-  publishAutoScroll({ ...s.autoScroll, running });
 
   /*
    * Following is only resumed by whoever paused it.
@@ -2654,27 +2675,57 @@ export function toggleAutoScroll(): void {
    * writes an entry every time it is called, and calling it for a take that was
    * already paused would fill the operator's history with pauses that never
    * happened.
+   *
+   * An automatic hold is the one pause it still takes over (#277). A hold is
+   * not anybody's decision, so it ends by itself when the transcript recovers
+   * — mid-roll, if that is when it happens, handing the document to the voice
+   * while the transport is still moving it. Taking the pause deliberately is
+   * what stops that release getting through. Paused before the roll is
+   * published, so nothing ever sees the two running at once.
    */
   if (running) {
-    autoScrollPausedFollowing = s.voiceFollow;
-    if (s.voiceFollow) smoothFollow.setFollowingPaused(true);
+    autoScrollPausedFollowing = s.voiceFollow || (s.mode === 'voice' && !s.followPausedByUser);
+    if (autoScrollPausedFollowing) smoothFollow.setFollowingPaused(true);
+    publishAutoScroll({ ...s.autoScroll, running });
     // A new roll takes the document from wherever it is now, so an ending the
     // last roll recorded no longer describes it. If this one runs off the end
     // too, it says so itself.
     releaseAutoScrollEnd();
   } else {
+    publishAutoScroll({ ...s.autoScroll, running });
     const restore = autoScrollPausedFollowing;
     autoScrollPausedFollowing = false;
     if (restore && !s.voiceFollow) smoothFollow.setFollowingPaused(false);
   }
 
   showToast(
-    running
-      ? `Auto-scroll on — ${s.autoScroll.wordsPerMinute} wpm`
-      : 'Auto-scroll off — following your voice again',
+    running ? `Auto-scroll on — ${s.autoScroll.wordsPerMinute} wpm` : autoScrollOffMessage(),
     'info',
     { durationMs: 1800 },
   );
+}
+
+/**
+ * What stopping the transport left following doing, read off the take AFTER
+ * the pause has been given back (#277).
+ *
+ * It used to say "following your voice again" every time, over a presenter who
+ * had switched following off themselves and over a take whose voice never
+ * started — in both, following stayed off and the toast said it was back.
+ */
+function autoScrollOffMessage(): string {
+  const s = get(state);
+  if (s.followPausedByUser) return 'Auto-scroll off — voice following is still off';
+  // "Again" is a claim about the next thing the script does. A paused take does
+  // nothing until Space, and a take with nothing listening does nothing at all.
+  const listening =
+    s.mode === 'voice' &&
+    s.paused === 'none' &&
+    s.micState === 'live' &&
+    s.connection === 'connected';
+  return s.voiceFollow && listening
+    ? 'Auto-scroll off — following your voice again'
+    : 'Auto-scroll off';
 }
 
 /**
@@ -3493,6 +3544,8 @@ function stopInternals(): void {
   // §36.3: the pass ends with the take. `stopSession` has already read what it
   // needed from it, and every other path belongs to a session that is gone.
   activeTake = null;
+  // A take ended mid-roll took a pause that nothing will give back now.
+  autoScrollPausedFollowing = false;
 }
 
 /**

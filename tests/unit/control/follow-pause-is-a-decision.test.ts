@@ -84,6 +84,40 @@ describe('pausing following says whether anybody decided to', () => {
   });
 });
 
+/**
+ * A deliberate pause belongs to the take it was made in (#277).
+ *
+ * A take that ends with following switched off — by the presenter, or by a
+ * transport still rolling when Stop was pressed — must not hand the next take a
+ * pause nobody made in it. Otherwise that take's first automatic hold never
+ * releases, under a switch that reads on.
+ */
+describe('the next take starts with nothing switched off', () => {
+  for (const [label, boundary] of [
+    ['a new session', (store: ReturnType<typeof createSmoothFollowStore>) => {
+      store.endSession();
+      store.beginSession(SESSION_ID, defaultFollowingSettings());
+    }],
+    // On its own: `beginSession` resets it too, and would hide a reset that did not.
+    ['a reset', (store: ReturnType<typeof createSmoothFollowStore>) => store.reset()],
+  ] as const) {
+    it(`lets a hold release after ${label}`, () => {
+      const { store, setFollowingPaused } = storeWithSpy();
+      store.setFollowingPaused(true); // switched off, and never back on
+      boundary(store);
+      setFollowingPaused.mockClear();
+
+      store.setFollowingPaused(true, false); // the next take's first hold
+      store.setFollowingPaused(false, false); // and its recovery
+      expect(setFollowingPaused.mock.calls).toEqual([
+        [true, false],
+        [false, false],
+      ]);
+      expect(store.snapshot().followingPaused).toBe(false);
+    });
+  }
+});
+
 describe('a manual move while paused (#275)', () => {
   const move = (seq: number, token: number) => ({
     sessionGeneration: 1,

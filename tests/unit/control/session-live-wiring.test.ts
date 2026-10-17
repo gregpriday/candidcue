@@ -103,6 +103,8 @@ vi.mock('../../../src/control/services/alignment', async (orig) => {
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
 const { compile } = await import('../../../src/shared/markdown');
 const {
+  autoScrollLive,
+  autoScrollReachedEnd,
   awaitPendingPersistence,
   clearSession,
   goToToken,
@@ -114,8 +116,11 @@ const {
   startLiveSession,
   startPrompting,
   stopSession,
+  toggleAutoScroll,
+  togglePlayPause,
   toggleVoiceFollow,
 } = await import('../../../src/control/stores/session');
+const { smoothFollow } = await import('../../../src/control/stores/smooth-follow');
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
@@ -999,5 +1004,286 @@ describe('#275 — manual moves while the take is paused or not following', () =
     }
 
     expect(stopSession().followingShare).toBe(0);
+  });
+});
+
+/**
+ * #277 — the transport and the voice never carry the take together.
+ *
+ * Auto-scroll replaces following, it does not run beside it: two things moving
+ * one document with different ideas of where the presenter is. Every road that
+ * could switch the voice back on under a running roll — the dock, the
+ * take-controls drawer, Space, a hold recovering — is enumerated here, and each
+ * is checked where it matters: whether a voice snapshot still reaches the take.
+ */
+describe('#277 — auto-scroll and voice following never both carry the take', () => {
+  const SOURCE =
+    '# Opening\n\nFirst sentence of the opening. Second sentence of the opening.\n\n' +
+    '## Close\n\nThird sentence near the close. Fourth and final sentence.\n';
+
+  let seq = 0;
+
+  function voiceAt(token: number): Record<string, unknown> {
+    seq += 1;
+    return {
+      sessionGeneration: 7,
+      seq,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: token,
+      observedToken: token,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000 * seq,
+      atAudioMs: 1000 * seq,
+      maxPredictionMs: 900,
+      pauseOnsetMs: 1800,
+      leadFloorMs: 550,
+      maxLeadTokens: 2.5,
+      leadMarginTokens: 1.2,
+      leadEaseMs: 450,
+      leadHoldMs: 0,
+      leadDecayMs: 1200,
+      displayLimitToken: token,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: token,
+      confirmedAtom: token,
+    };
+  }
+
+  async function startScript(mode: 'voice' | 'manual' = 'voice') {
+    const compiled = compile(SOURCE, { scriptId: 'script-1' });
+    start({ compiled, sentences: compiled.sentences as never, mode });
+    await vi.advanceTimersByTimeAsync(0);
+    return compiled;
+  }
+
+  /**
+   * Whether a voice snapshot pushed now reaches the take.
+   *
+   * Throws rather than answering false without a feed: a "kept out" that only
+   * meant "never sent" would pass every test below for the wrong reason.
+   */
+  function voiceReaches(token: number): boolean {
+    if (!alignmentFeed.push) throw new Error('the take never subscribed to the alignment feed');
+    alignmentFeed.push(voiceAt(token));
+    return get(session).snapshot?.confirmedToken === token;
+  }
+
+  /** One of the stubbed pipeline's callbacks, as the take handed it over. */
+  function pipelineCallback<T>(name: string): T {
+    const callback = pipeline.captured.deps?.[name];
+    if (!callback) throw new Error('the voice pipeline was never constructed');
+    return callback as unknown as T;
+  }
+
+  /** What `onFollowingHold` is told when the transcript goes untrustworthy and back. */
+  function hold(held: boolean): void {
+    pipelineCallback<(held: boolean, reason: string | null) => void>('onFollowingHold')(
+      held,
+      held ? 'reconnecting' : null,
+    );
+  }
+
+  const lastToast = () => get(toasts).at(-1)?.message;
+
+  beforeEach(() => {
+    seq = 0;
+  });
+
+  it('stops the roll when following is switched back on at the dock', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    expect(get(autoScrollLive).running).toBe(true);
+    expect(get(session).voiceFollow).toBe(false);
+
+    toggleVoiceFollow();
+    const s = get(session);
+    expect(s.autoScroll.running, 'the voice took the document back').toBe(false);
+    expect(get(autoScrollLive).running).toBe(false);
+    expect(s.voiceFollow).toBe(true);
+    expect(s.followPausedByUser).toBe(false);
+    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
+  });
+
+  it('stops the roll when following is switched back on in the take-controls drawer', async () => {
+    // The drawer reaches the follow store directly, never `toggleVoiceFollow`.
+    const compiled = await startScript();
+    toggleAutoScroll();
+    expect(get(smoothFollow).followingPaused).toBe(true);
+
+    smoothFollow.toggleFollowingPaused();
+    const s = get(session);
+    expect(s.autoScroll.running).toBe(false);
+    expect(s.voiceFollow).toBe(true);
+    expect(s.followPausedByUser).toBe(false);
+    expect(get(smoothFollow).followingPaused).toBe(false);
+    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
+    expect(get(toasts).filter((t) => t.message.startsWith('Auto-scroll off'))).toHaveLength(1);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
+  });
+
+  it('hands over a roll Space has paused, and Space does not start it again', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    togglePlayPause();
+    expect(get(session).paused).toBe('listening');
+
+    toggleVoiceFollow();
+    expect(get(session).autoScroll.running, 'the armed roll is disarmed too').toBe(false);
+
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).paused).toBe('none');
+    expect(get(autoScrollLive).running).toBe(false);
+    expect(get(session).voiceFollow).toBe(true);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
+  });
+
+  it('keeps the voice out of a roll through a Space pause and resume', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    togglePlayPause();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).paused).toBe('none');
+    expect(get(autoScrollLive).running, 'the roll picks up where it stopped').toBe(true);
+
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(false);
+    expect(get(session).voiceFollow).toBe(false);
+  });
+
+  it('keeps the voice out through Space while following is switched off', async () => {
+    // The same rule without the transport: Space is not the follow switch.
+    const compiled = await startScript();
+    toggleVoiceFollow();
+    togglePlayPause();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(false);
+    toggleVoiceFollow();
+    expect(voiceReaches(compiled.sentences[3]!.startTokenIndex)).toBe(true);
+  });
+
+  it('does not let a hold that began before the roll release into it', async () => {
+    const compiled = await startScript();
+    hold(true);
+    expect(get(session).voiceFollow).toBe(false);
+    expect(get(session).followPausedByUser).toBe(false);
+
+    toggleAutoScroll();
+    // The stage holds the voice off the glass on this flag, not on `voiceFollow`.
+    expect(get(session).followPausedByUser).toBe(true);
+    hold(false);
+    let s = get(session);
+    expect(s.voiceFollow, 'a recovering transcript is not a request for the voice').toBe(false);
+    expect(get(autoScrollLive).running).toBe(true);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(false);
+
+    // The pause the roll took over is still the roll's to give back.
+    toggleAutoScroll();
+    s = get(session);
+    expect(s.voiceFollow).toBe(true);
+    expect(s.followPausedByUser).toBe(false);
+    expect(voiceReaches(compiled.sentences[3]!.startTokenIndex)).toBe(true);
+  });
+
+  it('gives back a roll stopped under a hold without claiming the voice is back', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    pipelineCallback<(connection: string) => void>('onConnectionState')('reconnecting');
+    hold(true);
+
+    toggleAutoScroll();
+    expect(get(session).micState, 'the microphone itself is fine').toBe('live');
+    expect(lastToast()).toBe('Auto-scroll off');
+
+    hold(false);
+    expect(get(session).voiceFollow).toBe(true);
+    expect(get(session).autoScroll.running, 'the recovery does not restart the roll').toBe(false);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
+  });
+
+  it('keeps the voice out of a roll through a hard pause and resume', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    hardPause();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).paused).toBe('none');
+    expect(get(autoScrollLive).running).toBe(true);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(false);
+
+    toggleAutoScroll();
+    expect(voiceReaches(compiled.sentences[3]!.startTokenIndex)).toBe(true);
+  });
+
+  it('does not say the voice is back while Space still holds the take', async () => {
+    await startScript();
+    toggleAutoScroll();
+    togglePlayPause();
+    toggleAutoScroll();
+    expect(get(session).voiceFollow).toBe(true);
+    expect(lastToast()).toBe('Auto-scroll off');
+  });
+
+  it('says following is back when stopping the roll gave it back', async () => {
+    await startScript();
+    toggleAutoScroll();
+    toggleAutoScroll();
+    expect(get(session).voiceFollow).toBe(true);
+    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
+  });
+
+  it('leaves following off, and says so, when the presenter had switched it off first', async () => {
+    await startScript();
+    toggleVoiceFollow();
+    toggleAutoScroll();
+    toggleAutoScroll();
+
+    const s = get(session);
+    expect(s.voiceFollow).toBe(false);
+    expect(s.followPausedByUser).toBe(true);
+    expect(lastToast()).toBe('Auto-scroll off — voice following is still off');
+  });
+
+  it('claims nothing about a voice a manual take never had', async () => {
+    await startScript('manual');
+    expect(get(session).voiceFollow).toBe(false);
+    toggleAutoScroll();
+    toggleAutoScroll();
+
+    const s = get(session);
+    expect(s.voiceFollow, 'the roll gave back nothing it did not take').toBe(false);
+    expect(s.followPausedByUser).toBe(false);
+    expect(lastToast()).toBe('Auto-scroll off');
+  });
+
+  it('ignores an end report from a roll the voice has already taken over', async () => {
+    await startScript();
+    toggleAutoScroll();
+    toggleVoiceFollow();
+    const before = get(toasts).length;
+
+    autoScrollReachedEnd('document_end');
+    expect(get(toasts)).toHaveLength(before);
+    expect(get(session).voiceFollow).toBe(true);
+    expect(stopSession().endTokenIndex, 'no ending was recorded for the roll').toBe(0);
+  });
+
+  it('starts the next take following after one that ended mid-roll', async () => {
+    await startScript();
+    toggleAutoScroll();
+    stopSession();
+    clearSession();
+
+    const compiled = await startScript();
+    hold(true);
+    hold(false);
+    expect(get(session).voiceFollow, 'the last take’s pause is not this one’s').toBe(true);
+    expect(voiceReaches(compiled.sentences[1]!.startTokenIndex)).toBe(true);
   });
 });

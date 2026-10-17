@@ -603,6 +603,15 @@ describe('a take whose voice cannot be resumed', () => {
     });
   }
 
+  it('does not say the voice is back when stopping the roll over a refused take (#277)', async () => {
+    await refusedTake('MIC_PERMISSION_DENIED');
+    toggleAutoScroll();
+    toggleAutoScroll();
+    // Following is handed back, but nothing is listening to follow.
+    expect(get(session).micState).toBe('disconnected');
+    expect(get(toasts).at(-1)?.message).toBe('Auto-scroll off');
+  });
+
   it('releases a hard pause whose microphone cannot come back', async () => {
     start();
     hardPause();
