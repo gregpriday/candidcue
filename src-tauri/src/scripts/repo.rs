@@ -960,8 +960,7 @@ pub async fn restore_script(
 
 /// Permanent deletion (spec §21.5): canonical source, revisions, copied
 /// assets, caches, analyses, database rows — including the script's session
-/// history (sessions, and the takes and retained transcripts that cascade from
-/// them). Never touches dictionary entries, display profiles, or another
+/// history. Never touches dictionary entries, display profiles, or another
 /// script's sessions.
 pub async fn permanently_delete_script(
     pool: &SqlitePool,

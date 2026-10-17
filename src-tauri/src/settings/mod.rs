@@ -132,9 +132,9 @@ pub struct GeneralSettings {
     /*
      * No `save_transcript` either. It was the transcript retention window
      * (spec §36.2): takes stopped writing transcripts (#214), the setting left
-     * Settings (#215), and the storage it governed went with #217. Every
-     * document on disk still carries `saveTranscript`, and is tolerated for the
-     * same reason as `updateCheck`.
+     * Settings (#215), and the storage it governed went with #217. A document
+     * written before that still carries `saveTranscript` until its next save,
+     * and is tolerated for the same reason as `updateCheck`.
      */
 }
 

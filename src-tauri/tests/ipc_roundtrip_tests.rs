@@ -929,10 +929,11 @@ fn the_settings_patch_the_ui_sends_persists_through_the_command() {
 /// #217 — transcript retention is gone from the Rust side too, and a settings
 /// document an earlier build wrote must survive that.
 ///
-/// Every stored document still carries `general.saveTranscript`. It has to load
-/// through the real command with the settings around it intact, be dropped from
-/// what the frontend is sent, and leave the stored document at the next write —
-/// and a session started over it must say nothing about transcripts.
+/// A document a pre-#217 build stored carries `general.saveTranscript`. It has
+/// to load through the real command with the settings around it intact, be
+/// dropped from what the frontend is sent, and leave the stored document at the
+/// next write — and a session started over it must say nothing about
+/// transcripts.
 #[test]
 fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
     let h = harness();

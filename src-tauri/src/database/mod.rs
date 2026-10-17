@@ -257,7 +257,6 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
     let migrator = sqlx::migrate!("./migrations");
 
     let scrub_marker = app_data_dir.join(RETIRED_STORAGE_SCRUB_MARKER);
-    let mut scrub_now = false;
     if pre_existing {
         let pending = pending_migrations(&pool, &migrator).await?;
         if pending.is_empty() {
@@ -279,18 +278,23 @@ pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
          * transaction. A crash or a failed VACUUM in between would otherwise
          * leave migration 3 applied — so never pending again — with the words
          * still in the free pages, and nothing anywhere remembering that.
+         *
+         * So it is a precondition, like the backup: if it cannot be written,
+         * nothing has changed yet, and the migration waits for a launch that
+         * can promise to finish the job.
          */
         if pending.contains(&RETIRED_STORAGE_MIGRATION) {
-            scrub_now = true;
-            if let Err(err) = crate::util::atomic_write(&scrub_marker, b"3\n") {
-                tracing::warn!(error = %err, "could not record the storage scrub; it runs now, without a retry");
-            }
+            crate::util::atomic_write(&scrub_marker, b"3\n").map_err(|err| {
+                backup_required_error(&AppError::Internal(format!(
+                    "could not record the retired-storage scrub: {err}"
+                )))
+            })?;
         }
     }
 
     migrator.run(&pool).await?;
 
-    if scrub_now || scrub_marker.exists() {
+    if scrub_marker.exists() {
         scrub_retired_storage(&pool, &scrub_marker).await;
     }
 

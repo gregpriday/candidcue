@@ -1509,10 +1509,33 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
 /// log.
 fn live_bytes(root: &Path) -> Vec<u8> {
     let mut bytes = fs::read(root.join("candidcue.sqlite3")).expect("live database");
-    if let Ok(wal) = fs::read(root.join("candidcue.sqlite3-wal")) {
-        bytes.extend(wal);
-    }
+    bytes.extend(wal_bytes(root));
     bytes
+}
+
+/// The write-ahead log, where an absent log reads as empty — and any OTHER
+/// failure to read it fails the test rather than passing as "nothing found".
+fn wal_bytes(root: &Path) -> Vec<u8> {
+    match fs::read(root.join("candidcue.sqlite3-wal")) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => panic!("could not read the write-ahead log: {err}"),
+    }
+}
+
+fn pre_migration_snapshots(root: &Path) -> Vec<std::path::PathBuf> {
+    match fs::read_dir(root.join("backups")) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with("pre-migration-") && name.ends_with(".sqlite3")
+            })
+            .collect(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => panic!("could not list backups: {err}"),
+    }
 }
 
 /// What #217 promises about a database that went through migration 3: the
@@ -1521,9 +1544,8 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
     let live = live_bytes(root);
     assert!(!contains(&live, RETAINED_WORDS), "retained words must leave the live files");
     assert!(!contains(&live, SWEPT_WORDS), "and so must words swept before the upgrade");
-    let wal = root.join("candidcue.sqlite3-wal");
     assert!(
-        fs::metadata(&wal).map(|m| m.len() == 0).unwrap_or(true),
+        wal_bytes(root).is_empty(),
         "the write-ahead log must be emptied, not merely ignored"
     );
     assert!(
@@ -1578,18 +1600,26 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
 /// The one copy that is meant to keep them: the verified pre-migration backup
 /// is the rollback for this upgrade, so it is taken whole and left whole.
 async fn assert_rollback_copy_kept(root: &Path) {
-    let snapshot = fs::read_dir(root.join("backups"))
-        .expect("a pending migration takes a backup first")
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            let name = path.file_name().unwrap().to_string_lossy();
-            name.starts_with("pre-migration-") && name.ends_with(".sqlite3")
-        })
-        .expect("a pre-migration snapshot");
-    assert_eq!(applied_migrations_at(&snapshot).await, vec![1, 2]);
+    let snapshots = pre_migration_snapshots(root);
+    assert_eq!(snapshots.len(), 1, "a pending migration takes exactly one backup first");
+    let snapshot = &snapshots[0];
+    assert_eq!(applied_migrations_at(snapshot).await, vec![1, 2]);
+    // Whole, not merely present: every retained row, the take and the latch.
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(snapshot).read_only(true),
+    )
+    .await
+    .expect("open the snapshot");
+    let count = |sql: &'static str| {
+        let pool = pool.clone();
+        async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(&pool).await.expect(sql) }
+    };
+    assert_eq!(count("SELECT count(*) FROM session_transcript_items").await, 40);
+    assert_eq!(count("SELECT count(*) FROM session_takes").await, 1);
+    assert_eq!(count("SELECT count(*) FROM sessions WHERE transcript_retained = 1").await, 1);
+    pool.close().await;
     assert!(
-        contains(&fs::read(&snapshot).expect("snapshot"), RETAINED_WORDS),
+        contains(&fs::read(snapshot).expect("snapshot"), RETAINED_WORDS),
         "the rollback copy must still hold what the upgrade removed"
     );
 }
@@ -1635,6 +1665,8 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
     assert!(export.complete);
     let exported_database = Path::new(&export.path).join("candidcue.sqlite3");
     assert_eq!(applied_migrations_at(&exported_database).await, vec![1, 2]);
+    let exported_bytes = fs::read(&exported_database).expect("export");
+    assert!(contains(&exported_bytes, RETAINED_WORDS));
 
     let h = harness().await;
     backup::restore_all_data(&h.paths, Path::new(&export.path))
@@ -1650,7 +1682,7 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
     assert_rollback_copy_kept(h.dir.path()).await;
     pool.close().await;
     assert!(
-        contains(&fs::read(&exported_database).expect("export"), RETAINED_WORDS),
+        fs::read(&exported_database).expect("export") == exported_bytes,
         "the export itself is the user's file, and is left exactly as it was"
     );
 }
@@ -1675,6 +1707,14 @@ async fn an_interrupted_scrub_is_finished_on_the_next_launch() {
     ] {
         sqlx::query(&statement).execute(&h.pool).await.expect("leave freed words behind");
     }
+    // Into the main file now, rather than whenever the pool's closing
+    // connection gets round to it: sqlx closes on a worker thread, and the read
+    // below must not race it.
+    let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&h.pool)
+        .await
+        .expect("checkpoint");
+    assert_eq!(busy, 0);
     h.pool.close().await;
     assert!(
         contains(&fs::read(h.dir.path().join("candidcue.sqlite3")).expect("db"), RETAINED_WORDS),
@@ -1688,9 +1728,75 @@ async fn an_interrupted_scrub_is_finished_on_the_next_launch() {
     assert!(!contains(&live_bytes(h.dir.path()), RETAINED_WORDS));
     assert!(!h.dir.path().join("retired-storage-scrub.pending").exists());
     assert!(
-        !h.dir.path().join("backups").exists(),
+        pre_migration_snapshots(h.dir.path()).is_empty(),
         "nothing was pending, so finishing the scrub takes no backup"
     );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn a_scrub_that_cannot_finish_is_retried_rather_than_forgotten() {
+    /*
+     * The marker's whole job, exercised for real: a scrub that fails AFTER
+     * migration 3 has committed. A reader holding an old snapshot open is
+     * enough — the TRUNCATE checkpoint cannot complete under it, and SQLite
+     * says so in a result column rather than an error. Startup must go on (the
+     * rows are already gone), keep the marker, and the next launch must finish
+     * without taking a second backup.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    a_version_two_database_with_retained_transcripts(dir.path()).await;
+
+    let reader_options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(dir.path().join("candidcue.sqlite3"))
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+    let mut reader = sqlx::ConnectOptions::connect(&reader_options)
+        .await
+        .expect("a second reader");
+    sqlx::query("BEGIN").execute(&mut reader).await.expect("begin");
+    let _: i64 = sqlx::query_scalar("SELECT count(*) FROM session_transcript_items")
+        .fetch_one(&mut reader)
+        .await
+        .expect("hold a snapshot from before the upgrade");
+
+    let pool = candidcue_lib::database::init(dir.path())
+        .await
+        .expect("a scrub that cannot finish must not stop the app opening");
+    assert_eq!(
+        applied_migrations_at(&dir.path().join("candidcue.sqlite3")).await,
+        vec![1, 2, 3],
+        "the storage itself is gone either way"
+    );
+    assert!(
+        dir.path().join("retired-storage-scrub.pending").exists(),
+        "an unfinished scrub must leave its marker for the next launch"
+    );
+    assert_eq!(pre_migration_snapshots(dir.path()).len(), 1);
+
+    sqlx::query("ROLLBACK").execute(&mut reader).await.expect("release the snapshot");
+    sqlx::Connection::close(reader).await.expect("close the reader");
+    pool.close().await;
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("next launch");
+    assert_retired_storage_removed(dir.path(), &pool).await;
+    assert_rollback_copy_kept(dir.path()).await;
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn a_stale_marker_over_a_fresh_database_is_simply_retired() {
+    /*
+     * A rebuild or a wiped data folder can leave a marker with no database
+     * beside it. That is not an upgrade: startup must succeed, take no backup,
+     * and not leave the marker to run again forever.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("retired-storage-scrub.pending"), "3\n").expect("marker");
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("fresh database");
+
+    assert!(!dir.path().join("retired-storage-scrub.pending").exists());
+    assert!(pre_migration_snapshots(dir.path()).is_empty());
     pool.close().await;
 }
 
