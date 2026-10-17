@@ -103,6 +103,34 @@ export function flattenOutlineNodes(nodes: readonly OutlineNode[]): OutlineNode[
 }
 
 /**
+ * The outline section a token position is in: the last heading that starts at
+ * or before it, nested headings included.
+ *
+ * "Last started", not "every node whose span contains it" — a parent's span is
+ * widened to cover its children, so the parent contains every token its
+ * children do, and the section somebody is reading is the innermost one. Ties
+ * resolve to the later node in document order (the flatten is a stable sort),
+ * which is the heading the words under that shared token belong to.
+ *
+ * The token is compared as given. A fractional position half a token short of
+ * a heading has not reached it, and rounding here would name the next section
+ * for a reader still finishing the last one. Null when the outline is empty or
+ * the token is before its first node, which real compiler output never is:
+ * `buildOutline` always opens at token zero.
+ */
+export function outlineSectionAt(
+  outline: readonly OutlineNode[],
+  token: number,
+): OutlineNode | null {
+  let best: OutlineNode | null = null;
+  for (const node of flattenOutlineNodes(outline)) {
+    if (node.startTokenIndex <= token) best = node;
+    else break;
+  }
+  return best;
+}
+
+/**
  * Divide a compiled script into parts.
  *
  * Returns an empty list when the script has no division to offer — no spoken

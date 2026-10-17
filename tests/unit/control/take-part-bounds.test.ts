@@ -165,6 +165,8 @@ function present(
     sentences?: SentenceUnit[];
     compiled?: CompiledScript | null;
     totalTokens?: number;
+    /** Where the take opens, when that is not the part's own start. */
+    startTokenIndex?: number;
   } = {},
 ): void {
   startLiveSession({
@@ -175,7 +177,7 @@ function present(
     outline: shape.outline ?? [],
     sentences: shape.sentences ?? [],
     totalTokens: shape.totalTokens ?? 200,
-    startTokenIndex: part?.startTokenIndex ?? 0,
+    startTokenIndex: shape.startTokenIndex ?? part?.startTokenIndex ?? 0,
     sessionId: 'session-uuid-1',
     compiled: shape.compiled === undefined ? compiledStub() : shape.compiled,
     sessionGeneration: 7,
@@ -530,11 +532,17 @@ describe('a take the auto-scroll transport carried to the end', () => {
   });
 
   it('does not count the roll as words followed, jumps or sections reached', () => {
-    present(PART_THREE, null);
+    // Two sections under the part, so a roll that credited the glass's travel
+    // would have a second one to count.
+    present(PART_THREE, null, {
+      outline: [heading('h-1', 'Close', 100, 149), heading('h-2', 'Sign-off', 150, 199)],
+    });
     at(100, 'manualAnchor');
     rollToEnd();
     const summary = stopSession();
     expect(summary.wordsFollowed).toBe(0);
+    expect(summary.coverageWords).toBe(100);
+    expect(summary.coverageScope).toBe('part');
     expect(summary.manualJumps).toBe(0);
     expect(summary.sectionsReached).toBe(1);
   });
@@ -624,5 +632,103 @@ describe('a take the auto-scroll transport carried to the end', () => {
     expect(summary.endTokenIndex).toBe(50);
     expect(summary.partComplete).toBe(false);
     expect(summary.partRolledToEnd).toBe(false);
+  });
+});
+
+/*
+ * #285 — "Script followed" is measured against what the take was given.
+ *
+ * It was a fraction of the whole script every time: a 50-word part read to its
+ * last word reported 49 of 200 words (25%), and a "From here" take near the end
+ * of a script could never look complete.
+ */
+describe('script followed, out of what the take was given', () => {
+  function coverage() {
+    const { wordsFollowed, coverageWords, coverageScope } = stopSession();
+    return { wordsFollowed, coverageWords, coverageScope };
+  }
+
+  it('measures a whole-part take against the part', () => {
+    present(PART_TWO, PART_THREE);
+    at(50, 'manualAnchor');
+    at(99);
+    // Still a distance, as it always was: first word to last is N-1 of N.
+    expect(coverage()).toEqual({ wordsFollowed: 49, coverageWords: 50, coverageScope: 'part' });
+  });
+
+  it('does not credit reading on past the end of the part', () => {
+    present(PART_TWO, PART_THREE);
+    at(140);
+    expect(coverage()).toEqual({ wordsFollowed: 49, coverageWords: 50, coverageScope: 'part' });
+  });
+
+  it('measures a take begun part way into a part against the rest of it', () => {
+    present(PART_TWO, PART_THREE, { startTokenIndex: 75 });
+    at(99);
+    expect(coverage()).toEqual({
+      wordsFollowed: 24,
+      coverageWords: 25,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('measures an unbounded take begun part way in against the rest of the script', () => {
+    present(null, null, { startTokenIndex: 150 });
+    at(199);
+    expect(coverage()).toEqual({
+      wordsFollowed: 49,
+      coverageWords: 50,
+      coverageScope: 'restOfScript',
+    });
+  });
+
+  it('measures a take from the top against the whole script', () => {
+    present(null);
+    at(100);
+    expect(coverage()).toEqual({ wordsFollowed: 100, coverageWords: 200, coverageScope: 'script' });
+  });
+
+  it('measures a retake from where it began, as the words followed are', () => {
+    present(PART_TWO, PART_THREE);
+    at(75);
+    restartParagraph();
+    at(99);
+    expect(coverage()).toEqual({
+      wordsFollowed: 24,
+      coverageWords: 25,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('has nothing of the part left for a retake begun past its end', () => {
+    present(PART_TWO, PART_THREE);
+    at(140);
+    restartParagraph();
+    at(160);
+    expect(coverage()).toEqual({
+      wordsFollowed: 0,
+      coverageWords: 0,
+      coverageScope: 'restOfPart',
+    });
+  });
+
+  it('stops a part at the end of the document', () => {
+    present({ ...PART_THREE, startTokenIndex: 50, endTokenIndex: 250 }, null);
+    at(199);
+    expect(coverage()).toEqual({ wordsFollowed: 149, coverageWords: 150, coverageScope: 'part' });
+  });
+
+  it('gives an empty document nothing to be a fraction of', () => {
+    // `startTake` pads the count it hands over to one; the compile has none.
+    present(null, null, { compiled: compiledStub(0), totalTokens: 1 });
+    expect(coverage()).toEqual({ wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' });
+  });
+
+  it('does not credit the run-up to a part to a retake begun above it', () => {
+    present(PART_TWO, PART_THREE);
+    at(30, 'manualAnchor');
+    restartParagraph();
+    at(60);
+    expect(coverage()).toEqual({ wordsFollowed: 10, coverageWords: 50, coverageScope: 'part' });
   });
 });

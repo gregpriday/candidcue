@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   partOutcomeLabel,
+  scriptFollowedLabel,
   summaryActions,
   type SummaryActionsInput,
 } from '../../../src/control/lib/summary-actions';
@@ -182,5 +183,81 @@ describe('partOutcomeLabel', () => {
     for (const mode of ['manual', 'fixed'] as const) {
       expect(partOutcomeLabel({ mode, partComplete: false, partRolledToEnd: false }), mode).toBeNull();
     }
+  });
+});
+
+/*
+ * The "Script followed" row (#285). It was a fraction of the whole script
+ * whatever the take was given, so a part read to its last word scored a quarter
+ * and a "From here" take near the end could never look complete.
+ */
+describe('scriptFollowedLabel', () => {
+  const base = { wordsFollowed: 49, coverageWords: 50, part: null, retakes: 0 } as const;
+
+  it('says nothing more for the whole script from its first word', () => {
+    expect(scriptFollowedLabel({ ...base, coverageWords: 200, coverageScope: 'script' })).toBe(
+      '49 of 200 words (25%)',
+    );
+  });
+
+  it('measures a part take against the part, and names it', () => {
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'part', part: PART_TWO })).toBe(
+      '49 of 50 words in part 2 (98%)',
+    );
+  });
+
+  it('says where a take started part way into a part was measured from', () => {
+    expect(
+      scriptFollowedLabel({
+        ...base,
+        wordsFollowed: 24,
+        coverageWords: 25,
+        coverageScope: 'restOfPart',
+        part: PART_TWO,
+      }),
+    ).toBe('24 of 25 words from the start point to the end of part 2 (96%)');
+  });
+
+  it('says an unbounded take that started part way in ran to the end of the script', () => {
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'restOfScript' })).toBe(
+      '49 of 50 words from the start point to the end of the script (98%)',
+    );
+  });
+
+  it('measures from the retake once one opened the pass being reported', () => {
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'restOfScript', retakes: 2 })).toBe(
+      '49 of 50 words from the retake to the end of the script (98%)',
+    );
+    expect(
+      scriptFollowedLabel({ ...base, coverageScope: 'restOfPart', part: PART_THREE, retakes: 1 }),
+    ).toBe('49 of 50 words from the retake to the end of part 3 (98%)');
+  });
+
+  it('says when a retake began past the end of the part', () => {
+    expect(
+      scriptFollowedLabel({
+        ...base,
+        wordsFollowed: 0,
+        coverageWords: 0,
+        coverageScope: 'restOfPart',
+        part: PART_TWO,
+        retakes: 1,
+      }),
+    ).toBe('None of part 2 was left after the retake');
+  });
+
+  it('still names a part it was not handed', () => {
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'part' })).toBe(
+      '49 of 50 words in the part (98%)',
+    );
+    expect(scriptFollowedLabel({ ...base, coverageScope: 'restOfPart' })).toBe(
+      '49 of 50 words from the start point to the end of the part (98%)',
+    );
+  });
+
+  it('gives no percentage of nothing', () => {
+    expect(
+      scriptFollowedLabel({ ...base, wordsFollowed: 0, coverageWords: 0, coverageScope: 'script' }),
+    ).toBe('0 of 0 words');
   });
 });

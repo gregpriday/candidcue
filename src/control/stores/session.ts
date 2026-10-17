@@ -22,6 +22,7 @@ import type {
   TranscriptionConfig,
 } from '../../shared/contracts';
 import type { AlignmentSnapshot, StageVoicePillPayload } from '../../shared/contracts';
+import { outlineSectionAt, partAt } from '../../shared/markdown/parts';
 import {
   initialVoicePillState,
   reduceVoicePillLevel,
@@ -95,9 +96,36 @@ export interface SessionCounts {
   reconnects: number;
 }
 
+/**
+ * What "Script followed" is a fraction of (#285).
+ *
+ * The span the last pass could have covered, named so the row can say which:
+ *
+ *   - `script` — the whole document, from its first word;
+ *   - `part` — the whole part the take was bounded to;
+ *   - `restOfPart` — from where the pass began to the end of that part ("From
+ *     here" inside a part, or a retake);
+ *   - `restOfScript` — from where the pass began to the end of the document
+ *     ("From here", "From last ending", or a retake on an unbounded take).
+ *
+ * It used to be the whole script, always, so a part read to its last word
+ * scored a quarter and a take started near the end could never look complete.
+ */
+export type CoverageScope = 'script' | 'part' | 'restOfPart' | 'restOfScript';
+
 export interface SessionSummary {
   durationSeconds: number;
   mode: SessionMode;
+  /**
+   * Distinct sections the take was in, across every pass (#285).
+   *
+   * A section is a PART on a divided script and an outline heading otherwise —
+   * see `sectionIdForToken`. It used to be distinct BLOCKS, and every paragraph
+   * is a block, so two headings over six paragraphs reported six.
+   *
+   * The session row's `metrics.sectionsReached` is this same number; both are
+   * taken from one value in `stopSession`.
+   */
   sectionsReached: number;
   retakes: number;
   reconnects: number;
@@ -135,10 +163,18 @@ export interface SessionSummary {
   wordsHeard: number;
   /** Words in the utterance still open when the take ended. */
   wordsInFlight: number;
-  /** How far the cursor actually got, in script words. */
+  /**
+   * How far the last pass's cursor got, in script words, counted only inside
+   * `coverageWords` — so reading on past the end of a part cannot score more
+   * than the part.
+   */
   wordsFollowed: number;
-  /** Script length, so `wordsFollowed` has something to be a fraction of. */
-  scriptWords: number;
+  /**
+   * The words `wordsFollowed` is a fraction of: the span `coverageScope` names,
+   * and never the whole script unless that is what the pass was given.
+   */
+  coverageWords: number;
+  coverageScope: CoverageScope;
   /**
    * False when this voice take never had a recogniser, because the speech
    * model was refused when the take tried to start it.
@@ -383,7 +419,14 @@ export interface SessionState {
   sentences: SentenceUnit[];
   counts: SessionCounts;
   summary: SessionSummary | null;
-  blocksSeen: string[];
+  /**
+   * The sections this session has been in, by id, for `sectionsReached`.
+   *
+   * Session-wide rather than per pass: a retake goes back over a section the
+   * take has already been in, and that does not make it a section reached
+   * twice — or not reached at all.
+   */
+  sectionsSeen: string[];
   stageFontSizePx: number;
   /**
    * What the stage is prompting at RIGHT NOW, for the in-session sheet to open
@@ -460,7 +503,7 @@ const initial: SessionState = {
   sentences: [],
   counts: { jumps: 0, retakes: 0, reconnects: 0 },
   summary: null,
-  blocksSeen: [],
+  sectionsSeen: [],
   stageFontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
   stageAppearance: {
     textIntensity: 'standard',
@@ -1487,23 +1530,38 @@ function buildStartSequenceGate(input: StartSessionInput): {
  * ------------------------------------------------------------------------- */
 
 /**
- * Which authored block a token position falls in.
+ * The one section a document with no outline at all is made of.
  *
- * Derived rather than reported: the engine states where the reader is, and
- * block identity is a property of the compiled document. Resolving it here
- * means the summary can count the sections a take reached without the engine
- * having to know what a section is.
+ * Only degraded input reaches it — the compiler always emits an outline, with a
+ * synthetic "Script" node when there are no headings — but a take that was
+ * somewhere in the script was in a section of it, and reporting none would
+ * read as a take that went nowhere.
  */
-function blockIdForToken(token: number): string | null {
-  const compiled = compiledScript;
-  if (!compiled) return null;
-  const at = Math.round(token);
-  let best: string | null = null;
-  for (const sentence of compiled.sentences) {
-    if (sentence.startTokenIndex <= at) best = sentence.blockId;
-    else break;
-  }
-  return best;
+const WHOLE_SCRIPT_SECTION = 'whole-script';
+
+/**
+ * Which section a token position falls in, for `sectionsReached` (#285).
+ *
+ * A PART on a divided script, and the innermost outline heading otherwise —
+ * which is what the issue asked for and what a presenter means by the word.
+ * It used to be the authored BLOCK, and every paragraph is a block, so a
+ * script with two headings and six paragraphs reported six sections reached.
+ *
+ * Parts are the compiler's division, read off the compile this take runs on
+ * rather than re-derived: `TakePart` says why the store must not hold a second
+ * opinion about how a script divides. A divided script whose headings nest
+ * deeper than its parts counts parts, while "Ended in" still names the deeper
+ * heading — the count says how much of the talk was covered, the ending says
+ * exactly where it stopped.
+ *
+ * Compared as a fractional position, as `locateEnding` does: a confirmed
+ * anchor half a token short of a heading has not reached it.
+ */
+function sectionIdForToken(s: SessionState, token: number): string | null {
+  if (!Number.isFinite(token) || token < 0) return null;
+  const parts = compiledScript?.parts ?? [];
+  if (parts.length > 0) return partAt(parts, token)?.id ?? null;
+  return outlineSectionAt(s.outline, token)?.id ?? WHOLE_SCRIPT_SECTION;
 }
 
 /**
@@ -1521,7 +1579,6 @@ function blockIdForToken(token: number): string | null {
  */
 function handleSnapshot(snapshot: AlignmentSnapshot): void {
   const nowMs = monotonicNowMs();
-  const blockId = blockIdForToken(snapshot.confirmedToken);
   if (activeTake !== null) {
     // §36.3 unique coverage: the high-water mark of the conservative anchor.
     // `confirmed` is monotone except across an accepted retake or a manual
@@ -1574,6 +1631,12 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
     activeTake.lastState = heldMove ? null : snapshot.state;
   }
 
+  /*
+   * Every snapshot counts, a manual anchor included. A manual take moves by
+   * nothing else, and the operator stepping into a section has the take in
+   * it as surely as a voice reading into it does.
+   */
+  const sectionId = sectionIdForToken(get(state), snapshot.confirmedToken);
   state.update((s) => ({
     ...s,
     snapshot,
@@ -1608,8 +1671,10 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
       (s.part !== null &&
         snapshot.decision !== 'manualAnchor' &&
         Math.floor(snapshot.confirmedToken) >= s.part.endTokenIndex),
-    blocksSeen:
-      blockId && !s.blocksSeen.includes(blockId) ? [...s.blocksSeen, blockId] : s.blocksSeen,
+    sectionsSeen:
+      sectionId !== null && !s.sectionsSeen.includes(sectionId)
+        ? [...s.sectionsSeen, sectionId]
+        : s.sectionsSeen,
   }));
   smoothFollow.ingestSnapshot(snapshot);
 }
@@ -1746,15 +1811,74 @@ function roundToken(token: number | undefined): number | undefined {
 }
 
 /**
+ * Spoken tokens in the document this take is running on.
+ *
+ * The COMPILE's count, not `scriptWordCount` — `startTake` pads the count it
+ * hands over to at least one, so an empty script would otherwise be credited
+ * with a token it does not have.
+ */
+function documentTokenCount(): number {
+  return compiledScript?.spokenTokens.length ?? scriptWordCount;
+}
+
+/** "Script followed": how far the last pass got, out of how much (#285). */
+interface TakeCoverage {
+  wordsFollowed: number;
+  coverageWords: number;
+  coverageScope: CoverageScope;
+}
+
+/**
  * §36.3 "unique coverage", the honest form.
  *
  * The furthest the CONFIRMED anchor reached in this pass, not the position it
  * finished at. Reporting the final position would score a take that lost the
  * thread and jumped to the closing line as complete — which is precisely the
  * summary that made the old numbers untrustworthy.
+ *
+ * ---------------------------------------------------------------------------
+ * OUT OF WHAT (#285)
+ * ---------------------------------------------------------------------------
+ * The span this pass could have covered: from where it began to the end of the
+ * part it was bounded to, or to the end of the script. It used to be the whole
+ * script whatever the take was given, so a 50-word part read to its last word
+ * reported "49 of 200 words (25%)", and a "From here" take near the end of a
+ * script could never look complete.
+ *
+ * From the PASS's start rather than the launch's, because that is where the
+ * numerator is measured from — a retake opens a new pass, and a denominator
+ * left at the launch point would score a pass that covered everything it could
+ * as a fraction of words it never had the chance to read. `coverageScope` names
+ * the span so the summary can say what it is a fraction of.
+ *
+ * Both ends are bounded, not just the total. The part's bound is advisory and
+ * the presenter can read straight past it, but what is past it is not part of
+ * the part; and a pass begun before the part (the operator moved back above it
+ * and retook) has not covered the part by covering the run-up to it.
+ *
+ * Still a DISTANCE, as it always was: a span read from its first word to its
+ * last is N-1 of N. Counting it inclusively would credit a take that never
+ * moved off its opening anchor with a word it did not hear.
  */
-function takeWordsFollowed(): number {
-  if (activeTake === null) return 0;
+function takeCoverage(s: SessionState): TakeCoverage {
+  const documentTokens = documentTokenCount();
+  const passStart = activeTake?.startTokenIndex ?? 0;
+  const part = s.part;
+  const documentEnd = documentTokens - 1;
+  const scopeEnd = part === null ? documentEnd : Math.min(part.endTokenIndex, documentEnd);
+  const scopeStart = Math.max(0, passStart, part?.startTokenIndex ?? 0);
+  const coverageWords = Math.max(0, scopeEnd - scopeStart + 1);
+  const coverageScope: CoverageScope =
+    part === null
+      ? scopeStart === 0
+        ? 'script'
+        : 'restOfScript'
+      : scopeStart === part.startTokenIndex
+        ? 'part'
+        : 'restOfPart';
+  if (activeTake === null || coverageWords === 0) {
+    return { wordsFollowed: 0, coverageWords, coverageScope };
+  }
   /*
    * How far this PASS got, not where its cursor ended up in the document.
    *
@@ -1764,13 +1888,18 @@ function takeWordsFollowed(): number {
    * looking like one that read more than half the script. Subtracting the start
    * makes it the distance travelled, which is what the summary claims it is.
    */
-  return Math.max(0, Math.round(activeTake.maxConfirmedToken - activeTake.startTokenIndex));
+  const reached = Math.min(activeTake.maxConfirmedToken, scopeEnd);
+  const wordsFollowed = Math.min(
+    coverageWords,
+    Math.max(0, Math.round(reached - scopeStart)),
+  );
+  return { wordsFollowed, coverageWords, coverageScope };
 }
 
 /**
  * The furthest ABSOLUTE token this pass reached — a position, not a distance.
  *
- * Split out from `takeWordsFollowed` when start points arrived, because the two
+ * Split out from `takeCoverage` when start points arrived, because the two
  * numbers stopped being the same the moment a take could open anywhere but
  * zero. This one answers "where did it get to" and is what the session row's
  * ending index and the retake's section are resolved from; the other answers
@@ -2615,14 +2744,13 @@ export function autoScrollReachedEnd(reason: StageAutoScrollEndReason): void {
 /**
  * The transport ran the document off its end: the take is at the last token.
  *
- * The last token of the COMPILE, not `scriptWordCount` — `startTake` pads the
- * count it hands over to at least one, so an empty script would otherwise be
- * credited with a token it does not have. The stage reports an empty document
- * as `nowhere_to_go` and never reaches here; this is the second guard.
+ * The last token of the COMPILE — see `documentTokenCount`. The stage reports
+ * an empty document as `nowhere_to_go` and never reaches here; this is the
+ * second guard.
  */
 function recordAutoScrollEnd(s: SessionState): void {
   if (activeTake === null) return;
-  const documentTokens = compiledScript?.spokenTokens.length ?? scriptWordCount;
+  const documentTokens = documentTokenCount();
   if (documentTokens <= 0) return;
   const lastToken = documentTokens - 1;
   activeTake.autoScrollEndToken = lastToken;
@@ -3128,7 +3256,7 @@ export function stopSession(): SessionSummary {
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
-    sectionsReached: s.blocksSeen.length,
+    sectionsReached: s.sectionsSeen.length,
     retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s, rolledTo ?? s.snapshot?.confirmedToken ?? null),
@@ -3141,8 +3269,7 @@ export function stopSession(): SessionSummary {
     manualJumps: s.counts.jumps,
     followingShare: takeFollowingShare(),
     wordsHeard,
-    wordsFollowed: takeWordsFollowed(),
-    scriptWords: scriptWordCount,
+    ...takeCoverage(s),
     wordsInFlight,
     /*
      * "Never had a recogniser", not "has none right now". A take that connected
@@ -3172,7 +3299,8 @@ export function stopSession(): SessionSummary {
       reconnectCount: s.counts.reconnects,
       manualCorrectionCount: s.counts.jumps,
       metrics: {
-        sectionsReached: s.blocksSeen.length,
+        // The summary's own figure, so the row and the dialog cannot disagree.
+        sectionsReached: summary.sectionsReached,
         durationSeconds: s.elapsedSeconds,
         endingLocation: summary.endingLocation,
       },
@@ -3241,7 +3369,10 @@ function emptySummary(s: SessionState): SessionSummary {
     followingShare: null,
     wordsHeard: 0,
     wordsFollowed: 0,
-    scriptWords: scriptWordCount,
+    // Nothing was given, so nothing is the denominator — not the length of
+    // whatever script the last session happened to run.
+    coverageWords: 0,
+    coverageScope: 'script',
     wordsInFlight: 0,
     voiceFollowingAvailable: true,
   };
@@ -3256,15 +3387,7 @@ function emptySummary(s: SessionState): SessionSummary {
  * instead of offering the same thing twice.
  */
 function sectionStartFor(s: SessionState, token: number): number | null {
-  const flat: OutlineNode[] = [];
-  const walk = (nodes: OutlineNode[]): void => {
-    for (const n of nodes) {
-      flat.push(n);
-      walk(n.children);
-    }
-  };
-  walk(s.outline);
-  const section = [...flat].reverse().find((n) => n.startTokenIndex <= token);
+  const section = outlineSectionAt(s.outline, token);
   if (!section || section.startTokenIndex <= 0) return null;
   return section.startTokenIndex;
 }
@@ -3280,17 +3403,9 @@ function sectionStartFor(s: SessionState, token: number): number | null {
  */
 function locateEnding(s: SessionState, token: number | null): string {
   if (token === null) return 'Beginning';
-  const flat: OutlineNode[] = [];
-  const walk = (nodes: OutlineNode[]) => {
-    for (const n of nodes) {
-      flat.push(n);
-      walk(n.children);
-    }
-  };
-  walk(s.outline);
-  const section = [...flat]
-    .reverse()
-    .find((n) => n.startTokenIndex <= token);
+  // The lookup `sectionIdForToken` counts an undivided script's sections with,
+  // so the two never disagree about which heading a token is under.
+  const section = outlineSectionAt(s.outline, token);
   if (section) return section.title;
   /*
    * A script with no headings still ended SOMEWHERE, and it used to be told in
