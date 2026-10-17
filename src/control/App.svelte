@@ -342,6 +342,13 @@ import { rememberReaderFrame } from './lib/reader-frame';
     const releaseModelReadiness = speechModelReadiness.subscribe(() => {});
 
     /*
+     * A held launch belongs to the screen it was asked for on. Leave that
+     * screen — a menu command, a take starting from somewhere else — and the
+     * sheet would follow, still holding a launch for a context that is gone.
+     */
+    const releaseReadinessOnNavigate = route.subscribe(() => dismissTakeReadiness());
+
+    /*
      * Native menu clicks. Installed for the life of the window, and reading
      * both context and actions at dispatch time — a menu bar outlives every
      * route, so capturing either would pin the whole menu to whatever screen
@@ -797,6 +804,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       unregisterSaveGuard();
       teardownShutdown();
       releaseModelReadiness();
+      releaseReadinessOnNavigate();
     };
   });
 

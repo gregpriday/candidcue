@@ -185,3 +185,44 @@ test('Present from the Library is checked like the editor’s', async ({ page })
   await expectTakeRunning(page);
   errors.expectClean();
 });
+
+/** A native menu command, delivered the way Rust delivers it. */
+async function menuCommand(page: Page, id: string): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate((commandId) => window.__E2E__.emit('menu://command', { id: commandId }), id),
+    )
+    .toBeGreaterThan(0);
+}
+
+test('File › Present is checked too, and a launch that goes ahead clears the sheet', async ({
+  page,
+}) => {
+  /*
+   * ⌘↩ is File › Present's accelerator, so in the packaged app the menu takes
+   * it before the editor's own shortcut can — and the menu called `startTake`
+   * directly. The most common way to present skipped the check.
+   */
+  const errors = watchPageErrors(page);
+  await installTauriShim(page, {
+    welcomed: true,
+    seedScripts: [SCRIPT],
+    promptMode: 'voice',
+    modelStatuses: nothingInstalled(),
+  });
+  await page.goto('/control.html');
+  await openScript(page, SCRIPT.title);
+  await expect(footer(page)).toContainText('No speech model is installed');
+
+  await menuCommand(page, 'file.present');
+  await expect(sheet(page)).toBeVisible();
+  await expect(sheet(page)).toContainText('No speech model is installed');
+
+  // Installed from the sheet's own button, in another window; File › Present
+  // again with the old sheet still up.
+  await announce(page, modelStatus());
+  await menuCommand(page, 'file.present');
+  await expectTakeRunning(page);
+  await expect(sheet(page)).toHaveCount(0);
+  errors.expectClean();
+});

@@ -14,7 +14,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get, type Writable } from 'svelte/store';
 
-const h = vi.hoisted(() => ({ startTake: vi.fn(async () => true) }));
+const h = vi.hoisted(() => ({
+  startTake: vi.fn(async () => true),
+  listMicrophones: vi.fn(async (): Promise<unknown[]> => []),
+}));
 
 vi.mock('../../../src/control/lib/start-take', async () => {
   const { readable } = await import('svelte/store');
@@ -32,6 +35,26 @@ vi.mock('../../../src/control/stores/speech-model-readiness', async () => {
       damaged: false,
       installing: false,
     }),
+  };
+});
+
+vi.mock('../../../src/control/services/voice-facade', async (orig) => ({
+  ...(await orig<typeof import('../../../src/control/services/voice-facade')>()),
+  getVoiceFacade: () => ({ listMicrophones: h.listMicrophones }),
+}));
+
+/** The editor's document and compile, which the check reads script facts from. */
+vi.mock('../../../src/control/stores/editor', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/stores/editor')>();
+  const { writable } = await import('svelte/store');
+  return { ...actual, editor: writable({ scriptId: null, loading: false }) };
+});
+vi.mock('../../../src/control/stores/compiled', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/stores/compiled')>();
+  const { writable } = await import('svelte/store');
+  return {
+    ...actual,
+    compiled: writable({ status: 'idle', result: null, error: null, scriptId: null }),
   };
 });
 
@@ -53,6 +76,8 @@ import {
 import { speechModelReadiness } from '../../../src/control/stores/speech-model-readiness';
 import type { SpeechModelReadiness } from '../../../src/control/stores/speech-model-readiness';
 import { settings } from '../../../src/control/stores/settings';
+import { editor } from '../../../src/control/stores/editor';
+import { compiled } from '../../../src/control/stores/compiled';
 import {
   defaultAppSettings,
   type AppSettings,
@@ -60,6 +85,8 @@ import {
 
 const model = speechModelReadiness as unknown as Writable<SpeechModelReadiness>;
 const settingsDoc = settings as unknown as Writable<AppSettings>;
+const editorDoc = editor as unknown as Writable<{ scriptId: string | null; loading: boolean }>;
+const compileDoc = compiled as unknown as Writable<Record<string, unknown>>;
 
 const INSTALLED: SpeechModelReadiness = {
   known: true,
@@ -70,15 +97,48 @@ const INSTALLED: SpeechModelReadiness = {
 };
 const MISSING: SpeechModelReadiness = { ...INSTALLED, installed: false };
 
+const YETI = {
+  deviceId: 'mic-1',
+  label: 'Blue Yeti',
+  isDefault: false,
+  available: true,
+};
+
+/** A microphone pinned in Settings rather than the system default. */
+function pinYeti(): void {
+  const base = defaultAppSettings();
+  settingsDoc.set({
+    ...base,
+    audio: {
+      ...base.audio,
+      followSystemDefault: false,
+      preferredDeviceId: YETI.deviceId,
+      preferredDeviceLabel: YETI.label,
+    },
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function findingIds(): string[] {
   return get(takeReadinessPrompt)?.verdict.findings.map((f) => f.id) ?? [];
 }
 
 beforeEach(() => {
   h.startTake.mockClear();
+  h.listMicrophones.mockReset();
+  h.listMicrophones.mockResolvedValue([]);
   dismissTakeReadiness();
   model.set(INSTALLED);
   settingsDoc.set(defaultAppSettings());
+  editorDoc.set({ scriptId: null, loading: false });
+  compileDoc.set({ status: 'idle', result: null, error: null, scriptId: null });
 });
 
 describe('checkThenStartTake', () => {
@@ -176,9 +236,109 @@ describe('checkThenStartTake', () => {
   });
 
   it('does not judge a script by a compile of a different one', async () => {
-    // Nothing is open in the editor: the script facts are unknown, which is
-    // optimistic — `startTake` compiles the saved source itself.
-    await checkThenStartTake('a-script-the-editor-does-not-hold');
+    // The editor holds script A, settled, with nothing speakable in it.
+    editorDoc.set({ scriptId: 'a', loading: false });
+    compileDoc.set({
+      status: 'ready',
+      error: null,
+      scriptId: 'a',
+      result: { spokenWordCount: 0, diagnostics: [] },
+    });
+
+    // A launch of B from the Library knows nothing about B's compile, which
+    // is optimistic — `startTake` compiles the saved source itself.
+    await checkThenStartTake('b');
+    expect(h.startTake).toHaveBeenCalledWith('b', {});
+
+    // A's own launch is judged by it, and there is nothing to start.
+    await checkThenStartTake('a');
+    expect(findingIds()).toEqual(['script_silent']);
+    expect(get(takeReadinessPrompt)?.verdict.blocked).toBe(true);
+    await startAnyway();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a pinned microphone', () => {
+  it('is reported when it is not connected', async () => {
+    // `matchRememberedMicrophone` answers `undefined` for "not connected"; a
+    // comparison with null never fired.
+    pinYeti();
+    await checkThenStartTake('script-1');
+    expect(findingIds()).toEqual(['mic_missing']);
+    expect(get(takeReadinessPrompt)?.verdict.blocked).toBe(false);
+  });
+
+  it('is not reported when it is', async () => {
+    pinYeti();
+    h.listMicrophones.mockResolvedValue([YETI]);
+    await checkThenStartTake('script-1');
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('checks that overlap', () => {
+  it('a launch that goes ahead answers a sheet left from an earlier attempt', async () => {
+    // Sheet up over a missing model; the model is installed from its own
+    // button; File › Present is chosen with the sheet still showing.
+    model.set(MISSING);
+    await checkThenStartTake('script-1');
+    expect(get(takeReadinessPrompt)).not.toBeNull();
+
+    model.set(INSTALLED);
+    await checkThenStartTake('script-1');
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    // Left up, the sheet would sit over the take with the old launch behind it.
+    expect(get(takeReadinessPrompt)).toBeNull();
+  });
+
+  it('a check finishing after the sheet was dismissed does not bring it back', async () => {
+    pinYeti();
+    model.set(MISSING);
+    const devices = deferred<unknown[]>();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+
+    const pending = checkThenStartTake('script-1');
+    dismissTakeReadiness();
+    devices.resolve([YETI]);
+    await pending;
+
+    expect(get(takeReadinessPrompt)).toBeNull();
+    expect(h.startTake).not.toHaveBeenCalled();
+  });
+
+  it('only the newest of two checks in flight goes on', async () => {
+    pinYeti();
+    model.set(MISSING);
+    const first = deferred<unknown[]>();
+    const second = deferred<unknown[]>();
+    h.listMicrophones.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const older = checkThenStartTake('script-1', { presentationMode: 'reader' });
+    const newer = checkThenStartTake('script-1', { presentationMode: 'prompter' });
+    second.resolve([YETI]);
+    await newer;
+    first.resolve([YETI]);
+    await older;
+
+    await startAnyway();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { presentationMode: 'prompter' });
+  });
+
+  it('reads the model as it is when the device list arrives', async () => {
+    pinYeti();
+    model.set(MISSING);
+    const devices = deferred<unknown[]>();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+
+    const pending = checkThenStartTake('script-1');
+    // The install finishes while the microphones are being listed.
+    model.set(INSTALLED);
+    devices.resolve([YETI]);
+    await pending;
+
+    expect(get(takeReadinessPrompt)).toBeNull();
     expect(h.startTake).toHaveBeenCalledTimes(1);
   });
 });

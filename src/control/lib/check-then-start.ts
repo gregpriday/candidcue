@@ -20,7 +20,7 @@ import { startTake, type StartTakeOptions } from './start-take';
 import { isCompileSettledForScript } from './editor-readiness';
 import { matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
-import type { PresentationMode } from '../services/settings-types';
+import type { AppSettings, PresentationMode } from '../services/settings-types';
 import { compiled } from '../stores/compiled';
 import { takeDestination } from '../stores/destination';
 import { editor } from '../stores/editor';
@@ -50,53 +50,70 @@ export interface TakeReadinessPrompt {
 
 const prompt = writable<TakeReadinessPrompt | null>(null);
 
+/*
+ * Which check is current. A check awaits the device list, so two can be in
+ * flight — Present pressed twice, or File › Present while the sheet is up —
+ * and one can finish after the sheet it would have filled was dismissed. Only
+ * the newest may launch or hold a prompt; a dismissal retires every check
+ * before it.
+ */
+let generation = 0;
+
 /** Mounted by the shell, so the sheet is there whichever route launched. */
 export const takeReadinessPrompt: Readable<TakeReadinessPrompt | null> = {
   subscribe: prompt.subscribe,
 };
 
 /**
- * Resolve the verdict for launching `scriptId`.
+ * The pinned microphone, and whether it is connected right now.
  *
- * Async because the device list is the only fact here that has to be fetched,
- * and it must be fetched the SAME way the take path fetches it — through
+ * Fetched the SAME way the take path fetches it — through
  * `matchRememberedMicrophone`, which matches on id and falls back to the
  * remembered label, because WKWebView salts device ids per origin and a
  * replug can change them. Comparing raw ids here would report a perfectly
  * present microphone as missing on some restarts.
  */
+async function pinnedMicrophone(
+  audio: AppSettings['audio'],
+): Promise<{ label: string | null; available: boolean }> {
+  const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
+  // Nothing pinned is "follow the system default", which is not a problem.
+  if (pinned === undefined) return { label: null, available: true };
+  const label = audio.preferredDeviceLabel ?? pinned;
+  try {
+    const devices = await getVoiceFacade().listMicrophones();
+    // `undefined`, not null, is the matcher's "not connected". Comparing with
+    // null was always true, so a missing microphone was never reported.
+    const match = matchRememberedMicrophone(devices, {
+      deviceId: pinned,
+      ...(audio.preferredDeviceLabel === undefined ? {} : { label: audio.preferredDeviceLabel }),
+    });
+    return { label, available: match !== undefined };
+  } catch {
+    // Enumeration failed, so absence is not proven. `start-take.ts` honours
+    // the pin in exactly this case; accusing the hardware would be worse.
+    return { label, available: true };
+  }
+}
+
+/**
+ * Resolve the verdict for launching `scriptId`.
+ *
+ * Async because the device list is the only fact here that has to be fetched.
+ */
 export async function resolveTakeReadiness(
   scriptId: string,
   intent: LaunchIntent = {},
 ): Promise<ReadinessVerdict> {
-  const s = get(settings);
-  const audio = s.audio;
-  const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
-
-  let pinnedMicLabel: string | null = null;
-  let pinnedMicAvailable = true;
-  if (pinned !== undefined) {
-    pinnedMicLabel = audio.preferredDeviceLabel ?? pinned;
-    try {
-      const devices = await getVoiceFacade().listMicrophones();
-      pinnedMicAvailable =
-        matchRememberedMicrophone(devices, {
-          deviceId: pinned,
-          ...(audio.preferredDeviceLabel === undefined
-            ? {}
-            : { label: audio.preferredDeviceLabel }),
-        }) !== null;
-    } catch {
-      // Enumeration failed, so absence is not proven. `start-take.ts` honours
-      // the pin in exactly this case; accusing the hardware would be worse.
-      pinnedMicAvailable = true;
-    }
-  }
+  const mic = await pinnedMicrophone(get(settings).audio);
 
   /*
-   * Read AFTER the await: the answer is live, and an install that finished
-   * while the device list was being fetched is an install that finished.
+   * Everything else is read AFTER the await. The model's answer is live, and
+   * an install that finished while the device list was being fetched is an
+   * install that finished; so is a switch to a voice take made in Settings in
+   * the same moment, which `startTake` will read when it loads the document.
    */
+  const s = get(settings);
   const model = get(speechModelReadiness);
 
   /*
@@ -140,8 +157,8 @@ export async function resolveTakeReadiness(
     modelSupported: model.supported,
     modelDamaged: model.damaged,
     modelInstalling: model.installing,
-    pinnedMicLabel,
-    pinnedMicAvailable,
+    pinnedMicLabel: mic.label,
+    pinnedMicAvailable: mic.available,
     spokenWordCount: scriptFactsKnown ? (result?.spokenWordCount ?? 0) : 1,
     blockingDiagnostics: scriptFactsKnown
       ? (result?.diagnostics ?? []).filter((d) => d.blocking).length
@@ -167,8 +184,13 @@ export async function checkThenStart(
   intent: LaunchIntent,
   launch: () => Promise<unknown>,
 ): Promise<void> {
+  const mine = ++generation;
   const verdict = await resolveTakeReadiness(scriptId, intent);
+  if (mine !== generation) return;
   if (!verdict.show) {
+    // A sheet held over an earlier attempt is answered by this one. Left up,
+    // it would sit over the take with that attempt's launch still behind it.
+    prompt.set(null);
     await launch();
     return;
   }
@@ -190,8 +212,12 @@ export function checkThenStartTake(
   );
 }
 
-/** Close the sheet without launching anything. */
+/**
+ * Close the sheet without launching anything, and retire any check still in
+ * flight — one finishing afterwards must not put the sheet back.
+ */
 export function dismissTakeReadiness(): void {
+  generation += 1;
   prompt.set(null);
 }
 
@@ -203,7 +229,7 @@ export function dismissTakeReadiness(): void {
  */
 export async function startAnyway(): Promise<void> {
   const held = get(prompt);
-  prompt.set(null);
+  dismissTakeReadiness();
   if (held === null || held.verdict.blocked) return;
   await held.start();
 }

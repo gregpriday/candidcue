@@ -620,13 +620,16 @@ import type { PresentationMode } from '../services/settings-types';
     practice?: boolean,
     part?: TakePartRequest,
   ): Promise<void> {
+    // Captured: the held launch must start the script it was asked for, not
+    // whatever `scriptId` names by the time somebody presses Start anyway.
+    const id = scriptId;
     await checkThenStart(
-      scriptId,
+      id,
       {
         ...(mode === undefined ? {} : { mode }),
         ...(practice ? { practice: true } : {}),
       },
-      () => present(mode, startTokenIndex, practice, part),
+      () => present(id, mode, startTokenIndex, practice, part),
     );
   }
 
@@ -641,13 +644,14 @@ import type { PresentationMode } from '../services/settings-types';
    * for why an explicit choice sticks when the mid-take toggle does not.
    */
   async function present(
+    id: string,
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
     part?: TakePartRequest,
   ): Promise<void> {
     await saveNow();
-    await startTake(scriptId, {
+    await startTake(id, {
       // A practice forces its own window, so passing a mode alongside it would
       // be handing `startTake` a preference it is about to overrule anyway.
       ...(practice ? { practice: true } : mode === undefined ? {} : { presentationMode: mode }),
@@ -794,7 +798,10 @@ import type { PresentationMode } from '../services/settings-types';
     {
       label: 'Review take setup…',
       description: 'Check the model, microphone and display before opening the stage.',
-      onselect: () => void checkThenStart(scriptId, { requested: true }, () => present()),
+      onselect: () => {
+        const id = scriptId;
+        void checkThenStart(id, { requested: true }, () => present(id));
+      },
     },
   ]);
 
