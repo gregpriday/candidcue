@@ -304,16 +304,6 @@
         matched += 1;
         row.setAttribute('data-settings-search-hit', '');
         row.removeAttribute('data-settings-search-miss');
-      } else if (row.contains(document.activeElement)) {
-        /*
-         * Never the row the keyboard is in. A change made in a matching row can
-         * rewrite its own text — a follow feel's description, a slider's
-         * readout — and the `$settings` re-run above would then hide the
-         * control mid-adjustment and drop focus with it. Left unmarked, the
-         * safe direction, until the next pass after focus has moved on.
-         */
-        row.removeAttribute('data-settings-search-miss');
-        row.removeAttribute('data-settings-search-hit');
       } else {
         row.setAttribute('data-settings-search-miss', '');
         row.removeAttribute('data-settings-search-hit');
@@ -3386,13 +3376,9 @@
    * body, so a rule hung off it would be global in the way that matters and
    * specific only by accident. These two attributes are set in exactly one
    * `$effect`, in this file.
-   *
-   * `!important` because every row's own root sets `display` in a scoped rule
-   * — `.toggle-row.svelte-…` and its siblings — and that outranks a bare
-   * attribute selector. Without it the misses were marked and never hidden.
    */
   :global([data-settings-search-miss]) {
-    display: none !important;
+    display: none;
   }
   /*
    * A wash rather than a highlighted substring. Marking the matched words
