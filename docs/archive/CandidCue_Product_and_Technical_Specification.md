@@ -1,3 +1,21 @@
+> **Historical design. This is not a description of the app as it ships.**
+>
+> CandidCue as shipped differs from this document: speech recognition runs
+> on-device, there is no live coaching, there is no OpenAI or other hosted
+> speech or language model, and macOS is the only supported platform. Where
+> this document and the code disagree, the code is the authority.
+>
+> The text and section numbering below are unchanged, because code comments
+> still cite them: mostly by bare number (`§46`), as `spec §N` in
+> `src-tauri/`, and as `primary §N`. Numbers below §62 may also belong to the
+> [Smooth Following specification](CandidCue_Smooth_Following_and_Intelligent_Alignment_Specification.md),
+> so read the comment around a citation before trusting the number.
+>
+> [The archive index](README.md) explains how to read a `§` reference in a
+> code comment.
+
+---
+
 # CandidCue
 ## Product, UX, Architecture, and Implementation Specification
 

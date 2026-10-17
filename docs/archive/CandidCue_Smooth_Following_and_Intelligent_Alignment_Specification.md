@@ -1,3 +1,23 @@
+> **Historical design. This is not a description of the app as it ships.**
+>
+> CandidCue as shipped differs from this document: speech recognition runs
+> on-device, there is no live coaching, there is no OpenAI or other hosted
+> speech or language model, and macOS is the only supported platform. Where
+> this document and the code disagree, the code is the authority.
+>
+> The text and section numbering below are unchanged, because code comments
+> still cite them: as `companion §N`, and by bare number in the stage motion
+> code (`§30.5`, `§62`, `§70.5`). This is the only archived document with
+> sections from §62 to §90; below that, a bare number may equally be the
+> [Product and Technical Specification](CandidCue_Product_and_Technical_Specification.md).
+> Some bare numbers are review-item numbers that match no document, so check
+> that the section's topic matches the comment.
+>
+> [The archive index](README.md) explains how to read a `§` reference in a
+> code comment.
+
+---
+
 # CandidCue
 ## Smooth Following, Intelligent Alignment, Retakes, and Live Coaching
 ### Mandatory Companion Specification to the Product and Technical Specification
