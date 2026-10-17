@@ -303,12 +303,20 @@ impl SpeechEngine {
     ///
     /// Blocks on a cold start, because it loads the model first: see
     /// [`Self::ensure_loaded`].
+    ///
+    /// `admit` is asked once the recogniser is in hand and before anything is
+    /// replaced, and an `Err` from it leaves the running session exactly as it
+    /// was. A load can take seconds, and whether this caller may take the
+    /// stream can change inside it (#264: a take opening while Settings'
+    /// transcription test waited on the same load).
     pub fn start_stream<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,
         model: &BundledModel,
+        admit: impl FnOnce() -> Result<(), AppError>,
     ) -> Result<u64, AppError> {
         let recognizer = self.ensure_loaded(&app, model)?;
+        admit()?;
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

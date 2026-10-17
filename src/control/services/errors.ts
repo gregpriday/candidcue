@@ -305,6 +305,12 @@ const ERROR_COPY: Record<string, string> = {
   STT_LANGUAGE_UNAVAILABLE:
     'That language is not installed on this machine. Install it in Settings › Speech first.',
 
+  /* -- testing transcription ---------------------------------------------- */
+  // Refused, not failed: the take is using the recogniser, and a test would
+  // take it away from the take for good (#264).
+  STT_TEST_BLOCKED_BY_TAKE:
+    'Transcription cannot be tested during a take: the take is using the recogniser, and a test would stop it following you. End the take, then test again.',
+
   /* -- generic backend ---------------------------------------------------- */
   INTERNAL_UNEXPECTED:
     'Something went wrong inside CandidCue. Try again; if it keeps happening, export a support bundle from Settings → Data, privacy & updates → Diagnostics.',

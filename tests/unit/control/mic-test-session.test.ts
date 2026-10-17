@@ -236,6 +236,33 @@ describe('a failed start leaves the screen usable', () => {
     expect(h.last().error).toContain('mic busy');
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('shows a refusal reported while opening, and releases what was opened (#264)', async () => {
+    // The real facade does not reject when `start_transcription` refuses — a
+    // take holding the recogniser, say. It releases the capture, reports the
+    // copy through `onError` and only then hands back its disposer.
+    const dispose = vi.fn();
+    const snapshots: MicTestSnapshot[] = [];
+    const refusal = 'Transcription cannot be tested during a take.';
+    const session = new MicTestSession({
+      open: async (_deviceId, handlers) => {
+        handlers.onError(refusal);
+        return dispose;
+      },
+      onChange: (snapshot) => snapshots.push(snapshot),
+      describe: String,
+    });
+
+    await session.start('mic-1');
+
+    const last = snapshots[snapshots.length - 1] as MicTestSnapshot;
+    expect(session.running).toBe(false); // the button is pressable again
+    expect(last.state).toBe('idle');
+    expect(last.error).toBe(refusal);
+    expect(last.stoppedReason).toBe('error');
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('the chosen deadlines', () => {

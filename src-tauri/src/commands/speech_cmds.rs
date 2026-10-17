@@ -20,6 +20,7 @@ use crate::speech::catalogue::{self, ModelEntry};
 use crate::speech::language_options::{self, SpeechLanguageOptions};
 use crate::speech::model_manager::{self, SpeechModelManager, SpeechModelStatus};
 use crate::speech::{decode_base64, BundledModel, SpeechEngine, SAMPLE_RATE_HZ};
+use crate::windows::CONTROL_LABEL;
 
 /// The recogniser the user's settings select.
 ///
@@ -202,21 +203,54 @@ pub struct TranscriptionOptions {}
 /// Every subsequent `push_transcription_audio` and every event the session
 /// emits carries this generation. It is what keeps a frame captured before a
 /// take ended out of the next take's audio.
+///
+/// Refused from any window but control while a take is open
+/// ([`refuse_test_during_take`]).
 #[tauri::command]
 pub async fn start_transcription<R: tauri::Runtime>(
     boot: State<'_, crate::database::BootStatus>,
     app: tauri::AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
     db: State<'_, Database>,
+    coordinator: State<'_, AppCoordinator>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
+    /*
+     * The CALLER decides, not the session alone.
+     *
+     * The take's own call arrives with the coordinator session already open —
+     * `startTake` awaits `start_session` before the voice pipeline starts — so
+     * "refuse while a take runs" would refuse the take itself. Takes run in
+     * control and the test lives in Settings, and the window label is Tauri's
+     * to supply rather than the renderer's to claim. A take started while a
+     * test is running still replaces it, which is the order that was always
+     * safe.
+     */
+    let caller = window.label().to_string();
+    refuse_test_during_take(&caller, &coordinator)?;
     let model = selected_model(&db).await?;
     // All of `start_stream`, not just its load: the rest is microseconds, and
     // splitting it would open a gap between loading a recogniser and binding
     // a session to it that nothing needs.
     off_the_runtime(app, move |app, speech| {
-        speech.start_stream(app.clone(), model)
+        /*
+         * And again once the model is in hand, just before anything is bound.
+         *
+         * A load takes seconds and a take can open inside it: `startTake`
+         * preloads before it opens its session, so Settings can pass the check
+         * above, wait on that same load, and — asked only up front — reach
+         * `start_stream` after the take did and win. Asked after the load, the
+         * take has to open its session AND get its own stream started between
+         * this question and the binding, behind an IPC round trip and a
+         * microphone. Narrower, not closed: closing it means admitting
+         * ownership under the coordinator's lock. Control always passes.
+         */
+        speech.start_stream(app.clone(), model, || {
+            use tauri::Manager as _;
+            refuse_test_during_take(&caller, &app.state::<AppCoordinator>())
+        })
     })
     .await
 }
@@ -440,6 +474,25 @@ pub async fn select_speech_language<R: tauri::Runtime>(
      */
     crate::commands::settings_cmds::broadcast_settings(&app, &updated);
     Ok(updated)
+}
+
+/// Settings' "Test transcription" is refused while a take is open (#264).
+///
+/// It makes the same call a take does, and there is one stream at a time:
+/// `start_stream` hands the alignment engine to whichever started last, so a
+/// test accepted mid-take took the take's recogniser away for good. Only
+/// control runs takes, so control is never refused here.
+fn refuse_test_during_take(caller: &str, coordinator: &AppCoordinator) -> Result<(), AppError> {
+    if caller == CONTROL_LABEL || !take_is_running(coordinator) {
+        return Ok(());
+    }
+    Err(AppError::structured(
+        "STT_TEST_BLOCKED_BY_TAKE",
+        ErrorCategory::Validation,
+        "End the current take before testing transcription.",
+        true,
+    )
+    .with_log(format!("start_transcription from `{caller}` refused while a session was open")))
 }
 
 /// Whether a take is open, as Rust sees it.
