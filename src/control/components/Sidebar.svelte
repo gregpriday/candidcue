@@ -10,9 +10,15 @@
 
     the brand tile + wordmark   repeated identity the native titlebar already
                                 carries. §7.1: let the native title and icon do
-                                it. What survives is a small mark, kept only
-                                because on macOS the traffic lights need
-                                something to sit beside.
+                                it. A small mark outlived the wordmark on the
+                                theory that the macOS traffic lights floated
+                                over this rail and needed something beside
+                                them — they do not: the page content starts
+                                below the titlebar (`App.svelte`, `.shell`), so
+                                the mark was a microphone-shaped tile that
+                                looked like a button and did nothing. Identity
+                                lives in the app icon, the titlebar and the
+                                Welcome screen.
     the raised New Script CTA   read as a conversion button. It is a document
                                 command, so it looks like one: a source-list row
                                 with a plus, at the top of the list where every
@@ -198,18 +204,6 @@
 </script>
 
 <aside class="sidebar" style="width: {$workspace.sidebarWidth}px">
-  <!--
-    The mark, and nothing else.
-
-    Kept at all only because on macOS the window is full-size-content: the
-    traffic lights float over this rail's top-left corner, and something has to
-    occupy the space they need. The wordmark that used to sit beside it is gone
-    — the native titlebar says "CandidCue", and now says which script too.
-  -->
-  <div class="brand-row" aria-hidden="true">
-    <span class="brand-tile"><Icon name="mic" size={13} /></span>
-  </div>
-
   <nav class="nav" aria-label="Library" bind:this={list} onfocusout={() => (focusIndex = -1)}>
     {#each rows as row, index (row.label)}
       {#if row.kind === 'settings'}
@@ -267,46 +261,6 @@
     min-width: 0;
   }
 
-  /*
-   * Reserves the macOS traffic-light zone and nothing more.
-   *
-   * ---------------------------------------------------------------------------
-   * macOS ONLY, AND THAT IS THE WHOLE REASON THE PLATFORM ATTRIBUTE EXISTS
-   * ---------------------------------------------------------------------------
-   * Tauri gives every macOS window `NSWindowStyleMaskFullSizeContentView` (see
-   * `windows/present.rs`), so the traffic lights float OVER this rail's top-left
-   * corner and something has to hold that space open. Windows and Linux draw a
-   * real titlebar above the content, so there is nothing overlapping and the
-   * reserve is 28px of nothing at the top of the sidebar.
-   *
-   * This is the one place §22.3's platform attribute pays for itself: a genuine
-   * difference in window chrome, expressed once at the root, rather than a
-   * `navigator.platform` test inside a component. It is deliberately NOT used to
-   * make one platform look like the other.
-   */
-  .brand-row {
-    display: none;
-  }
-  :global(html[data-platform='macos']) .brand-row {
-    display: flex;
-    align-items: center;
-    height: 28px;
-    padding-inline: var(--space-2);
-    flex: 0 0 auto;
-    margin-bottom: var(--space-2);
-  }
-  .brand-tile {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    flex: 0 0 auto;
-    border-radius: 5px;
-    background: var(--accent);
-    color: var(--accent-contrast);
-  }
-
   .nav {
     display: flex;
     flex-direction: column;
@@ -331,15 +285,22 @@
     /* 5px, not 8: §7.1 asks for a source-list row rather than a floating tile,
        and the difference between those two shapes is almost entirely radius. */
     border-radius: 5px;
-    color: var(--text-secondary);
+    /* Primary label colour at a regular weight, the way a Mac source list
+       draws every row: grey semibold labels read as disabled beside the one
+       that was selected, and 550 is a variable-font weight WebKit and Chromium
+       round differently. The icon carries the secondary tone instead. */
+    color: var(--text-primary);
     font-size: var(--text-sm);
-    font-weight: 550;
+    font-weight: 500;
     text-align: left;
     width: 100%;
     min-width: 0;
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
+  }
+  .nav-item :global(svg) {
+    color: var(--text-secondary);
   }
   .label {
     overflow: hidden;
@@ -354,14 +315,15 @@
   }
 
   /*
-   * Selected: a tonal fill and stronger text. No white surface, no border, no
-   * shadow — see the note at the top for why the pill had to go.
+   * Selected: a neutral tonal fill and stronger text. No white surface, no
+   * border, no shadow — see the note at the top for why the pill had to go —
+   * and no clay wash either (`--bg-source-selected`): the accent is the icon's.
    */
   .nav-item.active,
   .nav-item.active:hover {
-    background: var(--bg-row-selected);
+    background: var(--bg-source-selected);
     color: var(--text-primary);
-    font-weight: 650;
+    font-weight: 600;
   }
   .nav-item.active :global(svg) {
     color: var(--accent-strong);

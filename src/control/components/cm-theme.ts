@@ -3,10 +3,18 @@
  * the surrounding shell. Values reference CSS custom properties directly.
  * Editor focus is a quiet surface — no accent outline ever (owner rule).
  */
-import { EditorView } from '@codemirror/view';
+import {
+  Decoration,
+  EditorView,
+  MatchDecorator,
+  ViewPlugin,
+  type DecorationSet,
+  type ViewUpdate,
+} from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import type { Extension } from '@codemirror/state';
+import { classifyBracketDirective } from '../../shared/markdown/directives';
 
 const themeSpec = {
   '&': {
@@ -50,6 +58,8 @@ const themeSpec = {
   '.cm-activeLineGutter': { backgroundColor: 'transparent' },
   '.cm-placeholder': { color: 'var(--prose-muted-warm, var(--text-muted))' },
   '.cm-scroller': { fontFamily: 'var(--font-prose)', overflow: 'auto' },
+  // A cue or part break: the preview's amber chip, as text. Not a link.
+  '.cm-directive': { color: 'var(--warning)', fontWeight: '600' },
 } as const;
 
 const workspaceBase = EditorView.theme({ ...themeSpec }, { dark: false });
@@ -62,7 +72,13 @@ const highlight = HighlightStyle.define([
   },
   { tag: t.strong, color: 'var(--text-primary)', fontWeight: '700' },
   { tag: t.emphasis, fontStyle: 'italic' },
-  { tag: [t.link, t.url], color: 'var(--accent-strong)', textDecoration: 'underline' },
+  /*
+   * The URL, not the link text. Lezer reads any bracketed span as a Link —
+   * `[Cue: look at the lens]` included — so styling `t.link` dressed every cue
+   * and part break as an underlined hyperlink. A real link is recognisable by
+   * its `(url)`; the directives get their own mark below.
+   */
+  { tag: t.url, color: 'var(--accent-strong)', textDecoration: 'underline' },
   { tag: t.monospace, color: 'var(--success)' },
   { tag: t.list, color: 'var(--text-secondary)' },
   { tag: t.quote, color: 'var(--text-secondary)', fontStyle: 'italic' },
@@ -73,5 +89,37 @@ const highlight = HighlightStyle.define([
   { tag: [t.squareBracket, t.bracket], color: 'var(--text-muted)' },
 ]);
 
+/**
+ * Marks the script's own syntax — `[Cue: …]`, `[Beat]`, `[Pause]`,
+ * `[Breathe]`, `[Take: …]` — so the source says what the preview and the glass
+ * will do with it. Classified by the compiler's own table, so a bracket the
+ * compiler does not read as a directive is left as ordinary text, and a
+ * bracket followed by `(` is a link and is left to the link styling.
+ */
+const directiveMark = Decoration.mark({ class: 'cm-directive' });
+const directiveMatcher = new MatchDecorator({
+  regexp: /\[([^\]\n]+)\](?!\()/g,
+  decoration: (match) => {
+    const kind = classifyBracketDirective(match[1] ?? '').kind;
+    return kind === 'cue' || kind === 'take' ? directiveMark : null;
+  },
+});
+const directiveHighlighter = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = directiveMatcher.createDeco(view);
+    }
+    update(update: ViewUpdate) {
+      this.decorations = directiveMatcher.updateDeco(update, this.decorations);
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 /** Calm workspace editor theme (light shell). */
-export const editorTheme: Extension = [workspaceBase, syntaxHighlighting(highlight)];
+export const editorTheme: Extension = [
+  workspaceBase,
+  syntaxHighlighting(highlight),
+  directiveHighlighter,
+];

@@ -98,10 +98,7 @@
       onchange={(value) => onchange({ developerDiagnostics: value })}
     />
 
-    <p class="hint">
-      Reading-band position lives with the other stage appearance settings — it sets where the
-      active line sits, which is what the follower aims for.
-    </p>
+    <p class="hint">Where the active line sits is set with the stage's appearance.</p>
   {/if}
 </div>
 
@@ -121,8 +118,9 @@
   .mini-label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: 500;
+    color: var(--text-primary);
   }
   .hint {
     margin: 0;

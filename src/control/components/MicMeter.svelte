@@ -190,8 +190,9 @@
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: 500;
+    color: var(--text-primary);
   }
 
   .status {

@@ -241,6 +241,41 @@
     })(),
   );
 
+  let sectionNav: HTMLElement | null = $state(null);
+
+  /** The index's roving tab stop: the open pane's row, or the first row when
+      the search has filtered the open pane out of the list. */
+  function sectionTabIndex(index: number): 0 | -1 {
+    const active = matchingSections.findIndex((entry) => entry.id === section);
+    return index === (active < 0 ? 0 : active) ? 0 : -1;
+  }
+
+  function sectionKeydown(event: KeyboardEvent, index: number): void {
+    const items = sectionNav
+      ? [...sectionNav.querySelectorAll<HTMLElement>('.section-item')]
+      : [];
+    if (items.length === 0) return;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowDown':
+        next = (index + 1) % items.length;
+        break;
+      case 'ArrowUp':
+        next = (index - 1 + items.length) % items.length;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = items.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    items[next]?.focus();
+  }
+
   /**
    * The section's own scroll container, for the row filter below.
    */
@@ -2241,11 +2276,15 @@
 
 <div class="page">
   <!--
-    In a WINDOW, the trailing control is Done; there is nowhere to go back to.
-    §14.1: "Remove Back to Library from Settings if it becomes a separate
-    window." The prop is optional so the route still works in the control window
-    if it is ever hosted there again — but the Preferences window always
-    supplies it, so the back control is gone in practice.
+    In a WINDOW there is nowhere to go back to (§14.1: "Remove Back to Library
+    from Settings if it becomes a separate window"), and nothing to finish
+    either. Every control here applies the moment it changes, so a Done button
+    promised a commit step that does not exist — filled in clay, it was also a
+    second primary action beside each pane's own. The window closes the way
+    every Mac settings window does: its close button and ⌘W
+    (`PreferencesApp.svelte` answers `file.close-script`). `onclose` stays a
+    prop so the route still works if it is ever hosted in the control window
+    again, where it is what removes the back control.
   -->
   <Toolbar
     title="Settings"
@@ -2253,9 +2292,6 @@
     onback={onclose ? undefined : () => navigate({ name: 'library', view: 'all' })}
   >
     {#snippet actions()}
-      {#if onclose}
-        <Button variant="primary" onclick={onclose}>Done</Button>
-      {/if}
       <!--
         Settings search (§14.2), in the toolbar where it is stable across every
         section. It filters BOTH: the section list narrows to the sections whose
@@ -2286,13 +2322,24 @@
   </Toolbar>
 
   <div class="body">
-    <nav class="section-nav" aria-label="Settings sections">
-      {#each matchingSections as entry (entry.id)}
+    <!--
+      One tab stop, arrows inside — the main sidebar's contract (§23.1), so the
+      app's two source lists are learnt once. Arrowing moves focus without
+      changing the pane; Enter or Space opens it, as a click does.
+    -->
+    <nav
+      class="section-nav"
+      aria-label="Settings sections"
+      bind:this={sectionNav}
+    >
+      {#each matchingSections as entry, index (entry.id)}
         <button
           type="button"
           class="section-item"
           class:active={($route.name === 'settings' ? section : 'general') === entry.id}
           aria-current={section === entry.id ? 'page' : undefined}
+          tabindex={sectionTabIndex(index)}
+          onkeydown={(event) => sectionKeydown(event, index)}
           onclick={() => navigate({ name: 'settings', section: entry.id })}
         >
           {entry.label}
@@ -2790,7 +2837,12 @@
               aria-pressed={chosenFingerprint === null}
               onclick={() => void chooseDisplay(null)}
             >
-              <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+              <span class="monitor-head">
+                <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                {#if chosenFingerprint === null}
+                  <span class="monitor-check" aria-hidden="true"><Icon name="check" size={16} /></span>
+                {/if}
+              </span>
               <span class="monitor-name">Automatic</span>
               <!-- Automatic is not a panel, so it carries no number of its
                    own; it names the number of the one it resolves to, which
@@ -2814,6 +2866,9 @@
                      found by, and two identical monitors share it. -->
                 <span class="monitor-head">
                   <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                  {#if chosenFingerprint === display.fingerprint}
+                    <span class="monitor-check" aria-hidden="true"><Icon name="check" size={16} /></span>
+                  {/if}
                   <span class="monitor-number">
                     <!-- An expression, because Svelte trims a literal
                          trailing space and the name would read "Display2". -->
@@ -2870,7 +2925,12 @@
               aria-pressed={$settings.stage.presentationMode === 'prompter'}
               onclick={() => void patchSettings('stage', { presentationMode: 'prompter' })}
             >
-              <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+              <span class="monitor-head">
+                <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                {#if $settings.stage.presentationMode === 'prompter'}
+                  <span class="monitor-check" aria-hidden="true"><Icon name="check" size={16} /></span>
+                {/if}
+              </span>
               <span class="monitor-name">Teleprompter</span>
               <span class="monitor-meta">
                 Fills the prompter display chosen here, or the one it is on, above everything, for reading off glass at a distance.
@@ -2883,7 +2943,12 @@
               aria-pressed={$settings.stage.presentationMode === 'reader'}
               onclick={() => void patchSettings('stage', { presentationMode: 'reader' })}
             >
-              <span class="monitor-glyph"><Icon name="book-open" size={22} /></span>
+              <span class="monitor-head">
+                <span class="monitor-glyph"><Icon name="book-open" size={22} /></span>
+                {#if $settings.stage.presentationMode === 'reader'}
+                  <span class="monitor-check" aria-hidden="true"><Icon name="check" size={16} /></span>
+                {/if}
+              </span>
               <span class="monitor-name">Reading window</span>
               <span class="monitor-meta">
                 Stays a window you can size and move. Wider lines, desk distance, never mirrored.
@@ -3481,7 +3546,9 @@
             label="Default font family"
             value={$settings.teleprompter.fontFamilyId}
             options={[
-              { value: 'high-legibility', label: 'Atkinson Hyperlegible (bundled)' },
+              // No "(bundled)" suffix: in a 220px control it clipped the name
+              // mid-word, and the line below says it travels with the app.
+              { value: 'high-legibility', label: 'Atkinson Hyperlegible' },
               { value: 'system-sans', label: 'System Sans' },
               { value: 'humanist-sans', label: 'Humanist Sans' },
               { value: 'serif', label: 'Serif' },
@@ -3490,10 +3557,8 @@
             onchange={(value) => void patchSettings('teleprompter', { fontFamilyId: value })}
           />
           <p class="hint-line">
-            Atkinson Hyperlegible travels with the app, so it renders the same on every machine
-            and needs no network. It disambiguates the characters a prompter gets wrong at
-            distance — capital I from lowercase l from 1, and 0 from O — which is the whole
-            reason to prefer it over whatever <em>System Sans</em> resolves to today.
+            Atkinson Hyperlegible comes with CandidCue and keeps I, l and 1, and 0 and O, apart at
+            a distance.
           </p>
           <!--
             What used to be "Stage background".
@@ -3507,22 +3572,27 @@
             a strong one bloom. That is the control that exists now, and the
             stage reads it as `data-text-intensity` on `.stage-root`.
           -->
-          <SegmentedControl
-            label="Text intensity"
-            value={$settings.teleprompter.textIntensity}
-            options={[
-              { value: 'soft', label: 'Soft' },
-              { value: 'standard', label: 'Standard' },
-              { value: 'strong', label: 'Strong' },
-            ]}
-            onchange={(value) =>
-              void patchSettings('teleprompter', { textIntensity: value as TextIntensity })}
-          />
-          <p class="hint-line">
-            How bright the words burn over the stage's black field. A calibrated rig carries its
-            own choice, made at the glass; this is what everything else runs with, reading windows
-            included — until you pick an intensity for them in Reading appearance.
-          </p>
+          <!-- Labelled like Reading window appearance below it: the name was
+               only ever the radiogroup's accessible label, so a sighted user met
+               three words with no question above them. -->
+          <div class="control-block">
+            <span class="control-label">Text intensity</span>
+            <SegmentedControl
+              label="Text intensity"
+              value={$settings.teleprompter.textIntensity}
+              options={[
+                { value: 'soft', label: 'Soft' },
+                { value: 'standard', label: 'Standard' },
+                { value: 'strong', label: 'Strong' },
+              ]}
+              onchange={(value) =>
+                void patchSettings('teleprompter', { textIntensity: value as TextIntensity })}
+            />
+            <p class="hint-line">
+              How bright the words burn on the black field. A calibrated rig keeps its own choice,
+              and Reading appearance can set one for reading windows.
+            </p>
+          </div>
           <!--
             The one field choice there is, and it is a reading window's.
 
@@ -3631,17 +3701,14 @@
           -->
           {#if geometryOwner === null}
             <p class="hint-line">
-              The marks at the sides of the stage are the band. With the preview running, drag this
-              until they sit over your camera lens — that is where your eyes rest, so it is where the
-              lens should be. <strong>Calibrate</strong> under Prompter display and rigs does the same alignment with
-              a crosshair and remembers it per rig.
+              The marks at the sides of the stage are the band: with the preview running, drag this
+              until they sit over your camera lens. <strong>Calibrate</strong>, under Prompter
+              display and rigs, does it with a crosshair and remembers it per rig.
             </p>
             <p class="hint-line">
-              These four are the <strong>fallback</strong> — what a display prompts at when CandidCue
-              can neither recognise it nor read its physical size. Every other panel is sized
-              automatically from how large it is and how far away you stand, and a rig calibrated
-              under Prompter display and rigs refines that with real measurements — which is the only
-              way the text can be right on two panels of different sizes at once.
+              These four are the <strong>fallback</strong> for a display CandidCue can neither
+              recognise nor measure. Every other panel is sized from its physical size and how far
+              away you stand, and a calibrated rig refines that.
             </p>
           {/if}
           <!--
@@ -3692,12 +3759,8 @@
             onchange={(value) => void patchSettings('teleprompter', { semanticLineBreaks: value })}
           />
           <p class="hint-line">
-            Uses phrase boundaries when the column is wide enough — about 48 characters a line
-            or more, which most reading windows are. The stage then ends each line where a phrase
-            ends rather than at the last word that fits, so the sweep back to the left edge lands
-            somewhere natural. A teleprompter sized automatically never has a column that wide,
-            so it wraps the way a browser does whatever this says. Turn it off to wrap that way
-            everywhere.
+            Ends each line where a phrase ends, in columns of about 48 characters or more — most
+            reading windows. Narrower teleprompter columns always wrap at the last word that fits.
           </p>
           <!-- #218 removed "When a session ends" and "Hide the pointer on the
                stage". Nothing read the first, and a take runs in the control
@@ -3718,7 +3781,7 @@
       {:else if section === 'following'}
         <Section
           title="Following"
-          description="How the stage follows your voice. These are feel choices — CandidCue keeps its own safety rules for section jumps and retakes whatever you pick."
+          description="How quickly the stage follows your voice. Section jumps and retakes keep their safety rules whatever you pick."
         >
           <FollowSettingsFields
             following={$settings.following}
@@ -3734,28 +3797,15 @@
               of your sessions (when each take ran and where in the script it stopped), and
               diagnostic logs are stored on this device.
             </p>
-            <h3 class="privacy-head">When your microphone is open</h3>
-            <p class="privacy-body">
-              CandidCue opens your microphone briefly when you grant access, while a take or a
-              microphone test is running, and while the input meter is on screen in Audio settings.
-              Audio from a take or a test is transcribed on this machine by the speech model
-              installed here; the meter only measures how loud you are. None of it is uploaded, and
-              CandidCue does not save it.
-            </p>
-            <h3 class="privacy-head">Your voice and your script stay here</h3>
-            <p class="privacy-body">
-              Neither your voice nor your script is sent anywhere. The words are recognised here,
-              matched against your script here, and not saved afterwards — there is no transcription
-              account, no API key, and no third party involved in following you.
-            </p>
-            <h3 class="privacy-head">Requests you start</h3>
-            <p class="privacy-body">
-              CandidCue has no update service and never contacts one. The only time it reaches the
-              network is when you download a language — from the Welcome screen or from Speech
-              settings — and that download carries neither your script nor your audio.
-            </p>
           </div>
 
+          <!--
+            What you can DO here comes straight after where your data lives,
+            and the update policy after that; the account of when the
+            microphone opens and what leaves the machine follows. It used to
+            be the other way round, so somebody who came to make a backup
+            read four paragraphs of disclosure to reach the button.
+          -->
           <!--
             A "Save session transcripts" row used to sit here (§36.2): Off, 1
             day, 7 days, 30 days or Forever, with a confirmation before a
@@ -3796,10 +3846,35 @@
             the signed bundle, so this line is also what a support request
             should be asked to quote.
           -->
-          <h3 class="privacy-head">Updates</h3>
-          <p class="privacy-body" data-testid="update-policy">
-            {updateNote || 'Reading the installed version…'}
-          </p>
+          <div class="privacy">
+            <h3 class="privacy-head">Updates</h3>
+            <p class="privacy-body" data-testid="update-policy">
+              {updateNote || 'Reading the installed version…'}
+            </p>
+          </div>
+
+          <div class="privacy">
+            <h3 class="privacy-head">When your microphone is open</h3>
+            <p class="privacy-body">
+              CandidCue opens your microphone briefly when you grant access, while a take or a
+              microphone test is running, and while the input meter is on screen in Audio settings.
+              Audio from a take or a test is transcribed on this machine by the speech model
+              installed here; the meter only measures how loud you are. None of it is uploaded, and
+              CandidCue does not save it.
+            </p>
+            <h3 class="privacy-head">Your voice and your script stay here</h3>
+            <p class="privacy-body">
+              Neither your voice nor your script is sent anywhere. The words are recognised here,
+              matched against your script here, and not saved afterwards — there is no transcription
+              account, no API key, and no third party involved in following you.
+            </p>
+            <h3 class="privacy-head">Requests you start</h3>
+            <p class="privacy-body">
+              CandidCue has no update service and never contacts one. The only time it reaches the
+              network is when you download a language — from the Welcome screen or from Speech
+              settings — and that download carries neither your script nor your audio.
+            </p>
+          </div>
         </Section>
 
         <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->
@@ -3903,13 +3978,21 @@
    * same reason. The rows are source-list height now and the selected one is a
    * tonal fill with no border and no elevation.
    */
+  /*
+   * 212px, not 180: at 180 "Prompter display and rigs" and "Data, privacy &
+   * updates" broke onto second lines, and an index whose rows change height is
+   * read as paragraphs. The rail is the main sidebar's paper with the same
+   * straight divider, so the two source lists in the app look like one idea.
+   */
   .section-nav {
-    flex: 0 0 180px;
+    flex: 0 0 212px;
     display: flex;
     flex-direction: column;
     gap: 1px;
     padding: var(--space-3) var(--space-2);
     overflow-y: auto;
+    background: var(--bg-chrome);
+    border-right: var(--divider-w) solid var(--divider);
   }
   .section-item {
     display: flex;
@@ -3921,9 +4004,12 @@
     border: none;
     border-radius: 5px;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: var(--text-sm);
-    font-weight: 550;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
@@ -3934,9 +4020,9 @@
   }
   .section-item.active,
   .section-item.active:hover {
-    background: var(--bg-row-selected);
+    background: var(--bg-source-selected);
     color: var(--text-primary);
-    font-weight: 650;
+    font-weight: 600;
   }
   .section-empty {
     margin: var(--space-2);
@@ -4266,17 +4352,23 @@
   }
 
   /* --- displays --- */
+  /*
+   * Equal columns. A wrapping flex row sized each tile to its own text, so the
+   * Automatic tile came out a third wider than the panels beside it and the
+   * last panel wrapped onto a row of its own. `auto-fit` keeps every tile the
+   * same width and lets a pair (Teleprompter / Reading window) share the row.
+   */
   .display-grid {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
     gap: var(--space-3);
-    flex-wrap: wrap;
   }
   .monitor-tile {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: var(--space-1);
-    min-width: 200px;
+    min-width: 0;
     padding: var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -4290,10 +4382,21 @@
     border-color: var(--border-strong);
     background: var(--bg-hover-surface);
   }
+  /*
+   * Chosen: a clay edge and a check, not just a wash. The old edge was
+   * --border-strong, 2.74:1 on the canvas and 2.58:1 on its own fill — under
+   * SC 1.4.11 for the one fact on this page that decides which screen a take
+   * lands on. --accent is 4.31:1, and the check says it without colour.
+   */
   .monitor-tile.selected,
   .monitor-tile.selected:hover {
-    border-color: var(--border-strong);
+    border-color: var(--accent);
     background: var(--accent-wash);
+  }
+  .monitor-check {
+    display: inline-flex;
+    margin-left: auto;
+    color: var(--accent-strong);
   }
   .monitor-glyph {
     color: var(--text-muted);
@@ -4307,6 +4410,9 @@
     justify-content: space-between;
     align-self: stretch;
     gap: var(--space-2);
+    /* Every tile's head is the height of the number badge, so names line up
+       across a row whether or not the tile carries a number. */
+    min-height: 32px;
   }
   .monitor-number {
     display: inline-flex;
@@ -4345,6 +4451,9 @@
   }
   .monitor-meta {
     font-size: var(--text-meta);
+    /* Its own leading: inherited, a two-line description ran at the body's
+       23px and read double-spaced. */
+    line-height: var(--lh-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -4455,8 +4564,9 @@
   .control-label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: 500;
+    color: var(--text-primary);
   }
 
   .chip-row {
@@ -4672,8 +4782,9 @@
   .mic-test-name {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: 500;
+    color: var(--text-primary);
   }
   .mic-test-prompt {
     font-size: var(--text-xs);

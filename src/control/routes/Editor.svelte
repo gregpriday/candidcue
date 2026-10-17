@@ -34,7 +34,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import ScriptLintPanel from '../components/ScriptLintPanel.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
-  import { presentMenuItems } from '../lib/present-menu';
+  import { presentMenuItems, type PresentMenuItem } from '../lib/present-menu';
   import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
@@ -818,6 +818,11 @@ import type { PresentationMode } from '../services/settings-types';
     ),
   );
 
+  /** Mark the first row of a run as the start of a named menu group. */
+  function withGroup(items: PresentMenuItem[], heading: string): PresentMenuItem[] {
+    return items.map((item, index) => (index === 0 ? { ...item, group: { heading } } : item));
+  }
+
   /*
    * Start rows first, then the two shapes.
    *
@@ -826,8 +831,11 @@ import type { PresentationMode } from '../services/settings-types';
    * exists for — and the mode is usually already correct from last time.
    */
   const presentModeItems = $derived([
-    ...presentStartItems,
-    ...presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+    ...withGroup(presentStartItems, 'Start'),
+    ...withGroup(
+      presentMenuItems($settings.stage.presentationMode, (mode) => void checkThenPresent(mode)),
+      'Present as',
+    ),
     /*
      * The third launch question, finally answered here.
      *
@@ -848,6 +856,7 @@ import type { PresentationMode } from '../services/settings-types';
     {
       label: PRACTICE_LABEL,
       description: 'Read it through in a window, following your voice. Nothing is reported.',
+      group: {},
       onselect: () => void checkThenPresent(undefined, undefined, true),
     },
     {
@@ -1356,8 +1365,10 @@ import type { PresentationMode } from '../services/settings-types';
           value={layout}
           onchange={(mode) => void changeMode(mode as EditorLayout)}
         />
+        <!-- A panel glyph, not `doc`: `doc` is "All scripts" in the sidebar a
+             few hundred pixels away, so the toggle read as a document command. -->
         <IconButton
-          icon="doc"
+          icon="panel-right"
           label={$workspace.outlineVisible ? 'Hide outline' : 'Show outline'}
           active={$workspace.outlineVisible}
           onclick={() => updateWorkspace({ outlineVisible: !$workspace.outlineVisible })}
@@ -1622,6 +1633,12 @@ import type { PresentationMode } from '../services/settings-types';
               </span>
             {:else if $compiled.status === 'compiling'}
               <span class="foot-line neutral">Reading the script…</span>
+            {:else if $compiled.status === 'ready' && wordCount === 0 && diagnostics.length === 0}
+              <!-- A clean compile of nothing is not a script ready to present:
+                   the green tick beside "0 words" taught that the line checks
+                   syntax rather than whether there is anything to say. Neutral,
+                   because an empty page is a start, not a fault. -->
+              <span class="foot-line neutral">No spoken text yet.</span>
             {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
               <!-- A clean compile is the SCRIPT's half of "ready". It said
                    "Ready to present." on its own, on a machine with no speech
@@ -1959,6 +1976,13 @@ import type { PresentationMode } from '../services/settings-types';
     display: flex;
     flex-direction: column;
     align-items: center;
+  }
+  /* Beside the source, the preview takes the source's own inset. Each half of
+     a split is a narrow column already, and the reading inset spent 64px of a
+     ~380px pane on margin — and set the two texts at different distances from
+     the divider they are being compared across. */
+  .panes.split .preview {
+    padding-inline: var(--page-x);
   }
   .preview-empty {
     margin: var(--space-6) 0;
