@@ -153,8 +153,9 @@ or compensate for:
   stale (`rate_hold_ms`, `rate_decay_ms`), so the display parks where the
   reader stopped. A final does not stop it by itself: a final lands after the
   last word, and stopping on arrival put a halt in the motion at every
-  sentence. `ItemStarted` re-bases the evidence clock when the recogniser opens
-  a new utterance, so gliding resumes as soon as the reader is heard again.
+  sentence. While following, `ItemStarted` re-bases the evidence clock when the
+  recogniser opens a new utterance, so gliding resumes as soon as the reader is
+  heard again.
 * `maxLeadTokens` caps the lead in *words*, not milliseconds, because a
   reader who slows down invalidates the rate estimate without invalidating
   the clock.
@@ -301,10 +302,11 @@ words" from a single final position. Control does this in
 * `crates/cc-bench` replays captured live sessions offline. From `crates/`,
   `cargo run --release -p cc-bench -- tier-b --label check` must stay green
   after any engine-adjacent change.
-* `cc-bench inspect-live <run-name>` prints a compact decision trace around
-  discontinuities in a captured replay, and `cc-bench inspect <script>
-  <scenario>` does the same for a synthetic Tier A scenario. When a take "felt
-  wrong", reproduce it from a captured run before touching engine code.
+* `cc-bench inspect-live <run-name>` prints the events of a captured replay
+  with large position changes, large errors or accepted relocations, and
+  `cc-bench inspect <script> <scenario>` prints the full per-event decision
+  trace of a synthetic Tier A scenario. When a take "felt wrong", reproduce it
+  from a captured run before touching engine code.
 * The fixtures in `bench/runs/` are frozen; add new captures rather than
   regenerating.
 
