@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveReadiness,
   summariseReadiness,
+  voiceModelFinding,
   type ReadinessInput,
 } from '../../../src/control/lib/take-readiness';
 
@@ -118,6 +119,31 @@ describe('resolveReadiness', () => {
     expect(verdict.findings.map((f) => f.id)).toEqual(['model_missing']);
   });
 
+  /*
+   * #301: "No speech model is installed" is true for the length of a download
+   * and reads as though nobody had started one. Still a warning — the take
+   * would roll without following, and the presenter may not want to wait.
+   */
+  it('says an installing model is installing, and does not block', () => {
+    const verdict = resolveReadiness(ready({ modelInstalled: false, modelInstalling: true }));
+    expect(verdict.blocked).toBe(false);
+    expect(verdict.findings.map((f) => f.id)).toEqual(['model_installing']);
+    expect(verdict.findings[0]?.detail).toMatch(/still installing/);
+    expect(verdict.findings[0]?.action?.settingsSection).toBe('speech');
+  });
+
+  it('calls a repair of a damaged download installing, while it runs', () => {
+    const verdict = resolveReadiness(
+      ready({ modelInstalled: false, modelDamaged: true, modelInstalling: true }),
+    );
+    expect(verdict.findings.map((f) => f.id)).toEqual(['model_installing']);
+  });
+
+  it('says nothing while a usable copy is in place, even mid-install', () => {
+    const verdict = resolveReadiness(ready({ modelInstalled: true, modelInstalling: true }));
+    expect(verdict.show).toBe(false);
+  });
+
   it('warns about an unloadable model without blocking the take', () => {
     /*
      * This blocked at first, reasoning that no user action fixes it in place.
@@ -205,25 +231,59 @@ describe('the sheet cannot become a gate', () => {
     // Everything else on this surface is launch-past-able by construction.
     for (const modelInstalled of [true, false]) {
       for (const modelSupported of [true, false]) {
-        for (const pinnedMicAvailable of [true, false]) {
-          for (const destinationMismatch of [null, { title: 'x', suggestion: 'y' }]) {
-            const verdict = resolveReadiness(
-              ready({
-                modelInstalled,
-                modelSupported,
-                pinnedMicLabel: 'Mic',
-                pinnedMicAvailable,
-                destinationMismatch,
-              }),
-            );
-            expect(
-              verdict.blocked,
-              JSON.stringify({ modelInstalled, modelSupported, pinnedMicAvailable }),
-            ).toBe(false);
+        for (const modelInstalling of [true, false]) {
+          for (const pinnedMicAvailable of [true, false]) {
+            for (const destinationMismatch of [null, { title: 'x', suggestion: 'y' }]) {
+              const verdict = resolveReadiness(
+                ready({
+                  modelInstalled,
+                  modelSupported,
+                  modelInstalling,
+                  pinnedMicLabel: 'Mic',
+                  pinnedMicAvailable,
+                  destinationMismatch,
+                }),
+              );
+              expect(
+                verdict.blocked,
+                JSON.stringify({
+                  modelInstalled,
+                  modelSupported,
+                  modelInstalling,
+                  pinnedMicAvailable,
+                }),
+              ).toBe(false);
+            }
           }
         }
       }
     }
+  });
+});
+
+/*
+ * #301: the editor's footer said "Ready to present." off the compile alone,
+ * beside a sheet saying the take could not follow a voice. Both now ask
+ * `voiceModelFinding`, so they say the same thing.
+ */
+describe('voiceModelFinding', () => {
+  it('is what the sheet shows for a voice take', () => {
+    const cases: Array<Partial<ReadinessInput>> = [
+      { modelInstalled: false },
+      { modelInstalled: false, modelDamaged: true },
+      { modelInstalled: false, modelInstalling: true },
+      { modelSupported: false },
+    ];
+    for (const over of cases) {
+      const input = ready(over);
+      expect(voiceModelFinding(input), JSON.stringify(over)).toEqual(
+        resolveReadiness(input).findings[0],
+      );
+    }
+  });
+
+  it('is null for a model that can follow', () => {
+    expect(voiceModelFinding(ready())).toBeNull();
   });
 });
 

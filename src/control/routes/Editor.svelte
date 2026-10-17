@@ -39,11 +39,10 @@ import SplitButton from '../components/SplitButton.svelte';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
   import { destinationAnnouncement } from '../lib/take-destination';
   import { startMenuItems } from '../lib/present-menu';
-  import TakeReadinessSheet from '../components/TakeReadinessSheet.svelte';
-  import { resolveReadiness, type ReadinessVerdict } from '../lib/take-readiness';
-  import { getSpeechModelStatus, isDamaged as isModelDamaged } from '../services/speech-models';
-  import { matchRememberedMicrophone } from '../services/audio/devices';
-  import { getVoiceFacade } from '../services/voice-facade';
+  import { checkThenStart } from '../lib/check-then-start';
+  import { voiceModelFinding } from '../lib/take-readiness';
+  import { openSettingsWindow } from '../lib/open-settings';
+  import { speechModelReadiness } from '../stores/speech-model-readiness';
   import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
   import { partAt } from '../../shared/markdown/parts';
   import { listSessionRecords } from '../services/session-records';
@@ -572,158 +571,39 @@ import type { PresentationMode } from '../services/settings-types';
     await navigate({ name: 'library', view: 'all' });
   }
 
-  /**
-   * Present opens the stage. There is no screen in between — everything the
-   * old Preflight page asked for is in Settings, and the take reports its own
-   * microphone, display and connection from the stage (lib/start-take.ts).
-   *
-   * `mode` is absent for the main button, which presents in whatever the saved
-   * default is, and set when the choice came from the split menu — which also
-   * makes that choice the new default. See `StartTakeOptions.presentationMode`
-   * for why an explicit choice sticks when the mid-take toggle does not.
-   */
   /* ------------------------------------------------ CCUX-013 readiness */
 
-  /**
-   * The pending launch, held while the readiness sheet is up.
-   *
-   * A healthy setup never populates this: `checkThenPresent` resolves the
-   * readiness verdict and, when it says nothing, launches without ever
-   * rendering the sheet. That is the whole design — the surface exists to be
-   * absent.
-   */
-  let readiness = $state<ReadinessVerdict | null>(null);
-  let pendingLaunch: {
-    mode?: PresentationMode;
-    startTokenIndex?: number;
-    practice?: boolean;
-    part?: TakePartRequest;
-  } | null = null;
-
-  /**
-   * Whether the speech model is there, refreshed when the editor opens.
-   *
-   * Optimistic defaults: an unknown model status must never invent a warning
-   * over a take that would have been fine. The take path itself reports a
-   * genuinely missing model from the stage regardless.
-   */
-  let modelReady = $state({ installed: true, supported: true, damaged: false });
-
   /*
-   * Re-read when the configured model changes, and ASK ABOUT THAT MODEL.
+   * Why the speech model cannot follow a voice take, kept current (#301).
    *
-   * `getSpeechModelStatus()` with no argument answers about the catalogue
-   * default, not the model this take will load — a mismatch Settings already
-   * documents. Without the id, somebody who had installed a non-default
-   * language would be told they had no model, and somebody who had switched
-   * away from an installed default would be told they had one.
+   * Followed for as long as the editor is open, not read once when the script
+   * opens: an install that finished, failed, or was removed in Settings while a
+   * script was open used to leave this answer exactly where it started. It is
+   * the same store every launch path reads (`lib/check-then-start.ts`), so the
+   * footer below and the sheet cannot disagree.
    *
-   * The id held here is the RECOGNISER id (`audio.transcriptionModel`), not
-   * the catalogue id the download controls use; `model_manager::entry_for`
-   * resolves either. It did not always, and this call was refused as
-   * `STT_MODEL_UNKNOWN` on every settings change, for an installed model.
+   * Only a voice take needs a model; a manual take is never warned about one.
    */
-  $effect(() => {
-    const modelId = $settings.speech.transcriptionModel;
-    void getSpeechModelStatus(modelId)
-      .then((status) => {
-        modelReady = {
-          installed: status.installed,
-          supported: status.supported,
-          damaged: isModelDamaged(status),
-        };
-      })
-      .catch(() => {
-        // Unknown stays optimistic. See above.
-      });
-  });
-
-  /**
-   * Resolve the readiness verdict, enumerating microphones as `startTake` does.
-   *
-   * Async because the device list is the only fact here that has to be fetched,
-   * and it must be fetched the SAME way the take path fetches it — through
-   * `matchRememberedMicrophone`, which matches on id and falls back to the
-   * remembered label, because WKWebView salts device ids per origin and a
-   * replug can change them. Comparing raw ids here would report a perfectly
-   * present microphone as missing on some restarts.
-   */
-  async function readinessNow(
-    requested = false,
-    mode?: PresentationMode,
-  ): Promise<ReadinessVerdict> {
-    const scriptFactsKnown = isCompileSettledForScript(scriptId, $editor, $compiled);
-    const audio = $settings.audio;
-    const pinned = audio.followSystemDefault ? undefined : audio.preferredDeviceId;
-
-    let pinnedMicLabel: string | null = null;
-    let pinnedMicAvailable = true;
-    if (pinned !== undefined) {
-      pinnedMicLabel = audio.preferredDeviceLabel ?? pinned;
-      try {
-        const devices = await getVoiceFacade().listMicrophones();
-        pinnedMicAvailable =
-          matchRememberedMicrophone(devices, {
-            deviceId: pinned,
-            ...(audio.preferredDeviceLabel === undefined
-              ? {}
-              : { label: audio.preferredDeviceLabel }),
-          }) !== null;
-      } catch {
-        // Enumeration failed, so absence is not proven. `start-take.ts` honours
-        // the pin in exactly this case; accusing the hardware would be worse.
-        pinnedMicAvailable = true;
-      }
-    }
-
-    return resolveReadiness({
-      voiceTake: $settings.general.defaultSessionMode === 'voice',
-      modelInstalled: modelReady.installed,
-      modelSupported: modelReady.supported,
-      modelDamaged: modelReady.damaged,
-      pinnedMicLabel,
-      pinnedMicAvailable,
-      /*
-       * SCRIPT FACTS ONLY WHEN THE COMPILE HAS SETTLED.
-       *
-       * `wordCount` and `blockingCount` come off the EDITOR's compile, which is
-       * debounced against typing. Mid-compile there is no result, so both read
-       * zero — and a zero word count is a BLOCKING finding. Reading them
-       * unconditionally would refuse to present a perfectly good script for as
-       * long as somebody had recently typed in it, which is a regression on
-       * behaviour that has always worked.
-       *
-       * Optimistic when unsettled, and safe to be: `startTake` compiles again
-       * from the saved source and throws on a blocking diagnostic itself, so
-       * the only thing skipping these costs is the chance to say so a moment
-       * earlier.
-       */
-      spokenWordCount: scriptFactsKnown ? wordCount : 1,
-      blockingDiagnostics: scriptFactsKnown ? blockingCount : 0,
-      /*
-       * The mismatch belongs to the mode being LAUNCHED, not the saved default.
-       *
-       * `takeDestination` is resolved for the default, and a reading window
-       * deliberately never mismatches — it is placed by dragging it. So
-       * choosing "Present in a window" from a prompter default would otherwise
-       * warn about a rig the take is not going to use.
-       */
-      destinationMismatch:
-        (mode ?? $settings.stage.presentationMode) === 'reader'
-          ? null
-          : $takeDestination?.mismatch ?? null,
-      requested,
-    });
-  }
+  const voiceModelProblem = $derived(
+    $settings.general.defaultSessionMode === 'voice'
+      ? voiceModelFinding({
+          modelInstalled: $speechModelReadiness.installed,
+          modelSupported: $speechModelReadiness.supported,
+          modelDamaged: $speechModelReadiness.damaged,
+          modelInstalling: $speechModelReadiness.installing,
+        })
+      : null,
+  );
 
   /**
    * Present, unless there is something the presenter has to know first.
    *
    * The immediate-launch rule is load-bearing: on a healthy familiar setup this
    * is exactly the old behaviour, one click, no sheet. Anything else and the
-   * launch is held rather than cancelled — `pendingLaunch` keeps the mode and
-   * start point so "Start anyway" resumes precisely the take that was asked
-   * for, not a default one.
+   * launch is held rather than cancelled — the shell's sheet keeps this exact
+   * call, so "Start anyway" resumes precisely the take that was asked for, not
+   * a default one. The check itself is shared with every other way of starting
+   * a take; see `lib/check-then-start.ts`.
    */
   /*
    * A PRACTICE GOES THROUGH THE SAME READINESS CHECK, AND MUST.
@@ -740,39 +620,38 @@ import type { PresentationMode } from '../services/settings-types';
     practice?: boolean,
     part?: TakePartRequest,
   ): Promise<void> {
-    const verdict = await readinessNow(false, practice ? 'reader' : mode);
-    if (!verdict.show) {
-      await present(mode, startTokenIndex, practice, part);
-      return;
-    }
-    pendingLaunch = {
-      ...(mode === undefined ? {} : { mode }),
-      ...(startTokenIndex === undefined ? {} : { startTokenIndex }),
-      ...(practice ? { practice: true } : {}),
-      ...(part === undefined ? {} : { part }),
-    };
-    readiness = verdict;
+    // Captured: the held launch must start the script it was asked for, not
+    // whatever `scriptId` names by the time somebody presses Start anyway.
+    const id = scriptId;
+    await checkThenStart(
+      id,
+      {
+        ...(mode === undefined ? {} : { mode }),
+        ...(practice ? { practice: true } : {}),
+      },
+      () => present(id, mode, startTokenIndex, practice, part),
+    );
   }
 
-  function dismissReadiness(): void {
-    readiness = null;
-    pendingLaunch = null;
-  }
-
-  async function startAnyway(): Promise<void> {
-    const launch = pendingLaunch;
-    dismissReadiness();
-    await present(launch?.mode, launch?.startTokenIndex, launch?.practice, launch?.part);
-  }
-
+  /**
+   * Present opens the stage. There is no screen in between — everything the
+   * old Preflight page asked for is in Settings, and the take reports its own
+   * microphone, display and connection from the stage (lib/start-take.ts).
+   *
+   * `mode` is absent for the main button, which presents in whatever the saved
+   * default is, and set when the choice came from the split menu — which also
+   * makes that choice the new default. See `StartTakeOptions.presentationMode`
+   * for why an explicit choice sticks when the mid-take toggle does not.
+   */
   async function present(
+    id: string,
     mode?: PresentationMode,
     startTokenIndex?: number,
     practice?: boolean,
     part?: TakePartRequest,
   ): Promise<void> {
     await saveNow();
-    await startTake(scriptId, {
+    await startTake(id, {
       // A practice forces its own window, so passing a mode alongside it would
       // be handing `startTake` a preference it is about to overrule anyway.
       ...(practice ? { practice: true } : mode === undefined ? {} : { presentationMode: mode }),
@@ -920,8 +799,8 @@ import type { PresentationMode } from '../services/settings-types';
       label: 'Review take setup…',
       description: 'Check the model, microphone and display before opening the stage.',
       onselect: () => {
-        pendingLaunch = {};
-        void readinessNow(true).then((verdict) => (readiness = verdict));
+        const id = scriptId;
+        void checkThenStart(id, { requested: true }, () => present(id));
       },
     },
   ]);
@@ -1360,12 +1239,6 @@ import type { PresentationMode } from '../services/settings-types';
   }
 </script>
 
-<!--
-  Only ever mounted; almost never open (CCUX-013). `resolveReadiness` returns
-  `show: false` for every healthy familiar setup, which is the design.
--->
-<TakeReadinessSheet verdict={readiness} onstart={() => void startAnyway()} onclose={dismissReadiness} />
-
 <div class="page">
   {#if opening}
     <!--
@@ -1664,9 +1537,13 @@ import type { PresentationMode } from '../services/settings-types';
             {:else if $compiled.status === 'compiling'}
               <span class="foot-line neutral">Reading the script…</span>
             {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
+              <!-- A clean compile is the SCRIPT's half of "ready". It said
+                   "Ready to present." on its own, on a machine with no speech
+                   model, beside a sheet saying the take could not follow
+                   anybody's voice (#301). -->
               <span class="foot-line good">
                 <Icon name="check" size={14} />
-                Ready to present.
+                {voiceModelProblem === null ? 'Ready to present.' : 'The script is ready.'}
               </span>
             {:else if $compiled.status === 'ready'}
               <ul class="diagnostics">
@@ -1683,6 +1560,28 @@ import type { PresentationMode } from '../services/settings-types';
                   </li>
                 {/each}
               </ul>
+            {/if}
+            <!-- The model's half, whatever the compile says: neither implies
+                 the other, and a script with notes in it is no more likely to
+                 be followed. Worded by the same finding the sheet shows. -->
+            {#if voiceModelProblem}
+              {@const action = voiceModelProblem.action}
+              <p class="diagnostic warning voice-model">
+                <Icon name="alert" size={13} />
+                <span>
+                  {voiceModelProblem.detail}
+                  {#if action?.settingsSection}
+                    {@const section = action.settingsSection}
+                    <button
+                      type="button"
+                      class="diagnostic-text"
+                      onclick={() => void openSettingsWindow(section)}
+                    >
+                      {action.label}
+                    </button>
+                  {/if}
+                </span>
+              </p>
             {/if}
           </div>
         </aside>
@@ -2214,6 +2113,12 @@ import type { PresentationMode } from '../services/settings-types';
   }
   .diagnostic.info {
     color: var(--text-muted);
+  }
+  .voice-model {
+    margin: 0;
+  }
+  .voice-model:not(:first-child) {
+    margin-top: var(--space-2);
   }
   .diagnostic-text {
     border: none;

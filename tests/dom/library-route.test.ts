@@ -608,7 +608,9 @@ describe('the Present shortcut says what it did', () => {
     await mount();
     shortcuts.fire('present');
     await settle();
-    expect(take.startTake).toHaveBeenCalledWith('a');
+    // Through the readiness check (#301), which a healthy setup passes
+    // straight through; its options are the Library's, which are none.
+    expect(take.startTake).toHaveBeenCalledWith('a', {});
   });
 });
 

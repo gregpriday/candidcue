@@ -392,15 +392,27 @@ impl SpeechModelManager {
             state.operations.remove(&entry.id);
             state.failures.remove(&entry.id);
         }
-        outcome?;
 
         // The resident recogniser was loaded from files that are now gone.
         // Evicting is what makes the next take reload from whatever `resolve`
         // finds instead of holding a handle to a deleted directory.
-        if let Some(model) = loadable_model(entry) {
-            speech.evict_if_loaded(model.id);
+        if outcome.is_ok() {
+            if let Some(model) = loadable_model(entry) {
+                speech.evict_if_loaded(model.id);
+            }
         }
-        Ok(self.status(app, entry))
+
+        // Announced, not only returned (#301). The reply goes to whichever
+        // window pressed Remove — Settings, its own webview — and the editor in
+        // the control window, which decides whether a take can follow a voice,
+        // learns of every other install state from this event and of a removal
+        // from nothing at all. So it went on warning about nothing, or not
+        // warning, until the script was reopened. Sent on a failed removal too:
+        // a delete that stopped part way may have left a model that no longer
+        // loads, and what is on disk now is the truth either way.
+        let status = self.status(app, entry);
+        let _ = app.emit_to(CONTROL_LABEL, events::SPEECH_MODEL_PROGRESS, &status);
+        outcome.map(|()| status)
     }
 
     fn record_progress(&self, model_id: &str, phase: StatusPhase, done: u64, total: u64) {
