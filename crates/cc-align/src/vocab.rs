@@ -47,19 +47,17 @@
 //!    letters are a model number or a unit. None of these needs a corpus to
 //!    recognise, and none of them is ambiguous.
 //! 2. **Ordinary English**, which is a filter rather than a detector. It
-//!    exists to stop the capitalisation rule firing on `Monday`, `Then` or the
-//!    `Big Idea` of a title, and it is judged from two things only: a short
-//!    hand-written table of grammar words, and the script itself. A word the
-//!    script also writes in lowercase is a word, whatever its capital says
-//!    elsewhere. A name is never written that way, which is the property the
-//!    filter exists to keep.
+//!    exists to stop the capitalisation rule firing on `Then`, `Monday` or the
+//!    `Big Idea` of a title. It is judged from hand-written tables — grammar
+//!    words, plus the days, months and titles in `ORDINARY_CAPITALISED` — and
+//!    from the script itself: a capital the script also writes in lowercase
+//!    is a word, whatever its capital says elsewhere. A name is almost never
+//!    written that way, which is the property the filter exists to keep.
 //!
-//!    There is deliberately no dictionary behind this. Every frequency list
-//!    large enough to matter carries names (`aaron`, `aaliyah` and `zimbabwe`
-//!    all sit in the top 20k of a web ranking), and would quietly suppress
-//!    exactly the words this module is here to find; the one list that had
-//!    been cleaned of them came under a share-alike licence this repository
-//!    does not carry.
+//!    There is deliberately no dictionary behind this. A frequency list large
+//!    enough to matter carries names (`aaron`, `aaliyah` and `zimbabwe` all
+//!    sit in the top 20k of a web ranking), and would quietly suppress exactly
+//!    the words this module is here to find.
 //!
 //! Position matters as much as shape: a capitalised word at the start of a
 //! sentence is evidence of nothing, which is why [`VocabToken`] carries a
@@ -226,10 +224,13 @@ pub fn spoken_surfaces(source: &str, options: CompileOptions) -> Vec<String> {
 /// Closed classes only: pronouns, determiners, prepositions, conjunctions,
 /// auxiliaries, greetings, and the handful of time words a sentence opens on.
 /// A closed class is grammar rather than vocabulary — it can be written down
-/// whole, it does not grow, and nothing in it is a name — which is what keeps
-/// this table from becoming a dictionary again. A content word does not belong
-/// here; whether `Design` is ordinary is a question for the script's own
-/// evidence (see [`OrdinaryEnglish`]), not for a list.
+/// whole and it does not grow — which is what keeps this table from becoming
+/// a dictionary again. A word that is as often a noun, a verb or a brand as it
+/// is grammar (`even`, `next`, `mine`, `hey`) is left out on purpose: this
+/// table is consulted with no context at all, and it decides whether the first
+/// word of a sentence belongs to the name after it. Whether `Design` is
+/// ordinary is a question for the script's own evidence (see
+/// [`OrdinaryEnglish`]), not for a list.
 ///
 /// Read together with [`crate::normalize::is_stopword`], which is deliberately
 /// NOT widened for this: it sets alignment weights, and growing it would move
@@ -238,43 +239,52 @@ const FUNCTION_WORDS: &[&str] = &[
     "after", "again", "against", "ago", "almost", "along", "already", "although", "always", "am",
     "among", "another", "anybody", "anyone", "anything", "anyway", "anywhere", "around", "because",
     "before", "behind", "below", "beneath", "beside", "besides", "between", "beyond", "both",
-    "during", "each", "either", "else", "enough", "even", "ever", "every", "everybody", "everyone",
+    "during", "each", "either", "else", "enough", "ever", "every", "everybody", "everyone",
     "everything", "everywhere", "except", "few", "further", "hello", "hence", "hers", "herself",
-    "hey", "hi", "him", "himself", "however", "inside", "itself", "least", "less", "many", "maybe",
-    "mine", "more", "most", "much", "must", "myself", "near", "neither", "never", "next", "nobody",
-    "none", "nor", "nothing", "nowhere", "off", "often", "once", "only", "onto", "other", "others",
-    "ought", "ours", "ourselves", "outside", "own", "perhaps", "please", "quite", "rather", "same",
-    "several", "since", "somebody", "someone", "something", "sometimes", "somewhere", "soon",
-    "still", "such", "thanks", "theirs", "themselves", "therefore", "though", "through",
-    "throughout", "thus", "today", "together", "tomorrow", "tonight", "too", "toward", "towards",
-    "under", "unless", "until", "upon", "whatever", "whenever", "whether", "which", "while", "whom",
-    "whose", "within", "without", "yesterday", "yet", "yours", "yourself", "yourselves",
+    "hi", "him", "himself", "however", "inside", "itself", "least", "less", "many", "maybe", "more",
+    "most", "much", "must", "myself", "neither", "never", "nobody", "none", "nor", "nothing",
+    "nowhere", "off", "often", "once", "only", "onto", "other", "others", "ought", "ours",
+    "ourselves", "outside", "own", "perhaps", "please", "quite", "rather", "same", "several",
+    "since", "somebody", "someone", "something", "sometimes", "somewhere", "still", "such",
+    "theirs", "themselves", "therefore", "though", "through", "throughout", "thus", "today",
+    "together", "tomorrow", "tonight", "too", "toward", "towards", "under", "unless", "until",
+    "upon", "whatever", "whenever", "whether", "which", "while", "whom", "whose", "within",
+    "without", "yesterday", "yet", "yours", "yourself", "yourselves",
 ];
 
 /// Endings a possessive or contraction adds to the word wearing it.
 ///
 /// `nobody's` is `nobody` and `doesn't` is `does`. Ordinary English with an
-/// apostrophe attached is still ordinary English, and treating one as an
-/// unknown word would offer the recogniser `nobody's` as a term worth
-/// learning. `can't` and `won't` do not reduce this way and are simply not
-/// ordinary, which costs nothing: neither is a capital anyone needs explained.
+/// apostrophe attached is still ordinary English: `That's SoundCloud` opens
+/// on grammar exactly as `That SoundCloud` would.
 const CLITICS: &[&str] = &["'s", "'re", "'ve", "'ll", "'d", "'m", "n't"];
+
+/// The negatives whose stem is not the word left by removing `n't`.
+const IRREGULAR_NEGATIVES: &[(&str, &str)] =
+    &[("can't", "can"), ("shan't", "shall"), ("won't", "will")];
 
 /// The form a word is looked up under, or `None` if it cannot be ordinary.
 ///
 /// Case-insensitive, ASCII-only by definition: a word carrying a letter outside
 /// ASCII is never ordinary for this purpose, because that letter is exactly the
-/// thing the recogniser is about to get wrong.
+/// thing the recogniser is about to get wrong. A lone letter is never ordinary
+/// either — `A` and `I` are articles and pronouns, but in `A Smith` it is an
+/// initial, and dropping it would cost the name its first half.
 fn ordinary_key(word: &str) -> Option<String> {
     let lowered = word
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_lowercase()
         .replace('\u{2019}', "'");
-    let stem = CLITICS
+    let stem = IRREGULAR_NEGATIVES
         .iter()
-        .find_map(|clitic| lowered.strip_suffix(clitic).filter(|s| !s.is_empty()))
+        .find_map(|(negative, stem)| (*negative == lowered).then_some(*stem))
+        .or_else(|| {
+            CLITICS
+                .iter()
+                .find_map(|clitic| lowered.strip_suffix(clitic).filter(|s| !s.is_empty()))
+        })
         .unwrap_or(&lowered);
-    (!stem.is_empty() && stem.chars().all(|c| c.is_ascii_lowercase())).then(|| stem.to_string())
+    (stem.len() >= 2 && stem.chars().all(|c| c.is_ascii_lowercase())).then(|| stem.to_string())
 }
 
 fn is_function_word(key: &str) -> bool {
@@ -287,34 +297,38 @@ fn is_function_word(key: &str) -> bool {
 /// Deliberately narrow: `FUNCTION_WORDS` and the stopword profile, and nothing
 /// else. `people` and `design` are not in it and do not need to be — a plain
 /// lowercase word is never sent anyway, and a capitalised one is judged against
-/// the script's own lowercase uses by `OrdinaryEnglish`. What this
-/// answers is the part no script can: whether `Then`, opening a sentence in
-/// front of `SoundCloud`, is grammar or the first half of a name.
+/// the script's own lowercase uses by `OrdinaryEnglish`. What this answers is
+/// the part no script can: whether `Then`, opening a sentence in front of
+/// `SoundCloud`, is grammar or the first half of a name.
 pub fn is_ordinary_word(word: &str) -> bool {
     ordinary_key(word).is_some_and(|key| is_function_word(&key))
 }
 
-/// Ordinary English for ONE script: the grammar words, plus every word the
-/// script itself writes in lowercase.
+/// Ordinary English for ONE script: the grammar words, plus every plain word
+/// the script itself writes in lowercase — ASCII letters and apostrophes, so
+/// never a compound, a figure or an identifier.
 ///
-/// The second half is evidence standing in for a corpus. `The Big Idea` is a
-/// title when the same script talks about "a big idea", and `IMPORTANT` is
-/// emphasis when it also says "important"; `Saoirse` is a name because nobody
-/// writes `saoirse`. The script is the one source that knows which of its
-/// capitals are words, and it costs nothing to ask.
+/// The second half is evidence standing in for a corpus, and it speaks only to
+/// CAPITALS. `The Big Idea` is a title when the same script talks about "a big
+/// idea", and `IMPORTANT` is emphasis when it also says "important"; `Saoirse`
+/// stays a name because a script does not write `saoirse`. What a lowercase
+/// word cannot vouch for is English: `onnx` is lowercase because that is how
+/// it is spelled. So the two places that ask "is this English?" rather than
+/// "is this capital a word?" — trimming the word that opens a sentence, and
+/// judging the parts of a lowercase compound — ask [`is_ordinary_word`] and
+/// never this.
 ///
-/// Exact spellings only. No suffix is stripped and no spelling is folded,
-/// because both invent relationships the script never made — `Miller` is not
-/// `mill`, and a witness that has to be argued for is not a witness. A
-/// hyphenated token witnesses nothing, not even its own parts: if it did,
-/// every lowercase compound would vouch for itself, and `sherpa-onnx` would
-/// look as ordinary as `held-back`.
+/// Matched on the spelling, up to case and the [`CLITICS`] above. No suffix is
+/// stripped and no spelling is folded, because both invent relationships the
+/// script never made: `Miller` is not `mill`, and a witness that has to be
+/// argued for is not a witness.
 ///
-/// What it cannot see is a name the script also uses as a word (`Rust` beside
-/// `rust`), or an ordinary capital the script never repeats in lowercase. The
-/// first errs towards dropping a term, but only one whose spelling the script
-/// itself treats as a word; the second errs towards sending one, which is the
-/// direction any filter short of a dictionary has to err in.
+/// What it cannot see is a name the script also writes as a word (`Harvest`
+/// beside `harvest`), or an ordinary capital the script never repeats in
+/// lowercase. The first loses the name's proper-noun score, though never a
+/// spelling score — `RustLight` beside `rustlight` keeps its internal capital.
+/// The second sends a capital that a dictionary would have cleared, which is
+/// the direction a filter without one has to err in.
 struct OrdinaryEnglish {
     witnessed: std::collections::BTreeSet<String>,
 }
@@ -341,10 +355,12 @@ impl OrdinaryEnglish {
 
 /// Capitalised words that are ordinary despite being proper nouns.
 ///
-/// A script almost never writes a day, a month or a title in lowercase, so its
-/// own evidence cannot clear one, and without this table `Monday` would look
-/// exactly like `Nkosinathi`. Short and hand-written: every entry is here
-/// because it is a capitalised word a presenter says without needing help.
+/// A script rarely writes a day, a month or a title in lowercase, so its own
+/// evidence cannot be relied on to clear one, and without this table `Monday`
+/// would look exactly like `Nkosinathi`. It is consulted for a single word —
+/// the proper-noun and initialism scores — not for a whole name phrase. Short
+/// and hand-written: every entry is here because it is a capitalised word a
+/// presenter says without needing help.
 const ORDINARY_CAPITALISED: &[&str] = &[
     "april", "august", "december", "dr", "february", "friday", "january", "july", "june",
     "march", "may", "miss", "monday", "mr", "mrs", "ms", "november", "october", "ok",
@@ -737,11 +753,13 @@ fn collect_name_phrases(
             end += 1;
         }
         // `Then SoundCloud` is not a two-word name. A capital that a sentence
-        // boundary explains, on a word ordinary English already knows, is
-        // grammar rather than evidence — so the run starts after it.
+        // boundary explains, on a word that is grammar, is not evidence — so
+        // the run starts after it. Grammar alone may decide this, not the
+        // script's lowercase words: the script writing `figma` says nothing
+        // about whether `Figma Studio` opening a sentence is a brand.
         let mut start = i;
         if words[start].sentence_start
-            && english.contains(words[start].core)
+            && is_ordinary_word(words[start].core)
             && !words[start].shape.is_distinctive()
             && end - start >= 2
         {
@@ -797,12 +815,14 @@ fn collect_singletons(words: &[Word<'_>], english: &OrdinaryEnglish, out: &mut V
         let ordinary = english.contains(word.core);
         let mut score = shape_score(word, ordinary);
 
+        // Grammar alone judges the parts: a lowercase witness says how a word
+        // is spelled, not that it is English (see `OrdinaryEnglish`).
         if shape.hyphenated
             && shape.letters >= 5
             && word
                 .core
                 .split('-')
-                .any(|part| part.len() >= 3 && !english.contains(part))
+                .any(|part| part.len() >= 3 && !is_ordinary_word(part))
         {
             score += SCORE_HYPHENATED;
         }
@@ -1006,8 +1026,12 @@ mod tests {
 
     #[test]
     fn grammar_is_ordinary_in_any_script_and_names_never_are() {
-        for word in ["the", "Then", "nobody", "Through", "today", "doesn't", "We're"] {
+        for word in ["the", "Then", "nobody", "Through", "today", "doesn't", "We're", "won't"] {
             assert!(is_ordinary_word(word), "{word} should be ordinary");
+        }
+        // A lone letter is an initial as often as it is a word: `A Smith`.
+        for initial in ["A", "I"] {
+            assert!(!is_ordinary_word(initial), "{initial} may be an initial");
         }
         // A content word is not grammar. Whether `design` is ordinary is the
         // script's call, made by `OrdinaryEnglish`, never this table's.
@@ -1044,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lowercase_compound_does_not_vouch_for_its_own_parts() {
+    fn a_lowercase_compound_is_cleared_by_grammar_alone() {
         // Saying `sherpa-onnx` twice is not saying `sherpa` and `onnx`; if a
         // compound witnessed its parts, every compound would clear itself.
         let terms = extract(&[
@@ -1052,12 +1076,27 @@ mod tests {
             "Every take goes through sherpa-onnx and nothing else.",
         ]);
         assert!(has(&terms, "sherpa-onnx"), "{terms:?}");
-        // Parts the script does say on their own are ordinary.
-        let terms = extract(&[
-            "Nothing was held back from the team.",
-            "The held-back budget went to hiring.",
-        ]);
-        assert!(!has(&terms, "held-back"), "{terms:?}");
+        // Nor do the parts said on their own: `onnx` is lowercase because
+        // that is how it is spelled, not because it is English.
+        let terms = extract(&["The sherpa runtime loads onnx graphs, hence sherpa-onnx."]);
+        assert!(has(&terms, "sherpa-onnx"), "{terms:?}");
+        // A compound of grammar words is grammar.
+        let terms = extract(&["We are somewhere in-between today."]);
+        assert!(!has(&terms, "in-between"), "{terms:?}");
+    }
+
+    #[test]
+    fn a_lowercase_word_never_trims_a_name_that_opens_a_sentence() {
+        // `figma` written in lowercase is how the brand is spelled, not
+        // evidence that `Figma` opening a sentence is grammar.
+        let terms = extract(&["We design everything in figma.", "Figma Studio ships the files."]);
+        assert!(has(&terms, "Figma Studio"), "{terms:?}");
+    }
+
+    #[test]
+    fn a_witness_matches_the_spelling_not_the_stem() {
+        let terms = extract(&["We hired Miller to run the mill."]);
+        assert!(has(&terms, "Miller"), "{terms:?}");
     }
 
     #[test]
@@ -1129,9 +1168,9 @@ mod tests {
             "Before we get into the roadmap I want to introduce the people who built this.",
             "It is a good idea and we should do it today.",
         ]);
-        // A capital that opens a sentence is grammar and a plain lowercase
-        // word is never sent, so ordinary prose offers nothing at all — not
-        // even `roadmap`, which no table of grammar words knows.
+        // A capital that opens a sentence is evidence of nothing and a plain
+        // lowercase word is never sent, so ordinary prose offers nothing at
+        // all — not even `roadmap`, which no table of grammar words knows.
         assert!(terms.is_empty(), "{terms:?}");
     }
 
