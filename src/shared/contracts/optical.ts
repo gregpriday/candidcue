@@ -27,10 +27,12 @@
  * ---------------------------------------------------------------------------
  * `OpticalProfile` — the measurement — is stored by Rust as opaque JSON in the
  * `optical` section of the settings document (`settings::OpticalSettings`),
- * keyed per panel, so re-opening the wizard starts from the calibration rather
- * than from scratch. Rust does not interpret it; `normalizeOpticalProfile` is
- * the validator. `ResolvedOptics` is never stored: it rides inside
- * `StageSettings` on the way to the stage and is re-derived on every take.
+ * keyed by panel fingerprint and rig name (`opticalRigKey`), so re-opening the
+ * wizard starts from the calibration rather than from scratch. Rust does not
+ * interpret it; `normalizeOpticalProfile` is the validator. `ResolvedOptics` is
+ * a result rather than a record: a take re-derives it and carries it to the
+ * stage inside `StageSettings`. (A script's `stageOverrides` is opaque JSON too
+ * and could hold a copy, but no take reads its optics from there.)
  */
 
 /** Hardware CandidCue knows the physical dimensions of without being told. */

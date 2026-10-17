@@ -308,10 +308,11 @@ export interface AppSettings {
    * overwrite the first, which is the one failure a calibration store cannot
    * afford (nobody re-measures a distance they believe is already saved).
    *
-   * Rust owns it: the `optical` section of the settings document
-   * (`settings::OpticalSettings`), revisioned and included in an export. The
-   * localStorage overlay only ever holds a legacy copy awaiting adoption — see
-   * `opticalAwaitingAdoption` in services/settings.ts. There is no second
+   * Rust owns it once adopted: the `optical` section of the settings
+   * document (`settings::OpticalSettings`), revisioned and included in an
+   * export. Until that adoption succeeds the legacy localStorage overlay still
+   * supplies the values — see `opticalAwaitingAdoption` and, for mirroring,
+   * `panelMirrorAwaitingAdoption` in services/settings.ts. There is no third
    * store: the `display_profiles` rows that once claimed to back this up had
    * no writer and were dropped (#232).
    */

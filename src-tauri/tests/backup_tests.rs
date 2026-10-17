@@ -1976,7 +1976,8 @@ async fn assert_display_profiles_removed(root: &Path, pool: &sqlx::SqlitePool) {
     let copy = repo::duplicate_script(pool, &paths, &locks, &id).await.expect("duplicate_script");
     assert_eq!(copy.title, "Launch copy");
 
-    // The failure a dangling foreign key causes: writes to `scripts` itself.
+    // The failure a dangling foreign key causes: inserts into and deletes
+    // from `scripts` itself.
     // A delete still cascades to the children that reference it.
     sqlx::query(
         "INSERT INTO scripts (id, title, canonical_rel_path, source_hash, created_at, updated_at)
@@ -2031,6 +2032,13 @@ async fn assert_profile_rollback_copy_kept(root: &Path) {
             .await
             .expect("the snapshot keeps the column");
     assert_eq!(selected.as_deref(), Some(PROFILE_ID));
+    let (name, stage): (String, String) =
+        sqlx::query_as("SELECT name, stage_settings_json FROM display_profiles WHERE id = ?")
+            .bind(PROFILE_ID)
+            .fetch_one(&pool)
+            .await
+            .expect("the snapshot keeps the profile row");
+    assert_eq!((name.as_str(), stage.as_str()), ("Elgato", "{\"schemaVersion\":1}"));
     pool.close().await;
 }
 
@@ -2038,10 +2046,11 @@ async fn assert_profile_rollback_copy_kept(root: &Path) {
 async fn upgrading_removes_display_profiles_and_keeps_what_hangs_off_a_script() {
     /*
      * #232. SQLite refuses to drop a column a foreign key names, dropping only
-     * the table leaves every later write to `scripts` failing, and rebuilding
-     * `scripts` inside sqlx's transaction would cascade away its revisions and
-     * image references. So migration 4 edits the stored schema instead — and
-     * this runs it through the bundled SQLite the app ships, not the CLI.
+     * the table leaves every INSERT into or DELETE from `scripts` failing, and
+     * rebuilding `scripts` inside sqlx's transaction would cascade away its
+     * revisions and image references. So migration 4 edits the stored schema
+     * instead — and this runs it through the bundled SQLite the app ships, not
+     * the CLI.
      */
     let dir = tempfile::tempdir().expect("tempdir");
     a_version_three_database_with_a_display_profile(dir.path()).await;
