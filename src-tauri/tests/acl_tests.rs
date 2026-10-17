@@ -25,7 +25,7 @@
 //! the lot. `permissions/app-commands.toml` turns the gate on; these tests
 //! prove it is on and that only `control` is through it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tauri::ipc::{Origin, RuntimeAuthority};
 use tauri::utils::acl::capability::Capability;
@@ -106,6 +106,25 @@ fn allowed_for(authority: &RuntimeAuthority, command: &str, window: &str) -> boo
         .is_some()
 }
 
+/// Every command a core plugin declares, keyed the way the webview invokes it
+/// (`plugin:menu|set_as_app_menu`). Read from the generated manifests rather
+/// than listed by hand, so a command a Tauri upgrade adds is covered without
+/// anyone remembering to add it.
+fn core_plugin_commands() -> BTreeSet<String> {
+    let mut commands = BTreeSet::new();
+    for (key, manifest) in acl_manifests() {
+        let Some(plugin) = key.strip_prefix("core:") else {
+            continue;
+        };
+        for permission in manifest.permissions.values() {
+            for command in &permission.commands.allow {
+                commands.insert(format!("plugin:{plugin}|{command}"));
+            }
+        }
+    }
+    commands
+}
+
 #[test]
 fn app_acl_manifest_is_present_so_the_gate_is_active() {
     let manifests = acl_manifests();
@@ -176,7 +195,7 @@ fn stage_window_cannot_reach_secrets_deletion_or_export() {
 #[test]
 fn no_window_can_drive_os_fullscreen_from_javascript() {
     let authority = authority();
-    for window in [CONTROL_WINDOW, STAGE_WINDOW] {
+    for window in [CONTROL_WINDOW, PREFERENCES_WINDOW, STAGE_WINDOW] {
         assert!(
             !allowed_for(&authority, "plugin:window|set_fullscreen", window),
             "`{window}` can invoke plugin:window|set_fullscreen; presentation is \
@@ -197,13 +216,19 @@ fn no_window_can_drive_os_fullscreen_from_javascript() {
 /// The positive half is what makes the negative half mean anything. A command
 /// key spelled in a shape the authority does not recognise is denied too, so
 /// without an allowed read from the same plugin this would pass vacuously.
+/// `current_monitor` is the one window-plugin command any window still holds
+/// (#267), and it is the Settings window that holds it.
 #[test]
 fn no_window_can_close_a_window_from_javascript() {
     let authority = authority();
     assert!(
-        allowed_for(&authority, "plugin:window|is_focused", CONTROL_WINDOW),
-        "control cannot even read is_focused, so the denial below proves nothing \
-         about the key format"
+        allowed_for(
+            &authority,
+            "plugin:window|current_monitor",
+            PREFERENCES_WINDOW
+        ),
+        "preferences cannot even read current_monitor, so the denial below \
+         proves nothing about the key format"
     );
     for window in [CONTROL_WINDOW, PREFERENCES_WINDOW, STAGE_WINDOW] {
         assert!(
@@ -305,5 +330,107 @@ fn no_window_can_open_a_file_dialog_from_javascript() {
                 capability.identifier
             );
         }
+    }
+}
+
+/// Each window may invoke exactly the core-plugin commands its frontend calls,
+/// and no others (#267).
+///
+/// Control and Settings both used to hold `core:default`, which is nine plugin
+/// defaults: the whole menu builder (`set_as_app_menu` and `set_as_window_menu`
+/// among it), tray icons, images, paths, resources, app metadata and the read
+/// halves of the webview and window plugins. The frontend called four of those
+/// commands. The menu bar is built in Rust (`src/menu.rs`), so the main thing
+/// that grant did was let a script in either window replace the application
+/// menu with one of its own. (The tray commands resolved too, and only failed
+/// to run because the `tray-icon` feature happens to be off.)
+///
+/// The universe is every command a core manifest declares, so a grant that
+/// comes back — through a capability file, a permission set, or a Tauri upgrade
+/// that widens a default — fails here by name. The allowed half is what keeps
+/// the denied half honest: it proves the `plugin:<name>|<command>` key shape
+/// resolves, and it is also the only thing that would notice the Settings
+/// window losing `current_monitor`, because the calibration wizard's read of it
+/// fails open rather than breaking the screen.
+///
+/// A new core call in the frontend means a new line here, and that is the
+/// point: it is a reviewed grant, not a default that came along.
+#[test]
+fn windows_can_invoke_only_the_core_commands_their_frontends_call() {
+    let expected: [(&str, &[&str]); 3] = [
+        (
+            CONTROL_WINDOW,
+            &[
+                "plugin:event|listen",
+                "plugin:event|unlisten",
+                // The Settings-section broadcast, the shutdown acknowledgement
+                // and the embedded stage's viewport hints.
+                "plugin:event|emit",
+            ],
+        ),
+        (
+            PREFERENCES_WINDOW,
+            &[
+                "plugin:event|listen",
+                "plugin:event|unlisten",
+                // Calibrate's `targetIsControlPanel`.
+                "plugin:window|current_monitor",
+            ],
+        ),
+        (
+            STAGE_WINDOW,
+            &[
+                "plugin:event|listen",
+                "plugin:event|unlisten",
+                "plugin:event|emit",
+                // stage.json grants it and no stage code calls `emitTo`; it
+                // predates #267, which left the stage alone.
+                "plugin:event|emit_to",
+            ],
+        ),
+    ];
+
+    let authority = authority();
+    let commands = core_plugin_commands();
+    for anchor in [
+        "plugin:menu|set_as_app_menu",
+        "plugin:menu|set_as_window_menu",
+        "plugin:menu|new",
+        "plugin:tray|new",
+        "plugin:webview|internal_toggle_devtools",
+        "plugin:window|is_focused",
+    ] {
+        assert!(
+            commands.contains(anchor),
+            "`{anchor}` is not among the core commands read from \
+             gen/schemas/acl-manifests.json, so the sweep below is not looking \
+             at what it claims to"
+        );
+    }
+
+    for (window, allowed) in expected {
+        for command in allowed {
+            assert!(
+                commands.contains(*command),
+                "`{command}` is not a core command any more; update this list"
+            );
+            assert!(
+                allowed_for(&authority, command, window),
+                "`{window}` can no longer invoke `{command}`, which its frontend \
+                 calls"
+            );
+        }
+
+        let unexpected: Vec<_> = commands
+            .iter()
+            .filter(|command| !allowed.contains(&command.as_str()))
+            .filter(|command| allowed_for(&authority, command, window))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "`{window}` can invoke core commands its frontend never calls: \
+             {unexpected:?}. Grant the individual `core:<plugin>:allow-*` \
+             permission a call needs, never a `default` set (#267)"
+        );
     }
 }
