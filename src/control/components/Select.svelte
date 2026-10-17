@@ -93,11 +93,17 @@
     gap: 1px;
     min-width: 0;
   }
+  /*
+   * A host can restyle every field label at once through these two — Settings
+   * gives its rows the switch's label treatment so a select, a slider and a
+   * switch in one section read as one kind of row. Stacked fields elsewhere
+   * keep the quieter label they always had.
+   */
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: var(--field-label-weight, 600);
+    color: var(--field-label-color, var(--text-secondary));
   }
   .description {
     font-size: var(--text-xs);

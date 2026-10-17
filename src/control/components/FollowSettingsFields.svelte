@@ -10,6 +10,7 @@
   import SegmentedControl from './SegmentedControl.svelte';
   import Select from './Select.svelte';
   import SettingReadout from './SettingReadout.svelte';
+  import SettingRow from './SettingRow.svelte';
   import Toggle from './Toggle.svelte';
   import {
     FOLLOW_FEEL_OPTIONS,
@@ -43,16 +44,17 @@
 </script>
 
 <div class="fields">
-  <div class="field">
-    <span class="mini-label" id="follow-feel-label">Follow feel</span>
-    <SegmentedControl
-      label="Follow feel"
-      value={following.feel}
-      options={FOLLOW_FEEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-      onchange={(value) => onchange({ feel: value as FollowFeel })}
-    />
-    <p class="hint">{feelNote}</p>
-  </div>
+  <SettingRow label="Follow feel" description={feelNote}>
+    {#snippet control(describedby)}
+      <SegmentedControl
+        label="Follow feel"
+        {describedby}
+        value={following.feel}
+        options={FOLLOW_FEEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        onchange={(value) => onchange({ feel: value as FollowFeel })}
+      />
+    {/snippet}
+  </SettingRow>
 
   {#if !compact}
     <!--
@@ -84,9 +86,10 @@
         <!-- One family ships, so this states which rather than offering a
              dropdown with a single entry and no alternative to reveal. -->
         <SettingReadout
+          layout="row"
           label="Motion profile"
           value={motionFamily.label}
-          description="CandidCue has one motion profile. Follow feel adjusts it; section safety and retake evidence are never relaxed."
+          description="CandidCue's one motion profile. Follow feel tunes it."
         />
       {/if}
     </div>
@@ -99,8 +102,8 @@
     />
 
     <p class="hint">
-      Reading-band position lives with the other stage appearance settings — it sets where the
-      active line sits, which is what the follower aims for.
+      Following aims for the reading band. Its position is a Teleprompter setting, unless a
+      calibrated rig or automatic sizing owns it.
     </p>
   {/if}
 </div>
@@ -117,12 +120,6 @@
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
-  }
-  .mini-label {
-    font-size: var(--text-label);
-    line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
   }
   .hint {
     margin: 0;

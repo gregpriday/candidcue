@@ -55,7 +55,10 @@
     gap: var(--space-4);
     min-height: var(--icon-control-h);
   }
-  .disabled {
+  /* As Slider: the label and switch fade, the description that explains them
+     stays readable. */
+  .disabled .label,
+  .disabled .switch {
     opacity: 0.55;
   }
 

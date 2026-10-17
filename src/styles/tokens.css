@@ -636,13 +636,29 @@ input[type='range'] {
   appearance: none;
   width: 100%;
   height: 20px;
+  /* The engine's default 2px margin pushed the track off the text column it
+     sits under and past its right edge. */
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
+/* `--range-from` / `--range-fill` (0-100%) darken the stretch of track between
+   them — the start (or zero) to the thumb — so the two sides of a value read
+   differently. Neutral, not the accent: a section of eighteen sliders in
+   terracotta would spend the accent on nothing. A range that sets neither
+   shows a plain track, as before. */
 input[type='range']::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: var(--radius-pill);
-  background: var(--border-control);
+  background: linear-gradient(
+    to right,
+    var(--border-control) 0 var(--range-from, 0%),
+    var(--border-strong) var(--range-from, 0%) var(--range-fill, 0%),
+    var(--border-control) var(--range-fill, 0%) 100%
+  );
+}
+input[type='range']:disabled {
+  cursor: not-allowed;
 }
 input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -675,6 +691,12 @@ input[type='range']:not([data-focus]):focus-visible::-webkit-slider-thumb {
    focus/active so the slider has the same state matrix as every other control. */
 input[type='range']:active::-webkit-slider-thumb {
   background: var(--accent-strong);
+}
+/* A disabled thumb goes neutral. Faded terracotta still read as a handle to
+   drag; grey says the value is held by something else. */
+input[type='range']:disabled::-webkit-slider-thumb,
+input[type='range']:disabled:hover::-webkit-slider-thumb {
+  background: var(--border-strong);
 }
 
 /* ============================================================================
