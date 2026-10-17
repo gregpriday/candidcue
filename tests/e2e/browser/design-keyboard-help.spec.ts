@@ -145,7 +145,8 @@ async function shootUnclipped(page: Page, name: string): Promise<void> {
   const viewport = page.viewportSize()!;
   await page.setViewportSize({ width: viewport.width, height: Math.ceil(height + 160) });
   await shoot(page, name, dialog(page));
-  await style.evaluate((el) => el.remove());
+  // `addStyleTag` hands back a Node handle; the tag it added is an Element.
+  await style.evaluate((el) => (el as Element).remove());
   await page.setViewportSize(viewport);
 }
 
