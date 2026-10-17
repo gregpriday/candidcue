@@ -755,8 +755,9 @@ export function createSmoothFollowStore(
         notices: s.notices.map((n) => ({ id: n.id, title: n.title })),
         counts: s.counts,
         movements: s.movements,
-        // §57.3: timeline entries leave their free-text `detail` behind, and
-        // the movement `record` they duplicate travels once, in `movements`.
+        // §57.3: timeline entries leave their free-text `detail` and duplicate
+        // movement `record` behind; retained movement records are exported
+        // separately, in `movements`.
         timeline: s.timeline.map(({ record: _record, detail: _detail, ...rest }) => rest),
       };
     },

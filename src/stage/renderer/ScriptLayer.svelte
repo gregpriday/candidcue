@@ -188,11 +188,10 @@
      */
     followProfile?: SmoothFollowProfile;
     /**
-     * §7.1. Extra bottom inset the script gives up to whatever the mount site
-     * reserves below it. Applied before the take begins and held for the whole
-     * take; the reading band and every measurement fold it into the bottom
-     * padding, so the script never scrolls under it. Nothing reserves a band
-     * today, so the stage passes `0`.
+     * §7.1. Extra bottom inset the mount site reserves below the script.
+     * Applied before the take begins and held for the whole take; it is folded
+     * into the bottom padding, so document height and scroll bounds account for
+     * it. Nothing reserves a band today, so the stage passes `0`.
      */
     bottomInsetPx?: number;
     /**
@@ -858,8 +857,8 @@
       : reachableTopPx(legacyPad.topPx, bandCenterPx - linePx / 2)) + lineEntryPx,
   );
   // §7.1: any inset the mount site reserves is folded into the bottom padding,
-  // so the reading band, the total document height, and the fallback target all
-  // keep the script clear of it with no separate bookkeeping.
+  // so document height and scroll bounds account for it with no separate
+  // bookkeeping.
   const padBottomPx = $derived(
     (optics
       ? stagePaddingPx(bandGeometry).bottomPx
