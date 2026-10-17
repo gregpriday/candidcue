@@ -2619,8 +2619,13 @@ function recordAutoScrollEnd(s: SessionState): void {
  * before that opening anchor comes back — and clearing on the echo let a move
  * made before the roll erase the ending the roll had just recorded.
  *
- * Not called by "re-find me here": a reacquisition reopens the search around
- * what is on the glass, and moves nothing.
+ * Not called by "re-find me here", and its eventual answer does not release
+ * the ending either. The request moves nothing — it reopens the search around
+ * what is on the glass, which the transport left at the end, so the recorded
+ * end is never far from wherever the search finds the presenter. And the
+ * answer is a voice snapshot: a relocation may move `observed` and leave
+ * `confirmed` where it was, which after a roll is the stale place it began —
+ * exactly the position this ending exists to outrank.
  */
 function releaseAutoScrollEnd(): void {
   if (activeTake !== null) activeTake.autoScrollEndToken = null;
