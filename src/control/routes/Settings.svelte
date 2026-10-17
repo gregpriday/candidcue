@@ -280,8 +280,17 @@
    * hidden; the rows inside it go with it. Counted separately, one setting read
    * as two; marked separately, a query that matched only the hint would hide
    * the dropdown and leave its description standing.
+   *
+   * A row holding keyboard focus counts as a match until focus leaves it. Using
+   * a row can change what it says: Follow feel matches "sluggish" only through
+   * Balanced's description, and one arrow key to Responsive swaps it. Hiding the
+   * row there hides the control the keyboard is on, and focus falls out to the
+   * page in the middle of the gesture. So it stays as it was, washed and
+   * counted — nothing on screen moves under the hands that moved it — and the
+   * `focusout` pass below judges it again once focus is elsewhere.
    */
   function applyRowFilter(root: HTMLElement, query: string): number | null {
+    const focused = root.ownerDocument.activeElement;
     let matched = 0;
     for (const row of root.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
       const outer = row.parentElement?.closest(ROW_SELECTOR) ?? null;
@@ -290,7 +299,9 @@
         row.removeAttribute('data-settings-search-hit');
         continue;
       }
-      const hit = (row.textContent ?? '').toLowerCase().includes(query);
+      const hit =
+        (row.textContent ?? '').toLowerCase().includes(query) ||
+        (focused !== null && row.contains(focused));
       if (hit) {
         matched += 1;
         row.setAttribute('data-settings-search-hit', '');
@@ -339,7 +350,29 @@
       rowMatches = applyRowFilter(root, query);
     });
     observer.observe(root, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
+    /*
+     * And when focus leaves a row, so a row held for it is judged again.
+     *
+     * A task later rather than at once: `focusout` fires before focus has
+     * landed anywhere, and a pass run inside it would read the page's body as
+     * focused — dropping a row that focus is only moving within. When the
+     * window itself loses focus, the element keeps it, so a presenter switching
+     * apps does not come back to a row that vanished behind them.
+     */
+    let focusPass: ReturnType<typeof setTimeout> | null = null;
+    const onFocusOut = (): void => {
+      if (focusPass !== null) return;
+      focusPass = setTimeout(() => {
+        focusPass = null;
+        rowMatches = applyRowFilter(root, query);
+      }, 0);
+    };
+    root.addEventListener('focusout', onFocusOut);
+    return () => {
+      observer.disconnect();
+      root.removeEventListener('focusout', onFocusOut);
+      if (focusPass !== null) clearTimeout(focusPass);
+    };
   });
 
   /*

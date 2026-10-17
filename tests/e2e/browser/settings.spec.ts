@@ -734,6 +734,52 @@ test('searching counts a row once when another row sits inside it', async ({ pag
 });
 
 /**
+ * A row stops matching while it has focus, and stays until focus leaves.
+ *
+ * Follow feel matches "sluggish" only through Balanced's description, and the
+ * arrow keys move focus AND the choice together. One press to Responsive swaps
+ * the description, so the row no longer matches — and hiding it there would
+ * hide the radio the keyboard is on, dropping focus to the page mid-gesture.
+ * It is held, and judged again once focus goes somewhere else.
+ */
+test('a row that stops matching while it has focus stays until focus leaves', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true });
+  await openPreferences(page);
+  await gotoSection(page, 'Following');
+
+  // `includeHidden`: a role query skips hidden elements, and the row is meant
+  // to end up hidden.
+  const feel = page.locator('.content .field', {
+    has: page.getByRole('radiogroup', { name: 'Follow feel', includeHidden: true }),
+  });
+  const search = page.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('sluggish');
+  await expect(feel).toBeVisible();
+  await expectRowFilterNote(page, 1);
+
+  await page.getByRole('radio', { name: 'Balanced' }).focus();
+  await page.keyboard.press('ArrowRight');
+
+  const responsive = page.getByRole('radio', { name: 'Responsive' });
+  await expect(responsive).toHaveAttribute('aria-checked', 'true');
+  // The description has changed, and the row no longer says "sluggish"…
+  await expect(feel).toContainText('Livelier');
+  // …and it is still on screen, with the keyboard still on it.
+  await expect(feel).toBeVisible();
+  await expect(feel).not.toHaveAttribute('data-settings-search-miss');
+  await expect(responsive).toBeFocused();
+  await expectRowFilterNote(page, 1);
+
+  // Leaving the row lets the filter catch up.
+  await search.focus();
+  await expect(feel).toHaveAttribute('data-settings-search-miss', '');
+  await expect(feel).toBeHidden();
+  await expectRowFilterNote(page, 0);
+});
+
+/**
  * Let a command held by `setHeld` answer — once the screen has actually asked.
  *
  * Releasing first would lift the hold before the request it was there for, and
