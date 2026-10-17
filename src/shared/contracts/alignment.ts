@@ -499,6 +499,8 @@ function validDisplayAtoms(value: unknown): boolean {
     if (typeof d[key] !== 'number' || !Number.isFinite(d[key])) return false;
   }
   if (!Number.isInteger(d.axisFrom) || (d.axisFrom as number) < 0) return false;
+  const { observed, rate, maxLead, margin, ceiling, axisFrom } = d as unknown as AlignmentDisplayAtoms;
+  if (rate < 0 || maxLead < 0 || margin < 0 || ceiling < 0) return false;
   const axis = d.axis;
   if (!Array.isArray(axis) || axis.length === 0 || axis.length > MAX_DISPLAY_AXIS) return false;
   let previous = -Infinity;
@@ -508,7 +510,18 @@ function validDisplayAtoms(value: unknown): boolean {
     if (typeof point !== 'number' || !Number.isFinite(point) || point < previous) return false;
     previous = point;
   }
-  return true;
+  /*
+   * The window must cover everything the formula can return. `axisTokenAt`
+   * clamps a position outside it to the nearest end, and a window starting
+   * ABOVE the lowest reachable position would clamp the display forward — the
+   * one direction it may never be moved. The same bounds `DisplayAtoms::of`
+   * builds from: the faded margin and the eased lead each stay inside their
+   * caps, and the result is clamped to the ceiling.
+   */
+  const low = Math.min(Math.max(observed - margin, 0), ceiling);
+  const high = Math.max(low, Math.min(observed + maxLead, ceiling));
+  const EPSILON = 1e-9;
+  return axisFrom <= low + EPSILON && axisFrom + axis.length - 1 >= high - EPSILON;
 }
 
 const SNAPSHOT_ENTRIES = Object.entries(SNAPSHOT_FIELDS) as Array<

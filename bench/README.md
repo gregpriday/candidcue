@@ -295,6 +295,76 @@ whose unperturbed baseline already misbehaves is reported as such and given no
 radius — a radius measured from a failing baseline is noise with a decimal point
 on it.
 
+## Measuring the take the app runs
+
+Three gaps let the suite score something slightly different from the product,
+and each now has a tool.
+
+**The compile.** A take never hands the engine Markdown: the app tokenises the
+spoken text itself and the host compiles those tokens with
+`compile_tokens_in`. Replays used `cc_align::compile`, which normalises a whole
+line at a time. `CC_BENCH_APP_TOKENS=1 cc-bench tier-b …` compiles the script
+the way a take does (`cc-bench/src/app_tokens.rs`, a port of
+`src/shared/markdown/tokenize.ts`) and maps gold into that compile's atoms. It
+found that the app split spelled numbers across tokens (`one hundred and 43`
+against a transcript's `143`), costing `live.within5` 95.49% → 94.05% on
+`runs-local` and 85.4% → 78.4% on `figures__exact__qwen`; the token path now
+normalises a sentence at a time and the two compiles agree again.
+
+**The projection.** The stage evaluates the display in tokens, the engine in
+atoms. `cc-bench projection --runs DIR` samples both at 20 Hz over replayed
+takes compiled the app's way and reports how often the stage's dim cursor
+disagrees with the engine's. Before snapshots carried `displayAtoms` it was
+ahead on 1.73% of samples (1.97% on `runs/`), by up to 2.4 tokens; it is now
+zero. `cc-bench display-parity <run>` exports the fixture
+`tests/unit/alignment-display-parity.test.ts` checks the TypeScript against.
+
+**The live fields.** No frozen corpus has per-word times or close reasons,
+and the hosted audio is gone. `cc-bench synth-say` renders every Tier-B
+performance with macOS `say` (free, local, kept), and `capture-local` streams
+it through the shipping recogniser:
+
+```bash
+export CANDIDCUE_TTS_CACHE_DIR=/private/tmp/candidcue-bench-say/tts-cache
+cargo run --release -p cc-bench -- synth-say
+cargo run --release -p cc-bench -- capture-local --runs /tmp/runs-say \
+    --model ../src-tauri/models/x-asr-480ms --pace 30
+cargo run --release -p cc-bench -- tier-b --runs /tmp/runs-say --label say
+```
+
+That corpus is the first where 59 of 86 utterances close at the 20 s length
+cap — what continuous reading actually does — and it showed the cap splitting
+words across utterances (`budge | t`, `lo | ud`). Re-decoding the same audio at
+30, 60 and 600 s caps, and rejoining split words in the engine, were both
+measured and neither improved tracking (see below).
+
+**Tier C's dim cursor.** The model drew the ramp from a debounced latch that the
+shipping component only draws from while frozen. It now models what ships.
+
+### Measured and rejected
+
+Recorded so they are not re-run as new ideas. Each was compared against the
+same replays on Tier A, Tier B (`runs-local`, `runs/`, and where relevant the
+`say` corpus) and Tier C, and rejected under one rule: no safety row may get
+worse, and the targeted outcome must improve.
+
+| Change | Result |
+|---|---|
+| Publish the monotone evidence clock instead of the raw one | `gate.unread_never_spoken` 2.751 → 2.801, pause overshoot up |
+| Compute rate staleness from the published clock instead | 52 rows worse, 15 better |
+| Draw the dim ramp from the debounced latch while following | gate 2.629 → 2.751, +2.1 disruptions/10 min, for 5% fewer corrections |
+| Debounce the dim frontier's ADVANCE (40/80/120 ms) | safer, but dims later one-for-one and does not reduce corrections |
+| Project the trailing margin backward | stage cursor ahead 1.73% → 2.32% |
+| Chinese numerals (`二十七`) to digits | real but tiny (+0.008 pp within5), gate +0.002 |
+| Keep a session pace prior through jumps | no measurable effect on this corpus |
+| Estimate pace only from anchor pairs not spanning a pause | lag −5 to −20 ms, gate 2.63 → 2.70–2.80 |
+| Restated finals do not advance weak/off-script streaks | negligible |
+| Utterance cap 30 / 60 / 600 s | WER −0.4 to −0.7 pp, ahead_time and freeze up |
+| Rejoin a word split across utterances | +0.1 pp within5, gate +0.005 |
+| Acoustic end from receipt / onset + 250 ms / no measurement | all within noise |
+| Drop per-word times | ahead_time +0.26 pp, freeze +0.15 pp: the times help |
+| `lead_margin_atoms` 0.6–1.0 × `max_lead_atoms` 2.6–3.2 × `max_prediction_ms` 1200/1400 | no Pareto point: every margin below 1.0 worsens the gate and `ahead_worst` on all three audio corpora |
+
 ## Commands
 
 ```bash

@@ -126,11 +126,16 @@ const target = alignmentDisplayAt(snapshot, audioNowMs);
 // bounds prediction, so no extra dead-reckoning on the stage side.
 ```
 
-`alignmentDisplayAt` in `src/shared/contracts/alignment.ts` is the canonical
-token-space mirror of `Snapshot::display_at`. It agrees with the engine at the
-endpoints of a prediction and may differ by a fraction of a token mid-flight
-across a multi-atom token. Never fork it, and don't transcribe it into a
-document either: a copy that used to live here fell behind it. In outline, while evidence is fresh the
+`alignmentDisplayAt` in `src/shared/contracts/alignment.ts` is the stage's
+copy of `Snapshot::display_at`, and it is EXACT: every snapshot carries
+`displayAtoms` (the engine's own coordinates plus the few atom→token axis
+boundaries the display can reach), and the stage evaluates the engine's formula
+in atoms and maps the answer through them. The older token-space path — the same
+formula on separately projected fields — is kept only for snapshots without that
+field, and it was measured drawing the dim cursor ahead of the engine's on 1.73%
+of samples (`cc-bench projection`). `tests/unit/alignment-display-parity.test.ts`
+pins the two together on a real take. Never fork it, and don't transcribe it
+into a document either: a copy that used to live here fell behind it. In outline, while evidence is fresh the
 lead grows 1:1 with evidence age (pipeline-lag compensation, not a guess about
 the future: the words are already said, the recogniser has simply not finished
 saying so), eases into a plateau at `pauseOnsetMs`, holds for `leadHoldMs`, and

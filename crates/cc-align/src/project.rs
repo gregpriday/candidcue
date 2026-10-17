@@ -280,3 +280,117 @@ pub fn project_to_tokens(
         display_atoms: DisplayAtoms::of(snapshot, script),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::script::{compile_tokens, TokenInput};
+    use crate::tracker::{DecisionCode, TrackingState};
+    use crate::AlignmentConfig;
+
+    /// Tokens that expand (`$12`, `it's`) and a number that merges several
+    /// tokens, so the axis bends in both directions.
+    fn script() -> CompiledScript {
+        let words = "It's $12 for one hundred and forty-three seats, we'll see it's fine today";
+        let tokens: Vec<TokenInput> = words
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, s)| TokenInput {
+                surface: s.to_string(),
+                line: 0,
+                para: 0,
+                sentence_end: i == 7,
+            })
+            .collect();
+        compile_tokens(&tokens)
+    }
+
+    fn snapshot(observed: f64, rate: f64, margin: f64, max_lead: f64, limit: f64, floor_ms: f64, len: f64) -> Snapshot {
+        let c = AlignmentConfig::default();
+        Snapshot {
+            seq: 1,
+            state: TrackingState::Following,
+            decision: DecisionCode::LocalObserved,
+            confirmed: observed,
+            observed,
+            rate,
+            evidence_audio_ms: 1_000.0,
+            at_audio_ms: 1_000.0,
+            max_prediction_ms: c.max_prediction_ms,
+            pause_onset_ms: c.pause_onset_ms,
+            lead_floor_ms: floor_ms,
+            max_lead_atoms: max_lead,
+            lead_margin_atoms: margin,
+            lead_ease_ms: c.lead_ease_ms,
+            lead_hold_ms: c.lead_hold_ms,
+            lead_decay_ms: c.lead_decay_ms,
+            display_limit: limit,
+            confidence: 0.8,
+            suggestion: None,
+            provisional: None,
+            provisional_retracted: false,
+            script_len: len,
+        }
+    }
+
+    /// The window `DisplayAtoms` ships covers every position `display_at` can
+    /// return for that snapshot, so mapping through it is exactly the full
+    /// axis — including the cases where it would be easy to get wrong.
+    #[test]
+    fn the_display_window_covers_every_reachable_position() {
+        let script = script();
+        let len = script.len() as f64;
+        let cases = [
+            ("flowing", snapshot(3.0, 2.5, 1.0, 3.2, 9.0, 0.0, len)),
+            ("holding at a nonzero position", snapshot(7.3, 0.0, 1.0, 3.2, 9.0, 0.0, len)),
+            ("positive lead floor", snapshot(4.0, 3.0, 1.0, 3.2, 12.0, 500.0, len)),
+            ("zero lead cap", snapshot(4.0, 3.0, 1.0, 0.0, 12.0, 0.0, len)),
+            ("margin larger than the cap", snapshot(5.0, 2.5, 2.5, 1.0, 12.0, 0.0, len)),
+            ("fractional ceiling", snapshot(4.0, 4.5, 1.0, 3.2, 5.5, 0.0, len)),
+            ("at the script end", snapshot(len - 0.4, 4.0, 1.0, 3.2, len, 0.0, len)),
+            ("start of script", snapshot(0.0, 2.8, 1.0, 3.2, 9.0, 0.0, len)),
+            ("observed past the ceiling", snapshot(9.0, 2.5, 1.0, 3.2, 6.0, 0.0, len)),
+            ("margin past the start", snapshot(0.4, 2.5, 1.0, 3.2, 9.0, 0.0, len)),
+        ];
+        for (name, snap) in cases {
+            let window = DisplayAtoms::of(&snap, &script);
+            let first = window.axis_from;
+            let last = first + window.axis.len() as f64 - 1.0;
+            let mut t = snap.evidence_audio_ms;
+            while t < snap.evidence_audio_ms + 4_000.0 {
+                let atom = snap.display_at(t);
+                assert!(
+                    atom >= first - 1e-9 && atom <= last + 1e-9,
+                    "{name}: display_at({t}) = {atom} outside [{first}, {last}]"
+                );
+                let exact = script.token_at(atom);
+                assert!(
+                    (window.token_at(atom) - exact).abs() < 1e-9,
+                    "{name}: window maps {atom} to {} not {exact}",
+                    window.token_at(atom)
+                );
+                t += 25.0;
+            }
+        }
+    }
+
+    /// The window is a handful of boundaries at the shipping defaults and
+    /// stays far under the stage's 256 cap at the largest margin and lead the
+    /// config will accept.
+    #[test]
+    fn the_display_window_stays_small() {
+        let script = script();
+        let len = script.len() as f64;
+        let ordinary = DisplayAtoms::of(&snapshot(6.0, 2.5, 1.0, 3.2, len, 0.0, len), &script);
+        assert!(ordinary.axis.len() <= 7, "{}", ordinary.axis.len());
+
+        let config = AlignmentConfig {
+            lead_margin_atoms: 10_000.0,
+            max_lead_atoms: 10_000.0,
+            ..Default::default()
+        }
+        .sanitized();
+        let reach = config.lead_margin_atoms + config.max_lead_atoms;
+        assert!(reach + 2.0 <= 256.0, "{reach}");
+    }
+}

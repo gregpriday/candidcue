@@ -81,6 +81,12 @@ describe('displayAtoms validation', () => {
     ['a fractional origin', { axisFrom: 1.5 }],
     ['a non-finite rate', { rate: Number.POSITIVE_INFINITY }],
     ['an implausibly long axis', { axis: Array.from({ length: 300 }, (_, i) => i) }],
+    ['a negative margin', { margin: -2 }],
+    ['a negative lead cap', { maxLead: -1 }],
+    // Would clamp a display sitting at `observed - margin` FORWARD to the
+    // window's first boundary.
+    ['a window starting above the lowest reachable position', { observed: 10, margin: 1, ceiling: 20, axisFrom: 11, axis: [11, 12, 13, 14, 15] }],
+    ['a window ending below the highest reachable position', { observed: 10, margin: 1, maxLead: 3.2, ceiling: 20, axisFrom: 9, axis: [9, 10, 11] }],
   ])('rejects %s', (_label, patch) => {
     const displayAtoms = { ...base.displayAtoms!, ...patch };
     expect(validateAlignmentSnapshot({ ...base, displayAtoms })).toBe('displayAtoms');
