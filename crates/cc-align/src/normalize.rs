@@ -870,8 +870,8 @@ mod tests {
         assert_eq!(atoms("can not"), vec!["can", "not"]);
         assert_eq!(atoms("it's we'll I'm"), vec!["it", "is", "we", "will", "i", "am"]);
         assert_eq!(atoms("don't"), vec!["do", "not"]);
-        // The `'s` rule is limited to a pronoun set, so an unknown word ending
-        // in `'s` keeps its apostrophe rather than being rewritten.
+        // Only explicitly listed contractions ending in `'s` expand; an
+        // unrecognised form keeps its apostrophe rather than being rewritten.
         assert_eq!(atoms("geht's"), vec!["geht's"]);
     }
 

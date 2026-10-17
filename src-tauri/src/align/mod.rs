@@ -864,6 +864,14 @@ mod tests {
             "observed {} drifted past the tokens actually read",
             snapshot.observed_token
         );
+        // And it did move: an upper bound alone passes a session that never
+        // got past the figure, which is exactly where the mapping could stall.
+        assert_eq!(snapshot.state, "following");
+        assert!(
+            snapshot.observed_token >= 4.0,
+            "observed {} never got past `$12 million`",
+            snapshot.observed_token
+        );
         assert!(snapshot.observed_atom >= snapshot.observed_token);
     }
 

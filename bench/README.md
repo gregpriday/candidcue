@@ -569,7 +569,7 @@ contract makes forgetting harder, not impossible.
 
 | Disposition | Rules | What it means |
 |---|---|---|
-| `SHARED` | segmentation | Assumed correct unchanged for any space-delimited language — asserted from the writing systems, not measured. Whitespace splitting is why a next language should be Latin-script; CJK needs a real tokenizer and is a much larger job. |
+| `SHARED` | segmentation | Correct unchanged for the English profile. Another space-delimited Latin-script language may reuse it, subject to review and its own corpus — asserted from the writing systems, not measured. CJK needs a real tokenizer and is a much larger job. |
 | `MUST_REPLACE` | fillers, stopwords, ampersand, decimal syntax, currency symbols, currency order, scale words, percent, unit words | Leaving these English is not inert. |
 | `SAFE_EMPTY` | phonetics | Switches off on both sides together, so nothing that matched becomes a mismatch. |
 | `INERT_RECALL_GAP` | contractions, spelled numbers, ordinals | Fail safe — no false merges — but the equivalence they bought is gone. |

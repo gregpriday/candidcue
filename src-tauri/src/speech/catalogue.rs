@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(bundled_default().resource_dir, default_model().resource_dir());
     }
 
-    /// No loadable recogniser serves a language nobody has measured.
+    /// No loadable recogniser serves French, German or Spanish.
     ///
     /// A `BundledModel` entry is a claim that the tuning beside it was
     /// MEASURED, and no `blank_penalty` sweep has been run for a recogniser in
@@ -549,7 +549,7 @@ mod tests {
     /// `cc-bench gate-language`, a catalogue entry for the weights, and then a
     /// `BundledModel` entry carrying the measured numbers.
     #[test]
-    fn no_loadable_recogniser_serves_an_unmeasured_language() {
+    fn no_loadable_recogniser_serves_french_german_or_spanish() {
         for tag in ["fr-FR", "de-DE", "es-ES"] {
             assert!(
                 !cc_stt::models::bundled_models()

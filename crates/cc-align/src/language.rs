@@ -157,9 +157,8 @@ pub enum LanguageRule {
 pub enum RuleDisposition {
     /// Correct unchanged for every language in [`AlignmentLanguage::ALL`].
     ///
-    /// Whitespace segmentation is the reason a next language should be a
-    /// space-delimited one: a CJK model would need a real tokenizer here and is
-    /// a much larger piece of work than a word list.
+    /// Whitespace segmentation is why a CJK model would need a real tokenizer
+    /// here, which is a much larger piece of work than a word list.
     Shared,
     /// A shipping profile MUST supply this. Leaving it English is not inert —
     /// it produces atoms that are actively wrong, or it silently changes the
