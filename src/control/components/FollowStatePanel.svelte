@@ -186,13 +186,18 @@
      * the pause still needs its remedy first. The panel is open while this is
      * read, and an open drawer stands the stage's keys down — hence "close this
      * panel" before Space.
+     *
+     * A soft pause keeps the microphone open, and says so, because that is the
+     * difference between it and a hard one. It used to add "Say “CandidCue,
+     * resume”" — a voice command nothing in the app listens for. The one way
+     * back that works is the key, so that is the only one offered.
      */
     if (takePaused !== 'none' && resolved.tone !== 'warning') {
       return {
         line: 'Take paused',
         detail:
           voiceInput && takePaused === 'listening'
-            ? 'The text stays where it is. Say “CandidCue, resume”, or close this panel and press Space.'
+            ? 'The text stays where it is and the microphone stays on. Close this panel and press Space to carry on.'
             : voiceInput
               ? 'The microphone is off and the text stays where it is. Close this panel and press Space to carry on.'
               : 'The text stays where it is. Close this panel and press Space to carry on.',

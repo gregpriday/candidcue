@@ -1,8 +1,8 @@
 /**
  * FollowStatePanel — never claim a microphone you do not have.
  *
- * The shared follow copy is written for a voice take ("still listening for
- * CandidCue, resume", "Transcription is still connected", "Start speaking and
+ * The shared follow copy is written for a voice take ("CandidCue is still
+ * listening", "Transcription is still connected", "Start speaking and
  * the stage picks up your place"). A manual or fixed-speed take has no realtime
  * connection and no open microphone, and the panel was showing all three of
  * those sentences anyway — including before the take had started.
@@ -70,6 +70,7 @@ interface PanelInputs {
   heardAnything?: boolean;
   heldByUser?: boolean;
   rollingAtPace?: boolean;
+  takePaused?: 'none' | 'listening' | 'hard';
 }
 
 function textOf(
@@ -183,6 +184,23 @@ describe('FollowStatePanel honesty', () => {
     const text = textOf(true, 'following', { rollingAtPace: true, heldByUser: true });
     expect(text).toContain('Rolling at pace');
     expect(text).not.toMatch(/stays where it is/i);
+  });
+
+  /*
+   * A soft pause offered "Say “CandidCue, resume”", and nothing in the app
+   * listens for a wake word or a voice command. It names the key that works,
+   * and keeps telling a soft pause from a hard one by the microphone.
+   */
+  it('offers only the way back from a pause that actually works', () => {
+    const soft = textOf(true, 'following', { takePaused: 'listening' });
+    expect(soft).toContain('Take paused');
+    expect(soft).not.toMatch(/CandidCue, resume|say “/i);
+    expect(soft).toMatch(/close this panel and press Space/i);
+    expect(soft).toMatch(/microphone stays on/i);
+
+    const hard = textOf(true, 'following', { takePaused: 'hard' });
+    expect(hard).toMatch(/microphone is off/i);
+    expect(hard).not.toMatch(/CandidCue, resume/i);
   });
 
   it('separates an operator hold from an automatic one', () => {

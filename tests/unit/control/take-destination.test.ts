@@ -19,6 +19,7 @@ import {
   destinationAnnouncement,
   findPinnedDisplay,
   resolvePrompterDisplay,
+  resolveReaderDisplay,
   resolveTakeDestination,
   type TakeDestinationInput,
 } from '../../../src/control/lib/take-destination';
@@ -54,6 +55,8 @@ function input(over: Partial<TakeDestinationInput> = {}): TakeDestinationInput {
     pinnedFingerprint: null,
     calibratedRigs: [rig()],
     pinnedRigName: null,
+    readerFrame: null,
+    restoreWindows: true,
     ...over,
   };
 }
@@ -249,6 +252,7 @@ describe('resolveTakeDestination', () => {
     expect(destination.mismatch).toBeNull();
     expect(destination.confidence).toBe('window');
     expect(destination.summary).toMatch(/reading window/i);
+    expect(destination.summary).toBe('Reading window · opens here');
   });
 
   it('falls back to a rig-neutral phrase when the rig has no name', () => {
@@ -387,6 +391,257 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
         }),
       ).mismatch,
     ).toBeNull();
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * A reading window, and the frame Present puts it back at
+ * -------------------------------------------------------------------------- */
+
+/*
+ * A Mac desk as tao reports it: a 2x laptop and a 1x external to its right.
+ * tao gives a panel's physical origin as its point origin times ITS OWN scale,
+ * so the external starts at physical 1512 — inside the laptop's 3024 physical
+ * pixels — and its logical rectangle starts at 1512 too.
+ */
+const LAPTOP = display({
+  fingerprint: 'dsp-laptop',
+  name: 'Built-in Retina Display',
+  primary: true,
+  physicalPosition: { x: 0, y: 0 },
+  physicalSize: { width: 3024, height: 1964 },
+  logicalSize: { width: 1512, height: 982 },
+  scaleFactor: 2,
+});
+const EXTERNAL = display({
+  fingerprint: 'dsp-external',
+  name: 'Dell 27-inch',
+  physicalPosition: { x: 1512, y: 0 },
+  physicalSize: { width: 1920, height: 1080 },
+  logicalSize: { width: 1920, height: 1080 },
+  scaleFactor: 1,
+});
+
+function frame(x: number, y: number, width = 800, height = 600) {
+  return { x, y, width, height };
+}
+
+describe('resolveReaderDisplay — Present’s own rule for a remembered frame', () => {
+  const reader = (over: Partial<Parameters<typeof resolveReaderDisplay>[0]> = {}) =>
+    resolveReaderDisplay({
+      displays: [LAPTOP, EXTERNAL],
+      windowDisplay: LAPTOP,
+      readerFrame: null,
+      restoreWindows: true,
+      ...over,
+    });
+
+  it('presents in place with no frame, or with "Restore windows" off', () => {
+    expect(reader()).toEqual({ display: LAPTOP, reason: 'in-place' });
+    // `restoreFrameFor` hands Present no frame at all when the toggle is off,
+    // however recently one was stored.
+    expect(reader({ readerFrame: frame(2000, 100), restoreWindows: false })).toEqual({
+      display: LAPTOP,
+      reason: 'in-place',
+    });
+  });
+
+  it('measures every panel in its OWN scale', () => {
+    /*
+     * Both directions, because the two plausible mistakes fail differently.
+     * Dividing the external's origin by the laptop's scale puts it at 756, so
+     * x = 1000 would read as the external; reading the laptop's 3024 physical
+     * pixels as logical keeps x = 2000 on the laptop. Rust divides each panel
+     * by its own scale, and so must this.
+     */
+    expect(reader({ readerFrame: frame(1000, 100, 400, 300) })).toEqual({ display: LAPTOP, reason: 'remembered' });
+    expect(reader({ readerFrame: frame(2000, 100) })).toEqual({ display: EXTERNAL, reason: 'remembered' });
+  });
+
+  it('tells a frame that comes back as it was from one the clamp has to move', () => {
+    /*
+     * `fit_reader_frame` keeps the window on the panel its origin is on, so a
+     * frame left straddling the laptop and the external — or hanging off the
+     * bottom — comes back pulled onto the laptop, not where it was left.
+     */
+    expect(reader({ readerFrame: frame(1200, 100, 800, 600) })).toEqual({ display: LAPTOP, reason: 'fitted' });
+    expect(reader({ readerFrame: frame(100, 600, 800, 600) })).toEqual({ display: LAPTOP, reason: 'fitted' });
+    // Ending exactly on the edge is still inside: nothing moves.
+    expect(reader({ readerFrame: frame(712, 382, 800, 600) })).toEqual({ display: LAPTOP, reason: 'remembered' });
+  });
+
+  it('agrees with Rust’s own mixed-DPI fixture', () => {
+    // `a_remembered_reader_is_measured_against_the_panel_it_returns_to`: a 1x
+    // panel at physical 3024, beside the 2x panel the editor is on.
+    const farExternal = display({
+      fingerprint: 'dsp-far',
+      name: 'Far Panel',
+      physicalPosition: { x: 3024, y: 0 },
+      physicalSize: { width: 1920, height: 1080 },
+      scaleFactor: 1,
+    });
+    expect(reader({ displays: [LAPTOP, farExternal], readerFrame: frame(3100, 120) }).display).toBe(farExternal);
+  });
+
+  it('reads the logical rectangle as half-open, the way Rust does', () => {
+    // x = 1512 is the laptop's right edge and the external's left one.
+    expect(reader({ readerFrame: frame(1511.5, 0) }).display).toBe(LAPTOP);
+    expect(reader({ readerFrame: frame(1512, 0) }).display).toBe(EXTERNAL);
+  });
+
+  it('finds a panel left of the primary, at negative coordinates', () => {
+    const left = display({
+      fingerprint: 'dsp-left',
+      name: 'Left Panel',
+      physicalPosition: { x: -1920, y: 0 },
+      physicalSize: { width: 1920, height: 1080 },
+      scaleFactor: 1,
+    });
+    expect(reader({ displays: [LAPTOP, left], readerFrame: frame(-1800, 100) })).toEqual({
+      display: left,
+      reason: 'remembered',
+    });
+  });
+
+  it('honours a fractional scale', () => {
+    // 1920×1080 physical at 1.25 is 1536×864 logical, starting at 2400 / 1.25.
+    const scaled = display({
+      fingerprint: 'dsp-125',
+      name: 'Scaled Panel',
+      physicalPosition: { x: 2400, y: 0 },
+      physicalSize: { width: 1920, height: 1080 },
+      scaleFactor: 1.25,
+    });
+    expect(reader({ displays: [LAPTOP, scaled], readerFrame: frame(1920, 10) }).display).toBe(scaled);
+    expect(reader({ displays: [LAPTOP, scaled], readerFrame: frame(1919, 10) }).reason).toBe('rescued');
+  });
+
+  it('fits a frame whose panel is unplugged onto the FIRST panel listed, not the primary', () => {
+    /*
+     * `fit_reader_monitor_index` falls back to index 0, and the clamp that
+     * follows leaves the window on that panel — so `restore_position`'s
+     * primary rescue never fires. Rust's comment says so; this pins it.
+     */
+    expect(reader({ displays: [LAPTOP], readerFrame: frame(4000, 300) })).toEqual({
+      display: LAPTOP,
+      reason: 'rescued',
+    });
+    expect(reader({ displays: [EXTERNAL, LAPTOP], readerFrame: frame(9000, 300) })).toEqual({
+      display: EXTERNAL,
+      reason: 'rescued',
+    });
+  });
+
+  it('cannot name a panel on a machine that listed none', () => {
+    expect(reader({ displays: [], windowDisplay: null, readerFrame: frame(10, 10) })).toEqual({
+      display: null,
+      reason: 'remembered',
+    });
+  });
+
+  it('treats a scale that is not positive as 1, as Rust does', () => {
+    const unscaled = display({
+      fingerprint: 'dsp-zero',
+      name: 'Odd Panel',
+      physicalPosition: { x: 3024, y: 0 },
+      physicalSize: { width: 1000, height: 1000 },
+      scaleFactor: 0,
+    });
+    expect(reader({ displays: [LAPTOP, unscaled], readerFrame: frame(3500, 10) }).display).toBe(unscaled);
+  });
+});
+
+describe('resolveTakeDestination — where a reading window says it opens', () => {
+  const readerInput = (over: Partial<TakeDestinationInput> = {}) =>
+    input({
+      mode: 'reader',
+      currentDisplay: LAPTOP,
+      displays: [LAPTOP, EXTERNAL],
+      calibratedRigs: [],
+      ...over,
+    });
+
+  it('opens here when nothing is remembered', () => {
+    const destination = resolveTakeDestination(readerInput());
+    expect(destination.summary).toBe('Reading window · opens here');
+    expect(destination.confidence).toBe('window');
+  });
+
+  it('opens here when "Restore windows" is off, whatever frame is stored', () => {
+    const destination = resolveTakeDestination(
+      readerInput({ readerFrame: frame(2000, 100), restoreWindows: false }),
+    );
+    expect(destination.summary).toBe('Reading window · opens here');
+  });
+
+  it('comes back at its last size and position on this window’s panel', () => {
+    const destination = resolveTakeDestination(readerInput({ readerFrame: frame(200, 100) }));
+    expect(destination.summary).toBe('Reading window · last size and position');
+    expect(destination.confidence).toBe('known');
+  });
+
+  it('names the other panel a remembered frame is going back to', () => {
+    // The case the old line got wrong: "opens where this window is", from the
+    // laptop, moments before Present moved the reader onto the external.
+    const destination = resolveTakeDestination(readerInput({ readerFrame: frame(2000, 100) }));
+    expect(destination.summary).toBe('Reading window · last position on Dell 27-inch');
+    expect(destination.confidence).toBe('known');
+  });
+
+  it('says where a frame whose panel is gone is going instead', () => {
+    const destination = resolveTakeDestination(
+      readerInput({ displays: [LAPTOP], readerFrame: frame(4000, 300) }),
+    );
+    expect(destination.summary).toBe('Reading window · opens on Built-in Retina Display');
+  });
+
+  it('promises no last position the clamp is about to change', () => {
+    // Left straddling both panels: it comes back pulled onto the laptop, so
+    // "last size and position" would be a promise Present does not keep.
+    const destination = resolveTakeDestination(readerInput({ readerFrame: frame(1200, 100, 800, 600) }));
+    expect(destination.summary).toBe('Reading window · opens on Built-in Retina Display');
+    expect(destination.confidence).toBe('known');
+  });
+
+  it('names a remembered panel even when this window’s cannot be', () => {
+    const destination = resolveTakeDestination(
+      readerInput({ currentDisplay: null, readerFrame: frame(200, 100) }),
+    );
+    expect(destination.summary).toBe('Reading window · last position on Built-in Retina Display');
+  });
+
+  it('says a remembered frame is used even when no panel can be named', () => {
+    const destination = resolveTakeDestination(
+      readerInput({ currentDisplay: null, displays: [], readerFrame: frame(200, 100) }),
+    );
+    expect(destination.summary).toBe('Reading window · last size and position');
+    expect(destination.confidence).toBe('unknown');
+  });
+
+  it('never warns a reading window, even one going back to another panel', () => {
+    // A rig on the panel it leaves, a pin elsewhere: still the reader's choice.
+    const destination = resolveTakeDestination(
+      readerInput({
+        readerFrame: frame(2000, 100),
+        pinnedFingerprint: 'gone',
+        pinnedRigName: 'Elgato rig',
+        calibratedRigs: [rig(LAPTOP)],
+      }),
+    );
+    expect(destination.mismatch).toBeNull();
+  });
+
+  it('leaves a prompter take ignoring the frame entirely', () => {
+    // A prompter fills a monitor and has no rectangle of its own.
+    const destination = resolveTakeDestination(
+      input({ currentDisplay: LAPTOP, displays: [LAPTOP, EXTERNAL], readerFrame: frame(2000, 100) }),
+    );
+    expect(destination.summary).toBe('Teleprompter · Built-in Retina Display');
+  });
+
+  it('speaks the reader line without its separator', () => {
+    const spoken = destinationAnnouncement(resolveTakeDestination(readerInput({ readerFrame: frame(2000, 100) })));
+    expect(spoken).toBe('Reading window, last position on Dell 27-inch');
   });
 });
 

@@ -251,15 +251,19 @@
    * the host handed in and `menu-nav`'s arithmetic walks this array to work out
    * what the arrow keys do. A row that is not offered may not occupy an index.
    *
-   * `kind` separates the two ARIA shapes below: a `menuitemcheckbox` reports
-   * `aria-checked` and flips a mode where it stands, and the panel row is a
-   * plain `menuitem` that says `aria-haspopup="dialog"` because the level it
-   * opens is a dialog with sliders in it — form controls inside `role="menu"`
-   * lose their own arrow keys to the menu's.
+   * `kind` separates the three ARIA shapes below: a `menuitemcheckbox` reports
+   * `aria-checked` and flips a mode where it stands; the panel row is a plain
+   * `menuitem` that says `aria-haspopup="dialog"` because the level it opens is
+   * a dialog with sliders in it — form controls inside `role="menu"` lose their
+   * own arrow keys to the menu's; and an action row is a plain `menuitem` that
+   * does one thing and closes the menu, the way any menu command does.
    */
   type MenuRow =
     | { kind: 'panel'; id: 'appearance'; label: string; select: () => void }
-    | { kind: 'checkbox'; id: 'present' | 'follow'; label: string; checked: boolean; select: () => void };
+    | { kind: 'action'; id: 'present'; label: string; select: () => void }
+    | { kind: 'checkbox'; id: 'follow'; label: string; checked: boolean; select: () => void };
+
+  const reading = $derived(presentationMode === 'reader');
 
   const rows = $derived<MenuRow[]>([
     ...(appearancePanel
@@ -268,19 +272,31 @@
             kind: 'panel' as const,
             id: 'appearance' as const,
             // The ellipsis is the desktop convention it has always been: this
-            // row asks for more input rather than doing something.
-            label: 'Adjust the prompter…',
+            // row asks for more input rather than doing something. A reading
+            // window is not a prompter, so it is not called one here.
+            label: reading ? 'Reading appearance…' : 'Adjust the prompter…',
             select: openAppearance,
           },
         ]
       : []),
+    /*
+     * NAMED FOR WHAT IT DOES, WHICH IS NOT "FILL THE DISPLAY".
+     *
+     * It was a checkbox called that, ticked while the take was a prompter. What
+     * it actually does is switch the take's presentation MODE: from a reading
+     * window it can move the window onto the pinned prompter panel, re-resolve
+     * the optics for that panel and apply that panel's saved mirroring. Nobody
+     * reading "fill the display" expects their script to jump to another
+     * monitor and turn back to front. So the row names the switch, from
+     * whichever side of it the take is on — an action, not a state, which is
+     * why it is a plain `menuitem` and no longer reports `aria-checked`.
+     */
     ...(onpresentationtoggle
       ? [
           {
-            kind: 'checkbox' as const,
+            kind: 'action' as const,
             id: 'present' as const,
-            label: 'Fill the display',
-            checked: presentationMode === 'prompter',
+            label: reading ? 'Switch to teleprompter' : 'Switch to reading window',
             select: () => onpresentationtoggle?.(),
           },
         ]
@@ -430,13 +446,23 @@
   /**
    * A checkbox row flips its mode and the menu STAYS OPEN.
    *
-   * These are settings, not commands: "fill the display" and "follow my voice"
-   * are things somebody may want to see take effect and then reconsider, and a
-   * menu that closes on every tick makes reconsidering a second hunt for the
-   * cog. The panel row is the other way round — it replaces the menu with the
-   * level it opens — which is why the two paths are not one.
+   * "Follow voice" is a setting, not a command: somebody may want to see it
+   * take effect and then reconsider, and a menu that closes on every tick makes
+   * reconsidering a second hunt for the cog. The other two rows are the other
+   * way round. The panel row replaces the menu with the level it opens, and the
+   * action row closes it — switching between a reading window and the
+   * teleprompter reshapes the window, and can move it to another panel, so a
+   * menu left hanging open over the result would be hanging from a place the
+   * window has just left.
    */
   function chooseRow(row: MenuRow): void {
+    if (row.kind === 'action') {
+      // Focus back on the trigger first, as for the panel row: the row is
+      // about to unmount, and focus dropped on `<body>` is focus nobody can see.
+      closeMenu(true);
+      row.select();
+      return;
+    }
     if (row.kind === 'panel') {
       /*
        * Focus goes back to the TRIGGER before the level below opens, and that
@@ -702,7 +728,8 @@
       THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
 
       Everything behind it is a verb somebody reaches for and then forgets:
-      adjust the prompter, take the display, hand it back. One of them is not —
+      adjust the appearance, switch to the teleprompter and back. One of them
+      is not —
       voice following sets a MODE, and a mode that hides itself is how a
       presenter ends up staring at a script that will not move, with the control
       that explains it invisible until they happen to move the mouse.

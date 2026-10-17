@@ -115,6 +115,63 @@ describe('refreshTakeDestination', () => {
     expect(destination?.mismatch?.detail).toContain('“Elgato rig”');
   });
 
+  /*
+   * A reading take, which the store used to describe without reading the one
+   * setting that decides where it goes: the remembered frame. Every reading
+   * take rewrites it on the way out, so the line beside Present said "where
+   * this window is" while Present was about to put the reader back on another
+   * panel.
+   */
+  it('names the panel a remembered reading window is going back to', async () => {
+    // STUDIO is 1280×720 logical at the origin; the Elgato sits to its right.
+    const elgatoRight = { ...ELGATO, physicalPosition: { x: 1280, y: 0 } };
+    backend({ displays: [STUDIO, elgatoRight], window: STUDIO });
+    await refreshTakeDestination({
+      mode: 'reader',
+      optical: chosenRig('dsp-elgato', 'Elgato rig'),
+      pinnedFingerprint: 'dsp-elgato',
+      readerFrame: { x: 1400, y: 40, width: 600, height: 400 },
+      restoreWindows: true,
+    });
+    const destination = get(takeDestination);
+    expect(destination?.summary).toBe('Reading window · last position on Elgato Prompter');
+    // A reader is placed by the person reading, so it is never a mismatch.
+    expect(destination?.mismatch).toBeNull();
+  });
+
+  it('says a reading window opens here once "Restore windows" is turned off', async () => {
+    backend({ displays: [STUDIO, { ...ELGATO, physicalPosition: { x: 1280, y: 0 } }], window: STUDIO });
+    await refreshTakeDestination({
+      mode: 'reader',
+      readerFrame: { x: 1400, y: 40, width: 600, height: 400 },
+      restoreWindows: false,
+    });
+    expect(get(takeDestination)?.summary).toBe('Reading window · opens here');
+
+    // And back on, through the same partial update a settings change makes.
+    await refreshTakeDestination({ restoreWindows: true });
+    expect(get(takeDestination)?.summary).toBe('Reading window · last position on Elgato Prompter');
+  });
+
+  it('follows the frame when a take rewrites it', async () => {
+    backend({ displays: [STUDIO, { ...ELGATO, physicalPosition: { x: 1280, y: 0 } }], window: STUDIO });
+    await refreshTakeDestination({ mode: 'reader', readerFrame: null, restoreWindows: true });
+    expect(get(takeDestination)?.summary).toBe('Reading window · opens here');
+
+    await refreshTakeDestination({ readerFrame: { x: 100, y: 80, width: 600, height: 400 } });
+    expect(get(takeDestination)?.summary).toBe('Reading window · last size and position');
+  });
+
+  it('names where a frame whose panel is unplugged will open', async () => {
+    backend({ displays: [STUDIO], window: STUDIO });
+    await refreshTakeDestination({
+      mode: 'reader',
+      readerFrame: { x: 1400, y: 40, width: 600, height: 400 },
+      restoreWindows: true,
+    });
+    expect(get(takeDestination)?.summary).toBe('Reading window · opens on Studio Display');
+  });
+
   it('asks Rust for the list and the window’s monitor once per refresh', async () => {
     const calls = backend({ displays: [STUDIO, ELGATO], window: STUDIO });
     await refreshTakeDestination({ mode: 'prompter', optical: chosenRig('dsp-elgato', 'r'), pinnedFingerprint: 'dsp-elgato' });

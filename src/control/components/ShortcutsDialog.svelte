@@ -184,11 +184,39 @@
     // The label comes from `shortcuts.ts` rather than being written out here,
     // because this is the one chord whose shape differs between platforms by more
     // than the modifier stands in for.
+    //
+    // Named for the switch it is. "Full display" read as making the window
+    // bigger; what the key does is change the take's presentation mode, which
+    // from a reading window can move it onto the pinned prompter panel and
+    // apply that panel's optics and mirroring — the stage dock's menu names the
+    // same switch from whichever side of it the take is on.
     {
-      label: 'Full display / reading window',
+      label: 'Switch between reading window and teleprompter',
       keys: [[presentationModeShortcutLabel(mac)]],
       actions: ['toggle-presentation-mode'],
     },
+  ];
+
+  /**
+   * The keys the STAGE answers itself, listed but not owned by the table.
+   *
+   * The editor's bold and italic below, one surface over. The stage listens on
+   * its own window (`StageApp.svelte`, `onKeyDown` and `onWheel`) and moves the
+   * script by hand for these, so they never pass through `resolveShortcut` and
+   * have no `ShortcutAction` to be grouped by. Leaving them off the page made
+   * the help silent about the most ordinary thing a reader does with a
+   * keyboard; giving them actions would put commands in the resolver that no
+   * screen subscribes to, purely so they could be printed here.
+   *
+   * Only keys the stage actually answers. Home and End are not among them.
+   *
+   * The wheel is a gesture, not a key, so it is written out in words rather
+   * than drawn as a cap somebody would go looking for on the keyboard.
+   */
+  const stageLocalRows: Array<Pick<ShortcutRow, 'label' | 'keys'> & { gesture?: string }> = [
+    { label: 'Move the script one line', keys: either('Up', 'Down') },
+    { label: 'Move the script about a screen', keys: either('Page Up', 'Page Down') },
+    { label: 'Scroll the script', keys: [], gesture: 'Mouse wheel or trackpad' },
   ];
 
   /**
@@ -267,12 +295,17 @@
    * button has focus. The note names the keys rather than saying "single keys"
    * because F11 is one and does NOT stand down: a function key types nothing,
    * so a field has no claim on it.
+   *
+   * The stage's own movement keys stand down too, for the stage's reasons
+   * rather than the resolver's: `StageApp.svelte` ignores every key but Escape
+   * while a panel is open over it or a control on it has the keyboard — and on
+   * the focused Take-menu trigger the arrows open the menu instead.
    */
   const GROUP_NOTES: Partial<Record<ShortcutScope, string>> = {
     editor: 'Bold and italic apply while the script text has focus.',
     live:
-      'Space, B, A, [ and ] do nothing while you are typing or a control has focus. ' +
-      'Esc does nothing while you are typing.',
+      'Space, B, A, [, ], the arrows and the page keys do nothing while you are typing or a ' +
+      'control has focus. Esc does nothing while you are typing.',
   };
 
   /**
@@ -356,31 +389,62 @@
    *
    * `data-actions` carries what the resolver calls each row so the suite can
    * check the rendered page against `SHORTCUT_OWNERSHIP` pair by pair, rather
-   * than counting rows and hoping. The editor's own keys carry none: they are
-   * not in the table, which is exactly what the empty value says.
+   * than counting rows and hoping. The editor's and the stage's own keys carry
+   * none: they are not in the table, which is exactly what the empty value says.
    */
-  const groups = GROUP_ORDER.map((scope) => ({
-    scope,
-    caption: GROUP_CAPTIONS[scope],
-    note: GROUP_NOTES[scope],
-    rows: [
-      ...rowsFor(scope).map((row) => ({
-        label: row.label,
-        keys: row.keys,
-        when: row.when,
-        actions: row.actions.join(' '),
-        mirrors: row.mirrors?.join(' ') ?? '',
-      })),
-      ...(scope === 'editor'
+  interface RenderedRow {
+    label: string;
+    keys: Keys;
+    /** Written out in place of the caps, for a row that is not a key at all. */
+    gesture?: string;
+    when: string | undefined;
+    actions: string;
+    mirrors: string;
+  }
+
+  /**
+   * The stage's own rows, placed with the other ways of moving through the
+   * script rather than after the stage's settings, because the take's table is
+   * ordered by what somebody mid-take is hunting for. After the section row
+   * when there is one; at the end otherwise, so a reworded table can move them
+   * but never lose them.
+   */
+  function withStageRows(rows: RenderedRow[]): RenderedRow[] {
+    const stage: RenderedRow[] = stageLocalRows.map((row) => ({
+      ...row,
+      when: undefined,
+      actions: '',
+      mirrors: '',
+    }));
+    const after = rows.findIndex((row) => row.actions.split(' ').includes('next-chapter'));
+    if (after === -1) return [...rows, ...stage];
+    return [...rows.slice(0, after + 1), ...stage, ...rows.slice(after + 1)];
+  }
+
+  const groups = GROUP_ORDER.map((scope) => {
+    const owned: RenderedRow[] = rowsFor(scope).map((row) => ({
+      label: row.label,
+      keys: row.keys,
+      when: row.when,
+      actions: row.actions.join(' '),
+      mirrors: row.mirrors?.join(' ') ?? '',
+    }));
+    const editor: RenderedRow[] =
+      scope === 'editor'
         ? editorLocalRows.map((row) => ({
             ...row,
             when: undefined,
             actions: '',
             mirrors: 'insert.bold insert.italic',
           }))
-        : []),
-    ],
-  })).filter((group) => group.rows.length > 0);
+        : [];
+    return {
+      scope,
+      caption: GROUP_CAPTIONS[scope],
+      note: GROUP_NOTES[scope],
+      rows: scope === 'live' ? withStageRows(owned) : [...owned, ...editor],
+    };
+  }).filter((group) => group.rows.length > 0);
 
   /**
    * One chord as the keys you hold: "⇧⌘Space" is ⇧, ⌘ and Space.
@@ -596,7 +660,7 @@
                   <td class="action">
                     {row.label}{#if row.when}{' '}<span class="when">{row.when}</span>{/if}
                   </td>
-                  <td class="keys" aria-label={spoken(row.keys)}>{@render keycaps(row.keys)}</td>
+                  <td class="keys" aria-label={row.gesture ?? spoken(row.keys)}>{#if row.gesture}<span class="gesture">{row.gesture}</span>{:else}{@render keycaps(row.keys)}{/if}</td>
                 </tr>
               {/each}
             </tbody>
@@ -752,6 +816,11 @@
     padding: 0;
     font-size: var(--text-sm);
     font-weight: 600;
+  }
+  /* A gesture is not a key, so it gets words in the caps' column, not a cap. */
+  .gesture {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
   }
   .plus,
   .or,

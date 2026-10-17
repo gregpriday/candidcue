@@ -65,7 +65,8 @@ function renderedClaims(): string[] {
     const caption = captionOf(table);
     for (const tr of table.querySelectorAll('tbody tr')) {
       const actions = tr.getAttribute('data-actions');
-      // Bold and Italic are the editor's own keys and carry no action.
+      // Bold and Italic are the editor's own keys, and the arrows, page keys
+      // and wheel are the stage's; none of them carries an action.
       if (!actions) continue;
       for (const action of actions.split(' ')) claims.push(`${action} → ${caption}`);
     }
@@ -248,6 +249,47 @@ describe('the shortcuts reference is grouped by the screen that answers each key
       c.textContent?.trim().startsWith('Editor'),
     );
     expect(caption?.textContent).toContain('while the script text has focus');
+  });
+
+  /*
+   * The stage's own movement keys. `StageApp.svelte` answers them on its own
+   * window and they never reach the resolver, so the ownership table cannot
+   * list them — and the page was silent about the most ordinary thing a reader
+   * does with a keyboard. Listed beside the other ways of moving through the
+   * script, and carrying no action, like the editor's own keys.
+   */
+  it('lists the stage’s own movement keys with the take’s keys', () => {
+    open();
+    const rows = groupRows('During a take');
+    expect(rows).toContainEqual(['Move the script one line', '↑ / ↓']);
+    expect(rows).toContainEqual(['Move the script about a screen', 'Page Up / Page Down']);
+    // A gesture is written out, not drawn as a cap.
+    expect(rows).toContainEqual(['Scroll the script', 'Mouse wheel or trackpad']);
+    const wheel = [...document.querySelectorAll('tbody tr')].find((tr) =>
+      tr.textContent?.includes('Scroll the script'),
+    )!;
+    expect(wheel.querySelector('kbd')).toBeNull();
+    expect(wheel.querySelector('.keys')?.getAttribute('aria-label')).toBe('Mouse wheel or trackpad');
+
+    // Next to sentence and section, not after the stage's settings.
+    const labels = labelsIn('During a take');
+    expect(labels.indexOf('Move the script one line')).toBe(labels.indexOf('Previous / next section') + 1);
+
+    // Only keys the stage answers: there is no Home or End.
+    const text = rows.map(([, keys]) => keys).join(' ');
+    expect(text).not.toMatch(/\bHome\b|\bEnd\b/);
+
+    // And they stand down while a control has the keyboard, which the group's
+    // note has to say rather than leave to the four keys it used to name.
+    const caption = tables().find((t) => captionOf(t) === 'During a take')!.querySelector('caption');
+    expect(caption?.textContent).toMatch(/the arrows and the page keys do nothing while/);
+  });
+
+  it('names the presentation-mode key for the switch it makes', () => {
+    open();
+    const labels = labelsIn('During a take');
+    expect(labels).toContain('Switch between reading window and teleprompter');
+    expect(labels).not.toContain('Full display / reading window');
   });
 });
 
