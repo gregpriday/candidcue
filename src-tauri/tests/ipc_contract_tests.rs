@@ -489,9 +489,10 @@ fn revision_reasons_are_exactly_the_ones_the_ui_labels() {
     }
 }
 
-/// The error codes Rust raises must exist on the TypeScript side.
+/// The stale-stage code Rust raises must exist on the TypeScript side. The
+/// whole code set is held in parity by `tests/unit/control/error-code-parity.test.ts`.
 #[test]
-fn the_typescript_error_contract_matches_the_rust_codes() {
+fn stage_session_mismatch_is_in_the_typescript_error_contract() {
     let ts = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

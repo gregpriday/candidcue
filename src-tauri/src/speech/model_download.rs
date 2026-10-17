@@ -1637,8 +1637,11 @@ mod tests {
     /// revalidation and the chunk loop under test are the ones that ship.
     ///
     /// The `/redirect*` paths answer 302 to a fixed `Location` and nothing
-    /// else, before any range handling. `/redirect` is the one hop the test
-    /// policy allows; every other target is one the guard has to refuse.
+    /// else, before any range handling. `/redirect` lands on `/archive`, which
+    /// the test policy allows. `/redirect-http`, `-loopback`, `-private` and
+    /// `-metadata` point somewhere the guard has to refuse. `/redirect-self`
+    /// points back at itself, so every hop is allowed and only the redirect
+    /// budget stops it.
     struct MockOrigin {
         port: u16,
         /// How many times a body has been served. Proves a resumed run sent a

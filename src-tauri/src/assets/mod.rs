@@ -180,9 +180,12 @@ pub fn asset_url(path: &Path) -> String {
 }
 
 /*
- * Nine arguments because the row has nine columns. Grouping them into a struct
- * would move the same fields one indirection away from the `INSERT` that has
- * to list them in order, which is where a mismatch would actually be caught.
+ * One argument per column the row is given. Grouping them into a struct would
+ * move the same fields one indirection away from the `INSERT` that has to list
+ * them in order, which is where a mismatch would actually be caught.
+ *
+ * `original_url` is not among them: nothing imports an image by URL, so a new
+ * row leaves it NULL. The column stays for rows written before that.
  */
 #[allow(clippy::too_many_arguments)]
 async fn register_asset(
@@ -194,12 +197,11 @@ async fn register_asset(
     size: u64,
     rel_path: &str,
     original_name: Option<&str>,
-    original_url: Option<&str>,
 ) -> Result<String, AppError> {
     let now = now_iso();
     sqlx::query(
-        "INSERT INTO assets (id, sha256, mime_type, extension, size_bytes, rel_path, original_name, original_url, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO assets (id, sha256, mime_type, extension, size_bytes, rel_path, original_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(sha256, rel_path) DO NOTHING",
     )
     .bind(new_uuid())
@@ -209,7 +211,6 @@ async fn register_asset(
     .bind(size as i64)
     .bind(rel_path)
     .bind(original_name)
-    .bind(original_url)
     .bind(&now)
     .execute(pool)
     .await?;
@@ -284,7 +285,6 @@ pub async fn import_image(
         bytes.len() as u64,
         &rel_path,
         original_name.as_deref(),
-        None,
     )
     .await?;
     Ok(ImportedAsset {
