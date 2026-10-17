@@ -47,6 +47,7 @@
     formatBytes,
     getSpeechLanguageOptions,
     isBusy as isModelBusy,
+    isDamaged,
     languageDisplayName,
     onSpeechModelProgress,
     phaseLabel,
@@ -198,9 +199,22 @@
     // Busy first: "Downloading" is what is happening, and it supersedes both
     // other labels for as long as it lasts.
     if (isModelBusy(status)) return { tone: 'neutral', label: phaseLabel(status) };
+    // Before "Needs download" and "Not downloaded", both of which would be
+    // false: it IS downloaded, and what it needs is to be downloaded AGAIN
+    // (#258). It used to read "Downloaded" here, and abort the next take.
+    if (isDamaged(status)) return { tone: 'warning', label: 'Damaged' };
     if (option.active) return { tone: 'success', label: status.installed ? 'In use' : 'Needs download' };
     if (status.installed) return { tone: 'neutral', label: 'Downloaded' };
     return { tone: 'warning', label: 'Not downloaded' };
+  }
+
+  /**
+   * What the download button says, for what actually happened: never fetched,
+   * a fetch that failed, or a download here whose files were damaged since.
+   */
+  function downloadLabel(status: SpeechModelStatus): string {
+    if (isDamaged(status)) return 'Download again';
+    return status.error ? 'Try again' : 'Download';
   }
 
   /** Whether removing this model would actually remove anything. */
@@ -371,6 +385,31 @@
   }
 </script>
 
+<!--
+  Remove, behind its confirm. A snippet because two branches offer it: an
+  installed download, and a damaged one (#258) — whose files are still on disk
+  and still the user's to reclaim, and whose repair may be exactly what there
+  is no room for.
+-->
+{#snippet removeButtons(modelId: string)}
+  {#if confirmingDelete === modelId}
+    <Button
+      variant="danger-primary"
+      onclick={() => {
+        confirmingDelete = null;
+        void runModelAction(modelId, deleteSpeechModel);
+      }}
+    >
+      Remove it
+    </Button>
+    <Button bind:element={keepButton} variant="default" onclick={() => (confirmingDelete = null)}>
+      Keep it
+    </Button>
+  {:else}
+    <Button variant="danger" onclick={() => void askToRemove(modelId)}>Remove download</Button>
+  {/if}
+{/snippet}
+
 <div class="picker" class:compact>
   {#if options === null && loadError !== null}
     <!-- The FIRST snapshot failed, so there is nothing to fall back to.
@@ -481,7 +520,14 @@
           §153: a model the app expects and cannot find must fail somewhere the
           user can act on it. This is that screen, and this is that state.
         -->
-        {#if shown.active}
+        {#if shown.active && isDamaged(status)}
+          <!-- The line below says what is wrong with the files; this one says
+               what it costs, as the not-downloaded alert does. -->
+          <p class="inline-alert" role="alert">
+            {name} is selected, but its speech data on this machine is damaged. Voice following
+            cannot run until it is downloaded again.
+          </p>
+        {:else if shown.active}
           <p class="inline-alert" role="alert">
             {name} is selected, but its speech data is not on this machine. Voice following cannot
             run until it is downloaded.
@@ -496,9 +542,18 @@
             disabled={busyByModel[shown.modelId]}
             onclick={() => void runModelAction(shown.modelId, startSpeechModelDownload)}
           >
-            {status.error ? 'Try again' : 'Download'} ({formatBytes(status.downloadBytes)})
+            {downloadLabel(status)} ({formatBytes(status.downloadBytes)})
           </Button>
+          {#if removable(status, shown.modelId)}
+            {@render removeButtons(shown.modelId)}
+          {/if}
         </div>
+        {#if confirmingDelete === shown.modelId}
+          <p class="inline-alert" role="alert">
+            Remove the damaged {name} speech data? Voice following will not work in {name} until it
+            is downloaded again.
+          </p>
+        {/if}
       {:else}
         <p class="hint-line">
           {#if status.source === 'bundled'}
@@ -532,28 +587,7 @@
             model exactly where it was — a button that appears to do nothing.
           -->
           {#if removable(status, shown.modelId)}
-            {#if confirmingDelete === shown.modelId}
-              <Button
-                variant="danger-primary"
-                onclick={() => {
-                  confirmingDelete = null;
-                  void runModelAction(shown.modelId, deleteSpeechModel);
-                }}
-              >
-                Remove it
-              </Button>
-              <Button
-                bind:element={keepButton}
-                variant="default"
-                onclick={() => (confirmingDelete = null)}
-              >
-                Keep it
-              </Button>
-            {:else}
-              <Button variant="danger" onclick={() => void askToRemove(shown.modelId)}>
-                Remove download
-              </Button>
-            {/if}
+            {@render removeButtons(shown.modelId)}
           {/if}
         </div>
         {#if confirmingDelete === shown.modelId}
@@ -621,11 +655,13 @@
             there is a button that can only fail.
           -->
           {@const current = statusByModel[entry.modelId] ?? entry}
-          {#if current.installed}
+          {#if current.installed || current.source === 'downloaded'}
             <div class="inventory-row">
               <span class="inventory-name">
                 {current.languages.map((tag) => languageDisplayName(tag)).join(', ')}
-                <span class="inventory-size">{formatBytes(current.installedBytes)}</span>
+                <span class="inventory-size">
+                  {formatBytes(current.installedBytes)}{isDamaged(current) ? ', damaged' : ''}
+                </span>
               </span>
               {#if confirmingDelete === entry.modelId}
                 <span class="inventory-actions">

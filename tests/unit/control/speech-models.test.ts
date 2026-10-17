@@ -23,6 +23,8 @@ import {
   formatBytes,
   getSpeechModelStatus,
   isBusy,
+  isDamaged,
+  MODEL_DAMAGED_CODE,
   phaseLabel,
   progressFraction,
   startSpeechModelDownload,
@@ -264,6 +266,69 @@ describe('what the screen offers', () => {
     expect(
       canDownload(statusFixture({ phase: 'installed', installed: true, supported: true })),
       'already installed',
+    ).toBe(false);
+  });
+
+  /**
+   * #258: a download damaged after install is `failed` with its own code, and
+   * that code is the only thing that tells it from a fetch that failed or a
+   * model never fetched. The download is still what is offered — it is the
+   * repair.
+   */
+  it('tells a damaged download from a failed one, and still offers the download', () => {
+    const damaged = statusFixture({
+      phase: 'failed',
+      installed: false,
+      source: 'downloaded',
+      error: { code: MODEL_DAMAGED_CODE, message: 'damaged' },
+    });
+    expect(MODEL_DAMAGED_CODE).toBe('STT_MODEL_DAMAGED');
+    expect(isDamaged(damaged)).toBe(true);
+    expect(canDownload(damaged)).toBe(true);
+    expect(
+      isDamaged(
+        statusFixture({
+          phase: 'failed',
+          installed: false,
+          error: { code: 'STT_MODEL_DOWNLOAD_FAILED', message: 'offline' },
+        }),
+      ),
+      'a failed fetch of a model that was never here',
+    ).toBe(false);
+    expect(isDamaged(statusFixture({ phase: 'notInstalled', installed: false })), 'never fetched').toBe(
+      false,
+    );
+    expect(isDamaged(statusFixture({ phase: 'installed', installed: true, source: 'downloaded' }))).toBe(
+      false,
+    );
+    expect(isDamaged(null)).toBe(false);
+  });
+
+  /**
+   * A damaged download's files are on disk and were put there by this app, so
+   * they are the user's to reclaim — including after a repair that failed for
+   * want of space, which is when reclaiming them matters most. The failure's
+   * own code is what the status carries then, not the damage code.
+   */
+  it('offers removal of a damaged download, even after its repair failed', () => {
+    const damaged = statusFixture({
+      phase: 'failed',
+      installed: false,
+      source: 'downloaded',
+      error: { code: MODEL_DAMAGED_CODE, message: 'damaged' },
+    });
+    const repairFailed = statusFixture({
+      phase: 'failed',
+      installed: false,
+      source: 'downloaded',
+      error: { code: 'STT_MODEL_INSUFFICIENT_SPACE', message: 'no room' },
+    });
+    expect(canRemove(damaged)).toBe(true);
+    expect(canRemove(repairFailed)).toBe(true);
+    expect(isDamaged(repairFailed)).toBe(true);
+    expect(
+      canRemove(statusFixture({ phase: 'downloading', installed: false, source: null })),
+      'a repair in flight',
     ).toBe(false);
   });
 });

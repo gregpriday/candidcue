@@ -64,6 +64,12 @@ export interface ReadinessInput {
   modelInstalled: boolean;
   modelSupported: boolean;
   /**
+   * Whether the chosen model WAS downloaded here and has since been damaged
+   * (#258) — not installed, and not something to describe as never fetched.
+   * Optional so a caller that cannot tell keeps the plain "missing" wording.
+   */
+  modelDamaged?: boolean;
+  /**
    * The microphone Settings pins, and whether it is present right now.
    *
    * Null when nothing is pinned, which is the "follow the system default"
@@ -146,6 +152,18 @@ export function resolveReadiness(input: ReadinessInput): ReadinessVerdict {
         detail:
           'This build cannot load the selected speech model, so this take cannot follow your voice.',
         action: { label: 'Choose a language', settingsSection: 'speech' },
+      });
+    } else if (!input.modelInstalled && input.modelDamaged) {
+      // A warning for the same reason as a missing model, below. Said as what
+      // it is: "no model is installed" would be news to somebody who
+      // downloaded one, and "install" is not quite the remedy.
+      findings.push({
+        id: 'model_damaged',
+        severity: 'warning',
+        label: 'Voice following',
+        detail:
+          'The speech data on this computer is damaged, so this take cannot follow your voice.',
+        action: { label: 'Download it again', settingsSection: 'speech' },
       });
     } else if (!input.modelInstalled) {
       /*

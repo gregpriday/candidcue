@@ -97,7 +97,7 @@ test('the first-run screen asks for a language and states what it costs', async 
   watchPageErrors(page);
   await installTauriShim(page, {
     languageOptions: languageOptions({
-      languages: [option({ status: status({ installed: false, phase: 'notInstalled' }) })],
+      languages: [option({ status: status({ installed: false, phase: 'notInstalled', source: null }) })],
     }),
   });
   await page.goto('/control.html');
@@ -140,6 +140,7 @@ test('downloading from the picker addresses the model by id', async ({ page }) =
       languages: ['de'],
       installed: false,
       phase: 'notInstalled',
+      source: null,
       downloadBytes: 57_565_698,
     }),
   });
@@ -180,6 +181,7 @@ test('stopping a download addresses the same model', async ({ page }) => {
       languages: ['de'],
       installed: false,
       phase: 'downloading',
+      source: null,
       progressBytes: 10_000_000,
       progressTotal: 57_565_698,
     }),
@@ -214,7 +216,7 @@ test('moving the dropdown downloads nothing and saves nothing', async ({ page })
     primarySubtag: 'de',
     modelId: 'kroko-de',
     active: false,
-    status: status({ modelId: 'kroko-de', languages: ['de'], installed: false, phase: 'notInstalled' }),
+    status: status({ modelId: 'kroko-de', languages: ['de'], installed: false, phase: 'notInstalled', source: null }),
   });
   await installTauriShim(page, {
     welcomed: true,
@@ -367,7 +369,7 @@ test('a selected language with no data on the machine is fixable here', async ({
   await installTauriShim(page, {
     welcomed: true,
     languageOptions: languageOptions({
-      languages: [option({ active: true, status: status({ installed: false, phase: 'notInstalled' }) })],
+      languages: [option({ active: true, status: status({ installed: false, phase: 'notInstalled', source: null }) })],
     }),
   });
   await page.goto('/control.html');

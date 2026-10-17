@@ -114,16 +114,38 @@ export function progressFraction(status: SpeechModelStatus | null): number | nul
  * where Remove would delete an invisible app-data copy and leave the visible
  * model exactly where it was — a button that appears to do nothing.
  *
+ * A damaged download (#258) is removable too. It is not installed — nothing
+ * can run on it — but its files are on disk and were put there by this app,
+ * which is the whole of what makes a model ours to delete. Rust reports its
+ * `source` as `downloaded` for exactly this reason.
+ *
  * A rule rather than an inline condition because Settings and its tests must
  * not be able to disagree about it.
  */
 export function canRemove(status: SpeechModelStatus | null): boolean {
-  return status != null && status.installed && !isBusy(status) && status.source === 'downloaded';
+  return status != null && !isBusy(status) && status.source === 'downloaded';
 }
 
 /** Whether Download should be offered. */
 export function canDownload(status: SpeechModelStatus | null): boolean {
   return status != null && status.supported && !status.installed && !isBusy(status);
+}
+
+/** A download on this machine whose files were damaged after install (#258). */
+export const MODEL_DAMAGED_CODE = 'STT_MODEL_DAMAGED';
+
+/**
+ * Whether this model was downloaded here and has since been damaged.
+ *
+ * Rust reports it as `failed` — the screen already offers the download beside
+ * an error's message, and the download is the repair — with `source:
+ * 'downloaded'` and `installed: false`, a pairing it produces for this case and
+ * no other. Read from the source rather than the error code, because the error
+ * is not always this one: a repair that then FAILED (no network, no space)
+ * reports its own failure, and the files on disk are no less damaged for it.
+ */
+export function isDamaged(status: SpeechModelStatus | null): boolean {
+  return status != null && !status.installed && status.source === 'downloaded';
 }
 
 /** What the user is told is happening, per phase. */

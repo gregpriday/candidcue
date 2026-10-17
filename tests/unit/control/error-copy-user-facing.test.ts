@@ -101,7 +101,7 @@ const {
 const CODE_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 
 /**
- * The five the on-device recogniser can raise. They share one property no other
+ * The six the on-device recogniser can raise. They share one property no other
  * copy in the file has: more than one surface, and only one of those has a take
  * open.
  *
@@ -113,6 +113,7 @@ const RECOGNISER_CODES = [
   'STT_MODEL_NOT_INSTALLED',
   'STT_MODEL_MISSING',
   'STT_MODEL_LOAD_FAILED',
+  'STT_MODEL_DAMAGED',
   'STT_WORKER_FAILED',
   'STT_ENGINE_ERROR',
 ] as const;
@@ -626,13 +627,16 @@ describe('recogniser copy stays true on the surface with no take', () => {
  */
 describe('the model download is the remedy, not a reinstall', () => {
   /**
-   * The three raised while working out whether this machine has usable weights.
+   * The four raised while working out whether this machine has usable weights.
    * A download is their remedy because their fault is the model's residence.
    */
   const MODEL_STATE_CODES = [
     'STT_MODEL_NOT_INSTALLED',
     'STT_MODEL_MISSING',
     'STT_MODEL_LOAD_FAILED',
+    // A damaged download (#258). Its remedy is the download for the same reason
+    // as the other three: the fault is in the model's files, not the app.
+    'STT_MODEL_DAMAGED',
   ] as const;
 
   /**

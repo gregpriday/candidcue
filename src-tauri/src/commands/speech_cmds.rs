@@ -102,7 +102,13 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     // to ask it would imply the tuning had something to do with the answer.
     let available = match SpeechEngine::model_dir(&app, model) {
         Ok(dir) => cc_stt::local::ModelFiles::detect(&dir).map(|_| ()),
-        Err(err) => Err(err.to_string()),
+        // The user-facing half, never `to_string()`: `AppError`'s `Display`
+        // carries the log message, and for a damaged model (#258) that is a
+        // filesystem path and a parser diagnostic. Logged here instead.
+        Err(err) => {
+            tracing::debug!(error = %err, "speech status: no usable model");
+            Err(err.to_payload().user_message)
+        }
     };
     Ok(match available {
         Ok(()) => SpeechEngineStatus {

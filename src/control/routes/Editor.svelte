@@ -41,7 +41,7 @@ import { startTake, takeStarting } from '../lib/start-take';
   import { startMenuItems } from '../lib/present-menu';
   import TakeReadinessSheet from '../components/TakeReadinessSheet.svelte';
   import { resolveReadiness, type ReadinessVerdict } from '../lib/take-readiness';
-  import { getSpeechModelStatus } from '../services/speech-models';
+  import { getSpeechModelStatus, isDamaged as isModelDamaged } from '../services/speech-models';
   import { matchRememberedMicrophone } from '../services/audio/devices';
   import { getVoiceFacade } from '../services/voice-facade';
   import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
@@ -607,7 +607,7 @@ import type { PresentationMode } from '../services/settings-types';
    * over a take that would have been fine. The take path itself reports a
    * genuinely missing model from the stage regardless.
    */
-  let modelReady = $state({ installed: true, supported: true });
+  let modelReady = $state({ installed: true, supported: true, damaged: false });
 
   /*
    * Re-read when the configured model changes, and ASK ABOUT THAT MODEL.
@@ -627,7 +627,11 @@ import type { PresentationMode } from '../services/settings-types';
     const modelId = $settings.speech.transcriptionModel;
     void getSpeechModelStatus(modelId)
       .then((status) => {
-        modelReady = { installed: status.installed, supported: status.supported };
+        modelReady = {
+          installed: status.installed,
+          supported: status.supported,
+          damaged: isModelDamaged(status),
+        };
       })
       .catch(() => {
         // Unknown stays optimistic. See above.
@@ -676,6 +680,7 @@ import type { PresentationMode } from '../services/settings-types';
       voiceTake: $settings.general.defaultSessionMode === 'voice',
       modelInstalled: modelReady.installed,
       modelSupported: modelReady.supported,
+      modelDamaged: modelReady.damaged,
       pinnedMicLabel,
       pinnedMicAvailable,
       /*

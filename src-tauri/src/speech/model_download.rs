@@ -1320,16 +1320,21 @@ fn install_from_archive(
     store::write_attribution(staging, model)
         .map_err(|e| install_failed(format!("could not write the licence notice: {e}")))?;
 
-    // Proven loadable while still in staging, so a model that cannot load
-    // never displaces one that can.
+    // Proven whole while still in staging, so a model that cannot load never
+    // displaces one that can.
     //
     // Asked of the DIRECTORY rather than through a `LocalSttConfig`, for the
     // reason `get_speech_engine_status` gives: "are the files there and in a
     // shape the loader understands" is a question about the bundle, and
     // building a tuned config to ask it would imply the tuning had something
-    // to do with the answer. `LocalSttConfig::validate` is this call anyway.
+    // to do with the answer.
+    //
+    // `verify_contents` rather than detection alone, because it is the test
+    // `model_store::resolve` holds a sealed directory to every time it looks.
+    // A model sealed on a weaker check than the one that reads it back would
+    // install cleanly and then report itself damaged for ever.
     on_progress(Phase::Validating, 0, 1);
-    cc_stt::local::ModelFiles::detect(staging).map_err(|detail| {
+    store::verify_contents(staging, model).map_err(|detail| {
         integrity_failed(format!("the downloaded model is not loadable: {detail}"))
     })?;
 
@@ -1414,7 +1419,7 @@ fn install_from_archive(
     // check proves the files; this proves the install — and the seal below
     // means "proven HERE", which is a claim only this call can support.
     on_progress(Phase::Validating, 1, 1);
-    if let Err(detail) = cc_stt::local::ModelFiles::detect(&target) {
+    if let Err(detail) = store::verify_contents(&target, model) {
         return Err(restore_backup(
             true,
             integrity_failed(format!("the installed model is not loadable: {detail}")),
@@ -1443,19 +1448,22 @@ fn install_from_archive(
 mod tests {
     use super::*;
     use crate::speech::catalogue::{Archive, Attribution, License, ModelFile};
+    use crate::speech::model_store::fixtures::{catalogued_len, graph_bytes, write_model};
     use std::io::Write as _;
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
     /// The four files a fixture model is made of. Small enough that a whole
-    /// install runs in milliseconds, real enough that `ModelFiles::detect`
-    /// accepts the result — which is the thing being proved.
+    /// install runs in milliseconds, real enough that `verify_contents`
+    /// accepts the result — which is the thing being proved. The graphs are
+    /// whole ONNX envelopes, because a sealed directory's graphs are walked
+    /// every time it is resolved.
     fn fixture_files() -> Vec<(&'static str, Vec<u8>)> {
         vec![
-            ("encoder.int8.onnx", b"encoder-graph-bytes".to_vec()),
-            ("decoder.onnx", b"decoder-graph-bytes".to_vec()),
-            ("joiner.int8.onnx", b"joiner-graph-bytes".to_vec()),
+            ("encoder.int8.onnx", graph_bytes(64, b"encoder-graph-bytes")),
+            ("decoder.onnx", graph_bytes(64, b"decoder-graph-bytes")),
+            ("joiner.int8.onnx", graph_bytes(64, b"joiner-graph-bytes")),
             ("tokens.txt", b"<blk> 0\n<unk> 1\n".to_vec()),
         ]
     }
@@ -1918,13 +1926,16 @@ mod tests {
         model
     }
 
-    /// A model directory `ModelFiles::detect` accepts, with recognisable bytes.
-    fn write_model_dir(dir: &Path, marker: &[u8]) {
-        std::fs::create_dir_all(dir).unwrap();
-        for name in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"] {
-            std::fs::write(dir.join(name), marker).unwrap();
-        }
-        std::fs::write(dir.join("tokens.txt"), b"<blk> 0\n").unwrap();
+    /// A model directory `resolve` accepts for `model` once sealed, with
+    /// recognisable bytes.
+    fn write_model_dir(dir: &Path, model: &ModelEntry, marker: &[u8]) {
+        write_model(dir, model, marker);
+    }
+
+    /// What [`write_model_dir`] put in one of `model`'s graphs, for telling
+    /// which copy survived.
+    fn model_graph(model: &ModelEntry, name: &str, marker: &[u8]) -> Vec<u8> {
+        graph_bytes(catalogued_len(model, name).unwrap_or(64), marker)
     }
 
     fn no_progress() -> Box<ProgressFn> {
@@ -1994,6 +2005,54 @@ mod tests {
         // The archive is 128 MB in production and has done its job.
         let downloads = store::models_root(temp.path()).join(store::DOWNLOADS_DIR);
         assert!(!downloads.join(store::archive_part_name(&model)).exists());
+    }
+
+    /// The repair #258 offers: Download over a sealed model whose files have
+    /// since been damaged replaces it, and the result is whole.
+    ///
+    /// Nothing short-circuits on "it is already sealed" — the old directory is
+    /// set aside like any previous version, and the seal that comes back is
+    /// one written after the new files were proven.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn downloading_over_a_damaged_sealed_model_repairs_it() {
+        let files = fixture_files();
+        let archive = build_archive("bundle-root", &files);
+        let origin = MockOrigin::start(archive.clone(), Behaviour::Ranged);
+        let model = aimed_at(
+            fixture_entry(&archive, &files, "bundle-root"),
+            origin.url("/archive"),
+        );
+        let catalogue = fixture_catalogue(model.clone());
+        let temp = tempfile::tempdir().unwrap();
+
+        let target = model.install_path(&store::models_root(temp.path()));
+        write_model_dir(&target, &model, b"OLD");
+        store::write_seal(&target, &model).unwrap();
+        std::fs::write(target.join("decoder.onnx"), b"").unwrap();
+        assert!(store::damaged_download(temp.path(), &model).is_some());
+
+        install(
+            temp.path(),
+            &catalogue,
+            &catalogue.models[0],
+            &origin.policy(),
+            &CancelFlag::new(),
+            &no_progress(),
+        )
+        .await
+        .expect("a damaged model must not stand in the way of its replacement");
+
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this download. Not
+        // across the `await` above — a std guard there is a clippy error.
+        let _env = store::env_guard();
+        assert!(store::damaged_download(temp.path(), &model).is_none());
+        let resolved =
+            store::resolve(temp.path(), None, &model).expect("the repaired model must resolve");
+        assert_eq!(resolved.dir, target);
+        for (name, body) in &files {
+            assert_eq!(&std::fs::read(target.join(name)).unwrap(), body, "{name}");
+        }
     }
 
     /// Every hop is revalidated, so a redirect still lands correctly.
@@ -3354,7 +3413,7 @@ mod tests {
         // directory was not deleted, not that a usable model survived.
         let root = store::models_root(temp.path());
         let installed = model.install_path(&root);
-        write_model_dir(&installed, b"OLD");
+        write_model_dir(&installed, &model, b"OLD");
         store::write_seal(&installed, &model).unwrap();
 
         let err = install(
@@ -3371,11 +3430,14 @@ mod tests {
 
         assert_eq!(
             std::fs::read(installed.join("encoder.int8.onnx")).unwrap(),
-            b"OLD",
+            model_graph(&model, "encoder.int8.onnx", b"OLD"),
             "the working install must survive a failed replacement"
         );
         // Still the model the resolver would pick — the property that
         // actually matters to a presenter about to start a take.
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
             .expect("the previous model must still resolve after a failed replacement");
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
@@ -3409,7 +3471,7 @@ mod tests {
         // matches, so verification passes, and `ModelFiles::detect` then
         // refuses the result.
         let files = vec![
-            ("encoder.int8.onnx", b"encoder-graph-bytes".to_vec()),
+            ("encoder.int8.onnx", graph_bytes(64, b"encoder-graph-bytes")),
             ("tokens.txt", b"<blk> 0\n".to_vec()),
         ];
         let archive = build_archive("bundle-root", &files);
@@ -3423,7 +3485,7 @@ mod tests {
 
         let root = store::models_root(temp.path());
         let installed = model.install_path(&root);
-        write_model_dir(&installed, b"OLD");
+        write_model_dir(&installed, &model, b"OLD");
         store::write_seal(&installed, &model).unwrap();
 
         let err = install(
@@ -3438,12 +3500,15 @@ mod tests {
         .expect_err("a model that cannot load must not install");
         assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
 
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
             .expect("the previous model must be restored");
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
         assert_eq!(
             std::fs::read(installed.join("joiner.int8.onnx")).unwrap(),
-            b"OLD",
+            model_graph(&model, "joiner.int8.onnx", b"OLD"),
             "the restored model must be the whole previous one"
         );
     }
@@ -3452,6 +3517,9 @@ mod tests {
     /// leaves no model and a full backup. Startup puts it back.
     #[test]
     fn an_interrupted_commit_is_recovered_on_the_next_launch() {
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let model = fixture_entry(&archive, &files, "bundle-root");
@@ -3460,7 +3528,7 @@ mod tests {
 
         // Exactly the state a crash in that window leaves behind.
         let backup = store::backup_path(&root, &model);
-        write_model_dir(&backup, b"OLD");
+        write_model_dir(&backup, &model, b"OLD");
         store::write_seal(&backup, &model).unwrap();
 
         assert!(
@@ -3484,16 +3552,16 @@ mod tests {
 
         // A finished install: complete, detectable and sealed.
         let installed = model.install_path(&root);
-        write_model_dir(&installed, b"CURRENT");
+        write_model_dir(&installed, &model, b"CURRENT");
         store::write_seal(&installed, &model).unwrap();
         let backup = store::backup_path(&root, &model);
-        write_model_dir(&backup, b"OLD");
+        write_model_dir(&backup, &model, b"OLD");
         store::write_seal(&backup, &model).unwrap();
 
         assert!(!store::recover_backup(&root, &model).unwrap());
         assert_eq!(
             std::fs::read(installed.join("encoder.int8.onnx")).unwrap(),
-            b"CURRENT"
+            model_graph(&model, "encoder.int8.onnx", b"CURRENT")
         );
     }
 
@@ -3506,6 +3574,9 @@ mod tests {
     /// when the target is absent" did, and why the seal is the test.
     #[test]
     fn an_unsealed_target_beside_a_sealed_backup_is_repaired() {
+        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // set; held so a usable override cannot answer for this model.
+        let _env = store::env_guard();
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
         let model = fixture_entry(&archive, &files, "bundle-root");
@@ -3513,9 +3584,9 @@ mod tests {
         let root = store::models_root(temp.path());
 
         let target = model.install_path(&root);
-        write_model_dir(&target, b"NEW-BUT-UNPROVEN");
+        write_model_dir(&target, &model, b"NEW-BUT-UNPROVEN");
         let backup = store::backup_path(&root, &model);
-        write_model_dir(&backup, b"OLD-BUT-PROVEN");
+        write_model_dir(&backup, &model, b"OLD-BUT-PROVEN");
         store::write_seal(&backup, &model).unwrap();
 
         assert!(
@@ -3529,7 +3600,7 @@ mod tests {
         assert_eq!(resolved.source, store::ModelSource::Downloaded);
         assert_eq!(
             std::fs::read(target.join("encoder.int8.onnx")).unwrap(),
-            b"OLD-BUT-PROVEN",
+            model_graph(&model, "encoder.int8.onnx", b"OLD-BUT-PROVEN"),
             "the PROVEN copy must win, not the one that merely exists"
         );
     }
@@ -3548,7 +3619,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = store::models_root(temp.path());
         let backup = store::backup_path(&root, &model);
-        write_model_dir(&backup, b"OLD");
+        write_model_dir(&backup, &model, b"OLD");
         store::write_seal(&backup, &model).unwrap();
 
         // Nothing installed yet: the backup is the only good copy.
@@ -3557,7 +3628,7 @@ mod tests {
 
         // Once the replacement is sealed, it is genuinely redundant.
         let target = model.install_path(&root);
-        write_model_dir(&target, b"NEW");
+        write_model_dir(&target, &model, b"NEW");
         store::write_seal(&target, &model).unwrap();
         store::clear_stale(temp.path(), &model).unwrap();
         assert!(!backup.exists(), "a superseded backup must be swept");

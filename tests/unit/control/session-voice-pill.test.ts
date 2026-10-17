@@ -382,7 +382,12 @@ describe('a take whose speech model was refused', () => {
     await vi.advanceTimersByTimeAsync(200);
   }
 
-  for (const code of ['STT_MODEL_NOT_INSTALLED', 'STT_MODEL_MISSING', 'STT_MODEL_LOAD_FAILED']) {
+  for (const code of [
+    'STT_MODEL_NOT_INSTALLED',
+    'STT_MODEL_MISSING',
+    'STT_MODEL_LOAD_FAILED',
+    'STT_MODEL_DAMAGED',
+  ]) {
     it(`records ${code} as no voice following, not a lost microphone`, async () => {
       await refusedTake(code);
       const s = get(session);

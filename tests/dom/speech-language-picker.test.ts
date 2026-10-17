@@ -151,7 +151,7 @@ describe('what is shown before anything downloads', () => {
     const { view } = await mount(
       optionsFixture({
         languages: [
-          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled' }) }),
+          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled', source: null }) }),
         ],
       }),
     );
@@ -174,7 +174,7 @@ describe('what is shown before anything downloads', () => {
     const { view } = await mount(
       optionsFixture({
         languages: [
-          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled' }) }),
+          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled', source: null }) }),
         ],
       }),
     );
@@ -192,7 +192,7 @@ describe('what is shown before anything downloads', () => {
     const { view } = await mount(
       optionsFixture({
         languages: [
-          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled' }) }),
+          optionFixture({ status: statusFixture({ installed: false, phase: 'notInstalled', source: null }) }),
         ],
       }),
     );
@@ -221,7 +221,7 @@ describe('choosing is deliberate', () => {
       primarySubtag: 'fr',
       modelId: 'kroko-fr',
       active: false,
-      status: statusFixture({ modelId: 'kroko-fr', installed: false, phase: 'notInstalled' }),
+      status: statusFixture({ modelId: 'kroko-fr', installed: false, phase: 'notInstalled', source: null }),
     });
     const { view, calls } = await mount(
       optionsFixture({ languages: [optionFixture(), french] }),
@@ -290,7 +290,10 @@ describe('a missing model is fixable here', () => {
         languages: [
           optionFixture({
             active: true,
-            status: statusFixture({ installed: false, phase: 'notInstalled' }),
+            // `source: null`, as Rust sends it: nothing usable was resolved
+            // and nothing downloaded is on disk. (`downloaded` with
+            // `installed: false` is the DAMAGED shape, tested below.)
+            status: statusFixture({ installed: false, phase: 'notInstalled', source: null }),
           }),
         ],
       }),
@@ -310,6 +313,7 @@ describe('a missing model is fixable here', () => {
             status: statusFixture({
               installed: false,
               phase: 'failed',
+              source: null,
               error: { code: 'STT_MODEL_DOWNLOAD_FAILED', message: 'The download was interrupted.' },
             }),
           }),
@@ -320,6 +324,51 @@ describe('a missing model is fixable here', () => {
     // Named "Try again" rather than "Download": the user already pressed
     // Download once and it did not work.
     expect(buttonLabelled(view, 'Try again')).not.toBeNull();
+  });
+
+  /*
+   * #258: a download whose files were damaged after install. It used to read
+   * "Downloaded" with no button to press, and abort the next take. Rust now
+   * reports it as `failed` with its own code, and this screen has to say what
+   * that means — damaged, not missing, not a failed fetch — and offer the
+   * download that repairs it.
+   */
+  it('reports a damaged download as damaged and offers to download it again', async () => {
+    const { view, calls } = await mount(
+      optionsFixture({
+        languages: [
+          optionFixture({
+            active: true,
+            status: statusFixture({
+              installed: false,
+              phase: 'failed',
+              source: 'downloaded',
+              error: {
+                code: 'STT_MODEL_DAMAGED',
+                message:
+                  'The speech data on this computer is damaged and cannot be used. Download it again to repair it.',
+              },
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(text(view)).toContain('speech data on this machine is damaged');
+    expect(text(view)).toContain('Download it again to repair it.');
+    expect(text(view)).not.toContain('Downloaded to this computer');
+    expect(text(view)).not.toContain('speech data is not on this machine');
+    expect(view.container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(buttonLabelled(view, 'Try again')).toBeNull();
+
+    // Its files are still on disk, and still the user's to reclaim.
+    expect(buttonLabelled(view, 'Remove download')).not.toBeNull();
+
+    const repair = buttonLabelled(view, 'Download again');
+    expect(repair).not.toBeNull();
+    await fireEvent.click(repair!);
+    await waitFor(() => {
+      expect(calls.some((call) => call.command === 'start_speech_model_download')).toBe(true);
+    });
   });
 });
 
@@ -482,7 +531,7 @@ describe('which language is in use', () => {
       primarySubtag: 'de',
       modelId: 'kroko-de',
       active: false,
-      status: statusFixture({ modelId: 'kroko-de', installed: false, phase: 'notInstalled' }),
+      status: statusFixture({ modelId: 'kroko-de', installed: false, phase: 'notInstalled', source: null }),
     });
     const { view } = await mount(optionsFixture({ languages: [optionFixture(), german] }));
 

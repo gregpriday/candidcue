@@ -137,6 +137,12 @@ const ERROR_COPY: Record<string, string> = {
   // that pair which is always there to follow.
   STT_MODEL_LOAD_FAILED:
     'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue; if this keeps happening, download the model again in Settings → Speech.',
+  // Found BEFORE the load, which is the point (#258): a damaged graph handed to
+  // the recogniser used to abort the app at the top of every take. No restart
+  // clause, unlike `STT_MODEL_LOAD_FAILED` — the files are what is wrong, and a
+  // restart reads the same files.
+  STT_MODEL_DAMAGED:
+    'The speech model files on this computer are damaged. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
   STT_WORKER_FAILED:
     'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
   STT_ENGINE_ERROR:
