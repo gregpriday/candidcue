@@ -267,10 +267,9 @@ pub struct AudioSettings {
     /// recogniser has to transcribe it and the alignment engine has to have a
     /// normalisation profile for it. Both are facts about the build, and they
     /// do not give the same answer — the shipped bundle is bilingual (`zh-en`,
-    /// a fact the code denied for long enough to be worth stating here) and has
-    /// no French, while the engine normalises English, French, German and
-    /// Spanish and has no Chinese. The two overlap on English alone. See
-    /// `migrate_in_place`.
+    /// a fact the code denied for long enough to be worth stating here), while
+    /// the engine normalises English alone and has no Chinese. The two overlap
+    /// on English alone. See `migrate_in_place`.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
@@ -596,13 +595,12 @@ fn migrate_in_place(settings: &mut AppSettings) {
     // The first question goes to the ALIGNMENT ENGINE: does it have a
     // normalisation profile for this tag? Asked of the engine's own table
     // rather than a literal `starts_with("en")` here, so it needs no editing as
-    // that table grows — which it since has: #157 gave the engine French,
-    // German and Spanish profiles. Note what that did NOT do. A profile is a
-    // normalisation capability, so this half of the conjunction now says yes to
-    // `fr-FR`, and the tag is still repaired, because the second half says no.
-    // That is the design: the bar in `cc_bench::language_gate` is a measurement
-    // of a MODEL on a corpus, and it is the model table that records the
-    // verdict. `from_bcp47` is also what canonicalises the persisted string:
+    // that table grows. A profile is a normalisation capability and not a
+    // verdict, so a language that gains one is still repaired until the second
+    // half says yes too. That is the design: the bar in
+    // `cc_bench::language_gate` is a measurement of a MODEL on a corpus, and it
+    // is the model table that records the verdict. `from_bcp47` is also what
+    // canonicalises the persisted string:
     // it resolves the PRIMARY subtag, so `en_GB` and `en-gibberish-` are still
     // English while `english` and `eng` — which the old prefix test waved
     // through — are not tags at all and resolve to nothing.
@@ -621,16 +619,17 @@ fn migrate_in_place(settings: &mut AppSettings) {
     //   says plainly that CJK needs a real tokenizer before whitespace
     //   segmentation means anything. Keeping the tag would buy a true claim
     //   about the transcript and a false one about the glass.
-    // * `fr-FR`, `de-DE`, `es-ES` — the mirror image. The engine has profiles
-    //   for all three, and no recogniser this build can LOAD speaks them: no
-    //   entry in `cc_stt::models` serves them, because that table's tuning is
-    //   measured and no `blank_penalty` sweep has been run for a recogniser in
-    //   any of them. Keeping one of these tags
-    //   would claim a French take from a recogniser with no French in it.
+    // * `fr-FR`, `de-DE`, `es-ES` — both halves say no. The engine has no
+    //   profile for them, and no recogniser this build can LOAD speaks them:
+    //   no entry in `cc_stt::models` serves them, because that table's tuning
+    //   is measured and no `blank_penalty` sweep has been run for a recogniser
+    //   in any of them. Keeping one of these tags would claim a French take
+    //   from a recogniser with no French in it.
     //
     // Each stops biting on its own terms — Chinese when it earns a profile, the
-    // other three when a sweep and a corpus earn them a model — and each stops
-    // by itself, with no string comparison here to remember to edit.
+    // other three when they earn a profile AND a sweep and a corpus earn them
+    // a model — and each stops by itself, with no string comparison here to
+    // remember to edit.
     let followable = cc_align::AlignmentLanguage::from_bcp47(settings.audio.language.trim())
         .is_some_and(|language| model.serves_language(language.primary_subtag()));
     if !followable {
@@ -780,7 +779,8 @@ mod tests {
     /// The two halves fail for different reasons, and both are here because the
     /// gate is a conjunction. Spanish, French, German and Portuguese were
     /// offered against a hosted service that transcribed them, and the bundled
-    /// recogniser does not — that is the recogniser's half.
+    /// recogniser does not — nor does the engine have a profile for any of
+    /// them, so they fail both halves.
     ///
     /// Chinese fails the other half, and is worth reading twice because it
     /// looks like a regression and is not. The shipped bundle is `zh-en` and
@@ -796,7 +796,7 @@ mod tests {
         let shipped = crate::speech::default_model();
         for stale in [
             // The recogniser has none of these.
-            "es-ES", "fr-FR", "de-DE", "pt-BR", "enochian", "",
+            "es-ES", "fr-FR", "de-DE", "es", "fr", "de", "pt-BR", "enochian", "",
             // The recogniser has these; the engine does not.
             "zh", "zh-CN", "zh-Hans-CN",
         ] {
@@ -814,35 +814,6 @@ mod tests {
             settings.audio.language = kept.to_string();
             migrate_in_place(&mut settings);
             assert_eq!(settings.audio.language, kept, "{kept} must survive");
-        }
-    }
-
-    /// A language the ENGINE can normalise is still refused while no loadable
-    /// recogniser speaks it.
-    ///
-    /// The half of the conjunction #157 put weight on. `fr-FR` used to be
-    /// rejected because `from_bcp47` returned `None`; it now resolves to a real
-    /// French profile, and it must STILL be rejected — for the other reason.
-    /// This pins the repair for the default recogniser; that no recogniser
-    /// this build can load serves these languages at all is pinned by
-    /// `a_normalisable_language_is_not_thereby_an_offered_one` in
-    /// `speech::catalogue`.
-    #[test]
-    fn a_language_the_engine_can_normalise_is_not_thereby_offered() {
-        for tag in ["fr-FR", "de-DE", "es-ES", "fr", "de", "es"] {
-            assert!(
-                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
-                "{tag} should normalise — the engine has the profile"
-            );
-            let mut settings = AppSettings::default();
-            settings.audio.language = tag.to_string();
-            migrate_in_place(&mut settings);
-            assert_eq!(
-                settings.audio.language,
-                crate::speech::default_model().default_language,
-                "{tag} must be repaired: no recogniser this build can load \
-                 serves it, however well the engine normalises it"
-            );
         }
     }
 

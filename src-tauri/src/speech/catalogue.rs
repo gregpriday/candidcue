@@ -532,39 +532,31 @@ mod tests {
         assert_eq!(bundled_default().resource_dir, default_model().resource_dir());
     }
 
-    /// A language the engine can normalise is not thereby one this build offers.
+    /// No loadable recogniser serves a language nobody has measured.
     ///
-    /// `cc_align` has French, German and Spanish normalisation profiles (#157),
-    /// so the engine can compile a script in those languages — the precondition
-    /// for ever scoring a corpus in one. Nothing else may follow from that: a
-    /// `BundledModel` entry is a claim that the tuning beside it was MEASURED,
-    /// and no `blank_penalty` sweep has been run for a recogniser in any of
-    /// them. The English 3.0 cannot be borrowed — it was swept against the
-    /// English corpus, where following quality and word error rate moved in
-    /// OPPOSITE directions.
+    /// A `BundledModel` entry is a claim that the tuning beside it was
+    /// MEASURED, and no `blank_penalty` sweep has been run for a recogniser in
+    /// any of these. The English 3.0 cannot be borrowed — it was swept against
+    /// the English corpus, where following quality and word error rate moved
+    /// in OPPOSITE directions.
     ///
-    /// This is what makes the profiles safe to land ahead of the measurement,
-    /// and it is load-bearing: the speech commands load whichever recogniser
-    /// the persisted setting selects (§153), so a `BundledModel` entry is by
-    /// itself enough to put an unmeasured recogniser in front of a live take.
-    /// What supporting one of these languages takes, stated in full so nobody
-    /// plans on half of it: a corpus in the language, a `blank_penalty` sweep,
-    /// a passing run of `cc-bench gate-language`, a catalogue entry for the
-    /// weights, and then a `BundledModel` entry carrying the measured numbers.
+    /// This is load-bearing: the speech commands load whichever recogniser the
+    /// persisted setting selects (§153), so a `BundledModel` entry is by itself
+    /// enough to put an unmeasured recogniser in front of a live take. What
+    /// supporting one of these languages takes, stated in full so nobody plans
+    /// on half of it: a normalisation profile in `cc_align`, a corpus in the
+    /// language, a `blank_penalty` sweep, a passing run of
+    /// `cc-bench gate-language`, a catalogue entry for the weights, and then a
+    /// `BundledModel` entry carrying the measured numbers.
     #[test]
-    fn a_normalisable_language_is_not_thereby_an_offered_one() {
+    fn no_loadable_recogniser_serves_an_unmeasured_language() {
         for tag in ["fr-FR", "de-DE", "es-ES"] {
-            assert!(
-                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
-                "{tag} should normalise — #157 added the profile"
-            );
             assert!(
                 !cc_stt::models::bundled_models()
                     .iter()
                     .any(|model| model.serves_language(tag)),
-                "{tag} is served by a loadable model, so the settings gate \
-                 would now honour it — which requires a passing language gate \
-                 first"
+                "{tag} is served by a loadable model, which claims its tuning \
+                 was measured — that requires a passing language gate first"
             );
         }
     }

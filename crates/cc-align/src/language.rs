@@ -42,15 +42,16 @@
 //!
 //! What actually holds the door is a different list, in a different crate: a
 //! language reaches a user only through a `cc_stt::models::BundledModel` that
-//! serves it, and that table admits nothing without measured tuning. No model
-//! this build can load serves French, German or Spanish, so nothing here
-//! offers them.
+//! serves it, and that table admits nothing without measured tuning. The only
+//! model this build can load serves English and Chinese, and Chinese has no
+//! profile here, so the two lists overlap on English alone.
 //!
 //! A profile is the PRECONDITION for measuring a language rather than the
 //! measurement: a corpus cannot be scored in a language the normaliser does not
-//! have. Being precise about the remaining distance — `cc-bench` compiles every
-//! suite with `CompileOptions::default()`, so selecting one of these from its
-//! command line is still to be built.
+//! have. Being precise about the remaining distance — English is the only
+//! profile today, and `cc-bench` compiles every suite with
+//! `CompileOptions::default()`, so selecting another language from its command
+//! line is still to be built as well as the profile itself.
 
 /// A language the alignment engine knows how to normalise.
 ///
@@ -62,16 +63,12 @@
 /// test, and does not follow.
 ///
 /// A variant here is a normalisation capability and NOT a shipping decision —
-/// see the module docs. English is the only one of these four that has been
-/// measured; French, German and Spanish arrived with #157 so that a corpus in
-/// those languages can be compiled and scored at all.
+/// see the module docs. English is the only variant, and it is the measured
+/// baseline every benchmark number was taken against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AlignmentLanguage {
     #[default]
     English,
-    French,
-    German,
-    Spanish,
 }
 
 impl AlignmentLanguage {
@@ -80,21 +77,13 @@ impl AlignmentLanguage {
     /// NOT the list of languages the product offers. See the module docs: this
     /// is a capability, and the shipping decision is a measurement held
     /// elsewhere.
-    pub const ALL: &'static [AlignmentLanguage] = &[
-        AlignmentLanguage::English,
-        AlignmentLanguage::French,
-        AlignmentLanguage::German,
-        AlignmentLanguage::Spanish,
-    ];
+    pub const ALL: &'static [AlignmentLanguage] = &[AlignmentLanguage::English];
 
     /// The BCP-47 primary subtag, for matching against a settings value or a
     /// recogniser's advertised language.
     pub fn primary_subtag(self) -> &'static str {
         match self {
             AlignmentLanguage::English => "en",
-            AlignmentLanguage::French => "fr",
-            AlignmentLanguage::German => "de",
-            AlignmentLanguage::Spanish => "es",
         }
     }
 
@@ -120,9 +109,6 @@ impl AlignmentLanguage {
     pub fn profile(self) -> &'static NormalizationProfile {
         match self {
             AlignmentLanguage::English => &ENGLISH,
-            AlignmentLanguage::French => &FRENCH,
-            AlignmentLanguage::German => &GERMAN,
-            AlignmentLanguage::Spanish => &SPANISH,
         }
     }
 }
@@ -171,9 +157,9 @@ pub enum LanguageRule {
 pub enum RuleDisposition {
     /// Correct unchanged for every language in [`AlignmentLanguage::ALL`].
     ///
-    /// Whitespace segmentation is the reason the first supported set is four
-    /// space-delimited Latin-script languages: a CJK model would need a real
-    /// tokenizer here and is a much larger piece of work than a word list.
+    /// Whitespace segmentation is the reason a next language should be a
+    /// space-delimited one: a CJK model would need a real tokenizer here and is
+    /// a much larger piece of work than a word list.
     Shared,
     /// A shipping profile MUST supply this. Leaving it English is not inert —
     /// it produces atoms that are actively wrong, or it silently changes the
@@ -354,8 +340,8 @@ pub struct NormalizationProfile {
     /// ("pour cent", "por ciento").
     pub percent: &'static [&'static str],
 
-    /// Unit abbreviation → the word actually said. The abbreviations are shared
-    /// across these languages; the spelled forms are not.
+    /// Unit abbreviation → the word actually said. The abbreviations are mostly
+    /// shared between Latin-script languages; the spelled forms are not.
     pub unit_words: &'static [(&'static str, &'static str)],
 
     /// Whether the English contraction table runs.
@@ -470,295 +456,6 @@ static ENGLISH: NormalizationProfile = NormalizationProfile {
     ordinals: true,
 };
 
-/* ---------------------------------------------------------------------------
- * The three profiles #157 added, and what they are and are not
- * ---------------------------------------------------------------------------
- * These answer every `MustReplace` rule, which is the contract this module
- * enforces. That is a narrower claim than "French is supported", and the
- * difference is the whole reason the module docs separate capability from
- * measurement: nobody has yet read a French script to a French recogniser and
- * measured what the glass did.
- *
- * Known limitations, recorded now rather than discovered later. The first two
- * are specific to these languages; the last three are properties of the schema
- * that English shares, listed because a reader comparing profiles will
- * otherwise think they are new here.
- *
- * * GROUPING SEPARATOR. `group_separator` is one character, and French groups
- *   thousands with a narrow no-break space rather than a point. `.` is the
- *   convention German and Spanish actually use, and no single character can be
- *   right for French, so it is chosen as the one that is at least right for two
- *   of the three — but it is not complete French, in two ways. A French script
- *   writing `3.5` and
- *   meaning three and a half normalises to `35`, because interior points are
- *   dropped without checking that the groups are three digits long. And a
- *   script writing the number CORRECTLY, as `1 234,5`, never reaches the
- *   separator logic at all: `canonical_atoms_for` splits on whitespace first,
- *   so that is two atoms, `1` and `234.5`. The decimal half — the half that
- *   changes the NUMBER — is right for all three.
- * * REGIONAL SPLITS. The profile is chosen by PRIMARY subtag, so `es-MX` gets
- *   this one, and Mexican usage is the English convention: decimal point,
- *   grouping comma. `de-CH` is a third convention again. A locale-aware
- *   numeric profile is a bigger change than a word list and wants a corpus
- *   behind it.
- * * CURRENCY SEQUENCES — FRENCH ONLY. `currency_units` holds one atom per
- *   unit, and French elides before a vowel: "millions D'EUROS" is the atom
- *   `d'euros`, which is not `euros`. Spanish and German are FINE here, and the
- *   distinction is worth keeping straight — "millones DE euros" leaves `euros`
- *   intact and merely adds an unmatched `de`, and German says "Millionen Euro"
- *   exactly. So this costs French one atom in three, and the other two
- *   nothing. `the_french_currency_sequence_is_a_known_gap` in `normalize.rs`
- *   pins it.
- * * SINGULAR AT ONE. `1 km` expands to `kilomètres` against a reader who says
- *   `kilomètre`. English has had this since the unit table existed (`1 km` →
- *   `kilometres`) and it is the measured baseline, so it is a property of the
- *   one-atom substitution rather than anything these three do differently.
- * * PARTIAL UNIT PHRASES. `fps` is "images par seconde", "Bilder pro Sekunde",
- *   "fotogramas por segundo" — three atoms, and the table substitutes one. It
- *   expands to the head noun, so the first atom matches and the rest do not.
- *   English does exactly the same (`fps` → `frames`).
- * * SCALE SEQUENCES. Spanish says `mil millones` for 10^9. That is two atoms,
- *   and `scale_words` entries must be one, so the currency swap does not see
- *   it. `millardo` exists and is rare enough that using it would be its own
- *   mismatch.
- * * VOCABULARY. The filler and stopword lists are deliberately short. A
- *   stopword list decides atom weight and global-anchor eligibility, so padding
- *   it speculatively changes the engine rather than merely adding words. The
- *   entries mirror the CATEGORIES the measured English profile uses — it lists
- *   `yes`, `no`, `here`, `there`, `now`, `very`, `well` — rather than a
- *   stricter rule invented for these three.
- */
-
-/// French. Candidate, not measured — see the block comment above.
-static FRENCH: NormalizationProfile = NormalizationProfile {
-    language: AlignmentLanguage::French,
-
-    // Elisions never reach this list: `l'arbre` is ONE atom, because the
-    // normaliser keeps word-internal apostrophes. These are the standalone
-    // forms, which are the only ones that can match.
-    //
-    // `hum` is deliberately absent though a recogniser may well emit it: in a
-    // written script it is a deliberate interjection carrying doubt, and a
-    // filler is skipped, so listing it would throw away a word the author
-    // chose. The rule at the top of the struct — never a real script word —
-    // decides that, not how often the recogniser writes it.
-    fillers: &["euh", "heu", "hmm", "mm", "mmh"],
-
-    // The elided forms are here on purpose and are the reason this list is
-    // longer than a translation of the English one. Because word-internal
-    // apostrophes survive, `c'est` and `qu'il` are single atoms made entirely
-    // of function words — among the most frequent atoms in any French script —
-    // and neither `ce` nor `est` classifies them. Left out, they would carry
-    // full locating weight and be eligible as global anchors, which is exactly
-    // the false-anchoring failure the rule's doc warns about.
-    //
-    // `fait` and `faire` are deliberately absent: `fait` is also the ordinary
-    // noun "fact", and the English list has no comparable content word.
-    stopwords: &[
-        "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou", "mais",
-        "à", "au", "aux", "en", "dans", "sur", "sous", "pour", "par", "avec",
-        "sans", "chez", "entre", "depuis", "vers", "que", "qui", "quoi",
-        "dont", "où", "ce", "cet", "cette", "ces", "il", "elle", "ils",
-        "elles", "je", "tu", "nous", "vous", "on", "me", "te", "se", "lui",
-        "y", "ça", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
-        "notre", "nos", "votre", "vos", "leur", "leurs", "est", "sont",
-        "était", "étaient", "être", "été", "suis", "a", "ai", "as", "avons",
-        "avez", "ont", "avait", "avaient", "avoir", "ne", "pas", "plus",
-        "non", "oui", "si", "alors", "donc", "très", "bien", "aussi", "tout",
-        "tous", "toute", "toutes", "comme", "quand", "déjà", "encore", "ici",
-        "là", "c'est", "qu'il", "qu'elle", "n'est", "j'ai", "d'un", "d'une",
-    ],
-
-    phonetics: PhoneticPolicy::Disabled,
-
-    ampersand: Some("et"),
-
-    decimal_separator: ',',
-    group_separator: '.',
-
-    currency_symbols: &[('€', "euros"), ('$', "dollars"), ('£', "livres")],
-    currency_units: &["euros", "dollars", "livres"],
-    currency_order: CurrencyOrder::UnitAfterScale,
-    scale_words: &[
-        "cent", "cents", "mille", "million", "millions", "milliard",
-        "milliards",
-    ],
-
-    percent: &["pour", "cent"],
-
-    unit_words: &[
-        ("hz", "hertz"),
-        ("khz", "kilohertz"),
-        ("mhz", "mégahertz"),
-        ("ghz", "gigahertz"),
-        ("ms", "millisecondes"),
-        // Both spellings of the abbreviation, because a French script is more
-        // likely to write `500 Go` than `500 GB` and matching is exact on the
-        // abbreviation — `go` left out would simply never expand. Lowercasing
-        // happens first, so these are the folded forms of Ko/Mo/Go/To.
-        ("ko", "kilooctets"),
-        ("mo", "mégaoctets"),
-        ("go", "gigaoctets"),
-        ("to", "téraoctets"),
-        ("kb", "kilooctets"),
-        ("mb", "mégaoctets"),
-        ("gb", "gigaoctets"),
-        ("tb", "téraoctets"),
-        ("km", "kilomètres"),
-        ("kg", "kilogrammes"),
-        ("cm", "centimètres"),
-        ("mm", "millimètres"),
-        ("fps", "images"),
-    ],
-
-    contractions: false,
-    spelled_numbers: false,
-    ordinals: false,
-};
-
-/// German. Candidate, not measured — see the block comment above.
-static GERMAN: NormalizationProfile = NormalizationProfile {
-    language: AlignmentLanguage::German,
-
-    // `hm` and `mhm` are deliberately absent. Both are ordinary German
-    // responses — reflection and agreement — rather than noise, and `hm` is
-    // also the SI symbol for hectometre, which `unit_words` does not expand.
-    // A filler that is really a unit would silently drop a measurement.
-    fillers: &["äh", "ähm", "öhm", "hmm", "mmh"],
-
-    stopwords: &[
-        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen",
-        "einem", "einer", "eines", "und", "oder", "aber", "von", "vom", "zu",
-        "zum", "zur", "in", "im", "an", "am", "auf", "für", "mit", "bei",
-        "nach", "über", "unter", "durch", "um", "ist", "sind", "war", "waren",
-        "sein", "gewesen", "bin", "hat", "haben", "habe", "hast", "hatte",
-        "hatten", "wird", "werden", "wurde", "wurden", "kann", "können",
-        "soll", "sollen", "muss", "müssen", "will", "wollen", "nicht",
-        "kein", "keine", "ja", "nein", "ich", "du", "er", "sie", "es", "wir",
-        "ihr", "man", "mich", "dich", "mir", "dir", "ihm", "ihn", "ihnen",
-        "sich", "uns", "euch", "mein", "dein", "unser", "als", "wie", "wenn",
-        "dass", "weil", "denn", "doch", "auch", "noch", "schon", "nur",
-        "sehr", "hier", "da", "dort", "so", "dann", "jetzt", "alle", "alles",
-        "was", "wer", "wo", "wann", "warum",
-        // Prepositions and the fused preposition+article forms, which are
-        // single words in German and among the most frequent atoms there is.
-        "aus", "vor", "ohne", "seit", "bis", "gegen", "zwischen", "pro",
-        "ins", "ans", "beim",
-        "dieser", "diese", "dieses", "diesen", "diesem",
-    ],
-
-    phonetics: PhoneticPolicy::Disabled,
-
-    ampersand: Some("und"),
-
-    decimal_separator: ',',
-    group_separator: '.',
-
-    // Singular after a number: German says "2,4 Millionen Euro", not "Euros".
-    currency_symbols: &[('€', "euro"), ('$', "dollar"), ('£', "pfund")],
-    currency_units: &["euro", "dollar", "pfund"],
-    currency_order: CurrencyOrder::UnitAfterScale,
-    scale_words: &[
-        "hundert", "tausend", "million", "millionen", "milliarde",
-        "milliarden",
-    ],
-
-    percent: &["prozent"],
-
-    unit_words: &[
-        ("hz", "hertz"),
-        ("khz", "kilohertz"),
-        ("mhz", "megahertz"),
-        ("ghz", "gigahertz"),
-        ("ms", "millisekunden"),
-        ("kb", "kilobyte"),
-        ("mb", "megabyte"),
-        ("gb", "gigabyte"),
-        ("tb", "terabyte"),
-        ("km", "kilometer"),
-        ("kg", "kilogramm"),
-        ("cm", "zentimeter"),
-        ("mm", "millimeter"),
-        ("fps", "bilder"),
-    ],
-
-    contractions: false,
-    // German counts units before tens — "zweiundvierzig" is one word, not
-    // "forty two" — so the English grammar is not a translation away from
-    // working here. Off until somebody writes the German one and measures it.
-    spelled_numbers: false,
-    ordinals: false,
-};
-
-/// Spanish. Candidate, not measured — see the block comment above.
-static SPANISH: NormalizationProfile = NormalizationProfile {
-    language: AlignmentLanguage::Spanish,
-
-    // `eh` is deliberately absent: it is a real Spanish interjection — "¿eh?",
-    // "eh, tú" — and a script that writes it means it. `em` and `ehm` are not
-    // ordinary words, so they are safe to skip.
-    fillers: &["ehm", "em", "mm", "mmm", "hmm"],
-
-    stopwords: &[
-        "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del",
-        "al", "a", "y", "e", "o", "u", "ni", "pero", "sino", "aunque", "en",
-        "con", "sin", "por", "para", "sobre", "entre", "hasta", "desde",
-        "que", "quien", "cual", "cuando", "donde", "como", "es", "son",
-        "era", "eran", "ser", "sido", "soy", "eres", "somos",
-        "está", "están", "estaba", "estaban", "estar", "estoy", "estás",
-        "estamos", "ha", "han", "he", "has", "hemos", "había",
-        "habían", "haber", "hay", "fue", "fueron", "no", "sí", "yo", "tú",
-        "él", "ella", "ellos", "ellas", "nosotros", "vosotros", "usted",
-        "ustedes", "me", "te", "se", "lo", "le", "les",
-        "nos", "os", "mi", "mis", "tu", "tus", "su", "sus",
-        "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "esto",
-        "estos", "estas", "ese", "esa", "eso", "esos", "esas",
-        "muy", "más", "menos", "también", "ya", "ahora", "aquí", "allí",
-        "todo", "todos", "toda", "todas", "algo", "si", "entonces", "porque",
-        "así", "bien",
-        // Spanish accents its interrogatives, and accents survive
-        // normalisation — so `que` does not classify `qué`. Without these the
-        // most frequent question words in the language would each carry full
-        // anchor weight.
-        "qué", "quién", "cuál", "cuándo", "dónde", "cómo",
-    ],
-
-    phonetics: PhoneticPolicy::Disabled,
-
-    ampersand: Some("y"),
-
-    decimal_separator: ',',
-    group_separator: '.',
-
-    currency_symbols: &[('€', "euros"), ('$', "dólares"), ('£', "libras")],
-    currency_units: &["euros", "dólares", "libras"],
-    currency_order: CurrencyOrder::UnitAfterScale,
-    scale_words: &["cien", "ciento", "cientos", "mil", "millón", "millones"],
-
-    percent: &["por", "ciento"],
-
-    unit_words: &[
-        ("hz", "hercios"),
-        ("khz", "kilohercios"),
-        ("mhz", "megahercios"),
-        ("ghz", "gigahercios"),
-        ("ms", "milisegundos"),
-        ("kb", "kilobytes"),
-        ("mb", "megabytes"),
-        ("gb", "gigabytes"),
-        ("tb", "terabytes"),
-        ("km", "kilómetros"),
-        ("kg", "kilogramos"),
-        ("cm", "centímetros"),
-        ("mm", "milímetros"),
-        ("fps", "fotogramas"),
-    ],
-
-    contractions: false,
-    spelled_numbers: false,
-    ordinals: false,
-};
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,8 +464,8 @@ mod tests {
     ///
     /// A language that reaches [`AlignmentLanguage::ALL`] has answered every
     /// rule that produces wrong atoms when left English. This is the check that
-    /// makes the rule table load-bearing instead of decorative — without it,
-    /// #157 could add French with an empty `unit_words` and ship a script whose
+    /// makes the rule table load-bearing instead of decorative — without it, a
+    /// new profile could leave `unit_words` empty and ship a script whose
     /// figures read out in English.
     #[test]
     fn every_language_answers_every_must_replace_rule() {
@@ -810,31 +507,21 @@ mod tests {
     /// than a quietly shorter loop.
     #[test]
     fn all_lists_every_variant() {
-        for lang in [
-            AlignmentLanguage::English,
-            AlignmentLanguage::French,
-            AlignmentLanguage::German,
-            AlignmentLanguage::Spanish,
-        ] {
-            assert!(
-                AlignmentLanguage::ALL.contains(&lang),
-                "{lang:?} has a profile but is missing from ALL, so every \
-                 contract test in this file skips it"
-            );
-        }
-        assert_eq!(AlignmentLanguage::ALL.len(), 4, "update this count with ALL");
+        assert_eq!(
+            AlignmentLanguage::ALL,
+            &[AlignmentLanguage::English],
+            "a variant has a profile but is missing from ALL, so every \
+             contract test in this file skips it; update this list with ALL"
+        );
     }
 
     /// Resolution is about the PROFILE TABLE, not about permission.
     ///
-    /// This test used to assert that `fr`/`de`/`es` resolved to nothing, which
-    /// was the right assertion while they had no profile and the wrong reason:
-    /// it read as "French is not allowed" when it meant "French cannot be
-    /// normalised". #157 gave all three a profile, so they resolve here — and
-    /// `settings::migrate_in_place` is what still refuses them, because no
-    /// recogniser this build can load serves them. The two halves are tested
-    /// separately now because they fail for different reasons and only one of
-    /// them is a shipping decision.
+    /// Only a tag whose primary subtag has a profile resolves, and English is
+    /// the only profile. `settings::migrate_in_place` is what decides whether a
+    /// resolved language is honoured, because it also asks the recogniser —
+    /// the two halves fail for different reasons and only one of them is a
+    /// shipping decision.
     #[test]
     fn bcp47_resolves_every_language_that_has_a_profile() {
         for (tag, expected) in [
@@ -842,15 +529,6 @@ mod tests {
             ("en-US", AlignmentLanguage::English),
             ("EN-us", AlignmentLanguage::English),
             ("en_US", AlignmentLanguage::English),
-            ("fr", AlignmentLanguage::French),
-            ("fr-FR", AlignmentLanguage::French),
-            ("fr-CA", AlignmentLanguage::French),
-            ("de", AlignmentLanguage::German),
-            ("de-DE", AlignmentLanguage::German),
-            ("de_AT", AlignmentLanguage::German),
-            ("es", AlignmentLanguage::Spanish),
-            ("es-ES", AlignmentLanguage::Spanish),
-            ("ES-mx", AlignmentLanguage::Spanish),
         ] {
             assert_eq!(
                 AlignmentLanguage::from_bcp47(tag),
@@ -860,7 +538,10 @@ mod tests {
         }
         // Still the important half: a tag the engine cannot normalise resolves
         // to nothing at all — never to English.
-        for tag in ["ja", "zh", "zh-CN", "pt", "pt-BR", "english", "eng", ""] {
+        for tag in [
+            "fr", "fr-FR", "fr-CA", "de", "de-DE", "de_AT", "es", "es-ES", "ES-mx",
+            "ja", "zh", "zh-CN", "pt", "pt-BR", "english", "eng", "",
+        ] {
             assert_eq!(
                 AlignmentLanguage::from_bcp47(tag),
                 None,
@@ -1015,69 +696,6 @@ mod tests {
                      the two disagree about whether it is a word at all"
                 );
             }
-        }
-    }
-
-    /// The three profiles #157 added are candidates, and the thing that makes
-    /// them candidates rather than copies is that they do not reuse English's
-    /// data. A profile that silently pointed at `ENGLISH` would satisfy every
-    /// other test in this file.
-    #[test]
-    fn the_candidate_languages_do_not_reuse_english_data() {
-        let english = AlignmentLanguage::English.profile();
-        for lang in [
-            AlignmentLanguage::French,
-            AlignmentLanguage::German,
-            AlignmentLanguage::Spanish,
-        ] {
-            let profile = lang.profile();
-            assert_ne!(profile.stopwords, english.stopwords, "{lang:?} stopwords");
-            assert_ne!(profile.fillers, english.fillers, "{lang:?} fillers");
-            assert_ne!(profile.percent, english.percent, "{lang:?} percent");
-            assert_ne!(
-                profile.unit_words, english.unit_words,
-                "{lang:?} unit words"
-            );
-            assert_ne!(
-                profile.ampersand, english.ampersand,
-                "{lang:?} reads & the English way"
-            );
-            // The one that changes the NUMBER rather than the wording.
-            assert_eq!(
-                (profile.decimal_separator, profile.group_separator),
-                (',', '.'),
-                "{lang:?} must group and point the way its readers write"
-            );
-        }
-    }
-
-    /// The candidate profiles are complete enough to normalise with, and carry
-    /// no claim about following quality.
-    ///
-    /// Named for what it checks. It does NOT verify that fr/de/es are
-    /// unreachable by a user — that gate is a `cc_stt::models::BundledModel`
-    /// serving the language, which is two crates away and is asserted in
-    /// `src-tauri/src/speech/catalogue.rs`. This crate cannot see it, and a
-    /// test here that claimed to would be checking nothing.
-    #[test]
-    fn a_candidate_profile_normalises_without_claiming_to_follow() {
-        for lang in [
-            AlignmentLanguage::French,
-            AlignmentLanguage::German,
-            AlignmentLanguage::Spanish,
-        ] {
-            // Constructible and normalising: the benchmark needs exactly this.
-            assert!(!lang.profile().stopwords.is_empty());
-            assert_eq!(lang.profile().language, lang);
-            // And carrying no claim about following quality: the phonetic
-            // relation is off, which is the documented starting point for a
-            // language nobody has measured.
-            assert_eq!(
-                lang.profile().phonetics,
-                PhoneticPolicy::Disabled,
-                "{lang:?} must not borrow the English phonetic skeleton before \
-                 anybody has shown it helps on a corpus in that language"
-            );
         }
     }
 
