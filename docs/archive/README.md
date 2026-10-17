@@ -29,9 +29,11 @@ Section numbers are per document, and the documents reuse them. Read the
 comment around a citation before trusting the number alone.
 
 - **Bare `§N`** is usually the Product specification. The Product specification
-  stops at §61, so a bare number from §62 up (`§62`, `§70.5`) can only be Smooth
-  Following. Below that, the stage motion code often means Smooth Following
-  too (`§30.5`).
+  stops at §61, and Smooth Following is the only one of these documents with
+  sections from §62 to §90, which is what the stage motion code means by a bare
+  `§62` or `§70.5`. Below §62, the stage motion code often means Smooth
+  Following too (`§30.5`). A bare number can also be a review-item number
+  (below), so check that the section's topic matches the comment.
 - **`companion §N`** is Smooth Following and Intelligent Alignment, which calls
   itself the "Mandatory Companion Specification".
 - **`primary §N`** and **`spec §N` in `src-tauri/`** are the Product
@@ -46,12 +48,15 @@ Some citations have no document to land on:
 - **Named anchors** such as `§parts` and `§practice` are topic tags, not
   sections.
 - **Review-item numbers** such as `§152` match no document.
-- A few comments still use the numbering of the **Coaching Rail
-  specification**, which was deleted along with the coaching feature.
+- A few comments on the retired coaching code still use the numbering of the
+  **Coaching Rail specification**, which was deleted because the feature is
+  gone.
 
 ## What was deleted rather than archived
 
-Three documents that nothing cited were removed instead of archived:
+Three documents describing features that no longer exist were removed instead
+of archived. No file names them, and apart from the coaching comments above,
+no comment uses their numbering:
 
 - the Coaching Rail and Live Delivery Intelligence specification
 - the Realtime Speaking Score technical report

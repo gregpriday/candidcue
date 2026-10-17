@@ -9,10 +9,13 @@ on-device speech session in `src-tauri/src/speech/`.
 suite, 99.99% within ±5 words on clean reads, and the display ahead of the
 reader 3.8% of the time on live captures (down from 22.2%). The live captures
 are the frozen corpora under `bench/runs/`, recorded through the hosted
-recogniser the app used before speech moved on-device. Read the report to know
-what the engine promises. Note the deliberate asymmetry before tuning anything
-on top of it: **the display is built to trail the reader, never to lead**, so
-the symmetric ±2-word figure is intentionally not the objective.
+recogniser the app used before speech moved on-device, and the 22.2% → 3.8%
+result was measured on an earlier configuration (`prediction_gain` 0.35, a
+paragraph-only ceiling). Read the report for the measured history behind
+today's defaults, not as a guarantee of today's numbers. Note the deliberate
+asymmetry before tuning anything on top of it: **the display is built to trail
+the reader, never to lead**, so the symmetric ±2-word figure is intentionally
+not the objective.
 
 ---
 
@@ -55,9 +58,10 @@ This is built. What follows describes `src-tauri/src/align/mod.rs` as it is.
 (`alignTokensFor` in `src/control/services/alignment.ts`). `AlignmentState`
 compiles them with `cc_align::compile_tokens_in`, which builds atoms *from the
 app's own tokens* so every position can be projected back, and arms
-`Engine::new(script, AlignmentConfig::default())`. The session starts unbound:
-`SpeechEngine::start_stream` binds it to the recogniser stream generation it
-mints, and frames from any other stream are ignored.
+`Engine::new(script, AlignmentConfig::default())`. If a recogniser stream is
+already running, the session is bound to it at once; otherwise it waits
+unbound until `SpeechEngine::start_stream` binds it to the generation it mints.
+Frames from any other stream are ignored.
 
 **Frames.** The recogniser thread in `src-tauri/src/speech/session.rs` hands
 every transcript frame to `align::observe_frame` before emitting it to control
@@ -86,8 +90,8 @@ and has no use for them.
 **Delivery.** `publish` emits the projected snapshot to two windows by name:
 `stage://alignment-snapshot` to the stage for motion, and `align://snapshot` to
 control for progress and the take summary. These are targeted events, not a
-broadcast. Control is out of the motion path; it receives its own copy only so
-its report can never disagree with what the stage showed.
+broadcast. Control is out of the motion path; it receives its own copy of the
+same snapshots, so its report is built from what the stage was sent.
 
 **The audio clock.** Time is milliseconds of audio handed to the recogniser,
 counted from samples at the pinned `SAMPLE_RATE_HZ`
@@ -123,9 +127,10 @@ const target = alignmentDisplayAt(snapshot, audioNowMs);
 ```
 
 `alignmentDisplayAt` in `src/shared/contracts/alignment.ts` is the canonical
-TypeScript mirror of `Snapshot::display_at`, and a Rust test asserts the two
-agree. Never fork it, and don't transcribe it into a document either: a copy
-that used to live here fell behind it. In outline, while evidence is fresh the
+token-space mirror of `Snapshot::display_at`. It agrees with the engine at the
+endpoints of a prediction and may differ by a fraction of a token mid-flight
+across a multi-atom token. Never fork it, and don't transcribe it into a
+document either: a copy that used to live here fell behind it. In outline, while evidence is fresh the
 lead grows 1:1 with evidence age (pipeline-lag compensation, not a guess about
 the future: the words are already said, the recogniser has simply not finished
 saying so), eases into a plateau at `pauseOnsetMs`, holds for `leadHoldMs`, and
@@ -146,10 +151,10 @@ or compensate for:
 * `rateTokensPerSecond` is zero whenever extrapolation would be a guess
   (holding / ambiguous / searching), and it decays to zero as evidence goes
   stale (`rate_hold_ms`, `rate_decay_ms`), so the display parks where the
-  reader stopped. A final does not stop it by itself: it arrives
-  `endpoint_lag_ms` after the last word, and stopping on arrival put a halt in
-  the motion at every sentence. `ItemStarted` re-bases the evidence clock so
-  gliding resumes the instant the reader speaks again.
+  reader stopped. A final does not stop it by itself: a final lands after the
+  last word, and stopping on arrival put a halt in the motion at every
+  sentence. `ItemStarted` re-bases the evidence clock when the recogniser opens
+  a new utterance, so gliding resumes as soon as the reader is heard again.
 * `maxLeadTokens` caps the lead in *words*, not milliseconds, because a
   reader who slows down invalidates the rate estimate without invalidating
   the clock.
@@ -161,8 +166,13 @@ or compensate for:
   the display to sit still at a full stop until the next sentence is genuinely
   heard — that pause is the feature.
 
-Benchmarked as `ahead_*` in `bench/REPORT.md`: live time-spent-ahead-of-the-
-reader is 3.8%, down from 22.2%, against a measurement floor of ~0.5%.
+These bound the *extrapolation*. None of them can correct an `observedToken`
+that is itself ahead of the reader, which a misrecognition can produce — so the
+stage must not add confidence the engine does not have.
+
+Measured as `ahead_*` in `bench/REPORT.md`, where the move to a trailing
+display took live time-spent-ahead-of-the-reader from 22.2% to 3.8%, against a
+measurement floor of ~0.5% that remains even with prediction switched off.
 
 > **The stage adds no lead of its own — done, and removed rather than
 > zeroed.** It used to ask `alignmentDisplayAt` for a moment in the future
@@ -213,8 +223,9 @@ treatment rather than assert a single token.
 ## 4. Mapping atoms ↔ screen
 
 The mapping is done, and it is done in Rust. Control compiles the Markdown
-into `spokenTokens` and sends each token's authored surface, source line,
-paragraph and sentence end to `start_alignment` (`alignTokensFor`). The host
+into `spokenTokens` and sends each token's authored surface, sentence ordinal
+(as `line`, a diagnostic locator the engine never reads), block ordinal (as
+`para`) and sentence end to `start_alignment` (`alignTokensFor`). The host
 builds atoms from those tokens with `compile_tokens_in`, which records where
 each atom came from, and projects every snapshot back with `project_to_tokens`
 before publishing it. Every position the frontend sees is a fractional index
@@ -287,12 +298,13 @@ words" from a single final position. Control does this in
 
 ## 8. Testing your integration
 
-* `crates/cc-bench` replays captured live sessions offline:
+* `crates/cc-bench` replays captured live sessions offline. From `crates/`,
   `cargo run --release -p cc-bench -- tier-b --label check` must stay green
   after any engine-adjacent change.
-* `cc-bench inspect <script> <scenario>` prints the per-event decision trace
-  when a take "felt wrong" — reproduce with a captured log before touching
-  engine code.
+* `cc-bench inspect-live <run-name>` prints a compact decision trace around
+  discontinuities in a captured replay, and `cc-bench inspect <script>
+  <scenario>` does the same for a synthetic Tier A scenario. When a take "felt
+  wrong", reproduce it from a captured run before touching engine code.
 * The fixtures in `bench/runs/` are frozen; add new captures rather than
   regenerating.
 

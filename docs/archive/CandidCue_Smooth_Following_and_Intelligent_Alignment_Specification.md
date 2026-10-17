@@ -7,9 +7,11 @@
 >
 > The text and section numbering below are unchanged, because code comments
 > still cite them: as `companion §N`, and by bare number in the stage motion
-> code (`§30.5`, `§62`, `§70.5`). A bare number from §62 up can only mean this
-> document; below that it may equally be the
+> code (`§30.5`, `§62`, `§70.5`). This is the only archived document with
+> sections from §62 to §90; below that, a bare number may equally be the
 > [Product and Technical Specification](CandidCue_Product_and_Technical_Specification.md).
+> Some bare numbers are review-item numbers that match no document, so check
+> that the section's topic matches the comment.
 >
 > [The archive index](README.md) explains how to read a `§` reference in a
 > code comment.
