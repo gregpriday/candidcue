@@ -98,10 +98,8 @@ describe('the next take starts with nothing switched off', () => {
       store.endSession();
       store.beginSession(SESSION_ID, defaultFollowingSettings());
     }],
-    ['a reset', (store: ReturnType<typeof createSmoothFollowStore>) => {
-      store.reset();
-      store.beginSession(SESSION_ID, defaultFollowingSettings());
-    }],
+    // On its own: `beginSession` resets it too, and would hide a reset that did not.
+    ['a reset', (store: ReturnType<typeof createSmoothFollowStore>) => store.reset()],
   ] as const) {
     it(`lets a hold release after ${label}`, () => {
       const { store, setFollowingPaused } = storeWithSpy();

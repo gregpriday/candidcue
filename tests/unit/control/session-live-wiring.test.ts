@@ -1059,19 +1059,31 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     return compiled;
   }
 
-  /** Whether a voice snapshot pushed now reaches the take. */
+  /**
+   * Whether a voice snapshot pushed now reaches the take.
+   *
+   * Throws rather than answering false without a feed: a "kept out" that only
+   * meant "never sent" would pass every test below for the wrong reason.
+   */
   function voiceReaches(token: number): boolean {
-    alignmentFeed.push?.(voiceAt(token));
+    if (!alignmentFeed.push) throw new Error('the take never subscribed to the alignment feed');
+    alignmentFeed.push(voiceAt(token));
     return get(session).snapshot?.confirmedToken === token;
+  }
+
+  /** One of the stubbed pipeline's callbacks, as the take handed it over. */
+  function pipelineCallback<T>(name: string): T {
+    const callback = pipeline.captured.deps?.[name];
+    if (!callback) throw new Error('the voice pipeline was never constructed');
+    return callback as unknown as T;
   }
 
   /** What `onFollowingHold` is told when the transcript goes untrustworthy and back. */
   function hold(held: boolean): void {
-    const onFollowingHold = pipeline.captured.deps?.onFollowingHold as unknown as
-      | ((held: boolean, reason: string | null) => void)
-      | undefined;
-    if (!onFollowingHold) throw new Error('the voice pipeline was never constructed');
-    onFollowingHold(held, held ? 'reconnecting' : null);
+    pipelineCallback<(held: boolean, reason: string | null) => void>('onFollowingHold')(
+      held,
+      held ? 'reconnecting' : null,
+    );
   }
 
   const lastToast = () => get(toasts).at(-1)?.message;
@@ -1163,6 +1175,8 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(get(session).followPausedByUser).toBe(false);
 
     toggleAutoScroll();
+    // The stage holds the voice off the glass on this flag, not on `voiceFollow`.
+    expect(get(session).followPausedByUser).toBe(true);
     hold(false);
     let s = get(session);
     expect(s.voiceFollow, 'a recovering transcript is not a request for the voice').toBe(false);
@@ -1175,6 +1189,45 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(s.voiceFollow).toBe(true);
     expect(s.followPausedByUser).toBe(false);
     expect(voiceReaches(compiled.sentences[3]!.startTokenIndex)).toBe(true);
+  });
+
+  it('gives back a roll stopped under a hold without claiming the voice is back', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    pipelineCallback<(connection: string) => void>('onConnectionState')('reconnecting');
+    hold(true);
+
+    toggleAutoScroll();
+    expect(get(session).micState, 'the microphone itself is fine').toBe('live');
+    expect(lastToast()).toBe('Auto-scroll off');
+
+    hold(false);
+    expect(get(session).voiceFollow).toBe(true);
+    expect(get(session).autoScroll.running, 'the recovery does not restart the roll').toBe(false);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
+  });
+
+  it('keeps the voice out of a roll through a hard pause and resume', async () => {
+    const compiled = await startScript();
+    toggleAutoScroll();
+    hardPause();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get(session).paused).toBe('none');
+    expect(get(autoScrollLive).running).toBe(true);
+    expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(false);
+
+    toggleAutoScroll();
+    expect(voiceReaches(compiled.sentences[3]!.startTokenIndex)).toBe(true);
+  });
+
+  it('does not say the voice is back while Space still holds the take', async () => {
+    await startScript();
+    toggleAutoScroll();
+    togglePlayPause();
+    toggleAutoScroll();
+    expect(get(session).voiceFollow).toBe(true);
+    expect(lastToast()).toBe('Auto-scroll off');
   });
 
   it('says following is back when stopping the roll gave it back', async () => {

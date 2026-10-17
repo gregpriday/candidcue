@@ -2706,7 +2706,13 @@ export function toggleAutoScroll(): void {
 function autoScrollOffMessage(): string {
   const s = get(state);
   if (s.followPausedByUser) return 'Auto-scroll off — voice following is still off';
-  const listening = s.mode === 'voice' && s.micState === 'live' && s.connection === 'connected';
+  // "Again" is a claim about the next thing the script does. A paused take does
+  // nothing until Space, and a take with nothing listening does nothing at all.
+  const listening =
+    s.mode === 'voice' &&
+    s.paused === 'none' &&
+    s.micState === 'live' &&
+    s.connection === 'connected';
   return s.voiceFollow && listening
     ? 'Auto-scroll off — following your voice again'
     : 'Auto-scroll off';
