@@ -21,6 +21,8 @@ import { isCompileSettledForScript } from './editor-readiness';
 import { matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
 import { readMicrophonePermission } from '../services/microphone-permission';
+import { describeError } from '../services/errors';
+import { showToast } from '../stores/toasts';
 import type { AppSettings, PresentationMode } from '../services/settings-types';
 import type { AudioDeviceInfo } from '../../shared/contracts';
 import { compiled } from '../stores/compiled';
@@ -230,7 +232,15 @@ export async function checkThenStart(
     await launch();
     return;
   }
-  prompt.set({ verdict, start: launch, recheck: () => checkThenStart(scriptId, intent, launch) });
+  prompt.set({
+    verdict,
+    start: launch,
+    // Only while this is still the newest check. A Present pressed since is
+    // the newer request, and re-running this one would retire it and launch
+    // the older take in its place.
+    recheck: () =>
+      mine === generation ? checkThenStart(scriptId, intent, launch) : Promise.resolve(),
+  });
 }
 
 /** `startTake`, through the check. What every launcher outside the editor calls. */
@@ -303,9 +313,17 @@ export async function allowMicrophoneForTake(): Promise<void> {
     if (answer === 'granted' && !get(settings).audio.microphoneGranted) {
       void patchSettings('audio', { microphoneGranted: true }).catch(() => {});
     }
-  } catch {
-    // A device that would not open is not a refusal. The take reports it in
-    // its own words if it persists; the access question has been answered.
+  } catch (err) {
+    /*
+     * Not a refusal: no microphone, or one held by something else — and on
+     * macOS that can fail before the OS has asked, so a re-check would show the
+     * same "Allow microphone" row and the button would appear to do nothing.
+     * Say what happened; the sheet stays, with Start anyway.
+     */
+    if (get(prompt) === held) {
+      showToast(`CandidCue could not open the microphone. ${describeError(err)}`, 'danger');
+    }
+    return;
   }
   // Dismissed, or replaced by another launch, while the OS was asking.
   if (get(prompt) !== held) return;

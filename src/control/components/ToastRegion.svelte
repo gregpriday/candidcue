@@ -23,7 +23,13 @@
   const notices = $derived($toasts.filter((t) => t.tone !== 'danger'));
 </script>
 
-<div class="region">
+<!--
+  `data-stage-chrome`: during a take the stage answers Space for pause, and it
+  stands back only for keys landing on its own chrome. A toast floats over the
+  take with buttons in it — the dismiss, and an action like "Open System
+  Settings" (#303) — and Space on one of those must press it, not pause.
+-->
+<div class="region" data-stage-chrome>
   <div class="stack" role="status" aria-live="polite">
     {#each notices as toast (toast.id)}
       <div class="toast {toast.tone}">

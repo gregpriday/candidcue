@@ -476,6 +476,47 @@ describe('microphone access before the take', () => {
     expect(findingIds()).toEqual(['mic_permission_denied']);
   });
 
+  it('lets a newer Present win over an older sheet’s Allow', async () => {
+    // Allow is pending on the OS when Present is pressed again, and the newer
+    // check is still reading its facts when Allow comes back. Re-running the
+    // old check would retire the new one and launch the older take.
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1', { presentationMode: 'reader' });
+    const answer = deferred<'granted' | 'denied'>();
+    h.requestMicrophoneAccess.mockReturnValue(answer.promise);
+    const allowing = allowMicrophoneForTake();
+
+    const devices = deferred<unknown[]>();
+    pinYeti();
+    h.listMicrophones.mockReturnValueOnce(devices.promise);
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    const newer = checkThenStartTake('script-1', { presentationMode: 'prompter' });
+
+    answer.resolve('granted');
+    await allowing;
+    expect(h.startTake, 'the older take must not launch').not.toHaveBeenCalled();
+
+    devices.resolve([YETI]);
+    await newer;
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    expect(h.startTake).toHaveBeenCalledWith('script-1', { presentationMode: 'prompter' });
+  });
+
+  it('says why when Allow finds no microphone, rather than looping', async () => {
+    const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
+    clearToasts();
+    h.readMicrophonePermission.mockResolvedValue('prompt');
+    await checkThenStartTake('script-1');
+    h.requestMicrophoneAccess.mockRejectedValue(new Error('MIC_DEVICE_MISSING'));
+    await allowMicrophoneForTake();
+    expect(h.startTake).not.toHaveBeenCalled();
+    // The sheet stays, Start anyway with it; the reason is said.
+    expect(get(takeReadinessPrompt)?.verdict.blocked).toBe(false);
+    const said = get(toasts).map((t) => t.message);
+    expect(said.some((m) => m.startsWith('CandidCue could not open the microphone.'))).toBe(true);
+    expect(said.join(' ')).not.toContain('MIC_DEVICE_MISSING');
+  });
+
   it('launches nothing when the sheet is dismissed while the OS is asking', async () => {
     h.readMicrophonePermission.mockResolvedValue('prompt');
     await checkThenStartTake('script-1');

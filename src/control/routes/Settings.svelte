@@ -1549,8 +1549,11 @@
    * Focus is the moment that matters: "Open System Settings" sends the user to
    * another application, and they come back having flipped the switch — or
    * not. A refusal shows the remedy even to somebody who has never pressed a
-   * button here; a grant while the refusal is showing adopts the microphone, so
-   * coming back is the retry. Passive throughout: nothing here opens a device.
+   * button here. A grant while the refusal is showing changes what it says,
+   * but does not clear it: the OS allowing CandidCue is not the same as this
+   * running webview being given the microphone, and only Try again — a real
+   * request — can tell the two apart. Passive throughout: nothing here opens a
+   * device.
    */
   $effect(() => {
     if (section !== 'audio') return undefined;
@@ -1563,9 +1566,6 @@
       if (isMicrophoneRefused(access)) {
         micAdopted = false;
         micPermission = 'denied';
-      } else if (access === 'granted' && micPermission === 'denied') {
-        micRetryRefused = false;
-        void adoptGrantedMicrophone();
       }
     };
     void read();
@@ -1724,6 +1724,12 @@
     micAdopted = true;
     try {
       const devices = await getVoiceFacade().listMicrophones();
+      // The OS said no while the list was coming back (#303). Listing inputs
+      // proves nothing about access, so the refusal stands.
+      if (isMicrophoneRefused(micAccess)) {
+        micAdopted = false;
+        return;
+      }
       micDevices = devices;
       micPermission = 'granted';
       micError = devices.length === 0
@@ -1794,6 +1800,9 @@
       if (granted === 'granted') {
         micAdopted = false;
         micRetryRefused = false;
+        // Witnessed: the device opened, so the OS has said yes, whatever an
+        // earlier read said (#303).
+        micAccess = 'granted';
         await adoptGrantedMicrophone();
         // Remember it. WKWebView cannot report permission state, so this flag
         // is the only way a returning user is not asked again (§28.1).
@@ -2256,12 +2265,17 @@
               {#if micAccess === 'restricted'}
                 Microphone access is restricted on this Mac, by Screen Time or a device management
                 profile, so it may not be yours to change.
+              {:else if micAccess === 'granted' && micRetryRefused}
+                CandidCue is allowed in System Settings, but macOS is still refusing it the
+                microphone. Quit and reopen CandidCue.
+              {:else if micAccess === 'granted'}
+                CandidCue is allowed in System Settings now. Choose Try again to use the microphone.
               {:else}
                 Microphone access is blocked. Allow CandidCue in System Settings → Privacy &amp;
                 Security → Microphone, then try again.
-              {/if}
-              {#if micRetryRefused}
-                If CandidCue is already allowed there, quit and reopen it.
+                {#if micRetryRefused}
+                  If CandidCue is already allowed there, quit and reopen it.
+                {/if}
               {/if}
             </p>
             <div class="row-actions">

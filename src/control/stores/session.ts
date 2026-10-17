@@ -1478,8 +1478,9 @@ export function startLiveSession(input: StartSessionInput): string {
         ...s,
         connection: 'offline',
         micState: 'disconnected',
-        // A refusal is not a device fault (#303): no input could answer it.
-        inputDeviceLost: (micFailure && !refused) || s.inputDeviceLost,
+        // A refusal is not a device fault (#303): no input could answer it,
+        // and while access is refused nothing is known about the device.
+        inputDeviceLost: refused ? false : micFailure || s.inputDeviceLost,
         microphoneRefused: refused,
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
       }));
@@ -2472,9 +2473,9 @@ export function hardPause(): void {
  * disconnected, unless a newer pause has been made since — see the failure
  * branch below.
  */
-export function resumeSession(): void {
+export function resumeSession(): Promise<void> {
   const s0 = get(state);
-  if (!s0.active) return;
+  if (!s0.active) return Promise.resolve();
   state.update((s) => ({ ...s, connection: 'reconnecting' }));
   // Un-pausing the take is not switching following back on. A presenter who
   // turned it off, or a transport rolling in its place, still has it off after
@@ -2484,7 +2485,7 @@ export function resumeSession(): void {
   if (!pipeline) {
     // Manual/mock mode: there is no session to negotiate.
     state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
-    return;
+    return Promise.resolve();
   }
   /*
    * A resume reports only on the take that asked for it.
@@ -2497,10 +2498,14 @@ export function resumeSession(): void {
    */
   const resuming = pipeline;
   const releasing = pauseCount;
-  void pipeline
+  // Returned so a caller that needs the outcome can wait for it (#303's Try
+  // again); it never rejects, because every failure is reported here.
+  return pipeline
     .resume()
     .then(() => {
       if (resuming !== pipeline) return;
+      // Capture is open, so a failed start's "no audio" is history.
+      voicePillDeviceLost = false;
       state.update((s) => ({
         ...s,
         paused: 'none',
@@ -2575,6 +2580,48 @@ function reportMicrophoneRefused(): void {
 }
 
 /**
+ * A reopen that failed — Try again, or an input chosen for a take whose voice
+ * never started (#303) — recorded and said as what it was: a refusal on its
+ * actionable notice, a device on the picker, a model as no voice following.
+ */
+function recordReopenFailure(err: unknown): void {
+  const code = errorCode(err);
+  const refused = code === 'MIC_PERMISSION_DENIED';
+  const modelUnavailable = isSpeechModelUnavailable(code);
+  state.update((s) => ({
+    ...s,
+    connection: 'offline',
+    micState: 'disconnected',
+    microphoneRefused: refused,
+    // Refused: no input can answer it, so no picker. Allowed, but the device
+    // is what failed: that one the picker answers.
+    inputDeviceLost: refused
+      ? false
+      : s.inputDeviceLost || (code !== null && code.startsWith('MIC_')),
+    voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
+  }));
+  if (refused) {
+    reportMicrophoneRefused();
+  } else {
+    dismissToastByKey(TOAST_MIC_REFUSED);
+    showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
+  }
+}
+
+/**
+ * Capture is open again after a failure (#303).
+ *
+ * The failed start's "no audio" on the pill is history, and nothing else would
+ * retract it: the new capture's monitor never saw a dead input, so it never
+ * reports one restored. And a Space pressed while it reopened still stands —
+ * the start that just finished cleared the pipeline's own copy of the pause.
+ */
+function captureReopened(reopened: VoiceSessionPipeline): void {
+  voicePillDeviceLost = false;
+  if (get(state).paused === 'listening') reopened.softPause();
+}
+
+/**
  * #303 — try the microphone again, after it was refused.
  *
  * A start that failed left the pipeline closed and resumable (`openSession`
@@ -2593,43 +2640,28 @@ function reportMicrophoneRefused(): void {
 export async function retryMicrophone(): Promise<boolean> {
   const s0 = get(state);
   if (!s0.active || !pipeline) return false;
-  if (s0.paused !== 'none') {
-    resumeSession();
-    return false;
-  }
   const retrying = pipeline;
   const forSession = s0.sessionId;
   const current = (): boolean =>
     retrying === pipeline && get(state).sessionId === forSession;
+  if (s0.paused !== 'none') {
+    // Awaited, so the button that asked reports for as long as this takes.
+    await resumeSession();
+    return current() && get(state).micState === 'live';
+  }
   trace('microphone', 'retry (user)');
   state.update((s) => ({ ...s, connection: 'reconnecting' }));
   try {
     await retrying.resume();
   } catch (err) {
     if (!current()) return false;
-    const code = errorCode(err);
     // Paused or ended while the retry was opening: that is what happened.
-    if (code === 'SESSION_STOPPED') return false;
-    const refused = code === 'MIC_PERMISSION_DENIED';
-    const modelUnavailable = isSpeechModelUnavailable(code);
-    state.update((s) => ({
-      ...s,
-      connection: 'offline',
-      micState: 'disconnected',
-      microphoneRefused: refused,
-      // Allowed now, but the device is what failed: that one the picker answers.
-      inputDeviceLost: s.inputDeviceLost || (!refused && code !== null && code.startsWith('MIC_')),
-      voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
-    }));
-    if (refused) {
-      reportMicrophoneRefused();
-    } else {
-      dismissToastByKey(TOAST_MIC_REFUSED);
-      showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
-    }
+    if (errorCode(err) === 'SESSION_STOPPED') return false;
+    recordReopenFailure(err);
     return false;
   }
   if (!current()) return false;
+  captureReopened(retrying);
   state.update((s) => ({
     ...s,
     micState: 'live',
@@ -2691,10 +2723,12 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
    * pipeline's choice now, so starting it is the switch. Not under a pause:
    * that is the presenter's to undo, and the resume will open this device.
    */
+  let reopening = false;
   let resumed = false;
   try {
     if (!(await pipeline.switchMicrophone(deviceId))) {
       if (pipeline !== forPipeline || get(state).paused !== 'none') return false;
+      reopening = true;
       await forPipeline.resume();
       resumed = true;
     }
@@ -2702,7 +2736,10 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
     // `SESSION_STOPPED` is the take being paused or ended mid-switch, and the
     // pipeline released the device it was opening; nothing failed (#289).
     if (pipeline === forPipeline && errorCode(err) !== 'SESSION_STOPPED') {
-      showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
+      // A whole start that failed again is reported as one — a refusal on
+      // the input it was meant to fix must not leave the picker as the remedy.
+      if (reopening) recordReopenFailure(err);
+      else showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
     }
     return false;
   }
@@ -2723,6 +2760,7 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
    * the picker, and is not remembered or celebrated.
    */
   const fellBack = inputFallbackCount !== fallbacksBefore;
+  if (resumed) captureReopened(forPipeline);
   state.update((s) => ({
     ...s,
     micState: 'live',
@@ -2747,7 +2785,15 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
   }).catch(() => {
     /* a remembered preference is a convenience, never a gate */
   });
-  showToast('Microphone switched. Voice following has resumed.', 'success');
+  // "Resumed" only when it has: a take paused, or with following switched
+  // off, has a new microphone and is still not following anything.
+  const after = get(state);
+  showToast(
+    after.paused === 'none' && !after.followPausedByUser
+      ? 'Microphone switched. Voice following has resumed.'
+      : 'Microphone switched.',
+    'success',
+  );
   return true;
 }
 
