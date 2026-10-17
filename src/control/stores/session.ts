@@ -3229,10 +3229,7 @@ export function toggleStageMirror(axis: 'x' | 'y' = 'x'): boolean | null {
     axis === 'x'
       ? { ...current, horizontal: !current.horizontal }
       : { ...current, vertical: !current.vertical };
-  // §7.5: the rail inherits the same mirror boundary as the script, so it must
-  // learn the new mirror state too — it flips through its own snapshot, not the
-  // stage transform, because it is inside the mirror plane but the boundary is
-  // decided on the control side. The rebuild re-issues both.
+  // Recompose so the stage takes the new mirror state with the appearance.
   applyStageAppearance({});
   return takeMirror.horizontal;
 }

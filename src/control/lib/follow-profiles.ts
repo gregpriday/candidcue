@@ -36,8 +36,9 @@ export interface FollowingSettings {
   /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
   /**
-   * §42.1. The old per-session cap on semantic-assist requests, still carried
-   * so a stored settings document round-trips. Nothing makes those requests now.
+   * §42.1. The old per-session cap on semantic-assist requests. The settings
+   * adapter still carries it, but Rust no longer stores it and nothing makes
+   * those requests now.
    */
   semanticRequestLimit: number | null;
   /** §15.2 / §64: reveals the diagnostics timeline in Take controls → Why did it move? */

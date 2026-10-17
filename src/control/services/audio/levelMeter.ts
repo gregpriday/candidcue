@@ -3,9 +3,9 @@
  *
  * Owns the polling loop over an injected analyser graph and feeds the pure
  * `LocalVad`. The default graph factory builds AudioContext →
- * MediaStreamSource → AnalyserNode and never connects to a destination, so
- * microphone audio cannot reach the speakers (feedback is explicitly
- * prevented, spec §28.4).
+ * MediaStreamSource → AnalyserNode and reaches the destination only through a
+ * zero-gain node, so the graph renders but microphone audio cannot reach the
+ * speakers (feedback is explicitly prevented, spec §28.4).
  */
 import type { AudioLevelSnapshot, Unsubscribe } from '../../../shared/contracts';
 import { DEFAULT_ANALYSIS_INTERVAL_MS, type VadConfig } from './defaults';

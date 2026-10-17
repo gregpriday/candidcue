@@ -857,9 +857,9 @@
       ? stagePaddingPx(bandGeometry).topPx
       : reachableTopPx(legacyPad.topPx, bandCenterPx - linePx / 2)) + lineEntryPx,
   );
-  // §7.1: the rail's reserved band is folded into the bottom padding, so the
-  // reading band, the total document height, and the fallback target all keep
-  // the script clear of the rail with no separate bookkeeping.
+  // §7.1: any inset the mount site reserves is folded into the bottom padding,
+  // so the reading band, the total document height, and the fallback target all
+  // keep the script clear of it with no separate bookkeeping.
   const padBottomPx = $derived(
     (optics
       ? stagePaddingPx(bandGeometry).bottomPx
