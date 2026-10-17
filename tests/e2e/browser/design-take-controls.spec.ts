@@ -230,7 +230,10 @@ for (const size of SIZES) {
       await snapshot(page, { state: 'following', token: 9, atMs: 2_000 });
       await snapshot(page, { state: 'searching', decision: 'holdAmbiguous', confidence: 0.22, rate: 0, token: 9, atMs: 6_400 });
       await page.evaluate(async () => {
-        const store = (await import('/src/control/stores/smooth-follow.ts')) as {
+        // Through a variable: the path is the dev server's, not one the
+        // typechecker can resolve from this file.
+        const storeUrl = '/src/control/stores/smooth-follow.ts';
+        const store = (await import(/* @vite-ignore */ storeUrl)) as {
           smoothFollow: { setCandidates(candidates: unknown[]): void };
         };
         store.smoothFollow.setCandidates([
