@@ -363,16 +363,6 @@ describe('the voice pill on a live take', () => {
   });
 });
 
-/**
- * A refused speech model is not a microphone fault (#286).
- *
- * `startTranscription()` runs AFTER the microphone opens, so a take started
- * with no usable model had a working input and no recogniser. It used to come
- * out of the same branch as a dead microphone: "Mic lost" in the status bar
- * while it ran, and "Nothing was transcribed — test or change the microphone"
- * when it ended. The take records the refusal itself, so both can say what
- * actually happened whichever path started the take.
- */
 /** The shape `ipcInvoke` rejects with: an AppError, not an Error. */
 function refusal(code: string): unknown {
   return { code, userMessage: 'The speech model could not be used.' };
@@ -386,6 +376,16 @@ async function refusedTake(code: string): Promise<void> {
   await vi.advanceTimersByTimeAsync(200);
 }
 
+/**
+ * A refused speech model is not a microphone fault (#286).
+ *
+ * `startTranscription()` runs AFTER the microphone opens, so a take started
+ * with no usable model had a working input and no recogniser. It used to come
+ * out of the same branch as a dead microphone: "Mic lost" in the status bar
+ * while it ran, and "Nothing was transcribed — test or change the microphone"
+ * when it ended. The take records the refusal itself, so both can say what
+ * actually happened whichever path started the take.
+ */
 describe('a take whose speech model was refused', () => {
   for (const code of [
     'STT_MODEL_NOT_INSTALLED',
@@ -613,6 +613,49 @@ describe('a take whose voice cannot be resumed', () => {
     expect(get(autoScrollLive).running).toBe(false);
     toggleAutoScroll();
     expect(get(autoScrollLive).running).toBe(true);
+  });
+
+  it('comes back for real once the microphone can', async () => {
+    // Released is still recoverable: the next resume that works says so.
+    start();
+    hardPause();
+    pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(get(session).micState).toBe('disconnected');
+
+    pipeline.captured.resumeError = null;
+    const toastsBefore = resumeToasts();
+    togglePlayPause();
+    togglePlayPause();
+    await vi.advanceTimersByTimeAsync(0);
+    const s = get(session);
+    expect(s.paused).toBe('none');
+    expect(s.micState).toBe('live');
+    expect(s.connection).toBe('connected');
+    expect(resumeToasts()).toBe(toastsBefore);
+  });
+
+  it('keeps a pause made while the refused resume was still trying', async () => {
+    /*
+     * The retry re-runs the whole start, which can take seconds. A hard pause
+     * from the menu meanwhile is the presenter's latest word, and the late
+     * refusal must not release it and set the script rolling again.
+     */
+    await refusedTake('MIC_PERMISSION_DENIED');
+    toggleAutoScroll();
+    togglePlayPause();
+    pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
+    togglePlayPause();
+    hardPause();
+    const toastsBefore = resumeToasts();
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(get(session).paused).toBe('hard');
+    expect(get(autoScrollLive).running, 'the roll stays stopped').toBe(false);
+    // The failure is still a fact, and still said.
+    expect(get(session).micState).toBe('disconnected');
+    expect(resumeToasts()).toBe(toastsBefore + 1);
   });
 
   it('does not un-pause the take after it when a replaced take’s resume is refused', async () => {

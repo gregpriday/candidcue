@@ -2071,9 +2071,16 @@ export function startPrompting(): void {
   driver?.start();
 }
 
+/**
+ * Every pause made, counted — so a resume that fails can tell whether the pause
+ * it was asked to undo is still the one in force when its answer arrives.
+ */
+let pauseCount = 0;
+
 /** Listening pause — transcription stays connected (§15.3). */
 export function pauseListening(): void {
   trace('pause', 'listening pause (user)');
+  pauseCount += 1;
   state.update((s) => ({ ...s, paused: 'listening' }));
   driver?.pause();
   pipeline?.softPause();
@@ -2084,6 +2091,7 @@ export function hardPause(): void {
   // 'muted' is the deliberate-pause label; 'disconnected' means something
   // broke. A hard pause is a choice, so it must not read as a failure.
   trace('pause', 'hard pause (user)');
+  pauseCount += 1;
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
   void pipeline?.hardPause().catch((err) => {
@@ -2125,6 +2133,7 @@ export function resumeSession(): void {
    * raise a toast about a failure it never had.
    */
   const resuming = pipeline;
+  const releasing = pauseCount;
   void pipeline
     .resume()
     .then(() => {
@@ -2151,10 +2160,15 @@ export function resumeSession(): void {
        * to resume, resolved at once and marked a dead microphone live. Released,
        * the take is where one whose voice failed to start already is: running,
        * disconnected, and a Space pair away from trying again.
+       *
+       * Only the pause it was asked to undo, though. The retry can spend
+       * seconds on the microphone, and a pause made meanwhile — a hard pause
+       * from the menu, say — is a newer decision a late failure may not
+       * overrule.
        */
       state.update((s) => ({
         ...s,
-        paused: 'none',
+        paused: pauseCount === releasing ? 'none' : s.paused,
         micState: 'disconnected',
         connection: 'offline',
         voiceFollowingAvailable: modelUnavailable ? false : s.voiceFollowingAvailable,
