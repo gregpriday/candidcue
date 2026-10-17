@@ -21,6 +21,12 @@
  * as true of an inventory that could not be read, does not parse, or lists
  * nothing, so each of those is a failure with a reason.
  *
+ * And a flag is not a review. `reviewed: true` counts only beside a `source`
+ * naming the repository and the tag or commit that was read, because a
+ * licence is a fact about one revision of one repository — the eight this
+ * gate first refused were recorded from project front pages, and three of
+ * those pages were not even the code the archive was built from.
+ *
  * Usage:
  *   node scripts/verify-native-review.mjs
  */
@@ -33,6 +39,32 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const INVENTORY = 'sbom/native-components.json';
 
 const failures = [];
+
+/**
+ * The provenance fields a review cannot do without, named when unusable. A
+ * missing, null or array `source` names both: there is nothing to read them from.
+ * generate-notices.mjs keeps its own copy of this check, because each script
+ * runs alone in the gates' scratch-tree tests.
+ */
+function provenanceProblems(provenance) {
+  if (provenance === null || typeof provenance !== 'object' || Array.isArray(provenance)) {
+    return ['source.repository', 'source.revision'];
+  }
+  const problems = [];
+  let url = null;
+  try {
+    url = new URL(provenance.repository);
+  } catch {
+    // Not a URL at all; reported below with the rest.
+  }
+  if (url === null || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+    problems.push('source.repository');
+  }
+  if (typeof provenance.revision !== 'string' || provenance.revision.trim() === '') {
+    problems.push('source.revision');
+  }
+  return problems;
+}
 
 let source = null;
 try {
@@ -69,16 +101,25 @@ if (failures.length === 0) {
         failures.push(`${INVENTORY}: components[${index}] is not an object.`);
         continue;
       }
-      if (component.reviewed === true) {
-        reviewedCount += 1;
-        continue;
-      }
       const name = component.component ?? `components[${index}]`;
       const spdx = component.spdx ?? 'no SPDX id';
+      if (component.reviewed === true) {
+        const missing = provenanceProblems(component.source);
+        if (missing.length === 0) {
+          reviewedCount += 1;
+        } else {
+          failures.push(
+            `${INVENTORY}: ${name} (${spdx}) is marked reviewed but has no usable ` +
+              `${missing.join(' or ')} — a review has to say which source it read. Record ` +
+              `the repository and the tag or commit the build pinned.`,
+          );
+        }
+        continue;
+      }
       failures.push(
         `${INVENTORY}: ${name} (${spdx}) is not reviewed — its licence is recorded from ` +
           `upstream and not confirmed against the build that ships. Set "reviewed": true ` +
-          `once somebody has checked it.`,
+          `once somebody has checked it, with the source they read.`,
       );
     }
   }

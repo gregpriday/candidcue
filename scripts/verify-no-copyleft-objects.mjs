@@ -332,8 +332,7 @@ for (const { component, literal, stdlib, project } of survivors.values()) {
   notes.push(
     `${component.component} (${component.spdx}): ${project.length} of its own symbol(s) ship, ` +
       `plus ${residue}. None of ${(component.copyleftIfLinkedWith ?? []).join(' or ')} ships ` +
-      `with it, so its own terms govern — satisfied by the attribution in ` +
-      `THIRD_PARTY_NOTICES.md.\n${detail}`,
+      `with it, so its own terms govern.\n${detail}`,
   );
 }
 
