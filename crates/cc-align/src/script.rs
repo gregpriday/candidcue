@@ -781,7 +781,7 @@ pub(crate) fn ends_sentence(raw: &str) -> bool {
 ///
 /// Returns the final paragraph ordinal, which is one less than the paragraph
 /// COUNT and is only meaningful when at least one line was spoken.
-pub(crate) fn for_each_spoken_line(
+pub fn for_each_spoken_line(
     source: &str,
     options: CompileOptions,
     mut visit: impl FnMut(u32, u32, &str),
@@ -908,12 +908,47 @@ pub fn compile_tokens(tokens: &[TokenInput]) -> CompiledScript {
 }
 
 /// The same, for a caller that knows which language the tokens are in.
+///
+/// # Normalised a sentence at a time, attributed a token at a time
+///
+/// Each token used to be normalised on its own. That is the right answer for
+/// almost every word and the wrong one wherever normalisation reaches across a
+/// word boundary — which spelled numbers always do. A script that says
+/// `one hundred and forty-three` arrives as four tokens and compiled to
+/// `one hundred and 43`, while the recogniser's `one hundred and forty three`
+/// is normalised as a phrase, to `143`. Nothing on the script side could match
+/// it, and the display stopped on a number the presenter had already said.
+/// The Markdown path never had the problem because it normalises a whole line
+/// at once, which is also why the benchmark — which compiled through that path
+/// — could not see it: replaying the captured corpus through THIS compile took
+/// `live.within5` on the two figures fixtures from 85.4% and 98.6% to 78.4% and
+/// 92.5%.
+///
+/// So each sentence is normalised as one string, the way a transcript is, and
+/// every resulting atom is attributed back to the tokens it came from by
+/// aligning it against the per-token normalisation (see [`attribute_atoms`]).
+/// Where the two agree — every sentence without a cross-word rule in it — the
+/// result is exactly what the per-token compile produced.
 pub fn compile_tokens_in(tokens: &[TokenInput], language: AlignmentLanguage) -> CompiledScript {
     let mut interner = Interner::default();
     let mut atoms: Vec<ScriptAtom> = Vec::new();
 
-    for (index, token) in tokens.iter().enumerate() {
-        for canonical in canonical_atoms_for(language, &token.surface) {
+    let mut start = 0usize;
+    while start < tokens.len() {
+        // A run is one sentence inside one block: it ends on a sentence end or
+        // before the block changes. Normalisation never reaches across either,
+        // which keeps a number at the end of one sentence from absorbing the
+        // number that opens the next.
+        let mut end = start + 1;
+        while end < tokens.len()
+            && !tokens[end - 1].sentence_end
+            && tokens[end].para == tokens[start].para
+        {
+            end += 1;
+        }
+        let run = &tokens[start..end];
+        for (canonical, index) in attribute_atoms(run, start, language) {
+            let token = &tokens[index];
             let id = interner.intern(&canonical);
             atoms.push(ScriptAtom {
                 id,
@@ -930,15 +965,130 @@ pub fn compile_tokens_in(tokens: &[TokenInput], language: AlignmentLanguage) -> 
         // The last atom standing is the sentence's last atom: a token that
         // normalized away entirely leaves the boundary on the word before it,
         // which is where the reader's voice actually stops.
-        if token.sentence_end {
+        if run.last().is_some_and(|t| t.sentence_end) {
             if let Some(last) = atoms.last_mut() {
                 last.flags |= FLAG_SENTENCE_END;
             }
         }
+        start = end;
     }
 
     let para_count = atoms.last().map_or(0, |a| a.para + 1);
     finalize(atoms, interner, para_count, tokens.len() as u32, language)
+}
+
+/// The atoms of one sentence, normalised as a phrase, each with the index of
+/// the token it belongs to.
+///
+/// The per-token normalisation knows exactly which token every atom came from;
+/// the phrase normalisation is the one that agrees with a transcript. They are
+/// aligned (minimum edits, equal strings matching), and:
+///
+/// * an atom both agree on keeps its own token;
+/// * a stretch where they disagree — `one hundred and 43` against `143` — is
+///   spread across the tokens that per-token stretch came from, in order. A
+///   single merged atom therefore lands on the FIRST of its tokens and the
+///   token axis interpolates it across all of them, so the display passes
+///   `one hundred and forty-three` as the number is said rather than leaping
+///   the words before it.
+///
+/// Monotone by construction: every stretch sits between two agreeing atoms
+/// whose tokens bound it.
+fn attribute_atoms(
+    run: &[TokenInput],
+    offset: usize,
+    language: AlignmentLanguage,
+) -> Vec<(String, usize)> {
+    let per: Vec<(String, usize)> = run
+        .iter()
+        .enumerate()
+        .flat_map(|(i, t)| {
+            canonical_atoms_for(language, &t.surface)
+                .into_iter()
+                .map(move |a| (a, offset + i))
+        })
+        .collect();
+    if run.len() < 2 {
+        return per;
+    }
+    let joined = run
+        .iter()
+        .map(|t| t.surface.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let phrase = canonical_atoms_for(language, &joined);
+    if phrase.len() == per.len() && phrase.iter().zip(&per).all(|(a, (b, _))| a == b) {
+        return per;
+    }
+
+    // Minimum-edit alignment, phrase (rows) against per-token (columns).
+    let (n, m) = (phrase.len(), per.len());
+    let mut d = vec![vec![0u32; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i as u32;
+    }
+    for j in 0..=m {
+        d[0][j] = j as u32;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let sub = d[i - 1][j - 1] + u32::from(phrase[i - 1] != per[j - 1].0);
+            d[i][j] = sub.min(d[i - 1][j] + 1).min(d[i][j - 1] + 1);
+        }
+    }
+    // Walk back, collecting agreeing pairs (phrase index, per index).
+    let mut anchors: Vec<(usize, usize)> = Vec::new();
+    let (mut i, mut j) = (n, m);
+    while i > 0 && j > 0 {
+        let equal = phrase[i - 1] == per[j - 1].0;
+        if d[i][j] == d[i - 1][j - 1] + u32::from(!equal) {
+            if equal {
+                anchors.push((i - 1, j - 1));
+            }
+            i -= 1;
+            j -= 1;
+        } else if d[i][j] == d[i - 1][j] + 1 {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    anchors.reverse();
+
+    let last_token = offset + run.len() - 1;
+    let mut out: Vec<(String, usize)> = Vec::with_capacity(n);
+    // Each gap between consecutive anchors (and before the first / after the
+    // last) is one disagreeing stretch.
+    let mut prev: Option<(usize, usize)> = None;
+    for anchor in anchors.iter().copied().map(Some).chain(std::iter::once(None)) {
+        let phrase_from = prev.map_or(0, |(pi, _)| pi + 1);
+        let phrase_to = anchor.map_or(n, |(pi, _)| pi);
+        let per_from = prev.map_or(0, |(_, pj)| pj + 1);
+        let per_to = anchor.map_or(m, |(_, pj)| pj);
+        if phrase_to > phrase_from {
+            // The tokens this stretch spans, from the per-token side; an empty
+            // per-token stretch borrows the token of whatever bounds it.
+            let (first, last) = if per_to > per_from {
+                (per[per_from].1, per[per_to - 1].1)
+            } else {
+                let t = anchor
+                    .map(|(_, pj)| per[pj].1)
+                    .or(prev.map(|(_, pj)| per[pj].1))
+                    .unwrap_or(last_token);
+                (t, t)
+            };
+            let span = last - first + 1;
+            let count = phrase_to - phrase_from;
+            for (k, atom) in phrase[phrase_from..phrase_to].iter().enumerate() {
+                out.push((atom.clone(), first + k * span / count));
+            }
+        }
+        if let Some((pi, pj)) = anchor {
+            out.push((phrase[pi].clone(), per[pj].1));
+        }
+        prev = anchor;
+    }
+    out
 }
 
 /// Occurrence counts, weights, flags, postings and the token axis — everything
@@ -1423,10 +1573,11 @@ mod tests {
     }
 
     /// The compiler entry points normalise in different contexts: `compile`
-    /// takes a whole spoken line and folds `twenty-seven million` into one
-    /// atom, while `compile_tokens` — the path the app compiles through —
-    /// normalises each authored token on its own and holds two. A term resolved
-    /// only as a phrase would mark nothing at all in production.
+    /// takes a whole spoken line, `compile_tokens` — the path the app compiles
+    /// through — a sentence of authored tokens. Both now fold
+    /// `twenty-seven million` into one atom (they used to disagree, which is
+    /// what `compile_tokens_in` documents), and a figure term must still mark
+    /// it on the path production actually takes.
     #[test]
     fn a_figure_term_reaches_both_compiler_entry_points() {
         let tokens: Vec<TokenInput> = ["We", "raised", "twenty-seven", "million"]
@@ -1441,11 +1592,9 @@ mod tests {
             })
             .collect();
         let mut script = compile_tokens(&tokens);
-        assert!(
-            script.atoms.iter().any(|a| a.surface == "27"),
-            "token path no longer splits the figure: {:?}",
-            script.atoms.iter().map(|a| &a.surface).collect::<Vec<_>>()
-        );
+        let markdown = compile("We raised twenty-seven million", CompileOptions::default());
+        let surfaces = |s: &CompiledScript| s.atoms.iter().map(|a| a.surface.clone()).collect::<Vec<_>>();
+        assert_eq!(surfaces(&script), surfaces(&markdown));
 
         assert_eq!(script.set_biased_terms(&["twenty-seven million".to_string()]), 0);
         let marked: Vec<&str> = script
@@ -1454,7 +1603,7 @@ mod tests {
             .filter(|a| a.flags & FLAG_BIASED != 0)
             .map(|a| a.surface.as_str())
             .collect();
-        assert_eq!(marked, vec!["27", "million"]);
+        assert_eq!(marked, vec!["27000000"]);
     }
 
     /// A term matching nothing is reported, and reported per term rather than
@@ -1572,6 +1721,96 @@ mod tests {
         // And the inverse round-trips.
         assert!((script.atom_at(2.5) - 3.0).abs() < 1e-9);
         assert!((script.atom_at(3.0) - 4.0).abs() < 1e-9);
+    }
+
+    fn words(text: &str, sentence_end_after: &[usize]) -> Vec<TokenInput> {
+        text.split_whitespace()
+            .enumerate()
+            .map(|(i, s)| TokenInput {
+                surface: s.to_string(),
+                line: 0,
+                para: 0,
+                sentence_end: sentence_end_after.contains(&i),
+            })
+            .collect()
+    }
+
+    /// A spelled number spans several tokens and must compile to the atom a
+    /// transcript of it normalises to — not to one atom per word.
+    #[test]
+    fn a_spelled_number_across_tokens_compiles_like_its_transcript() {
+        let script = compile_tokens(&words(
+            "Support handled one hundred and forty-three escalations",
+            &[6],
+        ));
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["support", "handled", "143", "escalations"]);
+        assert_eq!(
+            script.query_atoms("support handled one hundred and forty three escalations"),
+            surfaces,
+        );
+        // The merged atom sits on the FIRST of its four tokens and the axis
+        // spreads it across all of them, so finishing the number passes the
+        // whole run and starting it passes none of it.
+        assert_eq!(script.atoms[2].token, 2);
+        assert_eq!(script.atoms[3].token, 6);
+        assert_eq!(script.token_at(2.0), 2.0);
+        assert_eq!(script.token_at(3.0), 6.0);
+    }
+
+    /// Several merges in one sentence, plus words both normalisations agree on,
+    /// keep reading order and a monotone axis.
+    #[test]
+    fn mixed_merges_stay_in_order() {
+        let script = compile_tokens(&words(
+            "We had twenty seven thousand accounts and nineteen thousand four hundred users",
+            &[11],
+        ));
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(
+            surfaces,
+            vec!["we", "had", "27000", "accounts", "and", "19400", "users"]
+        );
+        let tokens: Vec<u32> = script.atoms.iter().map(|a| a.token).collect();
+        assert_eq!(tokens, vec![0, 1, 2, 5, 6, 7, 11]);
+        let mut previous = f64::NEG_INFINITY;
+        for &position in &script.atom_token_pos {
+            assert!(position >= previous, "axis went backwards at {position}");
+            previous = position;
+        }
+    }
+
+    /// Normalisation never reaches across a sentence end: a number closing one
+    /// sentence does not absorb the number opening the next.
+    #[test]
+    fn a_sentence_end_bounds_the_phrase() {
+        let script = compile_tokens(&words("we counted twenty Seven more arrived", &[2]));
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["we", "counted", "20", "7", "more", "arrived"]);
+        assert!(script.atoms[2].flags & FLAG_SENTENCE_END != 0);
+    }
+
+    /// Where no rule crosses a word boundary the result is exactly the old
+    /// per-token compile, token for token.
+    #[test]
+    fn ordinary_sentences_compile_exactly_as_before() {
+        let tokens = words("It's $12, well-known and 50% cheaper than before", &[7]);
+        let script = compile_tokens(&tokens);
+        let per_token: Vec<(String, u32)> = tokens
+            .iter()
+            .enumerate()
+            .flat_map(|(i, t)| {
+                canonical_atoms_for(AlignmentLanguage::English, &t.surface)
+                    .into_iter()
+                    .map(move |a| (a, i as u32))
+            })
+            .collect();
+        let compiled: Vec<(String, u32)> = script
+            .atoms
+            .iter()
+            .map(|a| (a.surface.clone(), a.token))
+            .collect();
+        assert_eq!(compiled, per_token);
     }
 
     #[test]
