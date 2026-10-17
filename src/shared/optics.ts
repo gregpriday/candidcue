@@ -595,6 +595,10 @@ export interface HardwareFitInput {
   readingContext?: ReadingContext;
 }
 
+/** The fit verdict's advice for an uncalibrated rig, by name (see optical-resolve's warnings). */
+export const UNCALIBRATED_FIT_ADVICE =
+  'This rig has not been calibrated, so CandidCue cannot say how large the text will look. Run the display calibration to size it by distance.';
+
 /**
  * Can this panel, at this distance, deliver both the requested type size and a
  * usable line? And if not, which one gives way?
@@ -642,8 +646,7 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
       arcminutes: null,
       achievableCharacters: isPositive(usableWidthPx) ? null : null,
       columnCh: null,
-      advice:
-        'This rig has not been calibrated, so CandidCue cannot say how large the text will look. Run the display calibration to size it by distance.',
+      advice: UNCALIBRATED_FIT_ADVICE,
     };
   }
 

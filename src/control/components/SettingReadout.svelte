@@ -28,15 +28,29 @@
     value: string;
     /** Why it is the only one — the sentence that stops the reader hunting. */
     description?: string;
+    /**
+     * `row` sets the value on the trailing edge, where a Select's or a
+     * switch's value sits in the rows around it — so a section of form rows
+     * keeps one axis for "what is it set to" whichever kind of row says it.
+     */
+    layout?: 'stacked' | 'row';
   }
 
-  let { label, value, description }: Props = $props();
+  let { label, value, description, layout = 'stacked' }: Props = $props();
 </script>
 
-<div class="readout">
-  <span class="label">{label}</span>
-  <span class="value">{value}</span>
-  {#if description}<p class="description">{description}</p>{/if}
+<div class="readout {layout}">
+  {#if layout === 'row'}
+    <span class="text">
+      <span class="label">{label}</span>
+      {#if description}<span class="description">{description}</span>{/if}
+    </span>
+    <span class="value">{value}</span>
+  {:else}
+    <span class="label">{label}</span>
+    <span class="value">{value}</span>
+    {#if description}<p class="description">{description}</p>{/if}
+  {/if}
 </div>
 
 <style>
@@ -46,11 +60,12 @@
     gap: 2px;
     min-width: 0;
   }
+  /* See Select: a host can give every field label one treatment. */
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: var(--field-label-weight, 600);
+    color: var(--field-label-color, var(--text-secondary));
   }
   .value {
     font-size: var(--text-sm);
@@ -63,5 +78,28 @@
     line-height: var(--lh-meta);
     color: var(--text-muted);
     max-width: var(--prose-measure-narrow);
+  }
+
+  .row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+  .row .text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .row .description {
+    margin: 0;
+  }
+  /* The value in ink, like the value inside a select beside it. In the
+     description's grey it read as the stray end of the description. */
+  .row .value {
+    flex: 0 0 auto;
+    line-height: var(--lh-label);
+    text-align: right;
   }
 </style>
