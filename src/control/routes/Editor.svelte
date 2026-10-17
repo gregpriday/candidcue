@@ -48,6 +48,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
   import { takeDestination, watchTakeDestination } from '../stores/destination';
+  import { openSyntaxReference } from '../stores/syntax-reference';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
@@ -1449,6 +1450,17 @@ import type { PresentationMode } from '../services/settings-types';
             <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
             <IconButton icon="flag" label="Insert part break" onclick={() => withView(inserts.insertTakeMarker)} />
           </div>
+          <!--
+            The syntax reference, beside the controls that insert two of the
+            constructs it explains (#305). Outside the toolbar group rather than
+            its last member: the group is named "Insert", and this inserts
+            nothing.
+          -->
+          <span class="secondary-spacer" aria-hidden="true"></span>
+          <Button size="sm" variant="ghost" title="Script syntax reference" onclick={openSyntaxReference}>
+            <Icon name="book-open" size={14} />
+            Syntax reference
+          </Button>
         {/if}
       {/snippet}
     </Toolbar>
@@ -1801,6 +1813,9 @@ import type { PresentationMode } from '../services/settings-types';
   }
   .insert-toolbar:focus {
     outline: none;
+  }
+  .secondary-spacer {
+    flex: 1 1 auto;
   }
   .toolbar-rule {
     width: 1px;

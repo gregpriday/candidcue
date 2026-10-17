@@ -12,6 +12,7 @@
   import ContextMenu from './components/ContextMenu.svelte';
   import SessionSummary from './components/SessionSummary.svelte';
   import ShortcutsDialog from './components/ShortcutsDialog.svelte';
+  import SyntaxReferenceDialog from './components/SyntaxReferenceDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import ToastRegion from './components/ToastRegion.svelte';
   import Editor from './routes/Editor.svelte';
@@ -117,6 +118,11 @@ import { rememberReaderFrame } from './lib/reader-frame';
     stopSession,
   } from './stores/session';
   import { loadSettings } from './stores/settings';
+  import {
+    closeSyntaxReference,
+    openSyntaxReference,
+    syntaxReferenceOpen,
+  } from './stores/syntax-reference';
   import { showToast } from './stores/toasts';
 
   let ready = $state(false);
@@ -875,6 +881,16 @@ import { rememberReaderFrame } from './lib/reader-frame';
     takeStarting: $takeStarting,
   });
 
+  /*
+   * The syntax reference is for writing, so a take starting under it closes
+   * it. Present can still be reached with it open — the native menu is not
+   * behind the scrim — and in single-window presentation this window becomes
+   * the prompter, where a modal would cover the script being read.
+   */
+  $effect(() => {
+    if ($session.active || $takeStarting) closeSyntaxReference();
+  });
+
   /**
    * What each command actually does.
    *
@@ -1005,6 +1021,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
      */
     showStageWindow: () => void focusAppWindow('stage'),
     keyboardShortcuts: () => (shortcutsOpen = true),
+    syntaxReference: () => openSyntaxReference(),
     setupAssistant: () => void navigate({ name: 'welcome' }),
     exportSupportBundle: () => void exportSupportBundleFromMenu(),
     revealLogs: () => {
@@ -1388,6 +1405,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
   -->
   <SessionSummary />
   <ShortcutsDialog open={shortcutsOpen} onclose={() => (shortcutsOpen = false)} />
+  <SyntaxReferenceDialog open={$syntaxReferenceOpen} onclose={closeSyntaxReference} />
 </div>
 
 <!--

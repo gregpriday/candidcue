@@ -180,6 +180,8 @@ export const COMMAND_IDS = [
 
   // ---- Help ----
   'help.keyboard-shortcuts',
+  // The script dialect, bundled rather than linked, so it answers offline.
+  'help.syntax-reference',
   'help.setup-assistant',
   'help.export-support-bundle',
   'help.reveal-logs',

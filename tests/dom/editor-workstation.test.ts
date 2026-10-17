@@ -25,6 +25,10 @@ import {
   updateWorkspace,
   workspace,
 } from '../../src/control/stores/workspace';
+import {
+  closeSyntaxReference,
+  syntaxReferenceOpen,
+} from '../../src/control/stores/syntax-reference';
 import Editor from '../../src/control/routes/Editor.svelte';
 
 vi.mock('../../src/control/stores/toasts', () => ({
@@ -119,6 +123,22 @@ describe('the editor layout lives in the workspace store', () => {
     updateWorkspace({ editorLayout: 'preview' });
     await tick();
     expect(container.querySelector('[aria-label="Insert"]')).toBeNull();
+  });
+
+  it('offers the syntax reference beside the insert controls, outside their group', async () => {
+    const container = await mount();
+    const reference = () =>
+      [...container.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Syntax reference',
+      );
+    expect(reference()).toBeDefined();
+    // Not a member of the Insert toolbar: its roving tab stop and arrow keys
+    // are for the insertions, and this inserts nothing.
+    expect(container.querySelector('[aria-label="Insert"]')?.contains(reference()!)).toBe(false);
+
+    reference()!.click();
+    expect(get(syntaxReferenceOpen)).toBe(true);
+    closeSyntaxReference();
   });
 
   it('renders a split divider only in split', async () => {

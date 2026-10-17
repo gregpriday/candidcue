@@ -70,7 +70,8 @@ export interface ContainerScanResult {
   diagnostics: CompileDiagnostic[];
 }
 
-const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
+/** Every container name the scanner recognises; the syntax reference documents each. */
+export const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
   'spoken',
   'silent',
   'stage',
@@ -345,7 +346,8 @@ export type InlineDirective =
   | { kind: 'malformed'; code: string; message: string; blocking: boolean }
   | { kind: 'none' };
 
-const SHORTHAND_CUES: Readonly<Record<string, 'pause' | 'beat' | 'breathe'>> = {
+/** The bare-word cues, keyed by lowercased label; the syntax reference documents each. */
+export const SHORTHAND_CUES: Readonly<Record<string, 'pause' | 'beat' | 'breathe'>> = {
   pause: 'pause',
   beat: 'beat',
   breathe: 'breathe',
