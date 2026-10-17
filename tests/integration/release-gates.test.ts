@@ -31,7 +31,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1187,6 +1189,190 @@ echo '{}'
       expect(result.output).not.toContain('TypeError');
       expect(existsSync(repo.notices), 'a failed run must not write the file').toBe(false);
     });
+  });
+});
+
+/* ------------------------------------------------------------------ SBOM */
+
+/*
+ * The SBOMs a release attaches, and the copies that used to be committed.
+ *
+ * pnpm and cargo both print where each package lives as an absolute path, and
+ * the inventories were written out raw: the committed copies named the
+ * developer's home directory 2,107 times, and every machine that regenerated
+ * them rewrote every one of those lines. The stand-in `pnpm` and `cargo` print
+ * the shapes the real ones print, in the order cargo puts `(proc-macro)` before
+ * a source, and name the checkout the way a process running in it sees it
+ * (`pwd -P`, which on macOS is `/private/var/…` for a temporary directory node
+ * names `/var/…`). Each checkout sits inside its own HOME, which is the shape
+ * of a developer machine and of the release runner.
+ */
+describe('the SBOMs a release publishes name nothing on the machine that wrote them', () => {
+  const SBOM_SCRIPT = 'scripts/verify-supply-chain.mjs';
+  const OUTPUTS = ['sbom/javascript.json', 'sbom/rust-app.txt', 'sbom/rust-alignment.txt'];
+
+  const FAKE_PNPM = `#!/bin/sh
+[ "$1" = list ] || { echo "unexpected: pnpm $*" >&2; exit 2; }
+root=$(pwd -P)
+from=left-pad
+dep="$root/node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad"
+[ "$FAKE_OUTSIDE" = pnpm ] && dep=/opt/vendored/left-pad
+[ "$FAKE_OUTSIDE" = pnpm-embedded ] && from="left-pad@file:$HOME/left-pad.tgz"
+cat <<EOF
+[{"name":"fixture","version":"1.0.0","path":"$root","private":true,"dependencies":{
+  "left-pad":{"from":"$from","version":"1.3.0","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz","path":"$dep"},
+  "local-lib":{"from":"local-lib","version":"link:$root/packages/local-lib","path":"$root/packages/local-lib"}}}]
+EOF
+`;
+
+  const FAKE_CARGO = `#!/bin/sh
+[ "$1" = tree ] || { echo "unexpected: cargo $*" >&2; exit 2; }
+root=$(pwd -P)
+case "$*" in
+  *src-tauri/Cargo.toml*) echo "candidcue v1.0.0 ($root/src-tauri)" ;;
+  *) echo "cc-bench v0.1.0 ($root/crates/cc-bench)" ;;
+esac
+echo "cc-align v0.1.0 ($root/crates/cc-align)"
+echo "cc-macros v0.1.0 (proc-macro) ($root/crates/cc-macros)"
+echo "serde_derive v1.0.0 (proc-macro)"
+echo "serde_derive v1.0.0 (proc-macro)"
+echo "git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)"
+echo "[build-dependencies]"
+[ "$FAKE_OUTSIDE" = cargo ] && echo "vendored v0.1.0 (/opt/vendored)"
+exit 0
+`;
+
+  function scratchCheckout(name: string) {
+    const home = mkdtempSync(join(tmpdir(), 'candidcue-home-'));
+    workspaces.push(home);
+    const dir = join(home, 'Projects', name);
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    cpSync(join(REPO_ROOT, SBOM_SCRIPT), join(dir, SBOM_SCRIPT));
+    const bin = join(home, 'fake-bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'pnpm'), FAKE_PNPM, { mode: 0o755 });
+    writeFileSync(join(bin, 'cargo'), FAKE_CARGO, { mode: 0o755 });
+    return { home, dir, bin };
+  }
+
+  function writeSboms(
+    checkout: ReturnType<typeof scratchCheckout>,
+    { outside = '', via = checkout.dir, env = {} }: { outside?: string; via?: string; env?: NodeJS.ProcessEnv } = {},
+  ) {
+    return run(join(via, SBOM_SCRIPT), ['sbom'], via, {
+      PATH: `${checkout.bin}${delimiter}${process.env.PATH ?? ''}`,
+      HOME: checkout.home,
+      FAKE_OUTSIDE: outside,
+      ...env,
+    });
+  }
+
+  it('names every package inside the checkout relative to it', () => {
+    const checkout = scratchCheckout('candidcue');
+    const result = writeSboms(checkout);
+    expect(result.status, result.output).toBe(0);
+
+    for (const file of OUTPUTS) {
+      const text = readFileSync(join(checkout.dir, file), 'utf8');
+      for (const spelling of new Set([checkout.home, realpathSync(checkout.home)])) {
+        expect(text, `${file} must not name ${spelling}`).not.toContain(spelling);
+      }
+    }
+
+    const [root] = JSON.parse(readFileSync(join(checkout.dir, 'sbom/javascript.json'), 'utf8'));
+    expect(root.path).toBe('.');
+    expect(root.dependencies['left-pad']).toMatchObject({
+      path: 'node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad',
+      resolved: 'https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz',
+    });
+    expect(root.dependencies['local-lib']).toMatchObject({
+      version: 'link:packages/local-lib',
+      path: 'packages/local-lib',
+    });
+
+    // A path dependency keeps its proc-macro annotation, and the parentheses
+    // that never held a path — a registry crate's, a git source — are left alone.
+    const shared = [
+      'cc-align v0.1.0 (crates/cc-align)',
+      'cc-macros v0.1.0 (proc-macro) (crates/cc-macros)',
+      'git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)',
+      'serde_derive v1.0.0 (proc-macro)',
+    ];
+    expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toBe(
+      ['[build-dependencies]', 'candidcue v1.0.0 (src-tauri)', ...shared, ''].join('\n'),
+    );
+    expect(readFileSync(join(checkout.dir, 'sbom/rust-alignment.txt'), 'utf8')).toBe(
+      ['[build-dependencies]', shared[0], 'cc-bench v0.1.0 (crates/cc-bench)', ...shared.slice(1), ''].join(
+        '\n',
+      ),
+    );
+  });
+
+  it('names the checkout relative to itself when node was started through a symlink', () => {
+    /*
+     * `--preserve-symlinks-main` keeps the script's path as it was given, so
+     * the script's idea of the checkout is the link while the tools, running
+     * in it, print where it really is.
+     */
+    const checkout = scratchCheckout('candidcue');
+    const linked = join(checkout.home, 'linked');
+    symlinkSync(checkout.dir, linked);
+
+    const result = writeSboms(checkout, { via: linked, env: { NODE_OPTIONS: '--preserve-symlinks-main' } });
+    expect(result.status, result.output).toBe(0);
+    const [root] = JSON.parse(readFileSync(join(checkout.dir, 'sbom/javascript.json'), 'utf8'));
+    expect(root.path).toBe('.');
+    expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toContain(
+      'candidcue v1.0.0 (src-tauri)',
+    );
+  });
+
+  it('comes out byte-for-byte the same wherever it is written', () => {
+    const first = scratchCheckout('candidcue');
+    const second = scratchCheckout('another (checkout)');
+    for (const checkout of [first, second]) {
+      const result = writeSboms(checkout);
+      expect(result.status, result.output).toBe(0);
+    }
+    for (const file of OUTPUTS) {
+      expect(readFileSync(join(second.dir, file), 'utf8'), file).toBe(
+        readFileSync(join(first.dir, file), 'utf8'),
+      );
+    }
+  });
+
+  it.each([
+    ['a JavaScript package outside the checkout', 'pnpm', 'sbom/javascript.json'],
+    ['the home directory in a field that is not a path', 'pnpm-embedded', 'sbom/javascript.json'],
+    ['a crate outside the checkout', 'cargo', 'sbom/rust-app.txt'],
+  ])('refuses to publish %s', (_, outside, file) => {
+    const checkout = scratchCheckout('candidcue');
+    const result = writeSboms(checkout, { outside });
+    expect(result.status, 'an SBOM that would publish a machine path must fail the gate').toBe(1);
+    expect(result.output).toContain(`${file} would publish a path from this machine`);
+    expect(existsSync(join(checkout.dir, file)), `${file} must not be written`).toBe(false);
+  });
+
+  it('keeps the generated SBOMs out of the repository and its inputs in it', () => {
+    /*
+     * `sbom/*` was ignored after the generated files had been committed, so
+     * they stayed tracked: ignored and published at once. `native-inputs.json`
+     * has to stay — the notices gate reads it on a checkout that has never
+     * built anything.
+     */
+    const git = (...args: string[]) => {
+      const result = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
+      expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+      return result.stdout.split('\n').filter(Boolean);
+    };
+    expect(
+      git('ls-files', '--cached', '--ignored', '--exclude-standard', '--', 'sbom'),
+      'tracked and ignored at once',
+    ).toEqual([]);
+    expect(git('ls-files', '--', 'sbom')).toEqual([
+      'sbom/native-components.json',
+      'sbom/native-inputs.json',
+    ]);
   });
 });
 

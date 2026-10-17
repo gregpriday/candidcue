@@ -24,7 +24,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, globSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -126,9 +127,16 @@ function writeSboms() {
   // JavaScript. `pnpm licenses` is not an SBOM, so the dependency graph comes
   // from the lockfile-derived list pnpm can already produce.
   try {
-    const list = JSON.parse(run('pnpm', ['list', '--depth', 'Infinity', '--json', '--prod']));
-    writeFileSync(join(OUT, 'javascript.json'), JSON.stringify(list, null, 2));
-    console.log('Wrote sbom/javascript.json');
+    const list = relativiseJson(JSON.parse(run('pnpm', ['list', '--depth', 'Infinity', '--json', '--prod'])));
+    const leaks = strings(list).filter(
+      (value) => ABSOLUTE.test(value.replace(/^(?:link|file):/, '')) || namesHome(value),
+    );
+    if (leaks.length > 0) {
+      problems.push(publishes('sbom/javascript.json', leaks));
+    } else {
+      writeFileSync(join(OUT, 'javascript.json'), JSON.stringify(list, null, 2));
+      console.log('Wrote sbom/javascript.json');
+    }
   } catch (error) {
     problems.push(`could not produce the JavaScript SBOM — ${error.message}`);
   }
@@ -142,13 +150,108 @@ function writeSboms() {
   ]) {
     try {
       const tree = run('cargo', ['tree', '--locked', '--manifest-path', manifest, '--prefix', 'none', '--no-dedupe']);
-      const unique = [...new Set(tree.split('\n').map((line) => line.trim()).filter(Boolean))].sort();
+      // Relativised before the dedupe, so a crate printed under two spellings
+      // of the checkout still collapses to one line.
+      const lines = tree.split('\n').map((line) => relativiseCargoLine(line.trim())).filter(Boolean);
+      const unique = [...new Set(lines)].sort();
+      // `(` is where cargo prints a crate's source. Its other parentheses —
+      // `(proc-macro)`, a git source's URL — never open on a path.
+      const leaks = unique.filter((line) => /\((?:[/\\]|[A-Za-z]:[/\\])/.test(line) || namesHome(line));
+      if (leaks.length > 0) {
+        problems.push(publishes(`sbom/${name}.txt`, leaks));
+        continue;
+      }
       writeFileSync(join(OUT, `${name}.txt`), `${unique.join('\n')}\n`);
       console.log(`Wrote sbom/${name}.txt — ${unique.length} crates`);
     } catch (error) {
       problems.push(`could not produce the ${name} SBOM — ${error.message}`);
     }
   }
+}
+
+/*
+ * Both tools print where each package lives as an absolute path —
+ * `/Users/<developer>/…/node_modules/.pnpm/…`, `cc-align v0.1.0 (/Users/…)` —
+ * and neither can be told not to. Written out raw, an SBOM published with a
+ * release carries the home directory of whoever built it, and no two machines
+ * produce the same file. So every path inside the checkout is rewritten
+ * relative to it, and anything still absolute afterwards is refused rather
+ * than published: a dependency outside the checkout is a question to answer,
+ * not a path to ship.
+ *
+ * The tools run with the checkout as their working directory and report it
+ * as the operating system resolves it. `ROOT` is that same spelling unless
+ * node was started through a symlink with `--preserve-symlinks-main`, which is
+ * what the resolved form is here for.
+ */
+const ROOTS = [...new Set([ROOT, realpathSync.native(ROOT)])];
+
+const ABSOLUTE = /^(?:[/\\]|[A-Za-z]:[/\\])/;
+
+/** `path` relative to the checkout with `/` separators, or null when it is outside it. */
+function insideCheckout(path) {
+  for (const root of ROOTS) {
+    if (path === root) return '.';
+    if (path.startsWith(root) && (path[root.length] === '/' || path[root.length] === '\\')) {
+      return path.slice(root.length + 1).replaceAll('\\', '/');
+    }
+  }
+  return null;
+}
+
+function relativiseJson(value) {
+  if (typeof value === 'string') {
+    // pnpm spells a local dependency's version `link:<path>` or `file:<path>`.
+    const [, scheme, path] = value.match(/^((?:link|file):)?(.*)$/s);
+    const relative = insideCheckout(path);
+    return relative === null ? value : `${scheme ?? ''}${relative}`;
+  }
+  if (Array.isArray(value)) return value.map(relativiseJson);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, relativiseJson(item)]));
+  }
+  return value;
+}
+
+/**
+ * `name vX.Y.Z`, then `(proc-macro)` if it is one, then `(source)` for anything
+ * not from crates.io. The source is matched by its position — the last group,
+ * running to the end of the line — rather than by what it contains, because a
+ * checkout path may hold parentheses of its own.
+ */
+function relativiseCargoLine(line) {
+  const crate = line.match(/^(\S+ \S+(?: \(proc-macro\))?) \((.+)\)$/);
+  const relative = crate && insideCheckout(crate[2]);
+  return relative ? `${crate[1]} (${relative})` : line;
+}
+
+function strings(value) {
+  if (typeof value === 'string') return [value];
+  if (value !== null && typeof value === 'object') return Object.values(value).flatMap(strings);
+  return [];
+}
+
+/**
+ * The backstop for a path in a position the checks above do not know about.
+ *
+ * Only the home directory as a whole path counts: with HOME=/a, a plain
+ * substring search finds it in `@tauri-apps/api` and every `node_modules/…/a/…`.
+ */
+function namesHome(text) {
+  const home = homedir();
+  if (home.length <= 1) return false;
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w.@+~-])${escaped}(?![\\w.@+~-])`).test(text);
+}
+
+function publishes(file, leaks) {
+  const shown = leaks.slice(0, 5);
+  const more = leaks.length > shown.length ? `\n    … and ${leaks.length - shown.length} more` : '';
+  return (
+    `${file} would publish a path from this machine, so it was not written:\n    ${shown.join('\n    ')}${more}` +
+    `\n  A dependency outside the checkout cannot be named relative to it. Vendor it into the ` +
+    `repository or depend on a published release.`
+  );
 }
 
 /* --------------------------------------------------------------- native */
