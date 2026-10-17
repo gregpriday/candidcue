@@ -83,6 +83,12 @@ export const takeStarting = { subscribe: startingStore.subscribe };
  * It is still worth getting right for those cases, and the rules below are the
  * ones that were correct when it was the only answer there was.
  *
+ * It is NOT a description of where Present goes, and no screen should use it as
+ * one: unpinned, Present fills the monitor the window is on, which this
+ * deliberately steers away from. Welcome, Settings and the editor say where a
+ * take opens through `resolvePrompterDisplay` (`lib/take-destination.ts`, #302);
+ * Settings still aims previews, tests and calibration with this.
+ *
  * ---------------------------------------------------------------------------
  * A PROMPTER CHOOSES A PANEL; A READING WINDOW IS ALREADY ON ONE
  * ---------------------------------------------------------------------------

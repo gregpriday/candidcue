@@ -62,7 +62,7 @@ test('a rejecting display enumeration leaves an actionable error and a working r
 test('the chosen display is remembered, and Automatic names what it resolves to', async ({
   page,
 }) => {
-  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], windowDisplay: 'dsp-e2e-builtin' });
   await page.goto('/control.html');
 
   await openPreferences(page);
@@ -80,7 +80,9 @@ test('the chosen display is remembered, and Automatic names what it resolves to'
     has: page.locator('.monitor-name', { hasText: 'Automatic' }),
   });
   await expect(automatic).toHaveClass(/selected/);
-  await expect(automatic).toContainText('Currently');
+  // The panel the CandidCue window is on, which is where Present puts an
+  // unpinned take (#302).
+  await expect(automatic).toContainText('Currently display 1 · Built-in Display');
 
   // Pinning a panel persists it, so the next take opens there without asking.
   // Scoped to the tile's own name: "Automatic" names the panel it resolves to,
@@ -121,7 +123,8 @@ function displayTile(page: Page, name: string) {
 test('every display tile carries the number Identify displays puts on its panel', async ({
   page,
 }) => {
-  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  // The CandidCue window on the primary panel, with an external one beside it.
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], windowDisplay: 'dsp-e2e-builtin' });
   await page.goto('/control.html');
 
   await openPreferences(page);
@@ -141,13 +144,15 @@ test('every display tile carries the number Identify displays puts on its panel'
   }
 
   // Automatic is not a panel: it takes no number of its own, and names the
-  // number of the panel it resolves to (the non-primary one here).
+  // number of the panel it resolves to — the one the CandidCue window is on,
+  // which is where Present puts an unpinned take. Not the external display,
+  // which this tile used to name although no take ever opened there (#302).
   const automatic = page.locator('.monitor-tile', {
     has: page.locator('.monitor-name', { hasText: 'Automatic' }),
   });
   await expect(automatic.locator('.monitor-number')).toHaveCount(0);
-  const external = session.displays.find((panel) => !panel.primary)!;
-  await expect(automatic).toContainText(`Currently display ${external.number} · ${external.name}`);
+  const windowPanel = session.displays.find((panel) => panel.primary)!;
+  await expect(automatic).toContainText(`Currently display ${windowPanel.number} · ${windowPanel.name}`);
 
   // The presentation-mode tiles share the tile style and are not displays.
   await expect(page.locator('.monitor-number')).toHaveCount(session.displays.length);
@@ -265,4 +270,34 @@ test('a refused Identify says so, announces nothing, and can be pressed again', 
   await identify.click();
   await expect(page.getByText('Each display shows the number on its tile here')).toBeVisible();
   await expect(page.locator('.inline-alert')).toHaveCount(0);
+});
+
+/**
+ * An unplugged pin has TWO fallbacks, and the alert used to name only one of
+ * them — the preview target — while saying nothing about where the take goes
+ * (#302). Present puts it on the panel the CandidCue window is on; previews,
+ * tests and calibration still prefer an external display. Both are named.
+ */
+test('an unplugged pin names where the take opens and where previews go, separately', async ({
+  page,
+}) => {
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], windowDisplay: 'dsp-e2e-builtin' });
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'candidcue.settings-overlay.v1',
+      JSON.stringify({ stage: { displayFingerprint: 'dsp-gone-from-this-desk' } }),
+    );
+  });
+  await page.goto('/control.html');
+
+  await openPreferences(page);
+  await page
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Prompter display and rigs', exact: true })
+    .click();
+
+  const alert = page.locator('.inline-alert[role="alert"]');
+  await expect(alert).toContainText('The display you chose is not connected.');
+  await expect(alert).toContainText('takes open on Built-in Display, where the CandidCue window is');
+  await expect(alert).toContainText('previews, tests and calibration use Teleprompter Display');
 });

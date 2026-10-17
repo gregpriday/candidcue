@@ -18,6 +18,10 @@ declare global {
       stage: { exists: boolean; visible: boolean; fullscreen: boolean; nativeFullscreen: boolean };
       /** Whether THIS window is presenting (single-window takes). */
       presenting: boolean;
+      /** The panel `current_window_display` names, by fingerprint; null is "unknown". */
+      windowDisplay: string | null;
+      /** Move the control window to another panel; emit the display-change event after. */
+      setWindowDisplay(fingerprint: string | null): void;
       /** Hold a command open for `ms` before it answers; null clears. */
       setDelay(command: string, ms: number | null): void;
       /** Hold a command's replies until released with `false`, in order. */

@@ -30,6 +30,7 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
+  import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import { displayNumbers, identificationMatches } from '../lib/display-numbers';
   import {
     ADVANCED_FONT_SIZE_CEILING_PX,
@@ -188,12 +189,11 @@
       /*
        * NOT "Stage display" (CCUX-003).
        *
-       * That name read as "the display the stage will appear on", which is the
-       * one thing this section does not decide — single-window presentation
-       * fills whichever monitor the control window is already on. A user could
-       * choose and calibrate a panel here, press Present from another, and get
-       * behaviour that follows the architecture exactly while contradicting
-       * every label they had been shown.
+       * That name read as "the display the separate stage window will appear
+       * on", and the panel chosen here is more than that: it is where a
+       * prompter take opens, it is what a rig is calibrated against, and the
+       * preview aims at it. The section is named for the panel and its rigs
+       * rather than for any one of the things that read it.
        *
        * The keywords keep "stage display" so anyone who learnt the old name, or
        * read it in an older note, still finds this section by searching for it.
@@ -482,6 +482,12 @@
   /* ------------------------------------------------------------- displays */
 
   let displays = $state<DisplayDescriptor[]>([]);
+  /**
+   * The panel the CONTROL window is on — not this one; Rust looks it up by
+   * label. It is where a prompter take opens when nothing pinned is connected,
+   * so it is read alongside the list and refreshed with it.
+   */
+  let windowDisplay = $state<DisplayDescriptor | null>(null);
   let displaysError = $state<string | null>(null);
   let displaysLoading = $state(false);
   /**
@@ -506,32 +512,47 @@
    */
   const numbers = $derived(displayNumbers(displays));
 
-  /**
-   * What "Automatic" resolves to right now, named on the tile.
-   *
-   * The same function the take uses, not a description of it: a picker that
-   * explains a rule the start sequence does not actually follow is how "it
-   * opened on the wrong screen" becomes unanswerable.
-   */
-  const automaticDisplay = $derived(chooseStageDisplay(displays, null));
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
+  /**
+   * Where a prompter take opens right now: Present's own rule
+   * (`resolvePrompterDisplay`), not a description of it. A picker that explains
+   * a rule the take does not follow is how "it opened on the wrong screen"
+   * becomes unanswerable — and this one did, for every case but one (#302).
+   */
+  const takeDisplay = $derived(
+    resolvePrompterDisplay({ displays, pinnedFingerprint: chosenFingerprint, windowDisplay }),
+  );
+  /**
+   * What "Automatic" resolves to right now, named on the tile: the panel the
+   * CandidCue window is on. Taken from the list so the tile can carry the
+   * number Identify puts on it.
+   */
+  const automaticDisplay = $derived.by(() => {
+    const here = windowDisplay;
+    return here === null ? null : (displays.find((d) => d.fingerprint === here.fingerprint) ?? null);
+  });
   /**
    * The panel Settings previews, tests and calibrates against, pinned or not.
    *
-   * Deliberately NOT "the panel a take opens on" — it used to say that and it
-   * was never true of single-window presentation. Present fills whichever
-   * monitor this window is already on (`windows/present.rs`), and the take is
-   * measured against the panel it actually landed on, which Rust reports back
-   * as `ControlPresentationState.displayFingerprint`. This choice reaches the
-   * preview, the display test and calibration and nothing else, which is what
-   * the section's own copy and the `pinnedMissing` alert now say.
+   * Deliberately NOT `takeDisplay`. With a panel pinned and connected the two
+   * normally agree; otherwise this is `chooseStageDisplay`'s guess, which prefers an
+   * external display because a preview aimed at the editor's own screen would
+   * cover the editor. The take never reads it: it is measured against the
+   * panel it actually landed on, which Rust reports back as
+   * `ControlPresentationState.displayFingerprint`.
    */
   const effectiveDisplay = $derived(chooseStageDisplay(displays, chosenFingerprint));
-  /** A pinned display that is not currently connected (§52 fingerprints). */
-  const pinnedMissing = $derived(
-    chosenFingerprint !== null &&
-      displays.length > 0 &&
-      !displays.some((d) => d.fingerprint === chosenFingerprint),
+  /**
+   * A pinned display that is not currently connected (§52 fingerprints),
+   * matched the way Present matches it — so a panel whose twin was unplugged
+   * is not called missing while the take fills it.
+   */
+  const pinnedMissing = $derived(displays.length > 0 && takeDisplay.reason === 'pin-missing');
+  /** Where the take falls back to, named — or described, when the OS could not name it. */
+  const windowPanel = $derived(
+    windowDisplay === null
+      ? 'the display the CandidCue window is on'
+      : `${displayName(windowDisplay)}, where the CandidCue window is`,
   );
 
   /* --------------------------------------------- the live teleprompter view */
@@ -772,7 +793,12 @@
    */
   $effect(() => {
     if (section !== 'stage' && section !== 'teleprompter') return;
-    return stageService.onDisplayTopologyChange(() => void loadDisplays());
+    /*
+     * Coalesced: Rust also forwards the control window's moves onto this
+     * event, so dragging it to another monitor is a burst of them — and that
+     * drag is worth hearing, because it moves an unpinned take.
+     */
+    return stageService.watchDisplayChanges(() => void loadDisplays());
   });
 
   function loadDisplays(): Promise<void> {
@@ -795,15 +821,21 @@
     displaysLoading = true;
     displaysError = null;
     try {
-      const listed = await stageService.listDisplays();
+      const [listed, here] = await Promise.all([
+        stageService.listDisplays(),
+        // "Unknown", not a failed list: the list is what this section is for.
+        stageService.currentWindowDisplay().catch(() => null),
+      ]);
       if (request !== displaysRequest) return;
       displays = listed;
+      windowDisplay = here;
       if (displays.length === 0) {
         displaysError = 'No displays were detected. Connect the teleprompter display and try again.';
       }
     } catch (err) {
       if (request !== displaysRequest) return;
       displays = [];
+      windowDisplay = null;
       displaysError = `CandidCue could not list the connected displays. ${describeError(err)}`;
     } finally {
       if (request === displaysRequest) {
@@ -2263,20 +2295,23 @@
         </Section>
       {:else if section === 'stage'}
         <!--
-          What this section does and does NOT control.
+          What this section controls (#302).
 
-          It used to say "Present goes straight here", and that was never true
-          of single-window presentation: `windows/present.rs` fills whichever
-          monitor this window is already on, deliberately, because teleporting
-          the window would take it away from the person driving it. The chosen
-          panel is what preview, the display test and calibration run against —
-          and the take is now measured against the panel it actually lands on,
-          which Rust reports back. Naming both keeps the operator from moving a
-          window that was never going to move on its own.
+          The pinned panel is where a prompter take opens: Present moves the
+          CandidCue window onto it (`windows/present.rs`). With Automatic, or
+          with the pinned panel unplugged, the take fills whichever monitor the
+          CandidCue window is on instead. That is the rule `takeDisplay`
+          states, and every sentence here comes from it — this copy once
+          described a rule Present had stopped following, and the Automatic
+          tile named an external display the take never opened on.
+
+          Previews, the display test and calibration are aimed separately
+          (`effectiveDisplay`), which only matters when the two disagree: the
+          unplugged-pin alert names both.
         -->
         <Section
           title="Prompter display and rigs"
-          description="Calibrate and test the displays you use with teleprompter glass. A take opens on the display that currently contains the CandidCue window — the editor's Present button names it."
+          description="Choose the display prompter takes open on, and calibrate and test the displays you use with teleprompter glass. Automatic opens a take on the display the CandidCue window is on — the editor's Present button names it."
         >
           {#snippet actions()}
             <Button size="sm" disabled={displaysLoading} onclick={() => void loadDisplays()}>
@@ -2294,11 +2329,12 @@
               <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
               <span class="monitor-name">Automatic</span>
               <!-- Automatic is not a panel, so it carries no number of its
-                   own; it names the number of the one it resolves to. -->
+                   own; it names the number of the one it resolves to, which
+                   is wherever the CandidCue window is. -->
               <span class="monitor-meta">
                 {automaticDisplay
                   ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? ` · ${automaticDisplay.name}` : ''}`
-                  : 'An external display when one is connected'}
+                  : 'The display the CandidCue window is on'}
               </span>
             </button>
             {#each displays as display (display.fingerprint)}
@@ -2331,13 +2367,16 @@
             {/each}
           </div>
           {#if pinnedMissing}
-            <!-- Said here rather than discovered halfway through calibrating:
-                 the fingerprint is panel identity, so a display that is
-                 unplugged simply stops matching. It no longer claims anything
-                 about where a take opens, because it never decided that. -->
+            <!-- Said here rather than discovered at Present: the fingerprint
+                 is panel identity, so a display that is unplugged simply stops
+                 matching. Both fallbacks are named, because they differ — the
+                 take goes where the CandidCue window is, previews prefer an
+                 external display. -->
             <p class="inline-alert" role="alert">
-              The display you chose is not connected. Previews, tests and calibration will use
-              {effectiveDisplay?.name ?? 'another display'} until it is back.
+              The display you chose is not connected. Until it is back, takes open on {windowPanel},
+              and previews, tests and calibration use {effectiveDisplay
+                ? displayName(effectiveDisplay)
+                : 'another display'}.
             </p>
           {/if}
           <div class="row-actions">

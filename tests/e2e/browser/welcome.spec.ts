@@ -78,6 +78,8 @@ const WELCOMED_KEY = 'candidcue.welcomed.v1';
 
 /** The prompter panel in the shim's fixed display fixtures. */
 const PROMPTER_DISPLAY = 'Teleprompter Display';
+/** The primary panel — where the shim reports the window when asked to (#302). */
+const DESK_DISPLAY = 'Built-in Display';
 
 const heading = { name: 'Speak naturally. Keep your place.' };
 
@@ -106,8 +108,9 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
   page,
 }) => {
   const errors = watchPageErrors(page);
-  // No `welcomed` flag and no overlay: a genuine first launch.
-  await installTauriShim(page);
+  // No `welcomed` flag and no overlay: a genuine first launch, with the window
+  // on the desk display and a prompter panel plugged in beside it.
+  await installTauriShim(page, { windowDisplay: 'dsp-e2e-builtin' });
   await page.goto('/control.html');
 
   await expect(page.getByRole('heading', heading)).toBeVisible();
@@ -120,10 +123,13 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
   await expect(micRow(page)).not.toHaveClass(hasToken('attention'));
 
   // The display probe settles and names where a take would actually land,
-  // rather than leaving "Checking…" on screen forever.
+  // rather than leaving "Checking…" on screen forever. With nothing pinned
+  // that is the panel this window is on — NOT the external display, which
+  // this row used to name while Present filled the desk monitor (#302).
   await expect(pill(displayRow(page))).toHaveText('Automatic');
   await expect(pill(displayRow(page))).toHaveClass(hasToken('neutral'));
-  await expect(displayRow(page)).toContainText(PROMPTER_DISPLAY);
+  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the CandidCue window is.`);
+  await expect(displayRow(page)).not.toContainText(PROMPTER_DISPLAY);
   await expect(displayRow(page)).not.toHaveClass(hasToken('attention'));
 
   // Nothing is gated: all three content actions stay pressable while the rig
@@ -264,7 +270,9 @@ test('the welcome screen never probes microphone hardware to answer its own read
 
 test('a remembered grant and a connected pinned display both read quiet', async ({ page }) => {
   const errors = watchPageErrors(page);
-  await installTauriShim(page);
+  // The window sits on the desk display, and the pinned panel still wins:
+  // Present moves the window onto it.
+  await installTauriShim(page, { windowDisplay: 'dsp-e2e-builtin' });
   await seedOverlay(page, {
     audio: { microphoneGranted: true },
     stage: { displayFingerprint: 'dsp-e2e-prompter' },
@@ -285,7 +293,8 @@ test('a remembered grant and a connected pinned display both read quiet', async 
 
   await expect(pill(displayRow(page))).toHaveText('Connected');
   await expect(pill(displayRow(page))).toHaveClass(hasToken('neutral'));
-  await expect(displayRow(page)).toContainText(PROMPTER_DISPLAY);
+  await expect(displayRow(page)).toContainText(`Takes open on ${PROMPTER_DISPLAY}.`);
+  await expect(displayRow(page)).not.toContainText(DESK_DISPLAY);
   await expect(displayRow(page)).not.toHaveClass(hasToken('attention'));
 
   errors.expectClean();
@@ -303,7 +312,7 @@ test('a pinned display that is not connected warns and names where the take will
   page,
 }) => {
   const errors = watchPageErrors(page);
-  await installTauriShim(page);
+  await installTauriShim(page, { windowDisplay: 'dsp-e2e-builtin' });
   await seedOverlay(page, { stage: { displayFingerprint: 'dsp-gone-from-this-desk' } });
   await page.goto('/control.html');
 
@@ -313,9 +322,11 @@ test('a pinned display that is not connected warns and names where the take will
   await expect(pill(row)).toHaveText('Needs attention');
   await expect(pill(row)).toHaveClass(hasToken('warning'));
   await expect(row).toHaveClass(hasToken('attention'));
-  // Named, not merely flagged: the fallback comes from the same resolver the
-  // real take uses, so this is where the prompt would actually appear.
-  await expect(row).toContainText(PROMPTER_DISPLAY);
+  // Named, not merely flagged: Present falls back to the monitor this window
+  // is on, so that is where the prompt would actually appear — not the
+  // external display this row used to name (#302).
+  await expect(row).toContainText(`takes open on ${DESK_DISPLAY}, where the CandidCue window is`);
+  await expect(row).not.toContainText(PROMPTER_DISPLAY);
 
   await row.getByRole('button', { name: 'Fix display' }).click();
 
@@ -323,6 +334,32 @@ test('a pinned display that is not connected warns and names where the take will
 
   // Looking at a setting is not finishing onboarding.
   expect(await welcomedFlag(page)).toBeNull();
+
+  errors.expectClean();
+});
+
+/**
+ * With nothing pinned, the row is only as right as its last read of where the
+ * window is — and dragging the window to another panel is exactly what moves an
+ * unpinned take. Rust sends the control window's moves as a display change.
+ */
+test('the display row follows the window when it is dragged to another panel', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await installTauriShim(page, { windowDisplay: 'dsp-e2e-builtin' });
+  await page.goto('/control.html');
+
+  await expect(displayRow(page)).toContainText(`Takes open on ${DESK_DISPLAY}, where the CandidCue window is.`);
+
+  await page.evaluate(() => window.__E2E__.setWindowDisplay('dsp-e2e-prompter'));
+  // Re-sent until it lands: the event is only heard once the row's listener
+  // has registered, and another screen's listener can answer first.
+  await expect(async () => {
+    await page.evaluate(() => window.__E2E__.emit('app://device-or-display-change', null));
+    await expect(displayRow(page)).toContainText(
+      `Takes open on ${PROMPTER_DISPLAY}, where the CandidCue window is.`,
+      { timeout: 1000 },
+    );
+  }).toPass();
 
   errors.expectClean();
 });
@@ -390,7 +427,7 @@ test('a rejecting display enumeration leaves welcome usable and still dismissibl
  * Rust answers `Ok([])` whenever `available_monitors()` succeeds and finds no
  * panel, and the row has to treat that as "cannot say" rather than as a normal
  * list. Without this test, deleting the empty-list half of that branch renders
- * "Automatic — Takes open on the best available display" about a machine that
+ * "Automatic — Takes open on the display the CandidCue window is on" about a machine that
  * reported no displays at all, and every other spec here stays green.
  */
 test('a successful but empty enumeration is reported as unknown, not as automatic', async ({

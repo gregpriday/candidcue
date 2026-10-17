@@ -1,5 +1,5 @@
 /**
- * Where the next take will open, kept current (CCUX-004, CCUX-005).
+ * Where the next take will open, kept current (CCUX-004, CCUX-005, #302).
  *
  * ---------------------------------------------------------------------------
  * WHY THIS IS A STORE AND NOT A CALL AT LAUNCH
@@ -13,11 +13,12 @@
  * answer can change without this app doing anything:
  *
  *   - a monitor is plugged, unplugged or rearranged (`onDisplayTopologyChange`);
- *   - the user drags the window to another panel, which produces no event this
- *     app can see, so window focus is used as the proxy — you cannot drag a
- *     window without focusing it, and coming back to the app is exactly when
- *     somebody is about to press Present;
- *   - the pinned calibration display or presentation mode changes in Settings.
+ *   - the user drags the window to another panel, which Rust forwards onto the
+ *     same display-change event — and window focus as a backstop, because
+ *     coming back to the app is exactly when somebody is about to press
+ *     Present;
+ *   - the pinned prompter display, the rigs or the presentation mode change in
+ *     Settings.
  *
  * Everything the resolution DECIDES lives in `lib/take-destination.ts` and is
  * pure. This module only fetches and schedules.
@@ -28,7 +29,7 @@ import {
   type CalibratedRig,
   type TakeDestination,
 } from '../lib/take-destination';
-import { currentWindowDisplay, listDisplays, onDisplayTopologyChange } from '../services/stage';
+import { currentWindowDisplay, listDisplays, watchDisplayChanges } from '../services/stage';
 import { activeOpticalProfile, type OpticalSettings, type PresentationMode } from '../services/settings-types';
 
 /**
@@ -48,17 +49,23 @@ export interface DestinationContext {
   /**
    * The optical settings, which is where a CALIBRATION actually lives.
    *
-   * Deliberately not `settings.stage.displayFingerprint`: that names the panel
-   * used for previews, tests and calibration, and says nothing about whether
-   * anything was ever measured. Reading it as "the calibrated rig" warned
-   * people who had calibrated nothing at all.
+   * Deliberately not read off `pinnedFingerprint`: a pinned panel says where a
+   * prompter take opens and nothing about whether anything was ever measured
+   * on it. Reading it as "the calibrated rig" warned people who had calibrated
+   * nothing at all.
    */
   optical: OpticalSettings;
+  /**
+   * `settings.stage.displayFingerprint` — the panel a prompter take fills when
+   * it is connected. Without it this store named the monitor the editor was
+   * on, while Present filled the pinned panel (#302).
+   */
+  pinnedFingerprint: string | null;
 }
 
 const NO_OPTICAL: OpticalSettings = { profiles: {}, activeRig: {}, panelMirror: {} };
 
-let context: DestinationContext = { mode: 'prompter', optical: NO_OPTICAL };
+let context: DestinationContext = { mode: 'prompter', optical: NO_OPTICAL, pinnedFingerprint: null };
 /** Guards against overlapping refreshes landing out of order. */
 let inFlight = 0;
 
@@ -87,12 +94,23 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
       const profile = activeOpticalProfile(context.optical, display.fingerprint);
       if (profile !== null) calibratedRigs.push({ display, rigName: profile.rigName });
     }
+    /*
+     * The pinned panel's rig is the exception to "connected only": when that
+     * panel is unplugged, the rig the operator set up is exactly what this take
+     * is about to go without, and the warning should say so by name.
+     */
+    const pinned = context.pinnedFingerprint;
+    const pinnedRigName =
+      pinned === null ? null : (activeOpticalProfile(context.optical, pinned)?.rigName ?? null);
 
     store.set(
       resolveTakeDestination({
         mode: context.mode,
         currentDisplay: current,
+        displays,
+        pinnedFingerprint: pinned,
         calibratedRigs,
+        pinnedRigName,
       }),
     );
   } catch {
@@ -103,9 +121,9 @@ export async function refreshTakeDestination(next?: Partial<DestinationContext>)
 /**
  * Start keeping the destination current. Returns a teardown.
  *
- * The focus listener is the load-bearing one and also the crudest: dragging a
- * window between monitors emits nothing this app receives, so there is no
- * precise signal to use. Refocusing the app is a superset of "the operator came
+ * The display-change event carries both a topology change and a drag of the
+ * control window, which Rust forwards onto it. Focus is the backstop and also
+ * the crudest signal: refocusing the app is a superset of "the operator came
  * back to press Present", which is the moment the readout has to be right.
  */
 export function watchTakeDestination(initial: DestinationContext): () => void {
@@ -113,35 +131,11 @@ export function watchTakeDestination(initial: DestinationContext): () => void {
   void refreshTakeDestination();
 
   /*
-   * Coalesced, because a drag emits one native `Moved` per frame.
-   *
-   * Rust now forwards window moves onto the display-change event — that is what
-   * makes dragging between two already-connected monitors visible at all — and
-   * a drag therefore arrives as a burst. Each one would otherwise start two IPC
-   * reads; the `inFlight` ticket stops a stale answer being STORED but does
-   * nothing about the requests themselves. 150 ms is below noticing and well
-   * above a frame.
+   * Coalesced inside `watchDisplayChanges`: a drag is a burst of move events,
+   * and the `inFlight` ticket stops a stale answer being STORED but does
+   * nothing about the requests themselves.
    */
-  let coalesce: ReturnType<typeof setTimeout> | null = null;
-  const refreshSoon = (): void => {
-    if (coalesce !== null) clearTimeout(coalesce);
-    coalesce = setTimeout(() => {
-      coalesce = null;
-      void refreshTakeDestination();
-    }, 150);
-  };
-
-  const stopTopology = onDisplayTopologyChange(refreshSoon);
-
-  const onFocus = (): void => refreshSoon();
-  if (typeof window !== 'undefined') window.addEventListener('focus', onFocus);
-
-  return () => {
-    if (coalesce !== null) clearTimeout(coalesce);
-    coalesce = null;
-    stopTopology();
-    if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus);
-  };
+  return watchDisplayChanges(() => void refreshTakeDestination(), { focus: true });
 }
 
 /** Current value without subscribing — for callers that need it once. */

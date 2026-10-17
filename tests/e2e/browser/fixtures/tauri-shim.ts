@@ -75,6 +75,15 @@ export interface ShimConfig {
    */
   emptyDisplays?: boolean;
   /**
+   * The fingerprint of the panel `current_window_display` reports the control
+   * window on — where a prompter take opens when nothing pinned is connected
+   * (#302). Unset, it answers null ("could not be named"), which is what it
+   * always answered: a default panel here would also feed the session's
+   * mid-take "this window moved" probe, which compares it with the panel a
+   * take landed on, and every take spec would see the window move.
+   */
+  windowDisplay?: string;
+  /**
    * Hold a SUCCESSFUL list_displays open for this long, from BEFORE the app
    * boots.
    *
@@ -362,6 +371,16 @@ function shimBody(config: ShimConfig): void {
     presenting: false,
     /** Every StageDirective relayed through publish_stage_command, in order. */
     directives: [] as Array<{ kind: string; payload: Record<string, unknown> }>,
+    /** The panel `current_window_display` names; see `ShimConfig.windowDisplay`. */
+    windowDisplay: config.windowDisplay ?? null,
+    /**
+     * Test seam: move the control window to another panel (or to an unnamed
+     * one with null). Pair it with `emit('app://device-or-display-change')`,
+     * which is what Rust sends when the window is dragged.
+     */
+    setWindowDisplay(fingerprint: string | null) {
+      this.windowDisplay = fingerprint;
+    },
     /** Test seam: force a command to reject with the given AppError (or clear). */
     setFail(command: string, error: unknown) {
       if (error === null || error === undefined) delete this.fail[command];
@@ -860,6 +879,11 @@ function shimBody(config: ShimConfig): void {
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];
         return config.emptyDisplays ? [] : displays();
+
+      case 'current_window_display':
+        return control.windowDisplay === null
+          ? null
+          : (displays().find((d) => d.fingerprint === control.windowDisplay) ?? null);
 
       case 'identify_displays':
         return {

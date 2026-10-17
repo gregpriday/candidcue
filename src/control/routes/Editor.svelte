@@ -830,6 +830,9 @@ import type { PresentationMode } from '../services/settings-types';
     watchTakeDestination({
       mode: $settings.stage.presentationMode,
       optical: $settings.optical,
+      // Where a prompter take actually opens when that panel is connected
+      // (#302) — read here so pinning another panel restarts the watcher too.
+      pinnedFingerprint: $settings.stage.displayFingerprint,
     }),
   );
 
