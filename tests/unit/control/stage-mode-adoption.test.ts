@@ -175,7 +175,7 @@ describe('the mode is carried into Rust, not merely read out of the overlay', ()
     /*
      * The stale copy is not inert: the migration fallback reads exactly these
      * keys whenever Rust has no answer, so one left behind could bring a dead
-     * choice back. `displayFingerprint` is still local and must survive.
+     * choice back. The pin went the same way once it moved to Rust (#272).
      */
     store.set(
       OVERLAY_KEY,
@@ -190,7 +190,8 @@ describe('the mode is carried into Rust, not merely read out of the overlay', ()
     expect(overlay.stage).not.toHaveProperty('presentationMode');
     expect(overlay.stage).not.toHaveProperty('fullscreen');
     expect(overlay.stage).not.toHaveProperty('readerFrame');
-    expect(overlay.stage?.['displayFingerprint']).toBe('panel-1');
+    expect(overlay.stage).not.toHaveProperty('displayFingerprint');
+    expect(ipc.stageBehavior()['displayFingerprint']).toBe('panel-1');
   });
 });
 

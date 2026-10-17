@@ -56,8 +56,13 @@ const ipc = vi.hoisted(() => {
     setStageBehavior(patch: Record<string, unknown>): void {
       Object.assign(document.value.stageBehavior, patch);
     },
+    /** Refuse the next command, the way a database that went away would. */
+    failNext: null as Error | null,
     invoke: async (command: string, args?: unknown) => {
       ipc.calls.push({ command, args });
+      const failure = ipc.failNext;
+      ipc.failNext = null;
+      if (failure !== null) throw failure;
       return document;
     },
   };
@@ -98,6 +103,9 @@ beforeEach(() => {
   ipc.calls.length = 0;
   ipc.reset();
   store.clear();
+  // The pin's latch governs its fallback, so one case seeing Rust own the pin
+  // would otherwise hide the overlay from every case after it.
+  settings.resetMigrationStateForTesting();
 });
 
 describe('the size bias survives a reload', () => {
@@ -179,8 +187,8 @@ describe('the presentation mode is Rust-owned', () => {
   it('never caches the mode in the overlay', async () => {
     /*
      * A cached copy would be read by the adoption path above on any document
-     * that has no value yet, resurrecting an old choice over a newer one.
-     * `displayFingerprint` is still local, so the section itself survives.
+     * that has no value yet, resurrecting an old choice over a newer one. The
+     * pin rode along in the same save and is Rust-owned too now (#272).
      */
     await settings.updateSettings(7, {
       stage: { presentationMode: 'reader', displayFingerprint: 'panel-1' } as never,
@@ -188,9 +196,8 @@ describe('the presentation mode is Rust-owned', () => {
     const overlay = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as {
       stage?: Record<string, unknown>;
     };
-    expect(overlay.stage).toBeDefined();
     expect(overlay.stage).not.toHaveProperty('presentationMode');
-    expect(overlay.stage?.displayFingerprint).toBe('panel-1');
+    expect(overlay.stage).not.toHaveProperty('displayFingerprint');
   });
 
   it('falls back rather than inventing a default for a value it cannot read', async () => {
@@ -261,5 +268,104 @@ describe('the reading window frame survives a quit', () => {
       stage?: Record<string, unknown>;
     };
     expect(overlay.stage ?? {}).not.toHaveProperty('readerFrame');
+  });
+});
+
+describe('the pinned prompter display is Rust-owned (#272)', () => {
+  it('reads the document over a different overlay pin', async () => {
+    seedOverlay({ displayFingerprint: 'dsp-old-desk' });
+    ipc.setStageBehavior({ displayFingerprint: 'dsp-glass', displayPinMigrated: true });
+    const loaded = await settings.getSettings();
+    expect(loaded.stage.displayFingerprint).toBe('dsp-glass');
+    expect(settings.pendingDisplayPinAdoption()).toBeNull();
+  });
+
+  it('reads the overlay only while the document has never owned the pin', async () => {
+    seedOverlay({ displayFingerprint: 'dsp-glass' });
+    const loaded = await settings.getSettings();
+    expect(loaded.stage.displayFingerprint).toBe('dsp-glass');
+    expect(settings.pendingDisplayPinAdoption()).toBe('dsp-glass');
+  });
+
+  it('treats an owned document without a pin as unpinned, whatever the overlay says', async () => {
+    /*
+     * The failure the ownership flag exists for: an operator unpinned, the
+     * overlay write that should have dropped the old copy failed, and the next
+     * launch would otherwise read the stale pin back — and adopt it.
+     */
+    seedOverlay({ displayFingerprint: 'dsp-old-desk' });
+    ipc.setStageBehavior({ displayPinMigrated: true });
+    const loaded = await settings.getSettings();
+    expect(loaded.stage.displayFingerprint).toBeNull();
+    expect(settings.pendingDisplayPinAdoption()).toBeNull();
+  });
+
+  it('writes a pin through with the ownership flag beside it', async () => {
+    await settings.updateSettings(7, { stage: { displayFingerprint: 'dsp-glass' } as never });
+    expect(lastPatch()).toEqual({
+      stageBehavior: { displayFingerprint: 'dsp-glass', displayPinMigrated: true },
+    });
+  });
+
+  it('passes an unpin through as null, still claiming ownership', async () => {
+    /*
+     * `merge_json` removes a null key, so the null is how the pin is forgotten
+     * — and the flag is how the document remembers that it was.
+     */
+    await settings.updateSettings(7, { stage: { displayFingerprint: null } as never });
+    expect(lastPatch()).toEqual({
+      stageBehavior: { displayFingerprint: null, displayPinMigrated: true },
+    });
+  });
+
+  it('never reads or sends a pin Rust would refuse', async () => {
+    // Every stage save carries the pin, so one Rust rejects would fail every
+    // save of the section rather than just the one that set it.
+    for (const bad of ['', '   ', 'x'.repeat(257), 42, { fingerprint: 'dsp-glass' }]) {
+      store.clear();
+      settings.resetMigrationStateForTesting();
+      seedOverlay({ displayFingerprint: bad });
+      const loaded = await settings.getSettings();
+      expect(loaded.stage.displayFingerprint, JSON.stringify(bad)).toBeNull();
+      expect(settings.pendingDisplayPinAdoption(), JSON.stringify(bad)).toBeNull();
+    }
+    await settings.updateSettings(7, { stage: { displayFingerprint: '' } as never });
+    expect(lastPatch()).toEqual({
+      stageBehavior: { displayFingerprint: null, displayPinMigrated: true },
+    });
+  });
+
+  it('drops the overlay copy once a save has carried the pin to Rust', async () => {
+    seedOverlay({ displayFingerprint: 'dsp-glass' });
+    await settings.updateSettings(7, { stage: { displayFingerprint: 'dsp-glass' } as never });
+    const overlay = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as {
+      stage?: Record<string, unknown>;
+    };
+    expect(overlay.stage ?? {}).not.toHaveProperty('displayFingerprint');
+  });
+
+  it('keeps the only copy of an unadopted pin when a save never mentioned it', async () => {
+    /*
+     * A stage patch with no pin in it wrote nothing to Rust about the pin. Until
+     * the adoption lands the overlay holds the only copy there is.
+     */
+    seedOverlay({ displayFingerprint: 'dsp-glass' });
+    await settings.updateSettings(7, { stage: { presentationMode: 'reader' } as never });
+    const overlay = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as {
+      stage?: Record<string, unknown>;
+    };
+    expect(overlay.stage?.['displayFingerprint']).toBe('dsp-glass');
+  });
+
+  it('keeps the overlay copy when the write to Rust fails', async () => {
+    seedOverlay({ displayFingerprint: 'dsp-glass' });
+    ipc.failNext = new Error('database gone');
+    await expect(
+      settings.updateSettings(7, { stage: { displayFingerprint: null } as never }),
+    ).rejects.toThrow('database gone');
+    const overlay = JSON.parse(store.get(OVERLAY_KEY) ?? '{}') as {
+      stage?: Record<string, unknown>;
+    };
+    expect(overlay.stage?.['displayFingerprint']).toBe('dsp-glass');
   });
 });

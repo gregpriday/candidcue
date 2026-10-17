@@ -103,6 +103,14 @@ interface RustSettings {
     presentationMode?: string | null;
     /** Where a reading window was last left; absent until one has been. */
     readerFrame?: unknown;
+    /**
+     * The pinned prompter panel (#272) — absent when nothing is pinned, AND in
+     * every document written before the pin moved out of the overlay. The flag
+     * below is what tells those two apart; see `displayPinAwaitingAdoption`.
+     */
+    displayFingerprint?: string | null;
+    /** Has this document taken ownership of the pin? Absent reads as no. */
+    displayPinMigrated?: boolean;
   };
   /**
    * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a slider
@@ -510,6 +518,45 @@ export function pendingPanelMirrorAdoption(): OpticalSettings['panelMirror'] | n
 }
 
 /**
+ * The pinned prompter panel still living only in the overlay, waiting to be
+ * written to Rust (#272).
+ *
+ * The same mechanism as the mode, and since Present started moving the window
+ * onto the pin it matters about as much: a lost pin does not show up as a wrong
+ * setting, it shows up as the next take filling the desk monitor the operator
+ * is working on, borderless and above everything.
+ *
+ * Unlike the mode, "nothing" is a real answer here — unpinned — and Rust cannot
+ * keep it as a value: `merge_json` removes a key whose patch value is null. So
+ * the document carries `displayPinMigrated` beside the pin, stamped by
+ * `toRustPatch` on every write of it, and that flag rather than the pin's
+ * presence is the authority marker. Without it, an operator who unpinned would
+ * look exactly like a document from before the move, and the stale overlay pin
+ * would be adopted straight back.
+ */
+let displayPinAwaitingAdoption: string | null = null;
+
+export function pendingDisplayPinAdoption(): string | null {
+  return displayPinAwaitingAdoption;
+}
+
+/** Mirrors `MAX_DISPLAY_FINGERPRINT_BYTES` in settings/mod.rs. */
+const MAX_DISPLAY_FINGERPRINT_BYTES = 256;
+
+/**
+ * A stored pin, or null if it is not one Rust would accept.
+ *
+ * Checked to Rust's rule rather than merely for being a string, because every
+ * stage save carries the pin: a value Rust refuses would not fail one write, it
+ * would fail every save of the section from then on.
+ */
+function displayPinFromStored(stored: unknown): string | null {
+  if (typeof stored !== 'string' || stored.trim() === '') return null;
+  if (new TextEncoder().encode(stored).length > MAX_DISPLAY_FINGERPRINT_BYTES) return null;
+  return stored;
+}
+
+/**
  * Drop the legacy `optical` section from the overlay.
  *
  * Called by the store once the durable write has SUCCEEDED, and not before.
@@ -570,15 +617,18 @@ function readerFrameFromRust(stored: unknown): ReaderFrame | null {
 let stageModeMigrated = false;
 let opticalMigrated = false;
 let panelMirrorMigrated = false;
+let displayPinMigrated = false;
 
 /** Test seam: forget that a migrated document was ever seen. */
 export function resetMigrationStateForTesting(): void {
   stageModeMigrated = false;
   opticalMigrated = false;
   panelMirrorMigrated = false;
+  displayPinMigrated = false;
   stageModeAwaitingAdoption = null;
   opticalAwaitingAdoption = null;
   panelMirrorAwaitingAdoption = null;
+  displayPinAwaitingAdoption = null;
 }
 
 export function adaptRevisionedSettings(payload: unknown): AppSettings | null {
@@ -660,6 +710,29 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     !stageModeMigrated && overlayStatedAMode(overlay.stage) ? resolvedMode : null;
 
   /*
+   * The pinned panel (#272): Rust once it owns the pin, the overlay until then.
+   *
+   * Ownership is the flag OR a pin, and the flag is the one that matters — it is
+   * how an operator who unpinned stays unpinned when the overlay still holds the
+   * old answer (a failed local write, another window, a document restored from
+   * a backup). A pin with no flag is a document somebody wrote by hand or an
+   * older shape; Rust holding a value is answer enough.
+   *
+   * The latch governs the fallback as well as the adoption, unlike the mode's:
+   * once this window has seen Rust own the pin, the overlay is never an answer
+   * again, however stale the document a later read happens to parse.
+   */
+  const rustPin = displayPinFromStored(rust.stageBehavior.displayFingerprint);
+  if (rustPin !== null || rust.stageBehavior.displayPinMigrated === true) {
+    displayPinMigrated = true;
+  }
+  const overlayPin = isPlainObject(overlay.stage)
+    ? displayPinFromStored(overlay.stage['displayFingerprint'])
+    : null;
+  const resolvedPin = rustPin ?? (displayPinMigrated ? null : overlayPin);
+  displayPinAwaitingAdoption = displayPinMigrated ? null : overlayPin;
+
+  /*
    * Calibrated rigs: Rust the moment it has any, the overlay until then.
    *
    * The same shape as the presentation-mode migration above, and for the same
@@ -717,11 +790,9 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     horizontal: rust.stageBehavior.horizontalMirror === true,
     vertical: overlayTeleprompter['mirrorY'] === true,
   };
-  const carriedMirror = carriedPanelMirror(
-    storedOptical,
-    isPlainObject(overlay.stage) ? overlay.stage['displayFingerprint'] : null,
-    legacyMirror,
-  );
+  // The RESOLVED pin, not the overlay's: once the pin is adopted the overlay
+  // copy is gone, and the old switch would lose the one panel it is carried to.
+  const carriedMirror = carriedPanelMirror(storedOptical, resolvedPin, legacyMirror);
   const resolvedOptical: OpticalSettings = {
     ...storedOptical,
     panelMirror: rustOwnsPanelMirror
@@ -788,10 +859,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     stage: {
       ...mergeSection(mapped.stage, overlay.stage),
       /*
-       * Two Rust-owned fields in an otherwise-local section, both spread over
+       * Three Rust-owned fields in an otherwise-local section, all spread over
        * the merge above so a stale overlay copy can never contradict the
-       * document. `displayFingerprint` is the one field here that is still
-       * genuinely per-machine, and it keeps the overlay merge.
+       * document. The pin used to keep the overlay merge as "genuinely
+       * per-machine"; that was before Present moved takes onto it (#272).
        *
        * The mode is resolved rather than merged for a second reason as well: the
        * stored section may still be carrying the retired `fullscreen` boolean and
@@ -802,6 +873,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
        */
       presentationMode: resolvedMode,
       readerFrame: readerFrameFromRust(rust.stageBehavior.readerFrame),
+      displayFingerprint: resolvedPin,
     },
     optical: resolvedOptical,
     revision: revisioned.revision,
@@ -851,6 +923,21 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
      */
     if (patch.stage.readerFrame !== undefined) {
       (rust.stageBehavior ??= {}).readerFrame = patch.stage.readerFrame;
+    }
+    /*
+     * The pin (#272), with null passed through as the unpin — and the
+     * ownership flag stamped in the same patch, the way `optical.migrated` is
+     * below. The flag is what keeps an unpin from reading as "never moved" once
+     * `merge_json` has turned the null into an absent key.
+     *
+     * Anything Rust would refuse goes as null rather than as itself. Every
+     * stage save carries this field, so a value Rust rejects would fail every
+     * save of the section, not just the one that set it.
+     */
+    if (patch.stage.displayFingerprint !== undefined) {
+      const stageBehavior = (rust.stageBehavior ??= {});
+      stageBehavior.displayFingerprint = displayPinFromStored(patch.stage.displayFingerprint);
+      stageBehavior.displayPinMigrated = true;
     }
   }
   if (patch.teleprompter) {
@@ -907,9 +994,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
  * Everything in the patch persists in the overlay so the UI view sticks —
  * except `following` (§47) and `speech` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
- * otherwise-overlaid sections (`audio.vadSensitivity` §28.4, the stage mode and
- * reader frame, `general.launchBehavior`/`defaultSessionMode` and
- * `teleprompter.fixedSpeedWpm` #271).
+ * otherwise-overlaid sections (`audio.vadSensitivity` §28.4, the stage mode,
+ * reader frame and display pin #272, `general.launchBehavior`/`defaultSessionMode`
+ * and `teleprompter.fixedSpeedWpm` #271).
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
@@ -945,13 +1032,22 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       for (const owned of RUST_OWNED_AUDIO_KEYS) delete merged[owned];
     }
     if (key === 'stage') {
-      // Rust-owned since the mode moved out of here. `displayFingerprint` is
-      // still genuinely per-machine and keeps the section alive.
+      // Rust-owned since the mode moved out of here.
       delete merged.presentationMode;
       delete merged.readerFrame;
       // The retired predecessor goes with it: it is only ever read as a stand-in
       // for a mode Rust does not hold, and Rust holds one by now.
       delete merged.fullscreen;
+      /*
+       * The pin (#272) — but only when THIS patch carried it. `toRustPatch`
+       * sent it to Rust in that case, and this runs only once that write has
+       * committed, so the overlay copy is now a second answer. A patch that
+       * never mentioned the pin wrote nothing to Rust about it, and until the
+       * adoption lands the overlay copy is the only one there is.
+       */
+      if ((section as Partial<AppSettings['stage']>).displayFingerprint !== undefined) {
+        delete merged.displayFingerprint;
+      }
     }
     if (key === 'general') {
       // Both persisted by Rust (`openTo`, `promptMode`). A copy here outlived

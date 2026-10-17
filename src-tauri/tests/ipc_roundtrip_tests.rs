@@ -924,6 +924,20 @@ fn the_settings_patch_the_ui_sends_persists_through_the_command() {
         json!({ "horizontal": true, "vertical": false }),
         "a panel's mirroring must survive the real command and read back"
     );
+    // And the pinned prompter display (#272). It used to live only in the
+    // WebView's localStorage; a field serde did not know would be dropped here
+    // just as silently, and the pin would die with the next cleared store.
+    let reread = h.expect_ok("get_settings", Value::Null);
+    assert_eq!(
+        reread["value"]["stageBehavior"]["displayFingerprint"],
+        json!("dsp-1"),
+        "the pinned display must survive the real command and read back"
+    );
+    assert_eq!(
+        reread["value"]["stageBehavior"]["displayPinMigrated"],
+        json!(true),
+        "the pin's ownership flag rides in the same patch"
+    );
 }
 
 /// #217 — transcript retention is gone from the Rust side too, and a settings

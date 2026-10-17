@@ -158,6 +158,7 @@ export async function loadSettings(force = false): Promise<AppSettings> {
    * unforced `loadSettings` would ever reach them again.
    */
   await adoptStageModeFromOverlay();
+  await adoptDisplayPinFromOverlay();
   await adoptOpticalFromOverlay();
   await adoptPanelMirrorFromLegacy();
   return get(state);
@@ -207,6 +208,35 @@ async function adoptStageModeFromOverlay(): Promise<void> {
     });
     /* A commit, like any other — see `commitCount`. */
     commitSettings(saved);
+  } catch {
+    // Left to the fallback, and to the next launch.
+  }
+}
+
+/**
+ * The same one-time move for the pinned prompter panel (#272).
+ *
+ * After the mode, because the mode's adoption writes the whole stage section
+ * and so carries the pin with it: when both were waiting, one write moves both
+ * and the read it commits reports nothing pending here. This catches the
+ * upgrader whose mode moved long ago and whose pin never did.
+ *
+ * Nothing to forget afterwards: `applyOverlayPatch` drops the overlay copy as
+ * part of the write that carried the pin, once Rust has committed it.
+ *
+ * Silent on failure, like the mode. The fallback still reads the overlay pin,
+ * so takes keep opening on the right panel, and the next launch tries again.
+ */
+async function adoptDisplayPinFromOverlay(): Promise<void> {
+  const pending = settingsService.pendingDisplayPinAdoption();
+  if (pending === null) return;
+  const before = get(state);
+  try {
+    const saved = await settingsService.updateSettings(before.revision, {
+      stage: { ...before.stage, displayFingerprint: pending },
+    });
+    /* A commit unless a newer document already stands — see `sendPatchBatch`. */
+    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }

@@ -260,6 +260,8 @@
         "expectedRevision": 3,
         "patch": {
           "stageBehavior": {
+            "displayFingerprint": "dsp-1",
+            "displayPinMigrated": true,
             "fixedSpeedWpm": 155
           },
           "optical": {
