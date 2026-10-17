@@ -1119,8 +1119,8 @@ fn attribute_middle(
     for (i, row) in d.iter_mut().enumerate() {
         row[0] = i as u32;
     }
-    for j in 0..=m {
-        d[0][j] = j as u32;
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j as u32;
     }
     for i in 1..=n {
         for j in 1..=m {
@@ -1935,7 +1935,7 @@ mod tests {
             assert!(atom.token >= previous);
             previous = atom.token;
         }
-        assert!(previous as usize <= tokens.len() - 1);
+        assert!((previous as usize) < tokens.len());
     }
 
     /// Normalisation never reaches across a sentence end: a number closing one

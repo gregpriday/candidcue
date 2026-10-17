@@ -165,8 +165,8 @@ impl AtomMap {
         for (i, row) in d.iter_mut().enumerate() {
             row[0] = i as u32;
         }
-        for j in 0..=m {
-            d[0][j] = j as u32;
+        for (j, cell) in d[0].iter_mut().enumerate() {
+            *cell = j as u32;
         }
         for i in 1..=n {
             for j in 1..=m {
@@ -202,6 +202,9 @@ impl AtomMap {
         Self { map }
     }
 
+    // `!(x > 0.0)` rather than `x <= 0.0`: the two differ on NaN, which must
+    // map to the start rather than fall through to the interpolation.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn at(&self, x: f64) -> f64 {
         let last = self.map.len() - 1;
         if !(x > 0.0) {

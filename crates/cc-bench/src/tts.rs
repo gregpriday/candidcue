@@ -374,9 +374,9 @@ pub async fn synthesize(
     let mut clips = std::collections::HashMap::new();
     for &(seg_start, seg_end) in &performance.segments {
         let text = segment_text(performance, seg_start, seg_end);
-        if !clips.contains_key(&text) {
-            let clip = synth.clip(engine, &text, voice_index).await?;
-            clips.insert(text, clip);
+        if let std::collections::hash_map::Entry::Vacant(slot) = clips.entry(text) {
+            let clip = synth.clip(engine, slot.key(), voice_index).await?;
+            slot.insert(clip);
         }
     }
     stitch(performance, |text| {
