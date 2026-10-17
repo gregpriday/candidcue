@@ -655,8 +655,8 @@ import type { PresentationMode } from '../services/settings-types';
    * The immediate-launch rule is load-bearing: on a healthy familiar setup this
    * is exactly the old behaviour, one click, no sheet. Anything else and the
    * launch is held rather than cancelled — the shell's sheet keeps this exact
-   * call, so "Start anyway" resumes precisely the take that was asked for, not
-   * a default one. The check itself is shared with every other way of starting
+   * call, so its start button resumes precisely the take that was asked for,
+   * not a default one. The check itself is shared with every other way of starting
    * a take; see `lib/check-then-start.ts`.
    */
   /*

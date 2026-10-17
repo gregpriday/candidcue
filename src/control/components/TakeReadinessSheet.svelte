@@ -6,9 +6,9 @@
   ---------------------------------------------------------------------------
   The Preflight PAGE was removed on purpose — it repeated one-time choices,
   people skipped it, and it became a gate nobody understood. Nothing here brings
-  it back: this cannot be reached on a healthy setup, it never asks for a value
-  Settings already owns, and every row is a statement of something that is
-  already true rather than a control to fill in.
+  it back: a healthy setup reaches this only when somebody asks to review it,
+  it never asks for a value Settings already owns, and every row is a statement
+  of something that is already true rather than a control to fill in.
 
   It appears only when `resolveReadiness` says so, which on an ordinary take is
   never. That restraint is the feature; the rows are just how it explains
@@ -18,11 +18,15 @@
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
-  import { summariseReadiness, type ReadinessVerdict } from '../lib/take-readiness';
+  import {
+    hasReadinessWarnings,
+    summariseReadiness,
+    type ReadinessVerdict,
+  } from '../lib/take-readiness';
 
   interface Props {
     verdict: ReadinessVerdict | null;
-    /** Launch anyway. Absent for a blocked take — there is nothing to launch. */
+    /** Launch the held take. Never offered for a blocked one — there is nothing to launch. */
     onstart?: () => void;
     /**
      * Ask for the microphone, then check again (#303) — both "Allow microphone"
@@ -104,14 +108,20 @@
   {#snippet footer()}
     <Button variant="ghost" onclick={onclose}>Back to the script</Button>
     <!--
-      "Start anyway" whenever continuing is safe, which is the guide's rule and
-      also the difference between this and a gate. A blocked take offers no such
+      A start whenever continuing is safe, which is the guide's rule and also
+      the difference between this and a gate. A blocked take offers no such
       button because there is genuinely nothing to start — a take with no spoken
       words would open a stage over an empty token list and report health the
       whole way through.
+
+      "Anyway" only when the sheet is warning about something. Somebody who
+      asked to review a healthy setup is told it is ready, and "Start anyway"
+      beside that reads as a check they failed (#283).
     -->
     {#if verdict && !verdict.blocked && onstart}
-      <Button variant="primary" onclick={onstart}>Start anyway</Button>
+      <Button variant="primary" onclick={onstart}>
+        {hasReadinessWarnings(verdict) ? 'Start anyway' : 'Present'}
+      </Button>
     {/if}
   {/snippet}
 </Dialog>

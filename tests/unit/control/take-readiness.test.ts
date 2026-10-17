@@ -15,10 +15,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  hasReadinessWarnings,
   resolveReadiness,
   summariseReadiness,
   voiceModelFinding,
+  type ReadinessFinding,
   type ReadinessInput,
+  type ReadinessVerdict,
 } from '../../../src/control/lib/take-readiness';
 
 /** A healthy voice take on a familiar rig. Each test breaks one thing. */
@@ -297,6 +300,56 @@ describe('summariseReadiness', () => {
       /can start/i,
     );
     expect(summariseReadiness(resolveReadiness(ready({ requested: true })))).toMatch(/ready/i);
+  });
+
+  it('calls an information-only sheet ready', () => {
+    // Nothing emits `info` yet, so the verdict is built by hand: a context row
+    // must not turn "ready" into "not everything is set up".
+    expect(summariseReadiness(verdictOf([finding('info')]))).toBe(
+      'Everything needed for this take is ready.',
+    );
+  });
+
+  it('puts a block ahead of any warning beside it', () => {
+    const verdict = resolveReadiness(ready({ spokenWordCount: 0, modelInstalled: false }));
+    expect(hasReadinessWarnings(verdict)).toBe(true);
+    expect(summariseReadiness(verdict)).toBe('This take cannot start as it is.');
+  });
+});
+
+/** A hand-built finding, for severities the resolver does not emit today. */
+function finding(severity: ReadinessFinding['severity']): ReadinessFinding {
+  return { id: `${severity}-row`, severity, label: 'Row', detail: 'Detail.' };
+}
+
+function verdictOf(findings: ReadinessFinding[]): ReadinessVerdict {
+  return { show: true, blocked: findings.some((f) => f.severity === 'blocking'), findings };
+}
+
+describe('hasReadinessWarnings', () => {
+  /*
+   * The sheet's start button reads "Start anyway" on this and "Present"
+   * without it (#283), so it has to agree with the summary line above it: a
+   * sheet that says everything is ready must not offer to start "anyway".
+   */
+  it('is false for a reviewed healthy setup', () => {
+    const verdict = resolveReadiness(ready({ requested: true }));
+    expect(verdict.show).toBe(true);
+    expect(hasReadinessWarnings(verdict)).toBe(false);
+  });
+
+  it('is true when the sheet is warning about something', () => {
+    expect(hasReadinessWarnings(resolveReadiness(ready({ modelInstalled: false })))).toBe(true);
+    expect(hasReadinessWarnings(verdictOf([finding('info'), finding('warning')]))).toBe(true);
+  });
+
+  it('does not count context rows as warnings', () => {
+    expect(hasReadinessWarnings(verdictOf([finding('info')]))).toBe(false);
+  });
+
+  it('does not count a block as a warning', () => {
+    // The blocked case is decided by `blocked`, which the button checks first.
+    expect(hasReadinessWarnings(verdictOf([finding('blocking')]))).toBe(false);
   });
 });
 

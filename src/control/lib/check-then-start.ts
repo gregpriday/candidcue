@@ -10,9 +10,9 @@
  *
  * Now each of them comes here. A healthy setup still launches at once, with no
  * sheet (`resolveReadiness` is the rule); anything else is held, and the sheet
- * the shell mounts against `takeReadinessPrompt` offers Start anyway exactly as
- * the editor's always did. Nothing here is a gate: `startTake` is unchanged and
- * remains the executor.
+ * the shell mounts against `takeReadinessPrompt` offers to start past it exactly
+ * as the editor's always did. Nothing here is a gate: `startTake` is unchanged
+ * and remains the executor.
  */
 import { get, writable, type Readable } from 'svelte/store';
 import { resolveReadiness, type ReadinessVerdict } from './take-readiness';
@@ -224,8 +224,8 @@ export async function resolveTakeReadiness(
  *
  * The immediate-launch rule is load-bearing: on a healthy familiar setup this
  * is exactly the old behaviour, one click, no sheet. Anything else and the
- * launch is held rather than cancelled — `start` keeps the whole request so
- * Start anyway resumes precisely the take that was asked for.
+ * launch is held rather than cancelled — `start` keeps the whole request so the
+ * sheet's start button resumes precisely the take that was asked for.
  */
 export async function checkThenStart(
   scriptId: string,
@@ -280,7 +280,8 @@ export function dismissTakeReadiness(): void {
 }
 
 /**
- * Start anyway.
+ * Launch the held take: the sheet's start button, whether it reads "Start
+ * anyway" over warnings or "Present" over a reviewed healthy setup.
  *
  * Refused for a blocked verdict, which the sheet offers no button for anyway —
  * there is genuinely nothing to start.
