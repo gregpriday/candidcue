@@ -399,3 +399,43 @@ describe('what a reading window shows in place of a chip', () => {
     expect(readerAnchors).toEqual(['0', '1', '2', '3', '4', '5']);
   });
 });
+
+describe('reference content in a reading window', () => {
+  const table: CompiledBlock = {
+    id: 'tbl',
+    kind: 'table',
+    renderNodes: [{ type: 'text', text: 'Month Storm days' }],
+    source: { utf16Start: 0, utf16End: 0 },
+    spoken: false,
+  };
+  const silent: CompiledBlock = {
+    id: 'note',
+    kind: 'silent',
+    renderNodes: [{ type: 'text', text: 'Producer note' }],
+    source: { utf16Start: 0, utf16End: 0 },
+    spoken: false,
+  };
+
+  it('reads at the zone opacity, not the quiet annotation treatment', () => {
+    // A reading window shows the table as part of the document; at 0.45 over
+    // its own card its text fell well under readable contrast.
+    const root = block(table, { reader: true, performanceMode: 'rehearsal' });
+    expect(root.classList.contains('unspoken')).toBe(false);
+    expect(root.classList.contains('reader-content')).toBe(true);
+    expect(root.classList.contains('zone-future')).toBe(true);
+  });
+
+  it('keeps annotations quiet in a reading window', () => {
+    const root = block(silent, { reader: true, performanceMode: 'rehearsal' });
+    expect(root.classList.contains('unspoken')).toBe(true);
+    expect(root.classList.contains('reader-content')).toBe(false);
+  });
+
+  it('leaves every prompter projection exactly as it was', () => {
+    for (const { name, performanceMode } of PROMPTER) {
+      const root = block(table, { performanceMode });
+      expect(root.classList.contains('unspoken'), name).toBe(true);
+      expect(root.classList.contains('reader-content'), name).toBe(false);
+    }
+  });
+});

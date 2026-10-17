@@ -1112,7 +1112,13 @@ import { onShortcut } from '../lib/shortcuts';
    * while the button promised 38%.
    */
   function openAppearanceSheet(): void {
-    if (appearanceOpen) return;
+    /*
+     * Not while the window is changing shape. The switch puts any open panel
+     * back before it starts, and a panel opened in the middle of it would
+     * snapshot one mode and apply into the other — Paper picked there could
+     * land on the glass before the prompter's composition does.
+     */
+    if (appearanceOpen || switchingPresentation) return;
     appearanceOnOpen = $session.stageAppearance;
     readerOnOpen = takeReaderPreferenceSettings();
     readerThemeOnOpen = takeReaderThemeSetting();
@@ -1234,7 +1240,7 @@ import { onShortcut } from '../lib/shortcuts';
       // Only when it moved: a Cancel that touched nothing must not leave the
       // take holding a choice of its own over the saved one.
       if (readerThemeOnOpen && readerThemeOnOpen !== takeReaderThemeSetting()) {
-        applyReaderTheme(readerThemeOnOpen);
+        applyReaderTheme(readerThemeOnOpen, { restoring: true });
       }
     } else if (appearanceOnOpen) {
       applyStageAppearance(appearanceOnOpen);

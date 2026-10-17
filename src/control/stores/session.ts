@@ -3917,15 +3917,22 @@ export function takeReaderThemeSetting(): ReaderTheme {
  *
  * Returns the reading window's theme for this take.
  */
-export function applyReaderTheme(theme: ReaderTheme): ReaderTheme {
+export function applyReaderTheme(
+  theme: ReaderTheme,
+  options: { restoring?: boolean } = {},
+): ReaderTheme {
   if (!get(state).active) return takeReaderThemeSetting();
   // The guard `applyStageAppearance` states: a profile with no panel cannot be
   // recomposed without demoting it to the uncalibrated layout.
   if (stageSettings?.optics && stageDisplay === null) return takeReaderThemeSetting();
   takeReaderTheme = theme === 'paper' ? 'paper' : 'dark';
-  // Chosen at the window itself, so a hold left by a switch that failed is
-  // over — see `suspendReaderPaper`.
-  readerPaperSuspended = false;
+  /*
+   * Chosen at the window itself, so a hold left by a switch that failed is
+   * over — see `suspendReaderPaper`. A RESTORE is not a choice: Cancel putting
+   * back the theme the sheet opened on says nothing about whether the window
+   * is safe to turn paper again, so it leaves the hold where it is.
+   */
+  if (!options.restoring) readerPaperSuspended = false;
   recomposeStageSettings();
   return takeReaderTheme;
 }

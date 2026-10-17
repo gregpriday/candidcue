@@ -128,7 +128,26 @@
    * sits with the passage it introduces.
    */
   const readerHeading = $derived(reader && block.kind === 'heading');
-  const unspoken = $derived(!block.spoken && block.kind !== 'cue' && !readerHeading);
+  /**
+   * In a reading window the quiet treatment is for ANNOTATIONS only.
+   *
+   * A reading window shows images, tables, code and diagrams in full, as part
+   * of the document — not as the reference cards a prompter rehearsal shows
+   * beside a script. Left `.unspoken`, a table's text sat at 0.45 over its own
+   * card, well under readable contrast, in the one surface built for reading it.
+   * Silent and stage-only notes, and the divider, keep the quiet look: they are
+   * direction and decoration, and their quietness is the information.
+   */
+  const readerContent = $derived(
+    reader &&
+      (block.kind === 'image' ||
+        block.kind === 'table' ||
+        block.kind === 'code' ||
+        block.kind === 'diagram'),
+  );
+  const unspoken = $derived(
+    !block.spoken && block.kind !== 'cue' && !readerHeading && !readerContent,
+  );
   const marker = $derived(block.kind === 'list_item' ? listMarker(block.layoutHints) : null);
   const markerGeometry = $derived(marker ? listMarkerGeometry(marker) : null);
 </script>
@@ -140,6 +159,7 @@
     class:zone-future={zone === 'future'}
     class:unspoken
     class:reader-heading={readerHeading}
+    class:reader-content={readerContent}
     data-heading-level={readerHeading ? headingLevel : undefined}
     data-block-id={block.id}
     style:padding-bottom="{gapPx}px"
@@ -501,7 +521,9 @@
     display: flex;
     justify-content: flex-end;
     white-space: nowrap;
-    color: color-mix(in srgb, var(--stage-text) 72%, transparent);
+    /* Full ink: the block's zone opacity already dims a passed list, and a
+       second translucency on top took a passed item's number under 3:1. */
+    color: var(--stage-text);
   }
   /* Drawn, not a glyph: the stage face has no ballot-box characters, and a
      fallback face's box would sit at a size nobody chose. Sits on the baseline
@@ -509,12 +531,13 @@
   .checkbox {
     position: relative;
     box-sizing: border-box;
-    border: 0.08em solid color-mix(in srgb, var(--stage-text) 62%, transparent);
+    /* Full ink for the same reason as the number: the zone opacity dims it. */
+    border: 0.08em solid var(--stage-text);
     border-radius: 0.16em;
     transform: translateY(0.04em);
   }
   .checkbox.checked {
-    background: color-mix(in srgb, var(--stage-text) 62%, transparent);
+    background: var(--stage-text);
   }
   /* The tick: two edges of an unrounded box, turned. */
   .checkbox.checked::after {
@@ -555,6 +578,11 @@
     font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     text-align: center;
+  }
+  /* In a reading window a missing image's description is the content it
+     stands in for, so it reads at full ink over its card. */
+  .reader-content .image-fallback {
+    color: var(--stage-text);
   }
 
   .table-card {

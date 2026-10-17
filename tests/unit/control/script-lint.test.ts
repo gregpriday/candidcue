@@ -424,6 +424,20 @@ describe('whole-line brackets', () => {
     expect(lintScriptSource('Say it [Pause][Beat] and go.\n')).toEqual([]);
   });
 
+  it('reads an unresolved footnote or reference as the prose the compiler speaks', () => {
+    // With no definition the parser resolves nothing: `[^…]` and `[a][b]` are
+    // bracketed text, spoken word for word, so their words count here too.
+    const footnote = lintScriptSource('Say [^ALPHA BRAVO CHARLIE DELTA] now.\n');
+    expect(codes(footnote)).toContain('all-caps-run');
+    const reference = lintScriptSource('Say [label][ALPHA BRAVO CHARLIE DELTA] now.\n');
+    expect(codes(reference)).toContain('all-caps-run');
+    // Defined, the same identifier is hidden again.
+    const defined = lintScriptSource(
+      'Say [label][ALPHA BRAVO CHARLIE DELTA] now.\n\n[alpha bravo charlie delta]: https://example.com\n',
+    );
+    expect(defined.filter((f) => f.line === 1 && f.code === 'all-caps-run')).toEqual([]);
+  });
+
   it('treats a line that mixes a directive and an unknown bracket as prose', () => {
     // The directive is hidden, the unknown bracket is read.
     expect(codes(lintScriptSource('[Beat] [aside]\n'))).toEqual(['no-terminal-punctuation']);

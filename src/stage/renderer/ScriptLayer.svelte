@@ -1315,6 +1315,10 @@
    */
   $effect(() => {
     void performanceMode;
+    // A reading window draws headings at their own scale with room above them,
+    // and a prompter does not — so flipping the context moves heading heights
+    // even when the projection stays `rehearsal` (Practise, Diagnostic Take).
+    void settings.readingContext;
     untrack(() => {
       if (measuredHeights.size === 0) return;
       measuredHeights.clear();

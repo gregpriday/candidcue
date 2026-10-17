@@ -199,6 +199,31 @@ function blank(chars: string[], start: number, end: number): void {
 }
 
 /**
+ * A reference label as Markdown matches it: case-folded, with runs of
+ * whitespace collapsed, trimmed.
+ */
+function referenceLabel(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Link-reference and footnote definition lines: `[label]: …` / `[^note]: …`. */
+const DEFINITION_LINE = /^ {0,3}\[([^\]]+)\]:/;
+
+/**
+ * Every label the document defines, so the mask can tell a reference the
+ * parser resolves (an identifier, never spoken) from bracketed prose that only
+ * looks like one (spoken, and counted).
+ */
+function definedLabels(lines: SourceLine[]): Set<string> {
+  const out = new Set<string>();
+  for (const line of lines) {
+    const match = DEFINITION_LINE.exec(line.text);
+    if (match) out.add(referenceLabel(match[1]!));
+  }
+  return out;
+}
+
+/**
  * Blank inline markup that is not read aloud: image references, link
  * destinations and reference identifiers, footnote markers, inline code,
  * emphasis markers, bracket directives and `{say="…"}` aliases.
@@ -208,7 +233,13 @@ function blank(chars: string[], start: number, end: number): void {
  * tokenises into five words and quietly pushed short paragraphs over the long
  * paragraph threshold.
  */
-function maskInline(chars: string[], text: string, base: number, from: number): void {
+function maskInline(
+  chars: string[],
+  text: string,
+  base: number,
+  from: number,
+  defined: ReadonlySet<string> = new Set(),
+): void {
   const hide = (start: number, end: number) => blank(chars, base + start, base + end);
   let i = from;
   while (i < text.length) {
@@ -252,8 +283,10 @@ function maskInline(chars: string[], text: string, base: number, from: number): 
           }
         }
         // A footnote marker, `[^1]`: the compiler draws and speaks nothing for
-        // it (its definition is reported instead).
-        if (text.charAt(i + 1) === '^') {
+        // it (its definition is reported instead) — but only when the document
+        // defines it. An undefined `[^x]` is ordinary bracketed prose to the
+        // parser, so its words are spoken and stay in the count.
+        if (text.charAt(i + 1) === '^' && defined.has(referenceLabel(text.slice(i + 1, close)))) {
           hide(i, close + 1);
           i = close + 1;
           continue;
@@ -271,7 +304,11 @@ function maskInline(chars: string[], text: string, base: number, from: number): 
         // directive test, so `[Pause][Beat]` stays two cues.
         if (text.charAt(close + 1) === '[') {
           const refClose = text.indexOf(']', close + 2);
-          if (refClose >= 0) {
+          // Only a reference the document defines: an unresolved `[a][b]` is
+          // two runs of bracketed prose to the parser, and both are spoken.
+          const ref = refClose >= 0 ? text.slice(close + 2, refClose) : '';
+          const label = referenceLabel(ref === '' ? text.slice(i + 1, close) : ref);
+          if (refClose >= 0 && defined.has(label)) {
             hide(i, i + 1);
             hide(close, refClose + 1);
             i += 1;
@@ -332,6 +369,7 @@ function isDirectiveOnlyLine(trimmed: string): boolean {
 /** Line-by-line scan producing the mask and the spoken/blank classification. */
 function scanSource(source: string): { masked: string; scans: LineScan[]; lines: SourceLine[] } {
   const lines = splitLines(source);
+  const defined = definedLabels(lines);
   // split('') keeps UTF-16 indexing; spreading would split by code point and
   // shift every offset after an astral character.
   const chars = source.split('');
@@ -482,7 +520,7 @@ function scanSource(source: string): { masked: string; scans: LineScan[]; lines:
       blank(chars, line.start + markerStart, line.start + markerStart + list[2]!.length);
       from += list[0].length;
     }
-    maskInline(chars, line.text, line.start, from);
+    maskInline(chars, line.text, line.start, from, defined);
     // Only bare prose can be retitled by an underline: a `=====` under a list
     // item or a quote is the parser's problem, and guessing at it here could
     // silence a paragraph the author can still see on the stage.
