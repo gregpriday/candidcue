@@ -222,7 +222,11 @@ fn no_window_can_drive_os_fullscreen_from_javascript() {
 fn no_window_can_close_a_window_from_javascript() {
     let authority = authority();
     assert!(
-        allowed_for(&authority, "plugin:window|current_monitor", PREFERENCES_WINDOW),
+        allowed_for(
+            &authority,
+            "plugin:window|current_monitor",
+            PREFERENCES_WINDOW
+        ),
         "preferences cannot even read current_monitor, so the denial below \
          proves nothing about the key format"
     );
