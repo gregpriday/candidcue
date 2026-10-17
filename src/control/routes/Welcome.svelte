@@ -34,7 +34,7 @@
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill, { type PillTone } from '../components/StatusPill.svelte';
   import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
-  import { chooseStageDisplay } from '../lib/start-take';
+  import { displayName, resolvePrompterDisplay } from '../lib/take-destination';
   import * as stageService from '../services/stage';
   import {
     isBusy as isModelBusy,
@@ -56,10 +56,14 @@
    * settings document this screen has to go and ask. `checking` is a real
    * state rather than an empty list: "no displays yet" and "no displays"
    * look identical in an array and mean opposite things.
+   *
+   * `windowDisplay` is the panel this window is on, which is where a prompter
+   * take opens whenever nothing pinned is connected (#302). Null when it could
+   * not be named — that is "unknown", not a failed probe.
    */
   type DisplayProbe =
     | { kind: 'checking' }
-    | { kind: 'loaded'; displays: DisplayDescriptor[] }
+    | { kind: 'loaded'; displays: DisplayDescriptor[]; windowDisplay: DisplayDescriptor | null }
     | { kind: 'failed' };
 
   let probe = $state<DisplayProbe>({ kind: 'checking' });
@@ -69,19 +73,34 @@
     // paint of a first launch, which is exactly when somebody is most likely
     // to click straight through to the editor.
     let live = true;
-    void (async () => {
+    // And an older read must not land over a newer one.
+    let request = 0;
+    const read = async (): Promise<void> => {
+      const mine = ++request;
       try {
-        const displays = await stageService.listDisplays();
-        if (live) probe = { kind: 'loaded', displays };
+        const [displays, windowDisplay] = await Promise.all([
+          stageService.listDisplays(),
+          stageService.currentWindowDisplay().catch(() => null),
+        ]);
+        if (live && mine === request) probe = { kind: 'loaded', displays, windowDisplay };
       } catch {
         // Deliberately not surfaced in detail. Stage settings already reports
         // the enumeration error properly and offers a retry; repeating it here
         // would put a stack-shaped message on the welcome screen.
-        if (live) probe = { kind: 'failed' };
+        if (live && mine === request) probe = { kind: 'failed' };
       }
-    })();
+    };
+    void read();
+    /*
+     * Asked again when a monitor comes or goes, or this window is dragged to
+     * another one — Rust reports both on one event — because either can change
+     * where an unpinned take opens. Not on focus: that would re-ask every time
+     * somebody clicked back into the app, for an answer only a move changes.
+     */
+    const stopWatching = stageService.watchDisplayChanges(() => void read());
     return () => {
       live = false;
+      stopWatching();
     };
   });
 
@@ -100,21 +119,37 @@
   const readerMode = $derived($settings.stage.presentationMode === 'reader');
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
   const connectedDisplays = $derived(probe.kind === 'loaded' ? probe.displays : []);
-  /** Where a take would actually land, from the function the take itself uses. */
-  const effectiveDisplay = $derived(
-    chooseStageDisplay(connectedDisplays, chosenFingerprint, $settings.stage.presentationMode),
+  const windowDisplay = $derived(probe.kind === 'loaded' ? probe.windowDisplay : null);
+  /**
+   * Where a prompter take would actually land, by Present's own rule: the
+   * pinned panel when it is connected, otherwise the panel this window is on.
+   *
+   * Not `chooseStageDisplay`, which this used to be. That is the preview
+   * target, and it prefers an external display — so a first-run user with a
+   * second monitor read here that takes open on it, pressed Present, and
+   * watched the monitor in front of them become the prompter (#302).
+   */
+  const destination = $derived(
+    resolvePrompterDisplay({
+      displays: connectedDisplays,
+      pinnedFingerprint: chosenFingerprint,
+      windowDisplay,
+    }),
   );
   /**
    * A pinned display that is not currently connected (§52 fingerprints), the
    * same predicate Stage settings shows its inline alert from. A fingerprint is
    * panel identity, so an unplugged display simply stops matching and the take
-   * quietly opens somewhere else.
+   * opens on the panel this window is on instead.
    */
   const pinnedMissing = $derived(
-    probe.kind === 'loaded' &&
-      connectedDisplays.length > 0 &&
-      chosenFingerprint !== null &&
-      !connectedDisplays.some((d) => d.fingerprint === chosenFingerprint),
+    probe.kind === 'loaded' && connectedDisplays.length > 0 && destination.reason === 'pin-missing',
+  );
+  /** The fallback, named — or described, when the OS could not name it. */
+  const windowPanel = $derived(
+    windowDisplay === null
+      ? 'the display the CandidCue window is on'
+      : `${displayName(windowDisplay)}, where the CandidCue window is`,
   );
 
   interface RowState {
@@ -237,8 +272,8 @@
     if (readerMode) {
       // Reader mode presents in an ordinary window at desk distance, so there
       // is no second panel to choose and nothing here to be wrong. The action
-      // must not say "Choose display" either: `chooseStageDisplay` ignores the
-      // pin entirely in this mode, so it would offer a choice nothing reads.
+      // must not say "Choose display" either: a reading window ignores the
+      // pin entirely, so it would offer a choice nothing reads.
       return {
         tone: 'neutral',
         pill: 'This window',
@@ -272,18 +307,16 @@
       return {
         tone: 'warning',
         pill: 'Needs attention',
-        detail: `The display you chose is not connected. Takes will open on ${
-          effectiveDisplay?.name ?? 'another display'
-        } until it is back.`,
+        detail: `The display you chose is not connected. Until it is back, takes open on ${windowPanel}.`,
         emphasis: 'attention',
         action: 'Fix display',
       };
     }
-    if (chosenFingerprint !== null) {
+    if (destination.reason === 'pinned') {
       return {
         tone: 'neutral',
         pill: 'Connected',
-        detail: `Takes open on ${effectiveDisplay?.name ?? 'the display you chose'}.`,
+        detail: `Takes open on ${displayName(destination.display)}.`,
         emphasis: 'quiet',
         action: 'Choose display',
       };
@@ -291,7 +324,7 @@
     return {
       tone: 'neutral',
       pill: 'Automatic',
-      detail: `Takes open on ${effectiveDisplay?.name ?? 'the best available display'}.`,
+      detail: `Takes open on ${windowPanel}.`,
       emphasis: 'quiet',
       action: 'Choose display',
     };

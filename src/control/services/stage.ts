@@ -32,14 +32,14 @@ export async function listDisplays(): Promise<DisplayDescriptor[]> {
 }
 
 /**
- * The panel the control window is on right now, or null when it cannot be
- * named (CCUX-004).
+ * The panel the CONTROL window is on right now, or null when it cannot be
+ * named (CCUX-004) — from any window, Settings included, because Rust looks the
+ * control window up by label rather than asking whoever called.
  *
- * Not the same question as `listDisplays` plus the pinned fingerprint: that
- * pair answers "which panel is calibrated", and single-window presentation
- * fills whichever monitor this window is already sitting on. Null is a real
- * answer — the caller must say it does not know rather than substituting the
- * calibrated display, which is the confusion this exists to remove.
+ * It is where a prompter take opens when nothing pinned is connected
+ * (`resolvePrompterDisplay` in `lib/take-destination.ts` has the whole rule).
+ * Null is a real answer — the caller must say it does not know rather than
+ * substituting another display, which is the confusion this exists to remove.
  */
 export async function currentWindowDisplay(): Promise<DisplayDescriptor | null> {
   return invokeOrMock<DisplayDescriptor | null>('current_window_display', undefined, () =>
@@ -301,5 +301,45 @@ export function onDisplayTopologyChange(handler: () => void): () => void {
     cancelled = true;
     unlisten?.();
     unlisten = null;
+  };
+}
+
+/**
+ * Re-read display facts when they may have changed, at most once per burst.
+ * Returns a teardown.
+ *
+ * Coalesced, because a drag emits one native `Moved` per frame: Rust forwards
+ * the control window's moves onto the display-change event — that is what
+ * makes dragging between two already-connected monitors visible at all — so a
+ * drag arrives as a burst, and each event would otherwise start its own IPC
+ * reads. 150 ms is below noticing and well above a frame.
+ *
+ * `focus` adds window focus as a second trigger, for a screen whose answer is
+ * worth re-checking the moment somebody comes back to press Present. It is off
+ * by default because the move event already covers a drag, and a screen that
+ * re-asks on every focus re-asks a great deal.
+ */
+export function watchDisplayChanges(
+  handler: () => void,
+  options: { focus?: boolean } = {},
+): () => void {
+  let coalesce: ReturnType<typeof setTimeout> | null = null;
+  const soon = (): void => {
+    if (coalesce !== null) clearTimeout(coalesce);
+    coalesce = setTimeout(() => {
+      coalesce = null;
+      handler();
+    }, 150);
+  };
+
+  const stopTopology = onDisplayTopologyChange(soon);
+  const focus = options.focus === true && typeof window !== 'undefined';
+  if (focus) window.addEventListener('focus', soon);
+
+  return () => {
+    if (coalesce !== null) clearTimeout(coalesce);
+    coalesce = null;
+    stopTopology();
+    if (focus) window.removeEventListener('focus', soon);
   };
 }
