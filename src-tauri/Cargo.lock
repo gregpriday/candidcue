@@ -462,6 +462,7 @@ dependencies = [
  "hex",
  "image",
  "libc",
+ "muda",
  "percent-encoding",
  "regex",
  "reqwest 0.12.28",

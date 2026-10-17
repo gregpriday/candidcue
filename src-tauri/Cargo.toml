@@ -110,6 +110,11 @@ tempfile = "3"
 # helper returned `Emit`. Dev-only: with resolver v2 this feature is not unified
 # into a normal `cargo build`, so the shipped binary is unaffected.
 tauri = { version = "2", features = ["test"] }
+# The parser Tauri hands every menu accelerator to. Tauri discards its error and
+# builds the item with no key, so the only place a misspelt accelerator can fail
+# is a test that parses it the same way (`menu.rs`). Already in the tree through
+# tauri at the same version; no default features, so it unifies to tauri's set.
+muda = { version = "0.19", default-features = false }
 
 [profile.release]
 panic = "abort"
