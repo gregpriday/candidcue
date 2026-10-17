@@ -1279,13 +1279,14 @@ export function startLiveSession(input: StartSessionInput): string {
        * M3: a soft pause keeps the microphone and the recogniser open, so one
        * that outlasts its limit closes the recogniser. This fires as it
        * closes, not before — and the wake word cannot reopen a recogniser that
-       * is gone, so the toast names the controls that do. Both of them: the
-       * stage has no Resume button, only Space.
+       * is gone, so the toast names the key that does. Only Space: the stage
+       * has no Resume button, and while it is mounted Live leaves play-pause to
+       * the stage's own keyboard handler — so Session › Resume, which arrives on
+       * the shortcut bus rather than as a key, goes nowhere.
        */
       onPauseWarning: () => {
         showToast(
-          'Voice following switched off after a long pause. ' +
-            'Press Space or choose Session › Resume to turn it back on.',
+          'Voice following switched off after a long pause. Press Space to turn it back on.',
           'info',
         );
       },

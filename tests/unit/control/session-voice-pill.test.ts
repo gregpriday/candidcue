@@ -756,7 +756,7 @@ describe('speech status names an on-device recogniser, not a connection (#304)',
     return get(toasts).map((toast) => toast.message);
   }
 
-  it('says a long pause switched voice off, and names the controls that bring it back', () => {
+  it('says a long pause switched voice off, and names the key that brings it back', () => {
     start();
     pauseListening();
     // The pipeline fires this as it closes the recogniser, always with 0 — so
@@ -764,8 +764,7 @@ describe('speech status names an on-device recogniser, not a connection (#304)',
     (deps().onPauseWarning as unknown as (msRemaining: number) => void)(0);
 
     expect(messages()).toEqual([
-      'Voice following switched off after a long pause. ' +
-        'Press Space or choose Session › Resume to turn it back on.',
+      'Voice following switched off after a long pause. Press Space to turn it back on.',
     ]);
   });
 
