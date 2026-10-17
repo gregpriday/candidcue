@@ -2111,7 +2111,8 @@ export function hardPause(): void {
  *
  * Releasing the pause is a different claim from that one. A resume whose voice
  * cannot come back still un-pauses the take (#279), with the microphone marked
- * disconnected — see the failure branch below.
+ * disconnected, unless a newer pause has been made since — see the failure
+ * branch below.
  */
 export function resumeSession(): void {
   const s0 = get(state);

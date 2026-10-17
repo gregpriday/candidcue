@@ -622,6 +622,7 @@ describe('a take whose voice cannot be resumed', () => {
     pipeline.captured.resumeError = refusal('MIC_PERMISSION_DENIED');
     togglePlayPause();
     await vi.advanceTimersByTimeAsync(200);
+    expect(get(session).paused).toBe('none');
     expect(get(session).micState).toBe('disconnected');
 
     pipeline.captured.resumeError = null;
