@@ -393,6 +393,14 @@ export interface StartTakeOptions {
    * that has since been edited. The type says so rather than a comment saying
    * so: anything that knows a part's identity can launch it, which is what lets
    * the summary dialog offer the next part without holding a compiler type.
+   *
+   * WHERE IN THE PART THE TAKE BEGINS is `startTokenIndex`'s answer. Without
+   * one the take opens at the part's start, re-measured like the span — which
+   * is what a part row and the summary's "record part N" mean, so they pass no
+   * token at all. With one it opens there, snapped as usual, provided the token
+   * still lies inside the re-measured part: "From here" passes the caret this
+   * way, and a take begun part way into part three is a take of part three
+   * that starts where the cursor was.
    */
   part?: { id: string };
 }
@@ -608,22 +616,44 @@ export async function startTake(
      * index would be resolved against a document the take is not going to
      * show.
      *
-     * A RESOLVED PART OVERRULES THE TOKEN THAT CAME WITH IT (§parts). Both
-     * arrive from the same menu row, but only one of them was re-measured
-     * against this compile: the caller's token index was read off whatever the
-     * editor had compiled when the row was drawn. Edit the script between
-     * opening the menu and choosing the row and the two disagree — and taking
-     * the stale one would open the take a few tokens outside the very part it
-     * is bounded to, then report on a part it did not start in.
+     * A RESOLVED PART CONFINES THE TOKEN THAT CAME WITH IT (§parts). Both
+     * arrive from the same menu row, but only the part was re-measured against
+     * this compile: the caller's token index was read off whatever the editor
+     * had compiled when the row was drawn. Edit the script between opening the
+     * menu and choosing the row and the two can disagree — and taking a token
+     * the part no longer contains would open the take outside the very part it
+     * is bounded to, then report on a part it did not start in. So the caret's
+     * token is honoured only inside the part, and the part's own start stands
+     * in for it everywhere else, including when no token came at all.
+     *
+     * That is deliberately not "the part always wins", which is what this used
+     * to be: it served the part rows and swallowed the caret, so "From here"
+     * six paragraphs into a section opened at the section's first sentence.
+     * The part rows still get their re-measured start because they pass no
+     * token — an in-range check alone could not tell a stale part start from a
+     * cursor.
      */
-    const startPoint = snapToStart(
-      takePart?.startTokenIndex ?? options.startTokenIndex ?? 0,
-      {
-        sentences: compiled.sentences,
-        outline: compiled.outline,
-        totalTokens: compiled.spokenWordCount,
-      },
-    );
+    const requestedToken =
+      takePart === null
+        ? (options.startTokenIndex ?? 0)
+        : options.startTokenIndex !== undefined &&
+            Number.isFinite(options.startTokenIndex) &&
+            options.startTokenIndex >= takePart.startTokenIndex &&
+            options.startTokenIndex <= takePart.endTokenIndex
+          ? options.startTokenIndex
+          : takePart.startTokenIndex;
+    const snapped = snapToStart(requestedToken, {
+      sentences: compiled.sentences,
+      outline: compiled.outline,
+      totalTokens: compiled.spokenWordCount,
+    });
+    // Snapping only moves backwards, and a part starts on a sentence, so this
+    // cannot fire on compiler output. It is the invariant the bound relies on:
+    // a take never begins before the part it is reporting on.
+    const startPoint =
+      takePart !== null && snapped.tokenIndex < takePart.startTokenIndex
+        ? { ...snapped, tokenIndex: takePart.startTokenIndex }
+        : snapped;
 
     const record = await startSessionRecord({
       scriptId,

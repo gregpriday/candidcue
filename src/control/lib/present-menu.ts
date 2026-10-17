@@ -83,9 +83,14 @@ export interface StartMenuInput {
   parts: readonly ScriptPart[];
 }
 
+/**
+ * `present` gets a token, a part, or both. A part with no token is the whole
+ * part — `startTake` opens it at its re-measured start — and a token with a part
+ * is a take of that part begun at the token, which is what "From here" means.
+ */
 export function startMenuItems(
   input: StartMenuInput,
-  present: (tokenIndex: number, part?: ScriptPart) => void,
+  present: (tokenIndex: number | undefined, part?: ScriptPart) => void,
 ): PresentMenuItem[] {
   const items: PresentMenuItem[] = [
     {
@@ -127,12 +132,19 @@ export function startMenuItems(
    * other four, so the parts a creator was most likely to be recording late in
    * a project were the ones that vanished. The overflow now says so, and names
    * the route that still reaches them.
+   *
+   * "From here" starts at the cursor, so the route has to say WHERE the cursor
+   * goes for the whole part: its first spoken words. Not its heading — a
+   * heading that is not read aloud has no sentence of its own, and a caret on
+   * one resolves to the last sentence above it, in the previous part.
    */
   for (const part of input.parts.slice(0, MAX_PART_ROWS)) {
     items.push({
       label: `Part ${part.ordinal} · ${part.label}`,
       description: describePartRange(input.parts, part),
-      onselect: () => present(part.startTokenIndex, part),
+      // No token: the row's start was measured against the compile the menu
+      // was drawn from, and only the part is re-measured at launch.
+      onselect: () => present(undefined, part),
     });
   }
 
@@ -140,7 +152,8 @@ export function startMenuItems(
   if (hidden > 0) {
     items.push({
       label: `${hidden} more ${hidden === 1 ? 'part' : 'parts'} below`,
-      description: 'Put the cursor in one and choose “From here” — it records that part.',
+      description:
+        'To record a whole part, put the cursor on its first spoken words and choose “From here”.',
       disabled: true,
       onselect: () => {},
     });

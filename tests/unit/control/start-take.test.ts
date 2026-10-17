@@ -1351,4 +1351,141 @@ describe('recording one part of a script', () => {
     expect(opened().part).toBeNull();
     expect(opened().nextPart).toBeNull();
   });
+
+  /*
+   * "From here" on a divided script: the caret's token AND the caret's part.
+   *
+   * Every part in `divided()` is a single sentence, so a caret anywhere inside
+   * one snaps back to where the part begins and cannot tell the caret from the
+   * part's start — which is how the part's start came to overrule the caret
+   * unnoticed. These parts have sentences inside them.
+   */
+  describe('from a token inside the part', () => {
+    const SECTIONS = [
+      { id: 'p1', label: 'Setup', ordinal: 1, startTokenIndex: 0, endTokenIndex: 19, origin: 'heading' as const },
+      { id: 'p2', label: 'Demo', ordinal: 2, startTokenIndex: 20, endTokenIndex: 49, origin: 'heading' as const },
+      { id: 'p3', label: 'Close', ordinal: 3, startTokenIndex: 50, endTokenIndex: 59, origin: 'heading' as const },
+    ];
+
+    const SENTENCES = [
+      { id: 's1', blockId: 'b1', startTokenIndex: 0, endTokenIndex: 19, normalizedText: 'here is the setup' },
+      { id: 's2', blockId: 'b2', startTokenIndex: 20, endTokenIndex: 29, normalizedText: 'open the demo project' },
+      { id: 's3', blockId: 'b3', startTokenIndex: 30, endTokenIndex: 39, normalizedText: 'press the run button' },
+      { id: 's4', blockId: 'b4', startTokenIndex: 40, endTokenIndex: 49, normalizedText: 'watch the output appear' },
+      { id: 's5', blockId: 'b5', startTokenIndex: 50, endTokenIndex: 59, normalizedText: 'that is all for today' },
+    ];
+
+    function sectioned(parts: readonly unknown[] = SECTIONS, sentences: readonly unknown[] = SENTENCES) {
+      const base = compiled();
+      return {
+        ...base,
+        sentences: sentences as never,
+        parts: parts as never,
+        spokenWordCount: 60,
+        script: {
+          ...(base.script as unknown as Record<string, unknown>),
+          sentences,
+          parts,
+        } as never,
+      };
+    }
+
+    function glass(): number {
+      const input = calls.startLiveSession.mock.calls[0]![0] as {
+        stageEnvelope: { initialTokenIndex: number };
+      };
+      return input.stageEnvelope.initialTokenIndex;
+    }
+
+    beforeEach(() => {
+      calls.compileScript.mockResolvedValue(sectioned());
+    });
+
+    it('opens at the caret’s sentence and still records the caret’s part', async () => {
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 40, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      // The session row, the live session and the glass all agree.
+      expect(calls.startSessionRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startTokenIndex: 40 }),
+      );
+      expect(opened().startTokenIndex).toBe(40);
+      expect(glass()).toBe(40);
+      // Begun part way, but a take of part two all the same.
+      expect(opened().part).toEqual({
+        id: 'p2',
+        label: 'Demo',
+        ordinal: 2,
+        totalParts: 3,
+        startTokenIndex: 20,
+        endTokenIndex: 49,
+      });
+      expect(opened().nextPart).toMatchObject({ id: 'p3', ordinal: 3 });
+    });
+
+    it('snaps a caret part way through a sentence to that sentence, not to the part', async () => {
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 44, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect(opened().startTokenIndex).toBe(40);
+      expect(glass()).toBe(40);
+    });
+
+    it('counts the part’s last token as inside it', async () => {
+      // `endTokenIndex` is inclusive (`parts.ts`).
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 49, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect(opened().startTokenIndex).toBe(40);
+    });
+
+    it('opens a whole part at its start when no token comes with it', async () => {
+      // A part row and the summary's "record part N" pass the part alone.
+      await expect(startTake(SCRIPT.id, { part: { id: 'p2' } })).resolves.toBe(true);
+      expect(calls.startSessionRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startTokenIndex: 20 }),
+      );
+      expect(opened().startTokenIndex).toBe(20);
+      expect(glass()).toBe(20);
+    });
+
+    it.each([
+      ['before it', 10],
+      ['after it, in the next part', 55],
+    ])(
+      'falls back to the part’s start when the token is no longer inside it (%s)',
+      async (_where, token) => {
+        // An edit made with the menu open can move the caret's sentence out of
+        // the part it was drawn in. The part is what was asked for, so the
+        // take is still of the part — from its start, not from a token that
+        // would have it begin somewhere it is not reporting on.
+        await expect(
+          startTake(SCRIPT.id, { startTokenIndex: token, part: { id: 'p2' } }),
+        ).resolves.toBe(true);
+        expect(opened().startTokenIndex).toBe(20);
+        expect(opened().part).toMatchObject({ id: 'p2' });
+      },
+    );
+
+    it('never opens before the part it reports on', async () => {
+      /*
+       * Defensive, not compiler output: a part always begins on a sentence, so
+       * snapping a token inside one cannot leave it. This part starts in the
+       * middle of a sentence to prove the invariant holds if that ever stops
+       * being true.
+       */
+      calls.compileScript.mockResolvedValue(
+        sectioned([
+          { ...SECTIONS[0]!, endTokenIndex: 24 },
+          { ...SECTIONS[1]!, startTokenIndex: 25 },
+          SECTIONS[2]!,
+        ]),
+      );
+      await expect(
+        startTake(SCRIPT.id, { startTokenIndex: 27, part: { id: 'p2' } }),
+      ).resolves.toBe(true);
+      expect(opened().startTokenIndex).toBe(25);
+      expect(glass()).toBe(25);
+    });
+  });
 });

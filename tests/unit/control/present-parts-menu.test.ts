@@ -66,16 +66,20 @@ describe('startMenuItems part rows', () => {
     expect(items[2]?.description).toBe('Part 2 of 2. Done at the end of the script.');
   });
 
-  it('hands the chosen part to the caller, not only its start token', () => {
-    const chosen: Array<[number, ScriptPart | undefined]> = [];
+  it('hands the chosen part to the caller, and no start token beside it', () => {
+    // A part row means the WHOLE part. Its start was measured against the
+    // compile the menu was drawn from, and a token that came with it would be
+    // honoured by `startTake` wherever it still fell inside the re-measured
+    // part — part way into it, after an edit that moved the part earlier.
+    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
     const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
     const items = startMenuItems(input({ parts }), (token, p) => chosen.push([token, p]));
     items.find((i) => i.label === 'Part 2 · Pricing')?.onselect();
-    expect(chosen).toEqual([[10, parts[1]]]);
+    expect(chosen).toEqual([[undefined, parts[1]]]);
   });
 
   it('starts an unbounded take from the beginning row', () => {
-    const chosen: Array<[number, ScriptPart | undefined]> = [];
+    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
     const items = startMenuItems(
       input({ parts: [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)] }),
       (token, p) => chosen.push([token, p]),
@@ -92,6 +96,12 @@ describe('startMenuItems part rows', () => {
     const overflow = items[items.length - 1]!;
     expect(overflow.label).toBe('3 more parts below');
     expect(overflow.disabled).toBe(true);
+    // "From here" starts at the cursor, so the advice has to say where the
+    // cursor goes for the whole part — and not its heading, which resolves to
+    // the previous part when it is not read aloud.
+    expect(overflow.description).toBe(
+      'To record a whole part, put the cursor on its first spoken words and choose “From here”.',
+    );
     // Twelve rows plus the beginning plus the overflow notice.
     expect(items).toHaveLength(14);
   });
@@ -115,7 +125,7 @@ describe('startMenuItems part rows', () => {
   it('records the part the caret sits in when "From here" is chosen', () => {
     // The overflow notice tells anybody with more than twelve parts to reach
     // the rest this way, so this row has to actually bound the take.
-    const chosen: Array<[number, ScriptPart | undefined]> = [];
+    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
     const parts = [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)];
     const items = startMenuItems(
       input({ hereTokenIndex: 14, hereLabel: 'From here', herePart: parts[1]!, parts }),
@@ -128,7 +138,7 @@ describe('startMenuItems part rows', () => {
   });
 
   it('leaves "From here" unbounded on an undivided script', () => {
-    const chosen: Array<[number, ScriptPart | undefined]> = [];
+    const chosen: Array<[number | undefined, ScriptPart | undefined]> = [];
     const items = startMenuItems(
       input({ hereTokenIndex: 14, hereLabel: 'From here', herePart: null }),
       (token, p) => chosen.push([token, p]),
