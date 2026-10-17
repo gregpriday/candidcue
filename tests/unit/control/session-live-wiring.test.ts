@@ -1502,8 +1502,10 @@ describe('#287 — time the presenter set following aside is not charged to foll
 
   it('starts the next take with nothing set aside after one stopped paused', async () => {
     // Straight from the stop to the next take, as "Present again" does: the
-    // store still says paused when the next one begins.
+    // store still says paused when the next one begins. Ten seconds listened
+    // first, so a leak of the last session's listening would show.
     await startScript();
+    await vi.advanceTimersByTimeAsync(10_000);
     togglePlayPause();
     await vi.advanceTimersByTimeAsync(10_000);
     stopSession();
