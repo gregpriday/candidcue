@@ -98,6 +98,8 @@ const ipc = vi.hoisted(() => {
       return structuredClone(document);
     },
     stageBehavior: () => document.value['stageBehavior'] as Record<string, unknown>,
+    /** The whole persisted document, for sections other than the stage. */
+    document: () => document.value,
     /** How many `update_settings` calls reached the document. */
     updates: () => updates,
     /** Refuse the next `count` writes, the way a database that went away would. */
@@ -326,6 +328,32 @@ describe('the document is the answer once it owns the pin', () => {
 
     expect(loaded.stage.displayFingerprint).toBeNull();
     expect(settingsStore.getSettingsSnapshot().stage.displayFingerprint).toBeNull();
+  });
+
+  it('carries the old mirror onto the panel pinned NOW, not the one an older answer named', async () => {
+    /*
+     * Skipping the older answer is half of it. Parsing that answer rewrote the
+     * pending migrations from the older document, so the mirror adoption still
+     * to run would carry the retired switch onto the panel that is no longer
+     * pinned — at the newer revision, so the write succeeds and the glass the
+     * operator just pinned renders unmirrored for good.
+     */
+    Object.assign(ipc.stageBehavior(), { horizontalMirror: true });
+    seedOverlay({ presentationMode: 'reader', displayFingerprint: 'dsp-old' });
+    const held = ipc.holdNextUpdate();
+
+    const loading = settingsStore.loadSettings(true);
+    await held.reached;
+    const newer = ipc.otherWindowWrites({
+      stageBehavior: { displayFingerprint: 'dsp-new', displayPinMigrated: true },
+    });
+    expect(settingsStore.adoptSettings(newer)).toBe(true);
+    held.release();
+    const loaded = await loading;
+
+    expect(loaded.stage.displayFingerprint).toBe('dsp-new');
+    const optical = ipc.document()['optical'] as { panelMirror?: Record<string, unknown> };
+    expect(Object.keys(optical?.panelMirror ?? {})).toEqual(['dsp-new']);
   });
 
   it("takes another window's unpin as the answer, never having seen the pin itself", async () => {

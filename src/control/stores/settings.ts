@@ -198,6 +198,31 @@ export function resetMigrationLatchesForTesting(): void {
   settingsService.resetMigrationStateForTesting();
 }
 
+/**
+ * Commit a migration's answer — unless a newer document already stands, in
+ * which case keep that one and re-read.
+ *
+ * Skipping the older answer is not the whole of it. Parsing it rewrote every
+ * pending migration (`pending*Adoption` describe the LAST document parsed), so
+ * the steps still to run in `loadSettings` would act on the older document's
+ * inputs at the newer document's revision — and succeed. The other window
+ * pinning a different panel while the mode adoption was in flight is the real
+ * case: the mirror adoption then carried the old switch onto the panel that is
+ * no longer pinned. A fresh read puts the pending state back on what stands.
+ */
+async function commitAdoption(saved: AppSettings): Promise<void> {
+  if (saved.revision >= lastCommitted.revision) {
+    commitSettings(saved);
+    return;
+  }
+  try {
+    const current = await settingsService.getSettings();
+    if (current.revision >= lastCommitted.revision) commitSettings(current);
+  } catch {
+    // The newer document still stands; the next launch reads afresh.
+  }
+}
+
 async function adoptStageModeFromOverlay(): Promise<void> {
   const pending = settingsService.pendingStageModeAdoption();
   if (pending === null) return;
@@ -207,12 +232,12 @@ async function adoptStageModeFromOverlay(): Promise<void> {
       stage: { ...before.stage, presentationMode: pending },
     });
     /*
-     * A commit unless a newer document already stands — see `sendPatchBatch`.
-     * This write carries the whole stage section, pin included (#272), so the
-     * other window unpinning in the meantime and its broadcast landing first is
-     * exactly the case where adopting this older answer puts the pin back.
+     * Not unconditionally. This write carries the whole stage section, pin
+     * included (#272), so the other window unpinning in the meantime and its
+     * broadcast landing first is exactly the case where adopting this older
+     * answer puts the pin back.
      */
-    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
+    await commitAdoption(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }
@@ -240,8 +265,7 @@ async function adoptDisplayPinFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       stage: { ...before.stage, displayFingerprint: pending },
     });
-    /* A commit unless a newer document already stands — see `sendPatchBatch`. */
-    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
+    await commitAdoption(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }
@@ -277,8 +301,7 @@ async function adoptOpticalFromOverlay(): Promise<void> {
     const saved = await settingsService.updateSettings(before.revision, {
       optical: pending,
     });
-    /* A commit unless a newer document already stands — see `sendPatchBatch`. */
-    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
+    await commitAdoption(saved);
     /*
      * Only now, and this ordering is the fix.
      *
@@ -327,10 +350,9 @@ async function adoptPanelMirrorFromLegacy(): Promise<void> {
      * A commit, like any other — see `commitCount` — unless a newer document
      * already stands. The other window can save after this write and its
      * broadcast can arrive first; adopting this older answer over it would put
-     * a mirror back that the operator had just changed. `sendPatchBatch` guards
-     * the same way.
+     * a mirror back that the operator had just changed. See `commitAdoption`.
      */
-    if (saved.revision >= lastCommitted.revision) commitSettings(saved);
+    await commitAdoption(saved);
   } catch {
     // Left to the fallback, and to the next launch.
   }
