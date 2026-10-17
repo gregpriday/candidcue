@@ -74,8 +74,6 @@ commands.allow = [
   "publish_stage_document",
   "publish_stage_command",
   "get_stage_status",
-  "save_display_profile",
-  "list_display_profiles",
   "get_settings",
   "update_settings",
   "export_all_data",

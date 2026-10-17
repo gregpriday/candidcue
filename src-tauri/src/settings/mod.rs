@@ -52,7 +52,7 @@ impl Default for AppSettings {
 /// capable of failing silently. The 1.0 readiness review called this out
 /// directly: clearing WebView storage erased calibrated rigs, and a
 /// `display_profiles` SQLite table that described itself as the durable
-/// backstop had no callers at all.
+/// backstop had no callers at all. (Migration 0004 dropped it.)
 ///
 /// It lives in the settings document rather than in that table because the
 /// document already has every property this needs and the table has none of

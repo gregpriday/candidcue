@@ -94,6 +94,14 @@ async fn a_complete_export_is_named_complete_and_carries_every_section() {
     assert!(export.join("candidcue.sqlite3").exists());
     assert!(export.join("settings.json").exists());
     assert!(export.join("scripts").exists());
+    let settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(export.join("settings.json")).expect("settings.json"))
+            .expect("settings.json parses");
+    assert!(settings["settings"].is_object(), "the settings document is the section");
+    assert!(
+        settings.get("displayProfiles").is_none(),
+        "display profiles were dropped (#232); an export no longer writes them"
+    );
 
     // Every file is checksummed, and the manifest excludes itself.
     let files = manifest["files"].as_array().expect("files");
@@ -1309,7 +1317,7 @@ async fn a_baseline_database_upgrades_to_full_source_search() {
         .fetch_all(&pool)
         .await
         .expect("migrations");
-    assert_eq!(applied, vec![1, 2, 3]);
+    assert_eq!(applied, vec![1, 2, 3, 4]);
     // The snapshot taken first is of the database as the baseline left it.
     let snapshot = fs::read_dir(dir.path().join("backups"))
         .expect("a pending migration takes a backup first")
@@ -1557,7 +1565,7 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
         .fetch_all(pool)
         .await
         .expect("migrations");
-    assert_eq!(applied, vec![1, 2, 3]);
+    assert_eq!(applied, vec![1, 2, 3, 4]);
     let leftovers: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master
          WHERE name IN ('session_takes', 'session_transcript_items', 'idx_session_takes_session')",
@@ -1590,11 +1598,6 @@ async fn assert_retired_storage_removed(root: &Path, pool: &sqlx::SqlitePool) {
     let settings = candidcue_lib::settings::get_settings(pool).await.expect("settings");
     assert_eq!(settings.revision, 7);
     assert_eq!(settings.value.general.words_per_minute_estimate, 155);
-    let profiles: i64 = sqlx::query_scalar("SELECT count(*) FROM display_profiles")
-        .fetch_one(pool)
-        .await
-        .expect("profiles");
-    assert_eq!(profiles, 1);
 }
 
 /// The one copy that is meant to keep them: the verified pre-migration backup
@@ -1764,7 +1767,7 @@ async fn a_scrub_that_cannot_finish_is_retried_rather_than_forgotten() {
         .expect("a scrub that cannot finish must not stop the app opening");
     assert_eq!(
         applied_migrations_at(&dir.path().join("candidcue.sqlite3")).await,
-        vec![1, 2, 3],
+        vec![1, 2, 3, 4],
         "the storage itself is gone either way"
     );
     assert!(
@@ -1798,6 +1801,337 @@ async fn a_stale_marker_over_a_fresh_database_is_simply_retired() {
     assert!(!dir.path().join("retired-storage-scrub.pending").exists());
     assert!(pre_migration_snapshots(dir.path()).is_empty());
     pool.close().await;
+}
+
+/* ------------------------------------------------ retired display profiles */
+
+const PROFILED_SCRIPT: &str = "3a9e2f10-6c4d-4b8e-a1f2-232d15c0ffee";
+const PROFILE_ID: &str = "8b1c4e2a-0d3f-4a6b-9c5e-7f2a1b3c4d5e";
+const PROFILED_SESSION: &str = "c4f0e1d2-9a8b-4c7d-8e6f-5a4b3c2d1e0f";
+const PROFILED_ASSET: &str = "e7d6c5b4-a3f2-4e1d-b0c9-8f7e6d5c4b3a";
+
+/// A database exactly as a build before #232 left it: the real `0001`–`0003`
+/// applied by sqlx with their own checksums, a display profile, a script that
+/// points at it, and one of every row that hangs off a script — which are what
+/// a careless rebuild of `scripts` would cascade away or be refused over.
+async fn a_version_three_database_with_a_display_profile(root: &Path) {
+    let migrations = root.join("v3-migrations");
+    fs::create_dir_all(&migrations).expect("migrations dir");
+    for (name, sql) in [
+        ("0001_initial.sql", include_str!("../migrations/0001_initial.sql")),
+        ("0002_search_full_source.sql", include_str!("../migrations/0002_search_full_source.sql")),
+        (
+            "0003_remove_take_and_transcript_storage.sql",
+            include_str!("../migrations/0003_remove_take_and_transcript_storage.sql"),
+        ),
+    ] {
+        fs::write(migrations.join(name), sql).expect("migration");
+    }
+
+    let source = "# Launch\n\nToday we are shipping.\n";
+    let rel_path = format!("scripts/{PROFILED_SCRIPT}/script.md");
+    fs::create_dir_all(root.join(format!("scripts/{PROFILED_SCRIPT}"))).expect("script dir");
+    fs::write(root.join(&rel_path), source).expect("canonical file");
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(root.join("candidcue.sqlite3"))
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .expect("open");
+    sqlx::migrate::Migrator::new(migrations.as_path())
+        .await
+        .expect("v3 migrator")
+        .run(&pool)
+        .await
+        .expect("apply 0001 + 0002 + 0003");
+
+    let statements = [
+        format!(
+            "INSERT INTO display_profiles
+                (id, name, display_fingerprint, stage_settings_json, created_at, updated_at)
+             VALUES ('{PROFILE_ID}', 'Elgato', 'dsp-elgato', '{{\"schemaVersion\":1}}',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+        ),
+        // `status` sits before the retired column and `last_opened_at` after
+        // it, so a mangled row layout cannot pass for a clean one.
+        format!(
+            "INSERT INTO scripts
+                (id, title, canonical_rel_path, source_hash, status,
+                 selected_display_profile_id, created_at, updated_at, last_opened_at)
+             VALUES ('{PROFILED_SCRIPT}', 'Launch', '{rel_path}', '{}', 'ready',
+                     '{PROFILE_ID}', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z',
+                     '2026-01-03T00:00:00Z')",
+            candidcue_lib::util::sha256_hex(source.as_bytes())
+        ),
+        format!(
+            "INSERT INTO script_revisions
+                (id, script_id, revision_number, source_hash, rel_path, reason, created_at)
+             VALUES ('revision-1', '{PROFILED_SCRIPT}', 1, 'abc',
+                     'scripts/{PROFILED_SCRIPT}/revisions/1.md', 'manual', '2026-01-01T00:00:00Z')"
+        ),
+        format!(
+            "INSERT INTO assets
+                (id, sha256, mime_type, extension, size_bytes, rel_path, created_at)
+             VALUES ('{PROFILED_ASSET}', 'def', 'image/png', 'png', 67,
+                     'scripts/{PROFILED_SCRIPT}/assets/diagram.png', '2026-01-01T00:00:00Z')"
+        ),
+        format!(
+            "INSERT INTO script_asset_references (script_id, asset_id, source_start, created_at)
+             VALUES ('{PROFILED_SCRIPT}', '{PROFILED_ASSET}', 12, '2026-01-01T00:00:00Z')"
+        ),
+        format!(
+            "INSERT INTO sessions
+                (id, script_id, script_source_hash, started_at, mode, command_count, created_at)
+             VALUES ('{PROFILED_SESSION}', '{PROFILED_SCRIPT}', 'abc', '2026-01-01T09:00:00Z',
+                     'voice', 2, '2026-01-01T09:00:00Z')"
+        ),
+    ];
+    for statement in &statements {
+        sqlx::query(statement).execute(&pool).await.expect("seed");
+    }
+    pool.close().await;
+
+    assert_eq!(
+        applied_migrations_at(&root.join("candidcue.sqlite3")).await,
+        vec![1, 2, 3],
+        "the seed is a version-3 database"
+    );
+}
+
+/// What #232 promises about a database that went through migration 4: the
+/// table, the column and the foreign key are gone, the file is sound, and
+/// nothing that hung off the script went with them.
+async fn assert_display_profiles_removed(root: &Path, pool: &sqlx::SqlitePool) {
+    let applied: Vec<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+        .fetch_all(pool)
+        .await
+        .expect("migrations");
+    assert_eq!(applied, vec![1, 2, 3, 4]);
+
+    let tables: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE name = 'display_profiles'")
+            .fetch_all(pool)
+            .await
+            .expect("schema");
+    assert!(tables.is_empty(), "display_profiles is still in the schema");
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('scripts')")
+        .fetch_all(pool)
+        .await
+        .expect("scripts columns");
+    assert!(
+        !columns.iter().any(|c| c == "selected_display_profile_id"),
+        "got {columns:?}"
+    );
+    let foreign_keys: i64 = sqlx::query_scalar("SELECT count(*) FROM pragma_foreign_key_list('scripts')")
+        .fetch_one(pool)
+        .await
+        .expect("scripts foreign keys");
+    assert_eq!(foreign_keys, 0, "scripts references nothing now");
+
+    let integrity: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_all(pool)
+        .await
+        .expect("integrity_check");
+    assert_eq!(integrity, vec!["ok".to_string()]);
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await
+        .expect("foreign_key_check");
+    assert!(violations.is_empty(), "{} foreign key violations", violations.len());
+
+    // Everything that hung off the script survives, still attached to it.
+    let count = |sql: String| {
+        let pool = pool.clone();
+        async move { sqlx::query_scalar::<_, i64>(&sql).fetch_one(&pool).await.expect("count") }
+    };
+    for table in ["script_revisions", "script_asset_references", "sessions"] {
+        assert_eq!(
+            count(format!("SELECT count(*) FROM {table} WHERE script_id = '{PROFILED_SCRIPT}'")).await,
+            1,
+            "{table} lost its row"
+        );
+    }
+    assert_eq!(count(format!("SELECT count(*) FROM assets WHERE id = '{PROFILED_ASSET}'")).await, 1);
+    let last_opened: Option<String> =
+        sqlx::query_scalar("SELECT last_opened_at FROM scripts WHERE id = ?")
+            .bind(PROFILED_SCRIPT)
+            .fetch_one(pool)
+            .await
+            .expect("the script row survives");
+    assert_eq!(last_opened.as_deref(), Some("2026-01-03T00:00:00Z"));
+
+    // And the repository reads and copies it through the narrower row.
+    use candidcue_lib::scripts::{ScriptId, ScriptLocks, ScriptStatus};
+    let paths = DataPaths::new(root.to_path_buf());
+    let locks = ScriptLocks::default();
+    let id = ScriptId::parse(PROFILED_SCRIPT).expect("id");
+    let document = repo::get_script(pool, &paths, &locks, &id).await.expect("get_script");
+    assert_eq!(document.summary.title, "Launch");
+    assert_eq!(document.summary.status, ScriptStatus::Ready);
+    let copy = repo::duplicate_script(pool, &paths, &locks, &id).await.expect("duplicate_script");
+    assert_eq!(copy.title, "Launch copy");
+
+    // The failure a dangling foreign key causes: writes to `scripts` itself.
+    // A delete still cascades to the children that reference it.
+    sqlx::query(
+        "INSERT INTO scripts (id, title, canonical_rel_path, source_hash, created_at, updated_at)
+         VALUES ('scratch', 'Scratch', 'scripts/scratch/script.md', 'abc',
+                 '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z')",
+    )
+    .execute(pool)
+    .await
+    .expect("a script can still be inserted");
+    sqlx::query(
+        "INSERT INTO script_revisions
+            (id, script_id, revision_number, source_hash, rel_path, reason, created_at)
+         VALUES ('scratch-revision', 'scratch', 1, 'abc', 'r.md', 'manual', '2026-01-04T00:00:00Z')",
+    )
+    .execute(pool)
+    .await
+    .expect("revision");
+    sqlx::query("DELETE FROM scripts WHERE id = 'scratch'")
+        .execute(pool)
+        .await
+        .expect("a script can still be deleted");
+    assert_eq!(
+        count("SELECT count(*) FROM script_revisions WHERE script_id = 'scratch'".into()).await,
+        0,
+        "the delete still cascades"
+    );
+    // And foreign keys are still enforced on the connection the app uses.
+    let orphan = sqlx::query(
+        "INSERT INTO sessions (id, script_id, script_source_hash, started_at, mode, created_at)
+         VALUES ('orphan', 'no-such-script', 'abc', '2026-01-04T00:00:00Z', 'voice',
+                 '2026-01-04T00:00:00Z')",
+    )
+    .execute(pool)
+    .await;
+    assert!(orphan.is_err(), "a session for a missing script must still be refused");
+}
+
+/// The rollback copy is the database as it was: profile, column and all.
+async fn assert_profile_rollback_copy_kept(root: &Path) {
+    let snapshots = pre_migration_snapshots(root);
+    assert_eq!(snapshots.len(), 1, "a pending migration takes exactly one backup first");
+    assert_eq!(applied_migrations_at(&snapshots[0]).await, vec![1, 2, 3]);
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(&snapshots[0]).read_only(true),
+    )
+    .await
+    .expect("open the snapshot");
+    let selected: Option<String> =
+        sqlx::query_scalar("SELECT selected_display_profile_id FROM scripts WHERE id = ?")
+            .bind(PROFILED_SCRIPT)
+            .fetch_one(&pool)
+            .await
+            .expect("the snapshot keeps the column");
+    assert_eq!(selected.as_deref(), Some(PROFILE_ID));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn upgrading_removes_display_profiles_and_keeps_what_hangs_off_a_script() {
+    /*
+     * #232. SQLite refuses to drop a column a foreign key names, dropping only
+     * the table leaves every later write to `scripts` failing, and rebuilding
+     * `scripts` inside sqlx's transaction would cascade away its revisions and
+     * image references. So migration 4 edits the stored schema instead — and
+     * this runs it through the bundled SQLite the app ships, not the CLI.
+     */
+    let dir = tempfile::tempdir().expect("tempdir");
+    a_version_three_database_with_a_display_profile(dir.path()).await;
+
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("upgrade");
+    assert_display_profiles_removed(dir.path(), &pool).await;
+    pool.close().await;
+
+    // A file whose schema text was edited must open again like any other, and
+    // with nothing pending it takes no second backup.
+    let pool = candidcue_lib::database::init(dir.path()).await.expect("next launch");
+    let integrity: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_all(&pool)
+        .await
+        .expect("integrity_check");
+    assert_eq!(integrity, vec!["ok".to_string()]);
+    pool.close().await;
+    assert_profile_rollback_copy_kept(dir.path()).await;
+}
+
+#[tokio::test]
+async fn an_export_made_before_display_profiles_went_still_restores() {
+    /*
+     * A pre-#232 export carries the table in its database snapshot and the
+     * rows again as `displayProfiles` in `settings.json`. Nothing reads that
+     * file back, so the key is inert — but the export is checksummed, so this
+     * forges the exact old shape (with a matching manifest) rather than
+     * assuming it.
+     */
+    let old = tempfile::tempdir().expect("old install");
+    a_version_three_database_with_a_display_profile(old.path()).await;
+    let old_pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(old.path().join("candidcue.sqlite3")),
+    )
+    .await
+    .expect("open the old install");
+    let dest = tempfile::tempdir().expect("dest");
+    let export = backup::export_all_data(&old_pool, &DataPaths::new(old.path().to_path_buf()), dest.path())
+        .await
+        .expect("export from the old install");
+    old_pool.close().await;
+    assert!(export.complete);
+    let export_root = Path::new(&export.path);
+    assert_eq!(
+        applied_migrations_at(&export_root.join("candidcue.sqlite3")).await,
+        vec![1, 2, 3]
+    );
+
+    let mut settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(export_root.join("settings.json")).expect("settings.json"))
+            .expect("settings.json parses");
+    settings["displayProfiles"] = serde_json::json!([{
+        "id": PROFILE_ID,
+        "name": "Elgato",
+        "displayFingerprint": "dsp-elgato",
+        "stage": { "schemaVersion": 1 },
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }]);
+    let bytes = serde_json::to_vec_pretty(&settings).expect("serialize");
+    fs::write(export_root.join("settings.json"), &bytes).expect("write the old shape");
+    let mut manifest = manifest_of(export_root);
+    for file in manifest["files"].as_array_mut().expect("files") {
+        if file["path"] == "settings.json" {
+            file["bytes"] = serde_json::json!(bytes.len());
+            file["sha256"] = serde_json::json!(candidcue_lib::util::sha256_hex(&bytes));
+        }
+    }
+    for section in manifest["sections"].as_array_mut().expect("sections") {
+        if section["name"] == "settings" {
+            section["bytes"] = serde_json::json!(bytes.len());
+        }
+    }
+    fs::write(
+        export_root.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest"),
+    )
+    .expect("write the manifest");
+
+    let h = harness().await;
+    backup::restore_all_data(&h.paths, export_root)
+        .await
+        .expect("a pre-#232 export still restores");
+    h.pool.close().await;
+
+    let pool = candidcue_lib::database::init(h.dir.path())
+        .await
+        .expect("the next launch applies the restore and upgrades it");
+    assert_display_profiles_removed(h.dir.path(), &pool).await;
+    pool.close().await;
+    assert_profile_rollback_copy_kept(h.dir.path()).await;
 }
 
 /* ------------------------------------------------- the recovery-mode guard */
@@ -1919,7 +2253,6 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("list_displays", "read-only"),
         ("current_window_display", "read-only; asks the window manager, not the database"),
         ("identify_displays", "shows overlays; no persistence"),
-        ("list_display_profiles", "read-only"),
         ("get_system_diagnostics", "read-only; a support request needs it"),
         ("open_model_licence", "opens a validated url"),
         ("open_stage", "window management"),

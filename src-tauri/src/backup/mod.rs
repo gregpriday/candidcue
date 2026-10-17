@@ -65,7 +65,7 @@
 //!
 //! Contains: the database (a consistent `VACUUM INTO` snapshot), the whole
 //! canonical scripts tree — sources, revisions and assets — and the durable
-//! settings document including display profiles.
+//! settings document, calibrated rigs included.
 //!
 //! Does not contain: the speech model. It is ~161 MB of third-party ONNX under
 //! its own licence, it is downloaded in-app, and it is not the user's data. The
@@ -389,15 +389,14 @@ async fn write_settings_document(
     sections: &mut Vec<ExportSection>,
     warnings: &mut Vec<String>,
 ) {
-    let settings = crate::settings::get_settings(pool).await;
-    let profiles = crate::windows::list_display_profiles(pool).await;
-
-    match (settings, profiles) {
-        (Ok(settings), Ok(profiles)) => {
-            let document = serde_json::json!({
-                "settings": settings,
-                "displayProfiles": profiles,
-            });
+    /*
+     * Exports made before #232 also carry `displayProfiles` here. Nothing reads
+     * this file back — a restore validates its checksum and restores the
+     * database — so those still restore, and the key is simply not written now.
+     */
+    match crate::settings::get_settings(pool).await {
+        Ok(settings) => {
+            let document = serde_json::json!({ "settings": settings });
             let target = staging.join(SETTINGS_NAME);
             // `atomic_write`, so the bytes are on the platter: a directory
             // fsync commits the entry, not the file's contents, and this
@@ -430,14 +429,8 @@ async fn write_settings_document(
                 }
             }
         }
-        (settings, profiles) => {
-            let problem = format!(
-                "settings could not be read: {}",
-                settings.err().map(|e| e.to_string()).unwrap_or_else(|| profiles
-                    .err()
-                    .map(|e| e.to_string())
-                    .unwrap_or_default())
-            );
+        Err(err) => {
+            let problem = format!("settings could not be read: {err}");
             warnings.push(problem.clone());
             sections.push(ExportSection {
                 name: "settings".into(),

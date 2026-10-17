@@ -308,15 +308,12 @@ export interface AppSettings {
    * overwrite the first, which is the one failure a calibration store cannot
    * afford (nobody re-measures a distance they believe is already saved).
    *
-   * None of this has a Rust twin, so the localStorage overlay IS the document
-   * for it — see `mergeSection` in services/settings.ts, and note the trap
-   * documented there: a section missing from that merge does not fail loudly,
-   * the setting simply reverts on every read. The durable backstop is the §52
-   * `display_profiles` row a take writes, which carries `opticalProfile` inside
-   * its `StageSettings` — but that row is one per panel and is rewritten by
-   * every take, so what it backs up is the rig that panel LAST RAN WITH, not
-   * the list. Clearing the browser store still costs a two-rig operator one of
-   * their two arrangements; this map is the only place the list lives.
+   * Rust owns it: the `optical` section of the settings document
+   * (`settings::OpticalSettings`), revisioned and included in an export. The
+   * localStorage overlay only ever holds a legacy copy awaiting adoption — see
+   * `opticalAwaitingAdoption` in services/settings.ts. There is no second
+   * store: the `display_profiles` rows that once claimed to back this up had
+   * no writer and were dropped (#232).
    */
   optical: OpticalSettings;
   /**

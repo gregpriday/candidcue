@@ -106,12 +106,10 @@ describe('a calibrated rig says the same layout in both representations', () => 
   });
 
   /**
-   * `applyProfileToStageOverrides` decodes the dimming toggle as
-   * `pastOpacity < 0.9`, so "off" has to land above that threshold whatever the
-   * rig resolved to — the operator did not ask for a subtler dim, they asked
-   * for none.
+   * "Off" lands at the fixed undimmed value whatever the rig resolved to — the
+   * operator did not ask for a subtler dim, they asked for none.
    */
-  it('keeps "past dimming off" encodable when a rig is applied', () => {
+  it('keeps "past dimming off" undimmed when a rig is applied', () => {
     const settings = buildStageSettings({
       ...SETTINGS_OVERRIDES,
       pastDimming: false,

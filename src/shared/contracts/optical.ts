@@ -25,13 +25,12 @@
  * ---------------------------------------------------------------------------
  * WHERE THIS IS STORED
  * ---------------------------------------------------------------------------
- * `ResolvedOptics` rides inside `StageSettings`, which Rust persists as an
- * opaque JSON document validated only for `schemaVersion === 1`
- * (windows::save_display_profile). An optional field therefore needs no
- * migration and no Rust change. `OpticalProfile` rides in the same document for
- * the same reason, so that a display profile round-trips the calibration that
- * produced it rather than only its conclusions — otherwise re-opening the
- * wizard would start from scratch every time.
+ * `OpticalProfile` — the measurement — is stored by Rust as opaque JSON in the
+ * `optical` section of the settings document (`settings::OpticalSettings`),
+ * keyed per panel, so re-opening the wizard starts from the calibration rather
+ * than from scratch. Rust does not interpret it; `normalizeOpticalProfile` is
+ * the validator. `ResolvedOptics` is never stored: it rides inside
+ * `StageSettings` on the way to the stage and is re-derived on every take.
  */
 
 /** Hardware CandidCue knows the physical dimensions of without being told. */

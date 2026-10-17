@@ -1,11 +1,10 @@
 //! Stage/window commands (spec §46.6).
 
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Runtime};
 
-use crate::database::Database;
 use crate::errors::AppError;
 use crate::windows::{
-    self, ControlPresentationState, DisplayDescriptor, DisplayProfile, IdentificationSession,
+    self, ControlPresentationState, DisplayDescriptor, IdentificationSession,
     OpenStageRequest, StageAck, StageDocumentEnvelope, StageOpenResult, StageStatus,
     StageWindowState,
 };
@@ -142,22 +141,4 @@ pub fn publish_stage_command<R: Runtime>(
 #[tauri::command]
 pub fn get_stage_status<R: Runtime>(app: AppHandle<R>, _session_id: Option<String>) -> StageStatus {
     windows::stage_status(&app)
-}
-
-#[tauri::command]
-pub async fn save_display_profile(
-    boot: State<'_, crate::database::BootStatus>,
-    db: State<'_, Database>,
-    profile: DisplayProfile,
-) -> Result<DisplayProfile, AppError> {
-    // Recovery mode owns no writable database (database::BootStatus).
-    boot.require_ready()?;
-    windows::save_display_profile(db.pool(), profile).await
-}
-
-#[tauri::command]
-pub async fn list_display_profiles(
-    db: State<'_, Database>,
-) -> Result<Vec<DisplayProfile>, AppError> {
-    windows::list_display_profiles(db.pool()).await
 }
