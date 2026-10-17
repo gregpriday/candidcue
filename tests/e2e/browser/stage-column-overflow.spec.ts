@@ -21,9 +21,13 @@ import { watchPageErrors } from './fixtures/page-errors';
  *
  * SIZING, precisely: the shim presents onto its own 1920x1080 "Teleprompter
  * Display", which no automatic profile recognises, so the type is the flat
- * fallback — about 15 characters a line in this window, against the Elgato's
- * ~19 under its automatic profile. That is the geometry the issue measured
- * (column 113..911), and the narrower column is the harder case.
+ * fallback under the default appearance — 64px in a 78% column, 799px of this
+ * 1024px window, about 15 characters a line against the Elgato's ~19 under its
+ * automatic profile. That is the geometry the issue measured (column 113..911),
+ * and the narrower column is the harder case. Every long run below is wider
+ * than its box at that size, list indent and code type included; an
+ * appearance default that changed that would fail the multi-row checks
+ * loudly, not pass them quietly.
  *
  * jsdom resolves no stylesheets and lays nothing out, so this can only be said
  * in a real engine. It is Chromium; WKWebView, which ships, is not driven here.

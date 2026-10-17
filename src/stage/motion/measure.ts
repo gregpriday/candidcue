@@ -113,7 +113,7 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
   }
 
   const tokens: MeasuredTokenRect[] = [];
-  const wrapSteps: number[] = [];
+  const brokenRows = new Map<MeasuredTokenRect, number[]>();
   const range = plane.ownerDocument.createRange();
   for (const el of Array.from(plane.querySelectorAll<HTMLElement>('[data-t]'))) {
     const raw = el.dataset.t;
@@ -132,14 +132,18 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
     // A zero-width rect means the token is not laid out (hidden block, empty
     // text run); it must not create a phantom line.
     if (!rect || rect.width <= 0) continue;
-    tokens.push({
+    const token: MeasuredTokenRect = {
       tokenIndex,
       blockId,
       ...toDocumentRect(rect, planeRect, mirrorX, mirrorY),
-    });
+    };
+    tokens.push(token);
     if (rects.length > 1) {
-      const tops = Array.from(rects, (r) => toDocumentRect(r, planeRect, mirrorX, mirrorY).topY);
-      wrapSteps.push(...rowStepsWithin(tops));
+      // Only rows something is drawn on: an empty fragment is nowhere to read.
+      const rows = Array.from(rects)
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => toDocumentRect(r, planeRect, mirrorX, mirrorY).topY);
+      if (rows.length > 1) brokenRows.set(token, rows);
     }
   }
   range.detach?.();
@@ -147,7 +151,7 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
   return {
     tokens,
     blocks: measuredBlocks,
-    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx, wrapSteps),
+    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx, brokenRows),
     contentHeightPx,
   };
 }
@@ -169,18 +173,7 @@ export function tokenFragmentRects(el: Element): DOMRect[] {
   return rects;
 }
 
-/**
- * Row-to-row steps inside one token, in document pixels, from its fragment tops.
- *
- * The map anchors a word that breaks across rows (#281) on the row it starts
- * on, so the next token starts several rows further down and that one
- * start-to-start step reads as a single tall line. On a script made mostly of
- * such words that outlier becomes the median, and a pitch of three rows widens
- * the line-grouping tolerance past a real row and merges two lines into one.
- * The broken word carries its own honest evidence — one real step per extra
- * row — and this is it. A token drawn on one row contributes nothing, so a
- * script without one measures exactly as it always did.
- */
+/** Steps between the rows one token is drawn on, in document pixels. */
 export function rowStepsWithin(tops: readonly number[]): number[] {
   const sorted = [...tops].sort((a, b) => a - b);
   const steps: number[] = [];
@@ -192,11 +185,22 @@ export function rowStepsWithin(tops: readonly number[]): number[] {
   return steps;
 }
 
-/** The median row step between token starts, plus the steps inside broken words. */
+/**
+ * The median step from one drawn row to the next.
+ *
+ * A word broken across rows (#281) is anchored on the row it starts on, so
+ * measured start to start, the step over a three-row word reads as one line
+ * three rows tall. On a script made mostly of such words that outlier is the
+ * median, a pitch of three rows widens the map's grouping tolerance past a real
+ * row, and two lines are built as one. So a broken token contributes the steps
+ * between its own rows, and the next start is measured from its LAST row: every
+ * row transition counts once. With no broken token `brokenRows` is empty and
+ * this is the start-to-start median it always was.
+ */
 export function medianLinePitch(
   tokens: readonly MeasuredTokenRect[],
   fallbackPx: number,
-  wrapSteps: readonly number[] = [],
+  brokenRows: ReadonlyMap<MeasuredTokenRect, readonly number[]> = new Map(),
 ): number {
   const tops: number[] = [];
   let previousTop: number | null = null;
@@ -205,8 +209,13 @@ export function medianLinePitch(
       if (previousTop !== null) tops.push(token.topY - previousTop);
       previousTop = token.topY;
     }
+    const rows = brokenRows.get(token);
+    if (rows !== undefined && rows.length > 1) {
+      tops.push(...rowStepsWithin(rows));
+      previousTop = Math.max(previousTop, ...rows);
+    }
   }
-  const positive = [...tops, ...wrapSteps].filter((d) => d > 1);
+  const positive = tops.filter((d) => d > 1);
   if (positive.length === 0) return fallbackPx;
   positive.sort((a, b) => a - b);
   return positive[Math.floor(positive.length / 2)] ?? fallbackPx;

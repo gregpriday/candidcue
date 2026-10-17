@@ -11,6 +11,7 @@ import {
   buildLayoutFingerprint,
   buildRenderedLineMap,
   maxPathDisagreementPx,
+  measureStageLayout,
   medianLinePitch,
   rowStepsWithin,
   sameLayout,
@@ -380,11 +381,14 @@ describe('a word broken across rows (#281)', () => {
   function token(tokenIndex: number, row: number): MeasuredTokenRect {
     return { tokenIndex, blockId: 'b1', xStart: 0, xEnd: 100, topY: row * P, bottomY: row * P + 60 };
   }
+  function drawnOn(...rows: number[]): number[] {
+    return rows.map((row) => row * P);
+  }
 
   it('counts each row inside a broken word as one step', () => {
-    expect(rowStepsWithin([0, P, 2 * P])).toEqual([P, P]);
+    expect(rowStepsWithin(drawnOn(0, 1, 2))).toEqual([P, P]);
     // Fragment order is not a promise the caller has to keep.
-    expect(rowStepsWithin([2 * P, 0, P])).toEqual([P, P]);
+    expect(rowStepsWithin(drawnOn(2, 0, 1))).toEqual([P, P]);
   });
 
   it('adds nothing for a word on one row, or two fragments sharing a row', () => {
@@ -393,33 +397,124 @@ describe('a word broken across rows (#281)', () => {
   });
 
   it('keeps a script of broken words from measuring its pitch as several rows', () => {
-    // A three-row word on rows 0-2, then ordinary words on rows 3 and 4. The
-    // starts step 3P then P, and the upper median of two is the outlier: a
+    // A three-row word on rows 0-2, then ordinary words on rows 3 and 4. Start
+    // to start that is 3P then P, and the upper median of two is the outlier: a
     // pitch of 3P makes the grouping tolerance (0.35 of it) wider than a real
     // row, and rows 3 and 4 would be built as one line.
-    const tokens = [token(0, 0), token(1, 3), token(2, 4)];
+    const word = token(0, 0);
+    const tokens = [word, token(1, 3), token(2, 4)];
     expect(medianLinePitch(tokens, 70)).toBe(3 * P);
-    expect(medianLinePitch(tokens, 70, rowStepsWithin([0, P, 2 * P]))).toBe(P);
+    expect(medianLinePitch(tokens, 70, new Map([[word, drawnOn(0, 1, 2)]]))).toBe(P);
+  });
+
+  it('measures the step after a broken word from its last row, not its first', () => {
+    // Two rows, then one more word: the step OVER the word is not a sample.
+    // Counting it beside the word's own step would leave [2P, P], whose upper
+    // median is still the outlier.
+    const word = token(0, 0);
+    const tokens = [word, token(1, 2)];
+    expect(medianLinePitch(tokens, 70, new Map([[word, drawnOn(0, 1)]]))).toBe(P);
+    // A word that ends mid-row with the next one beside it adds no step at all.
+    const ending = token(0, 0);
+    const beside = [ending, token(1, 1), token(2, 2)];
+    expect(medianLinePitch(beside, 70, new Map([[ending, drawnOn(0, 1)]]))).toBe(P);
   });
 
   it('measures a script with no broken word exactly as before', () => {
     const tokens = [token(0, 0), token(1, 1), token(2, 3), token(3, 4)];
-    expect(medianLinePitch(tokens, 70, [])).toBe(medianLinePitch(tokens, 70));
+    expect(medianLinePitch(tokens, 70, new Map())).toBe(medianLinePitch(tokens, 70));
     // ...and falls back to the typographic line with no row step to measure.
     expect(medianLinePitch([token(0, 0)], 70)).toBe(70);
   });
 
+  /**
+   * A plane whose words are drawn on the given rows, measured through the real
+   * `measureStageLayout` — a Range reports a word's rows only once it has been
+   * pointed at that word, as a real one does.
+   */
+  function planeOf(words: number[][], options: { emptyRowAt?: number } = {}): HTMLElement {
+    const rect = (row: number, width = 100) => ({
+      top: row * P,
+      bottom: row * P + 60,
+      left: 0,
+      right: width,
+      width,
+      height: 60,
+    });
+    const blockEl = {
+      dataset: { blockId: 'b1' },
+      getBoundingClientRect: () => ({ top: 0, bottom: 10 * P, left: 0, right: 800 }),
+    };
+    const wordEls = words.map((rows, i) => ({
+      dataset: { t: String(i) },
+      rows,
+      closest: () => blockEl,
+      getBoundingClientRect: () => rect(rows[0]!),
+    }));
+    return {
+      getBoundingClientRect: () => ({ top: 0, bottom: 10 * P, left: 0, right: 800 }),
+      querySelectorAll: (selector: string) => (selector === '[data-block-id]' ? [blockEl] : wordEls),
+      ownerDocument: {
+        createRange: () => {
+          let selected: (typeof wordEls)[number] | null = null;
+          return {
+            selectNodeContents: (el: (typeof wordEls)[number]) => {
+              selected = el;
+            },
+            getClientRects: () => {
+              if (!selected) return [];
+              const drawn = selected.rows.map((row) => rect(row));
+              // A collapsed fragment on another row: nothing is drawn there.
+              if (options.emptyRowAt !== undefined && selected.rows.length > 1) {
+                drawn.push(rect(options.emptyRowAt, 0));
+              }
+              return drawn;
+            },
+            detach() {},
+          };
+        },
+      },
+    } as unknown as HTMLElement;
+  }
+
+  it('measures a broken word as the rows it is drawn on, anchored on the first', () => {
+    const measured = measureStageLayout({
+      plane: planeOf([[0, 1, 2], [3], [4]]),
+      blocks: [block('b1', 'paragraph')],
+      fallbackLineHeightPx: 70,
+    });
+    expect(measured.lineHeightPx).toBe(P);
+    // One anchor per token, on the row it starts on: the break is not a token.
+    expect(measured.tokens.map((t) => t.topY)).toEqual([0, 3 * P, 4 * P]);
+  });
+
+  it('ignores an empty fragment on a row the word is not drawn on', () => {
+    const measured = measureStageLayout({
+      plane: planeOf([[0, 1], [2], [3]], { emptyRowAt: 7 }),
+      blocks: [block('b1', 'paragraph')],
+      fallbackLineHeightPx: 70,
+    });
+    expect(measured.lineHeightPx).toBe(P);
+  });
+
   it('places a token on the rows its text is drawn on, never on an empty fragment', () => {
     const rect = (top: number, width: number, height: number) => ({ top, width, height }) as DOMRect;
-    const el = {
+    const el = {} as Element;
+    let selected: unknown = null;
+    Object.assign(el, {
       ownerDocument: {
         createRange: () => ({
-          selectNodeContents() {},
-          getClientRects: () => [rect(0, 0, 20), rect(10, 50, 20), rect(40, 30, 0), rect(94, 30, 20)],
+          selectNodeContents: (node: unknown) => {
+            selected = node;
+          },
+          getClientRects: () =>
+            selected === el
+              ? [rect(0, 0, 20), rect(10, 50, 20), rect(40, 30, 0), rect(94, 30, 20)]
+              : [],
           detach() {},
         }),
       },
-    } as unknown as Element;
+    });
     expect(tokenFragmentRects(el).map((r) => r.top)).toEqual([10, 94]);
   });
 });
