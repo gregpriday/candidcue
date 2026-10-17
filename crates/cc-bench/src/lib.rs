@@ -2,6 +2,7 @@
 //! synthesis, capture, replay, metrics and suite orchestration for the
 //! CandidCue alignment engine.
 
+pub mod app_tokens;
 pub mod capture_local;
 pub mod difficulty;
 pub mod dimming;
@@ -10,6 +11,7 @@ pub mod metrics;
 pub mod passgold;
 pub mod perceptual;
 pub mod plan;
+pub mod projection;
 pub mod replay;
 pub mod report;
 pub mod robustness;

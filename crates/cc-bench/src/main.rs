@@ -436,6 +436,193 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(synth_audio(&scripts_dir, &runs_dir))?;
         }
+        Some("synth-say") => {
+            /*
+             * cc-bench synth-say
+             *
+             * Every Tier-B performance rendered locally by macOS `say` — free,
+             * deterministic and kept — into the shared rendered directory
+             * (point `CANDIDCUE_TTS_CACHE_DIR` somewhere of its own so these
+             * never mix with the hosted renders). `capture-local` then streams
+             * them through the shipping recogniser, which records every live
+             * field the frozen corpora predate. See `tts::say_clip`.
+             */
+            let suite = build_suite(&scripts_dir)?;
+            let tts_dir = cc_bench::tts::shared_rendered_dir();
+            std::fs::create_dir_all(&tts_dir)?;
+            for live in cc_bench::scenarios::tier_b_selection() {
+                let Some(item) = suite
+                    .iter()
+                    .find(|s| s.plan.script == live.script && s.plan.scenario == live.scenario)
+                else {
+                    anyhow::bail!("no scenario {}/{} in the suite", live.script, live.scenario);
+                };
+                let voice = cc_bench::tts::say_voice_for(live.engine);
+                let name = format!(
+                    "{}__{}__say-{}",
+                    live.script,
+                    live.scenario,
+                    voice.to_lowercase()
+                );
+                let run_dir = tts_dir.join(&name);
+                if run_dir.join("manifest.json").exists() {
+                    println!("skip {name} (already synthesised)");
+                    continue;
+                }
+                std::fs::create_dir_all(&run_dir)?;
+                let performance = expand(&item.plan, &item.script);
+                let run = cc_bench::tts::synthesize_say(voice, &performance)?;
+                std::fs::write(run_dir.join("audio.wav"), wav_bytes(&run.pcm))?;
+                std::fs::write(run_dir.join("gold.json"), serde_json::to_string(&run.gold)?)?;
+                let spoken: String = performance
+                    .words
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                std::fs::write(run_dir.join("performance.txt"), &spoken)?;
+                let manifest = RunManifest {
+                    name: name.clone(),
+                    script: live.script.to_string(),
+                    scenario: live.scenario.to_string(),
+                    engine: format!("say-{}", voice.to_lowercase()),
+                    voice_index: live.voice_index,
+                    words: performance.words.len(),
+                    audio_s: run.gold.total_ms / 1000.0,
+                    atom_count: Some(item.script.len()),
+                };
+                std::fs::write(
+                    run_dir.join("manifest.json"),
+                    serde_json::to_string_pretty(&manifest)?,
+                )?;
+                println!("{name}: {:.1}s of audio", manifest.audio_s);
+            }
+        }
+        Some("projection") => {
+            // How closely the stage's token-space display reproduces the
+            // engine's atom-space one, over captured takes compiled the way
+            // the app compiles them. See `cc_bench::projection`.
+            let flags = parse_flags(args[1..].iter())?;
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
+            let config = AlignmentConfig::default();
+            let mut dirs: Vec<_> = std::fs::read_dir(&runs_dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            dirs.sort();
+            let mut total = cc_bench::projection::ProjectionStats::default();
+            let report = |name: &str, s: &cc_bench::projection::ProjectionStats| {
+                let mut abs = s.abs_err.clone();
+                abs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let pct = |q: f64| abs.get(((abs.len() as f64 - 1.0) * q) as usize).copied().unwrap_or(0.0);
+                let mean = abs.iter().sum::<f64>() / abs.len().max(1) as f64;
+                println!(
+                    "{name:<44} n={:>6} mean={:.4} p99={:.4} max_ahead={:+.3} cursor_ahead={:.3}% cursor_behind={:.3}%",
+                    s.samples,
+                    mean,
+                    pct(0.99),
+                    s.max_ahead,
+                    100.0 * s.cursor_ahead as f64 / s.samples.max(1) as f64,
+                    100.0 * s.cursor_behind as f64 / s.samples.max(1) as f64,
+                );
+            };
+            for dir in dirs {
+                let manifest: RunManifest =
+                    serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+                let gold: cc_bench::plan::GoldTimeline =
+                    serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
+                let events = cc_bench::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
+                let source =
+                    std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+                let md = cc_align::compile(&source, cc_align::CompileOptions::default());
+                let app = cc_bench::app_tokens::compile_like_app(&source, cc_align::CompileOptions::default());
+                let map = cc_bench::app_tokens::AtomMap::between(&md, &app);
+                let gold = cc_bench::app_tokens::map_gold(&gold, &map);
+                let result = cc_bench::replay::replay(app.clone(), config.clone(), &events, &gold.viewport_hints);
+                let stats = cc_bench::projection::measure(
+                    &app,
+                    &result.snapshots,
+                    std::env::var("CC_PROJECTION_LEGACY").is_ok(),
+                );
+                report(&manifest.name, &stats);
+                total.merge(stats);
+            }
+            report("TOTAL", &total);
+        }
+        Some("display-parity") => {
+            /*
+             * cc-bench display-parity <run-name> --out <path>
+             *
+             * Real snapshots from a captured run, compiled the way the app
+             * compiles it, each with the engine's intended TOKEN position
+             * (`T(display_at(t))`) sampled every 50 ms until the next snapshot.
+             * `alignment-display-parity.test.ts` asserts the stage's
+             * `alignmentDisplayAt` reproduces every sample, which pins the
+             * TypeScript to the Rust it mirrors with numbers rather than a
+             * comment saying it does.
+             *
+             * Selection: every snapshot whose window the old token-space
+             * formula got wrong by more than a tenth of a token (the cases the
+             * exact path exists for), plus every tenth snapshot otherwise, so
+             * the ordinary path is covered too.
+             */
+            let run_name = args.get(1).cloned().unwrap_or_default();
+            let flags = parse_flags(args[2..].iter())?;
+            let dir = flags.runs.clone().unwrap_or_else(|| runs_dir.clone()).join(&run_name);
+            let manifest: RunManifest =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+            let gold: cc_bench::plan::GoldTimeline =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
+            let events = cc_bench::capture_local::read_events_jsonl(&dir.join("events.jsonl"))?;
+            let source =
+                std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+            let md = cc_align::compile(&source, cc_align::CompileOptions::default());
+            let app = cc_bench::app_tokens::compile_like_app(&source, cc_align::CompileOptions::default());
+            let gold = cc_bench::app_tokens::map_gold(
+                &gold,
+                &cc_bench::app_tokens::AtomMap::between(&md, &app),
+            );
+            let result = cc_bench::replay::replay(
+                app.clone(),
+                AlignmentConfig::default(),
+                &events,
+                &gold.viewport_hints,
+            );
+            let mut cases = Vec::new();
+            for (index, snap) in result.snapshots.iter().enumerate() {
+                let token = cc_align::project_to_tokens(snap, &app, 1);
+                let until = result
+                    .snapshots
+                    .get(index + 1)
+                    .map(|n| n.at_audio_ms)
+                    .unwrap_or(snap.at_audio_ms + 3000.0);
+                let mut samples = Vec::new();
+                let mut worst = 0.0f64;
+                let mut t = snap.at_audio_ms;
+                while t < until {
+                    let intended = app.token_at(snap.display_at(t));
+                    let legacy = cc_bench::projection::token_display_at(&token, t, true);
+                    worst = worst.max((legacy - intended).abs());
+                    samples.push(serde_json::json!({ "tAudioMs": t, "token": intended }));
+                    t += 50.0;
+                }
+                if worst > 0.1 || index % 10 == 0 {
+                    cases.push(serde_json::json!({ "snapshot": token, "samples": samples }));
+                }
+            }
+            let doc = serde_json::json!({
+                "run": run_name,
+                "script": manifest.script,
+                "cases": cases,
+            });
+            let out = flags
+                .out
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("display-parity needs --out <path>"))?;
+            std::fs::write(&out, serde_json::to_string(&doc)?)?;
+            println!("wrote {} ({} snapshots)", out.display(), cases.len());
+        }
         Some("capture-local") => {
             // Synthesised audio heard by the on-device recogniser, written
             // into its own corpus so `tier-b --runs` can score it on the same

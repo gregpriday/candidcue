@@ -946,20 +946,9 @@ pub fn render(
         // of it, which is a trade in the right direction by a factor of three.
         let live_cursor = state.map(|_| display_atoms.floor() as i64);
         let dim_cursor = if following || latched_cursor.is_none() {
-            // Monotone forward while following.
-            //
-            // The cursor is `round(display)`, and the display position is
-            // continuous, so it chatters across every whole-token boundary — the
-            // lead margin fades in and out at each Following↔Holding edge, and
-            // the plant's own approach is not monotone at sub-token scale. Each
-            // chatter re-BRIGHTENED a word that had already gone grey behind the
-            // presenter: `corrections_per_1k_words` measured 213, which is a
-            // word flickering back roughly every fifth word spoken.
-            //
-            // A word that has gone dim must stay dim until the engine actually
-            // goes backward. Reset is gated on a real relocation (below), not on
-            // arithmetic noise, so a retake still rebrightens — which
-            // `retake_legibility_loss` is there to check.
+            // The component's debounced latch (`heldCursor`), updated exactly
+            // as `InlineNodes.svelte` updates it. It is what the ramp freezes
+            // on; it is NOT what the ramp draws while following — see below.
             let next = match (live_cursor, latched_cursor) {
                 (Some(live), Some(held)) if following => {
                     // DEBOUNCE IN TIME, not in space.
@@ -1000,8 +989,34 @@ pub fn render(
                 }
                 (live, _) => live,
             };
+            // WHAT THE PRODUCT ACTUALLY RENDERS, which is not the debounced
+            // value above.
+            //
+            // `InlineNodes.svelte` keeps this debounced latch (`heldCursor`) but
+            // only DRAWS from it while the ramp is frozen; while following, its
+            // `dimCursor` reads the live cursor. This model used to draw from
+            // the latch in both states, so for as long as it did, every Tier C
+            // number described a renderer that does not exist.
+            //
+            // Measured on `runs-local` at 60 Hz before choosing which side to
+            // move: drawing from the latch while following (the old model, and
+            // what "wiring the debounce up" in the component would ship) scored
+            // `gate.unread_never_spoken` 2.751 against 2.629 for the live
+            // cursor, `outcome.readable_availability` 71.05% against 71.24%,
+            // and 74.9 against 72.8 disruptions per ten minutes. All it bought
+            // was 5% fewer corrections (251 against 263 per thousand words).
+            // Holding the frontier forward through a retreat keeps darkness on
+            // text the engine has just stopped claiming, which is the one
+            // trade the safety gate exists to refuse. So the product keeps
+            // drawing the live cursor, and this model now does too.
+            //
+            // The latch still matters at the moment the ramp freezes: that is
+            // when the component starts drawing from it, so it is kept and
+            // updated exactly as the component updates it. (Latching the live
+            // cursor there instead measured indistinguishably: three rows
+            // moved, none by more than 0.3%.)
             latched_cursor = next;
-            next
+            live_cursor
         } else {
             latched_cursor
         };

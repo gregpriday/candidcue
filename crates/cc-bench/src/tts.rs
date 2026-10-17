@@ -370,6 +370,36 @@ pub async fn synthesize(
     performance: &Performance,
     voice_index: usize,
 ) -> anyhow::Result<SynthesizedRun> {
+    // Clips first (async), then the same stitching the local voice uses.
+    let mut clips = std::collections::HashMap::new();
+    for &(seg_start, seg_end) in &performance.segments {
+        let text = segment_text(performance, seg_start, seg_end);
+        if !clips.contains_key(&text) {
+            let clip = synth.clip(engine, &text, voice_index).await?;
+            clips.insert(text, clip);
+        }
+    }
+    stitch(performance, |text| {
+        clips
+            .get(text)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("clip missing for {text}"))
+    })
+}
+
+fn segment_text(performance: &Performance, seg_start: usize, seg_end: usize) -> String {
+    let words: Vec<&str> = performance.words[seg_start..seg_end]
+        .iter()
+        .map(|w| w.text.as_str())
+        .collect();
+    format!("{}.", words.join(" "))
+}
+
+/// Stitch a performance's segment clips with real silence and build its gold.
+fn stitch(
+    performance: &Performance,
+    mut clip_for: impl FnMut(&str) -> anyhow::Result<Vec<u8>>,
+) -> anyhow::Result<SynthesizedRun> {
     let mut pcm: Vec<u8> = Vec::new();
     let mut gold = GoldTimeline::default();
     push_silence(&mut pcm, LEAD_IN_MS);
@@ -394,8 +424,8 @@ pub async fn synthesize(
             .iter()
             .map(|w| w.text.as_str())
             .collect();
-        let text = format!("{}.", words.join(" "));
-        let clip = synth.clip(engine, &text, voice_index).await?;
+        let text = segment_text(performance, seg_start, seg_end);
+        let clip = clip_for(&text)?;
         let clip_ms = clip.len() as f64 / BYTES_PER_MS;
 
         // Word timing inside the clip: proportional to character length —
@@ -428,6 +458,89 @@ pub async fn synthesize(
 fn push_silence(pcm: &mut Vec<u8>, ms: u32) {
     let bytes = (ms as f64 * BYTES_PER_MS) as usize & !1;
     pcm.resize(pcm.len() + bytes, 0);
+}
+
+/// The voice macOS `say` renders a run with, standing in for each hosted engine
+/// so a local corpus keeps the corpus's mix of three voices.
+pub fn say_voice_for(engine: TtsEngine) -> &'static str {
+    match engine {
+        TtsEngine::Gemini => "Samantha",
+        TtsEngine::Qwen => "Daniel",
+        TtsEngine::Xai => "Karen",
+    }
+}
+
+/// One clip rendered by macOS `say`, as 24 kHz mono PCM16 with its leading and
+/// trailing silence trimmed. Cached by content hash in the shared cache.
+///
+/// # Why a local voice at all
+///
+/// The hosted engines cost money per clip and their audio is not kept, so a
+/// corpus can only be re-captured by paying for it again — and every frozen
+/// fixture predates the live fields the app now depends on (per-word times and
+/// how each utterance closed). `say` is free, local and deterministic, which is
+/// what makes it possible to re-decode the SAME audio under a different
+/// recogniser setting and attribute the difference to the setting.
+///
+/// Trimming matters for gold. Gold spreads a clip's duration over its words by
+/// character count, so silence `say` pads a clip with would be credited to the
+/// first and last words of every segment.
+pub fn say_clip(voice: &str, text: &str) -> anyhow::Result<Vec<u8>> {
+    let cache_dir = shared_cache_dir();
+    std::fs::create_dir_all(&cache_dir)?;
+    let mut hash = 0xcbf29ce484222325u64;
+    for bytes in [b"say-v1".as_slice(), voice.as_bytes(), text.as_bytes()] {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let cache_path = cache_dir.join(format!("say-{}-{hash:016x}.pcm", voice.to_lowercase()));
+    if let Ok(cached) = std::fs::read(&cache_path) {
+        return Ok(cached);
+    }
+    let pid = std::process::id();
+    let aiff = cache_dir.join(format!("say-{hash:016x}.{pid}.aiff"));
+    let out = cache_dir.join(format!("say-{hash:016x}.{pid}.raw"));
+    let status = Command::new("say")
+        .args(["-v", voice, "-o", aiff.to_str().unwrap(), "--", text])
+        .status()?;
+    anyhow::ensure!(status.success(), "say failed for {voice}: {text}");
+    let trim = "silenceremove=start_periods=1:start_threshold=-50dB,areverse,\
+                silenceremove=start_periods=1:start_threshold=-50dB,areverse";
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            aiff.to_str().unwrap(),
+            "-af",
+            trim,
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            "-f",
+            "s16le",
+            out.to_str().unwrap(),
+        ])
+        .status()?;
+    anyhow::ensure!(status.success(), "ffmpeg failed trimming a say clip");
+    let pcm = std::fs::read(&out)?;
+    let _ = std::fs::remove_file(&aiff);
+    let _ = std::fs::remove_file(&out);
+    write_new_cache_entry(&cache_path, &pcm)?;
+    Ok(pcm)
+}
+
+/// [`synthesize`], rendered locally by `say` instead of a hosted engine. The
+/// stitching and gold arithmetic are the same, so a local run is scored on the
+/// same ruler as a hosted one.
+pub fn synthesize_say(voice: &str, performance: &Performance) -> anyhow::Result<SynthesizedRun> {
+    stitch(performance, |text| say_clip(voice, text))
 }
 
 /// Wrap raw PCM in a WAV container (for listening/debugging in the temp dir).
