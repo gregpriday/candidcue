@@ -28,9 +28,8 @@
      *
      * False in a manual or fixed-speed take, where nothing is listening. The
      * shared copy is written for voice — "still listening for CandidCue,
-     * resume", "Transcription is still connected", "Start speaking and the
-     * stage picks up your place" — and every one of those sentences is a lie
-     * without a microphone. The operator reads this panel to decide whether a
+     * resume", "Start speaking and the stage picks up your place" — and each
+     * of those sentences is a lie without a microphone. The operator reads this panel to decide whether a
      * problem is their microphone or their script, so it says what is true.
      */
     voiceInput?: boolean;

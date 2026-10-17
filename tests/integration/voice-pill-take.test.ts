@@ -616,7 +616,7 @@ describe('the failure the pill exists for', () => {
      */
     await emitStt({ kind: 'transport', generation: 1, state: 'closed' });
     await untilReading('fault');
-    expect(latest().label).toBe('Not connected');
+    expect(latest().label).toBe('Voice off');
     // ...and the audio is demonstrably still flowing, so this is not the
     // stale-capture fault wearing the wrong label.
     expect(latest().levels.length).toBeGreaterThan(5);

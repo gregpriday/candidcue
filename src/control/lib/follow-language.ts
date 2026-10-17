@@ -19,7 +19,7 @@ import type { AlignmentDecision, StageMotionState } from '../../shared/contracts
 
 /**
  * One short status line per state. Wording reuses the primary F.11 vocabulary
- * ("Holding your place", "Looking for your place", "Reconnecting — position
+ * ("Holding your place", "Looking for your place", "Voice starting — position
  * held") so Live never speaks two dialects.
  */
 export const FOLLOW_STATE_LABELS: Record<StageMotionState, string> = {
@@ -44,7 +44,7 @@ export const FOLLOW_STATE_DETAIL: Record<StageMotionState, string | null> = {
   following: null,
   holding: 'The text stays put until the words match the script again.',
   ambiguous: 'These words appear in more than one place, so the text is waiting rather than guessing.',
-  paused: 'Automatic movement is stopped. Transcription is still connected.',
+  paused: 'Automatic movement is stopped. The take is still running.',
 };
 
 /** Tone used for the state indicator — calm by default, never alarming. */
@@ -407,10 +407,13 @@ export const FOLLOW_NOTICE_COPY: Record<
   Exclude<FollowNoticeId, 'budget_exceeded'>,
   FollowNoticeCopy
 > = {
+  // Not "Reconnecting": this is raised for every state but a running
+  // recogniser, including one that gave up, and nothing on this machine
+  // reconnects to anything.
   transcription_interrupted: {
-    title: 'Reconnecting — position held',
+    title: 'Voice following interrupted — position held',
     detail:
-      'Transcription dropped out. The stage decelerates and holds your place; it does not keep scrolling on an old pace estimate.',
+      'Speech recognition is not running. The stage decelerates and holds your place; it does not keep scrolling on an old pace estimate.',
     tone: 'warning',
   },
   low_transcript_confidence: {

@@ -437,7 +437,7 @@ describe('what the presenter is told', () => {
     expect(voicePillView(dead).label).toBe('No audio');
 
     const offline = tickVoicePill(reduceVoicePillText(state, 'hi'), OFFLINE, START_MS);
-    expect(voicePillView(offline).label).toBe('Not connected');
+    expect(voicePillView(offline).label).toBe('Voice off');
 
     const frames = Math.ceil(VOICE_PILL_UNHEARD_SPEECH_MS / FRAME_MS) + 2;
     const talking = feed(initialVoicePillState(START_MS), frames, START_MS);

@@ -859,7 +859,7 @@ export async function startTake(
     if (!arrived) {
       // A guard vetoed the move. The session is already live behind this
       // screen — tear it down rather than leave the microphone, the worker and
-      // the billing meter running under whatever page is still showing.
+      // the recogniser running under whatever page is still showing.
       await abandonTake(sessionId);
       showToast('Could not open the Live screen, so the take was stopped.', 'danger');
       return false;

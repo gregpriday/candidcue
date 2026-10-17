@@ -1075,8 +1075,8 @@ export function startLiveSession(input: StartSessionInput): string {
        */
       onAudioDropped: (frames) => {
         showToast(
-          `The connection stalled and ${frames} ${frames === 1 ? 'moment' : 'moments'} of audio ` +
-            'did not reach the transcriber. Anything said in that gap will not be followed.',
+          `Speech recognition fell behind and skipped ${frames} ${frames === 1 ? 'moment' : 'moments'} ` +
+            'of audio. Anything said in that gap will not be followed.',
           'danger',
           { key: TOAST_AUDIO_DROPPED },
         );
@@ -1090,7 +1090,7 @@ export function startLiveSession(input: StartSessionInput): string {
          * what drives a pipeline to `offline` — so take A's teardown lands
          * after take B has connected and hands B a connection state belonging
          * to a session that no longer exists. On the Live screen that is a
-         * status pill lying; on the stage it is a permanent "Not connected"
+         * status pill lying; on the stage it is a permanent "Voice off"
          * cross over a take that is working perfectly, because the pill reads
          * this same field.
          */
@@ -1135,7 +1135,7 @@ export function startLiveSession(input: StartSessionInput): string {
         // §59: an interrupted transcript is a first-class degraded state.
         smoothFollow.reportTranscriptStatus(
           connection === 'connected' ? 'live' : 'interrupted',
-          connection === 'offline' ? 'The transcription connection is offline.' : null,
+          connection === 'offline' ? 'Speech recognition has stopped.' : null,
         );
       },
       // H5: transcription is untrustworthy — stop following visibly rather
@@ -1273,10 +1273,15 @@ export function startLiveSession(input: StartSessionInput): string {
           'danger',
         );
       },
-      // M3: a soft pause keeps the mic and the billing meter live.
-      onPauseWarning: (msRemaining) => {
+      /*
+       * M3: a soft pause keeps the microphone and the recogniser open, so one
+       * that outlasts its limit closes the recogniser. This fires as it
+       * closes, not before — and the wake word cannot reopen a recogniser that
+       * is gone, so the toast names the control that does.
+       */
+      onPauseWarning: () => {
         showToast(
-          `Still paused — voice will disconnect in ${Math.round(msRemaining / 60_000)} min.`,
+          'Voice following switched off after a long pause. Press Resume to turn it back on.',
           'info',
         );
       },
@@ -1313,7 +1318,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * A start that failed on the MICROPHONE must say so on the pill.
        *
        * Without this the take goes `connection: 'offline'` a moment later and
-       * the pill reports "Not connected" — pointing at the network for a
+       * the pill reports "Voice off" — blaming speech recognition for a
        * failure that was the input device, which is the one thing the
        * presenter could have fixed. The no-capture window would eventually
        * reach the same conclusion, several seconds late and after they had
@@ -3486,10 +3491,14 @@ function stopInternals(): void {
 }
 
 /**
- * The realtime connection pill (§15.1). Three states, not two: `offline` is a
- * non-recoverable failure and nothing is retrying, so labelling it
- * "Reconnecting" in a warning tone tells the operator to wait for a recovery
- * that is never coming.
+ * The speech-recognition pill (§15.1). Three states, not two: `offline` means
+ * nothing is retrying — a failure the recogniser gave up on, or a pause that
+ * closed it — so labelling it "Voice starting" in a warning tone tells the
+ * operator to wait for a recovery that is never coming.
+ *
+ * The state names come from the hosted transport this replaced; the labels do
+ * not. The recogniser runs on this machine, and "Disconnected" sent presenters
+ * to check their wifi.
  */
 export function connectionPill(connection: SessionState['connection']): {
   tone: 'success' | 'warning' | 'danger';
@@ -3497,11 +3506,11 @@ export function connectionPill(connection: SessionState['connection']): {
 } {
   switch (connection) {
     case 'connected':
-      return { tone: 'success', label: 'Connected' };
+      return { tone: 'success', label: 'Voice on' };
     case 'reconnecting':
-      return { tone: 'warning', label: 'Reconnecting' };
+      return { tone: 'warning', label: 'Voice starting' };
     default:
-      return { tone: 'danger', label: 'Disconnected' };
+      return { tone: 'danger', label: 'Voice off' };
   }
 }
 
@@ -3522,8 +3531,10 @@ export const liveStatusLabel = derived(state, (s): string => {
   if (!s.active) return s.summary ? 'Take complete' : 'Ready to start';
   const voice = s.mode === 'voice';
   if (voice) {
-    if (s.connection === 'offline') return 'Disconnected — voice following has stopped';
-    if (s.connection === 'reconnecting') return 'Reconnecting — position held';
+    // "Is off", not "has stopped": a pause that closed the recogniser lands
+    // here too, and Resume brings that one back.
+    if (s.connection === 'offline') return 'Voice following is off';
+    if (s.connection === 'reconnecting') return 'Voice starting — position held';
     if (s.micState === 'disconnected') return 'Microphone disconnected — position held';
   }
   if (s.paused === 'hard') return voice ? 'Hard paused — microphone off' : 'Paused';

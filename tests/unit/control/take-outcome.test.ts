@@ -190,11 +190,13 @@ describe('resolveTakeOutcome', () => {
     expect(outcome.detail).toContain('Call to action');
   });
 
-  it('names a dropped connection ahead of the following share it explains', () => {
+  it('names interrupted voice following ahead of the following share it explains', () => {
     // A reconnect CAUSES a poor share. Reporting "following needed help" would
     // send the presenter to rewrite a script that was never the problem.
     const outcome = resolveTakeOutcome(take({ reconnects: 2, followingShare: 0.3 }));
-    expect(outcome.headline).toMatch(/connection/i);
+    expect(outcome.headline).toBe('Voice following was interrupted');
+    // The recogniser is on this machine: no connection, cable or link to blame.
+    expect(`${outcome.headline} ${outcome.suggestion}`).not.toMatch(/connection|cable|wireless/i);
     expect(outcome.detail).toContain('2 interruptions');
     // The band underneath still reports what actually happened.
     expect(outcome.health).toBe('frequent_help');

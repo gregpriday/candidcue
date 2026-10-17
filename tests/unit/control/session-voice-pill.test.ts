@@ -116,6 +116,7 @@ const {
   autoScrollLive,
   clearSession,
   hardPause,
+  liveStatusLabel,
   pauseListening,
   resumeSession,
   session,
@@ -739,6 +740,66 @@ describe('a take paused again while voice was reopening (#289)', () => {
 
     expect(await switchMicrophone('usb', 'USB microphone')).toBe(false);
     expect(toastsStartingWith('Could not switch')).toBe(before + 1);
+  });
+});
+
+describe('speech status names an on-device recogniser, not a connection (#304)', () => {
+  // A presenter who reads "connection" goes and checks their wifi. Nothing in a
+  // take reaches the network: the recogniser runs on this machine.
+  const HOSTED = /connect|transcriber|network|wi-?fi/i;
+
+  function messages(): string[] {
+    return get(toasts).map((toast) => toast.message);
+  }
+
+  it('says a long pause switched voice off, and names the control that brings it back', () => {
+    start();
+    pauseListening();
+    // The pipeline fires this as it closes the recogniser, always with 0.
+    (deps().onPauseWarning as unknown as (msRemaining: number) => void)(0);
+
+    const message = 'Voice following switched off after a long pause. Press Resume to turn it back on.';
+    expect(messages()).toContain(message);
+    // No countdown: "disconnect in 0 min" arrived at the moment it disconnected.
+    expect(message).not.toMatch(/\bmin\b|\d/);
+    expect(message).not.toMatch(HOSTED);
+  });
+
+  it('blames the recogniser falling behind for dropped audio, in the right number', () => {
+    start();
+    const onAudioDropped = deps().onAudioDropped as unknown as (frames: number) => void;
+
+    onAudioDropped(1);
+    expect(messages()).toContain(
+      'Speech recognition fell behind and skipped 1 moment of audio. ' +
+        'Anything said in that gap will not be followed.',
+    );
+    onAudioDropped(3);
+    expect(messages()).toContain(
+      'Speech recognition fell behind and skipped 3 moments of audio. ' +
+        'Anything said in that gap will not be followed.',
+    );
+  });
+
+  it('reads a closed recogniser as voice following being off, paused or not', async () => {
+    start();
+    const onConnectionState = deps().onConnectionState as unknown as (state: string) => void;
+    onConnectionState('connected');
+    onConnectionState('reconnecting');
+    expect(get(liveStatusLabel)).toBe('Voice starting — position held');
+
+    onConnectionState('offline');
+    expect(get(liveStatusLabel)).toBe('Voice following is off');
+
+    // A pause that outlasted its limit closes the recogniser too, and Resume
+    // brings that one back — so the line cannot say it has stopped for good.
+    onConnectionState('connected');
+    pauseListening();
+    await vi.advanceTimersByTimeAsync(0);
+    onConnectionState('offline');
+    expect(get(session).paused).toBe('listening');
+    expect(get(liveStatusLabel)).toBe('Voice following is off');
+    expect(get(liveStatusLabel)).not.toMatch(HOSTED);
   });
 });
 
