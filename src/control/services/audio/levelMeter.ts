@@ -3,9 +3,9 @@
  *
  * Owns the polling loop over an injected analyser graph and feeds the pure
  * `LocalVad`. The default graph factory builds AudioContext →
- * MediaStreamSource → AnalyserNode and never connects to a destination, so
- * microphone audio cannot reach the speakers (feedback is explicitly
- * prevented, spec §28.4).
+ * MediaStreamSource → AnalyserNode and reaches the destination only through a
+ * zero-gain node, so the graph renders but microphone audio cannot reach the
+ * speakers (feedback is explicitly prevented, spec §28.4).
  */
 import type { AudioLevelSnapshot, Unsubscribe } from '../../../shared/contracts';
 import { DEFAULT_ANALYSIS_INTERVAL_MS, type VadConfig } from './defaults';
@@ -37,9 +37,7 @@ export interface MicrophoneMonitorDeps {
  * spec only requires a node to render if it reaches the destination, and some
  * engines take that literally — an `AnalyserNode` hanging off the end of a
  * source with nowhere to go can return zeros forever while every state looks
- * healthy. This repository already documents that exact hazard for the
- * coaching graph (`coaching-analyzer.ts`), and this one was left dangling. The
- * silent path is `analyser → GainNode(0) → destination`: it makes the graph
+ * healthy, and this graph was left dangling. The silent path is `analyser → GainNode(0) → destination`: it makes the graph
  * render without emitting a sample of the presenter's own voice back into the
  * room, which is what the original "no feedback" note was protecting against.
  *

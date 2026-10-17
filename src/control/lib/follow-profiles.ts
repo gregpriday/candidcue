@@ -26,9 +26,8 @@ import {
 
 /** §47.1 follow feel. */
 export type FollowFeel = 'calm' | 'balanced' | 'responsive';
-/** §45 fidelity modes — these change coaching thresholds, not navigation. */
+/** §45 fidelity modes — kept as stored vocabulary; nothing reads them now. */
 export type FidelityMode = 'conversational' | 'balanced' | 'exact';
-/** §47.6 coaching display. */
 
 /** The persisted §47 settings block. */
 export interface FollowingSettings {
@@ -37,8 +36,9 @@ export interface FollowingSettings {
   /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
   /**
-   * Optional per-session cap on semantic-assist requests (§42.1). `null` means
-   * no cap — CandidCue does not invent a limit on the user's own key.
+   * §42.1. The old per-session cap on semantic-assist requests. The settings
+   * adapter still carries it, but Rust no longer stores it and nothing makes
+   * those requests now.
    */
   semanticRequestLimit: number | null;
   /** §15.2 / §64: reveals the diagnostics timeline in Take controls → Why did it move? */
@@ -264,7 +264,6 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
         ratios.motion.catchUpDecayCorridors,
       ),
     },
-    coaching: { ...base.coaching },
   };
 }
 

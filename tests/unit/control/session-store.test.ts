@@ -94,12 +94,6 @@ describe('live session store', () => {
     expect(get(liveStatusLabel)).not.toContain('microphone');
   });
 
-  /*
-   * §27. There is no rail in a manual take (coaching runs on the voice capture),
-   * and coaching mode `off` reserves no band at all. The toggle must decline
-   * rather than flip a flag the stage will never see — which is what the Live
-   * button's disabled state reflects.
-   */
   it('distinguishes listening pause from hard pause (§15.3)', () => {
     start();
     startPrompting();

@@ -231,9 +231,8 @@ describe('resolveTakeOutcome', () => {
   it('never judges the delivery', () => {
     /*
      * CandidCue can say whether it heard and whether it followed. It cannot
-     * tell whether a take was good, and the two analysis lanes that would bear
-     * on that are documented as incomplete. An outcome that praised a take
-     * would be inventing a measurement.
+     * tell whether a take was good, because nothing in it analyses delivery.
+     * An outcome that praised a take would be inventing a measurement.
      */
     const banned = /\b(great|excellent|good take|well done|confident|engaging|professional|nice work)\b/i;
     const shares = [null, 0, 0.2, 0.5, 0.85, 1];

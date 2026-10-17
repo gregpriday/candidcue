@@ -180,9 +180,8 @@
       THE ANSWER, ABOVE THE EVIDENCE (CCUX-006).
 
       Nothing here judges the delivery, and it must stay that way: CandidCue can
-      report whether it heard and whether it followed, and the two lanes that
-      would bear on how the take went are documented as incomplete. Praise would
-      be an invented measurement.
+      report whether it heard and whether it followed, and nothing in it
+      analyses how the take went. Praise would be an invented measurement.
     -->
     {#if outcome}
       <div class="outcome {outcome.tone}">

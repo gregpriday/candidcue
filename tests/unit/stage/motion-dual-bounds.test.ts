@@ -271,7 +271,6 @@ describe('viewportBoundedProfile (§30)', () => {
     expect(short.motion.catchUpMultiplier).toBe(PROFILE.motion.catchUpMultiplier);
     expect(short.motion.reverseTravelMaxPx).toBe(PROFILE.motion.reverseTravelMaxPx);
     expect(short.lineUnits).toBe(PROFILE.lineUnits);
-    expect(short.coaching).toBe(PROFILE.coaching);
   });
 
   it('refuses a viewport it cannot believe rather than capping motion to nothing', () => {

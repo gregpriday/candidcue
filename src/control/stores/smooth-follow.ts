@@ -755,8 +755,9 @@ export function createSmoothFollowStore(
         notices: s.notices.map((n) => ({ id: n.id, title: n.title })),
         counts: s.counts,
         movements: s.movements,
-        // Timeline summaries can quote a coach tip, and tips are derived from
-        // script text — so the export carries structure only (§57.3).
+        // §57.3: timeline entries leave their free-text `detail` and duplicate
+        // movement `record` behind; retained movement records are exported
+        // separately, in `movements`.
         timeline: s.timeline.map(({ record: _record, detail: _detail, ...rest }) => rest),
       };
     },

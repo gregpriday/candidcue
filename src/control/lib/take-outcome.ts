@@ -26,9 +26,9 @@
  * ---------------------------------------------------------------------------
  * Nothing here judges the DELIVERY. CandidCue can say whether it heard and
  * whether it followed; it cannot tell whether a take was good, confident or
- * engaging, and the two analysis lanes that would bear on that are documented
- * as incomplete. An outcome card that called a take "great" would be inventing
- * a measurement, which is the one thing this product does not do.
+ * engaging, because nothing in it analyses delivery. An outcome card that
+ * called a take "great" would be inventing a measurement, which is the one
+ * thing this product does not do.
  */
 
 /** Everything the outcome is allowed to look at. */

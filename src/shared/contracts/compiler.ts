@@ -394,9 +394,8 @@ export interface CoachFrontMatter {
 /**
  * The §19.4 directives in force over one authored span.
  *
- * `spanId` is a {@link SentenceUnit} id — the same identity the coaching
- * subsystem calls a *script span* and compares `activeScriptSpanId` against.
- * It is never a token index and never a block id.
+ * `spanId` is a {@link SentenceUnit} id. It is never a token index and never a
+ * block id.
  */
 export interface CoachDirectiveSpan {
   spanId: string;
@@ -414,9 +413,9 @@ export interface CoachDirectiveSpan {
 /**
  * Everything §19 asks the compiler to derive from the script itself.
  *
- * Resolved to span ids here rather than left as source offsets, because the
- * consumer (the coaching orchestrator's host state) speaks in span ids and has
- * no access to the source text at all.
+ * Resolved to span ids here rather than left as source offsets, so the result
+ * names sentences the way the rest of the compiled script does and needs no
+ * access to the source text to read.
  */
 export interface CompiledCoachingDirectives {
   frontMatter: CoachFrontMatter | null;

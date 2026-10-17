@@ -322,15 +322,6 @@ export interface SessionState {
   prompting: boolean;
   paused: PauseKind;
   stageBlanked: boolean;
-  /**
-   * §27. Whether the Coaching Rail's contents are shown. Toggled by the control
-   * UI or the "show me my stats" voice command. Hiding never reflows the script
-   * (§7.1): the band stays reserved, only the contents fade. `false` when
-   * coaching mode is `off`, because there is no rail to show.
-   */
-  coachRailVisible: boolean;
-  /** §6. Whether coaching is running at all this take (mode !== 'off'). */
-  coachingActive: boolean;
   voiceFollow: boolean;
   /**
    * §48. Following is off because somebody switched it off — the dock's own
@@ -484,8 +475,6 @@ const initial: SessionState = {
   prompting: false,
   paused: 'none',
   stageBlanked: false,
-  coachRailVisible: false,
-  coachingActive: false,
   voiceFollow: true,
   followPausedByUser: false,
   connection: 'connected',
@@ -615,22 +604,6 @@ let takeMirror: PanelMirror | null = null;
  * the range the operator was offered is the range they keep.
  */
 let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
-let stopSidecarFeed: (() => void) | null = null;
-
-/**
- * §60 low transcript confidence.
- *
- * The realtime session is billed for `requestLogprobs: true` and the per-token
- * confidences derived from them already widen the semantic filter's measurement
- * variance — so following really does get vaguer while the recogniser struggles.
- * Until now nothing told the presenter why: `TranscriptFeedStatus` has always
- * had a `'low_confidence'` member and `deriveNotices` has always rendered it,
- * and nothing ever produced it.
- *
- * Take-scoped, like every other per-session detector here. The thresholds and
- * the hysteresis live in the watcher; see that module for why they are what they
- * are.
- */
 
 /* ---------------------------------------------------------------------------
  * §36.3 the pass being performed
@@ -738,16 +711,6 @@ export interface StartSessionInput {
   /** Integration inputs — optional so the store degrades in browser dev. */
   sessionId?: string;
   compiled?: CompiledScript | null;
-  /**
-   * §22. The stored revision the compiled document was produced from.
-   *
-   * A `CompiledScript` carries `scriptId` and `sourceHash` but no revision
-   * number, and the persisted take row has a `scriptRevision` field
-   * that the review lane compares against the script's own to decide whether an
-   * annotation still points at the text it was written about
-   * (`shared/coaching/review/script-annotations.ts`). It has to be handed down.
-   */
-  scriptRevision?: number;
   /** From `start_session` — the Rust coordinator assigns it, control adopts. */
   sessionGeneration?: number;
   stageSettings?: StageSettings | null;
@@ -1536,7 +1499,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
 }
 
 /* ---------------------------------------------------------------------------
- * Semantic sidecar (companion §36–§40)
+ * Alignment snapshots — section progress and transcript bookkeeping
  * ------------------------------------------------------------------------- */
 
 /**
@@ -3266,10 +3229,7 @@ export function toggleStageMirror(axis: 'x' | 'y' = 'x'): boolean | null {
     axis === 'x'
       ? { ...current, horizontal: !current.horizontal }
       : { ...current, vertical: !current.vertical };
-  // §7.5: the rail inherits the same mirror boundary as the script, so it must
-  // learn the new mirror state too — it flips through its own snapshot, not the
-  // stage transform, because it is inside the mirror plane but the boundary is
-  // decided on the control side. The rebuild re-issues both.
+  // Recompose so the stage takes the new mirror state with the appearance.
   applyStageAppearance({});
   return takeMirror.horizontal;
 }
@@ -3537,8 +3497,6 @@ function stopInternals(): void {
   if (displayWatchTimer) clearInterval(displayWatchTimer);
   displayWatchTimer = null;
   stopVoicePill();
-  stopSidecarFeed?.();
-  stopSidecarFeed = null;
   compiledScript = null;
   stageSettings = null;
   // §36.3: the pass ends with the take. `stopSession` has already read what it
