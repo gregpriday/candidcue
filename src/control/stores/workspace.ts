@@ -297,10 +297,18 @@ let pending: Partial<WorkspaceState> | null = null;
 /**
  * Merge a patch over what is stored right now, and write the result.
  *
- * Read and written in one synchronous step, so a field another window stored
- * since this one loaded — or since this patch started waiting on the debounce
- * — survives. The stored side goes through `parseWorkspace`, which means a
- * clamped-out value on disk is repaired by the next write rather than carried.
+ * Read immediately before writing, so a field another window stored since this
+ * one loaded — or since this patch started waiting on the debounce — survives.
+ * The stored side goes through `parseWorkspace`, which means a clamped-out
+ * value on disk is repaired by the next write rather than carried.
+ *
+ * What this is NOT is a transaction. Web Storage promises no locking between
+ * webviews, so two windows writing in the same instant can both read the old
+ * copy and the second loses the first's field. Each write is a human gesture
+ * that has already waited out a debounce, which makes that a far smaller
+ * window than the one this replaced — every write, always — and the locks
+ * that would close it are asynchronous, which the flush before Settings opens
+ * and the one on `pagehide` cannot wait for.
  */
 function writeNow(patch: Partial<WorkspaceState>): void {
   try {
@@ -356,8 +364,12 @@ if (typeof window !== 'undefined') {
 
 /** Apply a partial change. The only mutator — everything else calls through it. */
 export function updateWorkspace(patch: Partial<WorkspaceState>): void {
-  state.update((current) => ({ ...current, ...patch }));
+  // Queued BEFORE the store notifies. Subscribers run synchronously inside
+  // `update`, and one that answers with its own `updateWorkspace` must have
+  // the later patch: queued afterwards, this one would land over it and disk
+  // would disagree with the layout on screen.
   persist(patch);
+  state.update((current) => ({ ...current, ...patch }));
 }
 
 /** Set a pane's width, clamped to that pane's declared range. */

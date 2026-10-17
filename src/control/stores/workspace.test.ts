@@ -234,7 +234,9 @@ describe('two windows writing one workspace', () => {
     const settings = await openWindow();
 
     control.updateWorkspace({ sidebarVisible: false });
-    control.setPaneWidth('editorOutline', 320);
+    // Past the pane's maximum: the clamp has to reach the patch, because the
+    // merge parses only the STORED side.
+    control.setPaneWidth('editorOutline', 9999);
     settings.updateWorkspace({ settingsSection: 'speech' });
     settings.flushWorkspace();
 
@@ -244,8 +246,9 @@ describe('two windows writing one workspace', () => {
     expect(stored()).toMatchObject({
       settingsSection: 'speech',
       sidebarVisible: false,
-      outlineWidth: 320,
+      outlineWidth: PANE_LIMITS.editorOutline.max,
     });
+    expect(get(control.workspace).outlineWidth).toBe(PANE_LIMITS.editorOutline.max);
   });
 
   it('never moves the live layout of the other window', async () => {
@@ -280,8 +283,10 @@ describe('two windows writing one workspace', () => {
     const control = await openWindow();
     const settings = await openWindow();
 
+    // Written by the debounce rather than a flush: both have to let go of
+    // what they wrote.
     control.updateWorkspace({ settingsSection: 'privacy' });
-    control.flushWorkspace();
+    vi.advanceTimersByTime(250);
     settings.updateWorkspace({ settingsSection: 'audio' });
     settings.flushWorkspace();
     control.updateWorkspace({ outlineVisible: false });
@@ -310,6 +315,35 @@ describe('two windows writing one workspace', () => {
     vi.advanceTimersByTime(250);
     expect(stored()).toMatchObject({ documentScale: 1, settingsSection: 'audio' });
     expect(get(control.workspace).documentScale).toBe(1);
+  });
+
+  it('still steps from the nearest step when the live scale sits between two', async () => {
+    // Loading snaps a stored scale, so only a scale set in THIS run can be
+    // off-table — and stepping now reads it from the live copy.
+    const control = await openWindow();
+    control.updateWorkspace({ documentScale: 1.07 });
+
+    control.stepDocumentScale(1);
+    control.flushWorkspace();
+    expect(get(control.workspace).documentScale).toBe(1.25);
+    expect(stored().documentScale).toBe(1.25);
+  });
+
+  it('persists the later patch when a subscriber answers one with another', async () => {
+    // Subscribers run inside `update`. Queued after notifying, the outer patch
+    // landed over the one its subscriber made, and disk said Preview while the
+    // screen said Both.
+    const control = await openWindow();
+    const stop = control.workspace.subscribe((current) => {
+      if (current.editorLayout === 'preview') control.updateWorkspace({ editorLayout: 'split' });
+    });
+
+    control.updateWorkspace({ editorLayout: 'preview' });
+    stop();
+    control.flushWorkspace();
+
+    expect(get(control.workspace).editorLayout).toBe('split');
+    expect(stored().editorLayout).toBe('split');
   });
 
   it('flushes synchronously, so a window opened straight after reads the section', async () => {
@@ -379,6 +413,26 @@ describe('two windows writing one workspace', () => {
 
     expect(stored()).toMatchObject({ settingsSection: 'audio', editorLayout: 'edit' });
     expect(get(control.workspace).editorLayout).toBe('preview');
+
+    // Once storage reads again, the abandoned patch stays abandoned.
+    settings.updateWorkspace({ settingsSection: 'speech' });
+    settings.flushWorkspace();
+    control.updateWorkspace({ sidebarVisible: false });
+    control.flushWorkspace();
+    expect(stored()).toMatchObject({
+      settingsSection: 'speech',
+      editorLayout: 'edit',
+      sidebarVisible: false,
+    });
+  });
+
+  it('lays out from memory when there is no storage at all', async () => {
+    vi.stubGlobal('localStorage', undefined);
+    const control = await openWindow();
+
+    control.updateWorkspace({ editorLayout: 'split' });
+    expect(() => control.flushWorkspace()).not.toThrow();
+    expect(get(control.workspace).editorLayout).toBe('split');
   });
 
   it('drops a patch whose write failed rather than retrying it later', async () => {
