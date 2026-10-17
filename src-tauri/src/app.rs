@@ -163,11 +163,10 @@ pub fn run() {
             // Sessions (spec §36)
             commands::start_session,
             commands::end_session,
-            commands::append_session_transcript,
             commands::list_sessions,
-            // §36.3 take history
-            commands::record_session_take,
-            commands::list_session_takes,
+            // No `append_session_transcript`, `record_session_take` or
+            // `list_session_takes`. Takes stopped writing transcripts and take
+            // history (#214), and their storage went with #217.
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -336,14 +335,13 @@ pub fn run() {
             // Preflight can revalidate its display selection (spec §52.5).
             crate::windows::spawn_display_watcher(&handle);
 
-            // Startup reconciliation + retention enforcement (spec §47.6,
-            // §36.2). This runs to completion HERE, synchronously, before
-            // `setup` returns and therefore before the event loop dispatches
-            // the first IPC message — reconciliation repairs and a user
-            // command must never interleave (H3). It also uses the MANAGED
-            // lock set: a private `ScriptLocks::default()` locks nothing that
-            // a command would respect, which is exactly how a repair could
-            // race a save.
+            // Startup reconciliation (spec §47.6). This runs to completion
+            // HERE, synchronously, before `setup` returns and therefore before
+            // the event loop dispatches the first IPC message — reconciliation
+            // repairs and a user command must never interleave (H3). It also
+            // uses the MANAGED lock set: a private `ScriptLocks::default()`
+            // locks nothing that a command would respect, which is exactly how
+            // a repair could race a save.
             //
             // Skipped entirely in recovery mode. Reconciliation REPAIRS: it
             // deletes stale temp files, inserts recovered rows, purges trash
@@ -362,13 +360,6 @@ pub fn run() {
                         &pool, &paths, &locks,
                     )
                     .await;
-                    if let Ok(settings) = crate::settings::get_settings(&pool).await {
-                        let _ = crate::sessions::enforce_transcript_retention(
-                            &pool,
-                            &settings.value.general.save_transcript,
-                        )
-                        .await;
-                    }
                     // §36.1: no session can be live at startup, so any row
                     // still open belongs to a take that crashed or was force
                     // quit. Closing it here is the only path that covers the

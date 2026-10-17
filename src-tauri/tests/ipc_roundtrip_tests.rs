@@ -162,7 +162,6 @@ const REPLAYED: &[&str] = &[
     "restore_revision",
     "start_session",
     "end_session",
-    "append_session_transcript",
     "list_sessions",
     "get_settings",
     "update_settings",
@@ -201,6 +200,9 @@ const REPLAYED: &[&str] = &[
 struct Harness {
     _dir: tempfile::TempDir,
     paths: DataPaths,
+    /// The same pool the commands use, for a test that has to put the
+    /// database into a state no command would write.
+    pool: sqlx::SqlitePool,
     _app: tauri::App<MockRuntime>,
     webview: WebviewWindow<MockRuntime>,
     /// A webview labelled `stage`, so `emit_to(STAGE_LABEL, …)` has somewhere
@@ -233,7 +235,6 @@ fn harness() -> Harness {
             commands::restore_revision,
             commands::start_session,
             commands::end_session,
-            commands::append_session_transcript,
             commands::list_sessions,
             commands::get_settings,
             commands::update_settings,
@@ -253,7 +254,7 @@ fn harness() -> Harness {
     // recovery mode, so the harness has to declare which mode it exercises.
     // `Ready` is the ordinary one; the recovery refusal has its own tests.
     app.manage(candidcue_lib::database::BootStatus::Ready);
-    app.manage(Database::new(pool));
+    app.manage(Database::new(pool.clone()));
     app.manage(paths.clone());
     app.manage(ScriptLocks::default());
     app.manage(AppCoordinator::default());
@@ -272,6 +273,7 @@ fn harness() -> Harness {
     Harness {
         _dir: dir,
         paths,
+        pool,
         _app: app,
         webview,
         stage,
@@ -924,74 +926,78 @@ fn the_settings_patch_the_ui_sends_persists_through_the_command() {
     );
 }
 
-/// §36.2 — retention is decided by settings AT START and cannot be talked into
-/// existence later.
+/// #217 — transcript retention is gone from the Rust side too, and a settings
+/// document an earlier build wrote must survive that.
 ///
-/// The UI no longer sends this patch: the Settings row went with #215, once
-/// takes stopped writing transcripts (#214). Rust still honours the field, and
-/// still sweeps what older builds kept, until #217 removes it — so the patch is
-/// built here rather than replayed from the capture fixture.
+/// A document a pre-#217 build stored carries `general.saveTranscript`. It has
+/// to load through the real command with the settings around it intact, be
+/// dropped from what the frontend is sent, and leave the stored document at the
+/// next write — and a session started over it must say nothing about
+/// transcripts.
 #[test]
-fn transcript_retention_follows_the_settings_document() {
+fn a_stored_save_transcript_setting_loads_and_is_dropped_on_the_next_write() {
     let h = harness();
-    let created = h.expect_ok(
-        "create_script",
-        json!({ "input": { "title": "Retention", "source": "# Retention\n" } }),
-    );
-    let script_id = created["id"].as_str().unwrap().to_string();
+    let first = h.expect_ok("get_settings", Value::Null);
+    tauri::async_runtime::block_on(
+        sqlx::query(
+            "UPDATE settings SET value_json = json_set(value_json,
+                '$.general.saveTranscript', '7d',
+                '$.general.wordsPerMinuteEstimate', 155)",
+        )
+        .execute(&h.pool),
+    )
+    .expect("store what a pre-#217 build wrote");
+    let stored_json = || -> Value {
+        let raw: String = tauri::async_runtime::block_on(
+            sqlx::query_scalar("SELECT value_json FROM settings").fetch_one(&h.pool),
+        )
+        .expect("stored settings");
+        serde_json::from_str(&raw).expect("stored settings are json")
+    };
+    assert_eq!(stored_json()["general"]["saveTranscript"], json!("7d"));
 
-    let start = json!({ "input": {
-        "scriptId": script_id,
-        "scriptSourceHash": "sha256:retention",
-        "mode": "voice",
-    }});
-
-    // Default is off.
-    let before = h.expect_ok("start_session", start.clone());
+    let loaded = h.expect_ok("get_settings", Value::Null);
+    assert_eq!(loaded["revision"], first["revision"]);
     assert_eq!(
-        before["transcriptRetained"],
-        json!(false),
-        "retention must default off (§36.2)"
+        loaded["value"]["general"]["wordsPerMinuteEstimate"],
+        json!(155),
+        "the settings beside the retired key must survive"
     );
-    h.expect_ok(
-        "end_session",
-        json!({ "sessionId": before["id"].as_str().unwrap(), "summary": null }),
+    assert!(
+        loaded["value"]["general"].get("saveTranscript").is_none(),
+        "the retired key must not reach the frontend, got {}",
+        loaded["value"]["general"]
     );
 
-    let settings = h.expect_ok("get_settings", Value::Null);
     let updated = h.expect_ok(
         "update_settings",
         json!({
-            "expectedRevision": settings["revision"].as_i64().unwrap(),
-            "patch": { "general": { "saveTranscript": "7d" } },
+            "expectedRevision": loaded["revision"].as_i64().unwrap(),
+            "patch": { "general": { "revisionIntervalMinutes": 12 } },
         }),
     );
-    assert_eq!(
-        updated["value"]["general"]["saveTranscript"],
-        json!("7d"),
-        "a retention patch must reach `general.saveTranscript`"
+    assert_eq!(updated["value"]["general"]["wordsPerMinuteEstimate"], json!(155));
+    let stored = stored_json();
+    assert_eq!(stored["general"]["revisionIntervalMinutes"], json!(12));
+    assert!(
+        stored["general"].get("saveTranscript").is_none(),
+        "the next write must drop the retired key from disk, got {}",
+        stored["general"]
     );
 
-    let after = h.expect_ok("start_session", start);
-    assert_eq!(
-        after["transcriptRetained"],
-        json!(true),
-        "a session started after retention was enabled must retain"
+    let created = h.expect_ok(
+        "create_script",
+        json!({ "input": { "title": "Retired", "source": "# Retired\n" } }),
     );
-
-    // And the transcript really lands.
-    let written = h.expect_ok(
-        "append_session_transcript",
-        json!({
-            "sessionId": after["id"].as_str().unwrap(),
-            "items": [{
-                "commitSequence": 1,
-                "transcript": "Good morning everyone.",
-                "disposition": "script",
-            }],
-        }),
+    let session = h.expect_ok(
+        "start_session",
+        json!({ "input": {
+            "scriptId": created["id"].as_str().unwrap(),
+            "scriptSourceHash": "sha256:retired",
+            "mode": "voice",
+        }}),
     );
-    assert_eq!(written, json!(1));
+    assert!(session.get("transcriptRetained").is_none(), "got {session}");
 }
 
 /// #216 — permanently deleting a script deletes its sessions, so a take still

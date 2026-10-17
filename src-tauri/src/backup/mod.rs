@@ -34,8 +34,8 @@
 //! rename, directory fsync), every move in `move_or_copy`, every file
 //! `copy_tree` writes, the restored database before it is verified, and the
 //! directory entries all of those depend on. The database itself commits with
-//! `synchronous = FULL`, because settings, session history and retained
-//! transcripts exist nowhere else.
+//! `synchronous = FULL`, because settings and session history exist nowhere
+//! else.
 //!
 //! Deliberately NOT flushed, and the reason in each case is that the source
 //! still exists afterwards:
@@ -1616,9 +1616,10 @@ pub async fn rebuild_database_index(paths: &DataPaths) -> Result<PathBuf, AppErr
          it opens: each script's text, and the saved versions and images that are\n\
          intact. Script names, Trash and per-script reading settings are read out\n\
          of this database where it can still be read; a script it cannot name is\n\
-         named after its own first line. Session history and retained transcripts\n\
-         are NOT reconstructed by a rebuild — if you need them, this file is where\n\
-         they still are.\n\
+         named after its own first line. Session history is NOT reconstructed by\n\
+         a rebuild — if you need it, this file is where it still is. An older\n\
+         version of CandidCue that kept take history or saved transcripts may\n\
+         have left those here too; this version no longer reads them.\n\
          \n\
          Nothing deletes this folder automatically.\n",
     )

@@ -129,8 +129,13 @@ pub struct GeneralSettings {
      * deserialises and simply drops it on the next write.
      */
     pub analytics_enabled: bool,
-    /// 'off' | '1d' | '7d' | '30d' | 'forever' (spec §36.2).
-    pub save_transcript: String,
+    /*
+     * No `save_transcript` either. It was the transcript retention window
+     * (spec §36.2): takes stopped writing transcripts (#214), the setting left
+     * Settings (#215), and the storage it governed went with #217. A document
+     * written before that still carries `saveTranscript` until its next save,
+     * and is tolerated for the same reason as `updateCheck`.
+     */
 }
 
 impl Default for GeneralSettings {
@@ -141,7 +146,6 @@ impl Default for GeneralSettings {
             revision_interval_minutes: 5,
             words_per_minute_estimate: 130,
             analytics_enabled: false,
-            save_transcript: "off".into(),
         }
     }
 }
@@ -391,13 +395,6 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
             )
             .with_detail("field", "stageBehavior.presentationMode"));
         }
-    }
-
-    let allowed_transcript = ["off", "1d", "7d", "30d", "forever"];
-    if !allowed_transcript.contains(&settings.general.save_transcript.as_str()) {
-        return Err(AppError::invalid_input(
-            "Setting general.saveTranscript must be off, 1d, 7d, 30d, or forever.",
-        ));
     }
 
     // Following settings (companion §47): closed vocabularies, validated here
@@ -702,26 +699,6 @@ pub async fn update_settings(
         .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
     let next_revision = current.revision + 1;
 
-    /*
-     * §32.2 / §36.2. A retention toggle that is off must remove what earlier
-     * sessions stored, not merely stop future writes.
-     *
-     * `enforce_transcript_retention` already implemented that rule, but it was
-     * only ever called at startup (`app.rs`), so turning retention off deleted
-     * nothing until the next launch — the setting said "not kept" while the
-     * rows were still there, for as long as the app stayed open. Enforcing it
-     * on write closes that window.
-     *
-     * ONE TRANSACTION, and this is the part that was wrong. The two statements
-     * used to be separate: the document committed first and the deletion ran
-     * after it with `?`, so a deletion that failed left the new value durable
-     * and still returned an error. The caller rolls the UI back and reports
-     * "nothing was changed", the new revision is never broadcast, and every
-     * window goes on holding a revision that no longer exists — while the
-     * setting on disk says transcripts are not kept and the rows are still
-     * there. Committing both together means the pair is either true or absent.
-     */
-    let mut tx = pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE settings SET value_json = ?, revision = ?, updated_at = ?
          WHERE key = ? AND revision = ?",
@@ -731,14 +708,11 @@ pub async fn update_settings(
     .bind(now_iso())
     .bind(SETTINGS_KEY)
     .bind(expected_revision)
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AppError::stale_revision(expected_revision, next_revision));
     }
-    crate::sessions::enforce_transcript_retention_on(&mut tx, &merged.general.save_transcript)
-        .await?;
-    tx.commit().await?;
 
     Ok(RevisionedSettings {
         revision: next_revision,
@@ -1256,9 +1230,8 @@ mod tests {
     /// FIELD, which `GeneralSettings` tolerates for the same reason — and they
     /// are separate derives, so adding `deny_unknown_fields` to the inner
     /// struct alone would break this while leaving the section test green. A
-    /// user who upgrades would lose their words-per-minute estimate, their
-    /// open-to preference and their transcript-retention choice because of one
-    /// key nobody reads.
+    /// user who upgrades would lose their words-per-minute estimate and their
+    /// open-to preference because of one key nobody reads.
     #[test]
     fn a_document_carrying_the_removed_update_check_field_still_loads() {
         let stored = serde_json::json!({
@@ -1267,7 +1240,6 @@ mod tests {
                 "openTo": "last_script",
                 "wordsPerMinuteEstimate": 155,
                 "updateCheck": "daily",
-                "saveTranscript": "7d",
             },
         });
 
@@ -1279,7 +1251,6 @@ mod tests {
             settings.general.words_per_minute_estimate, 155,
             "the settings beside the retired key must survive the upgrade"
         );
-        assert_eq!(settings.general.save_transcript, "7d");
         assert!(validate(&settings).is_ok());
 
         // And it must not come back on the way out: the next write drops it.
@@ -1288,5 +1259,42 @@ mod tests {
             written["general"].get("updateCheck").is_none(),
             "the retired field must not be written back out"
         );
+    }
+
+    /// #217: the transcript retention window, retired the same way.
+    ///
+    /// Every settings document a pre-#217 build wrote carries
+    /// `general.saveTranscript`, with whatever window the presenter chose —
+    /// and `validate` used to REJECT anything outside its five values, so a
+    /// leftover check would turn a stale key into a document that cannot be
+    /// saved. Each value, including one no build ever offered, must load with
+    /// the settings around it intact, validate, and be gone on the way out.
+    #[test]
+    fn a_document_carrying_the_removed_save_transcript_field_still_loads() {
+        for retention in ["off", "1d", "7d", "30d", "forever", "90d"] {
+            let stored = serde_json::json!({
+                "schemaVersion": 1,
+                "general": {
+                    "openTo": "last_script",
+                    "wordsPerMinuteEstimate": 155,
+                    "revisionIntervalMinutes": 12,
+                    "saveTranscript": retention,
+                },
+            });
+
+            let settings: AppSettings = serde_json::from_value(stored)
+                .unwrap_or_else(|e| panic!("saveTranscript {retention:?} must still load: {e}"));
+
+            assert_eq!(settings.general.open_to, "last_script");
+            assert_eq!(settings.general.words_per_minute_estimate, 155);
+            assert_eq!(settings.general.revision_interval_minutes, 12);
+            assert!(validate(&settings).is_ok(), "saveTranscript {retention:?} must validate");
+
+            let written = serde_json::to_value(&settings).expect("serializes");
+            assert!(
+                written["general"].get("saveTranscript").is_none(),
+                "the retired field must not be written back out"
+            );
+        }
     }
 }

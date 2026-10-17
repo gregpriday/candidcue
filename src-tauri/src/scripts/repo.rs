@@ -960,8 +960,7 @@ pub async fn restore_script(
 
 /// Permanent deletion (spec §21.5): canonical source, revisions, copied
 /// assets, caches, analyses, database rows — including the script's session
-/// history (sessions, and the takes and retained transcripts that cascade from
-/// them). Never touches dictionary entries, display profiles, or another
+/// history. Never touches dictionary entries, display profiles, or another
 /// script's sessions.
 pub async fn permanently_delete_script(
     pool: &SqlitePool,
@@ -1021,9 +1020,9 @@ pub async fn permanently_delete_script(
             .execute(&mut *tx)
             .await?;
         // Sessions RESTRICT deletion of their script, so a script that was
-        // ever presented could not be deleted until they go. Takes and
-        // transcript items cascade from the session rows. This is inside the
-        // transaction so a failed delete keeps the history with the script.
+        // ever presented could not be deleted until they go. This is inside
+        // the transaction so a failed delete keeps the history with the
+        // script.
         sqlx::query("DELETE FROM sessions WHERE script_id = ?")
             .bind(script_id.as_str())
             .execute(&mut *tx)

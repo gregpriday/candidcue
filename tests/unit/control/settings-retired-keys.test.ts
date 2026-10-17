@@ -2,12 +2,12 @@
  * #215 — the retired transcript retention window must not cost anybody their
  * other settings.
  *
- * Every settings document on disk still carries `general.saveTranscript` (Rust
- * keeps the field until #217), and a localStorage overlay written by an older
- * build can still hold `privacy.saveTranscript`. Neither is read any more, and
- * both have to be tolerated the way the retired `updateCheck` key is: the rest
- * of the document loads exactly as it would without them, and nothing this
- * side of the boundary writes the field back.
+ * A settings document written before #217 still carries
+ * `general.saveTranscript` until its next save, and a localStorage overlay
+ * written by an older build can still hold `privacy.saveTranscript`. Neither
+ * is read any more, and both have to be tolerated the way the retired
+ * `updateCheck` key is: the rest of the document loads exactly as it would
+ * without them, and nothing this side of the boundary writes the field back.
  *
  * These drive the real service against a fake `ipcInvoke` and a real
  * (in-memory) localStorage, so the overlay code path actually runs — without
