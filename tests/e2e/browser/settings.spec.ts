@@ -511,11 +511,14 @@ test('searching for what Diagnostic Take shows finds its row', async ({ page }) 
   });
   await expect(row).toBeVisible();
   await expect(row).not.toHaveAttribute('data-settings-search-miss');
-  // And the search really narrowed the section rather than matching everything.
+  // And the search really narrowed the section rather than matching everything
+  // — HIDDEN, not merely marked. Every row's root sets its own `display` in a
+  // scoped rule, which used to outrank the miss rule and leave it on screen.
   const pointer = page.locator('.content .toggle-row', {
-    has: page.getByRole('switch', { name: 'Hide the pointer on the stage' }),
+    has: page.getByRole('switch', { name: 'Hide the pointer on the stage', includeHidden: true }),
   });
   await expect(pointer).toHaveAttribute('data-settings-search-miss');
+  await expect(pointer).toBeHidden();
 });
 
 test('a rig with every step answered but no measured scale does not read as done', async ({ page }) => {

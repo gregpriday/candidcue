@@ -3376,9 +3376,13 @@
    * body, so a rule hung off it would be global in the way that matters and
    * specific only by accident. These two attributes are set in exactly one
    * `$effect`, in this file.
+   *
+   * `!important` because every row's own root sets `display` in a scoped rule
+   * — `.toggle-row.svelte-…` and its siblings — and that outranks a bare
+   * attribute selector. Without it the misses were marked and never hidden.
    */
   :global([data-settings-search-miss]) {
-    display: none;
+    display: none !important;
   }
   /*
    * A wash rather than a highlighted substring. Marking the matched words
