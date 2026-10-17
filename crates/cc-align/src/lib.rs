@@ -34,7 +34,7 @@ pub use language::{
     AlignmentLanguage, CurrencyOrder, LanguageRule, NormalizationProfile, PhoneticPolicy,
     RuleDisposition,
 };
-pub use project::{decision_name, project_to_tokens, state_name, TokenSnapshot};
+pub use project::{decision_name, project_to_tokens, state_name, DisplayAtoms, TokenSnapshot};
 pub use script::{
     compile, compile_tokens, compile_tokens_in, CompileOptions, CompiledScript, QueryWord,
     TokenInput, TranscriptWordTime,

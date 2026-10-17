@@ -204,6 +204,37 @@ export interface AlignmentSnapshot {
   /** Atom-space originals. Diagnostics and benchmark parity only. */
   observedAtom: number;
   confirmedAtom: number;
+  /**
+   * The display trajectory in the engine's own coordinates, with the stretch
+   * of the atom→token axis it can reach. When present, {@link alignmentDisplayAt}
+   * evaluates the engine's formula exactly and maps the answer through `axis`,
+   * instead of re-running the formula on the token-space fields above.
+   *
+   * Optional: snapshots recorded before it existed (and hand-built ones in
+   * tests and previews) carry none, and take the token-space path unchanged.
+   * See `cc_align::DisplayAtoms` for why the token-space path is only an
+   * approximation wherever a token spans several atoms or an atom several
+   * tokens.
+   */
+  displayAtoms?: AlignmentDisplayAtoms | null;
+}
+
+/**
+ * `cc_align::DisplayAtoms`: everything needed to reproduce `display_at`
+ * exactly, in atoms, and the axis to map its answer into tokens.
+ */
+export interface AlignmentDisplayAtoms {
+  observed: number;
+  /** Display rate, atoms/second. */
+  rate: number;
+  maxLead: number;
+  margin: number;
+  /** The ceiling `display_at` clamps to, in atoms. */
+  ceiling: number;
+  /** The integer atom boundary `axis[0]` describes. */
+  axisFrom: number;
+  /** Token position at atom boundaries `axisFrom`, `axisFrom + 1`, …. */
+  axis: number[];
 }
 
 /**
@@ -214,23 +245,69 @@ export interface AlignmentSnapshot {
  * has not reached the evidence yet does not rewind the reader, and a stale
  * snapshot cannot scroll the document indefinitely.
  *
- * "Mirror" and not "identical": the engine extrapolates along the ATOM axis and
- * this runs on a single token-space rate, and the two axes are related by a
- * piecewise-linear map (a token like `$12` is two atoms). Wherever a
- * multi-atom token falls inside the prediction horizon the two curves differ
- * mid-flight — by a fraction of a token — while agreeing at both endpoints,
- * which is what the projection in `src-tauri/src/align/mod.rs` is chosen to
- * guarantee. Representing the difference exactly would mean shipping the axis
- * breakpoints to the stage; a fraction of a word of interpolation error inside
- * a bounded horizon does not justify that.
+ * Exact when the snapshot carries `displayAtoms`, which every live snapshot
+ * does: the engine's formula runs in atoms and the answer is mapped through the
+ * few axis breakpoints the display can reach. Without it — an older recording,
+ * a hand-built test snapshot — the same formula runs on the token-space fields,
+ * which is only a mirror: separately projected margin, cap and rate do not
+ * compose back into the engine's curve wherever a token spans several atoms or
+ * an atom several tokens, and the error was measured at up to 2.4 tokens.
  *
  * Deliberately NOT a second prediction model. The engine has already applied
  * lag compensation and bounded the extrapolation; a stage that layered its own
  * horizon on top would be extrapolating an extrapolation.
  */
 export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number): number {
-  const { observedToken, rateTokensPerSecond, scriptLenTokens } = snapshot;
-  const ceiling = Math.min(snapshot.displayLimitToken, scriptLenTokens);
+  const exact = snapshot.displayAtoms;
+  if (exact) {
+    /*
+     * The engine's own formula, in atoms, mapped through the axis it shipped.
+     *
+     * The token-space branch below projects a margin, a cap, a rate and a
+     * ceiling through the atom→token axis separately, and the axis bends
+     * wherever a token spans several atoms (`$12`, `it's`) or an atom spans
+     * several tokens (`one hundred and forty-three` → `143`). Replayed over the
+     * captured corpus compiled the way the app compiles it, that put this
+     * stage's dim cursor ahead of the engine's on 1.73% of 20 Hz samples — a
+     * word drawn as spoken that the engine had not claimed — by up to 2.4
+     * tokens. This branch agrees with the engine exactly
+     * (`cc-bench projection`).
+     */
+    const atom = displayTrajectory(
+      snapshot,
+      tAudioMs,
+      exact.observed,
+      exact.rate,
+      exact.maxLead,
+      exact.margin,
+      exact.ceiling,
+    );
+    return axisTokenAt(exact, atom);
+  }
+  return displayTrajectory(
+    snapshot,
+    tAudioMs,
+    snapshot.observedToken,
+    snapshot.rateTokensPerSecond,
+    snapshot.maxLeadTokens,
+    snapshot.leadMarginTokens,
+    Math.min(snapshot.displayLimitToken, snapshot.scriptLenTokens),
+  );
+}
+
+/**
+ * `Snapshot::display_at`, over whichever coordinates it is handed: atoms with
+ * {@link AlignmentDisplayAtoms}, tokens for a snapshot that carries none.
+ */
+function displayTrajectory(
+  snapshot: AlignmentSnapshot,
+  tAudioMs: number,
+  observed: number,
+  rate: number,
+  maxLead: number,
+  leadMargin: number,
+  ceiling: number,
+): number {
   const age = Number.isFinite(tAudioMs) ? Math.max(0, tAudioMs - snapshot.evidenceAudioMs) : 0;
   const onset = Math.min(snapshot.pauseOnsetMs, snapshot.maxPredictionMs);
   /*
@@ -238,7 +315,7 @@ export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number
    *
    * Computed BEFORE the zero-rate branch, because the margin below depends on
    * it and the margin applies whether or not there is a lead. Returning a bare
-   * `observedToken` when the rate is zero — which this used to do — put a step
+   * `observed` when the rate is zero — which this used to do — put a step
    * of the whole margin into the reference at every Following→Holding
    * transition: the path below answers `observed - margin` at zero lead, so
    * dropping the margin moved the target FORWARD by a couple of words in one
@@ -251,8 +328,8 @@ export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number
   // Caution as a distance, not as a reduced speed — see `leadMarginTokens`.
   // Fades out through the settle, so a display that has come to rest rests ON
   // the last word heard rather than a word short of it.
-  const margin = snapshot.leadMarginTokens * (1 - settle);
-  if (!(rateTokensPerSecond > 0)) return clampToScript(observedToken - margin, ceiling);
+  const margin = leadMargin * (1 - settle);
+  if (!(rate > 0)) return clampToScript(observed - margin, ceiling);
 
   // While evidence is fresh the lead grows 1:1 — that is pipeline-lag
   // compensation, not a guess about the future: the words are already said,
@@ -260,16 +337,28 @@ export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number
   // at `onset` rather than arriving there at full speed, holds, and then eases
   // back so the display rests on the last word actually heard.
   //
-  // Exact mirror of `Snapshot::display_at`; a Rust test asserts the two agree.
+  // Mirror of `Snapshot::display_at`.
   const rise = softMin(age, onset, snapshot.leadEaseMs);
   const floorMs = Math.min(snapshot.leadFloorMs, onset);
   const leadMs = rise * (1 - settle) + floorMs * settle;
-  const lead = softMin(
-    (rateTokensPerSecond * leadMs) / 1000,
-    snapshot.maxLeadTokens,
-    (rateTokensPerSecond * snapshot.leadEaseMs) / 1000,
-  );
-  return clampToScript(observedToken + lead - margin, ceiling);
+  const lead = softMin((rate * leadMs) / 1000, maxLead, (rate * snapshot.leadEaseMs) / 1000);
+  return clampToScript(observed + lead - margin, ceiling);
+}
+
+/**
+ * `DisplayAtoms::token_at`: linear interpolation between the axis's integer
+ * atom boundaries, clamped to the window it covers.
+ */
+function axisTokenAt(exact: AlignmentDisplayAtoms, atom: number): number {
+  const { axis } = exact;
+  const last = axis.length - 1;
+  const x = atom - exact.axisFrom;
+  if (!(x > 0)) return axis[0]!;
+  if (x >= last) return axis[last]!;
+  const i = Math.floor(x);
+  const lo = axis[i]!;
+  const hi = axis[i + 1]!;
+  return lo + (hi - lo) * (x - i);
 }
 
 /**
@@ -359,7 +448,8 @@ type FieldKind =
   | 'decision'
   | 'nullableReal'
   | 'optionalNullableReal'
-  | 'optionalBoolean';
+  | 'optionalBoolean'
+  | 'optionalDisplayAtoms';
 
 /**
  * Typed `Record<keyof AlignmentSnapshot, FieldKind>`, so a field added to the
@@ -392,7 +482,34 @@ const SNAPSHOT_FIELDS: Record<keyof AlignmentSnapshot, FieldKind> = {
   scriptLenTokens: 'real',
   observedAtom: 'real',
   confirmedAtom: 'real',
+  displayAtoms: 'optionalDisplayAtoms',
 };
+
+/**
+ * The display window is a handful of boundaries (margin plus lead cap, about
+ * six). A much longer one is not a window, it is a malformed payload, and the
+ * motion plant should not be iterating over it.
+ */
+const MAX_DISPLAY_AXIS = 256;
+
+function validDisplayAtoms(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const d = value as Record<string, unknown>;
+  for (const key of ['observed', 'rate', 'maxLead', 'margin', 'ceiling', 'axisFrom'] as const) {
+    if (typeof d[key] !== 'number' || !Number.isFinite(d[key])) return false;
+  }
+  if (!Number.isInteger(d.axisFrom) || (d.axisFrom as number) < 0) return false;
+  const axis = d.axis;
+  if (!Array.isArray(axis) || axis.length === 0 || axis.length > MAX_DISPLAY_AXIS) return false;
+  let previous = -Infinity;
+  for (const point of axis) {
+    // Non-decreasing, like the axis it is a window onto: a display that only
+    // moves forward in atoms must only move forward in tokens.
+    if (typeof point !== 'number' || !Number.isFinite(point) || point < previous) return false;
+    previous = point;
+  }
+  return true;
+}
 
 const SNAPSHOT_ENTRIES = Object.entries(SNAPSHOT_FIELDS) as Array<
   [keyof AlignmentSnapshot, FieldKind]
@@ -439,6 +556,9 @@ export function validateAlignmentSnapshot(value: unknown): string | null {
         break;
       case 'optionalBoolean':
         if (field !== undefined && typeof field !== 'boolean') return key;
+        break;
+      case 'optionalDisplayAtoms':
+        if (field !== undefined && field !== null && !validDisplayAtoms(field)) return key;
         break;
       case 'state':
         if (typeof field !== 'string' || !STATE_SET.has(field)) return key;

@@ -103,6 +103,95 @@ pub struct TokenSnapshot {
     /// Atom-space originals. Diagnostics and benchmark parity only.
     pub observed_atom: f64,
     pub confirmed_atom: f64,
+    /// The display trajectory in the engine's own coordinates, with the stretch
+    /// of the atom→token axis it can reach — so the stage reproduces
+    /// `display_at` EXACTLY instead of approximately. See [`DisplayAtoms`].
+    pub display_atoms: DisplayAtoms,
+}
+
+/// Everything the stage needs to evaluate `Snapshot::display_at` in atoms and
+/// map the answer into tokens without an approximation.
+///
+/// # Why the token-space fields above are not enough
+///
+/// They project a margin, a cap, a rate and a ceiling through the atom→token
+/// axis SEPARATELY, and the axis is piecewise linear — its slope changes
+/// wherever a token spans several atoms (`$12`, `it's`) or an atom spans several
+/// tokens (`one hundred and forty-three` → `143`). Separately projected pieces of
+/// a curve do not compose back into the curve. Replayed over the captured
+/// corpus compiled the way the app compiles it (`cc-bench projection`), the
+/// stage's dim cursor disagreed with the engine's on 4.3% of 20 Hz samples, and
+/// on 1.73% it was AHEAD — a word drawn as spoken that the engine had not
+/// claimed — by up to 2.4 tokens over a spelled number. Projecting the margin
+/// backward instead, the obvious repair, made it worse (2.32% ahead), because
+/// the forward margin happens to cancel the forward-projected lead in steady
+/// reading.
+///
+/// The exact answer is cheap because the display cannot go far. It is always
+/// between `observed - margin` and the lesser of `observed + max_lead` and the
+/// ceiling, so the axis is only needed over about half a dozen atom boundaries.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayAtoms {
+    pub observed: f64,
+    /// Display rate, atoms/s — `Snapshot::rate`.
+    pub rate: f64,
+    pub max_lead: f64,
+    pub margin: f64,
+    /// `min(display_limit, script_len)`, the ceiling `display_at` clamps to.
+    pub ceiling: f64,
+    /// The integer atom boundary `axis[0]` belongs to.
+    pub axis_from: f64,
+    /// Token position at atom boundaries `axis_from`, `axis_from + 1`, … —
+    /// covering every position `display_at` can return for this snapshot.
+    pub axis: Vec<f64>,
+}
+
+impl DisplayAtoms {
+    pub fn of(snapshot: &Snapshot, script: &CompiledScript) -> Self {
+        let ceiling = snapshot.display_limit.min(snapshot.script_len).max(0.0);
+        let low = (snapshot.observed - snapshot.lead_margin_atoms)
+            .max(0.0)
+            .min(ceiling);
+        let high = (snapshot.observed + snapshot.max_lead_atoms)
+            .min(ceiling)
+            .max(low);
+        let from = low.floor().max(0.0);
+        let to = high.ceil().max(from);
+        let axis = (from as u64..=to as u64)
+            .map(|atom| script.token_at(atom as f64))
+            .collect();
+        Self {
+            observed: snapshot.observed,
+            rate: snapshot.rate,
+            max_lead: snapshot.max_lead_atoms,
+            margin: snapshot.lead_margin_atoms,
+            ceiling,
+            axis_from: from,
+            axis,
+        }
+    }
+
+    /// Token position of a fractional atom position inside the window, by the
+    /// same linear interpolation `CompiledScript::token_at` uses. Positions
+    /// outside the window clamp to its ends.
+    pub fn token_at(&self, atom: f64) -> f64 {
+        let last = self.axis.len().saturating_sub(1);
+        if self.axis.is_empty() {
+            return 0.0;
+        }
+        let x = atom - self.axis_from;
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(x > 0.0) {
+            return self.axis[0];
+        }
+        if x >= last as f64 {
+            return self.axis[last];
+        }
+        let i = x.floor() as usize;
+        let frac = x - i as f64;
+        self.axis[i] + (self.axis[i + 1] - self.axis[i]) * frac
+    }
 }
 
 /// Project an engine snapshot from atom space into token space.
@@ -188,5 +277,6 @@ pub fn project_to_tokens(
         script_len_tokens: script.token_count as f64,
         observed_atom: snapshot.observed,
         confirmed_atom: snapshot.confirmed,
+        display_atoms: DisplayAtoms::of(snapshot, script),
     }
 }
