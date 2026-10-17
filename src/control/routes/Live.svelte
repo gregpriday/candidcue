@@ -696,7 +696,7 @@ import { onShortcut } from '../lib/shortcuts';
     } else if (intent.kind === 'toggle_follow') {
       toggleVoiceFollow();
     } else if (intent.kind === 'auto_scroll_end') {
-      autoScrollReachedEnd();
+      autoScrollReachedEnd(intent.reason);
     } else if (intent.kind === 'auto_scroll_toggle') {
       toggleAutoScroll();
     } else if (intent.kind === 'auto_scroll_pace') {

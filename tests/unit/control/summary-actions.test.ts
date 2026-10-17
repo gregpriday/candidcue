@@ -9,7 +9,11 @@
  * dialog with nothing highlighted.
  */
 import { describe, expect, it } from 'vitest';
-import { summaryActions, type SummaryActionsInput } from '../../../src/control/lib/summary-actions';
+import {
+  partOutcomeLabel,
+  summaryActions,
+  type SummaryActionsInput,
+} from '../../../src/control/lib/summary-actions';
 import type { TakePart } from '../../../src/control/stores/session';
 
 function part(ordinal: number, label: string, start: number, end: number): TakePart {
@@ -141,5 +145,42 @@ describe('summaryActions', () => {
     const again = actions.find((a) => a.id === 'present-again');
     expect(again?.startTokenIndex).toBeUndefined();
     expect(again?.partId).toBeUndefined();
+  });
+});
+
+/*
+ * The Part row's claim about how far the take got (#276).
+ *
+ * A voice take that fell back to auto-scroll is still a `voice` take, so the
+ * mode alone used to decide it — and a part the transport rolled off the bottom
+ * of the glass was reported "stopped part way".
+ */
+describe('partOutcomeLabel', () => {
+  it('says a voice take read to the end when it did', () => {
+    expect(partOutcomeLabel({ mode: 'voice', partComplete: true, partRolledToEnd: false })).toBe(
+      '— read to the end',
+    );
+  });
+
+  it('says a voice take stopped part way when it did', () => {
+    expect(partOutcomeLabel({ mode: 'voice', partComplete: false, partRolledToEnd: false })).toBe(
+      '— stopped part way',
+    );
+  });
+
+  it('says the transport carried it, not that anybody read it, in every mode', () => {
+    for (const mode of ['voice', 'manual', 'fixed'] as const) {
+      expect(partOutcomeLabel({ mode, partComplete: true, partRolledToEnd: true }), mode).toBe(
+        '— carried to the end by auto-scroll',
+      );
+    }
+  });
+
+  it('makes no claim about a take without a voice that the transport did not carry', () => {
+    // No snapshots and no roll: there is no evidence either way, and "stopped
+    // part way" would be a wrong answer rather than a cautious one.
+    for (const mode of ['manual', 'fixed'] as const) {
+      expect(partOutcomeLabel({ mode, partComplete: false, partRolledToEnd: false }), mode).toBeNull();
+    }
   });
 });

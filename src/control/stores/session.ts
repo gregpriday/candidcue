@@ -15,6 +15,7 @@ import type {
   CompiledScript,
   OutlineNode,
   SentenceUnit,
+  StageAutoScrollEndReason,
   StageAutoScrollPayload,
   StageSessionEnvelope,
   StageSettings,
@@ -177,9 +178,13 @@ export interface SessionSummary {
    * script, because the summary outlives the compile the take ran on: the
    * editor behind this dialog can be recompiling already, and a part list read
    * a moment later could be a different division of a different document.
+   *
+   * `partRolledToEnd` says HOW the end was reached when it was the transport
+   * that got there, not a voice — see {@link SessionState.partRolledToEnd}.
    */
   part: TakePart | null;
   partComplete: boolean;
+  partRolledToEnd: boolean;
   nextPart: TakePart | null;
 }
 
@@ -245,7 +250,7 @@ export interface SessionState {
    */
   nextPart: TakePart | null;
   /**
-   * The presenter has read to the end of the part (§parts).
+   * The take has reached the end of the part (§parts).
    *
    * LATCHED. It is set the first time the confirmed position reaches the part's
    * last token and never cleared while the take runs — the aligner can and does
@@ -253,8 +258,27 @@ export interface SessionState {
    * and a badge that appeared and vanished as the estimate wobbled around the
    * boundary would be noise at exactly the moment somebody is deciding whether
    * to stop.
+   *
+   * The auto-scroll transport running off the end of the document sets it too
+   * (#276) — see `partRolledToEnd`.
    */
   partComplete: boolean;
+  /**
+   * The part's end was reached by the auto-scroll transport, not by a voice.
+   *
+   * A transport that carried a part to the end and a presenter who stopped
+   * halfway through it are not the same take, and treating them as one is
+   * what offered "Record part 3 again" to somebody whose part had just rolled
+   * off the bottom of the glass. So `partComplete` is raised for both. But
+   * "read to the end" is a claim about a voice, and the transport is evidence
+   * of the GLASS — it moved the script past the reading band, and nothing
+   * about that says anybody spoke it. This flag is what lets the summary say
+   * which of the two happened instead of choosing the flattering one.
+   *
+   * Raised only when the part was not already complete: a presenter who read
+   * the part and then rolled the rest of the script did read it.
+   */
+  partRolledToEnd: boolean;
   displayLabel: string;
   startedAtMs: number;
   elapsedSeconds: number;
@@ -410,6 +434,7 @@ const initial: SessionState = {
   part: null,
   nextPart: null,
   partComplete: false,
+  partRolledToEnd: false,
   displayLabel: '',
   startedAtMs: 0,
   elapsedSeconds: 0,
@@ -591,6 +616,25 @@ interface ActiveTake {
   /** Wall time of the previous snapshot, for accumulating `followingMs`. */
   lastSnapshotAtMs: number | null;
   lastState: AlignmentSnapshot['state'] | null;
+  /**
+   * Where the auto-scroll transport left the document, when it ran it off the
+   * end (#276). Null when it has not, or when something since has put the take
+   * somewhere else.
+   *
+   * A POSITION, and deliberately not folded into `maxConfirmedToken`. That
+   * mark is coverage — "Script followed N of M words" — and a transport rolling
+   * the glass past the reading band is not a voice being followed through it.
+   * What the transport does establish is where the take ENDED, and the ending
+   * is read from here before any snapshot.
+   *
+   * It outranks every later VOICE snapshot, and that is the point of it. The
+   * aligner is paused while the transport runs, so nothing tells Rust the
+   * document moved; when following is handed back, its idea of the reader is
+   * wherever the roll began, and the next snapshot it publishes describes that
+   * stale place. Only the operator moving the take on purpose supersedes it — a
+   * manual anchor, a retake, or starting the transport again.
+   */
+  autoScrollEndToken: number | null;
 }
 
 let activeTake: ActiveTake | null = null;
@@ -774,6 +818,7 @@ export function startLiveSession(input: StartSessionInput): string {
     part: input.part ?? null,
     nextPart: input.nextPart ?? null,
     partComplete: false,
+    partRolledToEnd: false,
     displayLabel: input.displayLabel,
     startedAtMs: Date.now(),
     voiceFollow: input.mode === 'voice',
@@ -1482,6 +1527,10 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
     if (snapshot.confirmedToken > activeTake.maxConfirmedToken) {
       activeTake.maxConfirmedToken = snapshot.confirmedToken;
     }
+    // A manual anchor is the operator putting the take somewhere on purpose,
+    // after the transport left it at the end — so the ending is theirs again.
+    // A voice snapshot is not: see `ActiveTake.autoScrollEndToken`.
+    if (snapshot.decision === 'manualAnchor') activeTake.autoScrollEndToken = null;
     /*
      * §36.3 availability: time spent in `following`, accumulated between
      * snapshots. Measured rather than inferred from a state count, because
@@ -1749,6 +1798,7 @@ function beginTake(startTokenIndex: number): void {
     followingMs: 0,
     lastSnapshotAtMs: null,
     lastState: null,
+    autoScrollEndToken: null,
   };
 }
 
@@ -2419,6 +2469,10 @@ export function toggleAutoScroll(): void {
   if (running) {
     autoScrollPausedFollowing = s.voiceFollow;
     if (s.voiceFollow) smoothFollow.setFollowingPaused(true);
+    // A new roll takes the document from wherever it is now, so an ending the
+    // last roll recorded no longer describes it. If this one runs off the end
+    // too, it says so itself.
+    if (activeTake !== null) activeTake.autoScrollEndToken = null;
   } else {
     const restore = autoScrollPausedFollowing;
     autoScrollPausedFollowing = false;
@@ -2482,17 +2536,70 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
  * obviously clears. Resuming is the safer of the two: a paused aligner that is
  * handed the document back holds until it has evidence, so the worst case is
  * that nothing happens, which is also the likeliest one.
+ *
+ * ---------------------------------------------------------------------------
+ * AND IT IS WHERE THE TAKE ENDED (#276)
+ * ---------------------------------------------------------------------------
+ * The transport pauses following, so a take it carries produces no snapshots
+ * for as long as it rolls — and the ending used to be read off the last one,
+ * which is wherever the roll BEGAN. A part rolled off the bottom of the glass
+ * was reported "stopped part way", with "Record part 3 again" as the primary
+ * action and "From last ending" offering the same start point again, right
+ * after this function had toasted that the script was finished.
+ *
+ * So a `document_end` records the position here, before following is handed
+ * back. Not by moving the aligner (`moveToToken` would re-anchor the engine at
+ * the moment the transport stands down, and is counted as a jump the operator
+ * made), and not by inventing a snapshot: by noting, on the pass, the one fact
+ * this report establishes. `nowhere_to_go` establishes nothing — the document
+ * never moved — so it stands the transport down and records no position.
  */
-export function autoScrollReachedEnd(): void {
+export function autoScrollReachedEnd(reason: StageAutoScrollEndReason): void {
   const s = get(state);
   if (!s.autoScroll.running) return;
+  if (reason === 'document_end') recordAutoScrollEnd(s);
   publishAutoScroll({ ...s.autoScroll, running: false });
   // The pause is still given back — the transport took it and is done with it —
   // but nothing here claims the microphone started working. See the note above.
   const restore = autoScrollPausedFollowing;
   autoScrollPausedFollowing = false;
   if (restore && !s.voiceFollow) smoothFollow.setFollowingPaused(false);
-  showToast('Auto-scroll reached the end of the script', 'info', { durationMs: 2400 });
+  showToast(
+    reason === 'document_end'
+      ? 'Auto-scroll reached the end of the script'
+      : 'Auto-scroll stopped — nowhere to scroll',
+    'info',
+    { durationMs: 2400 },
+  );
+}
+
+/**
+ * The transport ran the document off its end: the take is at the last token.
+ *
+ * The last token of the COMPILE, not `scriptWordCount` — `startTake` pads the
+ * count it hands over to at least one, so an empty script would otherwise be
+ * credited with a token it does not have. The stage reports an empty document
+ * as `nowhere_to_go` and never reaches here; this is the second guard.
+ */
+function recordAutoScrollEnd(s: SessionState): void {
+  if (!s.active || activeTake === null) return;
+  const documentTokens = compiledScript?.spokenTokens.length ?? scriptWordCount;
+  if (documentTokens <= 0) return;
+  const lastToken = documentTokens - 1;
+  activeTake.autoScrollEndToken = lastToken;
+  /*
+   * The whole script is behind the reading band, so whatever part this take
+   * was bounded to is too. Raised through the same latch voice uses, because
+   * the transport carrying a part to its end is not the take that "stopped part
+   * way" — and flagged as rolled, because it is not the take that read it
+   * either. A part already completed by voice keeps its claim.
+   */
+  if (s.part === null || lastToken < s.part.endTokenIndex) return;
+  state.update((current) => ({
+    ...current,
+    partRolledToEnd: current.partRolledToEnd || !current.partComplete,
+    partComplete: true,
+  }));
 }
 
 /** The offered pace range, for the controls that present it. */
@@ -2943,17 +3050,30 @@ export function stopSession(): SessionSummary {
     stopInternals();
     return s.summary ?? emptySummary(s);
   }
+  /*
+   * Where the take ended, resolved ONCE and handed to every reader of it.
+   *
+   * The summary, the retake section, the ending's name and the session row
+   * used to each re-read it from the snapshot, which was harmless while the
+   * snapshot was the only source. It is not any more (#276): a transport that
+   * ran the document off its end outranks it, and four readers each deciding
+   * that for themselves is how three of them would end up agreeing with the
+   * glass and one with where the roll began.
+   */
+  const rolledTo = activeTake?.autoScrollEndToken ?? null;
+  const endTokenIndex = rolledTo ?? roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
     sectionsReached: s.blocksSeen.length,
     retakes: s.counts.retakes,
     reconnects: s.counts.reconnects,
-    endingLocation: locateEnding(s),
-    endTokenIndex: roundToken(s.snapshot?.confirmedToken) ?? takeEndToken(),
-    sectionStartTokenIndex: sectionStartFor(s, roundToken(s.snapshot?.confirmedToken) ?? takeEndToken()),
+    endingLocation: locateEnding(s, rolledTo ?? s.snapshot?.confirmedToken ?? null),
+    endTokenIndex,
+    sectionStartTokenIndex: sectionStartFor(s, endTokenIndex),
     part: s.part,
     partComplete: s.partComplete,
+    partRolledToEnd: s.partRolledToEnd,
     nextPart: s.nextPart,
     manualJumps: s.counts.jumps,
     followingShare: takeFollowingShare(),
@@ -2972,13 +3092,16 @@ export function stopSession(): SessionSummary {
   // pass `takeEndToken` reads, so the ending has to be taken from it first.
   if (s.sessionId) {
     /*
-     * Where the session ended. The conservative anchor when there is one, and
-     * the take's own high-water mark otherwise — a session that ran and ended
-     * has an end position even if alignment never produced a snapshot, and
-     * reporting `undefined` there would make "did it follow anything" and "was
-     * there a session at all" the same answer.
+     * Where the session ended — `endTokenIndex` above. Where the transport left
+     * the document if it ran it off the end, the conservative anchor when there
+     * is one, and the take's own high-water mark otherwise — a session that ran
+     * and ended has an end position even if alignment never produced a
+     * snapshot, and reporting `undefined` there would make "did it follow
+     * anything" and "was there a session at all" the same answer.
+     *
+     * This is the number "From last ending" opens the next take at, so it is
+     * the one that most needs to agree with the glass.
      */
-    const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeEndToken();
     void trackPersistence(endSessionRecord(s.sessionId, {
       endTokenIndex,
       commandCount: 0,
@@ -3043,6 +3166,7 @@ function emptySummary(s: SessionState): SessionSummary {
     sectionStartTokenIndex: null,
     part: null,
     partComplete: false,
+    partRolledToEnd: false,
     nextPart: null,
     durationSeconds: 0,
     mode: s.mode,
@@ -3082,9 +3206,17 @@ function sectionStartFor(s: SessionState, token: number): number | null {
   return section.startTokenIndex;
 }
 
-function locateEnding(s: SessionState): string {
-  const snapshot = s.snapshot;
-  if (!snapshot) return 'Beginning';
+/**
+ * The ending, named in the document's own terms.
+ *
+ * `token` is null when nothing is known about where the take got to — no
+ * snapshot, and no transport that ran it off the end — and only then is the
+ * answer "Beginning". It is the snapshot's own fractional position otherwise,
+ * not the rounded index, so a confirmed anchor half a token short of a heading
+ * is still named for the section before it.
+ */
+function locateEnding(s: SessionState, token: number | null): string {
+  if (token === null) return 'Beginning';
   const flat: OutlineNode[] = [];
   const walk = (nodes: OutlineNode[]) => {
     for (const n of nodes) {
@@ -3095,7 +3227,7 @@ function locateEnding(s: SessionState): string {
   walk(s.outline);
   const section = [...flat]
     .reverse()
-    .find((n) => n.startTokenIndex <= snapshot.confirmedToken);
+    .find((n) => n.startTokenIndex <= token);
   if (section) return section.title;
   /*
    * A script with no headings still ended SOMEWHERE, and it used to be told in
@@ -3111,7 +3243,7 @@ function locateEnding(s: SessionState): string {
   // "Beginning" would be a claim about where the take ended, and this is the
   // one case where nothing is known about that.
   if (sentences.length === 0) return 'Location unavailable';
-  const reached = sentences.filter((unit) => unit.startTokenIndex <= snapshot.confirmedToken).length;
+  const reached = sentences.filter((unit) => unit.startTokenIndex <= token).length;
   // Before the first sentence starts. Ordinary compiler output opens at token 0
   // so this needs degraded input to reach, but flooring it to "Sentence 1"
   // would report a sentence that had not been begun.

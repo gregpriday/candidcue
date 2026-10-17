@@ -15,7 +15,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-import type { AlignmentSnapshot, CompiledScript } from '../../../src/shared/contracts';
+import type {
+  AlignmentSnapshot,
+  CompiledScript,
+  OutlineNode,
+  SentenceUnit,
+} from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
@@ -83,8 +88,16 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   return { ...actual, isTauriRuntime: () => true };
 });
 
-const { clearSession, session, startLiveSession, stopSession } =
-  await import('../../../src/control/stores/session');
+const {
+  autoScrollReachedEnd,
+  clearSession,
+  restartParagraph,
+  session,
+  startLiveSession,
+  stopSession,
+  toggleAutoScroll,
+} = await import('../../../src/control/stores/session');
+const { summaryActions } = await import('../../../src/control/lib/summary-actions');
 
 type TakePart = NonNullable<import('../../../src/control/stores/session').SessionState['part']>;
 
@@ -136,14 +149,18 @@ const PART_THREE: TakePart = {
   endTokenIndex: 199,
 };
 
-function present(part: TakePart | null, nextPart: TakePart | null = null): void {
+function present(
+  part: TakePart | null,
+  nextPart: TakePart | null = null,
+  shape: { outline?: OutlineNode[]; sentences?: SentenceUnit[] } = {},
+): void {
   startLiveSession({
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
     mode: 'voice',
     displayLabel: 'Stage',
-    outline: [],
-    sentences: [],
+    outline: shape.outline ?? [],
+    sentences: shape.sentences ?? [],
     totalTokens: 200,
     startTokenIndex: part?.startTokenIndex ?? 0,
     sessionId: 'session-uuid-1',
@@ -187,6 +204,7 @@ function at(confirmedToken: number, decision: AlignmentSnapshot['decision'] = 'l
 
 beforeEach(() => {
   vi.useFakeTimers();
+  records.endSessionRecord.mockClear();
   driverCalls.length = 0;
   deliverSnapshot = null;
   seq = 0;
@@ -317,5 +335,233 @@ describe('an unbounded take', () => {
     expect(summary.part).toBeNull();
     expect(summary.nextPart).toBeNull();
     expect(summary.partComplete).toBe(false);
+  });
+});
+
+/*
+ * #276. Auto-scroll pauses following, so the aligner publishes nothing while
+ * the transport rolls, and the take's ending used to be read off the last
+ * snapshot — wherever the roll BEGAN. These pin the one fact the stage does
+ * report, that the document ran off its end, as the place the take ended.
+ */
+describe('a take the auto-scroll transport carried to the end', () => {
+  /** Press A, and let the stage run the document off its end. */
+  function rollToEnd(): void {
+    toggleAutoScroll();
+    autoScrollReachedEnd('document_end');
+  }
+
+  function heading(id: string, title: string, start: number, end: number): OutlineNode {
+    return {
+      id,
+      level: 1,
+      title,
+      normalizedTitle: title.toLowerCase(),
+      blockId: 'b-1',
+      startTokenIndex: start,
+      endTokenIndex: end,
+      children: [],
+    };
+  }
+
+  function sentence(id: string, start: number, end: number): SentenceUnit {
+    return {
+      id,
+      blockId: 'b-1',
+      startTokenIndex: start,
+      endTokenIndex: end,
+      normalizedText: 'words',
+      source: { utf16Start: start, utf16End: end },
+    };
+  }
+
+  it('ends where the transport left the script, not where the roll began', () => {
+    // The issue's own reproduction: part three, auto-scroll on, rolled to the
+    // end, take ended.
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.mode).toBe('voice');
+    expect(summary.endTokenIndex).toBe(199);
+    expect(summary.partComplete).toBe(true);
+    expect(summary.partRolledToEnd).toBe(true);
+  });
+
+  it('records the same ending on the session row, which is what "From last ending" reads', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    stopSession();
+    expect(records.endSessionRecord).toHaveBeenCalledTimes(1);
+    expect(records.endSessionRecord).toHaveBeenCalledWith(
+      'session-uuid-1',
+      expect.objectContaining({ endTokenIndex: 199 }),
+    );
+  });
+
+  it('ends at the end of the SCRIPT, past the part, and offers the next part', () => {
+    // The stage renders the whole document; a part only sets where the take
+    // opens. Running off the end therefore carried the take through part two
+    // and the whole of part three.
+    present(PART_TWO, PART_THREE);
+    at(50, 'manualAnchor');
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(199);
+    expect(summary.partComplete).toBe(true);
+    const actions = summaryActions({
+      retrySectionTokenIndex: summary.sectionStartTokenIndex,
+      part: summary.part,
+      partComplete: summary.partComplete,
+      nextPart: summary.nextPart,
+    });
+    expect(actions.find((a) => a.primary)?.id).toBe('record-next-part');
+  });
+
+  it('does not call a part the presenter had already read "carried"', () => {
+    present(PART_TWO, PART_THREE);
+    at(99);
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.partComplete).toBe(true);
+    expect(summary.partRolledToEnd).toBe(false);
+  });
+
+  it('credits nothing when the transport had nowhere to go', () => {
+    // A script that fits on the glass reports its end on the first frame,
+    // having moved nothing at all.
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    toggleAutoScroll();
+    autoScrollReachedEnd('nowhere_to_go');
+    const s = get(session);
+    expect(s.autoScroll.running, 'the transport was not stood down').toBe(false);
+    expect(s.voiceFollow, 'the pause the transport took was not given back').toBe(true);
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(100);
+    expect(summary.partComplete).toBe(false);
+    expect(summary.partRolledToEnd).toBe(false);
+  });
+
+  it('is not pulled back by a voice snapshot from where the roll began', () => {
+    /*
+     * Following is handed back when the transport stands down, and nothing ever
+     * told the aligner the document moved — so the next snapshot it publishes
+     * describes the stale place the roll started from.
+     */
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    at(104);
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(199);
+  });
+
+  it('gives the ending back to the operator when they move the take by hand', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    at(140, 'manualAnchor');
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(140);
+    // The part was still carried to its end; moving back does not un-carry it,
+    // on the same latch voice completion uses.
+    expect(summary.partComplete).toBe(true);
+    expect(summary.partRolledToEnd).toBe(true);
+  });
+
+  it('forgets the roll on a retake, which opens a new pass', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    restartParagraph();
+    expect(stopSession().endTokenIndex).toBe(100);
+  });
+
+  it('forgets the roll when the transport is started again', () => {
+    // A roll stopped part way has no position anywhere (the stage reports only
+    // the end), so the ending falls back to the last snapshot — but it must
+    // not keep claiming an end the document has since been taken away from.
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    toggleAutoScroll();
+    toggleAutoScroll();
+    expect(stopSession().endTokenIndex).toBe(100);
+  });
+
+  it('does not count the roll as words followed, jumps or sections reached', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.wordsFollowed).toBe(0);
+    expect(summary.manualJumps).toBe(0);
+    expect(summary.sectionsReached).toBe(1);
+  });
+
+  it('names the ending from the outline even with no snapshot at all', () => {
+    present(PART_THREE, null, {
+      outline: [heading('h-1', 'Opening', 0, 99), heading('h-2', 'Close', 100, 199)],
+    });
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.endingLocation).toBe('Close');
+    expect(summary.sectionStartTokenIndex).toBe(100);
+  });
+
+  it('names the last sentence in a script with no headings', () => {
+    present(PART_THREE, null, {
+      sentences: [sentence('s-1', 0, 99), sentence('s-2', 100, 149), sentence('s-3', 150, 199)],
+    });
+    rollToEnd();
+    expect(stopSession().endingLocation).toBe('Sentence 3 of 3');
+  });
+
+  it('still says "Beginning" for a take that went nowhere and heard nothing', () => {
+    present(null);
+    expect(stopSession().endingLocation).toBe('Beginning');
+  });
+
+  it('ends an unbounded take at the end of the script without claiming a part', () => {
+    present(null);
+    rollToEnd();
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(199);
+    expect(summary.partComplete).toBe(false);
+    expect(summary.partRolledToEnd).toBe(false);
+  });
+
+  it('ignores an end reported for a transport that is not running', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    autoScrollReachedEnd('document_end');
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(100);
+    expect(summary.partComplete).toBe(false);
+  });
+
+  it('ignores an end that arrives after the take has stopped', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    toggleAutoScroll();
+    const summary = stopSession();
+    autoScrollReachedEnd('document_end');
+    expect(get(session).summary).toEqual(summary);
+    expect(summary.endTokenIndex).toBe(100);
+    expect(summary.partComplete).toBe(false);
+  });
+
+  it('does not carry a roll into the next take', () => {
+    present(PART_THREE, null);
+    at(100, 'manualAnchor');
+    rollToEnd();
+    stopSession();
+    present(PART_TWO, PART_THREE);
+    const summary = stopSession();
+    expect(summary.endTokenIndex).toBe(50);
+    expect(summary.partComplete).toBe(false);
+    expect(summary.partRolledToEnd).toBe(false);
   });
 });
