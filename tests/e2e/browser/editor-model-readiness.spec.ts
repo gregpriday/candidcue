@@ -234,3 +234,33 @@ test('File › Present is checked too, and a launch that goes ahead clears the s
   await expect(sheet(page)).toHaveCount(0);
   errors.expectClean();
 });
+
+test('Review take setup on a healthy setup offers Present, not Start anyway', async ({ page }) => {
+  /*
+   * Asking for the check is the one way a healthy setup reaches the sheet, and
+   * it said "Everything needed for this take is ready." over a button reading
+   * "Start anyway" — telling somebody who just asked that the check had failed
+   * (#283). With nothing to warn about, the start is an ordinary one.
+   */
+  const errors = watchPageErrors(page);
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT], promptMode: 'voice' });
+  await page.goto('/control.html');
+  await openScript(page, SCRIPT.title);
+  await modelStatusSettled(page);
+  await expect(footer(page)).toContainText('Ready to present.');
+
+  await page.getByRole('button', { name: 'How to present' }).click();
+  await page
+    .getByRole('menu', { name: 'How to present' })
+    .getByRole('menuitem', { name: /Review take setup/ })
+    .click();
+
+  await expect(sheet(page)).toBeVisible();
+  await expect(sheet(page)).toContainText('Everything needed for this take is ready.');
+  await expect(sheet(page).getByRole('button', { name: 'Start anyway' })).toHaveCount(0);
+  // Scoped to the sheet: the toolbar has a Present of its own.
+  await sheet(page).getByRole('button', { name: 'Present', exact: true }).click();
+  await expectTakeRunning(page);
+  await expect(sheet(page)).toHaveCount(0);
+  errors.expectClean();
+});

@@ -405,7 +405,7 @@ describe('checks that overlap', () => {
 });
 
 describe('checkThenStart', () => {
-  it('shows the sheet on request even for a healthy setup, and Start anyway launches', async () => {
+  it('shows the sheet on request even for a healthy setup, and its start button launches', async () => {
     const launch = vi.fn(async () => {});
     await checkThenStart('script-1', { requested: true }, launch);
     expect(launch).not.toHaveBeenCalled();

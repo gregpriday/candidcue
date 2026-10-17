@@ -35,7 +35,7 @@ import type { SettingsSection } from '../stores/router';
 export type ReadinessSeverity =
   /** The take cannot do what was asked. Launching produces a broken take. */
   | 'blocking'
-  /** Worth knowing before committing; Start anyway is always offered. */
+  /** Worth knowing before committing; a take can always start past it. */
   | 'warning'
   /** Context only. Never on its own a reason to interrupt. */
   | 'info';
@@ -341,7 +341,18 @@ export function microphoneAccessFinding(
  */
 export function summariseReadiness(verdict: ReadinessVerdict): string {
   if (verdict.blocked) return 'This take cannot start as it is.';
-  const warnings = verdict.findings.filter((f) => f.severity === 'warning').length;
-  if (warnings === 0) return 'Everything needed for this take is ready.';
+  if (!hasReadinessWarnings(verdict)) return 'Everything needed for this take is ready.';
   return 'This take can start, but not everything is set up.';
+}
+
+/**
+ * Whether the sheet is warning about anything.
+ *
+ * The summary and the start button both turn on this, so a sheet that says
+ * everything is ready cannot also offer to start "anyway" (#283). Warnings,
+ * not findings: an `info` row is context, and does not make a start one that
+ * goes past something.
+ */
+export function hasReadinessWarnings(verdict: ReadinessVerdict): boolean {
+  return verdict.findings.some((f) => f.severity === 'warning');
 }
