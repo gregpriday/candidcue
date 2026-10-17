@@ -246,11 +246,11 @@ const NON_BREAKING_SPACE = /[\u00A0\u202F\u2007\u2060\uFEFF]/;
 /**
  * Inline content whose width this pass cannot account for.
  *
- * A cue chip has text, padding and `white-space: nowrap`; an image has whatever
- * the asset is; a nested table has columns. None of them is measured here, so a
- * block containing one is a block whose lines would be planned against a width
- * that is not the width being drawn. Those blocks are handed back to the
- * browser whole rather than planned wrongly.
+ * A cue chip has its own size, capitals, letter-spacing and padding; an image
+ * has whatever the asset is; a nested table has columns. None of them is
+ * measured here, so a block containing one is a block whose lines would be
+ * planned against a width that is not the width being drawn. Those blocks are
+ * handed back to the browser whole rather than planned wrongly.
  *
  * An inline `code` run is here for the same reason and a subtler cause: it is
  * text, and it does measure, but only against the 0.92em arm of the rule above.

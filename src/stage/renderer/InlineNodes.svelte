@@ -430,7 +430,15 @@
   /* An inline cue is an instruction to the performer — "beat", "to camera" —
      read at the same distance as the line it sits in. 0.55em was a chip drawn
      for a laptop screen; two thirds of body is the point at which it still
-     reads as an aside without becoming decoration. */
+     reads as an aside without becoming decoration.
+
+     It wraps like the line it sits in (#281). A chip held to one line ran off
+     the column and was clipped by the layer: on a 9-inch panel, about 19
+     characters across, anything past ~25 lost its end and the presenter read
+     "LOOK STRAIGHT AT CAMERA AND SMI" with nothing to say there was more.
+     Cloning the decoration gives every row of a wrapped chip its own padding
+     and rounded ends, so each row still reads as part of the same cue rather
+     than as a pill sliced open at the column edge. */
   .cue {
     color: var(--stage-cue);
     font-size: max(var(--stage-secondary-min, 0.67em), 0.67em);
@@ -441,6 +449,7 @@
     padding: 0.1em 0.55em;
     border-radius: 999px;
     background: color-mix(in srgb, var(--stage-cue) 12%, transparent);
-    white-space: nowrap;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
   }
 </style>

@@ -32,8 +32,9 @@
  * geometry exactly — unmeasurable inline content, a block kind whose size it
  * cannot know, a platform that will not measure — rather than planning on an
  * estimate. Overflow itself is not introduced here: the solver can leave one
- * indivisible run wider than the column, exactly as the browser already did
- * with a word longer than the line.
+ * indivisible run wider than the column, and the column's `overflow-wrap:
+ * anywhere` then breaks it inside its one word span (#281) — extra rows the
+ * plan did not count, but never a token lost, moved or split in two.
  *
  * The two ways to get nothing at all, both safe:
  *   - the platform will not measure text (`measureAdvance` returns null), or
