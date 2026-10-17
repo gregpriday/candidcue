@@ -41,8 +41,8 @@ const OUT = join(ROOT, 'sbom');
  * build rather than after the lawyers.
  *
  * Notably absent: GPL and AGPL in every form. CandidCue is distributed as a
- * signed binary under the MIT licence, and a copyleft dependency would put the
- * whole binary under its terms instead.
+ * signed binary under the MIT licence, and a GPL or AGPL dependency would put
+ * the whole binary under its terms instead.
  */
 const REVIEWED_LICENCES = new Set([
   'MIT',

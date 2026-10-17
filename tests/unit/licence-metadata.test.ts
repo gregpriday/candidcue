@@ -17,7 +17,7 @@ const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf8');
 /** One TOML table's lines, up to the next table header or the end of file. */
 function table(toml: string, header: string): string {
   const lines = toml.split('\n');
-  const start = lines.findIndex((line) => line.trim() === `[${header}]`);
+  const start = lines.findIndex((line) => line.replace(/#.*/, '').trim() === `[${header}]`);
   if (start < 0) throw new Error(`no [${header}] table`);
   const end = lines.findIndex((line, i) => i > start && line.trim().startsWith('['));
   return lines.slice(start + 1, end < 0 ? undefined : end).join('\n');
@@ -41,12 +41,12 @@ describe('the licence is stated once and agreed with everywhere', () => {
   });
 
   it('is what every Cargo package declares', () => {
-    expect(table(read('src-tauri/Cargo.toml'), 'package')).toMatch(/^license = "MIT"$/m);
-    expect(table(read('crates/Cargo.toml'), 'workspace.package')).toMatch(/^license = "MIT"$/m);
+    const mit = /^license\s*=\s*"MIT"\s*(#.*)?$/m;
+    const inherited = /^license(\s*\.\s*workspace\s*=\s*true|\s*=\s*\{\s*workspace\s*=\s*true\s*\})\s*(#.*)?$/m;
+    expect(table(read('src-tauri/Cargo.toml'), 'package')).toMatch(mit);
+    expect(table(read('crates/Cargo.toml'), 'workspace.package')).toMatch(mit);
     for (const member of ['cc-align', 'cc-stt', 'cc-bench']) {
-      expect(table(read(`crates/${member}/Cargo.toml`), 'package'), member).toMatch(
-        /^license\.workspace = true$/m,
-      );
+      expect(table(read(`crates/${member}/Cargo.toml`), 'package'), member).toMatch(inherited);
     }
   });
 

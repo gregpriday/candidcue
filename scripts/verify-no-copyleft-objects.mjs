@@ -8,11 +8,11 @@
  * copyleft: `libespeak-ng.a` and `libucd.a` are GPL-3.0-or-later, and
  * `libpiper_phonemize.a` declares MIT while linking eSpeak NG, which makes its
  * distributed terms GPL-3.0. CandidCue is MIT-licensed, and a binary that kept
- * any of their code would have to be distributed on GPL terms instead. Nothing
- * in that crate removes them from the link line — there is no TTS feature,
- * upstream's `-DSHERPA_ONNX_ENABLE_TTS=OFF` is unavailable because we consume
- * a prebuilt archive, and the `shared` alternative is worse, because the
- * sherpa-onnx dylib genuinely contains the code.
+ * any eSpeak NG or ucd-tools code would have to be distributed on GPL terms
+ * instead. Nothing in that crate removes them from the link line — there is no
+ * TTS feature, upstream's `-DSHERPA_ONNX_ENABLE_TTS=OFF` is unavailable
+ * because we consume a prebuilt archive, and the `shared` alternative is
+ * worse, because the sherpa-onnx dylib genuinely contains the code.
  *
  * The comfortable assumption was that a static link extracts only what
  * resolves an undefined symbol, that CandidCue does speech-to-TEXT and calls

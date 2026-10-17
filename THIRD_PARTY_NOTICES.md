@@ -14,8 +14,7 @@ It ships inside the app. On macOS it is at
 CandidCue itself is free software under the MIT licence. Its text is in
 `Contents/Resources/LICENSE.txt`, beside this file.
 
-Two third-party licences require their full text to travel with the work,
-and both do:
+Two third-party licences travel in full with the work they cover:
 
 - the typeface, whose SIL Open Font License is in
   `Contents/Resources/LICENSE-fonts.txt`;
