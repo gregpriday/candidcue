@@ -52,18 +52,53 @@
   would write the RIG's numbers into the global defaults, quietly changing what
   every uncalibrated take opens with. So the panel says what the rig resolved,
   says where to change it, and offers nothing it cannot deliver.
+
+  ---------------------------------------------------------------------------
+  A READING WINDOW GETS ITS OWN CONTROLS
+  ---------------------------------------------------------------------------
+  A reading window always runs a profile too, and it used to get the readout
+  above — "Calibrated", "worked out from how far away you stand" — over a window
+  nobody had calibrated and nobody stands away from. Its text is the reading rig
+  with the READER PREFERENCE laid over it, and that preference is what these
+  controls set: size, line width, line spacing, intensity and cue, live, with
+  Done saving them for every reading window. There is no reading line here,
+  because a window has no lens to align it to, and no percentage width: the
+  measure a reader feels is characters, and only the stage can count them.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
   import SegmentedControl from './SegmentedControl.svelte';
   import Slider from './Slider.svelte';
   import { FOCUSABLE_SELECTOR, nextTrapFocus } from './dialog-focus';
-  import { APPEARANCE_LIMITS, type StageAppearance } from '../lib/stage-appearance';
-  import type { TextIntensity } from '../../shared/contracts';
+  import {
+    APPEARANCE_LIMITS,
+    READER_APPEARANCE_LIMITS,
+    readerCharactersFor,
+    readerLineWidthFor,
+    stepReaderFontSize,
+    type ReaderAppearance,
+    type ReaderLineWidth,
+    type StageAppearance,
+  } from '../lib/stage-appearance';
+  import type { ReaderPreferencePatch } from '../services/settings-types';
+  import type { ReadingCueStyle, TextIntensity } from '../../shared/contracts';
 
   interface Props {
+    /**
+     * Whose controls these are: the prompter's, or a reading window's. A
+     * reading window's text answers to the reader preference, not to the
+     * fields `appearance` describes, so it gets a different panel rather than
+     * a relabelled one. Absent means the prompter.
+     */
+    surface?: 'reader' | 'prompter';
     /** What the stage is prompting at right now. */
     appearance: StageAppearance;
+    /**
+     * What the reading window is showing right now — required for the reader
+     * panel, which falls back to the prompter's without it rather than
+     * offering controls with nothing behind them.
+     */
+    reader?: ReaderAppearance | null;
     /**
      * §17.2: a saved rig decided this take's appearance, so none of it is the
      * panel's to set. It reports and points at the wizard instead.
@@ -99,6 +134,11 @@
     charactersPerLine?: number | null;
     /** Apply to the running take. Called on every move. */
     onchange: (patch: Partial<StageAppearance>) => void;
+    /**
+     * Apply to the running reading window. Called on every move; `null` puts a
+     * field back to automatic (the Standard line width).
+     */
+    onreaderchange?: (patch: ReaderPreferencePatch) => void;
     /** Keep it: save to settings and close. */
     onok: () => void;
     /** Put the take back and close. */
@@ -106,15 +146,21 @@
   }
 
   let {
+    surface = 'prompter',
     appearance,
+    reader = null,
     rigResolved,
     automatic = false,
     maxFontSizePx,
     charactersPerLine = null,
     onchange,
+    onreaderchange,
     onok,
     oncancel,
   }: Props = $props();
+
+  /** The reading window's panel is up — and has something to drive. */
+  const readerView = $derived(surface === 'reader' ? reader : null);
 
   const uid = $props.id();
   let panel: HTMLElement | null = $state(null);
@@ -148,6 +194,29 @@
 
   const atMinSize = $derived(Math.round(appearance.fontSizePx) <= APPEARANCE_LIMITS.fontSizePx.min);
   const atMaxSize = $derived(Math.round(appearance.fontSizePx) >= Math.round(maxFontSizePx));
+
+  /*
+   * The reading window's nudges: the same two-pixel step and Shift multiplier,
+   * so a window and a prompter answer the buttons the same way ⌘= does — over
+   * the reader's own range rather than the prompter's.
+   */
+  const READER_SIZE = READER_APPEARANCE_LIMITS.fontSizePx;
+  const READER_LINE_HEIGHT = READER_APPEARANCE_LIMITS.lineHeight;
+
+  function nudgeReaderSize(direction: 1 | -1, event: MouseEvent | KeyboardEvent): void {
+    if (!readerView) return;
+    const step = event.shiftKey ? SIZE_STEP_COARSE_PX : SIZE_STEP_PX;
+    const next = stepReaderFontSize(readerView.fontSizePx, direction * step);
+    if (next === Math.round(readerView.fontSizePx)) return;
+    onreaderchange?.({ fontSizePx: next });
+  }
+
+  const readerAtMinSize = $derived(
+    readerView !== null && Math.round(readerView.fontSizePx) <= READER_SIZE.min,
+  );
+  const readerAtMaxSize = $derived(
+    readerView !== null && Math.round(readerView.fontSizePx) >= READER_SIZE.max,
+  );
 
   /**
    * Focus moves in on open and back to the opener on close, the same contract
@@ -218,8 +287,12 @@
   bind:this={panel}
 >
   <header class="sheet-head">
-    <h2 class="title" id="{uid}-title">Prompter appearance</h2>
-    {#if rigResolved}
+    <h2 class="title" id="{uid}-title">
+      {readerView ? 'Reading appearance' : 'Prompter appearance'}
+    </h2>
+    <!-- No badge for a reading window. "Calibrated" and "Automatic" describe
+         who sized a prompter; a window's size is the reader's own. -->
+    {#if !readerView && rigResolved}
       <!-- A badge rather than a sentence. "This display runs from a saved rig"
            was doing two jobs — naming the state and explaining it — and the
            explanation belongs with the values it applies to, below. -->
@@ -228,7 +301,108 @@
   </header>
 
   <div class="body">
-    {#if rigResolved}
+    {#if readerView}
+      <!-- Size first, with buttons, for the reason the prompter panel gives:
+           it is the one that gets changed, and the one changed by two pixels. -->
+      <div class="size-row">
+        <Slider
+          label="Text size"
+          value={readerView.fontSizePx}
+          min={READER_SIZE.min}
+          max={READER_SIZE.max}
+          step={READER_SIZE.step}
+          format={(v) => `${v} px`}
+          onchange={(value) => onreaderchange?.({ fontSizePx: value })}
+        />
+        <div class="nudge">
+          <button
+            type="button"
+            data-focus="control"
+            aria-label="Smaller text"
+            title="Smaller text (hold Shift for a bigger step)"
+            disabled={readerAtMinSize}
+            onclick={(event) => nudgeReaderSize(-1, event)}>−</button
+          >
+          <button
+            type="button"
+            data-focus="control"
+            aria-label="Larger text"
+            title="Larger text (hold Shift for a bigger step)"
+            disabled={readerAtMaxSize}
+            onclick={(event) => nudgeReaderSize(1, event)}>+</button
+          >
+        </div>
+      </div>
+
+      <!--
+        Three widths, not a percentage. What a reader feels is characters per
+        line, so the choice is a measure and the readout is the stage's own
+        count of what fits — the window may be narrower than the line asked for,
+        and saying "Wider" over a line that cannot widen would be the readout
+        lying.
+      -->
+      <div class="field">
+        <div class="field-head">
+          <span class="field-label" aria-hidden="true">Line width</span>
+          {#if charactersPerLine}
+            <span class="field-value">About {charactersPerLine} characters a line</span>
+          {/if}
+        </div>
+        <SegmentedControl
+          label="Line width"
+          size="sm"
+          value={readerLineWidthFor(readerView.characters)}
+          options={[
+            { value: 'narrower', label: 'Narrower' },
+            { value: 'standard', label: 'Standard' },
+            { value: 'wider', label: 'Wider' },
+          ]}
+          onchange={(value) =>
+            onreaderchange?.({ characters: readerCharactersFor(value as ReaderLineWidth) })}
+        />
+      </div>
+
+      <Slider
+        label="Line spacing"
+        value={readerView.lineHeight}
+        min={READER_LINE_HEIGHT.min}
+        max={READER_LINE_HEIGHT.max}
+        step={READER_LINE_HEIGHT.step}
+        format={(v) => v.toFixed(2)}
+        onchange={(value) => onreaderchange?.({ lineHeight: value })}
+      />
+
+      <div class="field">
+        <span class="field-label" aria-hidden="true">Intensity</span>
+        <SegmentedControl
+          label="Intensity"
+          size="sm"
+          value={readerView.textIntensity}
+          options={[
+            { value: 'soft', label: 'Soft' },
+            { value: 'standard', label: 'Standard' },
+            { value: 'strong', label: 'Strong' },
+          ]}
+          onchange={(value) => onreaderchange?.({ intensity: value as TextIntensity })}
+        />
+      </div>
+
+      <div class="field">
+        <span class="field-label" aria-hidden="true">Reading cue</span>
+        <SegmentedControl
+          label="Reading cue"
+          size="sm"
+          value={readerView.readingCue}
+          options={[
+            { value: 'ticks', label: 'Ticks' },
+            { value: 'wash', label: 'Wash' },
+            { value: 'none', label: 'None' },
+          ]}
+          onchange={(value) => onreaderchange?.({ readingCue: value as ReadingCueStyle })}
+        />
+      </div>
+      <p class="hint">Done saves these for every reading window.</p>
+    {:else if rigResolved}
       <!--
         A readout, not four disabled tracks. A range input pinned at a value it
         cannot reach — a rig may resolve a line height of 2.0, past the top of
@@ -356,7 +530,7 @@
   </div>
 
   <footer class="foot">
-    {#if rigResolved}
+    {#if !readerView && rigResolved}
       <Button variant="primary" size="sm" onclick={oncancel}>Close</Button>
     {:else}
       <Button variant="ghost" size="sm" onclick={oncancel}>Cancel</Button>
@@ -537,6 +711,37 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
+  }
+
+  /*
+   * A labelled segmented row. The control names itself to assistive tech
+   * (`aria-label` on the group), so the visible label is hidden from it rather
+   * than read twice; it is styled as the sliders' own label so the column of
+   * controls reads as one list.
+   */
+  .field {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .field-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-self: stretch;
+  }
+  .field-label {
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .field-value {
+    font-size: var(--text-meta);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   .hint {

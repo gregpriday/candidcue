@@ -51,6 +51,7 @@ import { onShortcut } from '../lib/shortcuts';
     adjustStageFontSize,
     adoptPresentationMode,
     anchorManualScroll,
+    applyReaderAppearance,
     applyStageAppearance,
     autoScrollLive,
     awaitPendingPersistence,
@@ -72,12 +73,20 @@ import { onShortcut } from '../lib/shortcuts';
     stopSession,
     switchMicrophone,
     retryMicrophone,
+    takeReaderPreferenceSettings,
     toggleBlankStage,
     togglePlayPause,
     toggleStageMirror,
     toggleVoiceFollow,
   } from '../stores/session';
   import { patchSettings, settings } from '../stores/settings';
+  import {
+    readerPreferenceEquals,
+    readerPreferenceFrom,
+    readerPreferenceReplacement,
+    withReaderPreference,
+    type ReaderPreference,
+  } from '../services/settings-types';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
   import { showToast } from '../stores/toasts';
   import type { AudioDeviceInfo, OutlineNode, StageIntent } from '../../shared/contracts';
@@ -667,6 +676,13 @@ import { onShortcut } from '../lib/shortcuts';
 
   async function togglePresentationMode(): Promise<void> {
     if (!$session.active || switchingPresentation) return;
+    /*
+     * An open appearance panel is put back first. Its snapshot belongs to the
+     * mode it opened in, and the two modes have different controls — left open
+     * across a switch, it would show the other mode's controls with a Cancel
+     * that could undo only the first.
+     */
+    if (appearanceOpen) revertAppearance();
     const next: PresentationMode =
       $session.stagePresentationMode === 'reader' ? 'prompter' : 'reader';
     switchingPresentation = true;
@@ -762,6 +778,9 @@ import { onShortcut } from '../lib/shortcuts';
      * this shortcut has nothing to move — and reporting the unchanged number
      * ("Text 96 px", again) reads as a key that did not register rather than a
      * size that is not this key's to set.
+     *
+     * A reading window is never rig-resolved, so it never reaches the toast:
+     * `adjustStageFontSize` steps its reader preference instead.
      */
     if ($session.stageRigResolved) {
       showToast(
@@ -939,7 +958,9 @@ import { onShortcut } from '../lib/shortcuts';
    */
   $effect(() =>
     onRouteCommand((command) => {
-      if (command === 'view.stage-appearance') appearanceOpen = true;
+      // Through the same door as the dock, so Cancel has a snapshot to go back
+      // to — opened by flipping the flag, it had none and restored nothing.
+      if (command === 'view.stage-appearance') openAppearanceSheet();
     }),
   );
   /** `requestEndSession`'s confirm dialog is up over the take. */
@@ -952,6 +973,24 @@ import { onShortcut } from '../lib/shortcuts';
    * back" means has to survive that.
    */
   let appearanceOnOpen: StageAppearance | null = null;
+  /**
+   * The reading window's half of the same snapshot: the reader preference the
+   * take was running when the panel opened, absent fields and all, so Cancel
+   * puts back "automatic" rather than pinning the size it happened to be.
+   */
+  let readerOnOpen: ReaderPreference | null = null;
+  /**
+   * Which controls the panel opened with. Cancel undoes what THOSE controls
+   * could have changed — and nothing else, so a prompter's Cancel stays the
+   * single `applyStageAppearance` it has always been.
+   */
+  let surfaceOnOpen: 'reader' | 'prompter' | null = null;
+  /**
+   * The reading window's controls, rather than the prompter's: this take's text
+   * runs through the reader preference (`stageReaderAppearance`), so that is
+   * what the panel shows, what it changes, and what Done saves.
+   */
+  const readerSurface = $derived($session.stageReaderAppearance !== null);
   /**
    * What the stage measured off the face it is drawing — see `onmeasurement`.
    *
@@ -1005,12 +1044,16 @@ import { onShortcut } from '../lib/shortcuts';
   function openAppearanceSheet(): void {
     if (appearanceOpen) return;
     appearanceOnOpen = $session.stageAppearance;
+    readerOnOpen = takeReaderPreferenceSettings();
+    surfaceOnOpen = readerSurface ? 'reader' : 'prompter';
     appearanceOpen = true;
   }
 
   function closeAppearanceSheet(): void {
     appearanceOpen = false;
     appearanceOnOpen = null;
+    readerOnOpen = null;
+    surfaceOnOpen = null;
   }
 
   /**
@@ -1025,6 +1068,7 @@ import { onShortcut } from '../lib/shortcuts';
    * global defaults every uncalibrated take opens with.
    */
   async function keepAppearance(): Promise<void> {
+    if (readerSurface) return keepReaderAppearance();
     const live = $session.stageAppearance;
     closeAppearanceSheet();
     /*
@@ -1055,9 +1099,44 @@ import { onShortcut } from '../lib/shortcuts';
     }
   }
 
+  /**
+   * Done, for a reading window: the take's reader preference becomes the one
+   * every reading window opens with.
+   *
+   * Into `optical`, through `withReaderPreference`, and never into
+   * `teleprompter`. That section is the prompter's fallback; a reading window's
+   * 34 px written there would open the next uncalibrated prompter take at 34 px
+   * and change nothing in any reading window. And never as a rig: the
+   * preference is not a calibration of this panel, and storing it as one would
+   * make it this panel's prompter rig.
+   *
+   * Compared against the saved preference for the reason `keepAppearance`
+   * gives — a ⌘= before the panel opened is still something to keep.
+   */
+  async function keepReaderAppearance(): Promise<void> {
+    const live = takeReaderPreferenceSettings();
+    closeAppearanceSheet();
+    if (readerPreferenceEquals(readerPreferenceFrom($settings.optical), live)) return;
+    try {
+      await patchSettings(
+        'optical',
+        withReaderPreference($settings.optical, readerPreferenceReplacement(live)),
+      );
+      showToast('Reading appearance saved', 'info', { durationMs: 1600 });
+    } catch {
+      // The same split `keepAppearance` reports: the save was refused, the
+      // read keeps what is on the screen.
+      showToast('Saved reading appearance was not changed. This read keeps its look.', 'danger');
+    }
+  }
+
   /** Cancel: the take goes back exactly as it was found, and nothing is saved. */
   function revertAppearance(): void {
-    if (appearanceOnOpen) applyStageAppearance(appearanceOnOpen);
+    if (surfaceOnOpen === 'reader') {
+      if (readerOnOpen) applyReaderAppearance(readerPreferenceReplacement(readerOnOpen));
+    } else if (appearanceOnOpen) {
+      applyStageAppearance(appearanceOnOpen);
+    }
     closeAppearanceSheet();
   }
 
@@ -1326,12 +1405,15 @@ import { onShortcut } from '../lib/shortcuts';
 -->
 {#snippet appearancePanel()}
   <StageAppearanceSheet
+    surface={readerSurface ? 'reader' : 'prompter'}
     appearance={$session.stageAppearance}
+    reader={$session.stageReaderAppearance}
     rigResolved={$session.stageRigResolved}
     automatic={stageSizedAutomatically}
     maxFontSizePx={$session.stageFontCeilingPx}
     charactersPerLine={stageCharactersPerLine}
     onchange={(patch) => applyStageAppearance(patch)}
+    onreaderchange={(patch) => applyReaderAppearance(patch)}
     onok={() => void keepAppearance()}
     oncancel={revertAppearance}
   />

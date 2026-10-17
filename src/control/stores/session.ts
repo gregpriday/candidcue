@@ -34,17 +34,27 @@ import {
 import {
   DEFAULT_STAGE_APPEARANCE,
   panelMirrorFor,
+  readerPreferenceFrom,
+  withReaderPreference,
   type FollowingSettings,
   type PanelMirror,
   type PresentationMode,
+  type ReaderPreference,
+  type ReaderPreferencePatch,
   type SessionMode,
 } from '../services/settings-types';
 import type { DisplayDescriptor } from '../services/stage-types';
-import { isRigResolvedStage, stageSettingsFromSettings } from '../services/stage-envelope';
+import {
+  isReaderPreferenceStage,
+  isRigResolvedStage,
+  stageSettingsFromSettings,
+} from '../services/stage-envelope';
 import {
   clampStageAppearance,
   readStageAppearance,
+  stepReaderFontSize,
   typeCeilingPx,
+  type ReaderAppearance,
   type StageAppearance,
   type TeleprompterSettings,
 } from '../lib/stage-appearance';
@@ -494,8 +504,23 @@ export interface SessionState {
   /**
    * §17.2: a saved rig decided this take's appearance, so none of it is the
    * in-session sheet's to set — see `isRigResolvedStage`.
+   *
+   * Never true for a reading window, though one always runs a profile: its
+   * appearance is the reader preference laid over that profile, which the
+   * sheet and ⌘= / ⌘− set. This is what Larger/Smaller Stage Text are greyed
+   * on, so it has to say "nothing here to set", not "a profile is in play".
    */
   stageRigResolved: boolean;
+  /**
+   * The reading window's own appearance, when this take is one whose text runs
+   * through the reader preference — or null, for every other take.
+   *
+   * Null is what puts the sheet back on its prompter controls, so it follows
+   * the composition rather than the mode: a reading window with no panel to
+   * resolve against prompts from the flat fields, and the ordinary controls
+   * are the ones that reach it (`isReaderPreferenceStage`).
+   */
+  stageReaderAppearance: ReaderAppearance | null;
   /**
    * Whether this take is on the full display or in a reading window.
    *
@@ -565,6 +590,7 @@ const initial: SessionState = {
     readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
   },
   stageRigResolved: false,
+  stageReaderAppearance: null,
   // Matches `defaultAppSettings`, and matches what every take did before reader
   // mode existed. A take overwrites it at `startLiveSession`.
   stagePresentationMode: 'prompter',
@@ -610,6 +636,24 @@ let stageSettings: StageSettings | null = null;
  * them into tomorrow's take. Null outside a take.
  */
 let takeTeleprompter: TeleprompterSettings | null = null;
+/**
+ * What the in-session sheet and ⌘= / ⌘− have changed about the READING
+ * WINDOW this take, over the saved reader preference — or null for nothing.
+ *
+ * Its own field, never a corner of `takeTeleprompter`, because the two
+ * describe different windows. `takeTeleprompter` is the prompter's fallback
+ * and a reading window never reads it; writing a reader's 34 px there would
+ * make a mid-take switch to the prompter open at 34 px, and switching back
+ * would forget it. Held apart, each mode keeps its own nudges across a switch.
+ *
+ * A PATCH over the saved preference rather than a copy of it, in the
+ * vocabulary `withReaderPreference` speaks (a value sets, null clears back to
+ * automatic), so Done saving the preference mid-take — or anything else
+ * committing the optical section — lands under it rather than being shadowed
+ * by a snapshot taken at the opening. Null outside a take, and at the start of
+ * every one: an unsaved nudge ends with the take, like every other.
+ */
+let takeReaderPreference: ReaderPreferencePatch | null = null;
 /**
  * The presentation mode THIS take is running, which is not always the saved one.
  *
@@ -929,6 +973,7 @@ export function startLiveSession(input: StartSessionInput): string {
   stageSettings = input.stageSettings ?? null;
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
+  takeReaderPreference = null;
   // The panel's own mirroring until somebody flips it — see `takeMirror`.
   takeMirror = null;
   // The take adopts the saved mode at its opening and owns it from then on.
@@ -979,6 +1024,7 @@ export function startLiveSession(input: StartSessionInput): string {
     stageEnvelope: input.stageEnvelope ?? null,
     stageAppearance: liveStageAppearance(),
     stageRigResolved: isRigResolvedStage(stageSettings),
+    stageReaderAppearance: liveReaderAppearance(),
     stagePresentationMode: takePresentationMode ?? 'prompter',
     stageFontCeilingPx: takeFontCeilingPx,
     /*
@@ -3471,10 +3517,20 @@ function takeMirrorAxes(): PanelMirror {
 }
 
 function recomposeStageSettings(): StageAppearance {
+  const saved = getSettingsSnapshot();
   const rebuilt = stageSettingsFromSettings(
     {
-      ...getSettingsSnapshot(),
+      ...saved,
       ...(takeTeleprompter ? { teleprompter: takeTeleprompter } : {}),
+      /*
+       * The take's reader nudges, over the saved preference — see
+       * `takeReaderPreference`. Only the fingerprint-less preference entry
+       * changes, so a prompter composition, which never looks there, is
+       * composed from exactly the rigs it always was.
+       */
+      ...(takeReaderPreference
+        ? { optical: withReaderPreference(saved.optical, takeReaderPreference) }
+        : {}),
       /*
        * The TAKE's mode, over the saved one.
        *
@@ -3486,7 +3542,7 @@ function recomposeStageSettings(): StageAppearance {
       ...(takePresentationMode
         ? {
             stage: {
-              ...getSettingsSnapshot().stage,
+              ...saved.stage,
               presentationMode: takePresentationMode,
             },
           }
@@ -3495,6 +3551,13 @@ function recomposeStageSettings(): StageAppearance {
     stageDisplay,
     // Null leaves it to the panel's saved answer, read off the same snapshot.
     takeMirror,
+    /*
+     * A reading window seeded from the SAVED intensity and cue, never the
+     * take's: `takeTeleprompter` holds the prompter's own unsaved nudges, and
+     * one tried on the prompter must not come with a switch to the reading
+     * window. A change made in Settings is saved, so it still arrives.
+     */
+    { intensity: saved.teleprompter.textIntensity, readingCue: saved.teleprompter.readingCue },
   );
   stageSettings = rebuilt;
   const appearance = liveStageAppearance();
@@ -3503,6 +3566,7 @@ function recomposeStageSettings(): StageAppearance {
     stageFontSizePx: rebuilt.fontSizePx,
     stageAppearance: appearance,
     stageRigResolved: isRigResolvedStage(rebuilt),
+    stageReaderAppearance: liveReaderAppearance(),
     stagePresentationMode: takePresentationMode ?? s.stagePresentationMode,
     stageEnvelope:
       s.stageEnvelope === null ? null : { ...s.stageEnvelope, stageSettings: rebuilt },
@@ -3617,11 +3681,84 @@ export function takeTeleprompterSettings(): TeleprompterSettings {
 }
 
 export function adjustStageFontSize(deltaPx: number): number {
+  /*
+   * A reading window steps its OWN size: the reader preference, from the size
+   * on the glass now, in the reader's range. Through `takeTeleprompter` it
+   * would move the prompter's fallback and nothing in the window.
+   */
+  if (isReaderPreferenceStage(stageSettings)) {
+    const next = stepReaderFontSize(stageSettings!.fontSizePx, deltaPx);
+    return applyReaderAppearance({ fontSizePx: next })?.fontSizePx ?? next;
+  }
   const current = get(state).stageAppearance.fontSizePx;
   // Clamped by `clampStageAppearance`, which is the same ceiling the sliders
   // draw against. It used to stop at 160px — below what this product's own
   // hardware asks for, and a different limit from the one Settings offered.
   return applyStageAppearance({ fontSizePx: current + deltaPx }).fontSizePx;
+}
+
+/**
+ * The reader preference this take is running — the saved one with the take's
+ * own nudges over it — for the sheet to restore on Cancel and save on Done.
+ */
+export function takeReaderPreferenceSettings(): ReaderPreference {
+  const saved = getSettingsSnapshot().optical;
+  return readerPreferenceFrom(
+    takeReaderPreference ? withReaderPreference(saved, takeReaderPreference) : saved,
+  );
+}
+
+/**
+ * What a reading window is showing now, for its sheet — or null when this take
+ * is not one whose text runs through the reader preference.
+ *
+ * Size, spacing, intensity and cue off the RENDERED settings, for the reason
+ * `liveStageAppearance` gives: the readout has to say what is on the glass.
+ * The measure is the one the reader asked for; what the window actually fits
+ * is the stage's to measure.
+ */
+function liveReaderAppearance(): ReaderAppearance | null {
+  if (!stageSettings || !isReaderPreferenceStage(stageSettings)) return null;
+  return {
+    fontSizePx: stageSettings.fontSizePx,
+    lineHeight: stageSettings.lineHeight,
+    characters: takeReaderPreferenceSettings().characters ?? null,
+    textIntensity: stageSettings.textIntensity ?? 'standard',
+    readingCue: stageSettings.readingCue ?? 'ticks',
+  };
+}
+
+/**
+ * Change how the reading window looks, now, for this take.
+ *
+ * The reader's sibling of `applyStageAppearance`, and kept apart from it on
+ * purpose: that one patches `takeTeleprompter`, which is what Settings'
+ * follower writes too, and a reading window never reads it. This patches the
+ * take's reader preference — a value sets a field, null puts it back to
+ * automatic — and recomposes through the same `recomposeStageSettings`, so the
+ * window adjusted mid-read and a window opened with those numbers are the same
+ * window.
+ *
+ * Nothing is saved: Done does that, with `withReaderPreference`.
+ *
+ * Returns what the reading window is now showing, or null when this take is
+ * not one (a prompter, or a reading window with no panel to resolve against).
+ * On a prompter take the nudge is still held, untouched by the prompter's own
+ * composition, and the reading window opens on it if the take switches.
+ */
+export function applyReaderAppearance(patch: ReaderPreferencePatch): ReaderAppearance | null {
+  if (!get(state).active) return liveReaderAppearance();
+  // The guard `applyStageAppearance` states: a profile with no panel cannot be
+  // recomposed without demoting it to the uncalibrated layout.
+  if (stageSettings?.optics && stageDisplay === null) return liveReaderAppearance();
+  const merged: ReaderPreferencePatch = { ...(takeReaderPreference ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    // An absent value means "leave it", and a spread would turn it into one.
+    if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+  }
+  takeReaderPreference = merged;
+  recomposeStageSettings();
+  return liveReaderAppearance();
 }
 
 /**
@@ -3905,6 +4042,7 @@ function stopInternals(): void {
    * settings again, which is where OK put anything worth keeping.
    */
   takeTeleprompter = null;
+  takeReaderPreference = null;
   takeMirror = null;
   takePresentationMode = null;
   stageDisplay = null;
@@ -3953,8 +4091,14 @@ export function connectionPill(connection: SessionState['connection']): {
   }
 }
 
-const PAUSED_LISTENING_LABEL = 'Paused — still listening for “CandidCue, resume”';
-/** No microphone in this take, so nothing is listening for a wake word. */
+/*
+ * No wake phrase. This used to promise "still listening for “CandidCue,
+ * resume”", and nothing in the app has ever answered that phrase — a presenter
+ * who said it would have stood there waiting. What is true is that the
+ * microphone is still open, which is what makes Resume immediate.
+ */
+const PAUSED_LISTENING_LABEL = 'Paused — still listening';
+/** No microphone in this take, so nothing is listening at all. */
 const PAUSED_MANUAL_LABEL = 'Paused — the script stays where it is';
 
 /**

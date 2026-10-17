@@ -101,6 +101,9 @@ describe('live session store', () => {
     expect(get(session).paused).toBe('listening');
     expect(get(session).micState).toBe('live'); // still connected & listening
     expect(get(liveStatusLabel)).toContain('still listening');
+    // No wake phrase: nothing in the app answers "CandidCue, resume", so the
+    // label must not tell a presenter to say it.
+    expect(get(liveStatusLabel)).not.toContain('CandidCue');
 
     resumeSession();
     expect(get(session).paused).toBe('none');

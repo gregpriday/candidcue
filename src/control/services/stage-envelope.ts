@@ -36,6 +36,7 @@ import {
   readerOpticalProfile,
   type AppSettings,
   type PanelMirror,
+  type ReaderProfileSeed,
 } from './settings-types';
 import type { DisplayDescriptor } from './stage-types';
 
@@ -273,7 +274,9 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
      * A calibrated rig's own brightness and cue choice outrank the global
      * default, because they were made by somebody standing at that glass
      * looking at that reflection. The Settings control is what an uncalibrated
-     * rig gets, not a second opinion about a calibrated one.
+     * rig gets, not a second opinion about a calibrated one — and a profile
+     * nobody calibrated (the automatic prompter profile, a derived reading
+     * rig) already carries it, as the seed it was built from.
      */
     textIntensity: optical ? optical.profile.intensity : overrides.textIntensity ?? 'standard',
     // The rig's own choice when there is one, the explicit override otherwise.
@@ -325,6 +328,15 @@ export function stageSettingsFromSettings(
    * been flipped live from the Session menu. Absent means the panel's own.
    */
   mirror?: PanelMirror | null,
+  /**
+   * What a reading window's derived profile is seeded with, when it is not the
+   * `teleprompter` section being composed. A take passes its SAVED section's
+   * choices here: the section it composes from carries the take's prompter
+   * nudges, and an intensity tried on the prompter and never saved belongs to
+   * the prompter — it must not follow a mid-take switch into the reading
+   * window. Absent means `s.teleprompter`'s, which is what a take opens with.
+   */
+  readerSeed?: ReaderProfileSeed,
 ): StageSettings {
   const t = s.teleprompter;
   const reader = s.stage.presentationMode === 'reader';
@@ -345,8 +357,25 @@ export function stageSettingsFromSettings(
    * is "not mirrored". It used to find the glass's, and read backwards.
    */
   const mirrorAxes = mirror ?? panelMirrorFor(s.optical, display?.fingerprint ?? null);
+  /*
+   * A reading window is seeded too, and with less.
+   *
+   * Intensity and cue, because `buildStageSettings` takes both off the profile
+   * whenever there is one — so without a seed, Settings › Teleprompter's "Text
+   * intensity" moved and every reading window went on burning at the derived
+   * profile's 'standard'. The defaults are the same values, so nobody who never
+   * changed either sees a difference.
+   *
+   * Not `sizeBias`: that slider belongs to every automatically sized prompter
+   * display, and a reading window sizes its type from the reader preference
+   * that `readerOpticalProfile` lays over the rig.
+   */
   const profile = reader
-    ? readerOpticalProfile(s.optical, display?.fingerprint ?? null)
+    ? readerOpticalProfile(
+        s.optical,
+        display?.fingerprint ?? null,
+        readerSeed ?? { intensity: t.textIntensity, readingCue: t.readingCue },
+      )
     : prompterOpticalProfile(s.optical, display, {
         intensity: t.textIntensity,
         readingCue: t.readingCue,
@@ -461,9 +490,29 @@ export function prompterOpticalProfile(
  * profile still produces an optics block, and `buildStageSettings` still
  * ignores every flat value in its presence. The controls' authority follows the
  * composition, not the quality of the measurement.
+ *
+ * A READING WINDOW IS NEVER THIS, though it always carries an optics block.
+ * Its profile is the reading rig with the reader preference laid over it, and
+ * that preference is exactly what the sheet and ⌘= / ⌘− set — so the window's
+ * size, spacing, measure, intensity and cue all answer to controls, just not to
+ * the flat Settings ones. See `isReaderPreferenceStage`.
  */
 export function isRigResolvedStage(settings: StageSettings | null): boolean {
-  return Boolean(settings?.optics);
+  return Boolean(settings?.optics) && !isReaderPreferenceStage(settings);
+}
+
+/**
+ * True when this take is a reading window whose appearance runs through the
+ * reader preference — the in-session sheet's reader controls, and the size
+ * keys, reach the glass.
+ *
+ * Only with an optics block, for the same reason a prompter needs one to be
+ * rig-resolved: without a display there is no profile on the stage at all, the
+ * window prompts from the flat fields, and the reader preference reaches
+ * nothing. That take keeps the ordinary controls, which DO move those fields.
+ */
+export function isReaderPreferenceStage(settings: StageSettings | null): boolean {
+  return settings?.readingContext === 'reader' && Boolean(settings.optics);
 }
 
 /**

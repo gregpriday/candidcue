@@ -103,6 +103,11 @@ export interface CommandContext {
    * already declined and explained in a toast, which is the right answer for a
    * key press and the wrong one for a menu item somebody had to open a menu to
    * reach and read as available on the way.
+   *
+   * False for a reading window, which always runs a profile but sizes its text
+   * from the reader preference — the very thing these two commands step. It
+   * used to be true there, and greyed them out over a window whose size was
+   * adjustable and had no other key to adjust it with.
    */
   stageRigResolved: boolean;
   /** The take is paused (so Pause reads Resume). */
@@ -589,7 +594,9 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
      * editor-only meant the disabled menu item ate ⌘= during a take.
      *
      * Except on a CALIBRATED rig, which sizes its type from a measured viewing
-     * distance and has nothing for this to move (§17.2, §6.3).
+     * distance and has nothing for this to move (§17.2, §6.3). A reading window
+     * is never that: these step its reader preference, and the session store
+     * reports it as not rig-resolved for exactly that reason.
      */
     available: (c) => editing(c) || (presenting(c) && !c.stageRigResolved),
     run: (a) => a.stepScale(1),

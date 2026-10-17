@@ -24,21 +24,27 @@ import { get } from 'svelte/store';
 import {
   adjustStageFontSize,
   adoptPresentationMode,
+  applyReaderAppearance,
   applyStageAppearance,
   clearSession,
   liveMirrorX,
   session,
   startLiveSession,
+  takeReaderPreferenceSettings,
   takeTeleprompterSettings,
   toggleStageMirror,
 } from '../../../src/control/stores/session';
+import { getSettingsSnapshot } from '../../../src/control/stores/settings';
 import { smoothFollow } from '../../../src/control/stores/smooth-follow';
 import {
   buildStageEnvelope,
   buildStageSettings,
   stageSettingsFromSettings,
 } from '../../../src/control/services/stage-envelope';
-import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import {
+  defaultAppSettings,
+  readerPreferenceReplacement,
+} from '../../../src/control/services/settings-types';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
 import type { CompiledScript, StageSessionEnvelope } from '../../../src/shared/contracts';
 import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
@@ -616,5 +622,192 @@ describe('switching presentation mode mid-take', () => {
     adoptPresentationMode('reader');
 
     expect(rendered()).toEqual(composedFor('reader', LAPTOP));
+  });
+});
+
+/**
+ * A reading window, adjusted during a read.
+ *
+ * A reading window always runs a profile, so it used to be announced as
+ * rig-resolved: the sheet showed a read-only readout over a window nobody had
+ * calibrated, ⌘= and ⌘− were greyed out, and even had they not been, the only
+ * thing they could write was `takeTeleprompter` — the prompter's fallback,
+ * which a reading window never reads. Its appearance is the reader preference
+ * laid over its profile now, and these pin that the take-time path reaches the
+ * glass and stays out of the prompter's way.
+ */
+describe('a reading window, adjusted mid-read', () => {
+  const DESK: DisplayDescriptor = {
+    id: 'display-1',
+    name: 'Built-in Retina Display',
+    primary: true,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 3456, height: 2234 },
+    logicalSize: { width: 1728, height: 1117 },
+    scaleFactor: 2,
+    fingerprint: 'panel-desk',
+    topologyHash: 'topology-1',
+  };
+
+  const composedFor = (mode: 'prompter' | 'reader') =>
+    stageSettingsFromSettings(
+      { ...SETTINGS, stage: { ...SETTINGS.stage, presentationMode: mode } },
+      DESK,
+    );
+
+  function startReading(): void {
+    const opening = composedFor('reader');
+    startLiveSession({
+      scriptId: 'script-1',
+      scriptTitle: 'Launch video',
+      mode: 'manual',
+      displayLabel: 'This window',
+      outline: [],
+      sentences: [],
+      totalTokens: 200,
+      stageSettings: opening,
+      stageEnvelope: envelopeFor(opening),
+      teleprompter: SETTINGS.teleprompter,
+      presentationMode: 'reader',
+      stageDisplay: DESK,
+    });
+  }
+
+  it('is not announced as rig-resolved, so its controls and keys are offered', () => {
+    startReading();
+    expect(get(session).stageRigResolved).toBe(false);
+    const reader = get(session).stageReaderAppearance;
+    expect(reader).not.toBeNull();
+    expect(reader?.fontSizePx).toBe(rendered().fontSizePx);
+    expect(reader?.characters).toBeNull();
+  });
+
+  it('is not claimed for a prompter take', () => {
+    start();
+    expect(get(session).stageReaderAppearance).toBeNull();
+  });
+
+  it('reaches the glass through the profile the stage re-resolves from', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40, lineHeight: 1.6, characters: 55, readingCue: 'wash' });
+
+    expect(rendered().opticalProfile?.overrides).toEqual({
+      fontSizePx: 40,
+      lineHeight: 1.6,
+      characters: 55,
+    });
+    expect(rendered().fontSizePx).toBe(40);
+    expect(rendered().readingCue).toBe('wash');
+    expect(get(session).stageReaderAppearance).toMatchObject({
+      fontSizePx: 40,
+      lineHeight: 1.6,
+      characters: 55,
+      readingCue: 'wash',
+    });
+  });
+
+  it('leaves the prompter’s fallback alone, and saves nothing', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+    adjustStageFontSize(2);
+
+    expect(takeTeleprompterSettings()).toEqual(SETTINGS.teleprompter);
+    expect(takeReaderPreferenceSettings()).toEqual({ fontSizePx: 42 });
+    // Done is what saves; a nudge is the take's.
+    expect(getSettingsSnapshot().optical).toEqual(SETTINGS.optical);
+  });
+
+  it('steps its own size with ⌘= and ⌘−, inside the reader’s range', () => {
+    startReading();
+    const opening = rendered().fontSizePx;
+
+    expect(adjustStageFontSize(2)).toBe(opening + 2);
+    expect(rendered().fontSizePx).toBe(opening + 2);
+
+    applyReaderAppearance({ fontSizePx: 95 });
+    expect(adjustStageFontSize(2)).toBe(96);
+    expect(adjustStageFontSize(2)).toBe(96);
+    applyReaderAppearance({ fontSizePx: 21 });
+    expect(adjustStageFontSize(-2)).toBe(20);
+  });
+
+  it('keeps each mode’s nudges to itself across a switch', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+
+    // To the prompter: none of the reader's size comes with it...
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered()).toEqual(composedFor('prompter'));
+
+    // ...a prompter nudge stays the prompter's...
+    applyStageAppearance({ fontSizePx: 96 });
+
+    // ...and back again, the reading window is where it was left.
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().fontSizePx).toBe(40);
+    expect(takeTeleprompterSettings().fontSizePx).toBe(96);
+  });
+
+  it('does not take an unsaved prompter intensity into the reading window', () => {
+    /*
+     * The reading window is seeded from Settings' intensity, and the section a
+     * take recomposes from is the take's — prompter nudges included. Tried on
+     * the prompter and never saved, a Soft belongs to the prompter.
+     */
+    startReading();
+    adoptPresentationMode('prompter', DESK);
+    applyStageAppearance({ textIntensity: 'soft' });
+    expect(rendered().textIntensity).toBe('soft');
+
+    adoptPresentationMode('reader', DESK);
+    expect(rendered().textIntensity).toBe(SETTINGS.teleprompter.textIntensity);
+    expect(rendered()).toEqual(composedFor('reader'));
+
+    adoptPresentationMode('prompter', DESK);
+    expect(rendered().textIntensity).toBe('soft');
+  });
+
+  it('goes back exactly when the sheet is cancelled, automatic fields and all', () => {
+    startReading();
+    const opening = rendered();
+    const onOpen = takeReaderPreferenceSettings();
+
+    applyReaderAppearance({ fontSizePx: 40, characters: 75, intensity: 'strong' });
+    applyReaderAppearance(readerPreferenceReplacement(onOpen));
+
+    // Not "pinned at the size it happened to be": automatic again.
+    expect(rendered()).toEqual(opening);
+    expect(takeReaderPreferenceSettings()).toEqual({});
+  });
+
+  it('puts a field back to automatic with null', () => {
+    startReading();
+    const opening = rendered();
+    applyReaderAppearance({ characters: 75 });
+    applyReaderAppearance({ characters: null });
+    expect(rendered()).toEqual(opening);
+  });
+
+  it('drops an unsaved nudge when the session is cleared', () => {
+    startReading();
+    applyReaderAppearance({ fontSizePx: 40 });
+    clearSession();
+    startReading();
+    expect(takeReaderPreferenceSettings()).toEqual({});
+    expect(rendered()).toEqual(composedFor('reader'));
+  });
+
+  it('keeps the ordinary controls for a reading window with no panel to resolve against', () => {
+    /*
+     * Without a display there is no profile on the stage: the window prompts
+     * from the flat fields, the reader preference would reach nothing, and the
+     * controls that DO reach it are the prompter's.
+     */
+    start(stageSettingsFromSettings({
+      ...SETTINGS,
+      stage: { ...SETTINGS.stage, presentationMode: 'reader' },
+    }));
+    expect(get(session).stageReaderAppearance).toBeNull();
+    expect(get(session).stageRigResolved).toBe(false);
   });
 });

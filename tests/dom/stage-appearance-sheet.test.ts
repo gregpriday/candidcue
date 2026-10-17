@@ -16,7 +16,7 @@ import { flushSync } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import StageAppearanceSheet from '../../src/control/components/StageAppearanceSheet.svelte';
 import { FOCUSABLE_SELECTOR } from '../../src/control/components/dialog-focus';
-import type { StageAppearance } from '../../src/control/lib/stage-appearance';
+import type { ReaderAppearance, StageAppearance } from '../../src/control/lib/stage-appearance';
 
 const APPEARANCE: StageAppearance = {
   textIntensity: 'standard',
@@ -341,5 +341,137 @@ describe('the panel owns the keyboard while it is open', () => {
     const focusables = [...container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
     expect(focusables.length).toBeGreaterThan(0);
     expect(focusables.some((el) => el.getAttribute('tabindex') === '-1')).toBe(false);
+  });
+});
+
+describe('a reading window', () => {
+  /*
+   * A reading window always runs a profile, and it used to get the
+   * rig-resolved readout: "Prompter appearance", a "Calibrated" badge over a
+   * window nobody calibrated, "worked out from how far away you stand", and
+   * only Close. Its text is the reader preference now, and these are its
+   * controls.
+   */
+  const READER: ReaderAppearance = {
+    fontSizePx: 30,
+    lineHeight: 1.38,
+    characters: null,
+    textIntensity: 'standard',
+    readingCue: 'ticks',
+  };
+
+  function openReader(overrides: Record<string, unknown> = {}) {
+    const onreaderchange = vi.fn();
+    const opened = open({
+      surface: 'reader',
+      reader: READER,
+      // A reading window always resolves through a profile; the panel must
+      // not fall back to the readout because of it.
+      rigResolved: true,
+      onreaderchange,
+      ...overrides,
+    });
+    return { ...opened, onreaderchange };
+  }
+
+  it('is titled for what it is, with no calibration badge', () => {
+    const { getByRole, queryByText } = openReader();
+    expect(getByRole('heading').textContent?.trim()).toBe('Reading appearance');
+    expect(queryByText('Calibrated')).toBeNull();
+    expect(queryByText('Automatic')).toBeNull();
+    expect(queryByText(/how far away you stand/i)).toBeNull();
+  });
+
+  it('offers working controls, Cancel and Done', () => {
+    const { container, getByRole, onreaderchange, onchange } = openReader();
+
+    drag(slider(container, 'Text size'), 36);
+    drag(slider(container, 'Line spacing'), 1.6);
+    radio(container, 'Intensity', 'Strong').click();
+    radio(container, 'Reading cue', 'Wash').click();
+    flushSync();
+
+    expect(onreaderchange).toHaveBeenCalledWith({ fontSizePx: 36 });
+    expect(onreaderchange).toHaveBeenCalledWith({ lineHeight: 1.6 });
+    expect(onreaderchange).toHaveBeenCalledWith({ intensity: 'strong' });
+    expect(onreaderchange).toHaveBeenCalledWith({ readingCue: 'wash' });
+    // Nothing reaches the prompter's fallback from here.
+    expect(onchange).not.toHaveBeenCalled();
+    expect(getByRole('button', { name: 'Done' })).toBeTruthy();
+    expect(getByRole('button', { name: 'Cancel' })).toBeTruthy();
+  });
+
+  it('draws the size over the reader’s range, not the prompter’s', () => {
+    const { container } = openReader();
+    const size = slider(container, 'Text size');
+    expect(size.min).toBe('20');
+    expect(size.max).toBe('96');
+    const spacing = slider(container, 'Line spacing');
+    expect(spacing.min).toBe('1.2');
+    expect(spacing.max).toBe('1.8');
+  });
+
+  it('nudges by two, by ten with Shift, and stops at the ends', () => {
+    const { getByLabelText, onreaderchange } = openReader();
+    getByLabelText('Larger text').click();
+    flushSync();
+    expect(onreaderchange).toHaveBeenLastCalledWith({ fontSizePx: 32 });
+    getByLabelText('Smaller text').dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }),
+    );
+    flushSync();
+    expect(onreaderchange).toHaveBeenLastCalledWith({ fontSizePx: 20 });
+
+    const nudge = (container: HTMLElement, label: string) =>
+      container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    const top = openReader({ reader: { ...READER, fontSizePx: 96 } });
+    expect(nudge(top.container, 'Larger text').disabled).toBe(true);
+    const bottom = openReader({ reader: { ...READER, fontSizePx: 20 } });
+    expect(nudge(bottom.container, 'Smaller text').disabled).toBe(true);
+  });
+
+  /** One option of one segmented control — "Standard" is in two of them. */
+  function radio(container: HTMLElement, group: string, name: string): HTMLElement {
+    const groupEl = container.querySelector<HTMLElement>(`[role="radiogroup"][aria-label="${group}"]`);
+    expect(groupEl, `no control labelled "${group}"`).not.toBeNull();
+    const match = [...groupEl!.querySelectorAll<HTMLElement>('[role="radio"]')].find(
+      (el) => el.textContent?.trim() === name,
+    );
+    expect(match, `no "${name}" in "${group}"`).toBeDefined();
+    return match!;
+  }
+
+  it('offers three line widths, as measures, with Standard clearing the choice', () => {
+    const standard = openReader();
+    expect(radio(standard.container, 'Line width', 'Standard').getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    radio(standard.container, 'Line width', 'Narrower').click();
+    flushSync();
+    expect(standard.onreaderchange).toHaveBeenLastCalledWith({ characters: 55 });
+
+    const wider = openReader({ reader: { ...READER, characters: 75 } });
+    expect(radio(wider.container, 'Line width', 'Wider').getAttribute('aria-checked')).toBe('true');
+    radio(wider.container, 'Line width', 'Standard').click();
+    flushSync();
+    expect(wider.onreaderchange).toHaveBeenLastCalledWith({ characters: null });
+  });
+
+  it('reports the measured characters, not a percentage of the display', () => {
+    const { getByText, queryByText } = openReader({ charactersPerLine: 61 });
+    expect(getByText('About 61 characters a line')).toBeTruthy();
+    expect(queryByText(/%/)).toBeNull();
+  });
+
+  it('says where the choice is kept', () => {
+    const { getByText } = openReader();
+    expect(getByText('Done saves these for every reading window.')).toBeTruthy();
+  });
+
+  it('falls back to the prompter panel when there is no reading appearance to drive', () => {
+    // A reading window with no panel to resolve against prompts from the flat
+    // fields, and the ordinary controls are the ones that reach it.
+    const { getByRole } = openReader({ reader: null, rigResolved: false });
+    expect(getByRole('heading').textContent?.trim()).toBe('Prompter appearance');
   });
 });
