@@ -10,8 +10,11 @@
   interface Props {
     open: boolean;
     title: string;
-    /** `lg` widens the panel for two-column content (revision browser). */
-    size?: 'md' | 'lg';
+    /**
+     * `wide` makes room for a footer of four actions (the take summary);
+     * `lg` widens the panel for two-column content (revision browser).
+     */
+    size?: 'md' | 'wide' | 'lg';
     onclose?: () => void;
     children?: Snippet;
     footer?: Snippet;
@@ -202,6 +205,9 @@
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-pop);
   }
+  .panel.wide {
+    width: min(560px, 100%);
+  }
   /* Two-column content (the revision browser) needs room; the panel then
      owns the scroll boundary itself rather than scrolling as one column. */
   .panel.lg {
@@ -233,8 +239,15 @@
     min-width: 0;
   }
 
+  /*
+   * Wraps rather than squeezes. A button may shrink below its label (it has
+   * `min-width: 0` so an ellipsizing caller can be shorter than its text), and
+   * in a row that cannot wrap the labels then spill out of their borders and
+   * over each other — which is what the take summary's four actions did.
+   */
   .footer {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: var(--space-2);

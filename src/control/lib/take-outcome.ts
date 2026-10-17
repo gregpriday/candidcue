@@ -77,7 +77,6 @@ export interface TakeOutcomeInput {
   /** Times the operator moved the script by hand. */
   manualJumps: number;
   durationSeconds: number;
-  endingLocation: string;
 }
 
 /**
@@ -146,14 +145,19 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
    */
   if (input.mode !== 'voice') {
     return {
-      headline: 'Take finished',
+      /*
+       * Said as a setting, not a shortfall. "Take finished" sat directly under
+       * the dialog's own "Take complete", and "did not follow your voice" read
+       * as a fault in a take that never asked to be followed.
+       */
+      headline: 'Voice following was off',
       /*
        * Neither branch claims WHAT moved the script beyond what is known. A
        * fixed-mode take does not start rolling on its own — `autoScroll.running`
        * begins false and the transport starts it — so "the script rolled at
        * your set pace" would be false for a fixed take nobody ever started.
        */
-      detail: `CandidCue did not follow your voice on this take. You ended in ${input.endingLocation}.`,
+      detail: 'CandidCue was not listening on this take, so there is no following to report.',
       suggestion: null,
       health: 'no_tracking',
       tone: 'neutral',
@@ -174,7 +178,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   if (input.voiceFollowingAvailable === false) {
     return {
       headline: 'Take finished without voice following',
-      detail: `No usable speech model was available, so CandidCue did not follow your voice. You ended in ${input.endingLocation}.`,
+      detail: 'No usable speech model was available, so CandidCue did not follow your voice.',
       suggestion: 'Check the speech model in Settings → Speech before the next take.',
       health: 'no_tracking',
       tone: 'neutral',
@@ -194,7 +198,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
     if (input.microphoneRefused) {
       return {
         headline: 'CandidCue could not use the microphone',
-        detail: `This Mac did not allow CandidCue to use the microphone, so it could not follow your voice. You ended in ${input.endingLocation}.`,
+        detail: 'This Mac did not allow CandidCue to use the microphone, so it could not follow your voice.',
         suggestion:
           'Allow CandidCue in System Settings → Privacy & Security → Microphone before the next take.',
         // Not "no speech detected": nothing was listening to detect it.
@@ -215,7 +219,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
      * short silence with no pause in it is just a short take.
      */
     if ((input.listenedSeconds ?? input.durationSeconds) < TOO_SHORT_SECONDS) {
-      if (time && time.pausedSeconds > 0) return standDownOutcome(input, time);
+      if (time && time.pausedSeconds > 0) return standDownOutcome(time);
       return {
         headline: 'Take ended early',
         detail: 'This take was too short to tell whether CandidCue could hear you.',
@@ -255,7 +259,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
    * Only when something WAS set aside. A take that simply ran short is the
    * existing branches' business, and gets exactly the answer it always did.
    */
-  if (time && !followingAssessed(time)) return standDownOutcome(input, time);
+  if (time && !followingAssessed(time)) return standDownOutcome(time);
   const setAside = setAsideSeconds(time);
 
   /*
@@ -288,7 +292,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
   if (input.reconnects > 0) {
     return {
       headline: 'Voice following was interrupted',
-      detail: `CandidCue held the text through ${input.reconnects === 1 ? 'an interruption' : `${input.reconnects} interruptions`} and picked you up again. You ended in ${input.endingLocation}.`,
+      detail: `CandidCue held the text through ${input.reconnects === 1 ? 'an interruption' : `${input.reconnects} interruptions`} and picked you up again.`,
       suggestion: 'Present again. If it keeps happening, export a support bundle from Settings.',
       health: healthFromShare(input.followingShare),
       tone: 'attention',
@@ -320,14 +324,14 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
    *
    * "Followed most of the take" has to remain TRUE at the bottom of the band,
    * and the technical rows below report "the stage spent most of it holding"
-   * under 0.6. Two statements on one dialog that contradict each other cost
-   * more trust than either buys, so this band says what it did without
-   * quantifying it, and the number is one disclosure away.
+   * under 50% as displayed. Two statements on one dialog that contradict each
+   * other cost more trust than either buys, so this band says what it did
+   * without quantifying it, and the number is one disclosure away.
    */
   if (input.followingShare < STEADY_ABOVE) {
     return {
       headline: 'CandidCue stayed with you',
-      detail: `It followed you and held its place whenever it was unsure.${notCounted} You ended in ${input.endingLocation}.`,
+      detail: `It followed you and held its place whenever it was unsure.${notCounted}`,
       suggestion: null,
       health: 'occasional_holds',
       tone: 'good',
@@ -338,10 +342,10 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
     headline: 'CandidCue stayed with you',
     detail:
       input.followingShare < 1
-        ? `Speech was detected and the stage followed almost all of ${span}.${notCounted} You ended in ${input.endingLocation}.`
+        ? `Speech was detected and the stage followed almost all of ${span}.${notCounted}`
         : setAside > 0
-          ? `Speech was detected and the stage followed all of ${span}.${notCounted} You ended in ${input.endingLocation}.`
-          : `Speech was detected and the stage followed for the whole take. You ended in ${input.endingLocation}.`,
+          ? `Speech was detected and the stage followed all of ${span}.${notCounted}`
+          : 'Speech was detected and the stage followed for the whole take.',
     suggestion: null,
     health: 'steady',
     tone: 'good',
@@ -404,7 +408,7 @@ export function describeSetAside(time: FollowingTime): string | null {
  * bundle, no microphone and no script advice, each of which is what the old
  * verdicts sent presenters off to chase.
  */
-function standDownOutcome(input: TakeOutcomeInput, time: FollowingTime): TakeOutcome {
+function standDownOutcome(time: FollowingTime): TakeOutcome {
   const largest = Math.max(time.pausedSeconds, time.offSeconds, time.autoScrollSeconds);
   const headline =
     time.pausedSeconds === largest
@@ -414,7 +418,7 @@ function standDownOutcome(input: TakeOutcomeInput, time: FollowingTime): TakeOut
         : 'Following was switched off';
   return {
     headline,
-    detail: `Voice following was on for under ${TOO_SHORT_SECONDS} seconds, so there is nothing to judge it on. You ended in ${input.endingLocation}.`,
+    detail: `Voice following was on for under ${TOO_SHORT_SECONDS} seconds, so there is nothing to judge it on.`,
     suggestion: null,
     health: 'not_assessed',
     tone: 'neutral',
