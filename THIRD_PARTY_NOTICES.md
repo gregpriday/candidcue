@@ -111,7 +111,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-321 crates across both workspaces, with the SPDX expression each
+324 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -268,6 +268,7 @@ declares in its own manifest.
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
 | muda | 0.19.3 | Apache-2.0 OR MIT |
 | new_debug_unreachable | 1.0.6 | MIT |
+| nix | 0.31.3 | MIT |
 | nu-ansi-term | 0.50.3 | MIT |
 | num-bigfloat | 1.7.2 | MIT |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 |
@@ -401,6 +402,7 @@ declares in its own manifest.
 | tracing-log | 0.2.0 | MIT |
 | tracing-subscriber | 0.3.23 | MIT |
 | try-lock | 0.2.5 | MIT |
+| typed-path | 0.12.3 | MIT OR Apache-2.0 |
 | typeid | 1.0.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | unic-char-property | 0.9.0 | MIT/Apache-2.0 |
@@ -432,7 +434,8 @@ declares in its own manifest.
 | zerotrie | 0.2.4 | Unicode-3.0 |
 | zerovec | 0.11.6 | Unicode-3.0 |
 | zerovec-derive | 0.11.3 | Unicode-3.0 |
-| zip | 2.4.2 | MIT |
+| zip | 9.0.4 | MIT |
+| zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |
 | zopfli | 0.8.3 | Apache-2.0 |
 | zune-core | 0.5.1 | MIT OR Apache-2.0 OR Zlib |

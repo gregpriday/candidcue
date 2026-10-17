@@ -50,7 +50,7 @@ hex = "0.4"
 # it admits combining marks the compiler splits on — so the pattern is matched
 # with the same classes rather than approximated. Already in the lockfile.
 regex = "1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # Speech-model archives (§152). Upstream publishes `.tar.bz2`, so the `zip`
 # crate above — which is for script export/import — has nothing to do with this.
 #

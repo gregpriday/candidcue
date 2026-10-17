@@ -156,6 +156,17 @@ jobs:
         with:
           workspaces: ${{ matrix.cache }}
 
+      # rust-cache keeps every directory under target/ but deletes every file
+      # outside a Cargo profile, so it restores sherpa-onnx-sys's unpacked
+      # download as an empty `sherpa-onnx-prebuilt/<archive>/lib` folder. The
+      # crate's build script takes any lib folder that exists as already
+      # unpacked, so the first time a dependency change reruns it, it links
+      # against nothing: "could not find native static library
+      # `sherpa-onnx-c-api`". Without the folder it fetches the archive again,
+      # exactly as it does on a cold cache.
+      - name: Drop the empty sherpa-onnx download the cache restores
+        run: rm -rf '${{ matrix.cache }}/target/sherpa-onnx-prebuilt'
+
       - name: Tests and Clippy
         run: node scripts/release-verify.mjs --only='${{ matrix.steps }}'
 
@@ -180,6 +191,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
+
+      # The same empty folder as in the Rust job; see the comment there.
+      - name: Drop the empty sherpa-onnx download the cache restores
+        run: rm -rf src-tauri/target/sherpa-onnx-prebuilt
 
       - run: pnpm install --frozen-lockfile
 
