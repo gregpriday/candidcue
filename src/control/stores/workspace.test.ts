@@ -6,8 +6,13 @@
  * anything is painted. A stored width of 40000 is a workspace with no workspace
  * in it, and a stored `NaN` is a layout that never lays out — so the parser
  * treats what it finds as a suggestion, and these tests are the proof.
+ *
+ * It is also written by TWO windows — control and Settings — each holding the
+ * copy it loaded at startup. The last block here is the proof that a write in
+ * one carries only what that window changed (#274).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 import {
   DEFAULT_WORKSPACE,
   DOCUMENT_SCALE_STEPS,
@@ -132,5 +137,267 @@ describe('nearestScaleStep', () => {
     for (const step of DOCUMENT_SCALE_STEPS) {
       expect(nearestScaleStep(step)).toBe(step);
     }
+  });
+});
+
+/*
+ * TWO WINDOWS, ONE KEY.
+ *
+ * The control window and the Settings window are two webviews of one origin, so
+ * they share `localStorage` — and each evaluates this module for itself, loading
+ * its own copy once and never refreshing it. Here a window is a fresh module
+ * instance (`vi.resetModules` before each import) over one shared storage, which
+ * is exactly that arrangement without a DOM.
+ */
+describe('two windows writing one workspace', () => {
+  const KEY = 'candidcue.workspace.v1';
+
+  type WorkspaceModule = typeof import('./workspace');
+
+  function sharedStorage() {
+    const items = new Map<string, string>();
+    return {
+      getItem: (key: string): string | null => items.get(key) ?? null,
+      setItem: (key: string, value: string): void => void items.set(key, String(value)),
+      removeItem: (key: string): void => void items.delete(key),
+      clear: (): void => items.clear(),
+      key: (index: number): string | null => [...items.keys()][index] ?? null,
+      get length(): number {
+        return items.size;
+      },
+    };
+  }
+
+  let disk: ReturnType<typeof sharedStorage>;
+
+  /** Open a window: evaluate the store module again, as a new webview does. */
+  async function openWindow(): Promise<WorkspaceModule> {
+    vi.resetModules();
+    return import('./workspace');
+  }
+
+  function stored(): Record<string, unknown> {
+    const raw = disk.getItem(KEY);
+    return raw === null ? {} : (JSON.parse(raw) as Record<string, unknown>);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    disk = sharedStorage();
+    vi.stubGlobal('localStorage', disk);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps what both windows changed through the sequence the issue reports', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ settingsSection: 'audio', editorLayout: 'edit' });
+
+    // The editor's switch to Preview used to put back `general`, the section
+    // this window loaded with.
+    control.updateWorkspace({ editorLayout: 'preview' });
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ settingsSection: 'audio', editorLayout: 'preview' });
+
+    // And the next Settings click used to put back `edit`.
+    settings.updateWorkspace({ settingsSection: 'teleprompter' });
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ settingsSection: 'teleprompter', editorLayout: 'preview' });
+  });
+
+  it('reopens Settings where it was left after a main-window layout change (§14.4)', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+    control.setPaneWidth('sidebar', 300);
+    vi.advanceTimersByTime(250);
+
+    // ⌘, names no section, so the window that opens reads what is stored.
+    const reopened = await openWindow();
+    expect(get(reopened.workspace).settingsSection).toBe('audio');
+    expect(get(reopened.workspace).sidebarWidth).toBe(300);
+  });
+
+  it('merges a write still waiting on the debounce over what landed meanwhile', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    control.updateWorkspace({ sidebarVisible: false });
+    control.setPaneWidth('editorOutline', 320);
+    settings.updateWorkspace({ settingsSection: 'speech' });
+    settings.flushWorkspace();
+
+    vi.advanceTimersByTime(249);
+    expect(stored()).toMatchObject({ settingsSection: 'speech', sidebarVisible: true });
+    vi.advanceTimersByTime(1);
+    expect(stored()).toMatchObject({
+      settingsSection: 'speech',
+      sidebarVisible: false,
+      outlineWidth: 320,
+    });
+  });
+
+  it('never moves the live layout of the other window', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    control.updateWorkspace({ editorLayout: 'split' });
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    vi.advanceTimersByTime(250);
+
+    expect(stored()).toMatchObject({ editorLayout: 'split', settingsSection: 'audio' });
+    expect(get(control.workspace).settingsSection).toBe('general');
+    expect(get(settings.workspace).editorLayout).toBe('edit');
+  });
+
+  it('writes a field it was asked to even when its own copy already held that value', async () => {
+    // A changed field is one NAMED in a patch, not one that differs from this
+    // window's copy — that copy is stale. "Settings › General" from the main
+    // window has to land over the Audio that Settings stored since.
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+    control.updateWorkspace({ settingsSection: 'general' });
+    control.flushWorkspace();
+
+    expect(stored().settingsSection).toBe('general');
+  });
+
+  it('does not replay a field it already wrote over a newer one', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    control.updateWorkspace({ settingsSection: 'privacy' });
+    control.flushWorkspace();
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+    control.updateWorkspace({ outlineVisible: false });
+    vi.advanceTimersByTime(250);
+
+    expect(stored()).toMatchObject({ settingsSection: 'audio', outlineVisible: false });
+  });
+
+  it('steps the document scale without carrying the rest of its own copy', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+
+    control.stepDocumentScale(1);
+    control.stepDocumentScale(1);
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ documentScale: 1.25, settingsSection: 'audio' });
+
+    control.stepDocumentScale(-1);
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ documentScale: 1.1, settingsSection: 'audio' });
+
+    control.stepDocumentScale(0);
+    vi.advanceTimersByTime(250);
+    expect(stored()).toMatchObject({ documentScale: 1, settingsSection: 'audio' });
+    expect(get(control.workspace).documentScale).toBe(1);
+  });
+
+  it('flushes synchronously, so a window opened straight after reads the section', async () => {
+    // `openSettingsWindow`: write, flush, then ask Rust for the window — which
+    // mounts faster than the debounce.
+    const control = await openWindow();
+    const writes = vi.spyOn(disk, 'setItem');
+
+    control.updateWorkspace({ settingsSection: 'privacy' });
+    control.flushWorkspace();
+    const settings = await openWindow();
+    expect(get(settings.workspace).settingsSection).toBe('privacy');
+
+    // The flush took the pending timer with it.
+    vi.advanceTimersByTime(250);
+    control.flushWorkspace();
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  it('still lets a reset overwrite every field', async () => {
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+    control.updateWorkspace({ editorLayout: 'preview' });
+    control.flushWorkspace();
+
+    control.resetWorkspace();
+    control.flushWorkspace();
+    expect(stored()).toEqual(DEFAULT_WORKSPACE);
+  });
+
+  it('repairs a stored value that fails the clamp rather than carrying it', async () => {
+    const control = await openWindow();
+    // Written after this window loaded — by a hand edit, or another build.
+    disk.setItem(
+      KEY,
+      JSON.stringify({ sidebarWidth: 40000, settingsSection: 'audio', retiredFlag: true }),
+    );
+
+    control.updateWorkspace({ editorLayout: 'split' });
+    control.flushWorkspace();
+
+    expect(stored()).toMatchObject({
+      sidebarWidth: PANE_LIMITS.sidebar.max,
+      settingsSection: 'audio',
+      editorLayout: 'split',
+    });
+    expect(stored()).not.toHaveProperty('retiredFlag');
+  });
+
+  it('writes nothing when the stored copy cannot be read', async () => {
+    // Merging over defaults instead would reset every field the other window
+    // owns, which is the bug this store just stopped having.
+    const control = await openWindow();
+    const settings = await openWindow();
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+
+    vi.spyOn(disk, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    control.updateWorkspace({ editorLayout: 'preview' });
+    expect(() => control.flushWorkspace()).not.toThrow();
+    vi.restoreAllMocks();
+
+    expect(stored()).toMatchObject({ settingsSection: 'audio', editorLayout: 'edit' });
+    expect(get(control.workspace).editorLayout).toBe('preview');
+  });
+
+  it('drops a patch whose write failed rather than retrying it later', async () => {
+    // Kept for the next write, the abandoned section would land over whatever
+    // Settings has stored since.
+    const control = await openWindow();
+    const settings = await openWindow();
+
+    vi.spyOn(disk, 'setItem').mockImplementationOnce(() => {
+      throw new Error('QuotaExceededError');
+    });
+    control.updateWorkspace({ settingsSection: 'privacy' });
+    expect(() => control.flushWorkspace()).not.toThrow();
+
+    settings.updateWorkspace({ settingsSection: 'audio' });
+    settings.flushWorkspace();
+    control.updateWorkspace({ outlineVisible: false });
+    control.flushWorkspace();
+
+    expect(stored()).toMatchObject({ settingsSection: 'audio', outlineVisible: false });
   });
 });
