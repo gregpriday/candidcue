@@ -130,6 +130,9 @@ test('⌥↓ and ⌥↑ jump a whole section, from the first press', async ({ pa
   const numbers = await tokenOf(page, 'Quarterly');
   const next = await tokenOf(page, 'Hiring');
 
+  // There is no section before the first, so ⌥↑ there asks for nothing.
+  await page.keyboard.press('Alt+ArrowUp');
+
   // From the top, before the take has any position: the first press used to
   // ask for the section already on the glass.
   await page.keyboard.press('Alt+ArrowDown');
@@ -139,10 +142,67 @@ test('⌥↓ and ⌥↑ jump a whole section, from the first press', async ({ pa
   await page.keyboard.press('Alt+ArrowUp');
   await expectMoves(page, [numbers, next, numbers]);
 
-  // The stage did not step a line as well. Its step reports a moment later,
-  // once the gesture has settled, so it is looked for after that.
+  /*
+   * And no line step reported behind them. The stage's step reports a moment
+   * later, once the gesture has settled, so it is looked for after that. This
+   * is the weaker half — a report that lands behind a reposition is dropped —
+   * and `stage-embedded-keyboard.test.ts` is the direct proof the stage no
+   * longer answers the chord at all.
+   */
   await page.waitForTimeout(600);
   expect(await moves(page)).toEqual([numbers, next, numbers]);
+  errors.expectClean();
+});
+
+test('⌥↓ from between two sentences lands on the next section, not past it', async ({
+  page,
+}) => {
+  /*
+   * Section jumps used to be RELATIVE sentence moves, counted from Live's
+   * sentence index (the sentence CONTAINING the cursor, or 0 when none does)
+   * and applied by the driver from its own (the last sentence STARTING at or
+   * before it). A cursor between two sentences read differently to each, and
+   * the jump overshot by the difference. Every move above starts exactly on a
+   * sentence, where the two agree, so it takes a position from the voice to
+   * tell an absolute jump from a relative one.
+   */
+  const errors = watchPageErrors(page);
+  await present(page);
+  const numbers = await tokenOf(page, 'Quarterly');
+  // After "Today we look at the quarter." and before "It was a strange one."
+  const between = (await tokenOf(page, 'It')) - 0.5;
+
+  await page.evaluate((at) => {
+    window.__E2E__.emit('align://snapshot', {
+      sessionGeneration: window.__E2E__.lastSession?.sessionGeneration ?? 0,
+      seq: 1,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: at,
+      observedToken: at,
+      rateTokensPerSecond: 0,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 0,
+      pauseOnsetMs: 0,
+      leadFloorMs: 0,
+      maxLeadTokens: 0,
+      leadMarginTokens: 0,
+      leadEaseMs: 0,
+      leadHoldMs: 0,
+      leadDecayMs: 0,
+      displayLimitToken: at,
+      confidence: 0.95,
+      suggestionToken: null,
+      scriptLenTokens: 40,
+      observedAtom: at,
+      confirmedAtom: at,
+    });
+  }, between);
+  await expect(page.locator('.diagnostics')).toContainText(`token: ${between.toFixed(1)}`);
+
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(() => moves(page)).toEqual([numbers]);
   errors.expectClean();
 });
 
@@ -161,7 +221,13 @@ test('Session › Next and Previous Section jump the same way', async ({ page })
   errors.expectClean();
 });
 
-test('⌘⇧Space closes the microphone, and pressing it again does not reopen it', async ({
+/*
+ * What a browser can see of a hard pause is the recogniser session closing —
+ * the thing a soft pause deliberately keeps open. That the capture device is
+ * released with it is `teardownAudio`'s job, covered with the voice pipeline's
+ * own tests.
+ */
+test('⌘⇧Space hard-pauses, and pressing it again does not reopen anything', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
