@@ -65,6 +65,7 @@ import { onShortcut } from '../lib/shortcuts';
     clearSession,
     connectionPill,
     goToToken,
+    acceptSuggestedPlace,
     hardPause,
     liveStatusLabel,
     moveSentences,
@@ -797,6 +798,11 @@ import { onShortcut } from '../lib/shortcuts';
       nudgeAutoScrollWpm(
         intent.direction === 'faster' ? AUTO_SCROLL_WPM_STEP : -AUTO_SCROLL_WPM_STEP,
       );
+    } else if (intent.kind === 'read_from') {
+      // The session refuses a suggestion from another take, one the follower
+      // has made moot by finding the reader again, or one a deliberate
+      // reposition has overtaken.
+      acceptSuggestedPlace(intent.token, intent.sessionGeneration, intent.atMs);
     }
   }
 
@@ -1818,6 +1824,10 @@ import { onShortcut } from '../lib/shortcuts';
         autoScroll: $autoScrollLive,
         blanked: $session.stageBlanked,
         presentationMode: $session.stagePresentationMode,
+        // A paused take holds a reading window's text; the stage decides it
+        // only applies there (see `takePaused` on the bridge).
+        takePaused: $session.paused !== 'none',
+        scriptTitle: $session.scriptTitle,
         onpresentationtoggle: () => void togglePresentationMode(),
         /*
          * §practice. Kept on the session rather than derived from the window,

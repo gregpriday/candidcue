@@ -2971,6 +2971,83 @@ export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
+/** Why a "Read from here" press moves nothing, or null when it should move. */
+export type SuggestedPlaceRefusal =
+  | 'inactive'
+  | 'another-take'
+  | 'outside-script'
+  | 'found-again'
+  | 'overtaken';
+
+/**
+ * Whether an accepted off-screen suggestion still describes this take.
+ *
+ * Pure, so every guard can be shown to bite from a press that would otherwise
+ * be honoured. The press is refused when it no longer describes this take:
+ * another take's suggestion (a different session generation); a token that is
+ * not a word of this script once rounded; a take whose follower has found the
+ * reader again since (following resumed, so taking it would move somebody who
+ * is no longer lost); or an offer that a deliberate reposition — a sentence
+ * step, an outline jump, a restart — has overtaken since the stage last saw it.
+ */
+export function suggestedPlaceRefusal(check: {
+  active: boolean;
+  sessionGeneration: number;
+  suggestionGeneration: number;
+  token: number;
+  scriptWordCount: number;
+  following: boolean;
+  offeredAtMs: number;
+  lastRepositionAtMs: number;
+}): SuggestedPlaceRefusal | null {
+  if (!check.active) return 'inactive';
+  if (check.suggestionGeneration !== check.sessionGeneration) return 'another-take';
+  const index = Math.round(check.token);
+  if (!Number.isFinite(check.token) || index < 0 || index >= check.scriptWordCount) {
+    return 'outside-script';
+  }
+  if (check.following) return 'found-again';
+  if (Number.isFinite(check.offeredAtMs) && check.offeredAtMs <= check.lastRepositionAtMs) {
+    return 'overtaken';
+  }
+  return null;
+}
+
+/**
+ * The reader accepted the off-screen suggestion: read from that sentence.
+ *
+ * The engine refused to move the document there on its own — the place was off
+ * the glass — and named it instead. Accepting is the deliberate manual
+ * reposition that refusal leaves open, so it goes through `goToToken` like a
+ * sentence step: one explicit move, stamped as a reposition so a stale hand
+ * report cannot drag it back. `offeredAtMs` is when the stage last saw the
+ * offer; see `suggestedPlaceRefusal` for what refuses it. Returns whether it
+ * moved.
+ */
+export function acceptSuggestedPlace(
+  token: number,
+  suggestionGeneration: number,
+  offeredAtMs: number,
+): boolean {
+  const s = get(state);
+  const refusal = suggestedPlaceRefusal({
+    active: s.active,
+    sessionGeneration,
+    suggestionGeneration,
+    token,
+    scriptWordCount,
+    following: s.snapshot?.state === 'following',
+    offeredAtMs,
+    lastRepositionAtMs,
+  });
+  if (refusal !== null) {
+    trace('suggestion', `dropped: ${refusal}`);
+    return false;
+  }
+  goToToken(Math.round(token));
+  return true;
+}
+
 /**
  * When the operator last put the aligner somewhere by command, wall clock — a
  * sentence step, an outline jump, a restart, a re-find.

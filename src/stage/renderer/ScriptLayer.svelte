@@ -55,6 +55,18 @@
      */
     bodyFontSizePx?: number;
   }
+
+  /** What a suggested place is, in words the reader can recognise. */
+  export interface TokenDescription {
+    /** The start of the sentence the token is in — where "read from here" goes. */
+    sentenceStartToken: number;
+    /** The first words of that sentence, as written. */
+    excerpt: string;
+    /** The nearest heading above it, or null. */
+    section: string | null;
+    /** Where it is relative to the glass now. */
+    direction: 'above' | 'below' | 'visible';
+  }
 </script>
 
 <script lang="ts">
@@ -935,6 +947,20 @@
    * would put a hole in the middle of a clause.
    */
   const STRONG_SENTENCE_END = /[.!?…][)\]"'”’]*$/;
+
+  /** How many of the reader's own words an off-screen suggestion quotes. */
+  const EXCERPT_WORDS = 9;
+
+  /** A block's words as plain text, for naming the section a place is in. */
+  function plainTextOf(nodes: readonly SafeRenderNode[]): string {
+    let out = '';
+    for (const node of nodes) {
+      if (node.type === 'text') out += node.text;
+      else if (node.type === 'link') out += plainTextOf(node.label);
+      else if (node.type === 'line_break') out += ' ';
+    }
+    return out.replace(/\s+/g, ' ');
+  }
 
   /** Rendered text per spoken token, for punctuation and character counting. */
   const tokenTextByIndex = $derived.by(() => {
@@ -3421,7 +3447,7 @@
    * Manual navigation (spec §16.5, companion §30.6): immediate authority,
    * automatic correction suspended for a short grace interval.
    */
-  export function manualScrollBy(deltaPx: number) {
+  export function manualScrollBy(deltaPx: number, fallbackAnchorToken: number | null = null) {
     const y = clamp(scrollY + deltaPx, 0, maxScroll);
     const now = performance.now();
     setScroll(y);
@@ -3430,8 +3456,14 @@
      * where the presenter now is. It is handed to the engine so a relayout
      * arriving during the hold preserves their position rather than the
      * aligner's — see `manualOverride`.
+     *
+     * Home and End supply their own for when the reading line lands on no
+     * spoken line. It has to be the SAME token the stage then reports to
+     * control: the engine recognises the manual anchor that comes back as the
+     * hand's own echo only by that token, and an echo it does not recognise is
+     * spent as a re-anchor that undoes where the key put the document.
      */
-    engine.manualOverride(y, now, readingAnchorToken());
+    engine.manualOverride(y, now, readingAnchorToken() ?? fallbackAnchorToken);
     manualUntilMs = now + MANUAL_GRACE_MS;
     // Their hand is on the script; the opening has nothing left to say about
     // where it should be, now or after any later relayout. And unlike the other
@@ -3538,6 +3570,145 @@
   /** Where the document currently sits, for measuring a gesture's real travel. */
   export function scrollPositionPx(): number {
     return scrollY;
+  }
+
+  /** The furthest the document can be scrolled. */
+  export function maxScrollPx(): number {
+    return maxScroll;
+  }
+
+  /**
+   * Where End should leave the document.
+   *
+   * The script's last spoken line ON the reading line — not the bottom of the
+   * scroll range, which runs on past it by the run-out and would leave the
+   * mark in blank space. Two things push it further:
+   *
+   * - an ending that is not spoken (a table, an image, a closing note) and is
+   *   taller than what the glass shows below the mark. End then goes as far as
+   *   it takes to show the foot of the document and the "End of script" under
+   *   it, because the reader asked for the end, not the last sentence;
+   * - nothing else: it never goes past the end of the range.
+   *
+   * On a virtualized script the last block is usually not measured yet, so the
+   * last line is placed from block geometry instead — the estimate of the
+   * final block's height is the only error, and every block before it keeps
+   * the offset it already had. The tracker does not depend on that estimate:
+   * End re-seeds it from `scriptEndTokens` when the mark lands on no line.
+   */
+  export function endOfScriptScrollPx(): number {
+    const count = performanceBlocks.length;
+    if (count === 0) return 0;
+    const map = lineMap;
+    const readingLineY = map && map.valid ? map.readingLineStartY : readingBand.centerPx + lineEntryPx;
+    const ends = spokenEnds();
+    let spokenTarget = 0;
+    if (ends.lastBlock >= 0) {
+      const last = map && map.valid ? map.lines[map.lines.length - 1] : undefined;
+      const lastLineTopY =
+        last && last.lastTokenIndex >= ends.lastToken
+          ? last.topY
+          : (offsets[ends.lastBlock + 1] ?? 0) - linePx;
+      spokenTarget = lastLineTopY - readingLineY + 1;
+    }
+    // The foot of the document plus the marker that hangs below it.
+    const documentFootY = (offsets[count] ?? 0) + gapPx * 0.5 + linePx;
+    const showFoot = documentFootY - vh;
+    return Math.max(0, Math.min(maxScroll, Math.max(spokenTarget, showFoot)));
+  }
+
+  /**
+   * The two ends of the spoken script, for Home and End to re-seed the tracker
+   * when the reading line cannot: the first spoken token, and the start of the
+   * last sentence. Null for a script with nothing spoken.
+   */
+  export function scriptEndTokens(): { first: number | null; lastSentenceStart: number | null } {
+    const ends = spokenEnds();
+    if (ends.lastBlock < 0) return { first: null, lastSentenceStart: null };
+    const sentence = sentenceForToken(ends.lastToken);
+    return { first: ends.firstToken, lastSentenceStart: sentence?.startTokenIndex ?? ends.lastToken };
+  }
+
+  /** Where speech starts and stops in the document, by token and by block. */
+  function spokenEnds(): { firstToken: number; lastToken: number; lastBlock: number } {
+    let firstToken = Number.POSITIVE_INFINITY;
+    let lastToken = -1;
+    let lastBlock = -1;
+    performanceBlocks.forEach((block, index) => {
+      if (typeof block.startTokenIndex !== 'number' || typeof block.endTokenIndex !== 'number') return;
+      // Inclusive at both ends: a one-word block starts and ends on its word.
+      if (block.endTokenIndex < block.startTokenIndex) return;
+      if (block.startTokenIndex < firstToken) firstToken = block.startTokenIndex;
+      if (block.endTokenIndex > lastToken) {
+        lastToken = block.endTokenIndex;
+        lastBlock = index;
+      }
+    });
+    return { firstToken: Number.isFinite(firstToken) ? firstToken : 0, lastToken, lastBlock };
+  }
+
+  /**
+   * The spoken-token range on the glass now, from the measured lines — the same
+   * question the viewport hint asks, answered for the stage's own use. Null
+   * when there is no honest answer (no valid map, no viewport).
+   */
+  function visibleTokenRange(): [number, number] | null {
+    const map = lineMap;
+    if (!map || !map.valid || vh === 0) return null;
+    let first = Number.POSITIVE_INFINITY;
+    let last = Number.NEGATIVE_INFINITY;
+    for (const line of map.lines) {
+      if (line.bottomY < scrollY || line.topY > scrollY + vh) continue;
+      if (line.firstTokenIndex < first) first = line.firstTokenIndex;
+      if (line.lastTokenIndex > last) last = line.lastTokenIndex;
+    }
+    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return null;
+    return [first, last];
+  }
+
+  /**
+   * Describe a script position for the off-screen suggestion: the sentence it
+   * starts, a short excerpt of the reader's own words, the section it is in,
+   * and whether it lies above or below the glass.
+   *
+   * Pure lookup over what this layer already knows. It never judges whether
+   * the place is a good match — that is the engine's decision, and it was made
+   * before the token arrived here.
+   */
+  export function describeToken(token: number): TokenDescription | null {
+    if (!Number.isFinite(token)) return null;
+    const at = Math.max(0, Math.round(token));
+    const sentence = sentenceForToken(at);
+    const start = sentence ? sentence.startTokenIndex : at;
+    const words: string[] = [];
+    for (let i = start; words.length < EXCERPT_WORDS; i++) {
+      const word = tokenTextByIndex.get(i);
+      if (word === undefined) break;
+      words.push(word);
+      if (sentence && i >= sentence.endTokenIndex) break;
+    }
+    if (words.length === 0) return null;
+    const truncated = sentence ? start + words.length - 1 < sentence.endTokenIndex : false;
+    let section: string | null = null;
+    const blockIndex = blockIndexForToken(at);
+    if (blockIndex !== undefined) {
+      for (let i = blockIndex; i >= 0; i--) {
+        const candidate = performanceBlocks[i];
+        if (candidate?.kind !== 'heading') continue;
+        const text = plainTextOf(candidate.renderNodes).trim();
+        if (text) section = text;
+        break;
+      }
+    }
+    const range = visibleTokenRange();
+    const direction: TokenDescription['direction'] =
+      range === null ? 'below' : at > range[1] ? 'below' : at < range[0] ? 'above' : 'visible';
+    return {
+      sentenceStartToken: start,
+      excerpt: words.join(' ') + (truncated ? '…' : ''),
+      section,
+      direction,
+    };
   }
 
   /** Operator diagnostics (§64) — never rendered on the presenter's glass. */
@@ -3704,6 +3875,21 @@
       {#if renderWindow.trailingSpacePx > 0}
         <div class="spacer" style:height="{renderWindow.trailingSpacePx}px"></div>
       {/if}
+      <!--
+        The end of the script, said quietly, in a reading window.
+
+        Without it the last line reached the reading mark and the page simply
+        stopped, which reads the same as a stage that is waiting for you. It is
+        drawn in the run-out below the last block at zero height, so it adds no
+        line to the map, no token, and no scroll range — the document is exactly
+        as long as it was — and it carries no `data-t` or `data-block-id`, so the
+        measurement pass never sees it. A prompter keeps its plain black run-out.
+      -->
+      {#if settings.readingContext === 'reader' && renderWindow.endIndex >= performanceBlocks.length}
+        <div class="end-of-script">
+          <p class="end-of-script-label" style:top="{gapPx * 0.5}px">End of script</p>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -3758,6 +3944,24 @@
     inset: 0;
     overflow: hidden;
     color: var(--stage-text);
+  }
+
+  /* Zero height, so the run-out below the last block is still exactly the
+     run-out the padding solved for; the label hangs into it. */
+  .end-of-script {
+    position: relative;
+    height: 0;
+  }
+  .end-of-script-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.8em);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    /* 74%: clears 4.5:1 at the smallest reader size on Paper, Soft included. */
+    color: color-mix(in srgb, var(--stage-text) 74%, transparent);
   }
 
   /* §61 step 1: nonessential visual effects off under frame pressure.

@@ -208,7 +208,7 @@
    * keyboard; giving them actions would put commands in the resolver that no
    * screen subscribes to, purely so they could be printed here.
    *
-   * Only keys the stage actually answers. Home and End are not among them.
+   * Only keys the stage actually answers.
    *
    * The wheel is a gesture, not a key, so it is written out in words rather
    * than drawn as a cap somebody would go looking for on the keyboard.
@@ -216,6 +216,7 @@
   const stageLocalRows: Array<Pick<ShortcutRow, 'label' | 'keys'> & { gesture?: string }> = [
     { label: 'Move the script one line', keys: either('Up', 'Down') },
     { label: 'Move the script about a screen', keys: either('Page Up', 'Page Down') },
+    { label: 'Go to the start or end of the script', keys: either('Home', 'End') },
     { label: 'Scroll the script', keys: [], gesture: 'Mouse wheel or trackpad' },
   ];
 

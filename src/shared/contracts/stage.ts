@@ -760,7 +760,25 @@ export type StageIntent =
    * with voice following are all session state, and none of it is the stage's.
    */
   | { kind: 'auto_scroll_toggle' }
-  | { kind: 'auto_scroll_pace'; direction: 'faster' | 'slower' };
+  | { kind: 'auto_scroll_pace'; direction: 'faster' | 'slower' }
+  /**
+   * The reader accepted the engine's off-screen suggestion: "read from here".
+   *
+   * The engine refuses to move the document to a match it found off the glass
+   * (`holdOffScreen`) and reports the place it refused as `suggestionToken`.
+   * Accepting it is a deliberate manual reposition — the one exception to that
+   * leash the engine already allows — so it travels as a request for control
+   * to perform, never as motion the stage performs on its own.
+   *
+   * It names the offer it answers. `token` is the start of the suggested
+   * sentence; `sessionGeneration` and `seq` identify the refusal it came from,
+   * and `atMs` is when the stage last saw that refusal (wall clock) — so a press
+   * that outlived its take, or one that a deliberate reposition (a sentence
+   * step, an outline jump, a restart) has overtaken, is refused instead of
+   * moving the reader to a place they have already been moved from. A hand
+   * move withdraws the offer on the stage itself before it can be pressed.
+   */
+  | { kind: 'read_from'; token: number; sessionGeneration: number; seq: number; atMs: number };
 
 export interface StageIntentPayload {
   stageGeneration: number;

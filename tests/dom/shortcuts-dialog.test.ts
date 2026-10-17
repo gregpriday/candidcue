@@ -275,9 +275,8 @@ describe('the shortcuts reference is grouped by the screen that answers each key
     const labels = labelsIn('During a take');
     expect(labels.indexOf('Move the script one line')).toBe(labels.indexOf('Previous / next section') + 1);
 
-    // Only keys the stage answers: there is no Home or End.
-    const text = rows.map(([, keys]) => keys).join(' ');
-    expect(text).not.toMatch(/\bHome\b|\bEnd\b/);
+    // Home and End take the script to its two ends, on the stage itself.
+    expect(rows).toContainEqual(['Go to the start or end of the script', 'Home / End']);
 
     // And they stand down while a control has the keyboard, which the group's
     // note has to say rather than leave to the four keys it used to name.
