@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-import { setInvokeForTesting } from '../../../src/control/services/ipc';
+import { setInvokeForTesting, type InvokeFn } from '../../../src/control/services/ipc';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
 import { opticalRigKey, type OpticalSettings } from '../../../src/control/services/settings-types';
 import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
@@ -62,12 +62,13 @@ function chosenRig(fingerprint: string, rigName: string): OpticalSettings {
 /** Rust, as far as the store asks it anything. */
 function backend(facts: { displays: DisplayDescriptor[]; window: DisplayDescriptor | null }) {
   const calls: string[] = [];
-  setInvokeForTesting((async (command: string) => {
+  const invoke: InvokeFn = async <T,>(command: string): Promise<T> => {
     calls.push(command);
-    if (command === 'list_displays') return facts.displays;
-    if (command === 'current_window_display') return facts.window;
+    if (command === 'list_displays') return facts.displays as T;
+    if (command === 'current_window_display') return facts.window as T;
     throw new Error(`unexpected command ${command}`);
-  }) as Parameters<typeof setInvokeForTesting>[0]);
+  };
+  setInvokeForTesting(invoke);
   return calls;
 }
 
