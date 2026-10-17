@@ -116,6 +116,7 @@
     maxPathDisagreementPx,
     measureStageLayout,
     sameLayout,
+    tokenFragmentRects,
     type AlignmentReceiverStats,
     type FallbackTarget,
     type MeasuredTokenRect,
@@ -2933,10 +2934,10 @@
     const planeRect = planeEl.getBoundingClientRect();
     const el = planeEl.querySelector<HTMLElement>(`[data-t="${tokenIndex}"]`);
     if (el) {
-      // The line the token STARTS on, as the line map measures it: a word too
+      // The row the token STARTS on, as the line map anchors it: a word too
       // wide for the column breaks inside its span (#281), and its union box
       // would put the band on the middle of a three-row word.
-      const r = el.getClientRects()[0] ?? el.getBoundingClientRect();
+      const r = tokenFragmentRects(el)[0] ?? el.getBoundingClientRect();
       return { topDoc: docTopOf(r, planeRect), height: r.height, measured: true };
     }
     // Off-window or unmapped: estimate from the block's offsets.
@@ -3281,7 +3282,7 @@
     // breaks across rows (#281) and its union box would cover the column.
     let rects: DOMRect[] = spanned;
     if (rects.length === 0 && curEl) {
-      rects = Array.from(curEl.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      rects = tokenFragmentRects(curEl);
       if (rects.length === 0) rects = [curEl.getBoundingClientRect()];
     }
     if (rects.length === 0) {

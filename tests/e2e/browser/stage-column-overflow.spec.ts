@@ -11,17 +11,28 @@ import { watchPageErrors } from './fixtures/page-errors';
  * cue past ~25 characters read "LOOK STRAIGHT AT CAMERA AND SMI", and under a
  * mirror the cut was on the left.
  *
- * This is the issue's own script at the panel's own 1024x600, presented through
- * the production single-window path, mirrored and not. Every fragment of every
- * word and cue must lie inside the column. And the fix may only ever be drawn,
- * never counted: the long word still breaks inside ONE word span, carrying the
- * same token index on both sides of the mirror.
+ * This is the issue's own repro — its script, presented through the production
+ * single-window path with the e2e shim in a 1024x600 window, mirrored and not —
+ * plus a list item and a code block, the two block shapes that size their text
+ * differently (a flex row, and `pre-wrap`). Every fragment of every word and
+ * cue must lie inside the column. And the fix may only ever be drawn, never
+ * counted: the long word still breaks inside ONE word span, carrying the token
+ * index the aligner was given for it, on both sides of the mirror.
+ *
+ * SIZING, precisely: the shim presents onto its own 1920x1080 "Teleprompter
+ * Display", which no automatic profile recognises, so the type is the flat
+ * fallback — about 15 characters a line in this window, against the Elgato's
+ * ~19 under its automatic profile. That is the geometry the issue measured
+ * (column 113..911), and the narrower column is the harder case.
  *
  * jsdom resolves no stylesheets and lays nothing out, so this can only be said
  * in a real engine. It is Chromium; WKWebView, which ships, is not driven here.
  */
 
 const LONG_WORD = 'Pneumonoultramicroscopicsilicovolcanoconiosis';
+const LONG_URL = 'candidcue.example.com/documentation/getting-started/installation-guide';
+const LIST_WORD = 'Antidisestablishmentarianism';
+const CODE_WORD = 'configurationRegistryFactoryProviderInstance';
 const INLINE_CUE = 'look straight at camera and smile before continuing';
 const BLOCK_CUE = 'hold up the product box and turn it slowly toward the lens';
 
@@ -31,8 +42,11 @@ const SCRIPT = {
   source:
     `Hello and welcome to the show. [Cue: ${INLINE_CUE}] Today we talk about pricing.\n\n` +
     `[Cue: ${BLOCK_CUE}]\n\n` +
-    'Go to candidcue.example.com/documentation/getting-started/installation-guide today. ' +
-    `Then say ${LONG_WORD}.\n`,
+    `Go to ${LONG_URL} today. Then say ${LONG_WORD}.\n\n` +
+    `- Remember ${LIST_WORD} forever.\n\n` +
+    '```\n' +
+    `const ${CODE_WORD} = createRegistry();\n` +
+    '```\n',
 };
 
 /** Sub-pixel rounding between a fragment and the column it sits in. */
@@ -92,14 +106,17 @@ interface Glass {
   pieces: Piece[];
 }
 
-/** Every word and cue in the column, fragment by fragment. */
+/**
+ * Every word and cue in the column, fragment by fragment — unspoken words (the
+ * code block) included, because the glass clips them exactly the same.
+ */
 async function glass(page: Page): Promise<Glass> {
   return page.evaluate(() => {
     const column = document.querySelector<HTMLElement>('.stage-root .column');
     if (!column) throw new Error('no stage column');
     const c = column.getBoundingClientRect();
     const pieces = Array.from(
-      column.querySelectorAll<HTMLElement>('.w[data-t], .cue[data-cue-type]'),
+      column.querySelectorAll<HTMLElement>('.w, .cue[data-cue-type]'),
     ).map((el) => ({
       kind: el.classList.contains('cue') ? ('cue' as const) : ('word' as const),
       text: el.textContent ?? '',
@@ -142,9 +159,11 @@ function only(g: Glass, kind: Piece['kind'], text: string): Piece {
 /** The claims that must hold on either side of the mirror. */
 function expectContained(g: Glass): void {
   // The fixture is what it claims to be before anything is asserted about it:
-  // both cues, the URL and the long word are all on the glass.
+  // both cues and every long run are on the glass, and every piece is laid out
+  // — a piece with no box would pass the containment check by being nowhere.
   expect(g.pieces.filter((p) => p.kind === 'cue')).toHaveLength(2);
-  expect(g.pieces.some((p) => p.kind === 'word' && p.text.includes('installation'))).toBe(true);
+  const unlaid = g.pieces.filter((p) => p.rects.length === 0).map((p) => p.text);
+  expect(unlaid, 'every word and cue is drawn somewhere').toEqual([]);
 
   expect(escapes(g), 'everything on the glass stays inside the column').toEqual([]);
 
@@ -155,10 +174,24 @@ function expectContained(g: Glass): void {
     expect(rows(cue), `"${label}" wraps rather than running off`).toBeGreaterThan(1);
   }
 
-  // A word too wide for the column breaks — inside ONE token's span.
-  const word = only(g, 'word', LONG_WORD);
-  expect(word.token, 'the long word is still a token').not.toBeNull();
-  expect(rows(word), 'the long word breaks across rows').toBeGreaterThan(1);
+  // A run too wide for the column breaks — inside its ONE span, whole.
+  expect(only(g, 'word', LONG_URL).text).toBe(LONG_URL);
+  for (const run of [LONG_WORD, LONG_URL, LIST_WORD, CODE_WORD]) {
+    expect(rows(only(g, 'word', run)), `"${run}" breaks across rows`).toBeGreaterThan(1);
+  }
+  expect(only(g, 'word', LONG_WORD).token, 'the long word is still a token').not.toBeNull();
+}
+
+/** Where the aligner was told each spoken token is: `start_alignment`'s surfaces. */
+async function alignedSurfaces(page: Page): Promise<string[]> {
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.lastCall('start_alignment') !== null))
+    .toBe(true);
+  return page.evaluate(() => {
+    const call = window.__E2E__.lastCall('start_alignment');
+    const tokens = (call?.args as { tokens?: { surface: string }[] } | null)?.tokens ?? [];
+    return tokens.map((token) => token.surface);
+  });
 }
 
 test('long cues, a URL and an over-wide word stay inside the column, mirrored or not', async ({
@@ -176,6 +209,13 @@ test('long cues, a URL and an over-wide word stay inside the column, mirrored or
   const plain = await glass(page);
   expectContained(plain);
   const tokens = plain.pieces.filter((p) => p.kind === 'word').map((p) => p.token);
+
+  // The broken word's span carries the index of the ONE token the aligner was
+  // given for it: the break is drawn inside a token, not between two.
+  const surfaces = await alignedSurfaces(page);
+  const matches = surfaces.flatMap((s, i) => (s.toLowerCase().includes('pneumono') ? [i] : []));
+  expect(matches, 'the aligner sees the long word as one token').toHaveLength(1);
+  expect(only(plain, 'word', LONG_WORD).token).toBe(String(matches[0]));
 
   // Under a mirror the cut used to be on the LEFT. The column is flipped with
   // the text inside it, so the claim is the same one in viewport space.

@@ -11,10 +11,14 @@ import {
   buildLayoutFingerprint,
   buildRenderedLineMap,
   maxPathDisagreementPx,
+  medianLinePitch,
+  rowStepsWithin,
   sameLayout,
   sectionIdsForBlocks,
   toDocumentRect,
+  tokenFragmentRects,
   type FingerprintInput,
+  type MeasuredTokenRect,
 } from '../../../src/stage/motion';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
@@ -362,5 +366,60 @@ describe('measured geometry drift (§7.2, §33)', () => {
     expect(
       maxPathDisagreementPx({ motionKnots: [], sampleMotionPath: () => null }, mapFor()),
     ).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+describe('a word broken across rows (#281)', () => {
+  /*
+   * The column breaks a word wider than itself inside its one span, so a
+   * token can now be drawn on several rows. The map anchors it on the row it
+   * starts on; these pin what that does to the measured pitch, and where a
+   * caller asking for the token's position looks.
+   */
+  const P = 84;
+  function token(tokenIndex: number, row: number): MeasuredTokenRect {
+    return { tokenIndex, blockId: 'b1', xStart: 0, xEnd: 100, topY: row * P, bottomY: row * P + 60 };
+  }
+
+  it('counts each row inside a broken word as one step', () => {
+    expect(rowStepsWithin([0, P, 2 * P])).toEqual([P, P]);
+    // Fragment order is not a promise the caller has to keep.
+    expect(rowStepsWithin([2 * P, 0, P])).toEqual([P, P]);
+  });
+
+  it('adds nothing for a word on one row, or two fragments sharing a row', () => {
+    expect(rowStepsWithin([0])).toEqual([]);
+    expect(rowStepsWithin([P, P + 0.5])).toEqual([]);
+  });
+
+  it('keeps a script of broken words from measuring its pitch as several rows', () => {
+    // A three-row word on rows 0-2, then ordinary words on rows 3 and 4. The
+    // starts step 3P then P, and the upper median of two is the outlier: a
+    // pitch of 3P makes the grouping tolerance (0.35 of it) wider than a real
+    // row, and rows 3 and 4 would be built as one line.
+    const tokens = [token(0, 0), token(1, 3), token(2, 4)];
+    expect(medianLinePitch(tokens, 70)).toBe(3 * P);
+    expect(medianLinePitch(tokens, 70, rowStepsWithin([0, P, 2 * P]))).toBe(P);
+  });
+
+  it('measures a script with no broken word exactly as before', () => {
+    const tokens = [token(0, 0), token(1, 1), token(2, 3), token(3, 4)];
+    expect(medianLinePitch(tokens, 70, [])).toBe(medianLinePitch(tokens, 70));
+    // ...and falls back to the typographic line with no row step to measure.
+    expect(medianLinePitch([token(0, 0)], 70)).toBe(70);
+  });
+
+  it('places a token on the rows its text is drawn on, never on an empty fragment', () => {
+    const rect = (top: number, width: number, height: number) => ({ top, width, height }) as DOMRect;
+    const el = {
+      ownerDocument: {
+        createRange: () => ({
+          selectNodeContents() {},
+          getClientRects: () => [rect(0, 0, 20), rect(10, 50, 20), rect(40, 30, 0), rect(94, 30, 20)],
+          detach() {},
+        }),
+      },
+    } as unknown as Element;
+    expect(tokenFragmentRects(el).map((r) => r.top)).toEqual([10, 94]);
   });
 });

@@ -113,6 +113,7 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
   }
 
   const tokens: MeasuredTokenRect[] = [];
+  const wrapSteps: number[] = [];
   const range = plane.ownerDocument.createRange();
   for (const el of Array.from(plane.querySelectorAll<HTMLElement>('[data-t]'))) {
     const raw = el.dataset.t;
@@ -136,18 +137,67 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
       blockId,
       ...toDocumentRect(rect, planeRect, mirrorX, mirrorY),
     });
+    if (rects.length > 1) {
+      const tops = Array.from(rects, (r) => toDocumentRect(r, planeRect, mirrorX, mirrorY).topY);
+      wrapSteps.push(...rowStepsWithin(tops));
+    }
   }
   range.detach?.();
 
   return {
     tokens,
     blocks: measuredBlocks,
-    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx),
+    lineHeightPx: medianLinePitch(tokens, fallbackLineHeightPx, wrapSteps),
     contentHeightPx,
   };
 }
 
-function medianLinePitch(tokens: readonly MeasuredTokenRect[], fallbackPx: number): number {
+/**
+ * The boxes a token is drawn in, one per row, in reading order.
+ *
+ * Usually one. A word wider than the column breaks inside its span (#281) and
+ * is then drawn on several rows, and a caller asking where the token IS means
+ * the row it starts on — the line it belongs to, as the map anchors it — not
+ * the union box, whose middle is the middle of a three-row word. Empty
+ * fragments are dropped: nobody can read anything there.
+ */
+export function tokenFragmentRects(el: Element): DOMRect[] {
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  range.detach?.();
+  return rects;
+}
+
+/**
+ * Row-to-row steps inside one token, in document pixels, from its fragment tops.
+ *
+ * The map anchors a word that breaks across rows (#281) on the row it starts
+ * on, so the next token starts several rows further down and that one
+ * start-to-start step reads as a single tall line. On a script made mostly of
+ * such words that outlier becomes the median, and a pitch of three rows widens
+ * the line-grouping tolerance past a real row and merges two lines into one.
+ * The broken word carries its own honest evidence — one real step per extra
+ * row — and this is it. A token drawn on one row contributes nothing, so a
+ * script without one measures exactly as it always did.
+ */
+export function rowStepsWithin(tops: readonly number[]): number[] {
+  const sorted = [...tops].sort((a, b) => a - b);
+  const steps: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const step = sorted[i]! - sorted[i - 1]!;
+    // Two fragments on one row (a bidi run, a ligature split) are not a step.
+    if (step > 1) steps.push(step);
+  }
+  return steps;
+}
+
+/** The median row step between token starts, plus the steps inside broken words. */
+export function medianLinePitch(
+  tokens: readonly MeasuredTokenRect[],
+  fallbackPx: number,
+  wrapSteps: readonly number[] = [],
+): number {
   const tops: number[] = [];
   let previousTop: number | null = null;
   for (const token of tokens) {
@@ -156,7 +206,7 @@ function medianLinePitch(tokens: readonly MeasuredTokenRect[], fallbackPx: numbe
       previousTop = token.topY;
     }
   }
-  const positive = tops.filter((d) => d > 1);
+  const positive = [...tops, ...wrapSteps].filter((d) => d > 1);
   if (positive.length === 0) return fallbackPx;
   positive.sort((a, b) => a - b);
   return positive[Math.floor(positive.length / 2)] ?? fallbackPx;
