@@ -10,10 +10,18 @@
 //! are strictly paired through [`plan`] so the assertion cannot leak or be
 //! double-released; the OS also drops it automatically if the process dies.
 //!
+//! Two things present, and they share the one assertion: the single-window take
+//! and the separate stage window (preview, display test, calibration). Each
+//! records its own claim as a [`SleepHolder`], and the assertion goes only when
+//! the last claim does. With one bare slot, closing a display test from
+//! Settings mid-take released the take's assertion, and the prompter slept on
+//! the operator's idle timer partway through the read.
+//!
 //! Implemented with direct platform FFI rather than a dependency: macOS
 //! `IOPMAssertionCreateWithName`, Windows `SetThreadExecutionState`. Everything
 //! else is a no-op.
 
+use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
 
 use tauri::{AppHandle, Runtime};
@@ -38,51 +46,88 @@ pub fn plan(currently_held: bool, want_held: bool) -> SleepAction {
     }
 }
 
-fn state() -> &'static Mutex<Option<PlatformAssertion>> {
-    static STATE: OnceLock<Mutex<Option<PlatformAssertion>>> = OnceLock::new();
-    STATE.get_or_init(|| Mutex::new(None))
+/// Who wants the display awake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SleepHolder {
+    /// The control window presenting a take (`present.rs`).
+    Take,
+    /// One stage window, by generation. Not a single "the stage" claim:
+    /// `open_stage` replaces the window, and the old one's `Destroyed` runs on
+    /// another thread, so it can land after its replacement has presented —
+    /// the same overlap `AppCoordinator::stage_closed` guards against.
+    Stage(u64),
 }
 
-/// Hold the display awake. Safe to call repeatedly.
-pub fn acquire<R: Runtime>(_app: &AppHandle<R>) {
-    let mut guard = match state().lock() {
+/// The claims outstanding, and the one OS assertion they share. A set, not a
+/// count: the stage path withdraws the same claim up to three times for one
+/// window (un-present, `close_stage`, `Destroyed`), and a count would go
+/// negative and strand somebody else's.
+#[derive(Default)]
+struct State {
+    holders: BTreeSet<SleepHolder>,
+    assertion: Option<PlatformAssertion>,
+}
+
+fn state() -> &'static Mutex<State> {
+    static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(State::default()))
+}
+
+fn lock() -> std::sync::MutexGuard<'static, State> {
+    match state().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
-    };
-    if plan(guard.is_some(), true) != SleepAction::Create {
-        return;
     }
-    match PlatformAssertion::create() {
-        Some(assertion) => {
-            tracing::debug!("display sleep assertion acquired");
-            *guard = Some(assertion);
+}
+
+/// Bring the OS assertion in line with the claims. A claim stands even when
+/// the platform refuses the assertion, so the next acquire tries again and the
+/// last release still pairs.
+fn settle(state: &mut State) {
+    match plan(state.assertion.is_some(), !state.holders.is_empty()) {
+        SleepAction::Create => match PlatformAssertion::create() {
+            Some(assertion) => {
+                tracing::debug!("display sleep assertion acquired");
+                state.assertion = Some(assertion);
+            }
+            None => tracing::warn!("could not block display sleep for this take"),
+        },
+        SleepAction::Release => {
+            if let Some(assertion) = state.assertion.take() {
+                assertion.release();
+                tracing::debug!("display sleep assertion released");
+            }
         }
-        None => tracing::warn!("could not block display sleep for this take"),
+        SleepAction::None => {}
     }
 }
 
-/// Let the display sleep again. Safe to call repeatedly, and safe to call when
-/// no assertion was ever taken.
-pub fn release<R: Runtime>(_app: &AppHandle<R>) {
-    let mut guard = match state().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if plan(guard.is_some(), false) != SleepAction::Release {
-        return;
-    }
-    if let Some(assertion) = guard.take() {
-        assertion.release();
-        tracing::debug!("display sleep assertion released");
-    }
+/// Hold the display awake on `holder`'s behalf. Safe to call repeatedly.
+pub fn acquire<R: Runtime>(_app: &AppHandle<R>, holder: SleepHolder) {
+    let mut guard = lock();
+    guard.holders.insert(holder);
+    settle(&mut guard);
+}
+
+/// Withdraw `holder`'s claim; the display may sleep once nobody else holds
+/// it. Safe to call repeatedly, and safe to call when no claim was ever made.
+pub fn release<R: Runtime>(_app: &AppHandle<R>, holder: SleepHolder) {
+    let mut guard = lock();
+    guard.holders.remove(&holder);
+    settle(&mut guard);
+}
+
+/// Drop every claim at once. Quit only: nothing that outlives the app may keep
+/// the display awake.
+pub fn release_all<R: Runtime>(_app: &AppHandle<R>) {
+    let mut guard = lock();
+    guard.holders.clear();
+    settle(&mut guard);
 }
 
 /// True while the display is being held awake (diagnostics/tests).
 pub fn is_held() -> bool {
-    match state().lock() {
-        Ok(guard) => guard.is_some(),
-        Err(poisoned) => poisoned.into_inner().is_some(),
-    }
+    lock().assertion.is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -284,5 +329,141 @@ mod tests {
             }
         }
         assert!(!held, "the assertion must not survive the take");
+    }
+
+    /// The claims are one process-wide slot, and these tests drive it for
+    /// real; one at a time, each starting from nothing.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        let guard = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        release_all(mock_app().handle());
+        guard
+    }
+
+    fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_app()
+    }
+
+    fn holders() -> Vec<SleepHolder> {
+        lock().holders.iter().copied().collect()
+    }
+
+    #[test]
+    fn closing_a_display_test_mid_take_keeps_the_display_awake() {
+        let _serial = serial();
+        let app = mock_app();
+        let app = app.handle();
+        acquire(app, SleepHolder::Take);
+        let take_held = is_held();
+        // Settings' display test presents, un-presents, is closed and is
+        // destroyed — three withdrawals of the one stage claim.
+        acquire(app, SleepHolder::Stage(4));
+        release(app, SleepHolder::Stage(4));
+        release(app, SleepHolder::Stage(4));
+        release(app, SleepHolder::Stage(4));
+        assert_eq!(holders(), [SleepHolder::Take], "the take still owns the display");
+        assert_eq!(is_held(), take_held, "and the assertion it took is still there");
+        // The take ending is what finally lets it sleep.
+        release(app, SleepHolder::Take);
+        assert!(holders().is_empty());
+        assert!(!is_held(), "the assertion must not survive the take");
+    }
+
+    #[test]
+    fn ending_the_take_under_an_open_preview_keeps_the_display_awake() {
+        let _serial = serial();
+        let app = mock_app();
+        let app = app.handle();
+        // A preview left open while Present is pressed, and the take ends
+        // first: the preview is still on the glass. `PresentAction::Nothing`
+        // withdraws the take's claim a second time on the way out.
+        acquire(app, SleepHolder::Stage(2));
+        let stage_held = is_held();
+        acquire(app, SleepHolder::Take);
+        release(app, SleepHolder::Take);
+        release(app, SleepHolder::Take);
+        assert_eq!(holders(), [SleepHolder::Stage(2)]);
+        assert_eq!(is_held(), stage_held);
+        release(app, SleepHolder::Stage(2));
+        assert!(!is_held(), "nothing may outlive both");
+    }
+
+    #[test]
+    fn a_replaced_stage_window_cannot_release_its_replacement() {
+        let _serial = serial();
+        let app = mock_app();
+        let app = app.handle();
+        // `open_stage` destroys generation 6 and builds 7; 6's `Destroyed`
+        // lands after 7 has presented.
+        acquire(app, SleepHolder::Stage(6));
+        let held = is_held();
+        acquire(app, SleepHolder::Stage(7));
+        release(app, SleepHolder::Stage(6));
+        assert_eq!(holders(), [SleepHolder::Stage(7)]);
+        assert_eq!(is_held(), held);
+        release(app, SleepHolder::Stage(7));
+        assert!(!is_held());
+    }
+
+    #[test]
+    fn quitting_drops_every_claim() {
+        let _serial = serial();
+        let app = mock_app();
+        let app = app.handle();
+        acquire(app, SleepHolder::Take);
+        acquire(app, SleepHolder::Stage(1));
+        release_all(app);
+        assert!(holders().is_empty());
+        assert!(!is_held());
+        // `ExitRequested` and then `Exit` both arrive.
+        release_all(app);
+        assert!(!is_held());
+    }
+
+    #[test]
+    fn releasing_a_claim_nobody_made_changes_nothing() {
+        let _serial = serial();
+        let app = mock_app();
+        let app = app.handle();
+        release(app, SleepHolder::Stage(3));
+        release(app, SleepHolder::Take);
+        assert!(holders().is_empty());
+        assert!(!is_held());
+    }
+
+    /// The command the issue was about, not just the bookkeeping under it:
+    /// `close_stage` must withdraw the stage's claim and leave the take's.
+    #[test]
+    fn close_stage_leaves_a_running_take_holding_the_display() {
+        use tauri::Manager as _;
+
+        let _serial = serial();
+        let app = mock_app();
+        app.manage(crate::coordinator::AppCoordinator::default());
+        let _stage = tauri::WebviewWindowBuilder::new(
+            &app,
+            super::super::STAGE_LABEL,
+            tauri::WebviewUrl::App("stage.html".into()),
+        )
+        .build()
+        .expect("mock stage webview");
+        let session_id = "display-test-session";
+        let coordinator = app.state::<crate::coordinator::AppCoordinator>();
+        let generation = coordinator.next_stage_generation();
+        coordinator.register_stage(generation, Some(session_id.to_string()), None);
+
+        let handle = app.handle();
+        acquire(handle, SleepHolder::Take);
+        acquire(handle, SleepHolder::Stage(generation));
+        super::super::close_stage(handle, session_id).expect("the test's own stage closes");
+        assert_eq!(holders(), [SleepHolder::Take]);
+
+        // A late second close from the same caller is a cleanup, not a release
+        // of anything the take holds.
+        super::super::close_stage(handle, session_id).expect("closing again is a cleanup");
+        assert_eq!(holders(), [SleepHolder::Take]);
+
+        release(handle, SleepHolder::Take);
+        assert!(!is_held());
     }
 }

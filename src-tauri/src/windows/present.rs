@@ -57,7 +57,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, Webview
 
 use crate::errors::AppError;
 
-use super::{sleep, CONTROL_LABEL};
+use super::{sleep, sleep::SleepHolder, CONTROL_LABEL};
 
 /// The two shapes a take can present in.
 ///
@@ -1841,7 +1841,7 @@ pub fn set_control_presenting<R: Runtime>(
              * presenting, not less — a reader's hands are nowhere near the
              * trackpad while the script follows their voice.
              */
-            sleep::acquire(app);
+            sleep::acquire(app, SleepHolder::Take);
         }
         PresentAction::Reassert(current) => {
             let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;
@@ -2001,7 +2001,7 @@ pub fn set_control_presenting<R: Runtime>(
             target = bounds;
             target_scale = Some(scale);
             *saved = None;
-            sleep::release(app);
+            sleep::release(app, SleepHolder::Take);
             /*
              * Back to the OS default, so the take's black is not left behind the
              * editor.
@@ -2020,10 +2020,11 @@ pub fn set_control_presenting<R: Runtime>(
             let _ = window.set_background_color(None);
         }
         PresentAction::Nothing => {
-            // Idempotent, but the assertion is still released: it is shared with
-            // the separate-stage path, and a leaked one keeps the display awake
-            // for the rest of the run.
-            sleep::release(app);
+            // Idempotent, but the take's claim is still withdrawn: a leaked one
+            // keeps the display awake for the rest of the run. Only the take's,
+            // though — a preview or display test on the stage window holds its
+            // own, and this is not its to drop.
+            sleep::release(app, SleepHolder::Take);
             /*
              * And the chrome is still drained, for the same "shared latch can
              * outlive the thing that set it" reason.
