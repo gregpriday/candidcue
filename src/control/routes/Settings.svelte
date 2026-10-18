@@ -3570,7 +3570,7 @@
 
             <SettingRow
               label="Reading cue"
-              description="What marks the line you are reading: ticks in the margins, or a wash over the band."
+              description="What marks the line you are reading: ticks in the margins, or the ticks with a soft band across the line."
             >
               {#snippet control(describedby)}
                 <SegmentedControl

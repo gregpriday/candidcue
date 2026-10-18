@@ -58,6 +58,15 @@
   possible: a shape has a solid state and an outline state that differ in KIND,
   where a wash has only more or less of itself.
 
+  So the ticks are drawn under BOTH styles, and they alone carry the hold. `wash`
+  is the ticks plus a band, not a band instead of them. It used to be the band
+  alone, and that failed at both of its jobs: at 6% over black the plateau is
+  about 1.1:1 against the field, too faint to find a line by, and its hollow
+  state had to be drawn as two rules at the plateau's edges — which sit on the
+  cap middles of the line being read and the one above it, so every hold
+  struck both lines through. The band now marks the band and nothing else, and
+  it is identical whether the stage is following or holding.
+
   Presentational only. Every position arrives as a prop; nothing here measures,
   subscribes or decides.
 -->
@@ -245,11 +254,41 @@
 
 </script>
 
-{#if style === 'ticks'}
+{#if style === 'ticks' || style === 'wash'}
   <!-- aria-hidden: this is a position mark for the eye. A screen reader user
        is not reading off the glass, and announcing it would interrupt the
        transcript status that is actually useful to them. -->
-  <div class="cue ticks" data-hollow={hollow} aria-hidden="true">
+  <div class="cue {style}" data-hollow={hollow} aria-hidden="true">
+    {#if style === 'wash'}
+      <!--
+        The louder option, for presenters who cannot find the line from the
+        ticks alone.
+
+        Full width, at 6% over black. The underlay it descends from ran at about
+        2%, which is under the threshold at which a surface reads as lit at all;
+        6% is visible in peripheral vision and still quiet enough that the script
+        stays the brightest thing on the glass. It is not the mark — the ticks
+        drawn over it are — so it does not have to clear the 3:1 a mark owes, and
+        raising a full-width band that far would light the glass the black field
+        exists to keep dark.
+
+        Its plateau is a one-sided band: exactly one pitch, reaching UP from the
+        mark rather than centred on it, because that is the glass the line being
+        read actually occupies. Centred is the version that is lit half a pitch
+        below every line for the whole take.
+
+        It has no hold state. The ticks over it go hollow; a band that dimmed at
+        the same moment would be a second change on the glass for one event.
+        Painted first, so the ticks sit on top of it.
+      -->
+      <div
+        class="wash-band"
+        style:top="{centerPx - travelPx / 2}px"
+        style:height="{washHeightPx}px"
+        style:--plateau-top="{plateauTopPercent}%"
+        style:--plateau-bottom="{plateauBottomPercent}%"
+      ></div>
+    {/if}
     <span
       class="tick"
       style:left="max(0px, {leftTickPx}px)"
@@ -289,36 +328,6 @@
       </svg>
     </span>
   </div>
-{:else if style === 'wash'}
-  <!--
-    The louder option, for presenters who cannot find the line from the ticks.
-
-    Full width, at 6% over black. The underlay it descends from ran at about 2%,
-    which is under the threshold at which a surface reads as lit at all; 6% is
-    visible in peripheral vision and still quiet enough that the script stays the
-    brightest thing on the glass.
-
-    Its plateau is the same one-sided band the ticks draw: exactly one pitch,
-    reaching UP from the mark rather than centred on it, because that is the
-    glass the line being read actually occupies. Centred is the version that is
-    lit half a pitch below every line for the whole take.
-  -->
-  <div class="cue wash" data-hollow={hollow} aria-hidden="true">
-    <div
-      class="wash-band"
-      style:top="{centerPx - travelPx / 2}px"
-      style:height="{washHeightPx}px"
-      style:--plateau-top="{plateauTopPercent}%"
-      style:--plateau-bottom="{plateauBottomPercent}%"
-    >
-      {#if hollow}
-        <!-- Same solid-to-outline move as the ticks, applied to a band: the
-             fill drops away and the plateau's two edges are drawn instead. -->
-        <span class="wash-rule wash-rule-top"></span>
-        <span class="wash-rule wash-rule-bottom"></span>
-      {/if}
-    </div>
-  </div>
 {/if}
 
 <style>
@@ -344,8 +353,11 @@
     width: 100%;
     height: 100%;
     /* Quiet enough to sit under the script's brightness, solid enough to be
-       found without being looked for. */
-    opacity: 0.5;
+       found without being looked for. A role, because half of dark ink on paper
+       is a much lighter mark than half of cream on black: 0.5 there drops a Soft
+       reader's tick to 2.8:1, under the 3:1 a mark has to clear. Paper declares
+       its own value; the dark field keeps this one. */
+    opacity: var(--stage-reading-mark-opacity, 0.5);
   }
 
   .tick svg path {
@@ -358,7 +370,7 @@
     transition: fill-opacity var(--stage-fx-ms, 200ms) linear;
   }
 
-  .ticks[data-hollow='true'] .tick svg path {
+  .cue[data-hollow='true'] .tick svg path {
     fill-opacity: 0;
   }
 
@@ -370,7 +382,7 @@
     /* The plateau is exactly one line pitch — the band above the mark — and the
        skirts are 0.45 of one on each side. The percentages come in as custom
        properties because they follow from that ratio rather than from a pair of
-       chosen stops, and the rules below are pinned to the same two edges. */
+       chosen stops. */
     /*
      * The colours are roles, with the dark field's values as their fallbacks —
      * so a dark stage draws exactly the band it always did, and a paper one
@@ -384,36 +396,10 @@
       var(--stage-wash, rgb(245 243 239 / 6%)) var(--plateau-bottom, 76%),
       var(--stage-wash-clear, rgb(245 243 239 / 0%)) 100%
     );
-    transition: background var(--stage-fx-ms, 200ms) linear;
-  }
-
-  .wash[data-hollow='true'] .wash-band {
-    background: linear-gradient(
-      180deg,
-      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 0%,
-      var(--stage-wash-hollow, rgb(245 243 239 / 2%)) var(--plateau-top, 24%),
-      var(--stage-wash-hollow, rgb(245 243 239 / 2%)) var(--plateau-bottom, 76%),
-      var(--stage-wash-clear, rgb(245 243 239 / 0%)) 100%
-    );
-  }
-
-  .wash-rule {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: var(--stage-wash-rule, rgb(245 243 239 / 16%));
-  }
-  .wash-rule-top {
-    top: var(--plateau-top, 24%);
-  }
-  .wash-rule-bottom {
-    top: calc(var(--plateau-bottom, 76%) - 1px);
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .tick svg path,
-    .wash-band {
+    .tick svg path {
       transition: none;
     }
   }

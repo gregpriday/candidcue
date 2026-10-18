@@ -155,8 +155,7 @@
   /* Roles whose dark value is the fallback at the point of use. */
   --stage-wash-clear: rgb(96 84 70 / 0%);
   --stage-wash: rgb(96 84 70 / 8%);
-  --stage-wash-hollow: rgb(96 84 70 / 3%);
-  --stage-wash-rule: rgb(96 84 70 / 24%);
+  --stage-reading-mark-opacity: 0.62;
   --stage-mark-ink: #f6f2ea;
   --stage-diag-fault: #a6342b;
   --stage-chrome-bg-solid: rgb(252 250 246 / 96%);
