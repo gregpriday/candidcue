@@ -20,7 +20,7 @@
   essentially the whole left half of the stage — including the reading band, the
   one part the operator opened the panel to look at.
 
-  So it is 304 wide, capped just above 400 tall, and every row inside it earns
+  So it is 304 wide, capped just over 430 tall, and every row inside it earns
   its height. The long explanatory paragraphs are gone: they were written for a
   settings screen with room to teach, and this is a panel somebody is operating
   mid-take with a presenter waiting.
@@ -30,10 +30,18 @@
   ---------------------------------------------------------------------------
   Every move is live: the stage behind re-renders as the slider moves, because a
   control you have to close a panel to evaluate is a control you evaluate twice.
-  Done writes what is on the glass into the saved settings, so the next take
-  opens on it. Cancel puts the take back exactly as it was found and saves
-  nothing — which is why the caller hands in the appearance it opened with
-  rather than this panel remembering it.
+  While a slider is held the glass clears, leaving only that row, so the edges
+  and markers it covers can be judged too. Done writes what is on the glass into
+  the saved settings, so the next take opens on it, and the footer says where.
+  Cancel puts the take back exactly as it was found and saves nothing — which is
+  why the caller hands in the appearance it opened with rather than this panel
+  remembering it.
+
+  Only Cancel, Escape and Done end it. A click away is not a decision either
+  way: closing on it used to put back a minute of tuning the operator had only
+  clicked away to look at, and keeping on it would save an experiment into
+  every later take. So the dock answers that click by lighting this panel's
+  edge, and it stays until somebody says which.
 
   It is `aria-modal` and traps Tab. It has no scrim: the whole point is that the
   stage stays visible and legible behind it, so it takes one corner of the
@@ -52,6 +60,13 @@
   would write the RIG's numbers into the global defaults, quietly changing what
   every uncalibrated take opens with. So the panel says what the rig resolved,
   says where to change it, and offers nothing it cannot deliver.
+
+  With one exception, which the automatic profile has and a calibrated rig does
+  not: its size balance. That is the operator's preference rather than a
+  measurement, it is what trades size against how much of a line fits, and it
+  DOES recompose the glass. So an automatic take gets that one slider above the
+  readout — the readout then being its live consequence — with Cancel and a
+  Done that saves the balance and nothing else.
 
   ---------------------------------------------------------------------------
   A READING WINDOW GETS ITS OWN CONTROLS
@@ -72,7 +87,9 @@
   it is the light one, and a dark slab is not dropped onto a light page.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Button from './Button.svelte';
+  import Icon from './Icon.svelte';
   import SegmentedControl from './SegmentedControl.svelte';
   import Slider from './Slider.svelte';
   import { FOCUSABLE_SELECTOR, nextTrapFocus } from './dialog-focus';
@@ -123,6 +140,30 @@
      */
     automatic?: boolean;
     /**
+     * The take is a reading window, whichever controls it gets.
+     *
+     * Usually the same thing as `surface="reader"`, but not always: a reading
+     * window with no display to measure runs from the flat fields and gets the
+     * prompter's controls, because those are the ones that reach its glass. It
+     * is still a window on a desk, so it is not called a prompter and nothing in
+     * it mentions a camera lens.
+     */
+    readingWindow?: boolean;
+    /**
+     * The automatic profile's size balance as the take is running it, 0 to 1 —
+     * or null when the take is not sized automatically.
+     *
+     * The one thing about an automatic take that is the operator's to choose:
+     * every other value there is worked out from the panel, and this is what
+     * trades size against how much of a line fits. Settings has the same slider
+     * with the same ends.
+     */
+    sizeBias?: number | null;
+    /** Apply a size balance to the running take. Called on every move. */
+    onsizebiaschange?: (bias: number) => void;
+    /** The calibrated rig this take is running, by the name it was saved under. */
+    rigName?: string | null;
+    /**
      * The take's size ceiling, fixed when it opened.
      *
      * Handed in rather than derived here so it cannot move under the thumb: a
@@ -166,6 +207,10 @@
     readerTheme = 'dark',
     rigResolved,
     automatic = false,
+    readingWindow = false,
+    sizeBias = null,
+    onsizebiaschange,
+    rigName = null,
     maxFontSizePx,
     charactersPerLine = null,
     onchange,
@@ -179,15 +224,47 @@
   const readerView = $derived(surface === 'reader' ? reader : null);
   /** A reading window drawn on paper: the panel goes light with it. */
   const onPaper = $derived(readerView !== null && readerTheme === 'paper');
+  /** Named for the window it is in, not for which controls it happens to get. */
+  const inReadingWindow = $derived(readerView !== null || readingWindow);
+  /**
+   * An automatically sized prompter: a readout of what the panel resolved, with
+   * the size balance above it as the one live control — and so a Cancel and a
+   * Done, where a calibrated rig's readout has only Close.
+   */
+  const balancing = $derived(
+    readerView === null && rigResolved && automatic && typeof sizeBias === 'number',
+  );
+  /** A calibrated rig's readout: values to read, nothing to set. */
+  const readoutOnly = $derived(readerView === null && rigResolved && !balancing);
+
+  /*
+   * What Done keeps, said beside Done.
+   *
+   * Cancel and Done both look final, and only one of them reaches past this
+   * take. Without the sentence, nothing on the prompter's panel said Done
+   * rewrites the defaults every later take opens with — and on a reading window
+   * it was there, but below the fold of an inner scroller.
+   */
+  const scope = $derived(
+    readerView
+      ? 'Done saves these for every reading window.'
+      : balancing
+        ? 'Done saves this for every automatic display.'
+        : 'Done saves these as your prompter defaults.',
+  );
 
   const uid = $props.id();
   let panel: HTMLElement | null = $state(null);
+  let body: HTMLElement | null = $state(null);
 
   const INTENSITY_LABEL: Record<TextIntensity, string> = {
     soft: 'Soft',
     standard: 'Standard',
     strong: 'Strong',
   };
+
+  /** "1.38" is a ratio on screen and a bare number out loud. */
+  const spacingSpoken = (v: number): string => `${v.toFixed(2)} times the text size`;
 
   /**
    * The step the minus/plus buttons take.
@@ -246,8 +323,12 @@
   $effect(() => {
     if (!panel) return undefined;
     const opener = document.activeElement as HTMLElement | null;
+    // The first CONTROL, not the header's eye: that is a look, and the panel
+    // was opened to change something. A readout has no control, so its Close.
     const target =
       panel.querySelector<HTMLElement>('[data-autofocus]') ??
+      untrack(() => body)?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
+      panel.querySelector('.foot')?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
       panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
       panel; // the panel itself is tabindex="-1"
     target.focus();
@@ -294,6 +375,147 @@
     window.addEventListener('keydown', onKeydown, true);
     return () => window.removeEventListener('keydown', onKeydown, true);
   });
+
+  /*
+   * WHILE A SLIDER IS HELD, THE PANEL GETS OUT OF THE WAY.
+   *
+   * On a 1024x600 prompter this panel covers the left reading-line marker, the
+   * column's left edge and the start of the line being read — the very things
+   * the width, reading-line and size sliders are judged against. No height cap
+   * fixes that across the whole range of either, so for the length of a drag
+   * the glass goes clear and every row but the one under the pointer fades,
+   * leaving that row on a strip of its own. Nothing moves: the rows keep their
+   * boxes, so the track stays exactly under the thumb.
+   *
+   * Pointer only. A keyboard nudge is one step at a time and the panel coming
+   * and going on every arrow press would be worse than the occlusion.
+   */
+  let peeking = $state(false);
+
+  function onBodyPointerDown(event: PointerEvent): void {
+    const target = event.target;
+    if (event.button !== 0 || !(target instanceof HTMLInputElement) || target.type !== 'range') {
+      return;
+    }
+    const row = body ? [...body.children].find((child) => child.contains(target)) : undefined;
+    if (!row) return;
+    row.setAttribute('data-peek', '');
+    peeking = true;
+    const release = (): void => {
+      row.removeAttribute('data-peek');
+      peeking = false;
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      window.removeEventListener('blur', release);
+    };
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    window.addEventListener('blur', release);
+  }
+
+  /*
+   * AND WHENEVER SOMEBODY ASKS, ALL OF IT DOES.
+   *
+   * The held row still covers a strip of the stage, and a stepper, a segmented
+   * choice or an arrow-key nudge has no drag to hang a reveal on — so the eye in
+   * the header clears the whole panel for as long as it is held, by pointer or
+   * by Space/Return, and puts it back on release. Nothing is applied, kept or
+   * reverted by it. The eye itself stays, so the person holding it can see
+   * where the panel will come back.
+   */
+  let revealing = $state(false);
+
+  /**
+   * Clear the panel until `released` fires on the window, or the window loses
+   * focus — a release that happens in another app must still bring it back.
+   */
+  function holdReveal(released: Array<[string, (event: Event) => boolean]>): void {
+    revealing = true;
+    const listeners = released.map(([type, matches]) => {
+      const listener = (event: Event): void => {
+        if (matches(event)) end();
+      };
+      return [type, listener] as const;
+    });
+    function end(): void {
+      revealing = false;
+      for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);
+      window.removeEventListener('blur', end);
+    }
+    for (const [type, listener] of listeners) window.addEventListener(type, listener, true);
+    window.addEventListener('blur', end);
+  }
+
+  function onRevealPointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    // Focus stays where it was: this is a look, not a move.
+    event.preventDefault();
+    holdReveal([
+      ['pointerup', () => true],
+      ['pointercancel', () => true],
+    ]);
+  }
+
+  function onRevealKeydown(event: KeyboardEvent): void {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    if (event.repeat || revealing) return;
+    // Only the key that is holding it. Shift going up under a held Space is
+    // not a release.
+    const key = event.key;
+    holdReveal([['keyup', (up) => (up as KeyboardEvent).key === key]]);
+  }
+
+  /*
+   * Say when the body scrolls, at the edge it scrolls past.
+   *
+   * The body scrolls whenever the room above the dock is shorter than the
+   * controls — the smallest reading window, a hooded rig — and a clean footer
+   * under a cut-off list reads as a complete form. The fades follow the actual
+   * overflow, so a panel that fits shows none.
+   */
+  let moreAbove = $state(false);
+  let moreBelow = $state(false);
+
+  function measureOverflow(): void {
+    if (!body) return;
+    moreAbove = body.scrollTop > 1;
+    moreBelow = body.scrollTop + body.clientHeight < body.scrollHeight - 1;
+  }
+
+  /*
+   * A fade says "this goes on" quietly enough to be read as a dimmed control.
+   * In the smallest windows three whole controls can sit below it, so the edge
+   * also gets something to press.
+   */
+  function showMore(event: MouseEvent): void {
+    if (!body) return;
+    const cue = event.currentTarget as HTMLElement;
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    /*
+     * The cue hides itself once nothing is left below, and a focused element
+     * that hides drops the keyboard on `<body>`. So when it holds focus, focus
+     * goes ahead of the scroll to the first control it was hiding.
+     */
+    if (document.activeElement === cue) {
+      const fold = body.getBoundingClientRect().bottom;
+      const next = [...body.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].find(
+        (control) => control.getBoundingClientRect().top >= fold - 1,
+      );
+      next?.focus({ preventScroll: true });
+    }
+    body.scrollBy({ top: body.clientHeight * 0.75, behavior: still ? 'auto' : 'smooth' });
+  }
+
+  $effect(() => {
+    if (!body) return undefined;
+    measureOverflow();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(body);
+    for (const child of body.children) observer.observe(child);
+    return () => observer.disconnect();
+  });
 </script>
 
 <div
@@ -303,55 +525,81 @@
   aria-modal="true"
   aria-labelledby="{uid}-title"
   data-theme={onPaper ? 'workspace' : undefined}
+  data-window={inReadingWindow ? 'reading' : 'prompter'}
+  data-peeking={peeking ? '' : undefined}
+  data-revealing={revealing ? '' : undefined}
   bind:this={panel}
 >
   <header class="sheet-head">
     <h2 class="title" id="{uid}-title">
-      {readerView ? 'Reading appearance' : 'Prompter appearance'}
+      {inReadingWindow ? 'Reading appearance' : 'Prompter appearance'}
     </h2>
     <!-- No badge for a reading window. "Calibrated" and "Automatic" describe
          who sized a prompter; a window's size is the reader's own. -->
     {#if !readerView && rigResolved}
       <!-- A badge rather than a sentence. "This display runs from a saved rig"
            was doing two jobs — naming the state and explaining it — and the
-           explanation belongs with the values it applies to, below. -->
+           explanation belongs with the values it applies to, below. A quiet
+           tag, not an outlined capsule in capitals: that read as a button. -->
       <span class="badge">{automatic ? 'Automatic' : 'Calibrated'}</span>
     {/if}
+    <!-- Last in the header in every branch, so it is always in the same place. -->
+    <button
+      type="button"
+      class="reveal"
+      data-focus="control"
+      aria-label="Hold to see the whole stage"
+      title="Hold to see the whole stage"
+      aria-pressed={revealing}
+      onpointerdown={onRevealPointerDown}
+      onkeydown={onRevealKeydown}
+    >
+      <Icon name="eye" size={15} />
+    </button>
   </header>
 
-  <div class="body">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="body"
+    bind:this={body}
+    data-more-above={moreAbove ? '' : undefined}
+    data-more-below={moreBelow ? '' : undefined}
+    onscroll={measureOverflow}
+    onpointerdown={onBodyPointerDown}
+  >
     {#if readerView}
       <!-- Size first, with buttons, for the reason the prompter panel gives:
            it is the one that gets changed, and the one changed by two pixels. -->
-      <div class="size-row">
-        <Slider
-          label="Text size"
-          value={readerView.fontSizePx}
-          min={READER_SIZE.min}
-          max={READER_SIZE.max}
-          step={READER_SIZE.step}
-          format={(v) => `${v} px`}
-          onchange={(value) => onreaderchange?.({ fontSizePx: value })}
-        />
-        <div class="nudge">
-          <button
-            type="button"
-            data-focus="control"
-            aria-label="Smaller text"
-            title="Smaller text (hold Shift for a bigger step)"
-            disabled={readerAtMinSize}
-            onclick={(event) => nudgeReaderSize(-1, event)}>−</button
-          >
-          <button
-            type="button"
-            data-focus="control"
-            aria-label="Larger text"
-            title="Larger text (hold Shift for a bigger step)"
-            disabled={readerAtMaxSize}
-            onclick={(event) => nudgeReaderSize(1, event)}>+</button
-          >
-        </div>
-      </div>
+      <Slider
+        label="Text size"
+        value={readerView.fontSizePx}
+        min={READER_SIZE.min}
+        max={READER_SIZE.max}
+        step={READER_SIZE.step}
+        format={(v) => `${v} px`}
+        onchange={(value) => onreaderchange?.({ fontSizePx: value })}
+      >
+        {#snippet trailing()}
+          <div class="nudge">
+            <button
+              type="button"
+              data-focus="control"
+              aria-label="Smaller text"
+              title="Smaller text (hold Shift for a bigger step)"
+              disabled={readerAtMinSize}
+              onclick={(event) => nudgeReaderSize(-1, event)}>−</button
+            >
+            <button
+              type="button"
+              data-focus="control"
+              aria-label="Larger text"
+              title="Larger text (hold Shift for a bigger step)"
+              disabled={readerAtMaxSize}
+              onclick={(event) => nudgeReaderSize(1, event)}>+</button
+            >
+          </div>
+        {/snippet}
+      </Slider>
 
       <!--
         Three widths, not a percentage. What a reader feels is characters per
@@ -364,11 +612,12 @@
         <div class="field-head">
           <span class="field-label" aria-hidden="true">Line width</span>
           {#if charactersPerLine}
-            <span class="field-value">About {charactersPerLine} characters a line</span>
+            <span class="field-value" id="{uid}-measure">About {charactersPerLine} characters a line</span>
           {/if}
         </div>
         <SegmentedControl
           label="Line width"
+          describedby={charactersPerLine ? `${uid}-measure` : undefined}
           size="sm"
           value={readerLineWidthFor(readerView.characters)}
           options={[
@@ -388,6 +637,7 @@
         max={READER_LINE_HEIGHT.max}
         step={READER_LINE_HEIGHT.step}
         format={(v) => v.toFixed(2)}
+        spoken={spacingSpoken}
         onchange={(value) => onreaderchange?.({ lineHeight: value })}
       />
 
@@ -439,13 +689,31 @@
           onchange={(value) => onreaderchange?.({ readingCue: value as ReadingCueStyle })}
         />
       </div>
-      <p class="hint">Done saves these for every reading window.</p>
     {:else if rigResolved}
+      {#if balancing}
+        <!--
+          The one control an automatic take answers to. Settings' own slider,
+          ends and all, so the two read as the same setting: the operator who
+          finds it here and later in Settings is moving one thing, not two.
+        -->
+        <Slider
+          label="Size balance"
+          minLabel="More text on screen"
+          maxLabel="Larger, easier text"
+          value={Math.round((sizeBias ?? 0) * 100)}
+          min={0}
+          max={100}
+          format={(v) => `${v}%`}
+          spoken={(v) => `${v}% toward larger text`}
+          onchange={(value) => onsizebiaschange?.(value / 100)}
+        />
+      {/if}
       <!--
         A readout, not four disabled tracks. A range input pinned at a value it
         cannot reach — a rig may resolve a line height of 2.0, past the top of
         the slider — shows a thumb that disagrees with its own number, which is
-        a worse answer than plain text.
+        a worse answer than plain text. Under the size balance it is also the
+        live consequence of that slider: these are the numbers it moves.
       -->
       <dl class="readout">
         <div class="row">
@@ -461,12 +729,12 @@
           </dd>
         </div>
         <div class="row">
-          <dt>Reading line</dt>
-          <dd>{Math.round(appearance.readingBandCenterPercent)}%</dd>
-        </div>
-        <div class="row">
           <dt>Line spacing</dt>
           <dd>{appearance.lineHeight.toFixed(2)}</dd>
+        </div>
+        <div class="row">
+          <dt>Reading line</dt>
+          <dd>{Math.round(appearance.readingBandCenterPercent)}% from top</dd>
         </div>
         <div class="row">
           <dt>Intensity</dt>
@@ -475,52 +743,54 @@
       </dl>
       <p class="hint">
         {#if automatic}
-          Sized automatically for this display and a typical viewing distance. Trade size against
-          how much of a line fits with the size slider under
-          <strong>Settings → Prompter display and rigs</strong>; calibrating a rig there is what
-          replaces the assumed distance with a measured one.
+          Assumes a typical viewing distance. Calibrate a rig under
+          <strong>Settings → Prompter display and rigs</strong> to measure yours.
         {:else}
-          Worked out from how far away you stand. Change them under
+          Measured for {rigName ? `“${rigName}”` : 'your calibrated rig'}. Change it under
           <strong>Settings → Prompter display and rigs</strong>.
         {/if}
       </p>
     {:else}
       <!--
-        ORDERED BY HOW OFTEN IT IS TOUCHED.
+        ORDERED BY HOW OFTEN IT IS TOUCHED, AND IN THE READING WINDOW'S ORDER.
         The panel used to open on text intensity, which is a decision somebody
         makes once per room. Size is the one that gets changed, so it is first
         and it is the only control with buttons as well as a track — a
-        two-pixel nudge is not a drag anybody can make accurately.
+        two-pixel nudge is not a drag anybody can make accurately. Size, width
+        and spacing are the shape of the type and come in the same order as a
+        reading window's, so moving between the two modes finds them where they
+        were; the reading line, which only a prompter has, follows them.
       -->
-      <div class="size-row">
-        <Slider
-          label="Text size"
-          value={appearance.fontSizePx}
-          min={APPEARANCE_LIMITS.fontSizePx.min}
-          max={maxFontSizePx}
-          step={APPEARANCE_LIMITS.fontSizePx.step}
-          format={(v) => `${v} px`}
-          onchange={(value) => onchange({ fontSizePx: value })}
-        />
-        <div class="nudge">
-          <button
-            type="button"
-            data-focus="control"
-            aria-label="Smaller text"
-            title="Smaller text (hold Shift for a bigger step)"
-            disabled={atMinSize}
-            onclick={(event) => nudgeSize(-1, event)}>−</button
-          >
-          <button
-            type="button"
-            data-focus="control"
-            aria-label="Larger text"
-            title="Larger text (hold Shift for a bigger step)"
-            disabled={atMaxSize}
-            onclick={(event) => nudgeSize(1, event)}>+</button
-          >
-        </div>
-      </div>
+      <Slider
+        label="Text size"
+        value={appearance.fontSizePx}
+        min={APPEARANCE_LIMITS.fontSizePx.min}
+        max={maxFontSizePx}
+        step={APPEARANCE_LIMITS.fontSizePx.step}
+        format={(v) => `${v} px`}
+        onchange={(value) => onchange({ fontSizePx: value })}
+      >
+        {#snippet trailing()}
+          <div class="nudge">
+            <button
+              type="button"
+              data-focus="control"
+              aria-label="Smaller text"
+              title="Smaller text (hold Shift for a bigger step)"
+              disabled={atMinSize}
+              onclick={(event) => nudgeSize(-1, event)}>−</button
+            >
+            <button
+              type="button"
+              data-focus="control"
+              aria-label="Larger text"
+              title="Larger text (hold Shift for a bigger step)"
+              disabled={atMaxSize}
+              onclick={(event) => nudgeSize(1, event)}>+</button
+            >
+          </div>
+        {/snippet}
+      </Slider>
 
       <Slider
         label="Text width"
@@ -528,20 +798,10 @@
         min={APPEARANCE_LIMITS.columnWidthPercent.min}
         max={APPEARANCE_LIMITS.columnWidthPercent.max}
         format={(v) => `${v}%${charactersPerLine ? ` · ${charactersPerLine} chars` : ''}`}
+        spoken={(v) =>
+          `${v}% of the width${charactersPerLine ? `, about ${charactersPerLine} characters a line` : ''}`}
         onchange={(value) => onchange({ columnWidthPercent: value })}
       />
-
-      <Slider
-        label="Reading line"
-        value={appearance.readingBandCenterPercent}
-        min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
-        max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
-        format={(v) => `${v}%`}
-        onchange={(value) => onchange({ readingBandCenterPercent: value })}
-      />
-      <!-- One sentence. The three-line version of this was the tallest thing
-           in the panel and said the same thing. -->
-      <p class="hint">Align the side markers with the camera lens.</p>
 
       <Slider
         label="Line spacing"
@@ -550,29 +810,63 @@
         max={APPEARANCE_LIMITS.lineHeight.max}
         step={APPEARANCE_LIMITS.lineHeight.step}
         format={(v) => v.toFixed(2)}
+        spoken={spacingSpoken}
         onchange={(value) => onchange({ lineHeight: value })}
       />
 
-      <SegmentedControl
-        label="Intensity"
-        size="sm"
-        value={appearance.textIntensity}
-        options={[
-          { value: 'soft', label: 'Soft' },
-          { value: 'standard', label: 'Standard' },
-          { value: 'strong', label: 'Strong' },
-        ]}
-        onchange={(value) => onchange({ textIntensity: value as TextIntensity })}
+      <!-- One sentence, read with the slider. A reading window has no lens, so
+           there it has nothing to say. -->
+      <Slider
+        label="Reading line"
+        value={appearance.readingBandCenterPercent}
+        min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
+        max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
+        format={(v) => `${v}% from top`}
+        description={inReadingWindow ? undefined : 'Align the arrows with the camera lens.'}
+        onchange={(value) => onchange({ readingBandCenterPercent: value })}
       />
+
+      <div class="field">
+        <span class="field-label" aria-hidden="true">Intensity</span>
+        <SegmentedControl
+          label="Intensity"
+          size="sm"
+          value={appearance.textIntensity}
+          options={[
+            { value: 'soft', label: 'Soft' },
+            { value: 'standard', label: 'Standard' },
+            { value: 'strong', label: 'Strong' },
+          ]}
+          onchange={(value) => onchange({ textIntensity: value as TextIntensity })}
+        />
+      </div>
     {/if}
   </div>
 
+  <!-- A row of its own whenever the body scrolls at all, so the cue never sits
+       on a control and the panel does not jump when it comes and goes; shown
+       only while there is more below. -->
+  {#if moreAbove || moreBelow}
+    <div class="more-row">
+      <button
+        type="button"
+        class="more"
+        data-focus="control"
+        hidden={!moreBelow}
+        onclick={showMore}
+      >
+        More below <Icon name="chevron-down" size={12} />
+      </button>
+    </div>
+  {/if}
+
   <footer class="foot">
-    {#if !readerView && rigResolved}
+    {#if readoutOnly}
       <Button variant="primary" size="sm" onclick={oncancel}>Close</Button>
     {:else}
+      <p class="scope" id="{uid}-scope">{scope}</p>
       <Button variant="ghost" size="sm" onclick={oncancel}>Cancel</Button>
-      <Button variant="primary" size="sm" onclick={onok}>Done</Button>
+      <Button variant="primary" size="sm" describedby="{uid}-scope" onclick={onok}>Done</Button>
     {/if}
   </footer>
 </div>
@@ -594,21 +888,28 @@
    * glass, which is why no row here has a translucent card of its own.
    */
   .sheet {
+    position: relative;
     display: flex;
     flex-direction: column;
     /* Narrow on purpose: the reading band runs across the middle of the stage
        and the whole point is to watch it while dragging. */
     width: min(304px, calc(100vw - 32px));
     /*
-     * 412, not 560. This rises from a control 16px off the bottom of a panel
+     * 432, not 560. This rises from a control 16px off the bottom of a panel
      * that may be only 600px tall; see the note at the top of the file.
      *
-     * The number is what the five controls plus their one hint actually measure
-     * at this width, measured at 1024x600 rather than guessed: at 360 the
-     * intensity control fell below the fold, and a control nobody can see
-     * without discovering that a panel scrolls is a control that is not there.
-     * The BODY still scrolls if a longer rig readout needs it, so the title
-     * stays readable and Done stays reachable either way.
+     * The number is what the tallest prompter branch actually measures at this
+     * width, measured at 1024x600 rather than guessed: the automatic readout,
+     * with its size balance above it. At 360 the intensity control fell below
+     * the fold, and a control nobody can see without discovering that a panel
+     * scrolls is a control that is not there. The shorter branches are sized by
+     * their content and never reach it. The BODY still scrolls when a hooded
+     * rig leaves less room, so the title stays readable and Done stays
+     * reachable either way, and its fades say so.
+     *
+     * A PROMPTER's number only. A reading window is on a desk monitor, never on
+     * the Elgato, and holding its six controls to the prompter's cap put Reading
+     * cue below a fold nobody could see — so it takes the room there is.
      */
     /*
      * `--stage-popover-max-height` is published by the stage from the rig's
@@ -618,16 +919,27 @@
      * button with it. It inherits down to here through the dock. The viewport
      * fallback is what a plain panel — and the Settings screen — gets.
      */
-    max-height: min(412px, var(--stage-popover-max-height, calc(100vh - 96px)));
+    max-height: min(432px, var(--stage-popover-max-height, calc(100vh - 96px)));
+    /* The glass, and the strip a held row keeps while the rest of it clears. */
+    --sheet-fill: rgba(9, 11, 15, 0.88);
+    --sheet-strip: rgba(9, 11, 15, 0.94);
+    --sheet-edge-called: rgba(255, 255, 255, 0.5);
     border: 1px solid var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
     border-radius: var(--stage-chrome-radius, 12px);
-    background: rgba(9, 11, 15, 0.88);
+    background: var(--sheet-fill);
     /* Saturation lifted a little so the terracotta on the controls survives the
        blur instead of going grey behind it. */
     backdrop-filter: blur(22px) saturate(140%);
     -webkit-backdrop-filter: blur(22px) saturate(140%);
     box-shadow: var(--shadow-pop);
     overflow: hidden;
+    transition:
+      background-color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .sheet[data-window='reading'] {
+    max-height: var(--stage-popover-max-height, calc(100vh - 96px));
   }
 
   /*
@@ -640,10 +952,133 @@
    */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .sheet {
-      background: rgba(9, 11, 15, 0.96);
+      --sheet-fill: rgba(9, 11, 15, 0.96);
     }
     .sheet[data-theme='workspace'] {
-      background: rgba(252, 250, 246, 0.98);
+      --sheet-fill: rgba(252, 250, 246, 0.98);
+    }
+  }
+
+  /*
+   * Held: the glass clears and only the row under the pointer stays, on a strip
+   * of its own — see `onBodyPointerDown`. Opacity only, so nothing reflows and
+   * the track does not move under the thumb. Still one pane at a time: the
+   * strip is the only surface left on screen while it shows.
+   */
+  .sheet[data-peeking] {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .sheet-head,
+  .foot,
+  .body > :global(*) {
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .sheet[data-peeking] .sheet-head,
+  .sheet[data-peeking] .more-row,
+  .sheet[data-peeking] .foot,
+  .sheet[data-peeking] .body > :global(:not([data-peek])) {
+    opacity: 0;
+  }
+  .sheet[data-peeking] .body {
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+  /*
+   * The strip runs the full inner width of the panel — the edge the dock and
+   * the panel share — and carries its own blur, so the line it sits on is a
+   * smear behind it rather than words competing with the label.
+   */
+  .body > :global([data-peek]) {
+    position: relative;
+    /* Its own stacking context, so the strip below sits behind this row's
+       controls and in front of everything else, the stage included. */
+    isolation: isolate;
+  }
+  .body > :global([data-peek])::before {
+    content: '';
+    position: absolute;
+    inset: -8px calc(-1 * var(--space-4));
+    z-index: -1;
+    border-radius: var(--stage-chrome-radius, 12px);
+    background: var(--sheet-strip);
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+  }
+
+  /* Held eye: the whole panel clears, the eye stays. */
+  .sheet[data-revealing] {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .sheet[data-revealing] .title,
+  .sheet[data-revealing] .badge,
+  .sheet[data-revealing] .body,
+  .sheet[data-revealing] .more,
+  .sheet[data-revealing] .foot {
+    opacity: 0;
+  }
+  .title,
+  .badge,
+  .body,
+  .more {
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+
+  /*
+   * A click away does not close this panel — Cancel, Escape and Done do — so
+   * the click is answered here instead: the edge lights for a moment, which is
+   * what says "this is still waiting for you" rather than "nothing happened".
+   * The dock sets the attribute; it owns the outside click.
+   *
+   * Drawn on a layer of its own rather than by animating the panel's border:
+   * animating the glass itself dropped its blur for the length of the flash,
+   * and the script behind came through sharp.
+   */
+  .sheet::after {
+    content: '';
+    position: absolute;
+    /* Inside the border: the sheet clips at its padding edge. */
+    inset: 0;
+    border: 1px solid var(--sheet-edge-called);
+    border-radius: inherit;
+    opacity: 0;
+    pointer-events: none;
+  }
+  :global(.appearance-popover[data-attention]) > .sheet::after {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    :global(.appearance-popover[data-attention]) > .sheet::after {
+      animation: sheet-called 520ms var(--ease-out, ease-out) forwards;
+    }
+  }
+  @keyframes sheet-called {
+    0%,
+    35% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sheet,
+    .sheet-head,
+    .foot,
+    .title,
+    .badge,
+    .body,
+    .more,
+    .body > :global(*) {
+      transition: none;
     }
   }
 
@@ -659,7 +1094,17 @@
    * stage's quiet chrome border, rather than as a hole in it.
    */
   .sheet[data-theme='workspace'] {
-    background: rgba(252, 250, 246, 0.9);
+    --sheet-fill: rgba(252, 250, 246, 0.9);
+    --sheet-strip: rgba(252, 250, 246, 0.96);
+    --sheet-edge-called: rgba(36, 30, 20, 0.42);
+  }
+  .sheet[data-theme='workspace'] .badge,
+  .sheet[data-theme='workspace'] .reveal:hover {
+    background: var(--bg-hover-surface);
+  }
+  .sheet[data-theme='workspace'] .more,
+  .sheet[data-theme='workspace'][data-revealing] .reveal {
+    border-color: var(--border-control);
   }
   .sheet[data-theme='workspace'] .nudge button {
     border-color: var(--border-control);
@@ -680,20 +1125,77 @@
     padding: var(--space-3) var(--space-4) var(--space-2);
   }
   .title {
+    flex: 1 1 auto;
     margin: 0;
     font-size: var(--text-sm);
     font-weight: 650;
     color: var(--text-primary);
   }
-  .badge {
+  /* A quiet header action, at the steppers' size. */
+  .reveal {
     flex: 0 0 auto;
-    padding: 2px 7px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .reveal:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+  }
+  /* Alone on the stage while held, so it brings its own backing. */
+  .sheet[data-revealing] .reveal {
+    background: var(--sheet-strip);
+    border-color: var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
+    color: var(--text-primary);
+  }
+
+  /*
+   * "More below": under the faded edge, never over a control, and only there
+   * while the body really scrolls.
+   */
+  .more-row {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    height: 24px;
+    margin: 0 0 var(--space-2);
+  }
+  .more[hidden] {
+    display: none;
+  }
+  .more {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
     border-radius: 999px;
+    background: var(--sheet-strip);
+    color: var(--text-secondary);
+    font: inherit;
     font-size: var(--text-meta);
     font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .more:hover {
+    color: var(--text-primary);
+  }
+  /* A tag, not a control: no outline, no capitals, nothing to press. */
+  .badge {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: var(--text-meta);
+    font-weight: 600;
     color: var(--text-secondary);
   }
 
@@ -702,32 +1204,45 @@
     flex-direction: column;
     /* Tighter than the studio rhythm, deliberately: this is six rows on a panel
        that has to clear a 600px display and still leave the reading band in
-       view behind it. */
-    gap: 10px;
+       view behind it. Eight, not ten: at ten the prompter's five labelled rows
+       ran a few pixels past the cap and its last control sat under a fade. */
+    gap: 8px;
     padding: var(--space-2) var(--space-4) var(--space-3);
     overflow-y: auto;
   }
+  /* The fades sit at the edge the body scrolls past, and only there. */
+  .body[data-more-below] {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  }
+  .body[data-more-above] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px);
+    mask-image: linear-gradient(to bottom, transparent, #000 28px);
+  }
+  .body[data-more-above][data-more-below] {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      #000 28px,
+      #000 calc(100% - 28px),
+      transparent
+    );
+    mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  }
 
   /*
-   * The size row: a track plus two buttons that step it.
+   * The size steppers, on the size slider's own track row.
    *
    * The slider alone cannot be operated accurately at two pixels a step — the
    * whole range is 24 to 320 in a 200px-wide panel — and two pixels is exactly
-   * the size of adjustment somebody makes when they are nearly right.
+   * the size of adjustment somebody makes when they are nearly right. On the
+   * track's row rather than beside the whole slider, so the label and value
+   * above keep the full width and the value lines up with every other one.
    */
-  .size-row {
-    display: flex;
-    align-items: flex-end;
-    gap: var(--space-2);
-  }
-  .size-row :global(.slider) {
-    flex: 1 1 auto;
-  }
   .nudge {
     flex: 0 0 auto;
     display: flex;
     gap: 4px;
-    padding-bottom: 2px;
   }
   .nudge button {
     width: 24px;
@@ -755,7 +1270,6 @@
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
   }
   .row {
     display: flex;
@@ -825,9 +1339,20 @@
    */
   .foot {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-4) var(--space-3);
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  /* What Done keeps, in the footer beside it, where it cannot scroll away. */
+  .scope {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0 var(--space-2) 0 0;
+    font-size: var(--text-meta);
+    line-height: 1.35;
+    color: var(--text-muted);
+    text-wrap: pretty;
   }
 </style>

@@ -1086,9 +1086,11 @@ test.describe('on a page that identifies as macOS', () => {
  * where they meet — every drag reaches the glass on the way past, and backing
  * out puts the take back exactly as it was found.
  *
- * Both dismissals are checked because the dock routes them to the same place
- * for a reason: a click away that merely CLOSED would silently keep changes
- * nobody confirmed, with the button that would have undone them gone.
+ * A click away is checked too, because it is the gesture with no safe meaning:
+ * closing as cancel threw away tuning somebody had only clicked off to look
+ * at, and closing as keep would save an experiment into every later take. So
+ * it does neither. The panel stays, the take keeps what is on the glass, the
+ * panel's edge lights, and Cancel is still there to put it all back.
  */
 test('the appearance panel applies live and restores what it opened on', async ({ page }) => {
   const errors = watchPageErrors(page);
@@ -1114,13 +1116,19 @@ test('the appearance panel applies live and restores what it opened on', async (
   await expect(panel).toHaveCount(0);
   await expect.poll(widthOf).toBeCloseTo(opened, 0);
 
-  // And a click away is the same promise, not a quiet keep.
+  // A click away is held: neither a quiet keep nor a quiet revert.
   await openAppearancePanel(page);
   await expect(panel).toBeVisible();
   await width.fill('50');
   await width.dispatchEvent('input');
   await expect.poll(widthOf).toBeLessThan(opened - 20);
   await page.mouse.click(900, 120);
+  await expect(panel).toHaveAttribute('data-attention', '');
+  await expect(panel).toBeVisible();
+  await expect.poll(widthOf).toBeLessThan(opened - 20);
+
+  // ...and Cancel still puts it back exactly as it was found.
+  await panel.getByRole('button', { name: 'Cancel' }).click();
   await expect(panel).toHaveCount(0);
   await expect.poll(widthOf).toBeCloseTo(opened, 0);
 

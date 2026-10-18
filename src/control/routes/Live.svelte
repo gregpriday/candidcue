@@ -79,6 +79,7 @@ import { onShortcut } from '../lib/shortcuts';
     retryMicrophone,
     takeReaderPreferenceSettings,
     takeReaderThemeSetting,
+    takeTeleprompterSettings,
     toggleBlankStage,
     togglePlayPause,
     toggleStageMirror,
@@ -1020,6 +1021,16 @@ import { onShortcut } from '../lib/shortcuts';
    */
   let readerThemeOnOpen: ReaderTheme | null = null;
   /**
+   * The size balance the take was running when the panel opened — the TAKE's,
+   * which may already differ from the saved one.
+   *
+   * Its own snapshot because `appearanceOnOpen` is the resolved geometry, and
+   * putting resolved geometry back does not put the balance back: on an
+   * automatic take the next recomposition would size the type from whatever
+   * balance was left behind.
+   */
+  let sizeBiasOnOpen: number | null = null;
+  /**
    * Which controls the panel opened with. Cancel undoes what THOSE controls
    * could have changed — and nothing else, so a prompter's Cancel stays the
    * single `applyStageAppearance` it has always been.
@@ -1083,6 +1094,19 @@ import { onShortcut } from '../lib/shortcuts';
   const stageSizedAutomatically = $derived(
     isAutomaticProfile($session.stageEnvelope?.stageSettings.opticalProfile),
   );
+  /**
+   * The size balance the glass is drawn at, off the RENDERED profile — so the
+   * sheet's slider shows what the panel is running, not what was saved.
+   */
+  const stageSizeBias = $derived(
+    stageSizedAutomatically ? ($session.stageEnvelope?.stageSettings.opticalProfile?.bias ?? null) : null,
+  );
+  /** The calibrated rig the take is running, by name, for the sheet's readout. */
+  const stageRigName = $derived(
+    $session.stageRigResolved && !stageSizedAutomatically
+      ? ($session.stageEnvelope?.stageSettings.opticalProfile?.rigName ?? null)
+      : null,
+  );
 
   /**
    * Open chrome owns the keyboard — see `chromeOpen` on the stage bridge.
@@ -1128,6 +1152,7 @@ import { onShortcut } from '../lib/shortcuts';
     appearanceOnOpen = $session.stageAppearance;
     readerOnOpen = takeReaderPreferenceSettings();
     readerThemeOnOpen = takeReaderThemeSetting();
+    sizeBiasOnOpen = takeTeleprompterSettings().sizeBias;
     surfaceOnOpen = readerSurface ? 'reader' : 'prompter';
     appearanceOpen = true;
   }
@@ -1137,6 +1162,7 @@ import { onShortcut } from '../lib/shortcuts';
     appearanceOnOpen = null;
     readerOnOpen = null;
     readerThemeOnOpen = null;
+    sizeBiasOnOpen = null;
     surfaceOnOpen = null;
   }
 
@@ -1146,13 +1172,15 @@ import { onShortcut } from '../lib/shortcuts';
    * The take is already running these values — every drag applied them — so
    * this writes and closes and changes nothing visible.
    *
-   * Nothing is written for a RIG-RESOLVED take. Its numbers came from the
-   * profile, not from these controls (the panel shows them read-only and offers
-   * no Done), and persisting them would copy one rig's measurements into the
-   * global defaults every uncalibrated take opens with.
+   * None of these five is written for a RIG-RESOLVED take. Its numbers came
+   * from the profile, not from these controls (the panel shows them read-only),
+   * and persisting them would copy one rig's measurements into the global
+   * defaults every uncalibrated take opens with. An automatic take's Done saves
+   * its size balance and nothing else — see `keepSizeBalance`.
    */
   async function keepAppearance(): Promise<void> {
     if (readerSurface) return keepReaderAppearance();
+    if ($session.stageRigResolved) return keepSizeBalance();
     const live = $session.stageAppearance;
     closeAppearanceSheet();
     /*
@@ -1172,13 +1200,35 @@ import { onShortcut } from '../lib/shortcuts';
         columnWidthPercent: live.columnWidthPercent,
         readingBandCenterPercent: live.readingBandCenterPercent,
       });
-      showToast('Prompter settings saved', 'info', { durationMs: 1600 });
+      // Named for the panel that made it, as a reading window's is.
+      showToast('Prompter appearance saved', 'info', { durationMs: 1600 });
     } catch {
       // `patchSettings` has already rolled the saved document back and toasted.
       // The TAKE keeps the appearance either way — it is the half the presenter
       // can see, and the half they asked for right now — so this says which of
       // the two survived rather than leaving the generic "nothing was changed"
       // standing over a stage that plainly did change.
+      showToast('Saved defaults were not changed. This take keeps its look.', 'danger');
+    }
+  }
+
+  /**
+   * Done, for an automatically sized prompter: the balance the take is running
+   * becomes the one every automatic display opens with — exactly what Settings'
+   * Size balance slider writes, and the only thing this panel let them change.
+   *
+   * The resolved size, width and spacing are deliberately NOT saved: they are
+   * this panel's answer to that balance, and written into the flat defaults
+   * they would restyle every take on a display nobody can size.
+   */
+  async function keepSizeBalance(): Promise<void> {
+    const bias = takeTeleprompterSettings().sizeBias;
+    closeAppearanceSheet();
+    if (Object.is(bias, $settings.teleprompter.sizeBias)) return;
+    try {
+      await patchSettings('teleprompter', { sizeBias: bias });
+      showToast('Prompter appearance saved', 'info', { durationMs: 1600 });
+    } catch {
       showToast('Saved defaults were not changed. This take keeps its look.', 'danger');
     }
   }
@@ -1249,7 +1299,10 @@ import { onShortcut } from '../lib/shortcuts';
         applyReaderTheme(readerThemeOnOpen, { restoring: true });
       }
     } else if (appearanceOnOpen) {
-      applyStageAppearance(appearanceOnOpen);
+      applyStageAppearance({
+        ...appearanceOnOpen,
+        ...(sizeBiasOnOpen === null ? {} : { sizeBias: sizeBiasOnOpen }),
+      });
     }
     closeAppearanceSheet();
   }
@@ -1525,6 +1578,10 @@ import { onShortcut } from '../lib/shortcuts';
     readerTheme={stageReaderTheme}
     rigResolved={$session.stageRigResolved}
     automatic={stageSizedAutomatically}
+    readingWindow={$session.stagePresentationMode === 'reader'}
+    sizeBias={stageSizeBias}
+    onsizebiaschange={(bias) => applyStageAppearance({ sizeBias: bias })}
+    rigName={stageRigName}
     maxFontSizePx={$session.stageFontCeilingPx}
     charactersPerLine={stageCharactersPerLine}
     onchange={(patch) => applyStageAppearance(patch)}
@@ -1849,11 +1906,17 @@ import { onShortcut } from '../lib/shortcuts';
         appearanceOpen,
         onappearanceopen: openAppearanceSheet,
         /*
-         * A click away, or Escape, means CANCEL — not "leave it as it is".
-         * The panel applies every drag to the running take on the way past, so
-         * a dismissal that merely closed would silently keep changes the
-         * operator never confirmed, with the button that would have undone
-         * them gone.
+         * The dock's own ways of putting the panel away mean CANCEL — not
+         * "leave it as it is". The panel applies every drag to the running take
+         * on the way past, so a dismissal that merely closed would silently
+         * keep changes the operator never confirmed, with the button that
+         * would have undone them gone.
+         *
+         * A click away and a second press of the dock's trigger are NOT among
+         * them any more: the dock answers both by calling the panel's attention
+         * and leaves it open, because reverting on them threw away tuning the
+         * operator had only clicked off to look at. Escape, Cancel and Done end
+         * the panel; see the sheet's header.
          */
         onappearanceclose: revertAppearance,
         onmeasurement: (measurement) => {

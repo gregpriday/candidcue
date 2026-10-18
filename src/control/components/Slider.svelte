@@ -3,6 +3,8 @@
   label + tabular value readout.
 -->
 <script lang="ts">
+  import type { Snippet } from 'svelte';
+
   interface Props {
     value: number;
     min: number;
@@ -33,6 +35,12 @@
     maxLabel?: string;
     disabled?: boolean;
     onchange?: (value: number) => void;
+    /**
+     * Controls that sit on the track's own row, after it — the appearance
+     * panel's −/+ steppers. The label and value row above keeps the full width,
+     * so the value lines up with every other slider's in the same column.
+     */
+    trailing?: Snippet;
   }
 
   let {
@@ -49,6 +57,7 @@
     maxLabel,
     disabled = false,
     onchange,
+    trailing,
   }: Props = $props();
 
   const uid = $props.id();
@@ -78,21 +87,31 @@
   </div>
   <!-- `aria-valuetext`: the formatted value is the meaning ("140 wpm", "38%"),
        and without it a screen reader announces the bare number. -->
-  <input
-    id={uid}
-    type="range"
-    {min}
-    {max}
-    {step}
-    {value}
-    {disabled}
-    style="--range-from: {fillFrom}%; --range-fill: {fillTo}%"
-    aria-valuetext={(spoken ?? format)(value)}
-    aria-describedby={[describedby, description ? `${uid}-description` : undefined]
-      .filter(Boolean)
-      .join(' ') || undefined}
-    oninput={handleInput}
-  />
+  {#snippet range()}
+    <input
+      id={uid}
+      type="range"
+      {min}
+      {max}
+      {step}
+      {value}
+      {disabled}
+      style="--range-from: {fillFrom}%; --range-fill: {fillTo}%"
+      aria-valuetext={(spoken ?? format)(value)}
+      aria-describedby={[describedby, description ? `${uid}-description` : undefined]
+        .filter(Boolean)
+        .join(' ') || undefined}
+      oninput={handleInput}
+    />
+  {/snippet}
+  {#if trailing}
+    <div class="track-row">
+      {@render range()}
+      {@render trailing()}
+    </div>
+  {:else}
+    {@render range()}
+  {/if}
   {#if minLabel || maxLabel}
     <div class="ends" aria-hidden="true">
       <span>{minLabel}</span>
@@ -140,6 +159,15 @@
     font-size: var(--text-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+  }
+  .track-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .track-row input {
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .ends {
     display: flex;
