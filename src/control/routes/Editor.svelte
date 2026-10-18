@@ -43,7 +43,7 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import { voiceModelFinding } from '../lib/take-readiness';
   import { openSettingsWindow } from '../lib/open-settings';
   import { speechModelReadiness } from '../stores/speech-model-readiness';
-  import { continueFrom, describeStartPoint, snapToStart } from '../lib/take-start-point';
+  import { continueFrom, snapToStart, type StartPoint } from '../lib/take-start-point';
   import { partAt } from '../../shared/markdown/parts';
   import { listSessionRecords } from '../services/session-records';
   import { session } from '../stores/session';
@@ -737,6 +737,8 @@ import type { PresentationMode } from '../services/settings-types';
     sentences: result?.sentences ?? [],
     outline: result?.outline ?? [],
     totalTokens: result?.spokenWordCount ?? 0,
+    // So a start point is quoted as written, not in the aligner's lower case.
+    blocks: result?.blocks ?? [],
   });
 
   const caretStartPoint = $derived.by(() => {
@@ -796,7 +798,7 @@ import type { PresentationMode } from '../services/settings-types';
     startMenuItems(
       {
         hereTokenIndex: caretStartPoint?.tokenIndex ?? null,
-        hereLabel: caretStartPoint === null ? null : describeStartPoint(caretStartPoint),
+        hereLabel: startPlace(caretStartPoint),
         /*
          * §parts: starting at the caret starts the part the caret is IN.
          *
@@ -811,12 +813,21 @@ import type { PresentationMode } from '../services/settings-types';
          */
         herePart: caretStartPoint === null ? null : partAt(parts, caretStartPoint.tokenIndex),
         lastEndingTokenIndex: lastEndingPoint?.tokenIndex ?? null,
-        lastEndingLabel: lastEndingPoint === null ? null : lastEndingPoint.label,
+        lastEndingLabel: startPlace(lastEndingPoint),
         parts,
       },
       (tokenIndex, part) => void checkThenPresent(undefined, tokenIndex, false, part),
     ),
   );
+
+  /**
+   * What a start row's description names: the sentence's opening words, or the
+   * heading it opens on. The menu adds the part.
+   */
+  function startPlace(point: StartPoint | null): string | null {
+    if (point === null) return null;
+    return point.excerpt ?? point.label;
+  }
 
   /** Mark the first row of a run as the start of a named menu group. */
   function withGroup(items: PresentMenuItem[], heading: string): PresentMenuItem[] {
@@ -855,13 +866,13 @@ import type { PresentationMode } from '../services/settings-types';
      */
     {
       label: PRACTICE_LABEL,
-      description: 'Read it through in a window, following your voice. Nothing is reported.',
+      description: 'A rehearsal in a window · nothing is reported',
       group: {},
       onselect: () => void checkThenPresent(undefined, undefined, true),
     },
     {
       label: 'Review take setup…',
-      description: 'Check the model, microphone and display before opening the stage.',
+      description: 'Speech model, microphone and display',
       onselect: () => {
         const id = scriptId;
         void checkThenStart(id, { requested: true }, () => present(id));
@@ -2323,6 +2334,12 @@ import type { PresentationMode } from '../services/settings-types';
    * core; a line naming the panel is a convenience, and a squeezed one that
    * shows "Telepr…" is worse than none — it looks like a fault rather than a
    * readout. The readiness sheet still carries it at any width.
+   *
+   * Not even the shape alone, which was tried: at the 980px minimum "Reading
+   * window" costs the script title 35px, and the toolbar's actions never give
+   * up room (Toolbar.svelte), so a sixteen-character title was clipped
+   * mid-word. Inside the Present menu the tick and "same as clicking Present"
+   * answer the question at every width.
    */
   @media (max-width: 1100px) {
     .present-destination {

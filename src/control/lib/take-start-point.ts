@@ -25,7 +25,7 @@
  * beginning of a sentence, a heading, or an authored take marker. Pure, so the
  * snapping is testable without a stage, a compile or a window.
  */
-import type { OutlineNode, SentenceUnit } from '../../shared/contracts';
+import type { CompiledBlock, OutlineNode, SafeRenderNode, SentenceUnit } from '../../shared/contracts';
 
 /** Where a start point came from, which is what the UI has to explain. */
 export type StartPointKind = 'beginning' | 'section' | 'sentence' | 'marker' | 'last_ending';
@@ -36,6 +36,13 @@ export interface StartPoint {
   kind: StartPointKind;
   /** Human label — a heading, a marker name, or a truncated first phrase. */
   label: string;
+  /**
+   * For a sentence start, its opening words, quoted and as written — without
+   * the section `label` appends. The Present menu sets these beside the part
+   * the sentence is in, and the section name would be a second, competing
+   * answer to "where is this?".
+   */
+  excerpt?: string;
 }
 
 /** The beginning, which is what every take used to get whether it wanted it or not. */
@@ -50,6 +57,12 @@ export interface SnapInput {
   outline: OutlineNode[];
   /** Total spoken tokens, so a start past the end can be refused. */
   totalTokens: number;
+  /**
+   * The compiled blocks, for quoting a sentence as it was written. Optional:
+   * without them a sentence is quoted from its normalised text, which is
+   * lower-cased and unpunctuated — readable, but not the words on the page.
+   */
+  blocks?: readonly CompiledBlock[];
 }
 
 /**
@@ -126,10 +139,12 @@ export function snapToStart(token: number, input: SnapInput): StartPoint {
   // back at somebody who did not ask for a section.
   if (sentence.startTokenIndex === 0) return beginning();
 
+  const excerpt = quoteSentence(sentence, input.blocks);
   return {
     tokenIndex: sentence.startTokenIndex,
     kind: 'sentence',
-    label: describeSentence(sentence, headings),
+    label: describeSentence(sentence, headings, excerpt),
+    excerpt,
   };
 }
 
@@ -151,11 +166,95 @@ function lastAtOrBefore<T>(items: T[], target: number, key: (item: T) => number)
 }
 
 /** A sentence named by its section when it has one, so the label locates it. */
-function describeSentence(sentence: SentenceUnit, headings: OutlineNode[]): string {
+function describeSentence(sentence: SentenceUnit, headings: OutlineNode[], phrase: string): string {
   const heading = lastAtOrBefore(headings, sentence.startTokenIndex, (n) => n.startTokenIndex);
-  const words = sentence.normalizedText.trim().split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
-  const phrase = words === '' ? 'this sentence' : `“${words}…”`;
   return heading === null ? phrase : `${phrase} in ${heading.title}`;
+}
+
+/** How many words of a sentence a quotation carries. */
+const QUOTE_WORDS = 6;
+
+/**
+ * A sentence's opening words, quoted.
+ *
+ * From the compiled block when there is one, because that is the text the
+ * presenter wrote and is about to read: `normalizedText` is the aligner's form
+ * — lower-cased, unpunctuated, numbers spelled out — and quoting it back put
+ * “this is section five which covers…” beside a line that reads "This is
+ * section 5, which covers". The ellipsis is only for a sentence that was
+ * actually cut; a short one is quoted whole.
+ */
+function quoteSentence(sentence: SentenceUnit, blocks: readonly CompiledBlock[] | undefined): string {
+  const words = writtenWords(sentence, blocks) ?? sentence.normalizedText.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 'this sentence';
+  if (words.length <= QUOTE_WORDS) return `“${words.join(' ')}”`;
+  const cut = words.slice(0, QUOTE_WORDS).join(' ').replace(/[\s,;:.!?—–-]+$/u, '');
+  return `“${cut}…”`;
+}
+
+/**
+ * The sentence's words as written, or null when the block cannot say.
+ *
+ * A text node's `wordTokens` anchors each whitespace-separated word to its
+ * first spoken token, so a word belongs to the sentence when its anchor falls
+ * inside the sentence's range. An unspoken word between two that are (an em
+ * dash) is kept, so the quotation reads the way the line does.
+ *
+ * Words are rebuilt across node boundaries first. A link, a bold run or a code
+ * span ends one text node and starts another, and the full stop after
+ * `[Ready](…)` is a node of its own: taken node by node it became a separate
+ * "word", quoted as “Ready now .” and counted against the six. Pieces with no
+ * whitespace between them are one word, anchored where its first spoken piece
+ * is.
+ */
+function writtenWords(sentence: SentenceUnit, blocks: readonly CompiledBlock[] | undefined): string[] | null {
+  const block = blocks?.find((b) => b.id === sentence.blockId);
+  if (block === undefined) return null;
+
+  const visual: { text: string; token: number | null }[] = [];
+  let joined = false;
+  let anchored = false;
+  const visit = (nodes: readonly SafeRenderNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === 'link') {
+        visit(node.label);
+        continue;
+      }
+      if (node.type !== 'text') {
+        joined = false;
+        continue;
+      }
+      if (node.wordTokens !== undefined) anchored = true;
+      let word = 0;
+      for (const piece of node.text.split(/(\s+)/)) {
+        if (piece === '') continue;
+        if (/^\s+$/.test(piece)) {
+          joined = false;
+          continue;
+        }
+        const token = node.wordTokens?.[word] ?? null;
+        word += 1;
+        const last = visual[visual.length - 1];
+        if (joined && last !== undefined) {
+          last.text += piece;
+          last.token ??= token;
+        } else {
+          visual.push({ text: piece, token });
+        }
+        joined = true;
+      }
+    }
+  };
+  visit(block.renderNodes);
+  if (!anchored) return null;
+
+  const words: string[] = [];
+  let inside = false;
+  for (const { text, token } of visual) {
+    if (token !== null) inside = token >= sentence.startTokenIndex && token <= sentence.endTokenIndex;
+    if (inside) words.push(text);
+  }
+  return words.length > 0 ? words : null;
 }
 
 /**

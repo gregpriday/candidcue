@@ -32,7 +32,7 @@ async function presentInWindow(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'How to present' }).click();
   await page
     .getByRole('menu', { name: 'How to present' })
-    .getByRole('menuitemradio', { name: /Present in a window/ })
+    .getByRole('menuitemradio', { name: /Reading window/ })
     .click();
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready', {
     timeout: 20_000,
