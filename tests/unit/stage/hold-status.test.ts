@@ -103,7 +103,7 @@ describe('control loss is said at once, and outranks everything', () => {
   it('never names the A key, which is an intent sent to the window that died', () => {
     const status = resolveHoldStatus(held(0, { controlLost: true }));
     expect(status.hint).not.toBe(HOLD_FAULT_HINT);
-    expect(status.hint).not.toContain('Press A');
+    expect(status.hint?.keys).not.toContain('A');
   });
 
   it('keeps its hint even when the last transport flag said it was running', () => {
@@ -179,7 +179,7 @@ describe('what the message rung says', () => {
       'Finding your place',
     );
     expect(resolveHoldStatus(held(4000, { alignmentState: 'ambiguous' })).message).toBe(
-      'Two matching places — holding here',
+      'Two matching places',
     );
   });
 

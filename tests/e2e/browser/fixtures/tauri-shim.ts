@@ -89,6 +89,15 @@ export interface ShimConfig {
    */
   windowDisplay?: string;
   /**
+   * Replace the second panel, `dsp-e2e-prompter`, with one of these sizes.
+   *
+   * Unset, it is an unnamed 1920x1080 with no physical size: a panel the
+   * optical model cannot identify, so a take on it gets the flat fallback type.
+   * A 1024x600 grid is the 9-inch Elgato and resolves the profile a real rig
+   * prompts with — which is the only honest size to judge stage chrome at.
+   */
+  prompterPanel?: { width: number; height: number; name?: string };
+  /**
    * Hold a SUCCESSFUL list_displays open for this long, from BEFORE the app
    * boots.
    *
@@ -298,11 +307,17 @@ function shimBody(config: ShimConfig): void {
     },
     {
       id: 'display-1',
-      name: 'Teleprompter Display',
+      name: config.prompterPanel?.name ?? 'Teleprompter Display',
       physicalPosition: { x: 3024, y: 0 },
-      physicalSize: { width: 1920, height: 1080 },
+      physicalSize: {
+        width: config.prompterPanel?.width ?? 1920,
+        height: config.prompterPanel?.height ?? 1080,
+      },
       scaleFactor: 1,
-      logicalSize: { width: 1920, height: 1080 },
+      logicalSize: {
+        width: config.prompterPanel?.width ?? 1920,
+        height: config.prompterPanel?.height ?? 1080,
+      },
       primary: false,
       fingerprint: 'dsp-e2e-prompter',
       topologyHash: 'top-e2e',

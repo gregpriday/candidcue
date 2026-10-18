@@ -204,7 +204,7 @@ describe('control stops answering', () => {
     await settle();
 
     const text = chip(container)?.textContent ?? '';
-    expect(text).toContain(CONTROL_LOST_HINT);
+    expect(text).toContain(CONTROL_LOST_HINT.spoken);
     /*
      * `HOLD_FAULT_HINT` names the A key, and A is `auto_scroll_toggle` — an
      * intent, sent to control, which is the component that has stopped

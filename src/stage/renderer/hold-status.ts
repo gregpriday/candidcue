@@ -115,20 +115,35 @@ export interface HoldStatusInput {
   autoScrollRunning?: boolean;
 }
 
+/**
+ * What the presenter can DO about a hold that will not clear itself.
+ *
+ * Drawn as a key legend — the key as a cap, then two or three words for what it
+ * does — because the presenter acquires it in a glance from a camera and the
+ * key is the part they act on. A sentence put the key fourth of eight words.
+ * `spoken` is the same advice as a sentence, for a screen reader, which would
+ * otherwise announce a bare "A, Auto-scroll".
+ */
+export interface HoldHint {
+  keys: readonly string[];
+  action: string;
+  spoken: string;
+}
+
 export interface HoldStatus {
   rung: HoldRung;
   /** The sentence for the `message` rung; null on every other rung. */
   message: string | null;
   tone: HoldTone;
   /**
-   * A quieter second line naming what the presenter can DO, or null.
+   * A second line naming what the presenter can DO, or null.
    *
    * Separate from `message` because they are different kinds of sentence and
    * the chip draws them differently: the message names a condition, this names
    * a key. Keeping them apart is also what stops the hint being spoken as part
    * of the condition by a screen reader every time the fault text changes.
    */
-  hint: string | null;
+  hint: HoldHint | null;
   /**
    * Draw the chip as a mark rather than a sentence.
    *
@@ -165,10 +180,15 @@ export interface HoldStatus {
  * which stepping the script by arrow keys does not.
  *
  * It names the key rather than describing the feature because the presenter is
- * READING; six words they can act on beats a sentence explaining what auto
- * scrolling is.
+ * READING; a key and one word they can act on beats a sentence explaining what
+ * auto scrolling is.
  */
-export const HOLD_FAULT_HINT = 'Press A to scroll at a set pace';
+export const HOLD_FAULT_HINT: HoldHint = {
+  keys: ['A'],
+  // The shortcuts sheet's and the toasts' own name for what A does.
+  action: 'Auto-scroll',
+  spoken: 'Press A to auto-scroll',
+};
 
 /**
  * The control window has stopped answering.
@@ -206,7 +226,12 @@ export const CONTROL_LOST_MESSAGE = 'Control stopped responding';
  * this is the only sentence on the glass that stays honest through a control
  * loss.
  */
-export const CONTROL_LOST_HINT = 'Use ↑/↓ to move the script';
+export const CONTROL_LOST_HINT: HoldHint = {
+  keys: ['↑', '↓'],
+  // The shortcuts sheet's "Move the script one line", without the unit.
+  action: 'Move the script',
+  spoken: 'Use the up and down arrow keys to move the script',
+};
 
 /**
  * The sentence each state earns once it has held long enough to earn one.
@@ -218,12 +243,14 @@ export const CONTROL_LOST_HINT = 'Use ↑/↓ to move the script';
  * `ambiguous` is deliberately NOT worded as a failure. "Two matching places" is
  * a fact the presenter can act on in about a second — read a distinctive phrase,
  * or move the text by hand — where "holding" alone would send them looking for a
- * microphone problem that does not exist.
+ * microphone problem that does not exist. It no longer adds "— holding here":
+ * the stopped text and the hollow cue have said that already, and the three
+ * extra words were what wrapped the chip onto a third row on a 9-inch panel.
  */
 export const HOLD_MESSAGES: Record<AlignmentState, string | null> = {
   holding: 'Holding here',
   searching: 'Finding your place',
-  ambiguous: 'Two matching places — holding here',
+  ambiguous: 'Two matching places',
   following: null,
 };
 

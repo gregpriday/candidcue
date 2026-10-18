@@ -96,7 +96,7 @@
   /*
    * Said as the glass says it. A take with nothing following the voice does
    * NOT roll on its own — it holds until it is scrolled, or until A starts the
-   * set-pace scroll (the stage's own "Press A to scroll at a set pace").
+   * set-pace scroll (the stage's own "A — Auto-scroll" hint).
    */
   const voiceLost = $derived(tone === 'warning' && findings.some((f) => VOICE_LOST.has(f.id)));
 
