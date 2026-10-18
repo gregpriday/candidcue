@@ -67,6 +67,11 @@
   /* Reading measure for editors / transcripts. */
   --prose-measure: 70ch;
   --prose-measure-narrow: 52ch;
+  /* The Markdown editor's column. Shorter than --prose-measure because `ch` is
+     the width of a zero, and prose runs narrower than digits: 70ch of the
+     system face set about 85 characters a line, past the 65-75 a long read
+     wants. 62ch, inside the editor's own line insets, sets about 75. */
+  --editor-measure: 62ch;
 
   /* ---- Geometry ----
 
@@ -353,6 +358,10 @@
   --prose-text-warm: #e8ecf5;
   --prose-secondary-warm: #c5ccd8;
   --prose-muted-warm: #9aa5b5;
+  /* The Markdown editor's drawn selection. It renders only on the workspace
+     theme; these keep the pair defined and in proportion here. */
+  --editor-selection: rgba(224, 138, 99, 0.22);
+  --editor-selection-inactive: rgba(255, 255, 255, 0.08);
 
   --selection: rgba(224, 138, 99, 0.22);
 }
@@ -501,6 +510,17 @@
   --prose-text-warm: #2a2b30;
   --prose-secondary-warm: #4f535c;
   --prose-muted-warm: #6b707a;
+  /*
+   * The Markdown editor's drawn selection, focused and not.
+   *
+   * A step stronger than --selection, which tints incidental selections of UI
+   * text: here selecting is half the work. 0.2 is the ceiling, because the
+   * editor's punctuation (--text-faint) sits on it and keeps 4.53:1 there.
+   * The inactive tint is neutral, as a Mac shows a selection in a view that
+   * does not have the keyboard; --text-faint keeps 4.77:1 on it.
+   */
+  --editor-selection: rgba(183, 94, 59, 0.2);
+  --editor-selection-inactive: rgba(24, 25, 29, 0.1);
 
   --selection: rgba(183, 94, 59, 0.16);
 }
