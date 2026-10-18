@@ -250,7 +250,9 @@ describe('a named fault', () => {
     });
     await settle();
 
-    expect(chip(container)?.querySelector('.hint')?.textContent?.trim()).toBe(HOLD_FAULT_HINT);
+    expect(chip(container)?.querySelector('.hint .sr-only')?.textContent?.trim()).toBe(
+      HOLD_FAULT_HINT.spoken,
+    );
   });
 
   it('is reported on a stage that has never received a single snapshot', async () => {

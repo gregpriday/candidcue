@@ -90,6 +90,7 @@
   import StageDock from './StageDock.svelte';
   import {
     resolveHoldStatus,
+    type HoldHint,
     type HoldRung,
     type HoldStatus as HoldStatusReading,
     type HoldTone,
@@ -925,6 +926,22 @@
 
   const alignmentState = $derived(app.alignment?.state ?? null);
   /**
+   * Where the chip's top edge sits, when the shared inset would collide.
+   *
+   * In single-window presentation the host draws its "Take controls" tab in the
+   * window's top-right corner, unmirrored — and a horizontally mirrored stage
+   * puts the chip in exactly that corner, under the tab, with the condition's
+   * first word behind it. So on that one path the chip starts below the tab,
+   * measured in the host's own tokens (the tab is `top: var(--space-4)` and
+   * `--button-h` tall) so the two cannot drift apart. A standalone stage window
+   * has no tab, and an unmirrored chip is in the other corner.
+   */
+  const holdChipTop = $derived(
+    embedded && settings?.mirrorX
+      ? 'calc(var(--space-4, 16px) + var(--button-h, 32px) + 8px)'
+      : undefined,
+  );
+  /**
    * The watchdog has frozen the stage because control stopped answering.
    *
    * Narrowed to the watchdog's own reason rather than reading `app.frozen`,
@@ -960,7 +977,7 @@
   let ladderRung: HoldRung | null = null;
   let ladderMessage: string | null = null;
   let ladderTone: HoldTone = 'neutral';
-  let ladderHint: string | null = null;
+  let ladderHint: HoldHint | null = null;
 
   function refreshHoldStatus() {
     const state = alignmentState;
@@ -2394,6 +2411,7 @@
         style:left="{safeInsets.x}%"
         style:width="{safeInsets.width}%"
         style:height="{safeInsets.height}%"
+        style:--stage-hold-top={holdChipTop}
       >
         <!-- Layer 7: transient command acknowledgement (§33.10). -->
         {#if (settings?.stageAcknowledgements ?? true) && !app.blanked}
@@ -2420,6 +2438,7 @@
             glyph={holdStatus.glyph}
             hint={holdStatus.hint}
             secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
+            {reducedMotion}
           />
         {/if}
 
