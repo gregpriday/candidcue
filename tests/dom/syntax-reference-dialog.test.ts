@@ -55,9 +55,13 @@ describe('SyntaxReferenceDialog', () => {
       // would show up here as missing characters.
       expect(el.querySelector('pre code')?.textContent).toBe(entry.example);
       expect(el.querySelector('h4')?.textContent?.trim()).toBe(entry.title);
-      const descriptions = [...el.querySelectorAll('dd')].map((dd) => dd.textContent?.trim());
-      expect(descriptions).toEqual([entry.glass, entry.following]);
-      if (entry.note) expect(el.textContent).toContain(entry.note);
+      // The prose marks syntax with backticks, which the page sets as code.
+      const plain = (text: string) => text.replaceAll('`', '');
+      const captions = [...el.querySelectorAll('.outcome .caption')].map((p) =>
+        p.textContent?.trim(),
+      );
+      expect(captions).toEqual([plain(entry.glass), plain(entry.following)]);
+      for (const note of entry.notes ?? []) expect(el.textContent).toContain(plain(note));
     }
     // Nothing in an example became markup: no bold from `**`, no image from `![]()`.
     expect(panel.querySelector('pre strong, pre img, pre em')).toBeNull();

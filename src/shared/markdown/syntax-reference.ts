@@ -14,15 +14,20 @@
  * So every displayed `example` states what compiling it produces (`expect`):
  * the words following listens for, the text left on the glass, the cues, the
  * diagnostics, the parts, and what a take swaps in for media. Every claim a
- * `note` makes about another form is a `case` with its own source and outcome.
- * `syntax-reference.test.ts` compiles all of them with the real `compile()` and
- * fails on any difference, and it also fails when the compiler gains a
- * container, a shorthand cue, a take-time label or a diagnostic this file does
- * not account for.
+ * `notes` line makes about another form is a `case` with its own source and
+ * outcome. `syntax-reference.test.ts` compiles all of them with the real
+ * `compile()` and fails on any difference, and it also fails when the compiler
+ * gains a container, a shorthand cue, a take-time label or a diagnostic this
+ * file does not account for.
+ *
+ * The reference page shows the asserted facts rather than retelling them: the
+ * words following listens for are `expect.spoken`, and what a case breaks is
+ * read from its own `blocking`. The glass itself is drawn by compiling the
+ * example, so the page cannot show a look the compiler does not produce.
  *
  * What a test cannot read is prose. `glass` and `following` are kept to a line
- * each so there is little in them to go stale, and the strings that DO come
- * from the code — the take-time cue labels — are interpolated from it.
+ * each so there is little in them to go stale. Syntax inside prose sits in
+ * backticks, which the page sets as code.
  *
  * The retired coaching syntax is deliberately absent; it is being removed, and
  * documenting it would invite new scripts to depend on it.
@@ -57,6 +62,18 @@ export interface SyntaxCase extends SyntaxOutcome {
   /** What this case proves, for the test's name. */
   what: string;
   source: string;
+  /**
+   * Another way to write the construct, named in a word or two. The page
+   * offers it beside the example, drawn and copied the same way, so a case
+   * with a `variant` also asserts `spoken`.
+   */
+  variant?: string;
+  /**
+   * What goes wrong, in the reader's words, for a case that raises a
+   * diagnostic. The page says whether it warns or stops the script being
+   * presented from `blocking`, so a case with a `problem` asserts `blocking`.
+   */
+  problem?: string;
 }
 
 export interface SyntaxEntry {
@@ -64,20 +81,30 @@ export interface SyntaxEntry {
   title: string;
   /** Script source, shown exactly as written. */
   example: string;
-  /** What the presenter sees. */
+  /** What the presenter sees, beside the example drawn as a take draws it. */
   glass: string;
-  /** What following does with it. */
+  /** What following does with it, beside the words it listens for. */
   following: string;
-  note?: string;
+  /** The example's own name among the entry's `variant` cases, when it has any. */
+  form?: string;
+  /** Rules for writing it, a sentence each. */
+  notes?: readonly string[];
+  /**
+   * Words a writer might search with that the entry's own text does not
+   * contain: what they want to do rather than what the construct is called.
+   */
+  keywords?: readonly string[];
   /** Asserted against `example`. */
   expect: SyntaxOutcome;
-  /** Each claim `note` makes, proved on its own source. */
+  /** Each claim `notes` makes, proved on its own source. */
   cases?: SyntaxCase[];
 }
 
 export interface SyntaxGroup {
   id: string;
   title: string;
+  /** Said once for every entry in the group, rather than in each. */
+  note?: string;
   entries: SyntaxEntry[];
 }
 
@@ -89,8 +116,7 @@ export const READ_HEADINGS_SETTING = {
 
 const READ_HEADINGS_PATH = `Settings › ${READ_HEADINGS_SETTING.section} › ${READ_HEADINGS_SETTING.label}`;
 
-const IN_FULL_ELSEWHERE =
-  'Shown in full in a reading window, in the preview, in practice and in a Diagnostic Take.';
+const SKIPPED = 'Following moves straight past it.';
 
 export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
   {
@@ -101,9 +127,9 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'cue',
         title: 'Cue',
         example: '[Cue: look at the lens] Welcome back.',
-        glass: 'Shows the note as a cue where you wrote it.',
-        following: 'Not spoken. Following carries on with the next word.',
-        note: 'A cue with no label stays on the page as typed, with a warning.',
+        glass: 'A note to yourself, drawn where you wrote it.',
+        following: 'The cue is skipped.',
+        keywords: ['note', 'direction', 'reminder', 'camera', 'lens', 'smile', 'gesture'],
         expect: {
           spoken: ['welcome', 'back'],
           shown: 'Welcome back.',
@@ -113,6 +139,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'an empty cue is shown as source and warns',
+            problem: 'A cue with no label, `[Cue:]`, stays on the page as typed.',
             source: '[Cue:] Welcome back.',
             spoken: ['welcome', 'back'],
             shown: '[Cue:] Welcome back.',
@@ -126,9 +153,10 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'shorthand-cues',
         title: 'Pause, Beat, Breathe',
         example: 'First point. [Beat] Second point. [Pause] Last one. [Breathe]',
-        glass: 'Shows a short marker where you wrote it.',
-        following: 'Not spoken. Following carries on with the next word.',
-        note: 'The names are not case-sensitive: [beat] works too.',
+        glass: 'A short marker, drawn where you wrote it.',
+        following: 'The markers are skipped.',
+        notes: ['The names are not case-sensitive: `[beat]` works too.'],
+        keywords: ['wait', 'rest', 'breath', 'gap', 'silence', 'timing'],
         expect: {
           spoken: ['first', 'point', 'second', 'point', 'last', 'one'],
           cues: [
@@ -164,11 +192,16 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'take',
         title: 'Part break',
         example: '[Take: Opening]\n\nWelcome to the show.\n\n[Take: Demo]\n\nHere is how it works.',
-        glass: 'Shows the part name as a marker.',
+        glass: 'Each part name, as a marker.',
         following:
-          'Not spoken. Divides the script into parts the Present menu can start one at a time.',
-        note:
-          'Part breaks with words after them win over headings. Without any, the script is divided at its biggest headings, and any text before the first one is an opening part; a script that comes out as one part is not divided. A --- line only draws a divider. A part break needs a name, and a nameless one stops the script being presented; give each part a different name.',
+          'The names are skipped. The Present menu can start each part on its own.',
+        notes: [
+          'Part breaks with words after them win over headings.',
+          'Without any, the biggest headings divide the script, and text before the first one is an opening part.',
+          'A script that comes out as one part is not divided.',
+          'A `---` line only draws a divider.',
+        ],
+        keywords: ['split', 'section', 'chapter', 'segment', 'divide', 'present menu'],
         expect: {
           spoken: ['welcome', 'to', 'the', 'show', 'here', 'is', 'how', 'it', 'works'],
           cues: [
@@ -219,6 +252,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
           },
           {
             what: 'a part break without a name blocks presenting',
+            problem: 'A part break with no name, `[Take:]`.',
             source: '[Take:]\n\nWelcome to the show.',
             spoken: ['welcome', 'to', 'the', 'show'],
             diagnostics: ['directive_take_empty'],
@@ -226,6 +260,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
           },
           {
             what: 'two parts with one name warn',
+            problem: 'Two parts with the same name.',
             source: '[Take: Intro]\n\nWelcome to the show.\n\n[Take: Intro]\n\nHere is how it works.',
             diagnostics: ['take_duplicate_name'],
             blocking: false,
@@ -242,10 +277,14 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'say-alias',
         title: 'Spoken form of a word',
         example: 'The API{say="A P I"} is fast.',
-        glass: 'Shows the word before the braces.',
-        following: 'Follows you saying the words in say="…" instead.',
-        note:
-          'It applies to the single word right before the brace, and the quotes must be double quotes. Use :::spoken for anything longer.',
+        glass: 'Only the word before the braces.',
+        following: 'The `say` words stand in for the word.',
+        notes: [
+          'It covers the single word right before the brace.',
+          "The quotes must be double quotes: `{say='…'}` stays on the page as typed.",
+          'For anything longer, use a spoken block.',
+        ],
+        keywords: ['pronounce', 'pronunciation', 'acronym', 'abbreviation', 'alias', 'read as', 'sounds like'],
         expect: {
           spoken: ['the', 'a', 'p', 'i', 'is', 'fast'],
           shown: 'The API is fast.',
@@ -254,6 +293,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'an empty spoken form warns',
+            problem: 'An empty spoken form, `{say=""}`.',
             source: 'The API{say=""} is fast.',
             diagnostics: ['directive_say_empty'],
             blocking: false,
@@ -270,9 +310,10 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'spoken-block',
         title: 'Spoken block',
         example: ':::spoken\nvisual: Q3 revenue: $4.2M\nsay: third quarter revenue was four point two million\n:::',
-        glass: 'Shows the visual: line.',
-        following: 'Follows you saying the say: line.',
-        note: 'Both lines are needed. Without them the block shows as source and stops the script being presented.',
+        glass: 'Only the `visual:` line.',
+        following: 'The `say:` line stands in for the `visual:` line.',
+        notes: ['Both lines are needed.'],
+        keywords: ['pronounce', 'numbers', 'figures', 'money', 'currency', 'read as', 'sounds like'],
         expect: {
           spoken: ['third', 'quarter', 'revenue', 'was', 'four', 'point', 'two', 'million'],
           shown: 'Q3 revenue: $4.2M',
@@ -281,6 +322,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'a spoken block without a say: line blocks presenting',
+            problem: 'A spoken block missing a line, which then shows as typed.',
             source: ':::spoken\nvisual: Q3 revenue: $4.2M\n:::',
             spoken: [],
             shown: ':::spoken visual: Q3 revenue: $4.2M :::',
@@ -299,8 +341,9 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'silent',
         title: 'Silent block',
         example: ':::silent\nCut to the screen recording here.\n:::',
-        glass: 'Shown on the glass, set apart from the script.',
-        following: 'Never spoken or followed.',
+        glass: 'Shown quietly, set apart from the script.',
+        following: SKIPPED,
+        keywords: ['note', 'private', 'comment', 'direction', 'reminder', 'unspoken', 'quiet'],
         expect: {
           spoken: [],
           shown: 'Cut to the screen recording here.',
@@ -311,23 +354,25 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
       {
         id: 'stage',
         title: 'Stage block',
-        example: ':::stage\nKey result: **42% faster**\n:::',
-        glass: 'Shown on the glass for you. Images, tables, code and diagrams inside one are not swapped for a one-line cue during a take.',
-        following: 'Never spoken or followed.',
+        example: ':::stage\n| Plan | Price |\n| --- | --- |\n| Pro | 12 |\n:::',
+        glass:
+          'Shown quietly, and a table, image, code or diagram inside one stays in full during a take.',
+        following: SKIPPED,
+        keywords: ['note', 'private', 'slide', 'figure', 'stat', 'unspoken', 'glance'],
         expect: {
           spoken: [],
-          shown: 'Key result: 42% faster',
+          shown: 'Plan Price Pro 12',
           blockKinds: ['stage_only'],
+          takeCues: [],
           diagnostics: [],
         },
         cases: [
           {
-            what: 'a table inside a stage block is not replaced in a take',
-            source: ':::stage\n| Plan | Price |\n| --- | --- |\n| Pro | 12 |\n:::',
+            what: 'a stage block holds any text for you',
+            source: ':::stage\nKey result: **42% faster**\n:::',
             spoken: [],
-            shown: 'Plan Price Pro 12',
+            shown: 'Key result: 42% faster',
             blockKinds: ['stage_only'],
-            takeCues: [],
             diagnostics: [],
           },
         ],
@@ -337,11 +382,14 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         title: 'Nesting and closing',
         example:
           ':::stage\nSlide four.\n\n:::spoken\nvisual: $4.2M\nsay: four point two million\n:::\n:::',
-        glass: 'A bare ::: closes the block opened most recently, so blocks can sit inside each other.',
+        glass: 'Each block keeps its own look inside another.',
         following:
           'An outer silent or stage block keeps everything inside it unspoken, except a spoken block.',
-        note:
-          'Fence lines start at the beginning of a line. A silent or spoken block left open stops the script being presented; any other block left open, an unknown name or a stray ::: gets a warning.',
+        notes: [
+          'A bare `:::` closes the block opened most recently.',
+          'Fence lines start at the beginning of a line.',
+        ],
+        keywords: ['nest', 'inside', 'close', 'closing', 'end', 'fence', 'colons'],
         expect: {
           spoken: ['four', 'point', 'two', 'million'],
           shown: 'Slide four. $4.2M',
@@ -363,25 +411,31 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
           },
           {
             what: 'an unclosed stage block warns',
+            problem: 'Any other block left open.',
             source: ':::stage\nKey result.',
             diagnostics: ['directive_unclosed'],
             blocking: false,
           },
           {
             what: 'an unclosed silent block blocks presenting',
+            problem: 'A silent or spoken block left open.',
             source: ':::silent\nKey result.',
             diagnostics: ['directive_unclosed'],
             blocking: true,
           },
           {
             what: 'an unknown block name is reported and kept as text',
+            problem: 'An unknown block name, like `:::aside`.',
             source: ':::aside\nKey result.\n:::',
             diagnostics: ['directive_unknown'],
+            blocking: false,
           },
           {
             what: 'a ::: with nothing open is reported',
+            problem: 'A `:::` with no block open.',
             source: 'Key result.\n\n:::',
             diagnostics: ['directive_stray_fence'],
+            blocking: false,
           },
         ],
       },
@@ -397,7 +451,8 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         example: ':::literal-command\nThanks for trying CandidCue.\n:::',
         glass: 'Shown like any other text.',
         following:
-          'Spoken and followed as normal. It tells the editor the wake phrase CandidCue is meant to be read aloud, so it stops warning about it.',
+          'Read as normal, and the editor stops warning that CandidCue is the wake phrase.',
+        keywords: ['wake word', 'command', 'read aloud', 'brand', 'product name'],
         expect: {
           spoken: ['thanks', 'for', 'trying', 'candidcue'],
           shown: 'Thanks for trying CandidCue.',
@@ -406,6 +461,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'the same sentence outside the block warns',
+            problem: 'The same sentence outside the block.',
             source: 'Thanks for trying CandidCue.',
             diagnostics: ['command_collision'],
             blocking: false,
@@ -416,9 +472,13 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'escape',
         title: 'Brackets as text',
         example: 'Type \\[Pause] to add a pause.',
-        glass: 'Shows [Pause] as written, without the backslash.',
-        following: 'Spoken and followed as ordinary words.',
-        note: 'A backslash before the bracket keeps any directive as plain text. Brackets that are not directives, like [sic], are plain text already.',
+        glass: 'The brackets as written, without the backslash.',
+        following: 'Read as ordinary words.',
+        notes: [
+          'A backslash before the bracket keeps any directive as plain text.',
+          'Brackets that are not directives, like `[sic]`, are plain text already.',
+        ],
+        keywords: ['escape', 'backslash', 'literal', 'square brackets', 'plain'],
         expect: {
           spoken: ['type', 'pause', 'to', 'add', 'a', 'pause'],
           shown: 'Type [Pause] to add a pause.',
@@ -440,14 +500,16 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
   {
     id: 'media',
     title: 'Images, tables, code and diagrams',
+    note: 'In a teleprompter take, each of these becomes a one-line cue. A reading window, the preview, practice and a Diagnostic Take show them in full.',
     entries: [
       {
         id: 'image',
         title: 'Image',
         example: '![Product shot](images/product.png)',
-        glass: `On a line of its own, in a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.image} cue. ${IN_FULL_ELSEWHERE}`,
-        following: 'Not spoken.',
-        note: 'Images must be files added to the script. Web addresses are not loaded.',
+        glass: 'On a line of its own, this cue in a take.',
+        following: SKIPPED,
+        notes: ['Images must be files added to the script.'],
+        keywords: ['picture', 'photo', 'screenshot', 'png', 'media', 'file'],
         expect: {
           spoken: [],
           blockKinds: ['image'],
@@ -457,6 +519,7 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         cases: [
           {
             what: 'a remote image is not loaded',
+            problem: 'A web address, which is not loaded.',
             source: '![Product shot](https://example.com/product.png)',
             diagnostics: ['remote_image_blocked'],
             blocking: false,
@@ -467,8 +530,9 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'table',
         title: 'Table',
         example: '| Plan | Price |\n| --- | --- |\n| Pro | 12 |',
-        glass: `In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.table} cue. ${IN_FULL_ELSEWHERE}`,
-        following: 'Not spoken.',
+        glass: 'This cue in a take.',
+        following: SKIPPED,
+        keywords: ['grid', 'rows', 'columns', 'data', 'pipes', 'media'],
         expect: {
           spoken: [],
           blockKinds: ['table'],
@@ -480,8 +544,9 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'code',
         title: 'Code',
         example: '```js\nconsole.log("hello");\n```',
-        glass: `In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.code} cue. ${IN_FULL_ELSEWHERE}`,
-        following: 'Not spoken.',
+        glass: 'This cue in a take.',
+        following: SKIPPED,
+        keywords: ['snippet', 'program', 'backticks', 'fence', 'demo', 'media'],
         expect: {
           spoken: [],
           blockKinds: ['code'],
@@ -493,8 +558,10 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'diagram',
         title: 'Diagram',
         example: '```mermaid\ngraph LR\n  Idea --> Script\n```',
-        glass: `A mermaid fence marks a diagram; its source is what shows. In a teleprompter take: a one-line ${PERFORMANCE_CUE_LABELS.diagram} cue. ${IN_FULL_ELSEWHERE}`,
-        following: 'Not spoken.',
+        glass: 'This cue in a take. Elsewhere, its source is what shows.',
+        following: SKIPPED,
+        notes: ['A `mermaid` fence marks a diagram.'],
+        keywords: ['chart', 'flowchart', 'graph', 'media'],
         expect: {
           spoken: [],
           blockKinds: ['diagram'],
@@ -512,8 +579,9 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'heading',
         title: 'Heading',
         example: '# Pricing\n\nIt starts at twelve dollars.',
-        glass: 'Shown as a heading.',
-        following: `Not spoken, unless ${READ_HEADINGS_PATH} is on when the take starts.`,
+        glass: 'A quiet label on the glass. A reading window and the preview show it as a heading.',
+        following: `The heading is skipped, unless ${READ_HEADINGS_PATH} is on when the take starts.`,
+        keywords: ['title', 'section', 'headline', 'hash'],
         expect: {
           spoken: ['it', 'starts', 'at', 'twelve', 'dollars'],
           blockKinds: ['heading', 'paragraph'],
@@ -532,10 +600,15 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         id: 'text',
         title: 'Text, lists and links',
         example: '- Works **offline**\n- Read [the guide](https://example.com) first',
-        glass: 'Shown with its formatting. Links are not clickable on the glass.',
-        following: 'Spoken and followed. A link is read by its text, never its address.',
-        note:
-          'Quotes are read too. Inline `code` is shown but not spoken, and an HTML comment (<!-- like this -->) is a note to yourself that appears nowhere.',
+        form: 'List',
+        glass: 'Your formatting. Links are not clickable on the glass.',
+        following: 'A link is read by its text, never its address.',
+        notes: [
+          'Emphasis and quotes are read like any other text.',
+          'Text between backticks is shown as code but not spoken.',
+          'An HTML comment, `<!-- like this -->`, is a note to yourself that appears nowhere.',
+        ],
+        keywords: ['bold', 'italic', 'emphasis', 'list', 'bullet', 'url', 'quote', 'formatting', 'comment', 'inline code'],
         expect: {
           spoken: ['works', 'offline', 'read', 'the', 'guide', 'first'],
           shown: 'Works offline Read the guide first',
@@ -544,13 +617,23 @@ export const SYNTAX_REFERENCE: readonly SyntaxGroup[] = [
         },
         cases: [
           {
+            what: 'emphasis is read',
+            variant: 'Italic',
+            source: 'Read it *slowly*.',
+            spoken: ['read', 'it', 'slowly'],
+            shown: 'Read it slowly.',
+            diagnostics: [],
+          },
+          {
             what: 'a quote is read',
+            variant: 'Quote',
             source: '> Teleprompters should listen.',
             spoken: ['teleprompters', 'should', 'listen'],
             blockKinds: ['blockquote'],
           },
           {
             what: 'inline code is shown but not spoken',
+            variant: 'Inline code',
             source: 'Run `npm install` first.',
             spoken: ['run', 'first'],
             shown: 'Run npm install first.',
