@@ -104,18 +104,21 @@ describe('recovery reports a database failure without frightening the user', () 
     expect(ipc.calls.map((c) => c.command)).toEqual(['get_boot_status']);
   });
 
-  it('says the scripts are safe, because they are separate files', async () => {
+  it('says the scripts are safe, because they are separate files', () => {
     /*
      * The single most useful sentence this screen can carry. Script content
      * lives in Markdown files and those files are the authority (§48.1) — a
      * database failure does not touch them. Without saying so, "CandidCue
      * could not open its database" reads as "your work is gone".
+     *
+     * The screen says it once, above every failure's own explanation, rather
+     * than each explanation repeating it.
      */
-    const { describeBootFailure } = await import('../../../src/control/services/recovery');
-    for (const code of ['DATABASE_CORRUPT', 'DATABASE_MIGRATION_FAILED', 'DATABASE_BACKUP_REQUIRED']) {
-      const copy = describeBootFailure({ databaseReady: false, code, dataDirectory: '' });
-      expect(copy, `${code} must say the scripts are unaffected`).toMatch(/unaffected/i);
-    }
+    const recoverySource = readFileSync(
+      new URL('../../../src/control/routes/Recovery.svelte', import.meta.url),
+      'utf8',
+    );
+    expect(recoverySource).toMatch(/Your scripts are safe/);
   });
 
   it('distinguishes the three failures rather than saying one thing', async () => {
@@ -129,8 +132,8 @@ describe('recovery reports a database failure without frightening the user', () 
     const at = (code: string) =>
       describeBootFailure({ databaseReady: false, code, dataDirectory: '' });
 
-    expect(at('DATABASE_CORRUPT')).toMatch(/integrity check/i);
-    expect(at('DATABASE_MIGRATION_FAILED')).toMatch(/upgrade/i);
+    expect(at('DATABASE_CORRUPT')).toMatch(/damage/i);
+    expect(at('DATABASE_MIGRATION_FAILED')).toMatch(/update/i);
     expect(at('DATABASE_BACKUP_REQUIRED')).toMatch(/disk|permission/i);
 
     const all = new Set([

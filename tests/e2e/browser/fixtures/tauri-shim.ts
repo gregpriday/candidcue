@@ -135,6 +135,15 @@ export interface ShimConfig {
    * so an href not listed is answered the same way: missing.
    */
   assetUrls?: Record<string, string>;
+  /**
+   * What `get_boot_status` answers. Unset, the database came up. A report with
+   * `databaseReady: false` (and a `code` such as `DATABASE_CORRUPT`) puts the
+   * shell on the recovery screen instead of the app, exactly as a failed
+   * `database::init` does.
+   */
+  bootStatus?: Record<string, unknown>;
+  /** What `list_database_backups` answers — newest first, as Rust sorts them. */
+  databaseBackups?: Array<Record<string, unknown>>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -702,7 +711,30 @@ function shimBody(config: ShimConfig): void {
        * path by accident.
        */
       case 'get_boot_status':
-        return { databaseReady: true, dataDirectory: '/tmp/candidcue-e2e' };
+        return config.bootStatus ?? { databaseReady: true, dataDirectory: '/tmp/candidcue-e2e' };
+
+      /*
+       * The recovery screen's commands, shaped like `recovery_cmds.rs`. Both
+       * repairs move the live database into `quarantine/` and say where; a
+       * rescue copies the scripts into a timestamped folder beside a file that
+       * names them. Each succeeds; `setFail` drives a refusal and `setHeld`
+       * the moment one is still running.
+       */
+      case 'list_database_backups':
+        return config.databaseBackups ?? [];
+
+      case 'restore_database_backup':
+      case 'rebuild_database_index': {
+        const root = String(config.bootStatus?.['dataDirectory'] ?? '/tmp/candidcue-e2e');
+        return { previousStateAt: `${root}/quarantine/pre-rebuild-20261018T081500Z`, restartRequired: true };
+      }
+
+      case 'rescue_scripts':
+        return {
+          path: '/Users/sam/Desktop/CandidCue-scripts-20261018-081512',
+          scriptsCopied: store.size,
+          namesFile: 'CandidCue script names.txt',
+        };
 
       // Nothing was repaired at startup. `null` is the ordinary answer here,
       // and the shell treats it as "nothing to report".

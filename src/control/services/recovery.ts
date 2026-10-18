@@ -128,40 +128,95 @@ export async function writeUnsavedRecovery(scriptId: string, source: string): Pr
 }
 
 /**
- * What the recovery screen leads with, by failure code.
+ * The recovery screen's heading, by failure code: what happened, in a few
+ * words, before anything explains it.
  *
- * Pure and exported so the wording is testable without mounting anything. Each
- * one names the state of the user's data explicitly, because the single most
- * useful thing this screen can say is that the scripts are files and the files
- * are fine.
+ * An answer nobody could read gets its own, because "could not open" is a
+ * diagnosis the screen does not have — the database may be perfectly fine.
+ */
+export function bootFailureTitle(status: BootStatusReport): string {
+  switch (status.code) {
+    case 'DATABASE_CORRUPT':
+      return 'CandidCue’s database is damaged';
+    case 'DATABASE_MIGRATION_FAILED':
+      return 'CandidCue couldn’t finish updating';
+    case 'DATABASE_BACKUP_REQUIRED':
+      return 'CandidCue couldn’t back up its database';
+    case 'DATABASE_UNAVAILABLE':
+      return 'CandidCue couldn’t check its database';
+    default:
+      return 'CandidCue couldn’t open its database';
+  }
+}
+
+/**
+ * What happened, by failure code, in the words the screen explains it with.
+ *
+ * Pure and exported so the wording is testable without mounting anything. It
+ * is the CAUSE only. That the scripts are safe is said once, by the screen,
+ * above every one of these — it used to be repeated inside each of them as
+ * well, so the same reassurance was read two and three times over.
  */
 export function describeBootFailure(status: BootStatusReport): string {
   switch (status.code) {
     case 'DATABASE_CORRUPT':
       return (
-        'CandidCue’s database failed its integrity check, so it has not been changed. ' +
-        'Your scripts are separate Markdown files and are unaffected — you can save them ' +
-        'somewhere else right now, and rebuilding reads them back in.'
+        'CandidCue checks its database every time it opens, and this time it found damage, ' +
+        'so it stopped without changing anything.'
       );
     case 'DATABASE_MIGRATION_FAILED':
       return (
-        'CandidCue could not upgrade its database to this version, and stopped rather than ' +
-        'leaving it half-changed. Your scripts are separate Markdown files and are ' +
-        'unaffected. Restoring the backup taken before the upgrade is usually the fastest ' +
-        'way back.'
+        'This version of CandidCue needed to update its database and couldn’t, so it ' +
+        'stopped rather than leave the database half-changed.'
       );
     case 'DATABASE_BACKUP_REQUIRED':
       return (
-        'CandidCue needs to upgrade its database but could not first save a backup of it, ' +
-        'so it made no changes at all. This is usually a full disk or a permissions problem ' +
-        'in CandidCue’s data folder. Your scripts are unaffected.'
+        'This version of CandidCue needs to update its database, and it always saves a ' +
+        'backup first. It couldn’t save one, so it changed nothing. That usually means the ' +
+        'disk is full, or CandidCue isn’t allowed to write to its data folder.'
       );
+    /*
+     * The shell's own wording for this one narrates the exchange ("it asked,
+     * and the answer could not be read"). What the person needs is the
+     * consequence; the exchange is in the log.
+     */
+    case 'DATABASE_UNAVAILABLE':
+      return 'CandidCue couldn’t confirm that its database was ready, so it opened nothing.';
     default:
-      return (
-        status.message ??
-        'CandidCue could not open its database. Your scripts are separate Markdown files ' +
-          'and are unaffected.'
-      );
+      return status.message ?? 'CandidCue couldn’t open its database.';
+  }
+}
+
+export type RepairAdvice = 'restore' | 'rebuild' | 'reopen';
+
+/**
+ * Which way back the screen recommends.
+ *
+ * - `restore` — an update failed, and the backup saved just before it is the
+ *   state the user had a moment ago.
+ * - `rebuild` — the database is damaged, or an update failed with no usable
+ *   backup: the script files are what is left to build from.
+ * - `reopen` — nothing says the database is damaged. A backup that could not be
+ *   taken is a disk or permissions problem, and an unreadable answer may be a
+ *   one-off; replacing a database that may well be fine, on a guess, is the
+ *   wrong first move.
+ *
+ * `backups` is `null` while they are still being listed, or when they could
+ * not be — a failed update cannot be advised on until the screen knows whether
+ * there is a backup to go back to, so it says nothing rather than guess.
+ */
+export function recommendRepair(
+  status: BootStatusReport,
+  backups: readonly DatabaseBackup[] | null,
+): RepairAdvice | null {
+  switch (status.code) {
+    case 'DATABASE_MIGRATION_FAILED':
+      if (backups === null) return null;
+      return backups.some((backup) => backup.verified) ? 'restore' : 'rebuild';
+    case 'DATABASE_CORRUPT':
+      return 'rebuild';
+    default:
+      return 'reopen';
   }
 }
 
