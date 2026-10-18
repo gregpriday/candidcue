@@ -368,6 +368,15 @@
   --editor-selection-inactive: rgba(255, 255, 255, 0.08);
 
   --selection: rgba(224, 138, 99, 0.22);
+  /* Find in the editor: every hit, the current one, and the edge that marks
+     the current one by shape rather than by a second shade. Amber, so a hit
+     never reads as a selection (terracotta) — and a fill, where a cue is amber
+     TEXT, so the two never share a channel. */
+  --find-match: rgba(222, 169, 77, 0.24);
+  --find-match-current: rgba(222, 169, 77, 0.46);
+  --find-match-edge: #dea94d;
+  /* Other occurrences of the selected word: a whisper, not a search result. */
+  --selection-match: rgba(255, 255, 255, 0.08);
 }
 
 /* ============================================================================
@@ -531,6 +540,12 @@
   --editor-selection-inactive: rgba(24, 25, 29, 0.1);
 
   --selection: rgba(183, 94, 59, 0.16);
+  /* --find-match-edge is 5.2:1 on white, so the current hit's outline carries
+     the state on its own (SC 1.4.11). */
+  --find-match: rgba(214, 158, 46, 0.24);
+  --find-match-current: rgba(214, 158, 46, 0.5);
+  --find-match-edge: #8f6514;
+  --selection-match: rgba(24, 25, 29, 0.07);
 }
 
 /* ---- Base reset ---- */

@@ -32,14 +32,13 @@
   import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
   import {
     closeSearchPanel,
-    findNext,
-    findPrevious,
     highlightSelectionMatches,
     openSearchPanel,
     search,
     searchKeymap,
   } from '@codemirror/search';
   import { editorTheme } from './cm-theme';
+  import { createFindPanel, stepMatch } from './find-panel';
   import { insertBold, insertItalic } from '../lib/markdown-insert';
   import { lintRun } from '../lib/lint-run';
 
@@ -98,6 +97,22 @@
     { key: 'Mod-Enter', scope: 'editor search-panel', run: () => true },
   ];
 
+  /**
+   * ⌘G / ⇧⌘G (and F3) step through the same hits the find bar counts.
+   *
+   * `searchKeymap` binds these to CodeMirror's findNext/findPrevious, whose
+   * backward step scans overlapping matches and can land on one the count and
+   * the highlighting never show. Ahead of `searchKeymap` in the same array, so
+   * these win the way the format keys above win over the defaults.
+   */
+  const findStepKeymap = ['Mod-g', 'F3'].map((key) => ({
+    key,
+    scope: 'editor search-panel',
+    preventDefault: true,
+    run: (target: EditorView) => stepMatch(target, 1),
+    shift: (target: EditorView) => stepMatch(target, -1),
+  }));
+
   interface Props {
     value: string;
     placeholder?: string;
@@ -152,18 +167,18 @@
   }
 
   export function findNextMatch(): void {
-    if (view) findNext(view);
+    if (view) stepMatch(view, 1);
   }
 
   export function findPreviousMatch(): void {
-    if (view) findPrevious(view);
+    if (view) stepMatch(view, -1);
   }
 
   /**
    * Replace opens the SAME panel as Find, then focuses its replace field.
    *
-   * CodeMirror's default search panel carries the replace inputs already, so
-   * there is no second panel to open and no "replace mode" to switch into —
+   * The find bar carries the replace field already, so there is no second
+   * panel to open and no "replace mode" to switch into —
    * Find and Replace differ only in which field the caret lands in. Both menu
    * items exist because both are what a user looks for; pretending they open
    * different surfaces would be inventing a distinction the editor does not
@@ -201,6 +216,7 @@
             ...markdownFormatKeymap,
             ...defaultKeymap,
             ...historyKeymap,
+            ...findStepKeymap,
             ...searchKeymap,
           ]),
           /*
@@ -212,8 +228,14 @@
            * pinned to the top rather than the bottom, and match highlighting is
            * on. Without `highlightSelectionMatches` a search told you where the
            * caret went and nothing about the other hits.
+           *
+           * The panel itself is ours (`find-panel.ts`): CodeMirror's could not
+           * say how many hits there were, whether a pattern parsed, or what
+           * Replace All had just done. The query state, the replace commands
+           * and the highlighting are still CodeMirror's; stepping is ours, so it
+           * visits exactly the hits the bar counts (`findStepKeymap`).
            */
-          search({ top: true }),
+          search({ top: true, createPanel: createFindPanel }),
           highlightSelectionMatches(),
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,

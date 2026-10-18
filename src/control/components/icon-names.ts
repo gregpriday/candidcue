@@ -54,7 +54,10 @@ export type IconName =
   | 'user'
   | 'clock'
   | 'diagram'
-  | 'panel-right';
+  | 'panel-right'
+  | 'match-case'
+  | 'whole-word'
+  | 'regex';
 
 /**
  * Lucide draws on a 24px grid at stroke 2. Our controls render at 13-22px,
