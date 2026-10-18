@@ -54,6 +54,9 @@ const MAPPING: Record<IconName, string> = {
   clock: 'clock',
   diagram: 'workflow',
   'panel-right': 'panel-right',
+  'match-case': 'case-sensitive',
+  'whole-word': 'whole-word',
+  regex: 'regex',
 };
 
 const NAMES = Object.keys(MAPPING) as IconName[];

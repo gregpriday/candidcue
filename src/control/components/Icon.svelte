@@ -14,6 +14,7 @@
 
   import BookOpen from '@lucide/svelte/icons/book-open';
   import Bold from '@lucide/svelte/icons/bold';
+  import CaseSensitive from '@lucide/svelte/icons/case-sensitive';
   import Check from '@lucide/svelte/icons/check';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -42,6 +43,7 @@
   import Play from '@lucide/svelte/icons/play';
   import Plus from '@lucide/svelte/icons/plus';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import Regex from '@lucide/svelte/icons/regex';
   import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
   import Search from '@lucide/svelte/icons/search';
   import Settings2 from '@lucide/svelte/icons/settings-2';
@@ -51,6 +53,7 @@
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import Upload from '@lucide/svelte/icons/upload';
   import User from '@lucide/svelte/icons/user';
+  import WholeWord from '@lucide/svelte/icons/whole-word';
   import Workflow from '@lucide/svelte/icons/workflow';
   import X from '@lucide/svelte/icons/x';
 
@@ -106,6 +109,10 @@
     diagram: Workflow,
     // The trailing inspector, shown or hidden — the Editor's Outline toggle.
     'panel-right': PanelRight,
+    // The find bar's three search options.
+    'match-case': CaseSensitive,
+    'whole-word': WholeWord,
+    regex: Regex,
   };
 
 </script>

@@ -166,6 +166,44 @@ const themeSpec = {
     boxDecorationBreak: 'clone',
     WebkitBoxDecorationBreak: 'clone',
   },
+
+  /*
+   * The find bar's band (FindPanel.svelte draws everything inside it).
+   *
+   * `&.cm-editor` on the rules that override CodeMirror's base theme: its own
+   * are scoped `&light`, which is one class more specific than a plain theme
+   * rule, so without the extra class the stock grey and its #ddd rule win.
+   * The stock panel's padding and per-control margins go too — the bar lays
+   * itself out on a grid and a margin on every input would fight it.
+   */
+  '&.cm-editor .cm-panels.cm-panels-top': {
+    backgroundColor: 'var(--bg-toolbar)',
+    color: 'var(--text-primary)',
+    borderBottom: 'var(--divider-w) solid var(--divider)',
+  },
+  '.cm-panel.cm-search': { padding: '0' },
+  '.cm-panel.cm-search input, .cm-panel.cm-search button': { margin: '0' },
+
+  /*
+   * Hits, and the one you are on. The current hit is told apart by an edge,
+   * not only by a deeper shade: it is also the selection, and a reader with
+   * the replace field focused needs to see which one Replace will change.
+   * The edge is inset, and every hit carries a pixel of fill past each end
+   * that the margin gives back, so the edge clears the first and last letter
+   * without moving a single glyph.
+   */
+  '&.cm-editor .cm-searchMatch': {
+    backgroundColor: 'var(--find-match)',
+    borderRadius: '2px',
+    padding: '0 1px',
+    margin: '0 -1px',
+  },
+  '&.cm-editor .cm-searchMatch.cm-searchMatch-selected': {
+    backgroundColor: 'var(--find-match-current)',
+    boxShadow: 'inset 0 0 0 1px var(--find-match-edge)',
+  },
+  // Other occurrences of the selected word: quieter than a search result.
+  '.cm-selectionMatch': { backgroundColor: 'var(--selection-match)' },
 } as const;
 
 const workspaceBase = EditorView.theme({ ...themeSpec }, { dark: false });
