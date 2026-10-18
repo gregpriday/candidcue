@@ -273,6 +273,14 @@ test('Page Down at the foot of the script moves nothing and re-anchors nothing',
    * reading sit below the reading line. Re-anchoring there would drag the
    * aligner back up to a place nobody went.
    */
+  /*
+   * The walk to the foot does not fit the default budget. This script takes 32
+   * presses to reach it at 1280x720, and each press is waited out for 700 ms,
+   * so the waiting alone is 22.4 s of the 30. It ran in 26-27 s on CI and timed
+   * out on a slower runner; the loop's own ceiling, 40 presses, is 28 s of
+   * waiting before anything else is counted.
+   */
+  test.slow();
   const errors = watchPageErrors(page);
   await present(page);
 
