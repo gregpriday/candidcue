@@ -78,9 +78,15 @@ function words(count: number): string {
  * shows on its own label:
  *
  *   - the script at 130 wpm is 462 s, "≈ 8 min" (150 made it 400 s, "≈ 7 min");
- *   - `Detail` has 28 words, 13 s at 130, "≈ 15 sec" — and 27 words, the count
- *     the inclusive-end subtraction gave it, is 12 s, "≈ 10 sec";
- *   - `Close` has 372 words, "≈ 3 min" at 130 and "≈ 2 min" at 150.
+ *   - `Detail` has 28 words, 13 s at 130, "0:15" in the outline's five-second
+ *     steps — and 27 words, the count the inclusive-end subtraction gave it, is
+ *     12 s, "0:10";
+ *   - `Close` has 372 words, "2:50" at 130 and "2:30" at 150;
+ *   - `Intro` holds its subsections too, 628 words: "4:50" at 130, "4:10" at 150.
+ *
+ * The status bar keeps the rounded "≈ N min"; the outline's time column is
+ * minutes and seconds (`formatSectionTime`), with "0:00" for a section that has
+ * nothing spoken in it.
  */
 const SOURCE = [
   '# Intro',
@@ -177,7 +183,7 @@ function outlineLabels(): Array<[string, string]> {
   expect(items.length, 'the outline must list the sections').toBeGreaterThan(0);
   return items.map((item) => [
     item.querySelector('.outline-title')?.textContent?.trim() ?? '',
-    item.querySelector('.outline-meta')?.textContent?.trim() ?? '',
+    item.querySelector('.outline-time')?.textContent?.trim() ?? '',
   ]);
 }
 
@@ -199,10 +205,10 @@ describe('editor speaking time', () => {
   it('times each outline section at the same rate, counting every word in it', async () => {
     await mountEditor(130);
     expect(outlineLabels()).toEqual([
-      ['Intro', '≈ 5 min'],
-      ['Detail', '≈ 15 sec'],
-      ['Empty', '—'],
-      ['Close', '≈ 3 min'],
+      ['Intro', '4:50'],
+      ['Detail', '0:15'],
+      ['Empty', '0:00'],
+      ['Close', '2:50'],
     ]);
   });
 
@@ -215,10 +221,10 @@ describe('editor speaking time', () => {
     expect(labels).toContain('≈ 6 min');
     expect(labels).not.toContain('≈ 7 min');
     expect(outlineLabels()).toEqual([
-      ['Intro', '≈ 3 min'],
-      ['Detail', '≈ 10 sec'],
-      ['Empty', '—'],
-      ['Close', '≈ 2 min'],
+      ['Intro', '3:30'],
+      ['Detail', '0:10'],
+      ['Empty', '0:00'],
+      ['Close', '2:05'],
     ]);
   });
 });
