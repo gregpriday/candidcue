@@ -584,13 +584,19 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  /* The place keeps its length; the section is the card's, not the strip's —
-     there is no room for it beside the words. */
+  /* The place keeps its length. There is no room for the section beside the
+     words, so it is not drawn, but it is still read: the button's description
+     says where on the strip exactly as it does on the card. */
   .strip .where {
     flex: none;
   }
   .strip .section {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   /* The dock's own spacing, and buttons short enough that the strip is the
      dock's height. */
