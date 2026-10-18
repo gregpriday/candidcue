@@ -1913,6 +1913,7 @@ import { onShortcut } from '../lib/shortcuts';
       orientation="vertical"
       side="leading"
       label="Sections width"
+      pane="Sections"
       value={$workspace.liveOutlineWidth}
       min={PANE_LIMITS.liveOutline.min}
       max={PANE_LIMITS.liveOutline.max}
@@ -1979,7 +1980,8 @@ import { onShortcut } from '../lib/shortcuts';
     <PaneDivider
       orientation="vertical"
       side="trailing"
-      label="Diagnostics width"
+      label="Tracking width"
+      pane="Tracking"
       value={$workspace.diagnosticsWidth}
       min={PANE_LIMITS.liveDiagnostics.min}
       max={PANE_LIMITS.liveDiagnostics.max}
