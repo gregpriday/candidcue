@@ -125,7 +125,7 @@ describe('OverflowMenu — opening moves focus', () => {
 describe('OverflowMenu — the menu is one tab stop', () => {
   it('exactly one item carries tabindex 0, and it is the focused one', async () => {
     renderMenu(items({ label: 'Rename' }, { label: 'Duplicate' }, { label: 'Delete' }));
-    await openByClick();
+    await openByActivationKey();
 
     const tabbable = () => menuItems().filter((el) => el.getAttribute('tabindex') === '0');
     expect(tabbable()).toHaveLength(1);
@@ -141,7 +141,7 @@ describe('OverflowMenu — the menu is one tab stop', () => {
 describe('OverflowMenu — arrow navigation', () => {
   it('wraps past the end and before the start', async () => {
     renderMenu(items({ label: 'A' }, { label: 'B' }));
-    await openByClick();
+    await openByActivationKey();
     await pressOn(document.activeElement as Element, 'ArrowDown');
     expect(document.activeElement?.textContent?.trim()).toBe('B');
     await pressOn(document.activeElement as Element, 'ArrowDown');
@@ -152,7 +152,7 @@ describe('OverflowMenu — arrow navigation', () => {
 
   it('hops over a disabled item in the middle', async () => {
     renderMenu(items({ label: 'A' }, { label: 'B', disabled: true }, { label: 'C' }));
-    await openByClick();
+    await openByActivationKey();
     await pressOn(document.activeElement as Element, 'ArrowDown');
     expect(document.activeElement?.textContent?.trim()).toBe('C');
   });
@@ -281,7 +281,9 @@ describe('OverflowMenu — the highlight follows the operator, not the focus', (
     await openByClick();
     expect(active()).toHaveLength(0);
     await pressOn(document.activeElement as Element, 'ArrowDown');
-    expect(active().map((el) => el.textContent?.trim())).toEqual(['Duplicate']);
+    // The first item: nothing was drawn as chosen, so the first Down chooses
+    // the top of the list rather than the row after an invisible focus.
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Open']);
   });
 
   it('hover moves the one highlight rather than adding a second', async () => {

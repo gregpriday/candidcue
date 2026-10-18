@@ -74,6 +74,7 @@
   import { formatSpeakingDuration, relativeTime } from '../lib/format';
   import { createAndOpenScript, exportScriptToFile, importMarkdown } from '../lib/app-actions';
   import { formatAccelerator } from '../lib/commands';
+  import { scriptActionLabels } from '../lib/script-action-labels';
   import { onShortcut } from '../lib/shortcuts';
   import { detectPlatform } from '../lib/platform';
   import { checkThenStartTake } from '../lib/check-then-start';
@@ -523,7 +524,8 @@
     }
   }
 
-  const revealLabel = mac ? 'Reveal in Finder' : 'Show in File Explorer';
+  /** The editor's Script actions menu draws its names from the same place. */
+  const actionLabels = scriptActionLabels(mac);
 
   /**
    * The row's actions, as one list used by BOTH the context menu and the
@@ -536,9 +538,9 @@
   function rowMenuItems(script: ScriptSummary): ContextMenuItem[] {
     if (inTrash) {
       return [
-        { label: 'Restore', onselect: () => void restoreFromTrash(script) },
+        { label: actionLabels.restore, onselect: () => void restoreFromTrash(script) },
         {
-          label: 'Delete permanently',
+          label: actionLabels.deletePermanently,
           danger: true,
           separated: true,
           onselect: () => void confirmDeleteForever(script),
@@ -553,15 +555,15 @@
         onselect: () => presentScript(script),
       },
       {
-        label: 'Duplicate',
+        label: actionLabels.duplicate,
         separated: true,
         shortcut: formatAccelerator('Mod+D', mac),
         onselect: () => void duplicateScript(script.id),
       },
-      { label: 'Export Markdown…', onselect: () => void exportScript(script) },
-      { label: revealLabel, onselect: () => void revealScript(script) },
+      { label: actionLabels.exportMarkdown, onselect: () => void exportScript(script) },
+      { label: actionLabels.reveal, onselect: () => void revealScript(script) },
       {
-        label: 'Move to Trash',
+        label: actionLabels.moveToTrash,
         danger: true,
         separated: true,
         onselect: () => void confirmTrash(script),

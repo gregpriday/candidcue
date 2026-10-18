@@ -316,7 +316,7 @@ describe('the destructive confirmations name what they are about to remove', () 
     const menu = rowMenuTrigger(container);
     menu?.click();
     await settle();
-    buttonNamed(container, 'Delete permanently')?.click();
+    buttonNamed(container, 'Delete Permanently')?.click();
     await settle();
 
     expect(confirm.requestConfirm).toHaveBeenCalledTimes(1);

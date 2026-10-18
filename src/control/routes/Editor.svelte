@@ -34,6 +34,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import ScriptLintPanel from '../components/ScriptLintPanel.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
+  import { scriptActionLabels } from '../lib/script-action-labels';
   import { presentMenuItems, type PresentMenuItem } from '../lib/present-menu';
   import { PRACTICE_LABEL } from '../../shared/take-vocabulary';
 import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take';
@@ -1151,7 +1152,13 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   async function revealFolder(): Promise<void> {
-    await scriptsService.revealScriptFolder(scriptId);
+    // Said out loud, as File › Reveal in Finder does: a menu command that
+    // fails silently looks like a menu command that did nothing.
+    try {
+      await scriptsService.revealScriptFolder(scriptId);
+    } catch (err) {
+      showToast(`That script’s folder could not be opened. ${describeError(err)}`, 'danger');
+    }
   }
 
   /* --- F.8 external-conflict resolution ------------------------------- */
@@ -1202,8 +1209,11 @@ import type { PresentationMode } from '../services/settings-types';
 
   async function trashFromEditor(): Promise<void> {
     const accepted = await requestConfirm({
-      title: 'Delete script?',
-      body: `${$editor.title} will move to Trash and can be restored for 30 days.`,
+      // The words File › Move to Trash and the Library row use. "Delete
+      // script?" over a button that says Move to Trash asked whether this was
+      // permanent at the one moment the answer has to be unambiguous.
+      title: 'Move to Trash?',
+      body: `“${$editor.title}” will move to Trash and can be restored for 30 days.`,
       confirmLabel: 'Move to Trash',
       danger: true,
     });
@@ -1238,18 +1248,39 @@ import type { PresentationMode } from '../services/settings-types';
     showToast('Revision restored. Your previous text was saved as a revision.', 'success');
   }
 
+  /*
+   * The Script actions menu, in the File menu's order and words (§18.3).
+   *
+   * Three short groups: what makes or recovers a version of this script, what
+   * takes it out of the app, and — on its own, last, below a rule — the one
+   * command that removes it. Trash used to sit flush under the folder command,
+   * so overshooting a 32px row from the most ordinary item in the menu armed
+   * the destructive one. The names come from `scriptActionLabels`, which the
+   * Library's row menus use too.
+   */
+  const actionLabels = scriptActionLabels(mac);
   const overflowItems = $derived([
     // Through the store, not the service: the store is where a duplicate that
     // fails gets said out loud, and it reloads the library either way. Calling
     // the service directly from here had no catch and no notice at all.
-    { label: 'Duplicate', onselect: () => void duplicateScript(scriptId) },
-    { label: 'Revision history…', onselect: () => void openRevisions() },
     {
-      label: 'Export Markdown',
+      label: actionLabels.duplicate,
+      shortcut: accel('Mod+D'),
+      onselect: () => void duplicateScript(scriptId),
+    },
+    { label: actionLabels.revisionHistory, onselect: () => void openRevisions() },
+    {
+      label: actionLabels.exportMarkdown,
+      separated: true,
       onselect: () => void exportScriptToFile(scriptId, $editor.title, 'markdown'),
     },
-    { label: 'Reveal data folder', onselect: () => void revealFolder() },
-    { label: 'Move to Trash', danger: true, onselect: () => void trashFromEditor() },
+    { label: actionLabels.reveal, onselect: () => void revealFolder() },
+    {
+      label: actionLabels.moveToTrash,
+      danger: true,
+      separated: true,
+      onselect: () => void trashFromEditor(),
+    },
   ]);
 
   /*

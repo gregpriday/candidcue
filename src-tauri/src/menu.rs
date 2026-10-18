@@ -454,6 +454,9 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("file.practise", "Practise", Some(keys::PRACTISE))?,
             &sep()?,
             &item("file.close-script", "Close Script", Some(keys::CLOSE))?,
+            // On its own below a rule, as in the window's own menus: flush under
+            // Close Script, a one-row overshoot from ⌘W's item reached Trash.
+            &sep()?,
             &item("file.move-to-trash", "Move to Trash", None)?,
         ],
     )?;

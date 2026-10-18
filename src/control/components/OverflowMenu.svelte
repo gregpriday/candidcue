@@ -16,6 +16,7 @@
     menuItemTabIndex,
     nextMenuIndex,
     openIndexForTriggerKey,
+    typeaheadIndex,
   } from '../../shared/menu-nav';
 
   export interface MenuItem {
@@ -232,7 +233,24 @@
       closeMenu(false);
       return;
     }
-    const index = nextMenuIndex(items, activeIndex, event.key);
+    /*
+     * Navigate from what the menu SHOWS, not from where focus happens to sit.
+     *
+     * A pointer-opened menu parks focus on the first item without painting it,
+     * so navigating from `activeIndex` made the first ArrowDown skip the top
+     * item of a menu that looked unselected — while the same list opened by
+     * right-click (ContextMenu, which starts from nothing) landed on it. With
+     * nothing drawn, the first Down selects the first item and the first Up
+     * the last, as a native menu does.
+     *
+     * Arrows first, then a typed letter: the same first-letter jump the
+     * right-click menu has, so the one list answers the keyboard the same way
+     * whichever way it was opened.
+     */
+    const origin = highlighted ? activeIndex : -1;
+    const index =
+      nextMenuIndex(items, origin, event.key) ??
+      typeaheadIndex(items, origin, event.key, event.metaKey || event.ctrlKey || event.altKey);
     if (index === null) return;
     event.preventDefault();
     focusItem(index);
@@ -341,8 +359,10 @@
 
   .separator {
     height: 1px;
-    /* 4px of air either side inside the 9px the height arithmetic reserves. */
-    margin: var(--space-1) calc(-1 * var(--space-1));
+    /* 4px of air either side inside the 9px the height arithmetic reserves.
+       Inset to the label column: run past the highlight's edges and the rule
+       reads as a seam across the popover rather than a break in the list. */
+    margin: var(--space-1) var(--space-3);
     background: var(--border-faint);
   }
 
