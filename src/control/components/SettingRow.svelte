@@ -56,8 +56,8 @@
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: var(--field-label-weight, 600);
-    color: var(--field-label-color, var(--text-secondary));
+    font-weight: var(--field-label-weight, 500);
+    color: var(--field-label-color, var(--text-primary));
   }
   .description {
     font-size: var(--text-meta);

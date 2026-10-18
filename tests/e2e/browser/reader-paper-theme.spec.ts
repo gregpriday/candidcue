@@ -121,8 +121,9 @@ test('a paper reading window draws paper — field, ink and canvas — and a swi
   // Mid-take, to the teleprompter: the glass is black, whatever was saved.
   // The window moves BEFORE the geometry recomposes, and it moves onto the
   // glass, so the field has to be dark already while the move is in flight —
-  // held open here so that interval is observable at all.
-  await page.evaluate(() => window.__E2E__.setDelay('set_control_presenting', 1500));
+  // held open here so that interval is observable at all. Held, not delayed:
+  // a timed delay can run out on a slow runner before the assertions reach it.
+  await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', true));
   await openDockMenu(page);
   await page.locator('.stage-dock [data-menu-row="present"]').click();
   await expect(page.locator('.stage-root')).toHaveAttribute('data-theme', 'stage-dark', {
@@ -130,8 +131,6 @@ test('a paper reading window draws paper — field, ink and canvas — and a swi
   });
   expect(await stageField(page)).toBe(BLACK);
   expect(await canvas(page)).toBe(BLACK);
-  await page.evaluate(() => window.__E2E__.setDelay('set_control_presenting', null));
-  // Landed: still black, now as the prompter.
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -141,7 +140,20 @@ test('a paper reading window draws paper — field, ink and canvas — and a swi
       ),
     )
     .toContain('prompter');
-  await page.waitForTimeout(600);
+  // Asked and not answered: still the reading window, already dark.
+  await expect(page.locator('.stage-root')).toHaveAttribute('aria-label', /^Reading: /);
+  await page.evaluate(() => window.__E2E__.setHeld('set_control_presenting', false));
+  /*
+   * Landed: still black, now as the prompter.
+   *
+   * Waited for by the label, which only changes when the switch is adopted. A
+   * switch in flight drops the next toggle (`switchingPresentation` in
+   * Live.svelte), so asking for the way back before this one has landed is a
+   * click that does nothing — and the take then lands as the prompter.
+   */
+  await expect(page.locator('.stage-root')).toHaveAttribute('aria-label', 'Teleprompter', {
+    timeout: 10_000,
+  });
   await expect(page.locator('.stage-root')).toHaveAttribute('data-theme', 'stage-dark');
   await expect.poll(() => stageField(page)).toBe(BLACK);
   await expect.poll(() => canvas(page)).toBe(BLACK);

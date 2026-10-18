@@ -272,6 +272,41 @@
   /** Sections other than this one that the query found. */
   const otherMatches = $derived(matchingSections.filter((entry) => entry.id !== section).length);
 
+  let sectionNav: HTMLElement | null = $state(null);
+
+  /** The index's roving tab stop: the open pane's row (a search keeps it in
+      the list), or the first row should it ever be missing. */
+  function sectionTabIndex(index: number): 0 | -1 {
+    const active = matchingSections.findIndex((entry) => entry.id === section);
+    return index === (active < 0 ? 0 : active) ? 0 : -1;
+  }
+
+  function sectionKeydown(event: KeyboardEvent, index: number): void {
+    const items = sectionNav
+      ? [...sectionNav.querySelectorAll<HTMLElement>('.section-item')]
+      : [];
+    if (items.length === 0) return;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowDown':
+        next = (index + 1) % items.length;
+        break;
+      case 'ArrowUp':
+        next = (index - 1 + items.length) % items.length;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = items.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    items[next]?.focus();
+  }
+
   /**
    * The section's own scroll container, for the row filter below.
    */
@@ -2429,11 +2464,15 @@
 
 <div class="page">
   <!--
-    In a WINDOW, the trailing control is Done; there is nowhere to go back to.
-    §14.1: "Remove Back to Library from Settings if it becomes a separate
-    window." The prop is optional so the route still works in the control window
-    if it is ever hosted there again — but the Preferences window always
-    supplies it, so the back control is gone in practice.
+    In a WINDOW there is nowhere to go back to (§14.1: "Remove Back to Library
+    from Settings if it becomes a separate window"), and nothing to finish
+    either. Every control here applies the moment it changes, so a Done button
+    promised a commit step that does not exist — filled in clay, it was also a
+    second primary action beside each pane's own. The window closes the way
+    every Mac settings window does: its close button and ⌘W
+    (`PreferencesApp.svelte` answers `file.close-script`). `onclose` stays a
+    prop so the route still works if it is ever hosted in the control window
+    again, where it is what removes the back control.
   -->
   <Toolbar
     title="Settings"
@@ -2441,13 +2480,6 @@
     onback={onclose ? undefined : () => navigate({ name: 'library', view: 'all' })}
   >
     {#snippet actions()}
-      <!-- Secondary, and toolbar-sized. Every change here is saved as it is
-           made, so Done closes a window rather than committing anything, and a
-           filled accent button said the opposite — while outshouting the one
-           primary action a section has (Show on teleprompter, Allow…). -->
-      {#if onclose}
-        <Button size="sm" onclick={onclose}>Done</Button>
-      {/if}
       <!--
         Settings search (§14.2), in the toolbar where it is stable across every
         section. It filters BOTH: the section list narrows to the sections whose
@@ -2478,13 +2510,24 @@
   </Toolbar>
 
   <div class="body">
-    <nav class="section-nav" aria-label="Settings sections">
-      {#each matchingSections as entry (entry.id)}
+    <!--
+      One tab stop, arrows inside — the main sidebar's contract (§23.1), so the
+      app's two source lists are learnt once. Arrowing moves focus without
+      changing the pane; Enter or Space opens it, as a click does.
+    -->
+    <nav
+      class="section-nav"
+      aria-label="Settings sections"
+      bind:this={sectionNav}
+    >
+      {#each matchingSections as entry, index (entry.id)}
         <button
           type="button"
           class="section-item"
           class:active={($route.name === 'settings' ? section : 'general') === entry.id}
           aria-current={section === entry.id ? 'page' : undefined}
+          tabindex={sectionTabIndex(index)}
+          onkeydown={(event) => sectionKeydown(event, index)}
           onclick={() => navigate({ name: 'settings', section: entry.id })}
         >
           {entry.label}
@@ -4038,7 +4081,7 @@
       {:else if section === 'following'}
         <Section
           title="Following"
-          description="How the stage follows your voice. These are feel choices — CandidCue keeps its own safety rules for section jumps and retakes whatever you pick."
+          description="How quickly the stage follows your voice. Section jumps and retakes keep their safety rules whatever you pick."
         >
           <FollowSettingsFields
             following={$settings.following}
@@ -4243,7 +4286,8 @@
    */
   /* Wide enough for "Prompter display and rigs" on one line. At 180px it and
      "Data, privacy & updates" wrapped, and their second lines read as items
-     of their own. */
+     of their own. The rail is the main sidebar's paper with the same straight
+     divider, so the two source lists in the app look like one idea. */
   .section-nav {
     flex: 0 0 212px;
     display: flex;
@@ -4251,6 +4295,8 @@
     gap: 1px;
     padding: var(--space-3) var(--space-2);
     overflow-y: auto;
+    background: var(--bg-chrome);
+    border-right: var(--divider-w) solid var(--divider);
   }
   .section-item {
     display: flex;
@@ -4262,9 +4308,12 @@
     border: none;
     border-radius: 5px;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: var(--text-sm);
-    font-weight: 550;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
@@ -4275,9 +4324,9 @@
   }
   .section-item.active,
   .section-item.active:hover {
-    background: var(--bg-row-selected);
+    background: var(--bg-source-selected);
     color: var(--text-primary);
-    font-weight: 650;
+    font-weight: 600;
   }
 
   /*
@@ -4952,8 +5001,9 @@
   .control-label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: var(--field-label-weight, 600);
-    color: var(--field-label-color, var(--text-secondary));
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: var(--field-label-weight, 500);
+    color: var(--field-label-color, var(--text-primary));
   }
 
   /* The distance presets, then a typed distance on the same line. */
@@ -5225,8 +5275,9 @@
   .mic-test-name {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: var(--field-label-weight, 600);
-    color: var(--field-label-color, var(--text-secondary));
+    /* A setting's name — the same treatment as Select's and Toggle's labels. */
+    font-weight: var(--field-label-weight, 500);
+    color: var(--field-label-color, var(--text-primary));
   }
   .mic-test-prompt {
     font-size: var(--text-xs);
