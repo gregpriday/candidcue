@@ -676,14 +676,20 @@ input[type='range'] {
    them — the start (or zero) to the thumb — so the two sides of a value read
    differently. Neutral, not the accent: a section of eighteen sliders in
    terracotta would spend the accent on nothing. A range that sets neither
-   shows a plain track, as before. */
+   shows a plain track, as before.
+
+   The filled stretch is `--border-state`, the token that already marks a chosen
+   segment, rather than `--border-strong`: on the studio palette that one sits a
+   single step above `--border-control`, and over the stage's dark glass the two
+   sides of every slider read as one grey line. The thumb carries the value
+   either way; this is what lets the eye find it from across a room. */
 input[type='range']::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: var(--radius-pill);
   background: linear-gradient(
     to right,
     var(--border-control) 0 var(--range-from, 0%),
-    var(--border-strong) var(--range-from, 0%) var(--range-fill, 0%),
+    var(--border-state) var(--range-from, 0%) var(--range-fill, 0%),
     var(--border-control) var(--range-fill, 0%) 100%
   );
 }
@@ -716,6 +722,12 @@ input[type='range']:hover::-webkit-slider-thumb {
 input[type='range']:not([data-focus]):focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+/* Being left out of the policy above is not the same as drawing nothing: the
+   engine still rings the INPUT in its own blue, around the whole track, beside
+   the thumb ring. One indicator, on the part that moves. */
+input[type='range']:not([data-focus]):focus-visible {
+  outline: none;
 }
 /* Dragging the thumb deepens it to the press accent — completing rest/hover/
    focus/active so the slider has the same state matrix as every other control. */

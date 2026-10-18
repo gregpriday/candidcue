@@ -273,8 +273,10 @@
             id: 'appearance' as const,
             // The ellipsis is the desktop convention it has always been: this
             // row asks for more input rather than doing something. A reading
-            // window is not a prompter, so it is not called one here.
-            label: reading ? 'Reading appearance…' : 'Adjust the prompter…',
+            // window is not a prompter, so it is not called one here. Named for
+            // the panel it opens, not for a verb: on a calibrated rig that
+            // panel is a readout, and "Adjust" promised controls it has none of.
+            label: reading ? 'Reading appearance…' : 'Prompter appearance…',
             select: openAppearance,
           },
         ]
@@ -411,23 +413,27 @@
       return;
     }
     /*
-     * The trigger is also the way OUT of the second level.
+     * Not a way out of the second level.
      *
-     * Pressing it while the appearance panel is up means "put this away", the
-     * same as pressing the old settings button again did — and putting the
-     * panel away means cancel, which is what every other dismissal of it
-     * already means. Re-opening onto the menu instead would answer a dismissal
-     * gesture by showing more chrome.
+     * Pressing it while the appearance panel is up used to mean cancel, and
+     * cancel puts back everything the operator just tuned — on a gesture that
+     * reads as "close this", not "throw it away". The panel's own Cancel and
+     * Done say which; this calls the panel's attention to them, the way a click
+     * away does. Re-opening onto the menu instead would answer the press by
+     * showing more chrome.
      */
     if (appearanceOpen) {
-      onappearanceclose?.();
+      callAppearanceAttention();
       return;
     }
     openMenu(firstEnabledIndex(rows), !event || event.detail === 0);
   }
 
   function onTriggerKeydown(event: KeyboardEvent): void {
-    if (menuOpen) return;
+    // With the appearance panel up, the arrows would open the menu — and
+    // opening the menu puts the panel away as a cancel. That is the press of
+    // this trigger again by another route, so it is held the same way.
+    if (menuOpen || appearanceOpen) return;
     // Enter/Space reach the click handler as well; letting both run would
     // toggle twice, so only the arrows are handled here.
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -681,20 +687,72 @@
   });
 
   /*
-   * The appearance panel dismisses on an outside click too, so the two behave
-   * the same way. Its Escape is answered by the panel itself (it is a real
-   * modal and traps Tab), which is why only the pointer half is here.
+   * A CLICK AWAY FROM THE APPEARANCE PANEL IS HELD, NOT ANSWERED.
+   *
+   * The confirmation above closes on one, because cancelling it loses nothing.
+   * This panel applies every move to the running take, so a click away has no
+   * safe meaning: closing as cancel put back a minute of tuning somebody had
+   * only clicked off to look at, and closing as Done would save an experiment
+   * into every later take. It is a modal, so the click goes nowhere — not to
+   * the stage, not to the take controls behind it — and the panel's edge lights
+   * to say it is still waiting. Escape, Cancel and Done are the ways out; the
+   * panel answers Escape itself (it traps Tab), which is why only the pointer
+   * is here.
    */
+  let appearanceAttention = $state(false);
+  let attentionTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function callAppearanceAttention(): void {
+    if (attentionTimer !== null) clearTimeout(attentionTimer);
+    // Off and on again, so a second click restarts the animation rather than
+    // landing in the middle of the first.
+    appearanceAttention = false;
+    void tick().then(() => {
+      appearanceAttention = true;
+      attentionTimer = setTimeout(() => {
+        appearanceAttention = false;
+        attentionTimer = null;
+      }, 600);
+    });
+  }
+
   $effect(() => {
     if (!appearanceOpen) return undefined;
-    const onPointerDown = (event: PointerEvent): void => {
+    const outside = (event: Event): boolean => {
       const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (dockRoot?.contains(target)) return;
-      onappearanceclose?.();
+      if (!(target instanceof Node) || dockRoot?.contains(target)) return false;
+      /*
+       * Only while the panel is the TOP modal. A confirmation raised over it
+       * ("End this take?" from File › Close Window) is outside the dock too,
+       * and its buttons are the one thing on screen that must be pressable —
+       * the same topmost rule the panel's own Escape follows.
+       */
+      const modals = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      const top = modals[modals.length - 1];
+      return !top || dockRoot?.contains(top) === true;
+    };
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!outside(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      callAppearanceAttention();
+    };
+    // `preventDefault` on pointerdown suppresses the mouse events it would
+    // have produced, but not the click — so the click is swallowed too.
+    const onClick = (event: MouseEvent): void => {
+      if (!outside(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
     };
     window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('click', onClick, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('click', onClick, true);
+      if (attentionTimer !== null) clearTimeout(attentionTimer);
+      attentionTimer = null;
+      appearanceAttention = false;
+    };
   });
 </script>
 
@@ -750,11 +808,11 @@
       While it is off it stays lit and amber, because it is then the answer to
       the only question the presenter is going to ask.
 
-      It is NOT stood down while the appearance panel is up, unlike everything
-      else in this row: pressing it is how somebody puts that panel away with
-      the mouse, and it means cancel — the same as Escape and the same as
-      clicking off it. A control the modal's own dismissal gesture runs through
-      is not a control reaching past the modal.
+      It is NOT disabled while the appearance panel is up, unlike the End
+      control: it is the panel's anchor and stays drawn as expanded. Pressing it
+      then does not cancel — that threw away whatever had just been tuned — it
+      calls the panel's attention, exactly as a click away does, and the panel's
+      own Cancel and Done end it.
     -->
     <button
       type="button"
@@ -766,6 +824,12 @@
       aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
       title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
       bind:this={menuButton}
+      onpointerdown={(event) => {
+        // Pressed while the appearance panel is up, it only calls that panel's
+        // attention — so the keyboard stays inside the panel instead of
+        // following the press out to a trigger the panel's trap reaches past.
+        if (appearanceOpen) event.preventDefault();
+      }}
       onclick={toggleMenu}
       onkeydown={onTriggerKeydown}
     >
@@ -913,7 +977,7 @@
   {/if}
 
   {#if appearanceOpen && appearancePanel}
-    <div class="dock-popover appearance-popover">
+    <div class="dock-popover appearance-popover" data-attention={appearanceAttention ? '' : undefined}>
       {@render appearancePanel()}
     </div>
   {/if}

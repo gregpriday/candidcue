@@ -258,7 +258,7 @@ describe('the menu holds whatever this window can actually offer', () => {
 
     const prompting = mount({ appearancePanel: PANEL, presentationMode: 'prompter' });
     await openMenu(prompting.container);
-    expect(menuRow(prompting.container, 'appearance')!.textContent?.trim()).toBe('Adjust the prompter…');
+    expect(menuRow(prompting.container, 'appearance')!.textContent?.trim()).toBe('Prompter appearance…');
   });
 
   /*
@@ -368,20 +368,41 @@ describe('the menu holds whatever this window can actually offer', () => {
   });
 
   /*
-   * The trigger is the way back OUT of the second level, and it means cancel —
-   * the same as Escape and the same as clicking off the panel. Answering a
-   * dismissal gesture by re-opening the menu would show more chrome, not less.
+   * The trigger is NOT a way out of the second level. Pressing it used to
+   * cancel, and cancel put back everything just tuned on a gesture that reads
+   * as "close this". It calls the panel's attention instead, as a click away
+   * does, and leaves Cancel and Done to say which. Re-opening the menu would
+   * answer the press with more chrome.
    */
-  it('puts the second level away when the trigger is pressed again', () => {
+  it('holds the second level open when the trigger is pressed again', () => {
     const { container, onappearanceclose, onappearanceopen } = mount({
       appearancePanel: PANEL,
       appearanceOpen: true,
     });
     menuTrigger(container).click();
     flushSync();
-    expect(onappearanceclose).toHaveBeenCalledTimes(1);
+    expect(onappearanceclose).not.toHaveBeenCalled();
     expect(onappearanceopen).not.toHaveBeenCalled();
     expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(container.querySelector('.appearance-popover')).not.toBeNull();
+  });
+
+  /*
+   * A click away has no safe meaning while every move is already on the glass:
+   * closing as cancel throws the tuning away, closing as Done saves an
+   * experiment. It goes nowhere, and the panel stays.
+   */
+  it('holds a click away instead of answering it', () => {
+    const { container, onappearanceclose } = mount({
+      appearancePanel: PANEL,
+      appearanceOpen: true,
+    });
+    const away = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(away);
+    flushSync();
+    expect(onappearanceclose).not.toHaveBeenCalled();
+    expect(away.defaultPrevented).toBe(true);
+    expect(container.querySelector('.appearance-popover')).not.toBeNull();
   });
 });
 
