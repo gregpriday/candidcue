@@ -526,6 +526,19 @@ export function editorHasUnsavedWork(): boolean {
   return editorStateHasUnsavedWork(get(state));
 }
 
+/**
+ * Compile the current text again, now — the preview's "Try again" after a
+ * compile that failed. A compiler that died or timed out has already been
+ * dropped (`failWorker`), so this request is what starts a fresh one.
+ */
+export function retryCompile(): void {
+  if (compileTimer) clearTimeout(compileTimer);
+  compileTimer = null;
+  const s = get(state);
+  if (s.scriptId === null) return;
+  void requestCompile(s.scriptId, s.source, s.editorRevision, compileOptions(s));
+}
+
 /** Run a debounced compile now (or do nothing when none is pending). */
 function flushPendingCompile(): void {
   if (compileTimer === null) return;
