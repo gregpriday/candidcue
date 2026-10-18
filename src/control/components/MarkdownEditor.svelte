@@ -41,6 +41,7 @@
   } from '@codemirror/search';
   import { editorTheme } from './cm-theme';
   import { insertBold, insertItalic } from '../lib/markdown-insert';
+  import { lintRun } from '../lib/lint-run';
 
   /**
    * Bold and italic on the keys every editor on the machine uses for them.
@@ -229,6 +230,7 @@
            */
           EditorView.contentAttributes.of({ 'aria-label': ariaLabel, spellcheck: 'true' }),
           editorTheme,
+          lintRun,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               internalValue = update.state.doc.toString();

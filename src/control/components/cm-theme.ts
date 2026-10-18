@@ -153,6 +153,19 @@ const themeSpec = {
   '.cm-scroller': { fontFamily: 'var(--font-prose)', overflow: 'auto' },
   // A cue or part break: the preview's amber chip, as text. Not a link.
   '.cm-directive': { color: 'var(--warning)', fontWeight: '600' },
+  /*
+   * The run a followed reading note is about (lib/lint-run.ts). The rail's
+   * warm grey, not terracotta: the accent is the selection's colour here, and
+   * this must never read as text the next keystroke would replace. Cloned
+   * decoration so a run that wraps keeps its rounded ends on every line.
+   */
+  '.cm-lint-run': {
+    backgroundColor: 'var(--bg-hover-chrome)',
+    borderRadius: '3px',
+    padding: '0.12em 0',
+    boxDecorationBreak: 'clone',
+    WebkitBoxDecorationBreak: 'clone',
+  },
 } as const;
 
 const workspaceBase = EditorView.theme({ ...themeSpec }, { dark: false });

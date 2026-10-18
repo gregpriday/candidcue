@@ -8,9 +8,15 @@
  * restraint, because that is the part a future change would quietly lose:
  * silence when there is nothing to say, no announcement, no colour that means
  * stop, and a click that goes to the author's own text.
+ *
+ * They also pin the shape the panel took so that many notes stay readable:
+ * one heading per rule with a count, the advice given once per rule rather
+ * than on every row, and rows that quote the words they are about. And the
+ * way back — Escape from the editor returns to the note that was followed, or
+ * to the next one of its kind once the author has fixed it.
  */
 import { render } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import ScriptLintPanel from '../../src/control/components/ScriptLintPanel.svelte';
 import type { ScriptLintFinding } from '../../src/control/lib/script-lint';
 
@@ -28,9 +34,11 @@ function finding(over: Partial<ScriptLintFinding> = {}): ScriptLintFinding {
 }
 
 function panel(findings: ScriptLintFinding[], ongoto = vi.fn()) {
-  const { container } = render(ScriptLintPanel, { props: { findings, ongoto } });
-  return { container, ongoto };
+  const { container, rerender } = render(ScriptLintPanel, { props: { findings, ongoto } });
+  return { container, rerender, ongoto };
 }
+
+const text = (el: Element | null | undefined) => el?.textContent?.replace(/\s+/g, ' ').trim();
 
 describe('the reading-notes panel', () => {
   it('renders nothing at all when the script is clean', () => {
@@ -45,13 +53,12 @@ describe('the reading-notes panel', () => {
     const details = container.querySelector('details');
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
-    expect(container.querySelector('summary')?.textContent).toContain('2 notes');
+    expect(text(container.querySelector('summary'))).toBe('2 reading notes');
   });
 
   it('counts one note in the singular', () => {
     const { container } = panel([finding()]);
-    expect(container.querySelector('summary')?.textContent).toContain('1 note on how this reads');
-    expect(container.querySelector('summary')?.textContent).not.toContain('1 notes');
+    expect(text(container.querySelector('summary'))).toBe('1 reading note');
   });
 
   it('never announces itself', () => {
@@ -63,47 +70,99 @@ describe('the reading-notes panel', () => {
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
 
-  it('shows the note, the hint and the line it is about', () => {
-    const { container } = panel([finding({ line: 12 })]);
-    const row = container.querySelector('.finding');
-    expect(row?.textContent).toContain('Long paragraph');
-    expect(row?.textContent).toContain('line 12');
-    expect(row?.textContent).toContain('This paragraph runs to 96 spoken words.');
-    expect(row?.textContent).toContain('A blank line at the next natural pause');
+  it('gathers the notes under one heading per rule, in a fixed order, each with a count', () => {
+    // Handed in document order, with the sentence first: the headings still
+    // come out in the panel's own order, so they never swap places while the
+    // author works through them.
+    const { container } = panel([
+      finding({ code: 'very-long-sentence', line: 3 }),
+      finding({ code: 'long-paragraph', line: 12 }),
+      finding({ code: 'long-paragraph', line: 30 }),
+    ]);
+    const rules = [...container.querySelectorAll('.rule')];
+    expect(rules.map((rule) => text(rule.querySelector('.rule-name')))).toEqual([
+      'Long paragraphs',
+      'Long sentence',
+    ]);
+    expect(rules.map((rule) => text(rule.querySelector('.count')))).toEqual(['2', '1']);
+    expect(rules.map((rule) => rule.querySelectorAll('.finding').length)).toEqual([2, 1]);
+  });
+
+  it('opens on the inventory: every rule closed, unless there is only one note', () => {
+    // A shot list's twenty-five missing full stops must not be pushed below the
+    // fold by the one long sentence beside them.
+    const many = panel([
+      finding({ code: 'very-long-sentence', line: 3 }),
+      finding({ code: 'no-terminal-punctuation', line: 5 }),
+      finding({ code: 'no-terminal-punctuation', line: 7 }),
+    ]);
+    const rules = [...many.container.querySelectorAll<HTMLDetailsElement>('details.rule')];
+    expect(rules).toHaveLength(2);
+    expect(rules.map((rule) => rule.open)).toEqual([false, false]);
+
+    const one = panel([finding()]);
+    expect(one.container.querySelector<HTMLDetailsElement>('details.rule')?.open).toBe(true);
+  });
+
+  it('quotes the words, the line and the length, and gives the advice once per rule', () => {
+    const { container } = panel([
+      finding({ line: 12, excerpt: 'Here is the short version. You write…', words: 96 }),
+      finding({ line: 30, excerpt: 'The recogniser is a small streaming model…', words: 181 }),
+    ]);
+    const rows = [...container.querySelectorAll('.finding')];
+    expect(rows).toHaveLength(2);
+    expect(text(rows[0]?.querySelector('.excerpt'))).toBe('Here is the short version. You write…');
+    expect(text(rows[0]?.querySelector('.where'))).toContain('line 12');
+    expect(text(rows[0]?.querySelector('.where'))).toContain('96 words');
+    expect(text(rows[1]?.querySelector('.excerpt'))).toBe('The recogniser is a small streaming model…');
+
+    // The action belongs to the rule, not to each place it applies to.
+    const actions = [...container.querySelectorAll('.action')];
+    expect(actions).toHaveLength(1);
+    expect(text(actions[0])).toBe('Split it with a blank line at a natural pause.');
+    for (const row of rows) expect(row.querySelector('.action')).toBeNull();
+
+    // And the reason is there for whoever asks, folded away.
+    const why = container.querySelector<HTMLDetailsElement>('details.why');
+    expect(why?.open).toBe(false);
+    expect(text(why?.querySelector('summary'))).toBe('Why this helps');
+    expect(text(why?.querySelector('.why-text'))).toMatch(/paragraph/i);
   });
 
   it('names every rule it can be handed', () => {
-    // The label map is total over `ScriptLintCode`, so a new rule cannot ship
-    // without a name — this pins that none of the current four render blank.
+    // The rule map is total over `ScriptLintCode`, so a new rule cannot ship
+    // without a heading — this pins that none of the current four render blank.
     const { container } = panel([
       finding({ code: 'long-paragraph' }),
       finding({ code: 'very-long-sentence' }),
       finding({ code: 'all-caps-run' }),
       finding({ code: 'no-terminal-punctuation' }),
     ]);
-    const labels = [...container.querySelectorAll('.label')].map((el) => el.textContent?.trim());
-    expect(labels).toHaveLength(4);
-    for (const label of labels) expect(label).toBeTruthy();
-    expect(new Set(labels).size).toBe(4);
+    const names = [...container.querySelectorAll('.rule-name')].map((el) => text(el));
+    expect(names).toHaveLength(4);
+    for (const name of names) expect(name).toBeTruthy();
+    expect(new Set(names).size).toBe(4);
   });
 
   it('raises its voice with contrast, not with a colour that means stop', () => {
     const { container } = panel([finding({ severity: 'info' }), finding({ severity: 'warn' })]);
-    const labels = [...container.querySelectorAll('.label')];
-    expect(labels[0]?.classList.contains('firm')).toBe(false);
-    expect(labels[1]?.classList.contains('firm')).toBe(true);
+    const rows = [...container.querySelectorAll('.finding')];
+    expect(rows[0]?.classList.contains('firm')).toBe(false);
+    expect(rows[1]?.classList.contains('firm')).toBe(true);
     /*
      * And that step of contrast is ALL severity is allowed to buy. Asserting
      * the absence of a `.danger`/`.pill` class would have been a line that
      * cannot fail — those names appear nowhere in this component whatever it
      * renders. Comparing the two rows against each other is the assertion with
-     * something to lose: no added word, no badge, no extra element on the
-     * severe one. A script that reads long is not a script that is broken.
+     * something to lose: no added word, no badge, no extra element and no other
+     * class on the severe one. A script that reads long is not a script that is
+     * broken.
      */
-    const rows = [...container.querySelectorAll('.finding')];
     expect(rows[1]?.textContent).toBe(rows[0]?.textContent);
     expect(rows[1]?.querySelectorAll('*').length).toBe(rows[0]?.querySelectorAll('*').length);
-    expect(rows[1]?.className).toBe(rows[0]?.className);
+    const others = (row: Element | undefined) =>
+      [...(row?.classList ?? [])].filter((name) => name !== 'firm').sort();
+    expect(others(rows[1])).toEqual(others(rows[0]));
   });
 
   it('hands back the row that was clicked, whole', () => {
@@ -132,5 +191,81 @@ describe('the reading-notes panel', () => {
       finding({ code: 'very-long-sentence', line: 12, column: 1 }),
     ]);
     expect(container.querySelectorAll('.finding')).toHaveLength(2);
+  });
+});
+
+/*
+ * The way back from the text. A note is followed into the editor; Escape there
+ * returns focus to the list. The editor here is a stand-in carrying the class
+ * the panel looks for, which is all the panel knows about CodeMirror.
+ */
+describe('coming back from the editor', () => {
+  let editor: HTMLTextAreaElement | null = null;
+
+  function editorField(): HTMLTextAreaElement {
+    const host = document.createElement('div');
+    host.className = 'cm-editor';
+    editor = document.createElement('textarea');
+    host.append(editor);
+    document.body.append(host);
+    return editor;
+  }
+
+  function pressEscape(target: HTMLElement): void {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  }
+
+  afterEach(() => {
+    editor?.closest('.cm-editor')?.remove();
+    editor = null;
+  });
+
+  it('Escape in the editor returns focus to the note that was followed', async () => {
+    const { container } = panel([
+      finding({ code: 'very-long-sentence', line: 7 }),
+      finding({ code: 'very-long-sentence', line: 25 }),
+    ]);
+    const rows = container.querySelectorAll<HTMLButtonElement>('.finding');
+    rows[1]?.click();
+    const field = editorField();
+    field.focus();
+
+    pressEscape(field);
+    await vi.waitFor(() => expect(document.activeElement).toBe(rows[1]));
+    expect(rows[1]?.classList.contains('current')).toBe(true);
+  });
+
+  it('once the note is fixed, Escape comes back to the next one of its kind', async () => {
+    const fixed = finding({ code: 'no-terminal-punctuation', line: 19 });
+    const next = finding({ code: 'no-terminal-punctuation', line: 29 });
+    const { container, rerender, ongoto } = panel([fixed, next]);
+    container.querySelectorAll<HTMLButtonElement>('.finding')[0]?.click();
+    const field = editorField();
+    field.focus();
+
+    // The author types the full stop; the next compile no longer reports it.
+    await rerender({ findings: [{ ...next }], ongoto });
+    pressEscape(field);
+
+    await vi.waitFor(() => {
+      const focused = document.activeElement as HTMLElement | null;
+      expect(focused?.dataset['note']).toBe('no-terminal-punctuation:29:1');
+    });
+  });
+
+  it('leaves Escape alone once focus has gone anywhere but the editor', async () => {
+    const { container } = panel([finding(), finding({ line: 30 })]);
+    const rows = container.querySelectorAll<HTMLButtonElement>('.finding');
+    rows[0]?.click();
+    const elsewhere = document.createElement('button');
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    const field = editorField();
+    field.focus();
+    pressEscape(field);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(document.activeElement).toBe(field);
+    elsewhere.remove();
   });
 });

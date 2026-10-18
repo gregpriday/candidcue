@@ -516,3 +516,53 @@ describe('advisory contract', () => {
     }
   });
 });
+
+/*
+ * What the rail quotes beside each note. Taken from the same pass as the note,
+ * so it is the SPOKEN text: Markdown and link destinations are gone, and a
+ * paragraph without a closing mark is quoted from its end, which is what that
+ * note is about.
+ */
+describe('excerpts and word counts', () => {
+  it('quotes the opening words of a long paragraph, without its Markdown', () => {
+    const source = `**Bold** start and a [link](https://example.com/a) here. ${prose(LONG_PARAGRAPH_WORDS)}`;
+    const [finding] = only(lintScriptSource(source), 'long-paragraph');
+    expect(finding!.excerpt).toMatch(/^Bold start and a link here\. alpha bravo/);
+    expect(finding!.excerpt).not.toMatch(/[*[\]()]|https/);
+    expect(finding!.excerpt!.endsWith('…')).toBe(true);
+    expect(finding!.words).toBe(LONG_PARAGRAPH_WORDS + 6);
+  });
+
+  it('quotes a long sentence from where it starts, and counts its words', () => {
+    const source = `Short opener here. ${oneSentence(LONG_SENTENCE_WORDS + 1)}`;
+    const [finding] = only(lintScriptSource(source), 'very-long-sentence');
+    expect(finding!.excerpt).toMatch(/^alpha bravo charlie/);
+    expect(finding!.words).toBe(LONG_SENTENCE_WORDS + 1);
+  });
+
+  it('quotes a paragraph with no full stop from its end', () => {
+    const source =
+      'So this is the video where we show you what changed and what it means for every desk and every laptop without anyone needing to install anything at all\n';
+    const [finding] = only(lintScriptSource(source), 'no-terminal-punctuation');
+    expect(finding!.excerpt!.startsWith('…')).toBe(true);
+    expect(finding!.excerpt!.endsWith('install anything at all')).toBe(true);
+    expect(finding!.words).toBeUndefined();
+  });
+
+  it('quotes a run of capitals as the run itself', () => {
+    const [finding] = only(
+      lintScriptSource('Now listen. ALPHA BRAVO CHARLIE DELTA and back.'),
+      'all-caps-run',
+    );
+    expect(finding!.excerpt).toBe('ALPHA BRAVO CHARLIE DELTA');
+  });
+
+  it('never leaves a comma hanging in front of the ellipsis', () => {
+    // 72 characters in, this cut lands straight after "changed,".
+    const opener = 'So this is the video where we show you what changed, why it changed,';
+    const source = `${opener} and ${prose(LONG_PARAGRAPH_WORDS)}`;
+    const [finding] = only(lintScriptSource(source), 'long-paragraph');
+    expect(finding!.excerpt).not.toMatch(/[,;:]…$/);
+    expect(finding!.excerpt!.endsWith('…')).toBe(true);
+  });
+});
