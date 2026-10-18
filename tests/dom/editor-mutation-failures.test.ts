@@ -208,8 +208,10 @@ async function chooseOverflowItem(label: string): Promise<void> {
   expect(trigger, 'the editor header must offer the Script actions menu').toBeTruthy();
   trigger?.click();
   await tick();
+  // The label span, not the whole row: Duplicate carries a ⌘D / Ctrl+D hint
+  // beside its name, which is not part of what the item is called.
   const item = [...document.querySelectorAll('[role="menuitem"]')].find(
-    (element) => element.textContent?.trim() === label,
+    (element) => element.querySelector('.item-label')?.textContent?.trim() === label,
   );
   expect(item, `the Script actions menu must offer "${label}"`).toBeTruthy();
   (item as HTMLElement).click();

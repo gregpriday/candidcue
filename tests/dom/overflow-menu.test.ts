@@ -424,7 +424,9 @@ describe('OverflowMenu — separators', () => {
     renderMenu(
       items({ label: 'Open' }, { label: 'Move to Trash', danger: true, separated: true }),
     );
-    await openByClick();
+    // From the keyboard, so Open is the drawn starting point and one Down has
+    // to cross the separator to reach the next stop.
+    await openByActivationKey();
 
     expect(document.querySelectorAll('[role="separator"]')).toHaveLength(1);
     // The arrows must still see exactly two stops: `menu-nav` indexes `items`,

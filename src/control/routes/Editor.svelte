@@ -89,6 +89,7 @@ import type { PresentationMode } from '../services/settings-types';
   import { duplicateScript, loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
+  import type { ContextMenuItem } from '../stores/context-menu';
   import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
 
   interface Props {
@@ -1259,7 +1260,9 @@ import type { PresentationMode } from '../services/settings-types';
    * Library's row menus use too.
    */
   const actionLabels = scriptActionLabels(mac);
-  const overflowItems = $derived([
+  // Typed, as the Library's `rowMenuItems` is: left to inference, the handlers'
+  // return types were circular through the derived list and came out `any`.
+  const overflowItems = $derived<ContextMenuItem[]>([
     // Through the store, not the service: the store is where a duplicate that
     // fails gets said out loud, and it reloads the library either way. Calling
     // the service directly from here had no catch and no notice at all.
