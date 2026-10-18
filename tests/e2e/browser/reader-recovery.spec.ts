@@ -158,15 +158,15 @@ test('offers a refused off-screen match, and reads from it only when asked', asy
   await snapshot(page, refusal(target));
   const chip = page.getByRole('group', { name: 'Possible match' });
   await expect(chip).toBeVisible();
-  await expect(chip).toContainText('Possible match below');
+  await expect(chip).toContainText(/just below|\d+ paragraphs? down/);
   await expect(chip).toContainText('The log');
   await expect(chip).toContainText('When the light was finally automated');
   // The button says where from, and a screen reader hears the offer once.
-  await expect(chip.getByRole('button', { name: 'Read from here' })).toHaveAccessibleDescription(
-    /When the light was finally automated/,
+  await expect(chip.getByRole('button', { name: 'Read from there' })).toHaveAccessibleDescription(
+    /The log.*When the light was finally automated/,
   );
   await expect(page.locator('.stage-announcer')).toHaveText(
-    /Possible match, in The log: When the light was finally automated/,
+    /Possible match (just below|\d+ paragraphs? down), in The log: When the light was finally automated/,
   );
   // Offered, not taken: nothing asked the aligner to move, and the document
   // did not go there — a hold eases by a pixel or two, a relocation by screens.
@@ -175,7 +175,7 @@ test('offers a refused off-screen match, and reads from it only when asked', asy
   expect(Math.abs((await scrollPx(page)) - paintedBefore)).toBeLessThan(15);
   expect(await onGlass(page, target)).toBe(false);
 
-  await chip.getByRole('button', { name: 'Read from here' }).focus();
+  await chip.getByRole('button', { name: 'Read from there' }).focus();
   await page.keyboard.press('Enter');
   await expect(chip).toHaveCount(0);
   // The keyboard is handed to the reading window, not dropped on the page.
@@ -327,7 +327,9 @@ test('a hand move withdraws the offer, and a blanked stage keeps its place', asy
   errors.expectClean();
 });
 
-test('the offer fits a small reading window without covering the controls', async ({ page }) => {
+test('the offer fits a small reading window without covering the controls or the line', async ({
+  page,
+}) => {
   const errors = watchPageErrors(page);
   await page.setViewportSize({ width: 580, height: 360 });
   await presentInWindow(page);
@@ -343,8 +345,16 @@ test('the offer fits a small reading window without covering the controls', asyn
   expect(box!.x).toBeGreaterThanOrEqual(stage!.x);
   expect(box!.y).toBeGreaterThanOrEqual(stage!.y);
   expect(box!.x + box!.width).toBeLessThanOrEqual(stage!.x + stage!.width);
-  // Clear of the dock's row below it.
-  expect(box!.y + box!.height).toBeLessThanOrEqual(dock!.y);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(stage!.y + stage!.height);
+  // Too short a window for the card: it waits in the dock's row, beside the
+  // dock rather than over it, and the script is left alone.
+  const overlaps =
+    box!.x < dock!.x + dock!.width &&
+    dock!.x < box!.x + box!.width &&
+    box!.y < dock!.y + dock!.height &&
+    dock!.y < box!.y + box!.height;
+  expect(overlaps).toBe(false);
+  expect(box!.y).toBeGreaterThanOrEqual(dock!.y - 1);
   const hold = page.locator('.hold-status');
   if (await hold.isVisible()) {
     const h = (await hold.boundingBox())!;

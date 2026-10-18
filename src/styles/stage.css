@@ -170,6 +170,10 @@
   --stage-chrome-highlight: rgb(36 30 20 / 7%);
   --stage-chrome-control-border: rgb(36 30 20 / 18%);
   --stage-chrome-control-hover: rgb(36 30 20 / 6%);
+  /* The workspace clay, for the one action a reading window ever offers. */
+  --stage-action-bg: #b35a38;
+  --stage-action-bg-hover: #9c4a2c;
+  --stage-action-text: #ffffff;
   --stage-focus-ring: rgb(36 36 36 / 70%);
   --stage-dock-icon: rgb(36 36 36 / 72%);
   --stage-dock-end: rgb(36 36 36 / 58%);

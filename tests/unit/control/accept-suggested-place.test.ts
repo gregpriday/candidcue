@@ -3,7 +3,7 @@
  * suggestion still describes this take.
  *
  * The stage offers the place the engine refused (`holdOffScreen`); pressing
- * "Read from here" asks control to put the aligner there. A press that outlived
+ * "Read from there" asks control to put the aligner there. A press that outlived
  * its take, named a place outside the script, arrived after following had
  * already found the reader again, or was overtaken by a deliberate reposition
  * must move nothing.

@@ -2971,7 +2971,7 @@ export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
-/** Why a "Read from here" press moves nothing, or null when it should move. */
+/** Why a "Read from there" press moves nothing, or null when it should move. */
 export type SuggestedPlaceRefusal =
   | 'inactive'
   | 'another-take'
