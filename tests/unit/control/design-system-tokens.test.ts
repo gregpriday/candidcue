@@ -147,6 +147,18 @@ const SURFACE_TOKENS = [
   '--bg-row-selected-inactive',
 ];
 
+/**
+ * The status bar's hover and press fills, which are NOT general surfaces.
+ *
+ * The bar sits a shade under the chrome, so a hover step dark enough to see on
+ * it cannot also carry muted text at 4.5:1 (#e1dbd2 holds --text-muted at 4.38
+ * in the light theme). StatusBar.svelte therefore never puts muted text on
+ * them: a plain item turns --text-primary on hover and press, and a warning or
+ * danger item keeps its tone. These are checked against exactly that, below,
+ * rather than against the muted and faint greys SURFACE_TOKENS are held to.
+ */
+const STATUSBAR_FILLS = ['--bg-hover-statusbar', '--bg-active-statusbar'];
+
 const THEMES = [
   { name: 'studio (dark)', selector: ":root,\n[data-theme='studio']" },
   { name: 'workspace (light)', selector: "[data-theme='workspace']" },
@@ -220,6 +232,26 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
     }
   });
 
+  it('the status bar hover and press fills carry what is drawn on them', () => {
+    for (const fill of STATUSBAR_FILLS) {
+      const fillHex = resolve(block, fill);
+      expect(fillHex, `${fill} must be opaque to be checked`).toMatch(/^#[0-9a-f]{6}$/i);
+      for (const token of ['--text-primary', '--warning', '--danger']) {
+        const hex = resolve(block, token);
+        expect(
+          contrast(hex, fillHex),
+          `${token} (${hex}) on ${fill} (${fillHex})`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      // The ring is drawn on the fill's own edge, so it is read against it.
+      const ring = resolve(block, '--focus');
+      expect(
+        contrast(ring, fillHex),
+        `--focus (${ring}) on ${fill} (${fillHex})`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it('the accent ring is still the themed focus colour', () => {
     // --focus-ring lives on :root and aliases --focus; if that indirection is
     // ever broken the assertion above would be checking a token nothing uses.
@@ -236,7 +268,8 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
       (name) =>
         name.startsWith('--bg-') &&
         /^#[0-9a-f]{6}$/i.test(resolve(block, name)) &&
-        !SURFACE_TOKENS.includes(name),
+        !SURFACE_TOKENS.includes(name) &&
+        !STATUSBAR_FILLS.includes(name),
     );
     expect(unchecked, 'these surfaces exist but nothing is ever checked against them').toEqual([]);
     // And the inventory must not have gone hollow.
