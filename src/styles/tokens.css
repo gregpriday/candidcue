@@ -251,6 +251,10 @@
      a keyboard user nothing about where their next keystroke will land. */
   --bg-toolbar: #14171d;
   --bg-statusbar: #12151a;
+  /* The status bar's clickable items. The bar sits a shade under the chrome
+     `--bg-hover-chrome` was tuned for, so on it that step all but vanishes. */
+  --bg-hover-statusbar: #242932;
+  --bg-active-statusbar: #2b313b;
   --bg-row-selected: rgba(224, 138, 99, 0.18);
   /* The current row of a SOURCE LIST (sidebar, Settings index): neutral, the
      way a Finder sidebar marks where you are, with the accent left to the
@@ -389,6 +393,10 @@
   /* Desktop surface grammar — see the studio block for what each one is for. */
   --bg-toolbar: #f1ede7;
   --bg-statusbar: #ece8e1;
+  /* Dark enough to read as a hover on the bar, light enough that warning and
+     danger text still clear 4.5:1 on it (4.97 and 4.85; 4.69 and 4.58 pressed). */
+  --bg-hover-statusbar: #e1dbd2;
+  --bg-active-statusbar: #dcd5cb;
   --bg-row-selected: rgba(183, 94, 59, 0.14);
   /*
    * A source list's current row, in neutral rather than in clay.

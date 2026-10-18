@@ -70,50 +70,46 @@
     <p class="announcement" role="status" aria-live="polite">{announcement}</p>
   {/if}
   <div class="group">
-    {#each items as item (item.key)}
-      {#if item.onclick}
-        <button
-          type="button"
-          class="item interactive {item.tone ?? 'normal'}"
-          data-focus="control"
-          title={item.title}
-          onclick={item.onclick}
-        >
-          {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span class="label">{item.label}</span>
-        </button>
-      {:else}
-        <span class="item {item.tone ?? 'normal'}" title={item.title}>
-          {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span class="label">{item.label}</span>
-        </span>
-      {/if}
-    {/each}
+    {#each items as item (item.key)}{@render entry(item)}{/each}
   </div>
 
   <div class="group trailing">
     {#if extra}{@render extra()}{/if}
-    {#each trailing as item (item.key)}
-      {#if item.onclick}
-        <button
-          type="button"
-          class="item interactive {item.tone ?? 'normal'}"
-          data-focus="control"
-          title={item.title}
-          onclick={item.onclick}
-        >
-          {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span class="label">{item.label}</span>
-        </button>
-      {:else}
-        <span class="item {item.tone ?? 'normal'}" title={item.title}>
-          {#if item.icon}<Icon name={item.icon} size={13} />{/if}
-          <span class="label">{item.label}</span>
-        </span>
-      {/if}
-    {/each}
+    {#each trailing as item (item.key)}{@render entry(item)}{/each}
   </div>
 </footer>
+
+{#snippet content(item: StatusBarItem)}
+  {#if item.parts}
+    {#each item.parts as part (part.key)}
+      <span class="part {part.tone ?? 'normal'}">
+        {#if part.icon}<Icon name={part.icon} size={13} />{/if}
+        <span class="label">{part.label}</span>
+      </span>
+    {/each}
+  {:else}
+    {#if item.icon}<Icon name={item.icon} size={13} />{/if}
+    <span class="label">{item.label}</span>
+  {/if}
+{/snippet}
+
+{#snippet entry(item: StatusBarItem)}
+  {#if item.onclick}
+    <button
+      type="button"
+      class="item interactive {item.tone ?? 'normal'}"
+      data-focus="control"
+      title={item.title}
+      onclick={item.onclick}
+    >
+      {@render content(item)}
+    </button>
+  {:else}
+    <span class="item {item.tone ?? 'normal'}" title={item.title}>
+      {@render content(item)}
+    </span>
+  {/if}
+{/snippet}
 
 <style>
   .statusbar {
@@ -129,6 +125,18 @@
     /* Tabular everywhere: this band is mostly numbers, and proportional digits
        make a live word count shuffle sideways as it counts. */
     font-variant-numeric: tabular-nums;
+    /*
+     * The type is set HERE, once, and inherited — never on `.item`. A button
+     * needs `font: inherit`, and that shorthand resets size and line height to
+     * whatever the button's parent has. When the size lived on `.item`, the
+     * button's own `font: inherit` overrode it, and the one clickable fact in
+     * the bar was drawn at body size beside 11px neighbours. (The global
+     * button reset in tokens.css supplies the `font: inherit` now.)
+     */
+    font-size: var(--text-2xs);
+    /* Room for descenders: labels clip their overflow (to truncate), and a
+       line box of exactly 1em cut the tails off "scripts" and "agents". */
+    line-height: 16px;
     /* No radius. §9.2: permanent panes have straight edges. */
     border-radius: 0;
     user-select: none;
@@ -147,23 +155,34 @@
     border: 0;
   }
 
+  /*
+   * No `overflow: hidden` on the group. It used to clip there, and the 24px
+   * band is shorter than a focused button and its ring, so keyboard focus on
+   * the one button in the bar was cut down to a lone terracotta "(". Each
+   * item clips its own contents instead (an element's overflow never clips
+   * its own outline), and labels ellipsize inside it.
+   */
   .group {
     display: flex;
     align-items: center;
     gap: var(--space-4);
     flex: 0 1 auto;
     min-width: 0;
-    overflow: hidden;
   }
   /*
    * When the band runs out of room the trailing group gives way first, and
    * its labels ellipsize rather than pushing the leading facts out of view.
    * It used to refuse to shrink at all, so a long selected title in a narrow
    * window clipped the script count instead of itself.
+   *
+   * A zero basis, not a bigger shrink factor: shrinking is shared out by size,
+   * so a long enough title still took a share out of the leading group and
+   * cut the search phrase off before its closing quote. With no basis of its
+   * own, the trailing group has only the room the leading facts leave.
    */
   .trailing {
     justify-content: flex-end;
-    flex: 0 3 auto;
+    flex: 1 1 0;
   }
   /* The first leading fact (a count, a word total) is never the one cut. */
   .group:not(.trailing) > .item:first-child {
@@ -174,15 +193,25 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: var(--text-2xs);
-    /* Room for descenders: the group clips its overflow (to truncate), and a
-       line box of exactly 1em cut the tails off "scripts" and "agents". */
-    line-height: 16px;
     color: var(--text-muted);
     white-space: nowrap;
     min-width: 0;
+    overflow: hidden;
+  }
+  /* Two runs in one item ("1 error", "2 notes"): each keeps its own glyph and
+     tone, held closer together than two separate facts — clearly closer, so
+     the pair reads as one control rather than as a gap drawn slightly wrong. */
+  .part {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .item > .part + .part {
+    margin-left: var(--space-1);
   }
   .label {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -190,18 +219,53 @@
   .interactive {
     border: none;
     background: transparent;
-    padding: 0 4px;
-    height: 18px;
+    padding: 0 5px;
+    /*
+     * The fill reaches past the text into the gap, so the text itself sits on
+     * the same rhythm as the facts beside it. Without this the one button in
+     * the bar stood 5px further off its neighbour than any other item did.
+     */
+    margin-inline: -5px;
+    /* The band's content box is 23px under its 1px rule: 19 leaves an even
+       2px above and below, where 18 sat a half pixel low. */
+    height: 19px;
     border-radius: 4px;
-    font: inherit;
-    color: inherit;
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
   }
   .interactive:hover {
-    background: var(--bg-hover-chrome);
+    background: var(--bg-hover-statusbar);
+  }
+  .interactive:active {
+    background: var(--bg-active-statusbar);
+  }
+  /* Only a plain item darkens on hover. A toned one keeps its tone: a fault
+     that turned charcoal under the pointer stopped looking like a fault at the
+     moment somebody went to look at it. */
+  .interactive.normal:hover,
+  .interactive.normal:active {
     color: var(--text-primary);
+  }
+  /*
+   * What it does is named at rest, not only under the pointer: a quiet
+   * underline in the item's own colour, the mark the outline's diagnostic
+   * links already carry. Without it "125%" read as one more fact.
+   */
+  .interactive .label {
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 2px;
+  }
+  /*
+   * The accent ring (`data-focus="control"`) drawn on the fill's own edge
+   * rather than 2px out from it. Out, a ring needs 4px more than the button
+   * and the band has 2 to spare on each side, so it ran into the rule above
+   * and the window's edge below.
+   */
+  .interactive:focus-visible {
+    outline-offset: -2px;
   }
 
   /*
