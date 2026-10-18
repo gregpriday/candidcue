@@ -437,14 +437,16 @@ describe('the filled danger variant', () => {
    * outright would leave the class-name test in tests/dom/button.test.ts green
    * because the class is applied from a prop either way.
    */
-  it('is filled, lipped and labelled from the danger tokens', () => {
+  it('is filled and labelled from the danger tokens, flat like .primary', () => {
     const filled = rule('.danger-primary');
     expect(filled).toMatch(/background:\s*var\(--danger\)/);
-    expect(filled).toMatch(/border-color:\s*var\(--danger-strong\)/);
     expect(filled).toMatch(/color:\s*var\(--danger-contrast\)/);
-    // The 15px hero label, same as .primary — that is what makes it read as the
-    // action being asked about rather than a second Cancel.
-    expect(filled).toMatch(/font-size:\s*var\(--text-base\)/);
+    // The edge is the fill's own colour. A darker "lip" read as a cheap heavy
+    // outline on .primary, and this variant follows the same recipe in red.
+    expect(filled).toMatch(/border-color:\s*var\(--danger\)/);
+    // No label size of its own: the 15px hero label was dropped with the lip,
+    // so the fill alone is what sets it apart from the Cancel beside it.
+    expect(filled).not.toMatch(/font-size:/);
   });
 
   /*
@@ -504,7 +506,9 @@ describe('tokens that used to be spelled out by hand', () => {
   it('the sidebar carries no elevation on any row state', () => {
     const sidebar = read('src/control/components/Sidebar.svelte');
     expect(sidebar).not.toMatch(/box-shadow:/);
-    // And the selected row is a tonal fill, not a surface change.
-    expect(sidebar).toContain('background: var(--bg-row-selected)');
+    // And the selected row is a neutral tonal fill, not a surface change, and
+    // not the clay row tint a selected document takes in the Library.
+    expect(sidebar).toContain('background: var(--bg-source-selected)');
+    expect(sidebar).not.toContain('var(--bg-row-selected)');
   });
 });
