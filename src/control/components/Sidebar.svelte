@@ -239,6 +239,7 @@
   orientation="vertical"
   side="leading"
   label="Sidebar width"
+  pane="Sidebar"
   value={$workspace.sidebarWidth}
   min={PANE_LIMITS.sidebar.min}
   max={PANE_LIMITS.sidebar.max}

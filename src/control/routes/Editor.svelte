@@ -1526,6 +1526,11 @@ import type { PresentationMode } from '../services/settings-types';
               orientation="vertical"
               side="leading"
               label="Editor and preview split"
+              pane="Editor"
+              valuetext={(pixels) => {
+                const share = workWidth > 0 ? Math.round((pixels / workWidth) * 100) : 50;
+                return `Editor ${share}%, preview ${100 - share}%`;
+              }}
               value={splitPixels}
               min={splitMinPixels}
               max={splitMaxPixels}
@@ -1569,6 +1574,7 @@ import type { PresentationMode } from '../services/settings-types';
           orientation="vertical"
           side="trailing"
           label="Outline width"
+          pane="Outline"
           value={$workspace.outlineWidth}
           min={PANE_LIMITS.editorOutline.min}
           max={PANE_LIMITS.editorOutline.max}
