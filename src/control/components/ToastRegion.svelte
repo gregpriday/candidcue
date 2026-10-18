@@ -394,7 +394,12 @@
   `aria-atomic="false"` on both live regions: `status` and `alert` are atomic
   by default, which would read every notice still standing each time a new
   one arrived.
+
+  `pointerover` only notes that the pointer is on the stack, to pause its
+  countdowns; it does nothing a keyboard user lacks, since `focusin` pauses
+  them the same way.
 -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="region" class:presenting data-stage-chrome bind:this={region} {onpointerover} {onfocusin} {onfocusout}>
   {#if folded.length > 0 || expanded}
     <button

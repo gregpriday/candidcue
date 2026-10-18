@@ -50,14 +50,25 @@ describe('a keyed notice replaces rather than stacks', () => {
 
   it('leaves unkeyed notices alone — they are events, not states', () => {
     showToast('Auto-scroll 160 wpm', 'info');
-    showToast('Auto-scroll 160 wpm', 'info');
+    showToast('Auto-scroll 165 wpm', 'info');
     showToast('No sound is reaching the microphone.', 'danger', { key: 'input' });
     showToast('No sound is reaching the microphone.', 'danger', { key: 'input' });
     expect(messages()).toEqual([
       'Auto-scroll 160 wpm',
-      'Auto-scroll 160 wpm',
+      'Auto-scroll 165 wpm',
       'No sound is reaching the microphone.',
     ]);
+  });
+
+  /*
+   * An identical repeat is not a condition, but it is not a second event to
+   * dismiss either: it folds into the standing notice and says how many times.
+   */
+  it('folds an identical unkeyed repeat into one notice that counts it', () => {
+    showToast('Could not copy to the clipboard', 'danger');
+    showToast('Could not copy to the clipboard', 'danger');
+    showToast('Could not copy to the clipboard', 'danger');
+    expect(get(toasts)).toMatchObject([{ message: 'Could not copy to the clipboard', count: 3 }]);
   });
 });
 
