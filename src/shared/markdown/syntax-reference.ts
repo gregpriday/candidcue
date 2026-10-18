@@ -82,7 +82,10 @@ export interface SyntaxGroup {
 }
 
 /** Where the heading switch lives, named as the Settings window names it. */
-export const READ_HEADINGS_SETTING = { section: 'General', label: 'Read headings aloud' } as const;
+export const READ_HEADINGS_SETTING = {
+  section: 'General',
+  label: 'Follow headings as spoken lines',
+} as const;
 
 const READ_HEADINGS_PATH = `Settings › ${READ_HEADINGS_SETTING.section} › ${READ_HEADINGS_SETTING.label}`;
 

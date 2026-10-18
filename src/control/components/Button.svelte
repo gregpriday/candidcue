@@ -17,6 +17,8 @@
     disabled?: boolean;
     type?: 'button' | 'submit';
     title?: string;
+    /** The id of visible text that explains what the button does. */
+    describedby?: string;
     /**
      * The rendered element, for callers that must move focus onto this button
      * deliberately (RevisionHistory's confirm step). Exposed rather than left to
@@ -34,6 +36,7 @@
     disabled = false,
     type = 'button',
     title,
+    describedby,
     element = $bindable(null),
     onclick,
     children,
@@ -47,6 +50,7 @@
   {type}
   {disabled}
   {title}
+  aria-describedby={describedby}
   {onclick}
 >
   {@render children?.()}

@@ -69,7 +69,7 @@ describe('Motion profile with one family', () => {
   it('names the family that is actually in force', () => {
     const { view } = mount();
     expect(view.container.textContent).toContain(MOTION_PROFILE_FAMILIES[0]!.label);
-    expect(view.container.textContent).toContain('CandidCue has one motion profile');
+    expect(view.container.textContent).toContain("CandidCue's one motion profile");
     expect(view.container.textContent).not.toContain('in this release');
   });
 });

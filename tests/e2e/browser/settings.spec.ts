@@ -337,6 +337,11 @@ async function seedAppliedRig(
   );
 }
 
+/** The row that holds one Teleprompter slider and, when moved, its way back. */
+function overrideRow(page: Page, label: string) {
+  return page.locator('.content .override', { has: page.getByRole('slider', { name: label }) });
+}
+
 async function openSettingsSection(
   page: import('@playwright/test').Page,
   section: string,
@@ -345,6 +350,14 @@ async function openSettingsSection(
   await page.getByRole('button', { name: section, exact: true }).click();
 }
 
+/** The four fields a rig — or a reading window — decides for itself. */
+const geometrySliders = [
+  'Default font size',
+  'Line height',
+  'Text column width',
+  'Reading band position',
+] as const;
+
 test('a calibrated rig disables the four sliders it owns and names itself', async ({ page }) => {
   await installTauriShim(page, { welcomed: true });
   await seedAppliedRig(page, { scale: true });
@@ -352,20 +365,21 @@ test('a calibrated rig disables the four sliders it owns and names itself', asyn
   await openSettingsSection(page, 'Teleprompter');
 
   // All four are the rig's, so none of them accepts a drag.
-  for (const label of [
-    'Default font size',
-    'Line height',
-    'Text column width',
-    'Reading band position',
-  ]) {
+  for (const label of geometrySliders) {
     await expect(page.getByRole('slider', { name: label })).toBeDisabled();
   }
 
-  // And EACH says whose value it is showing, by name — not "a calibrated rig",
-  // and not one shared paragraph underneath. Counted rather than `.first()`:
-  // three of the four could lose the attribution and a first-match assertion
-  // would never notice.
-  await expect(page.getByText(/Controlled by Desk hood calibration/)).toHaveCount(4);
+  // Whose values they are is said once, by name — not "a calibrated rig" —
+  // in one note above the four. And EACH slider is described by it, so the
+  // attribution is read with whichever of them has focus. Checked per slider
+  // rather than once: three of the four could lose the link and a single
+  // check of the note would never notice.
+  await expect(page.getByText(/come from Desk hood calibration/)).toHaveCount(1);
+  for (const label of geometrySliders) {
+    await expect(page.getByRole('slider', { name: label })).toHaveAccessibleDescription(
+      /come from Desk hood calibration/,
+    );
+  }
 
   // With a route to the thing that owns it.
   await expect(page.getByRole('button', { name: 'Open Desk hood calibration' })).toBeVisible();
@@ -381,20 +395,16 @@ test('a reading window owns the same four fields, with no rig measured at all', 
   await page.goto('/control.html');
   await openSettingsSection(page, 'Teleprompter');
 
-  for (const label of [
-    'Default font size',
-    'Line height',
-    'Text column width',
-    'Reading band position',
-  ]) {
+  for (const label of geometrySliders) {
     await expect(page.getByRole('slider', { name: label })).toBeDisabled();
+    // And it says where a reading window's text is set instead, rather than
+    // naming a rig it does not have or a control this screen does not hold.
+    await expect(page.getByRole('slider', { name: label })).toHaveAccessibleDescription(
+      /A reading window sets its own text\. During a read, use Reading appearance/,
+    );
   }
-  // And it says where a reading window's text is set instead, rather than
-  // naming a rig it does not have or a control this screen does not hold.
-  await expect(
-    page.getByText(/A reading window does not use this: during a read, its text is set in Reading appearance/),
-  ).toHaveCount(4);
-  await expect(page.getByText(/Controlled by/)).toHaveCount(0);
+  await expect(page.getByText(/come from/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Open .*calibration$/ })).toHaveCount(0);
 });
 
 test('auto-scroll pace stays live under a rig, because a rig does not own pace', async ({ page }) => {
@@ -415,22 +425,22 @@ test('with no rig applied the sliders are live and show what the default is', as
 
   const fontSize = page.getByRole('slider', { name: 'Default font size' });
   await expect(fontSize).toBeEnabled();
-  // A fresh install sits on every default, and each one now says so rather
-  // than leaving the number unexplained.
-  //
-  // `exact: true` matters more than it looks: Playwright's default string
-  // matching is a case-insensitive SUBSTRING, so a loose 'Default · 130 wpm'
-  // also matches the reset button's 'Reset to default · 130 wpm' — which is
-  // how the first version of this test passed while the pace was showing
-  // "Set by you" against a default it disagreed with.
-  await expect(page.getByText('Default · 64 px', { exact: true })).toBeVisible();
-  await expect(page.getByText('Default · 1.32', { exact: true })).toBeVisible();
+  // A fresh install sits on every default, and a value at its default says
+  // nothing more than its readout: "Default · 64 px" under "64 px" was the
+  // same number twice. So no row claims to be chosen, and none offers a reset.
+  await expect(fontSize).toHaveValue('64');
+  await expect(overrideRow(page, 'Default font size').locator('.override-state')).toHaveCount(0);
+  await expect(page.getByRole('slider', { name: 'Line height' })).toHaveValue('1.32');
+  await expect(overrideRow(page, 'Line height').locator('.override-state')).toHaveCount(0);
 
   // The shim's document carries 140 wpm, which is NOT the default — so the
   // pace must report itself as chosen rather than defaulted, and name the
-  // number a reset would restore.
+  // number a reset would restore. On ITS row: a loose page-wide 'Set by you'
+  // would pass on any other slider that happened to be moved.
   await expect(page.getByRole('slider', { name: 'Auto-scroll pace' })).toHaveValue('140');
-  await expect(page.getByRole('button', { name: 'Reset to default · 130 wpm' })).toBeVisible();
+  const pace = overrideRow(page, 'Auto-scroll pace');
+  await expect(pace.getByText('Set by you', { exact: true })).toBeVisible();
+  await expect(pace.getByRole('button', { name: 'Reset to default (130 wpm)' })).toBeVisible();
 });
 
 test('a changed slider offers its way back to the default', async ({ page }) => {
@@ -443,13 +453,15 @@ test('a changed slider offers its way back to the default', async ({ page }) => 
 
   // It now reports itself as chosen rather than defaulted, and offers the
   // reset the screen never had.
-  await expect(page.getByText('Set by you').first()).toBeVisible();
-  const reset = page.getByRole('button', { name: 'Reset to default · 64 px' });
+  const row = overrideRow(page, 'Default font size');
+  await expect(row.getByText('Set by you', { exact: true })).toBeVisible();
+  const reset = row.getByRole('button', { name: 'Reset to default (64 px)' });
   await expect(reset).toBeVisible();
 
   await reset.click();
   await expect(fontSize).toHaveValue('64');
-  await expect(page.getByText('Default · 64 px')).toBeVisible();
+  // Back on the default, the row stops claiming it was chosen.
+  await expect(row.locator('.override-state')).toHaveCount(0);
 
   /*
    * And the reset PERSISTS — to the overlay, which is where this field lives.
@@ -603,9 +615,8 @@ test('a session mode stored by an older build is admitted, not papered over', as
   // "Follow voice" is two names for one mode.
   await expect(
     page.getByText(
-      'This mode was saved by an earlier version, and takes started in it do not follow ' +
-        'your voice. Switch back to Follow voice to prompt normally; auto-scroll still ' +
-        'rolls the script at a set pace from inside any take.',
+      'Saved by an earlier version. Takes in this mode do not follow your voice; ' +
+        'switch back to Follow voice to prompt normally.',
       { exact: true },
     ),
   ).toBeVisible();
@@ -626,7 +637,7 @@ test('a session mode stored by an older build is admitted, not papered over', as
     )
     .toBe(true);
   await expect(page.getByText('Follow voice', { exact: true })).toBeVisible();
-  await expect(page.getByText(/saved by an earlier version/)).toHaveCount(0);
+  await expect(page.getByText(/Saved by an earlier version/)).toHaveCount(0);
 });
 
 test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
@@ -642,8 +653,8 @@ test('Session mode states its one value instead of offering two dead options', a
   // It says where the pace actually lives — Teleprompter, not "below" in General.
   await expect(
     page.getByText(
-      'Every take opens listening. Auto-scroll can roll the script at a set pace from inside ' +
-        'any take; set the pace with Auto-scroll pace in Settings › Teleprompter.',
+      'Every take opens listening. Auto-scroll can still roll the script at a set pace ' +
+        '(Teleprompter › Auto-scroll pace).',
       { exact: true },
     ),
   ).toBeVisible();
@@ -658,7 +669,7 @@ test('Following drops the dead Script fidelity control', async ({ page }) => {
   await expect(page.getByText('Script fidelity')).toHaveCount(0);
   // Motion profile states its one family rather than opening a dropdown of one.
   await expect(page.getByText('Standard motion (v1)')).toBeVisible();
-  await expect(page.getByText('CandidCue has one motion profile')).toBeVisible();
+  await expect(page.getByText("CandidCue's one motion profile")).toBeVisible();
   // What genuinely reaches resolveFollowProfile stays. Matched exactly: the
   // motion-profile description mentions follow feel too, and a loose match
   // would pass on the sentence about the control rather than the control.
@@ -689,7 +700,7 @@ test('searching settings hides the rows that do not match, and says how many did
   const unrelated = [
     page.locator('.content .toggle-row', { hasText: 'Always on top' }),
     page.locator('.content .readout', { hasText: 'Body text' }),
-    page.locator('.content .field', { has: page.getByLabel('Custom (metres)') }),
+    page.locator('.content .control-block', { hasText: 'Viewing distance' }),
     page.locator('.content .field', { has: page.getByLabel('How you are framed') }),
   ];
   for (const row of [horizontal, vertical, ...unrelated]) await expect(row).toBeVisible();
@@ -699,6 +710,9 @@ test('searching settings hides the rows that do not match, and says how many did
 
   await expect(horizontal).toBeVisible();
   await expect(vertical).toBeVisible();
+  // The mode tiles match too, and rightly: the reading window's says it is
+  // never mirrored, which is an answer to the question being asked.
+  await expect(page.locator('.content .mode-grid')).toHaveAttribute('data-settings-search-hit', '');
   // Attached AND hidden: a row that is simply absent would pass `toBeHidden`
   // on its own.
   for (const row of unrelated) {
@@ -707,7 +721,7 @@ test('searching settings hides the rows that do not match, and says how many did
   }
   // The count is stated rather than left to be inferred from a short form, and
   // it is the count of what is on screen.
-  await expectRowFilterNote(page, 2);
+  await expectRowFilterNote(page, 3);
 
   // And "Show all" puts the section back rather than leaving the user to clear
   // a field they may not remember typing in.
@@ -743,12 +757,13 @@ test('rows that render after the search ran are filtered too', async ({ page }) 
   const alwaysOnTop = page.locator('.content .toggle-row', { hasText: 'Always on top' });
   const horizontal = page.locator('.content .toggle-row', { hasText: 'Horizontal mirror' });
   const framing = page.locator('.content .field', { has: page.getByLabel('How you are framed') });
-  // The section is open and the display list is not: only "Always on top"
-  // says teleprompter yet, and the rig rows do not exist.
+  // The section is open and the display list is not: "Always on top", the
+  // mode tiles and the "connect the prompter display" hint say prompter yet,
+  // the mirror switch does not, and the rig rows do not exist.
   await expect(alwaysOnTop).toBeVisible();
   await expect(horizontal).toHaveAttribute('data-settings-search-miss', '');
   await expect(framing).toHaveCount(0);
-  await expectRowFilterNote(page, 1);
+  await expectRowFilterNote(page, 3);
 
   await releaseHeld(page, 'list_displays');
 
@@ -757,8 +772,10 @@ test('rows that render after the search ran are filtered too', async ({ page }) 
   await expect(framing).toBeHidden();
   await expect(horizontal).toContainText('Teleprompter Display');
   await expect(horizontal).toBeVisible();
-  // And the note counts what is actually left on screen.
-  await expectRowFilterNote(page, 2);
+  // And the note counts what is actually left on screen: the display tiles
+  // and the sizing line arrived with the list and name the teleprompter, and
+  // the "connect" hint went with the list's absence.
+  await expectRowFilterNote(page, 5);
 
   await page.getByRole('button', { name: 'Show all' }).click();
   await expect(framing).toBeVisible();
@@ -785,7 +802,9 @@ test('a row a child component renders after the search ran is filtered too', asy
   const language = page.locator('.content .field', {
     has: page.getByLabel('Language', { exact: true }),
   });
-  await expect(page.getByText('Checking which languages are available')).toBeVisible();
+  // Attached, not visible: no row in the section matches yet, so the section
+  // is folded away with its picker still mounted and waiting.
+  await expect(page.getByText('Checking which languages are available')).toBeAttached();
   await expect(language).toHaveCount(0);
 
   await releaseHeld(page, 'get_speech_language_options');
@@ -795,8 +814,9 @@ test('a row a child component renders after the search ran is filtered too', asy
   await expect(language).toBeHidden();
   await expectRowFilterNote(page, 0);
 
-  // A row that arrived during the search comes back with the rest.
-  await page.getByRole('button', { name: 'Show all' }).click();
+  // A row that arrived during the search comes back with the rest. With
+  // nothing matched, the way back is named for what it does to the field.
+  await page.getByRole('button', { name: 'Clear search' }).click();
   await expect(language).toBeVisible();
   await expect(
     page.locator('.content [data-settings-search-miss], .content [data-settings-search-hit]'),
@@ -844,7 +864,7 @@ test('a row that stops matching while it has focus stays until focus leaves', as
 
   // `includeHidden`: a role query skips hidden elements, and the row is meant
   // to end up hidden.
-  const feel = page.locator('.content .field', {
+  const feel = page.locator('.content .setting-row', {
     has: page.getByRole('radiogroup', { name: 'Follow feel', includeHidden: true }),
   });
   const search = page.getByRole('searchbox', { name: 'Search settings' });
@@ -894,25 +914,32 @@ async function releaseHeld(page: Page, command: string): Promise<void> {
  * `expected`: a count captured once and compared with a note read later is two
  * snapshots of a section that may still be rendering. The whole number is
  * parsed, so "1 setting" cannot pass on a note that says "10 settings"; every
- * row wrapper the filter indexes is counted, `.readout` included; and a row
- * inside another row is counted with it, as the filter counts it. A missing
+ * row wrapper the filter indexes is counted (`ROW_SELECTOR` in Settings.svelte,
+ * mirrored below — sliders, segmented rows and hint lines are rows too); and a
+ * row inside another row is counted with it, as the filter counts it. A missing
  * note reads as `null`, so it never agrees with a number.
  */
 async function expectRowFilterNote(page: Page, expected: number): Promise<void> {
   await expect
     .poll(async () => {
-      const { note, visible } = await page.evaluate(() => ({
-        note: document.querySelector('.content p.row-filter-note')?.textContent ?? null,
-        // Unmarked, and not inside another row.
-        visible: document.querySelectorAll(
-          '.content :is(.field, .toggle-row, .readout)' +
-            ':not([data-settings-search-miss]):not(:is(.field, .toggle-row, .readout) *)',
-        ).length,
-      }));
+      const { note, visible } = await page.evaluate(() => {
+        const rows =
+          '.field, .toggle-row, .readout, .slider, .override, .setting-row, .control-block, ' +
+          '.hint-line, [data-search-row]';
+        return {
+          note: document.querySelector('.content p.row-filter-note > span')?.textContent ?? null,
+          // Unmarked, and not inside another row.
+          visible: document.querySelectorAll(
+            `.content :is(${rows}):not([data-settings-search-miss]):not(:is(${rows}) *)`,
+          ).length,
+        };
+      });
       if (note === null) return { stated: null, visible };
       const text = note.replace(/\s+/g, ' ').trim();
-      if (text.startsWith('No settings in this section matched.')) return { stated: 0, visible };
-      const match = /^(\d+) settings? matched in this section\./.exec(text);
+      // "Nothing in Speech matches …" when other sections may; "No settings
+      // match …" when none do. Both are a count of zero here.
+      if (/^(?:Nothing in .+ matches|No settings match) “/.test(text)) return { stated: 0, visible };
+      const match = /^(\d+) settings? in .+ match(?:es)? “/.exec(text);
       // An unrecognised note comes back as itself, so a failure says what it read.
       return { stated: match ? Number(match[1]) : text, visible };
     })

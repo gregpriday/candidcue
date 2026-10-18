@@ -166,7 +166,7 @@ function ensureWorker(): WorkerLike {
  * else about a compile is derived from the source itself.
  */
 export interface CompileOverrides {
-  /** Track heading text as spoken words (Preflight → "Read headings aloud"). */
+  /** Track heading text as spoken words (Settings › General → "Follow headings as spoken lines"). */
   readHeadings?: boolean;
   readImageAltText?: boolean;
   readInlineCode?: boolean;

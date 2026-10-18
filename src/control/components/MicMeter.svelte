@@ -187,11 +187,12 @@
 
   /* Matches a settings row's label, so the level reads as the next row of the
      same form rather than as decoration under the picker. */
+  /* See Select: a host can give every field label one treatment. */
   .label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: var(--field-label-weight, 600);
+    color: var(--field-label-color, var(--text-secondary));
   }
 
   .status {

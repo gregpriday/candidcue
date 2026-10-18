@@ -24,10 +24,10 @@
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import Select from '../components/Select.svelte';
   import SettingReadout from '../components/SettingReadout.svelte';
+  import SettingRow from '../components/SettingRow.svelte';
   import Slider from '../components/Slider.svelte';
   import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill from '../components/StatusPill.svelte';
-  import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { chooseStageDisplay } from '../lib/start-take';
   import { stagePreviewSettingsFromSettings } from '../services/stage-envelope';
@@ -124,6 +124,9 @@
     DEFAULT_SENTENCE_MICROGAP_LINES,
     DEFAULT_TOP_FADE_LINES,
     NO_LENS_READING_BAND_FRACTION,
+    UNCALIBRATED_PROMPTER_WARNING,
+    UNCALIBRATED_READER_WARNING,
+    UNMEASURED_FONT_WARNING,
     resolveStageGeometry,
     resolveTargetArcminutes,
     resolveTargetCharacters,
@@ -135,13 +138,13 @@
     MIN_VIEWING_DISTANCE_MM,
     MAX_VIEWING_DISTANCE_MM,
     READING_MEASURE,
+    UNCALIBRATED_FIT_ADVICE,
     isPlausibleViewingDistanceMm,
   } from '../../shared/optics';
   import {
     AUTO_SCROLL_MAX_WPM,
     AUTO_SCROLL_MIN_WPM,
   } from '../../stage/renderer/autoscroll';
-  import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
   import { navigate, route, type SettingsSection } from '../stores/router';
   import { loadSettings, patchSettings, settings } from '../stores/settings';
@@ -177,19 +180,32 @@
    * Deliberately written in the user's vocabulary rather than the code's —
    * somebody looking for the microphone types "mic", and somebody looking for
    * the teleprompter's mirror types "mirror", not "teleprompter".
+   *
+   * And they carry every visible setting NAME as well as the aliases. The
+   * section list can only search what is written here — a section that is not
+   * on screen has no rows to read — so a name left out of its keywords is a
+   * setting that search says does not exist: "noise" from General used to find
+   * nothing, with Noise suppression one section away. Add a row, add its name.
    */
   const sections: Array<{ id: SettingsSection; label: string; keywords: string }> = [
     {
       id: 'general',
       label: 'General',
-      keywords: 'launch startup open recent window restore confirm headings session mode',
+      keywords:
+        'on launch / open the script library / open the most recent script / startup / session mode / follow voice / remember the reading window / window position size restore / confirm before ending an active session / follow headings as spoken lines / headings read aloud',
     },
     {
       id: 'speech',
       label: 'Speech',
-      keywords: 'model download language recogniser recognizer transcription voice offline licence',
+      keywords:
+        'speech language / language / download / remove download / installed / ready / damaged / english / model / recogniser recognizer / transcription / offline / licence license / attribution',
     },
-    { id: 'audio', label: 'Audio', keywords: 'microphone mic input level meter device permission' },
+    {
+      id: 'audio',
+      label: 'Audio',
+      keywords:
+        'microphone / mic / input device / system default / input level / meter / quiet / clipping / permission / access / transcription test / test transcription / capture tuning / noise suppression / echo cancellation / automatic gain control / agc / voice-detection sensitivity / voice detection / vad',
+    },
     {
       id: 'stage',
       /*
@@ -205,41 +221,56 @@
        * read it in an older note, still finds this section by searching for it.
        */
       label: 'Prompter display and rigs',
+      /* Mirroring lives here, with the panel the glass is in front of — so
+         "mirror" has to find this section, not Teleprompter (where it used to
+         live and where it still sent people). */
       keywords:
-        'display monitor screen panel presentation prompter reader window identify stage display calibration rig destination',
+        'prompter display and rigs / display / monitor / screen / panel / automatic / primary / identify displays / show test on this display / teleprompter / reading window / reader / presentation / f11 / stage display / destination / always on top / horizontal mirror / vertical mirror / flip / this rig / calibrate / calibration / re-calibrate / recalibrate / measure another rig / forget / body text / line holds / visible / fit / viewing distance / size balance / more text on screen / larger, easier text / how you are framed / framing / close-up / head and shoulders / waist up / full body / text intensity / soft / standard / strong / reading cue / ticks / wash / advanced / reset everything to automatic / size and measure / text size / apparent cap height / arcmin / characters per line / column width / widest the column may go / typography / line height / weight / letter spacing / paragraph spacing / vertical geometry / reading corridor / fade above / fade below / script kept below the band / gap after a sentence / treatment / spoken text / upcoming text / smallest readable label / reading band below the lens / optics / safe area',
     },
     {
       id: 'teleprompter',
       label: 'Teleprompter',
       keywords:
-        'font size text mirror flip safe area column line height reading band optics rig calibration diagnostic clean take readout transcript debug',
+        'teleprompter / show on teleprompter / preview / sample / default font family / atkinson hyperlegible / system sans / humanist sans / serif / monospace / font / default text intensity / text intensity / soft / standard / strong / reading window appearance / dark / paper / default font size / line height / text column width / reading band position / fallback / auto-scroll pace / autoscroll / wpm / current phrase highlight / past-text dimming / break lines at phrase boundaries / diagnostic take / clean / readout / transcript / debug',
     },
     {
       id: 'following',
       label: 'Following',
-      keywords: 'follow scroll smoothing responsiveness alignment pace speed profile',
+      keywords:
+        'following / follow feel / calm / balanced / responsive / scroll / smoothing / responsiveness / alignment / motion profile / developer diagnostics / why did it move / timeline',
     },
     {
       id: 'privacy',
       label: 'Data, privacy & updates',
       keywords:
-        'privacy data location reveal backup restore export support bundle logs updates version about',
+        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
     },
   ];
 
-  /** The settings search box (§14.2). Filters the index, never the rows. */
+  /** The settings search box (§14.2). */
   let sectionQuery = $state('');
 
+  /*
+   * The section on screen stays in the list whatever the query says. Dropping
+   * it left a list with nothing selected beside a pane still showing that
+   * section — searching made it LESS clear where you were. The row filter
+   * below says how much of it matched.
+   */
   const matchingSections = $derived(
     (() => {
       const query = sectionQuery.trim().toLowerCase();
       if (query === '') return sections;
       return sections.filter(
         (entry) =>
-          entry.label.toLowerCase().includes(query) || entry.keywords.includes(query),
+          entry.id === section ||
+          entry.label.toLowerCase().includes(query) ||
+          entry.keywords.includes(query),
       );
     })(),
   );
+  const currentSectionLabel = $derived(sections.find((entry) => entry.id === section)?.label ?? '');
+  /** Sections other than this one that the query found. */
+  const otherMatches = $derived(matchingSections.filter((entry) => entry.id !== section).length);
 
   /**
    * The section's own scroll container, for the row filter below.
@@ -273,8 +304,17 @@
    * these is simply never hidden, which is the safe direction to fail. A
    * control that stays visible during a search is a search that under-filters,
    * not a setting somebody cannot find.
+   *
+   * That direction failed visibly, though, once most of a section was
+   * hand-written: searching "mirror" on the display section counted two
+   * switches and left the display tiles, the test buttons and both mode tiles
+   * standing above them, so the matches were off the bottom of the window. So
+   * the sliders (`.slider`, and the `.override` rows that wrap them), the
+   * segmented rows (`.setting-row`, `.control-block`), the hint lines, and any
+   * hand-written block that says so with `data-search-row` are rows too.
    */
-  const ROW_SELECTOR = '.field, .toggle-row, .readout';
+  const ROW_SELECTOR =
+    '.field, .toggle-row, .readout, .slider, .override, .setting-row, .control-block, .hint-line, [data-search-row]';
 
   /**
    * Mark every row under `root` against `query` (already trimmed and
@@ -316,6 +356,21 @@
       } else {
         row.setAttribute('data-settings-search-miss', '');
         row.removeAttribute('data-settings-search-hit');
+      }
+    }
+    /*
+     * A titled section with rows and no match goes too. Its heading standing
+     * over an empty body is not context, it is a second thing to read past —
+     * and a section that DID match keeps its heading, which is the context.
+     * The same for a fold: an open Advanced with every row hidden is a
+     * heading over nothing.
+     */
+    for (const block of root.querySelectorAll<HTMLElement>('section.section, details, .advanced-group')) {
+      const searched = query !== '' && block.querySelector(ROW_SELECTOR) !== null;
+      if (searched && block.querySelector('[data-settings-search-hit]') === null) {
+        block.setAttribute('data-settings-search-miss', '');
+      } else {
+        block.removeAttribute('data-settings-search-miss');
       }
     }
     return query === '' ? null : matched;
@@ -380,6 +435,46 @@
       root.removeEventListener('focusout', onFocusOut);
       if (focusPass !== null) clearTimeout(focusPass);
     };
+  });
+
+  /*
+   * A section opens at its top — or at the anchor a link asked for.
+   *
+   * `.content` is one scroller for every section, so without this a section
+   * opened at whatever offset the last one was left at, clamped: arriving in
+   * Prompter display and rigs from the bottom of Teleprompter landed partway
+   * down it. A search starts at the top for the same reason: what it found is
+   * at the top once the misses are gone.
+   */
+  let pendingAnchor: string | null = null;
+  /*
+   * Clearing a search goes back to where it started: somebody who searched
+   * from deep in Advanced and pressed Show all should land in Advanced again,
+   * not at the top of the section. Remembered only for the section the search
+   * began in; a search that moved somewhere else starts that section fresh.
+   */
+  let searchOrigin: { section: SettingsSection; top: number } | null = null;
+  let lastQuery = '';
+  $effect(() => {
+    const current = section;
+    const query = sectionQuery.trim();
+    const root = contentElement;
+    if (!root) return;
+    const anchor = pendingAnchor;
+    pendingAnchor = null;
+    let restore: number | null = null;
+    if (lastQuery === '' && query !== '') {
+      searchOrigin = { section: current, top: root.scrollTop };
+    } else if (lastQuery !== '' && query === '') {
+      if (searchOrigin?.section === current) restore = searchOrigin.top;
+      searchOrigin = null;
+    }
+    lastQuery = query;
+    void tick().then(() => {
+      const target = anchor ? root.querySelector<HTMLElement>(`#${anchor}`) : null;
+      if (target) target.scrollIntoView({ block: 'start' });
+      else root.scrollTop = restore ?? 0;
+    });
   });
 
   /*
@@ -1120,6 +1215,29 @@
   const rigOptics = $derived(resolvedRig?.optics ?? null);
 
   /**
+   * The resolver's warnings, less the ones this screen already says.
+   *
+   * Settings never measures the stage font — a take does — so "could not be
+   * measured" was true of every rig on every visit and the readout carries a
+   * one-line caption instead. With no stored rig, the sentence above the
+   * readout already says how the display is sized, so the resolver's
+   * "uncalibrated" guess is a second copy of it; and the Fit row already says
+   * an uncalibrated rig makes no claim, so its advice was a third. The panel
+   * used to stack all three under one readout.
+   */
+  const rigWarnings = $derived(
+    (resolvedRig?.warnings ?? []).filter(
+      (warning) =>
+        warning !== UNMEASURED_FONT_WARNING &&
+        warning !== UNCALIBRATED_FIT_ADVICE &&
+        !(
+          appliedRig === null &&
+          (warning === UNCALIBRATED_PROMPTER_WARNING || warning === UNCALIBRATED_READER_WARNING)
+        ),
+    ),
+  );
+
+  /**
    * Lines of script visible at once.
    *
    * Not a field of `ResolvedOptics`, because the stage measures its own line
@@ -1271,6 +1389,19 @@
    * A presenter in reader mode with no calibration would otherwise have been
    * left with exactly the defect this change exists to remove.
    */
+  /** The anchor on "This rig", for links that should land on the sizing itself. */
+  const RIG_SECTION_ID = 'settings-this-rig';
+  /* Explanations that live outside the controls they explain, by id, so the
+     controls can point `aria-describedby` at them. One window, one of each. */
+  const GEOMETRY_NOTE_ID = 'settings-geometry-note';
+  const AUTOSCROLL_HINT_ID = 'settings-autoscroll-hint';
+  const MIC_TEST_DESCRIPTION_IDS = 'settings-mic-test-prompt settings-mic-test-note';
+  const INTENSITY_LABELS: Record<TextIntensity, string> = {
+    soft: 'Soft',
+    standard: 'Standard',
+    strong: 'Strong',
+  };
+
   const geometryOwner = $derived.by((): { label: string; toRig: boolean } | null => {
     if ($settings.stage.presentationMode === 'reader') {
       return { label: 'the reading window', toRig: false };
@@ -1289,8 +1420,18 @@
    * this"; this answers "then where do I". Both destinations are the Stage
    * display section — where the applied rig sorts first and carries its own
    * Re-calibrate, and where the prompter/reader switch lives.
+   *
+   * It lands on the rig itself when a rig or automatic sizing is the owner:
+   * the top of that section is the display picker, a screenful away from the
+   * sizing that took the controls.
    */
+  /** Down to "This rig", from the summary line at the top of the same section. */
+  function jumpToRig(): void {
+    contentElement?.querySelector<HTMLElement>(`#${RIG_SECTION_ID}`)?.scrollIntoView({ block: 'start' });
+  }
+
   function openGeometryOwner(): void {
+    pendingAnchor = geometryOwner?.toRig ? RIG_SECTION_ID : null;
     void navigate({ name: 'settings', section: 'stage' });
   }
 
@@ -1307,6 +1448,32 @@
   /** Metres, because that is the unit somebody pacing out a studio thinks in. */
   const DISTANCE_PRESETS_M = [0.8, 1.0, 1.2, 1.5, 1.8];
   let distanceField = $state('');
+
+  /**
+   * The presets as one segmented choice, with the rig's own distance as a
+   * segment of its own when it is not a preset.
+   *
+   * They were loose chips whose selected state was the INVERSE of every
+   * segmented control on the screen, and a measured 0.90 m selected nothing at
+   * all — the only sign of it was a sentence underneath. Now the distance in
+   * force is always the selected segment.
+   */
+  const distanceOptions = $derived.by(() => {
+    const presets = DISTANCE_PRESETS_M.map((metres) => ({
+      value: String(Math.round(metres * 1000)),
+      label: `${metres.toFixed(1)} m`,
+    }));
+    const current = rig.viewingDistanceMm;
+    if (current === null || presets.some((option) => option.value === String(current))) {
+      return presets;
+    }
+    // In order among the presets, and written as they are (0.9 m, not 0.90 m)
+    // unless it genuinely has a second decimal.
+    const metres = Math.round(current / 10) / 100;
+    return [...presets, { value: String(current), label: `${metres} m` }].sort(
+      (a, b) => Number(a.value) - Number(b.value),
+    );
+  });
 
   function applyTypedDistance(): void {
     const mm = Math.round(Number(distanceField.trim()) * 1000);
@@ -1669,8 +1836,29 @@
    * it, because the row filter marks rows it cannot show inside a closed fold.
    */
   let captureTuningOpen = $state(false);
+  /** Advanced, under This rig — folded for the same reason. */
+  let advancedOpen = $state(false);
+  /*
+   * A search opens both folds — Advanced's rows were counted as matches while
+   * the fold that holds them stayed shut — and clearing it puts each back the
+   * way it was, so a search does not leave the panel unfolded behind it. A fold
+   * with no match inside is hidden by the row filter, so opening both costs
+   * nothing on screen.
+   */
+  let foldsBeforeSearch: { capture: boolean; advanced: boolean } | null = null;
   $effect(() => {
-    if (sectionQuery.trim() !== '') captureTuningOpen = true;
+    const searching = sectionQuery.trim() !== '';
+    untrack(() => {
+      if (searching && foldsBeforeSearch === null) {
+        foldsBeforeSearch = { capture: captureTuningOpen, advanced: advancedOpen };
+        captureTuningOpen = true;
+        advancedOpen = true;
+      } else if (!searching && foldsBeforeSearch !== null) {
+        captureTuningOpen = foldsBeforeSearch.capture;
+        advancedOpen = foldsBeforeSearch.advanced;
+        foldsBeforeSearch = null;
+      }
+    });
   });
 
   /**
@@ -2253,8 +2441,12 @@
     onback={onclose ? undefined : () => navigate({ name: 'library', view: 'all' })}
   >
     {#snippet actions()}
+      <!-- Secondary, and toolbar-sized. Every change here is saved as it is
+           made, so Done closes a window rather than committing anything, and a
+           filled accent button said the opposite — while outshouting the one
+           primary action a section has (Show on teleprompter, Allow…). -->
       {#if onclose}
-        <Button variant="primary" onclick={onclose}>Done</Button>
+        <Button size="sm" onclick={onclose}>Done</Button>
       {/if}
       <!--
         Settings search (§14.2), in the toolbar where it is stable across every
@@ -2298,9 +2490,6 @@
           {entry.label}
         </button>
       {/each}
-      {#if matchingSections.length === 0}
-        <p class="section-empty">No settings matched.</p>
-      {/if}
     </nav>
 
     <div class="content" bind:this={contentElement}>
@@ -2312,12 +2501,21 @@
         turns a filtered section into an obviously filtered section.
       -->
       {#if rowMatches !== null}
+        <!-- One message for an empty result, here — the section list no
+             longer carries a second one at another size and baseline. -->
         <p class="row-filter-note" role="status">
-          {rowMatches === 0
-            ? 'No settings in this section matched.'
-            : `${rowMatches} setting${rowMatches === 1 ? '' : 's'} matched in this section.`}
+          <span>
+            {#if rowMatches > 0}
+              {rowMatches === 1 ? '1 setting' : `${rowMatches} settings`} in {currentSectionLabel}
+              {rowMatches === 1 ? 'matches' : 'match'} “{sectionQuery.trim()}”.
+            {:else if otherMatches > 0}
+              Nothing in {currentSectionLabel} matches “{sectionQuery.trim()}”. The sections listed beside this may.
+            {:else}
+              No settings match “{sectionQuery.trim()}”.
+            {/if}
+          </span>
           <button type="button" class="row-filter-clear" onclick={() => (sectionQuery = '')}>
-            Show all
+            {rowMatches > 0 ? 'Show all' : 'Clear search'}
           </button>
         </p>
       {/if}
@@ -2381,25 +2579,31 @@
           -->
           {#if $settings.general.defaultSessionMode === 'voice'}
             <SettingReadout
+              layout="row"
               label="Session mode"
               value={SESSION_MODE_LABELS.voice}
-              description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take; set the pace with Auto-scroll pace in Settings › Teleprompter."
+              description="Every take opens listening. Auto-scroll can still roll the script at a set pace (Teleprompter › Auto-scroll pace)."
             />
           {:else}
-            <SettingReadout
-              label="Session mode"
-              value={sessionModeLabel($settings.general.defaultSessionMode)}
-              description={`This mode was saved by an earlier version, and takes started in it do not follow your voice. Switch back to ${SESSION_MODE_LABELS.voice} to prompt normally; auto-scroll still rolls the script at a set pace from inside any take.`}
-            />
-            <p class="hint-line">
-              <button
-                type="button"
-                class="inline-link"
-                onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
-              >
-                Switch to {SESSION_MODE_LABELS.voice}
-              </button>
-            </p>
+            <!-- The way back sits tight under the row it belongs to, not a
+                 row's gap away from it. -->
+            <div class="readout-with-action" data-search-row>
+              <SettingReadout
+                layout="row"
+                label="Session mode"
+                value={sessionModeLabel($settings.general.defaultSessionMode)}
+                description={`Saved by an earlier version. Takes in this mode do not follow your voice; switch back to ${SESSION_MODE_LABELS.voice} to prompt normally.`}
+              />
+              <p class="hint-line">
+                <button
+                  type="button"
+                  class="inline-link"
+                  onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
+                >
+                  Switch to {SESSION_MODE_LABELS.voice}
+                </button>
+              </p>
+            </div>
           {/if}
           <!-- #218 removed "Revision retention": nothing prunes revisions, so
                every one is kept whatever the slider said. -->
@@ -2423,17 +2627,19 @@
           />
           <!-- A compile switch, not a stage one: it changes what counts as a
                spoken token, so it is read when a take compiles the script. -->
+          <!-- Named for what the PRESENTER does. "Read headings aloud" read as
+               CandidCue speaking them. -->
           <Toggle
             checked={$settings.general.readHeadings}
-            label="Read headings aloud"
-            description="Track heading text as spoken words"
+            label="Follow headings as spoken lines"
+            description="Turn on if you read your headings out, so following counts them as script."
             onchange={(value) => void patchSettings('general', { readHeadings: value })}
           />
         </Section>
       {:else if section === 'speech'}
         <Section
           title="Speech language"
-          description="CandidCue listens in one language, chosen here. It transcribes on this machine — there is no account to create and no key to paste — but each language is a large download, fetched once rather than shipped inside the app."
+          description="The language CandidCue listens in. Each one is a large download, fetched once; after that, speech is transcribed on this computer with no account or key."
         >
           <!--
             The pill answers "can a take follow me right now?", which needs both
@@ -2482,20 +2688,71 @@
           />
 
           <p class="hint-line">
-            Once the language is downloaded, everything happens on this computer. Your voice is
-            never sent anywhere, and your audio is never recorded or saved. The words are used only
-            to work out where in the script you are, and CandidCue does not save them.
+            Your voice never leaves this computer. The audio is never saved, and the words are not
+            saved either: they are used only to find your place in the script.
           </p>
         </Section>
       {:else if section === 'audio'}
+        <!--
+          Capture tuning sits directly under the meter it changes. At the foot of
+          the section it was a screen away from the level it promises to move,
+          so every adjustment meant scrolling back up to see what it did. When
+          access is not granted there is no meter, and it falls back to the
+          foot of the section.
+        -->
+        {#snippet captureTuning()}
+          <!--
+            "Follow system default microphone" used to be a toggle here, three
+            controls away from the picker it disabled and blanked. One control
+            now: it is the first row of the input picker above.
+          -->
+          <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
+            <p class="mic-tuning-lead">
+              For difficult rooms. The meter above shows each change straight away.
+            </p>
+            <Toggle
+              checked={$settings.audio.noiseSuppression}
+              label="Noise suppression"
+              description="Filters out steady background noise, such as a fan or air conditioning."
+              onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
+            />
+            <Toggle
+              checked={$settings.audio.echoCancellation}
+              label="Echo cancellation"
+              description="Removes sound from your speakers that the microphone picks up."
+              onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
+            />
+            <Toggle
+              checked={$settings.audio.autoGainControl}
+              label="Automatic gain control"
+              description="Evens out your level as you move nearer to or further from the microphone."
+              onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
+            />
+            <!--
+              §28.4. It is a property of a room and a microphone, not of a take,
+              and the meter above observes at this value — so a change to it shows
+              immediately instead of being discovered mid-take.
+            -->
+            <Slider
+              label={VAD_SENSITIVITY_COPY.label}
+              description={VAD_SENSITIVITY_COPY.description}
+              value={Math.round($settings.audio.vadSensitivity * 100)}
+              min={0}
+              max={100}
+              format={VAD_SENSITIVITY_COPY.format}
+              onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
+            />
+          </Disclosure>
+        {/snippet}
         <Section
           title="Microphone"
-          description="Choose the microphone your takes listen to and check it on the input meter, which listens while this page is open. Then make sure CandidCue understands what you say."
+          description="Choose the input your takes listen to, check its level, then check that CandidCue understands you. The input meter listens while this page is open."
         >
           <!-- Mounted for as long as the section is, so a notice that arrives
                is spoken into a region that was already there (the cards and
                the fallback below carry no live role of their own). -->
           <p class="visually-hidden" role="status" aria-atomic="true">{micAnnouncement}</p>
+
           {#if micPermission !== 'granted'}
             <!--
               #303. macOS asks once per application; after a refusal, asking
@@ -2506,7 +2763,7 @@
               good news, not another red error.
             -->
             {#if micPermission === 'unknown'}
-              <div class="mic-access">
+              <div class="mic-access" data-search-row>
                 <span class="mic-access-icon"><Icon name="mic" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">Let CandidCue hear you</p>
@@ -2525,7 +2782,7 @@
                 </div>
               </div>
             {:else if micAccess === 'restricted'}
-              <div class="mic-access warn">
+              <div class="mic-access warn" data-search-row>
                 <span class="mic-access-icon"><Icon name="alert" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">Microphone access is managed on this Mac</p>
@@ -2541,7 +2798,7 @@
                 </div>
               </div>
             {:else if micAccess === 'granted' && micRetryRefused}
-              <div class="mic-access warn">
+              <div class="mic-access warn" data-search-row>
                 <span class="mic-access-icon"><Icon name="refresh" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">Quit and reopen CandidCue</p>
@@ -2555,7 +2812,7 @@
                 </div>
               </div>
             {:else if micAccess === 'granted'}
-              <div class="mic-access good">
+              <div class="mic-access good" data-search-row>
                 <span class="mic-access-icon"><Icon name="check" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">Microphone access is on</p>
@@ -2568,7 +2825,7 @@
                 </div>
               </div>
             {:else}
-              <div class="mic-access warn">
+              <div class="mic-access warn" data-search-row>
                 <span class="mic-access-icon"><Icon name="alert" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">
@@ -2640,6 +2897,12 @@
 
               <MicMeter level={micLevel} paused={micTestRunning} />
 
+              <!-- Pulled in a little: the fold's own padding plus the flow's gap
+                   left the closed row floating between the meter and the test. -->
+              <div class="mic-tuning-slot">
+                {@render captureTuning()}
+              </div>
+
               <!--
                 Costs nothing but holds the microphone, so it can always be
                 stopped and it closes itself if it is forgotten (see
@@ -2647,11 +2910,11 @@
                 mounted throughout, so the hand and keyboard focus stay where
                 they are when Test becomes Stop.
               -->
-              <div class="mic-test" data-tone={micVerdict.tone} data-phase={micTest}>
+              <div class="mic-test" data-tone={micVerdict.tone} data-phase={micTest} data-search-row>
                 <div class="mic-test-head">
                   <div class="mic-test-label">
                     <span class="mic-test-name">Transcription test</span>
-                    <span class="mic-test-prompt">Say “{MIC_TEST_SENTENCE}”</span>
+                    <span class="mic-test-prompt" id="settings-mic-test-prompt">Say “{MIC_TEST_SENTENCE}”</span>
                   </div>
                   <!-- One slot that holds the wider label's width, so Stop lands
                        exactly where Test was pressed. Start and Stop are separate
@@ -2665,7 +2928,7 @@
                         Stop test
                       </Button>
                     {:else}
-                      <Button onclick={() => void runTranscriptionTest()}>
+                      <Button describedby={MIC_TEST_DESCRIPTION_IDS} onclick={() => void runTranscriptionTest()}>
                         <Icon name="mic" size={14} />
                         Test transcription
                       </Button>
@@ -2695,7 +2958,7 @@
                        every message; only an unusually long utterance grows it. -->
                   <p class="mic-test-words {micTestWords.kind}">{micTestWords.text}</p>
                 </div>
-                <p class="mic-test-note">
+                <p class="mic-test-note" id="settings-mic-test-note">
                   Stops by itself after 30 seconds with nothing transcribed, or after two minutes at
                   most.
                 </p>
@@ -2705,57 +2968,17 @@
           {#if micError && micError !== micTestError}
             <p class="inline-alert" role="alert">{micError}</p>
           {/if}
-          <p class="mic-privacy">
+          <p class="mic-privacy" data-search-row>
             <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
             <span>
               Speech is transcribed on this Mac and never recorded, saved or uploaded. CandidCue
-              uses the microphone while a test or a take runs, and while the input meter is on
-              screen here; the meter only measures loudness.
+              uses the microphone during a test or a take, and while the input meter is on screen —
+              which measures loudness and nothing else.
             </span>
           </p>
-          <!--
-            "Follow system default microphone" used to be a toggle here, three
-            controls away from the picker it disabled and blanked. One control
-            now: it is the first row of the input picker above.
-          -->
-          <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
-            <p class="mic-tuning-lead">
-              For difficult rooms. The level meter above uses these too, so a change shows there
-              straight away.
-            </p>
-            <Toggle
-              checked={$settings.audio.noiseSuppression}
-              label="Noise suppression"
-              description="Filters out steady background noise, such as a fan or air conditioning."
-              onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
-            />
-            <Toggle
-              checked={$settings.audio.echoCancellation}
-              label="Echo cancellation"
-              description="Removes sound from your speakers that the microphone picks up."
-              onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
-            />
-            <Toggle
-              checked={$settings.audio.autoGainControl}
-              label="Automatic gain control"
-              description="Evens out your level as you move nearer to or further from the microphone."
-              onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
-            />
-            <!--
-              §28.4. It is a property of a room and a microphone, not of a take,
-              and the meter above observes at this value — so a change to it shows
-              immediately instead of being discovered mid-take.
-            -->
-            <Slider
-              label={VAD_SENSITIVITY_COPY.label}
-              description={VAD_SENSITIVITY_COPY.description}
-              value={Math.round($settings.audio.vadSensitivity * 100)}
-              min={0}
-              max={100}
-              format={VAD_SENSITIVITY_COPY.format}
-              onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
-            />
-          </Disclosure>
+          {#if micPermission !== 'granted'}
+            {@render captureTuning()}
+          {/if}
         </Section>
       {:else if section === 'stage'}
         <!--
@@ -2775,14 +2998,17 @@
         -->
         <Section
           title="Prompter display and rigs"
-          description="Choose the display prompter takes open on, and calibrate and test the displays you use with teleprompter glass. Automatic opens a take on the display the CandidCue window is on — the editor's Present button names it."
+          description="Where takes open and how they present. The editor's Present button names the display a take will use."
         >
           {#snippet actions()}
             <Button size="sm" disabled={displaysLoading} onclick={() => void loadDisplays()}>
               {displaysLoading ? 'Checking…' : 'Check again'}
             </Button>
           {/snippet}
-          <div class="display-grid">
+          <!-- One grid of equal tiles. They were content-sized and wrapped,
+               so the third display fell onto a row of its own beside a wide
+               empty gap, and no two tiles were the same width. -->
+          <div class="display-grid" data-search-row>
             <button
               type="button"
               class="monitor-tile"
@@ -2790,7 +3016,9 @@
               aria-pressed={chosenFingerprint === null}
               onclick={() => void chooseDisplay(null)}
             >
-              <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+              <span class="monitor-head">
+                <span class="monitor-glyph"><Icon name="monitor" size={20} /></span>
+              </span>
               <span class="monitor-name">Automatic</span>
               <!-- Automatic is not a panel, so it carries no number of its
                    own; it names the number of the one it resolves to, which
@@ -2813,7 +3041,7 @@
                      of the name, never inside it: the name is what the tile is
                      found by, and two identical monitors share it. -->
                 <span class="monitor-head">
-                  <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+                  <span class="monitor-glyph"><Icon name="monitor" size={20} /></span>
                   <span class="monitor-number">
                     <!-- An expression, because Svelte trims a literal
                          trailing space and the name would read "Display2". -->
@@ -2824,26 +3052,45 @@
                 <span class="monitor-meta">
                   {display.physicalSize.width} × {display.physicalSize.height} · {display.scaleFactor}×
                 </span>
-                <span class="monitor-badges">
-                  {#if display.primary}<StatusPill tone="neutral" dot={false} label="Primary" />{/if}
-                </span>
+                {#if display.primary}
+                  <span class="monitor-badges">
+                    <StatusPill tone="neutral" size="sm" dot={false} label="Primary" />
+                  </span>
+                {/if}
               </button>
             {/each}
+            {#if pinnedMissing}
+              <!-- The choice the user made stays on screen, selected, while
+                   its panel is away — rather than vanishing and leaving a
+                   picker with nothing chosen. Not a button: there is nothing
+                   to choose until it is back. -->
+              <div class="monitor-tile selected missing" aria-current="true">
+                <span class="monitor-head">
+                  <span class="monitor-glyph"><Icon name="monitor" size={20} /></span>
+                </span>
+                <span class="monitor-name">Your chosen display</span>
+                <span class="monitor-meta">Not connected</span>
+              </div>
+            {/if}
           </div>
           {#if pinnedMissing}
             <!-- Said here rather than discovered at Present: the fingerprint
                  is panel identity, so a display that is unplugged simply stops
                  matching. Both fallbacks are named, because they differ — the
                  take goes where the CandidCue window is, previews prefer an
-                 external display. -->
-            <p class="inline-alert" role="alert">
-              The display you chose is not connected. Until it is back, prompter takes open on {windowPanel},
-              and previews, tests and calibration use {effectiveDisplay
-                ? displayName(effectiveDisplay)
-                : 'another display'}.
-            </p>
+                 external display. A notice in the house warning shape, not a
+                 bold red paragraph: nothing failed, a panel is unplugged. -->
+            <div class="notice" role="alert" data-search-row>
+              <span class="notice-icon"><Icon name="alert" size={16} /></span>
+              <p class="notice-text">
+                <strong>Your chosen display is not connected.</strong> Until it is back, prompter
+                takes open on {windowPanel}, and previews, tests and calibration use {effectiveDisplay
+                  ? displayName(effectiveDisplay)
+                  : 'another display'}.
+              </p>
+            </div>
           {/if}
-          <div class="row-actions">
+          <div class="row-actions" data-search-row>
             <Button disabled={identifying} onclick={() => void identifyDisplays()}>Identify displays</Button>
             <Button disabled={!effectiveDisplay || stageTesting} onclick={() => void runDisplayTest()}>
               {stageTesting ? 'Opening…' : 'Show test on this display'}
@@ -2851,6 +3098,33 @@
           </div>
           {#if displaysError}
             <p class="inline-alert" role="alert">{displaysError}</p>
+          {/if}
+          <!--
+            How the text on this panel is sized, in one line, with a way down to
+            it. The sizing is what somebody returning mid-take comes to change,
+            and "This rig" starts a screenful below the picker; this line puts
+            the answer at the top and the controls one click away.
+          -->
+          {#if rigFingerprint !== null && rigOptics}
+            <p class="sizing-summary" data-search-row>
+              <span>
+                Prompter text on <strong>{effectiveDisplay?.name ?? 'this display'}</strong>:
+                {#if appliedRig}
+                  {appliedRig.rigName}, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
+                    ? ''
+                    : `, about ${Math.round(rigOptics.charactersPerLine)} characters a line`}.
+                {:else if automaticRig}
+                  sized automatically, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
+                    ? ''
+                    : `, about ${Math.round(rigOptics.charactersPerLine)} characters a line`}.
+                {:else}
+                  the {$settings.teleprompter.fontSizePx} px fallback — this display is not sized by distance.
+                {/if}
+              </span>
+              <button type="button" class="inline-link" onclick={() => jumpToRig()}>
+                {appliedRig || automaticRig ? 'Adjust sizing' : 'Calibrate'}
+              </button>
+            </p>
           {/if}
           <!--
             How a take presents.
@@ -2862,7 +3136,7 @@
             thing — a prompter and a reading window differ in the viewing
             distance, the mirror, the hood and where the reading line sits.
           -->
-          <div class="display-grid">
+          <div class="mode-grid" data-search-row>
             <button
               type="button"
               class="monitor-tile"
@@ -2870,10 +3144,12 @@
               aria-pressed={$settings.stage.presentationMode === 'prompter'}
               onclick={() => void patchSettings('stage', { presentationMode: 'prompter' })}
             >
-              <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
-              <span class="monitor-name">Teleprompter</span>
+              <span class="mode-head">
+                <span class="monitor-glyph"><Icon name="monitor" size={18} /></span>
+                <span class="monitor-name">Teleprompter</span>
+              </span>
               <span class="monitor-meta">
-                Fills the prompter display chosen here, or the one it is on, above everything, for reading off glass at a distance.
+                Fills the prompter display, above everything, for reading off glass at a distance.
               </span>
             </button>
             <button
@@ -2883,8 +3159,10 @@
               aria-pressed={$settings.stage.presentationMode === 'reader'}
               onclick={() => void patchSettings('stage', { presentationMode: 'reader' })}
             >
-              <span class="monitor-glyph"><Icon name="book-open" size={22} /></span>
-              <span class="monitor-name">Reading window</span>
+              <span class="mode-head">
+                <span class="monitor-glyph"><Icon name="book-open" size={18} /></span>
+                <span class="monitor-name">Reading window</span>
+              </span>
               <span class="monitor-meta">
                 Stays a window you can size and move. Wider lines, desk distance, never mirrored.
               </span>
@@ -2893,7 +3171,9 @@
           <p class="hint-line">
             Either way, {presentationModeShortcutLabel()} switches between them during a take.
           </p>
-          <div class="toggle-grid">
+          <!-- One column. In a two-column grid Vertical mirror landed under
+               Always on top, away from the Horizontal mirror it pairs with. -->
+          <div class="toggle-list">
             <!-- The stage window is created always-on-top and re-asserts it on
                  every show (§52.7); there is no command to turn that off, so it
                  is shown as the fixed behaviour it is rather than as a lie.
@@ -2907,8 +3187,8 @@
               disabled
               label="Always on top"
               description={$settings.stage.presentationMode === 'prompter'
-                ? 'Always on — the teleprompter must sit above other windows'
-                : 'Off for a reading window, so you can work beside it'}
+                ? 'Always on — the teleprompter must sit above other windows.'
+                : 'Off for a reading window, so you can work beside it.'}
             />
             <!-- Per panel (#206): these describe the glass in front of the
                  display named above, and a take on any other display ignores
@@ -2918,8 +3198,8 @@
               disabled={!rigFingerprint}
               label="Horizontal mirror"
               description={effectiveDisplay
-                ? `For glass in front of ${effectiveDisplay.name}, where the panel is reflected. Other displays keep their own.`
-                : 'Connect a display to set how it is mirrored'}
+                ? `For the glass in front of ${effectiveDisplay.name}. Each display keeps its own mirroring.`
+                : 'Connect a display to set how it is mirrored.'}
               onchange={(value) => setPanelMirror('horizontal', value)}
             />
             <Toggle
@@ -2945,8 +3225,9 @@
           back to automatic.
         -->
         <Section
+          id={RIG_SECTION_ID}
           title="This rig"
-          description="How the text is sized for the panel above — worked out from how far away you stand, not from a pixel default."
+          description={`How the text on ${effectiveDisplay?.name ?? 'the panel above'} is sized — from how far away you stand, not a pixel default.`}
         >
           <!--
             One button used to sit here and it always started a NEW rig.
@@ -2965,7 +3246,12 @@
             so the two must never be the same button.
           -->
           {#snippet actions()}
-            {#if appliedRig}
+            <!-- Not while searching: a search that found one Advanced row has
+                 nothing to do with recalibrating, and the two buttons stood
+                 over the single match. -->
+            {#if sectionQuery.trim() !== ''}
+              <!-- nothing -->
+            {:else if appliedRig}
               <!-- The full name is in the tooltip; the label ellipsizes rather
                    than dictate the width of the panel. A discovered rig is
                    named for how it was identified ("Elgato Prompter (9-inch)
@@ -2999,7 +3285,7 @@
                  for a seated waist-up shot and on the boom arm for a standing
                  close-up are two different rigs sharing one fingerprint. -->
             {#if rigs.length > 0}
-              <div class="rig-list">
+              <div class="rig-list" data-search-row>
                 {#each rigs as entry (entry.key)}
                   <div class="rig-row" class:active={entry.active}>
                     <button
@@ -3026,9 +3312,12 @@
                       <Button size="sm" onclick={() => calibrate(entry.profile.rigName)}>
                         Re-calibrate
                       </Button>
+                      <!-- Deletes measurements (after a confirmation), so it
+                           wears the low-emphasis danger treatment rather than
+                           the neutral one Re-calibrate beside it has. -->
                       <Button
                         size="sm"
-                        variant="ghost"
+                        variant="danger"
                         onclick={() => void forgetRig(entry.profile.rigName)}
                       >
                         Forget
@@ -3044,23 +3333,19 @@
                    The same discovery a take runs (`prompterOpticalProfile`),
                    so the readout below is the next take's geometry, not a
                    proposal. -->
-              <p class="hint-line">
+              <p class="rig-lead">
                 {#if automaticRig === null}
-                  <strong>No rig is chosen for this display</strong>, and CandidCue cannot size it
-                  automatically: {discovered.identification.confidence === 'unknown'
-                    ? 'the panel is not one it recognises and it does not report its own physical size'
-                    : `it recognised ${discovered.identification.label} but cannot assume that panel’s size`},
-                  so takes run at the fallback size ({$settings.teleprompter.fontSizePx} px).
-                  Calibrating is the way to size the text by distance here.
+                  <strong>Using the {$settings.teleprompter.fontSizePx} px fallback.</strong>
+                  {discovered.identification.confidence === 'unknown'
+                    ? 'CandidCue does not recognise this panel and it does not report its size'
+                    : `CandidCue recognised ${discovered.identification.label} but cannot assume its size`},
+                  so it cannot size text by distance until you calibrate it.
                 {:else}
-                  <strong>Sized automatically.</strong> CandidCue recognised this display as
-                  {discovered.identification.label} and sizes takes from that, assuming a viewing
-                  distance of about {(automaticRig.viewingDistanceMm ?? 0) / 1000} m. The numbers
-                  below are what takes on this display open with. The size balance is a preference
-                  shared by every automatically sized display and stores nothing; changing
-                  anything else here — or finishing the calibration — stores a rig for this
-                  display that takes precedence, and measuring the real distance is the one thing
-                  that makes the size more than an estimate.
+                  <strong>Sized automatically</strong> for {discovered.identification.label}, assuming
+                  you stand about {(automaticRig.viewingDistanceMm ?? 0) / 1000} m away. Changing
+                  anything below except the size balance — or calibrating — stores a rig for this
+                  display, and measuring the real distance is what turns the size from an estimate
+                  into a measurement.
                 {/if}
               </p>
             {/if}
@@ -3070,13 +3355,15 @@
                  through, against the same panel, so it cannot describe a stage
                  the take would not produce. -->
             {#if rigOptics}
-              <dl class="readout">
+              <!-- "arcmin", spelt out: a bare prime read as feet at this size. -->
+              <div class="readout">
+              <dl class="readout-list">
                 <div class="readout-row">
                   <dt class="readout-label">Body text</dt>
                   <dd class="readout-value">
                     {Math.round(rigOptics.bodyFontSizePx)} px
                     {#if rigOptics.bodyArcminutes !== null}
-                      · {rigOptics.bodyArcminutes.toFixed(0)}′ of cap height
+                      · {rigOptics.bodyArcminutes.toFixed(0)} arcmin cap height
                     {/if}
                   </dd>
                 </div>
@@ -3101,7 +3388,14 @@
                   </dd>
                 </div>
               </dl>
-              {#each resolvedRig?.warnings ?? [] as warning (warning)}
+              <!-- True of every visit: this window does not render the stage
+                   font, so these are proportions, and a take measures. -->
+              <p class="readout-note">
+                What takes on this display open with — estimated here from standard font
+                proportions; a take measures the stage font itself.
+              </p>
+              </div>
+              {#each rigWarnings as warning (warning)}
                 <p class="hint-line">{warning}</p>
               {/each}
             {/if}
@@ -3110,35 +3404,37 @@
                  the one every angular result is multiplied by. -->
             <div class="control-block">
               <span class="control-label">Viewing distance</span>
-              <div class="chip-row" role="group" aria-label="Viewing distance">
-                {#each DISTANCE_PRESETS_M as metres (metres)}
-                  <button
-                    type="button"
-                    class="chip"
-                    class:selected={rig.viewingDistanceMm === Math.round(metres * 1000)}
-                    aria-pressed={rig.viewingDistanceMm === Math.round(metres * 1000)}
-                    onclick={() => void updateRig({ viewingDistanceMm: Math.round(metres * 1000) })}
-                  >
-                    {metres.toFixed(1)} m
-                  </button>
-                {/each}
-                <div class="chip-field">
-                  <TextField
-                    label="Custom (metres)"
+              <div class="distance-row">
+                <SegmentedControl
+                  label="Viewing distance"
+                  size="sm"
+                  value={rig.viewingDistanceMm === null ? '' : String(rig.viewingDistanceMm)}
+                  options={distanceOptions}
+                  onchange={(value) => void updateRig({ viewingDistanceMm: Number(value) })}
+                />
+                <span class="distance-other">
+                  <input
+                    class="distance-input"
+                    type="text"
+                    inputmode="decimal"
+                    placeholder="Other"
+                    aria-label="Other viewing distance, in metres"
                     value={distanceField}
-                    oninput={(value) => (distanceField = value)}
-                    onsubmit={() => applyTypedDistance()}
+                    oninput={(event) => (distanceField = event.currentTarget.value)}
+                    onkeydown={(event) => {
+                      if (event.key === 'Enter') applyTypedDistance();
+                    }}
                   />
-                </div>
-                <Button onclick={() => applyTypedDistance()}>Use</Button>
+                  <span class="distance-unit" aria-hidden="true">m</span>
+                </span>
+                <Button disabled={distanceField.trim() === ''} onclick={() => applyTypedDistance()}>
+                  Use
+                </Button>
               </div>
-              {#if rig.viewingDistanceMm !== null}
+              {#if rig.viewingDistanceMm !== null && rig.scale === null}
                 <p class="hint-line">
-                  Currently {(rig.viewingDistanceMm / 1000).toFixed(2)} m.
-                  {#if rig.scale === null}
-                    CandidCue still has no physical scale for this panel, so the distance changes
-                    nothing until one is measured.
-                  {/if}
+                  This panel has no physical scale yet, so the distance changes nothing until it is
+                  calibrated.
                 </p>
               {/if}
             </div>
@@ -3171,33 +3467,38 @@
                 on the glass in front of the presenter, and quietly restyle
                 every OTHER automatic display they own.
               -->
-              <p class="hint-line">
-                Size balance needs a display CandidCue can size. This one runs at the fallback
-                size until it is calibrated.
-              </p>
+              <!-- No line here: the lead above already says this display runs
+                   at the fallback until it is calibrated, and a caption for a
+                   control that is not drawn read as a caption for the distance
+                   presets above it. -->
             {:else}
+              <!-- Named, with its two ends under the track. The label used to be
+                   both ends joined by a ⟷ that rendered as a subscript, and the
+                   copy around it called the control "size balance" — a name
+                   nothing on screen carried. -->
               <Slider
-                label="More text on screen ⟷ Larger, easier text"
+                label="Size balance"
+                minLabel="More text on screen"
+                maxLabel="Larger, easier text"
                 value={Math.round((appliedRig ? rig.bias : automaticBias) * 100)}
                 min={0}
                 max={100}
                 format={(v) => `${v}%`}
+                spoken={(v) => `${v}% toward larger text`}
+                description={appliedRig === null
+                  ? 'Shared by every display CandidCue sizes automatically. A calibrated rig carries its own.'
+                  : undefined}
                 onchange={(value) =>
                   void (appliedRig
                     ? updateRig({ bias: value / 100 })
                     : patchSettings('teleprompter', { sizeBias: value / 100 }))}
               />
-              {#if appliedRig === null}
-                <p class="hint-line">
-                  Shared by every display CandidCue sizes automatically. A calibrated rig carries
-                  its own.
-                </p>
-              {/if}
             {/if}
 
             <Select
-          layout="row"
+              layout="row"
               label="How you are framed"
+              description="Tighter framing asks for a narrower column, so eye movement stays invisible on camera."
               value={rig.framing}
               options={[
                 { value: 'close-up', label: 'Close-up' },
@@ -3207,42 +3508,41 @@
               ]}
               onchange={(value) => void updateRig({ framing: value as FramingPreset })}
             />
-            <p class="hint-line">
-              A sideways eye movement that is invisible in a waist-up shot is obvious in a tight
-              headshot, so tighter framing asks for a narrower column.
-            </p>
 
-            <div class="control-block">
-              <span class="control-label">Text intensity</span>
-              <SegmentedControl
-                label="Text intensity for this rig"
-                value={rig.intensity}
-                options={[
-                  { value: 'soft', label: 'Soft' },
-                  { value: 'standard', label: 'Standard' },
-                  { value: 'strong', label: 'Strong' },
-                ]}
-                onchange={(value) => void updateRig({ intensity: value as TextIntensity })}
-              />
-            </div>
+            <SettingRow label="Text intensity" description="How bright the words are on the glass.">
+              {#snippet control(describedby)}
+                <SegmentedControl
+                  label="Text intensity for this rig"
+                  {describedby}
+                  value={rig.intensity}
+                  options={[
+                    { value: 'soft', label: 'Soft' },
+                    { value: 'standard', label: 'Standard' },
+                    { value: 'strong', label: 'Strong' },
+                  ]}
+                  onchange={(value) => void updateRig({ intensity: value as TextIntensity })}
+                />
+              {/snippet}
+            </SettingRow>
 
-            <div class="control-block">
-              <span class="control-label">Reading cue</span>
-              <SegmentedControl
-                label="Reading cue for this rig"
-                value={rig.readingCue}
-                options={[
-                  { value: 'ticks', label: 'Ticks' },
-                  { value: 'wash', label: 'Wash' },
-                  { value: 'none', label: 'None' },
-                ]}
-                onchange={(value) => void updateRig({ readingCue: value as ReadingCueStyle })}
-              />
-              <p class="hint-line">
-                What marks the line you are reading. Ticks sit in the margins; a wash lifts the band
-                itself.
-              </p>
-            </div>
+            <SettingRow
+              label="Reading cue"
+              description="What marks the line you are reading: ticks in the margins, or a wash over the band."
+            >
+              {#snippet control(describedby)}
+                <SegmentedControl
+                  label="Reading cue for this rig"
+                  {describedby}
+                  value={rig.readingCue}
+                  options={[
+                    { value: 'ticks', label: 'Ticks' },
+                    { value: 'wash', label: 'Wash' },
+                    { value: 'none', label: 'None' },
+                  ]}
+                  onchange={(value) => void updateRig({ readingCue: value as ReadingCueStyle })}
+                />
+              {/snippet}
+            </SettingRow>
 
             <!--
               Every derived value, reachable.
@@ -3253,9 +3553,12 @@
               hand, shows what automatic currently RESOLVES to rather than what
               the constant is, and offers its way back.
             -->
-            <Disclosure label={pinnedCount === 0 ? 'Advanced' : `Advanced — ${pinnedCount} set by hand`}>
+            <Disclosure
+              label={pinnedCount === 0 ? 'Advanced' : `Advanced — ${pinnedCount} set by hand`}
+              bind:open={advancedOpen}
+            >
               {#if pinnedCount > 0}
-                <div class="row-actions">
+                <div class="row-actions" data-search-row>
                   <Button size="sm" onclick={() => void clearAllOverrides()}>
                     Reset everything to automatic
                   </Button>
@@ -3263,46 +3566,57 @@
               {/if}
 
               <p class="hint-line">
-                These shadow what the optical model works out. The model still runs — so if a size
-                you pin costs you the reading measure, the readout above still says so.
+                Each value follows the optical model until you move it; a moved value says <em
+                  >Set by you</em
+                > and can be reset. The model still runs, so if a size you pin costs the reading
+                measure, the readout above says so.
               </p>
 
+              <!-- Each group is one block, so a search that matches nothing in it
+                   takes its heading away too instead of leaving it standing over
+                   nothing. -->
+              <div class="advanced-group">
               <h4 class="advanced-head">Size and measure</h4>
               {@render override('fontSizePx', 'Text size', MIN_RENDERABLE_FONT_SIZE_PX, ADVANCED_FONT_SIZE_CEILING_PX, 1, (v) => `${Math.round(v)} px`)}
-              {@render override('arcminutes', 'Apparent cap height', ANGULAR_HARD_FLOOR_ARCMIN, 60, 0.5, (v) => `${v.toFixed(1)}′`)}
+              {@render override('arcminutes', 'Apparent cap height', ANGULAR_HARD_FLOOR_ARCMIN, 60, 0.5, (v) => `${v.toFixed(1)} arcmin`)}
               {@render override('characters', 'Characters per line', READING_MEASURE.hardFloor, READING_MEASURE.bandMax, 1, (v) => `${Math.round(v)}`)}
-              {@render override('columnCh', 'Column width', 8, 80, 0.5, (v) => `${v.toFixed(1)} ch`)}
+              {@render override('columnCh', 'Column width', 8, 80, 0.5, (v) => `${v.toFixed(1)} ch`, (v) => `${v.toFixed(1)} character widths`)}
               {@render override('maxColumnFraction', 'Widest the column may go', 0.1, 1, 0.01, (v) => `${Math.round(v * 100)}% of the safe width`)}
+              </div>
 
+              <div class="advanced-group">
               <h4 class="advanced-head">Typography</h4>
               {@render override('lineHeight', 'Line height', 1, 2, 0.01, (v) => v.toFixed(2))}
               {@render override('fontWeight', 'Weight', 300, 800, 50, (v) => String(Math.round(v)))}
               {@render override('letterSpacingEm', 'Letter spacing', -0.02, 0.08, 0.005, (v) => `${v.toFixed(3)} em`)}
               {@render override('paragraphSpacingEm', 'Paragraph spacing', 0, 2, 0.05, (v) => `${v.toFixed(2)} em`)}
+              </div>
 
+              <div class="advanced-group">
               <h4 class="advanced-head">Vertical geometry</h4>
               <p class="hint-line">
-                In line pitches, not pixels — so the stage behaves the same on a 600px panel and a
-                1080px one instead of meaning two different things on the two displays this app is
-                actually used on.
+                Measured in lines, not pixels, so each means the same on a 600 px panel and a 1080 px
+                one.
               </p>
               {@render override('deadZoneLines', 'Reading corridor', 0.3, 2, 0.02, (v) => `${v.toFixed(2)} lines`)}
               {@render override('topFadeLines', 'Fade above', 0, 4, 0.05, (v) => `${v.toFixed(2)} lines`)}
               {@render override('bottomFadeLines', 'Fade below', 0, 4, 0.05, (v) => `${v.toFixed(2)} lines`)}
               {@render override('futureReserveLines', 'Script kept below the band', 0, 10, 0.25, (v) => `${v.toFixed(2)} lines`)}
               {@render override('sentenceMicrogapLines', 'Gap after a sentence', 0, 1, 0.05, (v) => `${v.toFixed(2)} lines`)}
+              </div>
 
+              <div class="advanced-group">
               <h4 class="advanced-head">Treatment</h4>
               {@render override('pastOpacity', 'Spoken text', 0.15, 1, 0.01, (v) => `${Math.round(v * 100)}%`)}
               {@render override('futureOpacity', 'Upcoming text', 0.3, 1, 0.01, (v) => `${Math.round(v * 100)}%`)}
               {@render override('secondaryMinPx', 'Smallest readable label', 8, 120, 1, (v) => `${Math.round(v)} px`)}
-              {@render override('lensOffsetDegrees', 'Reading band below the lens', -3, 3, 0.1, (v) => `${v.toFixed(1)}°`)}
+              {@render override('lensOffsetDegrees', 'Reading band below the lens', -3, 3, 0.1, (v) => `${v.toFixed(1)}°`, (v) => `${v.toFixed(1)} degrees`)}
               <p class="hint-line">
-                A small downward offset can read as more direct on camera than looking at the exact
-                centre of the lens. It needs a physical scale to convert the angle, so an
-                uncalibrated rig cannot honour it — and says nothing rather than applying a wrong
-                number.
+                A small downward offset can read as more direct on camera than the exact centre of
+                the lens. It needs a physical scale, so an uncalibrated rig leaves it out rather than
+                guess.
               </p>
+              </div>
             </Disclosure>
           {/if}
         </Section>
@@ -3319,6 +3633,13 @@
           one thing the override block must never become. `applied` is the
           resolver's answer, and it is worth saying when the two differ.
         -->
+        <!--
+          An automatic row shows its value once, in the slider's own readout.
+          It used to repeat it underneath ("Automatic · 1.38") on every one of
+          eighteen rows, so the panel read twice as long as it was and the one
+          row somebody HAD changed looked like all the others. Now only a moved
+          value carries a line, with its way back.
+        -->
         {#snippet override(
           key: keyof OpticalOverrides,
           label: string,
@@ -3326,6 +3647,7 @@
           max: number,
           step: number,
           format: (value: number) => string,
+          spoken?: (value: number) => string,
         )}
           {@const pinnedValue = rig.overrides[key]}
           {@const pinned = typeof pinnedValue === 'number'}
@@ -3339,22 +3661,22 @@
               {max}
               {step}
               {format}
+              {spoken}
               onchange={(value) => void setOverride(key, value)}
             />
-            <div class="override-state">
-              {#if pinned}
+            {#if pinned}
+              <div class="override-state">
                 <span class="override-tag">
                   {applied ? 'Set by you' : 'Set by you — same as automatic'}
                 </span>
+                <!-- No number: with a pin in place the resolver's answer IS the
+                     pin, so "(58 px)" named the value being reset, not the one
+                     it resets to. -->
                 <button type="button" class="inline-link" onclick={() => void setOverride(key, null)}>
                   Reset to automatic
                 </button>
-              {:else}
-                <span class="override-tag automatic">
-                  Automatic · {format(automaticValue(key))}
-                </span>
-              {/if}
-            </div>
+              </div>
+            {/if}
           </div>
         {/snippet}
       {:else if section === 'teleprompter'}
@@ -3385,6 +3707,7 @@
           step: number,
           format: (value: number) => string,
           rigOwned: boolean,
+          describedby?: string,
         )}
           {@const value = $settings.teleprompter[key]}
           {@const defaultValue = APPEARANCE_DEFAULTS[key]}
@@ -3400,27 +3723,22 @@
               {step}
               {format}
               disabled={owned}
-              description={owner
-                ? readerOwnsGeometry
-                  ? `A reading window does not use this: during a read, its text is set in Reading appearance, and ${readerSizeKeys} change its size. Here it is the prompter's fallback.`
-                  : `Controlled by ${owner.label} — the number here is the fallback for a display CandidCue cannot size, not what a take prompts at.`
-                : undefined}
+              {describedby}
               onchange={(next) => void patchSettings('teleprompter', { [key]: next })}
             />
-            {#if !owned}
+            <!-- A value at its default says nothing: the readout already shows
+                 it, and "Default · 64 px" under "64 px" was the same number
+                 twice. A moved value says so and offers the way back. -->
+            {#if !owned && !atDefault}
               <div class="override-state">
-                {#if atDefault}
-                  <span class="override-tag automatic">Default · {format(defaultValue)}</span>
-                {:else}
-                  <span class="override-tag">Set by you</span>
-                  <button
-                    type="button"
-                    class="inline-link"
-                    onclick={() => void patchSettings('teleprompter', { [key]: defaultValue })}
-                  >
-                    Reset to default · {format(defaultValue)}
-                  </button>
-                {/if}
+                <span class="override-tag">Set by you</span>
+                <button
+                  type="button"
+                  class="inline-link"
+                  onclick={() => void patchSettings('teleprompter', { [key]: defaultValue })}
+                >
+                  Reset to default ({format(defaultValue)})
+                </button>
               </div>
             {/if}
           </div>
@@ -3433,7 +3751,7 @@
             one. The reading band especially: it wants to sit over the lens, and
             that is an alignment somebody performs by watching it move.
           -->
-          <div class="preview-row">
+          <div class="preview-row" data-search-row>
             <Button
               variant={stagePreview ? 'default' : 'primary'}
               disabled={stagePreviewBusy || displays.length === 0}
@@ -3448,13 +3766,16 @@
               the exact moment the preview was running to be believed.
             -->
             <p class="hint-line preview-note">
+              <!-- Where the sample is and who sizes it — no promise about which
+                   of the rows below it follows. "Everything" was false for the
+                   geometry a rig owns, "the rest" for an intensity a rig
+                   overrides and for the reading window's own appearance. -->
               {#if stagePreview && geometryOwner}
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
                 Size, line height, column width and reading band come from
-                <strong>{geometryOwner.label}</strong>; the rest updates as you drag.
+                <strong>{geometryOwner.label}</strong>.
               {:else if stagePreview}
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
-                Everything below updates it as you drag.
               {:else if displays.length === 0}
                 No displays detected — connect the teleprompter and open Prompter display and rigs.
               {:else}
@@ -3476,12 +3797,17 @@
             never offered it. The one face in the app chosen for legibility
             through glass, shipped, tested, and impossible to select.
           -->
+          <!-- "(bundled)" left the option name for the description: in the
+               220px column it clipped the name mid-word ("…(bunc"). -->
           <Select
-          layout="row"
+            layout="row"
             label="Default font family"
+            description={$settings.teleprompter.fontFamilyId === 'high-legibility'
+              ? 'Bundled with CandidCue, and drawn to keep I, l and 1 — and 0 and O — apart at a distance.'
+              : 'Atkinson Hyperlegible is bundled and drawn for reading at a distance.'}
             value={$settings.teleprompter.fontFamilyId}
             options={[
-              { value: 'high-legibility', label: 'Atkinson Hyperlegible (bundled)' },
+              { value: 'high-legibility', label: 'Atkinson Hyperlegible' },
               { value: 'system-sans', label: 'System Sans' },
               { value: 'humanist-sans', label: 'Humanist Sans' },
               { value: 'serif', label: 'Serif' },
@@ -3489,12 +3815,6 @@
             ]}
             onchange={(value) => void patchSettings('teleprompter', { fontFamilyId: value })}
           />
-          <p class="hint-line">
-            Atkinson Hyperlegible travels with the app, so it renders the same on every machine
-            and needs no network. It disambiguates the characters a prompter gets wrong at
-            distance — capital I from lowercase l from 1, and 0 from O — which is the whole
-            reason to prefer it over whatever <em>System Sans</em> resolves to today.
-          </p>
           <!--
             What used to be "Stage background".
 
@@ -3507,22 +3827,32 @@
             a strong one bloom. That is the control that exists now, and the
             stage reads it as `data-text-intensity` on `.stage-root`.
           -->
-          <SegmentedControl
-            label="Text intensity"
-            value={$settings.teleprompter.textIntensity}
-            options={[
-              { value: 'soft', label: 'Soft' },
-              { value: 'standard', label: 'Standard' },
-              { value: 'strong', label: 'Strong' },
-            ]}
-            onchange={(value) =>
-              void patchSettings('teleprompter', { textIntensity: value as TextIntensity })}
-          />
-          <p class="hint-line">
-            How bright the words burn over the stage's black field. A calibrated rig carries its
-            own choice, made at the glass; this is what everything else runs with, reading windows
-            included — until you pick an intensity for them in Reading appearance.
-          </p>
+          <!-- It had no visible label at all, and stretched the width of the
+               column with its three segments bunched at one end. -->
+          <!-- "Default", like the font family and size around it: on a display
+               with a calibrated rig the rig's own intensity is the one in force,
+               and the row says which rig and what it is. -->
+          <SettingRow
+            label="Default text intensity"
+            description={appliedRig && $settings.stage.presentationMode === 'prompter'
+              ? `${appliedRig.rigName} on ${effectiveDisplay?.name ?? 'this display'} uses its own (${INTENSITY_LABELS[appliedRig.intensity]}). This is for displays without a rig, and for reading windows until you set one in Reading appearance.`
+              : 'How bright the words are on the stage. A calibrated rig keeps its own; reading windows use this until you set one in Reading appearance.'}
+          >
+            {#snippet control(describedby)}
+              <SegmentedControl
+                label="Text intensity"
+                {describedby}
+                value={$settings.teleprompter.textIntensity}
+                options={[
+                  { value: 'soft', label: 'Soft' },
+                  { value: 'standard', label: 'Standard' },
+                  { value: 'strong', label: 'Strong' },
+                ]}
+                onchange={(value) =>
+                  void patchSettings('teleprompter', { textIntensity: value as TextIntensity })}
+              />
+            {/snippet}
+          </SettingRow>
           <!--
             The one field choice there is, and it is a reading window's.
 
@@ -3532,24 +3862,62 @@
             appearance offers the same choice during a read, and its Done saves
             here. Absent means Dark: nothing is written until somebody picks.
           -->
-          <div class="control-block">
-            <span class="control-label">Reading window appearance</span>
-            <SegmentedControl
-              label="Reading window appearance"
-              value={readerThemeFor($settings.teleprompter)}
-              options={[
-                { value: 'dark', label: 'Dark' },
-                { value: 'paper', label: 'Paper' },
-              ]}
-              onchange={(value) =>
-                void patchSettings('teleprompter', {
-                  readerTheme: (value === 'paper' ? 'paper' : 'dark') satisfies ReaderTheme,
-                })}
-            />
-            <p class="hint-line">
-              Reading windows only — light text on black, or dark text on warm paper. A
-              teleprompter take always stays black.
-            </p>
+          <SettingRow
+            label="Reading window appearance"
+            description="Light text on black, or dark text on warm paper. A teleprompter always stays black."
+          >
+            {#snippet control(describedby)}
+              <SegmentedControl
+                label="Reading window appearance"
+                {describedby}
+                value={readerThemeFor($settings.teleprompter)}
+                options={[
+                  { value: 'dark', label: 'Dark' },
+                  { value: 'paper', label: 'Paper' },
+                ]}
+                onchange={(value) =>
+                  void patchSettings('teleprompter', {
+                    readerTheme: (value === 'paper' ? 'paper' : 'dark') satisfies ReaderTheme,
+                  })}
+              />
+            {/snippet}
+          </SettingRow>
+          <!--
+            Who owns the four geometry sliders, said ONCE, above them, with the
+            way to the owner beside it. It used to be the same two-line sentence
+            under each of the four, with the link after the last of them. Each
+            slider still names its owner in one short line. The note and the
+            four share one well, so they read as the one group they are rather
+            than as four rows somebody forgot to switch on.
+
+            On the uncalibrated path nothing owns them, and the note says what
+            they are instead: the fallback — and, for the band, how to set it.
+          -->
+          <div class="geometry-group" data-search-row>
+          <div class="geometry-note">
+            {#if geometryOwner && readerOwnsGeometry}
+              <p class="geometry-note-text" id={GEOMETRY_NOTE_ID}>
+                <strong>A reading window sets its own text.</strong> During a read, use Reading
+                appearance; {readerSizeKeys} change the size. These four are the teleprompter's
+                fallback.
+              </p>
+            {:else if geometryOwner}
+              <p class="geometry-note-text" id={GEOMETRY_NOTE_ID}>
+                <strong>Size, line height, column width and reading band come from {geometryOwner.label}</strong
+                > on {effectiveDisplay?.name ?? 'this display'}. These four are only the fallback for a
+                display CandidCue cannot size.
+              </p>
+              <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
+                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open prompter displays'}
+              </button>
+            {:else}
+              <p class="geometry-note-text" id={GEOMETRY_NOTE_ID}>
+                <strong>These four are the fallback</strong> for a display CandidCue can neither
+                recognise nor measure. With the preview running, drag Reading band position until the
+                marks at the sides of the stage sit over your camera lens — or calibrate the display
+                for a crosshair that does it for you.
+              </p>
+            {/if}
           </div>
           <!--
             The ceiling was 160px, which is not a taste limit — it was short of
@@ -3567,6 +3935,7 @@
             1,
             (v) => `${v} px`,
             true,
+            GEOMETRY_NOTE_ID,
           )}
           <!-- Bounds from APPEARANCE_LIMITS, not literals: the in-session sheet
                sets these same four values, and a range that lives on one screen
@@ -3579,6 +3948,7 @@
             APPEARANCE_LIMITS.lineHeight.step,
             (v) => v.toFixed(2),
             true,
+            GEOMETRY_NOTE_ID,
           )}
           {@render appearanceSlider(
             'columnWidthPercent',
@@ -3588,6 +3958,7 @@
             1,
             (v) => `${v}%`,
             true,
+            GEOMETRY_NOTE_ID,
           )}
           {@render appearanceSlider(
             'readingBandCenterPercent',
@@ -3597,53 +3968,9 @@
             1,
             (v) => `${v}%`,
             true,
+            GEOMETRY_NOTE_ID,
           )}
-          {#if geometryOwner}
-            <!--
-              One route, once, under the four controls somebody else owns —
-              rather than a link repeated in every description. The owner is
-              named in each slider's own hint; this is where you go to change it.
-            -->
-            <p class="hint-line">
-              <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
-                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open prompter displays'}
-              </button>
-            </p>
-          {/if}
-          <!--
-            The one control on this screen that is aligning against a physical
-            object. Said here rather than in the shared note below, because the
-            others are judged (does that read easily?) and this one is measured
-            (is it over the lens?) — and because somebody who wants it exact
-            should be sent to the wizard that puts a crosshair on the glass
-            rather than left estimating a percentage.
-          -->
-          <!--
-            Both notes are for the uncalibrated path only now.
-
-            The band instruction ("drag until the marks sit over your lens") is
-            an instruction for a control that, once something else owns it,
-            cannot be dragged — and the paragraph below it explained an override
-            that the sliders themselves now state, each naming its owner.
-            Leaving either in place would put the explanation back beside a
-            control that has already made it, which is how the screen ended up
-            arguing with itself in the first place.
-          -->
-          {#if geometryOwner === null}
-            <p class="hint-line">
-              The marks at the sides of the stage are the band. With the preview running, drag this
-              until they sit over your camera lens — that is where your eyes rest, so it is where the
-              lens should be. <strong>Calibrate</strong> under Prompter display and rigs does the same alignment with
-              a crosshair and remembers it per rig.
-            </p>
-            <p class="hint-line">
-              These four are the <strong>fallback</strong> — what a display prompts at when CandidCue
-              can neither recognise it nor read its physical size. Every other panel is sized
-              automatically from how large it is and how far away you stand, and a rig calibrated
-              under Prompter display and rigs refines that with real measurements — which is the only
-              way the text can be right on two panels of different sizes at once.
-            </p>
-          {/if}
+          </div>
           <!--
             "Fixed-speed default" was a slider onto nothing, and then a sentence
             saying so. It is a control again, because there is finally something
@@ -3667,12 +3994,12 @@
             1,
             (v) => `${v} wpm`,
             false,
+            AUTOSCROLL_HINT_ID,
           )}
-          <p class="hint-line">
-            Auto-scroll rolls the script at this pace when your voice is not getting through.
-            Press <kbd>A</kbd> during a take to start or stop it; <kbd>[</kbd> and <kbd>]</kbd>
-            change the pace while it runs. Starting it pauses voice following, and stopping it
-            hands the script back.
+          <p class="hint-line" id={AUTOSCROLL_HINT_ID}>
+            Rolls the script at this pace when your voice is not getting through. During a take,
+            <kbd>A</kbd> starts and stops it, and <kbd>[</kbd> <kbd>]</kbd> change the pace; voice
+            following pauses while it runs.
           </p>
           <!-- Mirroring lives with the display it is a property of (Stage
                display), not here: it describes the rig, not the type. -->
@@ -3689,16 +4016,9 @@
           <Toggle
             checked={$settings.teleprompter.semanticLineBreaks}
             label="Break lines at phrase boundaries"
+            description="Ends each line where a phrase ends, in columns of about 48 characters or more — most reading windows. Narrower columns, like an automatically sized prompter, wrap normally either way."
             onchange={(value) => void patchSettings('teleprompter', { semanticLineBreaks: value })}
           />
-          <p class="hint-line">
-            Uses phrase boundaries when the column is wide enough — about 48 characters a line
-            or more, which most reading windows are. The stage then ends each line where a phrase
-            ends rather than at the last word that fits, so the sweep back to the left edge lands
-            somewhere natural. A teleprompter sized automatically never has a column that wide,
-            so it wraps the way a browser does whatever this says. Turn it off to wrap that way
-            everywhere.
-          </p>
           <!-- #218 removed "When a session ends" and "Hide the pointer on the
                stage". Nothing read the first, and a take runs in the control
                window, so there is no stage window for it to close. The stage
@@ -3711,7 +4031,7 @@
           <Toggle
             checked={$settings.teleprompter.diagnosticTake}
             label="Diagnostic Take"
-            description="Adds the follow engine's readouts and the recogniser's raw transcript to the stage, and shows tables, code, images and diagrams in full instead of as one-line cues. For checking a rig, or a script that will not follow. Hold and fault messages show either way."
+            description="Adds the follow engine's readouts and the raw transcript to the stage, and shows tables, code and images in full rather than as cues. For checking a rig or a script that will not follow."
             onchange={(value) => void patchSettings('teleprompter', { diagnosticTake: value })}
           />
         </Section>
@@ -3727,33 +4047,32 @@
         </Section>
       {:else}
         <Section title="Data, privacy & updates">
-          <div class="privacy">
-            <h3 class="privacy-head">Local by default</h3>
+          <!--
+            The tasks first, then the statements. Four paragraphs of privacy
+            prose used to stand between the window and Export, so the one thing
+            somebody opens this section to DO was a scroll away.
+          -->
+          <div class="privacy" data-search-row>
+            <h3 class="privacy-head">Your data</h3>
             <p class="privacy-body">
-              Your Markdown scripts and their saved versions, imported images, settings, a history
-              of your sessions (when each take ran and where in the script it stopped), and
-              diagnostic logs are stored on this device.
+              Scripts and their saved versions, imported images, settings, a history of your takes
+              (when each ran and where it stopped) and diagnostic logs are kept on this computer.
+              An export holds all of it, with a checksum per file, and can be restored.
             </p>
-            <h3 class="privacy-head">When your microphone is open</h3>
-            <p class="privacy-body">
-              CandidCue opens your microphone briefly when you grant access, while a take or a
-              microphone test is running, and while the input meter is on screen in Audio settings.
-              Audio from a take or a test is transcribed on this machine by the speech model
-              installed here; the meter only measures how loud you are. None of it is uploaded, and
-              CandidCue does not save it.
-            </p>
-            <h3 class="privacy-head">Your voice and your script stay here</h3>
-            <p class="privacy-body">
-              Neither your voice nor your script is sent anywhere. The words are recognised here,
-              matched against your script here, and not saved afterwards — there is no transcription
-              account, no API key, and no third party involved in following you.
-            </p>
-            <h3 class="privacy-head">Requests you start</h3>
-            <p class="privacy-body">
-              CandidCue has no update service and never contacts one. The only time it reaches the
-              network is when you download a language — from the Welcome screen or from Speech
-              settings — and that download carries neither your script nor your audio.
-            </p>
+          </div>
+          <!--
+            "Export all scripts" was the honest name for what this used to
+            do. It exports everything now — the database, the whole canonical
+            scripts tree, and the settings and calibrations that used to be
+            left out entirely — with a manifest and a checksum per file, so
+            it can be restored rather than only looked at.
+
+            Restore is the same weight as Export: it is half of the same job, not
+            a lesser action. Clear logs moved to Diagnostics, where logs are.
+          -->
+          <div class="row-actions" data-search-row>
+            <Button onclick={() => void runExportAllData()}>Export all data</Button>
+            <Button onclick={() => void runRestoreAllData()}>Restore from export…</Button>
           </div>
 
           <!--
@@ -3764,42 +4083,51 @@
             Speech settings line that pointed people at it. Rust still holds the
             field and sweeps what older builds kept until #217.
           -->
-          <div class="row-actions">
-            <!--
-              "Export all scripts" was the honest name for what this used to
-              do. It exports everything now — the database, the whole canonical
-              scripts tree, and the settings and calibrations that used to be
-              left out entirely — with a manifest and a checksum per file, so
-              it can be restored rather than only looked at.
-            -->
-            <Button onclick={() => void runExportAllData()}>
-              Export all data
-            </Button>
-            <Button variant="ghost" onclick={() => void runRestoreAllData()}>
-              Restore from export…
-            </Button>
-            <!-- #218 removed "Clear analysis cache": it emptied a directory
-                 nothing has ever written. -->
-            <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>
+          <!-- One block per topic, so a search for "updates" keeps Updates
+               and not every privacy paragraph with it. -->
+          <div class="privacy" data-search-row>
+            <h3 class="privacy-head">Your voice stays here</h3>
+            <p class="privacy-body">
+              Speech recognition and script matching happen on this computer. Microphone audio and
+              recognised words are not saved, and there is no transcription account, API key or third
+              party.
+            </p>
           </div>
+          <div class="privacy" data-search-row>
+            <h3 class="privacy-head">When the microphone is open</h3>
+            <p class="privacy-body">
+              Briefly when you grant access, during a take or a microphone test, and while the input
+              meter is on screen in Audio settings — which measures loudness only. None of it is
+              uploaded or kept.
+            </p>
+          </div>
+          <div class="privacy" data-search-row>
+            <h3 class="privacy-head">When CandidCue uses the network</h3>
+            <p class="privacy-body">
+              Only when you download a speech language, from Welcome or Speech settings. That
+              download carries neither your script nor your audio.
+            </p>
+          </div>
+          <div class="privacy" data-search-row>
+            <!--
+              #180 removed a "Diagnostic logging" toggle and an "Update channel"
+              dropdown from here: neither reached Rust, so logging ran either way
+              and the channel selected nothing. A "Check for updates" button
+              survived that pass because it asked Rust a real question — but the
+              only answer Rust could give was "not available in this build".
 
-          <!--
-            #180 removed a "Diagnostic logging" toggle and an "Update channel"
-            dropdown from here: neither reached Rust, so logging ran either way
-            and the channel selected nothing. A "Check for updates" button
-            survived that pass because it asked Rust a real question — but the
-            only answer Rust could give was "not available in this build".
-
-            CandidCue 1.0 updates manually, so the whole update surface is now
-            one true statement rather than an action with no outcome
-            (docs/updates.md). The version comes from Rust, which reads it from
-            the signed bundle, so this line is also what a support request
-            should be asked to quote.
-          -->
-          <h3 class="privacy-head">Updates</h3>
-          <p class="privacy-body" data-testid="update-policy">
-            {updateNote || 'Reading the installed version…'}
-          </p>
+              CandidCue 1.0 updates manually, so the whole update surface is now
+              one true statement rather than an action with no outcome
+              (docs/updates.md). The version comes from Rust, which reads it from
+              the signed bundle, so this line is also what a support request
+              should be asked to quote. Built like the statements above, so it
+              keeps their rhythm.
+            -->
+            <h3 class="privacy-head">Updates</h3>
+            <p class="privacy-body" data-testid="update-policy">
+              {updateNote || 'Reading the installed version…'}
+            </p>
+          </div>
         </Section>
 
         <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->
@@ -3818,7 +4146,7 @@
           {:else if !diagnostics}
             <p class="hint-line">{diagnosticsLoading ? 'Checking…' : 'No diagnostics yet.'}</p>
           {:else}
-            <dl class="diag">
+            <dl class="diag" data-search-row>
               {#each diagnosticRows(diagnostics) as row (row.label)}
                 <div class="diag-row">
                   <dt class="diag-label">{row.label}</dt>
@@ -3836,7 +4164,7 @@
             the app. The stable code is what a bug report needs, so it lives
             here — one place, clearly labelled as a technical detail.
           -->
-          <div class="recent-errors">
+          <div class="recent-errors" data-search-row>
             <p class="recent-errors-title">Recent errors</p>
             {#if recentErrors.length === 0}
               <p class="hint-line">Nothing has failed in this session.</p>
@@ -3853,11 +4181,11 @@
             {/if}
           </div>
 
-          <div class="row-actions">
+          <div class="row-actions" data-search-row>
             <Button size="sm" disabled={!diagnostics} onclick={() => void copyDiagnostics()}>
               Copy diagnostics
             </Button>
-            <Button size="sm" variant="ghost" onclick={() => void runSupportBundle()}>
+            <Button size="sm" onclick={() => void runSupportBundle()}>
               Export support bundle
             </Button>
             {#if bundleExported}
@@ -3865,14 +4193,24 @@
                 Reveal bundle
               </Button>
             {/if}
+            <!-- #218 removed "Clear analysis cache": it emptied a directory
+                 nothing has ever written. Clear logs deletes (after asking), so
+                 it is the low-emphasis danger trigger and sits apart. -->
+            <span class="row-actions-end">
+              <Button size="sm" variant="danger" onclick={() => clearLogs()}>Clear logs</Button>
+            </span>
           </div>
-          <ul class="bundle-contents">
-            {#each SUPPORT_BUNDLE_CONTENTS as line (line)}
-              <li>{line}</li>
-            {/each}
-          </ul>
-          <p class="hint-line">{SUPPORT_BUNDLE_EXCLUSIONS}</p>
-          <p class="hint-line">CandidCue {$appStatus.version}</p>
+          <!-- The version line that closed this section went: the version is
+               the first row of the table above and the subject of Updates. -->
+          <div class="bundle" data-search-row>
+            <p class="bundle-lead">A support bundle contains:</p>
+            <ul class="bundle-contents">
+              {#each SUPPORT_BUNDLE_CONTENTS as line (line)}
+                <li>{line}</li>
+              {/each}
+            </ul>
+            <p class="bundle-lead">{SUPPORT_BUNDLE_EXCLUSIONS}</p>
+          </div>
         </Section>
       {/if}
     </div>
@@ -3903,8 +4241,11 @@
    * same reason. The rows are source-list height now and the selected one is a
    * tonal fill with no border and no elevation.
    */
+  /* Wide enough for "Prompter display and rigs" on one line. At 180px it and
+     "Data, privacy & updates" wrapped, and their second lines read as items
+     of their own. */
   .section-nav {
-    flex: 0 0 180px;
+    flex: 0 0 212px;
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -3937,11 +4278,6 @@
     background: var(--bg-row-selected);
     color: var(--text-primary);
     font-weight: 650;
-  }
-  .section-empty {
-    margin: var(--space-2);
-    font-size: var(--text-xs);
-    color: var(--text-muted);
   }
 
   /*
@@ -3976,15 +4312,24 @@
   :global([data-settings-search-hit]) {
     background: var(--accent-wash);
     border-radius: var(--radius-sm);
+    /* The wash reaches 4px past the row on every side, so its text and its
+       switch do not sit flush against the band's edges — without moving the
+       row, which a padding would. No more than 4px: rows 12px apart would
+       merge into one band. */
+    box-shadow: 0 0 0 4px var(--accent-wash);
   }
 
+  /* Sits close over what it counts. Below it the column's 40px section gap
+     applied as well, and the note floated a band of empty space away from
+     the first match. */
   .row-filter-note {
-    margin: 0 0 var(--space-4);
+    margin: 0 0 calc(var(--space-4) - var(--space-9));
     font-size: var(--text-sm);
     color: var(--text-secondary);
     display: flex;
     align-items: baseline;
-    gap: var(--space-2);
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-2);
   }
   .row-filter-clear {
     border: 0;
@@ -4053,6 +4398,20 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-9);
+    /*
+      Every field label in Settings takes the switch's treatment — 13px,
+      medium, primary ink. Selects, sliders and readouts used to wear the
+      grey semibold of a stacked form label, so one section mixed two label
+      styles row by row.
+    */
+    --field-label-color: var(--text-primary);
+    --field-label-weight: 500;
+  }
+  /* No last word alone on a line, in any of the section's prose — its own and
+     its fields' descriptions alike. */
+  .content :global(p),
+  .content :global(.description) {
+    text-wrap: pretty;
   }
 
   .row-actions {
@@ -4060,6 +4419,15 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+  /* A destructive trigger at the far end of its row, apart from the rest. */
+  .row-actions-end {
+    margin-left: auto;
+  }
+  .readout-with-action {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   .key-form {
@@ -4086,6 +4454,25 @@
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-muted);
+    max-width: var(--prose-measure);
+  }
+  /* Keys named in a hint, as the keys they are. */
+  .hint-line kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 var(--space-1);
+    font-family: var(--font-ui);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    line-height: 1;
+    color: var(--text-primary);
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    vertical-align: 1px;
   }
 
   /*
@@ -4130,7 +4517,7 @@
   }
   .diag-figure {
     font-size: var(--text-sm);
-    color: var(--text-secondary);
+    color: var(--text-primary);
     word-break: break-word;
   }
   .diag-figure.good {
@@ -4190,6 +4577,18 @@
     color: var(--text-muted);
   }
 
+  .bundle {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-width: var(--prose-measure);
+  }
+  .bundle-lead {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+  }
   .bundle-contents {
     margin: 0;
     padding-left: var(--space-5);
@@ -4235,7 +4634,7 @@
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     color: var(--text-secondary);
-    max-width: var(--prose-measure-narrow);
+    max-width: var(--prose-measure);
   }
   .inline-link {
     border: none;
@@ -4259,41 +4658,89 @@
     color: var(--danger);
   }
 
-  .toggle-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-2) var(--space-6);
+  .toggle-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* A notice that is not an error: a panel is away, or something is
+     standing in. The house warning shape — tinted, an icon, ink body. */
+  .notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+  }
+  .notice-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 1px;
+    color: var(--warning);
+  }
+  .notice-text {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-primary);
+  }
+  .notice-text strong {
+    font-weight: 600;
+    color: var(--warning);
   }
 
   /* --- displays --- */
+  /* Equal columns, as many as fit: the Automatic tile and two displays sit on
+     one row at the window's normal width, and every tile is the same size. */
   .display-grid {
-    display: flex;
-    gap: var(--space-3);
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+    gap: var(--space-2);
   }
+  /* The two presentation modes, side by side as the pair they are. */
+  .mode-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+  /*
+   * Selection is the raised white tile, as it is the raised white segment in
+   * every segmented control on this screen. It used to be the reverse — the
+   * chosen tile tinted beige among white ones — and a tinted tile among bright
+   * ones reads as the one that is switched off.
+   */
   .monitor-tile {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--space-1);
-    min-width: 200px;
-    padding: var(--space-4);
+    gap: 2px;
+    min-width: 0;
+    padding: var(--space-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-panel);
+    background: transparent;
     text-align: left;
     transition:
       border-color var(--dur-fast) var(--ease-out),
-      background var(--dur-fast) var(--ease-out);
+      background var(--dur-fast) var(--ease-out),
+      box-shadow var(--dur-fast) var(--ease-out);
+  }
+  /* The chosen display while it is unplugged: still the selection, not a
+     button — the dashed edge says it is away. */
+  .monitor-tile.missing {
+    border-style: dashed;
   }
   .monitor-tile:hover {
     border-color: var(--border-strong);
-    background: var(--bg-hover-surface);
+    background: var(--bg-hover-chrome);
   }
   .monitor-tile.selected,
   .monitor-tile.selected:hover {
     border-color: var(--border-strong);
-    background: var(--accent-wash);
+    background: var(--bg-panel);
+    box-shadow: var(--shadow-card);
   }
   .monitor-glyph {
     color: var(--text-muted);
@@ -4301,25 +4748,29 @@
   /* The glyph and, on a display tile, its number. The number sits at the far
      edge, where an eye coming back from the glass lands on it before the
      name: it is the one thing on the tile that matches what the panel showed. */
+  /* Every tile has the same head, number or not, so the names below line up
+     across a row. */
   .monitor-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     align-self: stretch;
     gap: var(--space-2);
+    min-height: 26px;
+    margin-bottom: var(--space-1);
   }
   .monitor-number {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 32px;
-    height: 32px;
-    padding: 0 var(--space-2);
+    min-width: 26px;
+    height: 26px;
+    padding: 0 var(--space-1);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--bg-secondary);
     color: var(--text-primary);
-    font-size: var(--text-2xl);
+    font-size: var(--text-base);
     font-weight: 650;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -4345,6 +4796,7 @@
   }
   .monitor-meta {
     font-size: var(--text-meta);
+    line-height: var(--lh-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
@@ -4352,6 +4804,33 @@
     display: flex;
     gap: var(--space-1);
     margin-top: var(--space-1);
+  }
+  /* A mode tile's icon sits beside its name: the head row a display tile
+     needs for its number is height a mode tile does not. */
+  .mode-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: 2px;
+  }
+  .mode-head .monitor-glyph {
+    display: inline-flex;
+  }
+
+  /* The sizing in force, one line, under the display picker. */
+  .sizing-summary {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+  }
+  .sizing-summary strong {
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   /* --- the optical rig --- */
@@ -4371,7 +4850,6 @@
     gap: var(--space-2);
   }
   .rig-row {
-    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -4379,22 +4857,14 @@
     padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-panel);
+    background: transparent;
   }
+  /* The rig in force: raised white with a firm edge, like a selected tile
+     above it, and no accent bar — selection is never marked with one here. */
   .rig-row.active {
     border-color: var(--border-strong);
-    background: var(--accent-wash);
-  }
-  /* Inset bar, never a one-sided border on a rounded box. */
-  .rig-row.active::before {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 10px;
-    bottom: 10px;
-    width: 2px;
-    border-radius: 1px;
-    background: var(--accent);
+    background: var(--bg-panel);
+    box-shadow: var(--shadow-card);
   }
   .rig-choose {
     flex: 1 1 auto;
@@ -4418,15 +4888,41 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .readout {
+  /* How the display is sized, in one sentence above the numbers. */
+  .rig-lead {
     margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+    max-width: var(--prose-measure);
+  }
+  .rig-lead strong {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .readout {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: var(--space-3);
     padding: var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-panel);
+  }
+  .readout-list {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .readout-note {
+    margin: 0;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-faint);
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
   }
   .readout-row {
     display: flex;
@@ -4438,11 +4934,12 @@
     font-size: var(--text-sm);
     color: var(--text-muted);
   }
+  /* The answer in ink, the question in grey — here and in Diagnostics. */
   .readout-value {
     margin: 0;
     min-width: 0;
     font-size: var(--text-sm);
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-variant-numeric: tabular-nums;
   }
 
@@ -4455,48 +4952,73 @@
   .control-label {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: var(--field-label-weight, 600);
+    color: var(--field-label-color, var(--text-secondary));
   }
 
-  .chip-row {
+  /* The distance presets, then a typed distance on the same line. */
+  .distance-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
   }
-  .chip {
-    min-height: var(--button-h);
-    padding-inline: 14px;
-    border-radius: var(--radius-sm);
+  .distance-other {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .distance-input {
+    width: 92px;
+    height: var(--control-h);
+    padding: 0 22px 0 var(--space-2);
     border: 1px solid var(--border-control);
-    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
     color: var(--text-primary);
+    font: inherit;
     font-size: var(--text-sm);
-    font-weight: 600;
     font-variant-numeric: tabular-nums;
     transition:
-      background var(--dur-fast) var(--ease-out),
-      border-color var(--dur-fast) var(--ease-out);
+      border-color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
   }
-  .chip:hover {
-    background: var(--bg-hover-surface);
+  .distance-input::placeholder {
+    color: var(--text-faint);
   }
-  .chip.selected,
-  .chip.selected:hover {
-    background: var(--accent-wash);
+  .distance-input:hover {
     border-color: var(--border-strong);
   }
-  .chip-field {
-    flex: 0 1 160px;
-    min-width: 120px;
+  /* Quiet focus, as every field here: the inset edge comes from tokens.css. */
+  .distance-input:focus,
+  .distance-input:focus-visible {
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+  }
+  .distance-unit {
+    position: absolute;
+    right: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    pointer-events: none;
   }
 
+  /* The Advanced panel's groups, in the app's small-caps group label (the
+     shortcuts sheet's index titles). As 13px bold they differed from the
+     slider labels under them by colour alone. */
   .advanced-head {
-    margin: var(--space-2) 0 0;
-    font-size: var(--text-sm);
-    font-weight: 650;
-    color: var(--text-primary);
+    margin: var(--space-3) 0 calc(-1 * var(--space-1));
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: var(--ls-caps);
+    color: var(--text-muted);
+  }
+
+  .advanced-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
   }
 
   .override {
@@ -4504,22 +5026,53 @@
     flex-direction: column;
     gap: 2px;
   }
+  /* One size for the whole line: the tag was 11px and the reset link beside
+     it inherited 15px. */
   .override-state {
     display: flex;
     align-items: baseline;
-    gap: var(--space-3);
+    gap: var(--space-2);
     flex-wrap: wrap;
+    font-size: var(--text-xs);
+    line-height: var(--lh-meta);
   }
   .override-tag {
-    font-size: var(--text-2xs);
     font-weight: 600;
     /* Small terracotta TEXT has to use the strong ramp to clear AA in light. */
     color: var(--accent-strong);
     font-variant-numeric: tabular-nums;
   }
-  .override-tag.automatic {
-    font-weight: 500;
-    color: var(--text-faint);
+
+  /* The four geometry sliders and the note that says who owns them, in one
+     sunken well — not a bordered card: it groups, it does not frame. */
+  .geometry-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+  }
+  .geometry-note {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding-bottom: var(--space-1);
+  }
+  .geometry-note-text {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+    max-width: var(--prose-measure);
+  }
+  .geometry-note-text strong {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .geometry-note .inline-link {
+    font-size: var(--text-sm);
   }
 
   /* --- microphone --- */
@@ -4672,8 +5225,8 @@
   .mic-test-name {
     font-size: var(--text-label);
     line-height: var(--lh-label);
-    font-weight: 600;
-    color: var(--text-secondary);
+    font-weight: var(--field-label-weight, 600);
+    color: var(--field-label-color, var(--text-secondary));
   }
   .mic-test-prompt {
     font-size: var(--text-xs);
@@ -4813,6 +5366,9 @@
     display: inline-flex;
     flex: 0 0 auto;
     margin-top: 1px;
+  }
+  .mic-tuning-slot {
+    margin: calc(-1 * var(--space-3)) 0;
   }
   .mic-tuning-lead {
     margin: 0;

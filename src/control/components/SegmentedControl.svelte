@@ -15,11 +15,13 @@
     options: SegmentOption[];
     value: string;
     label: string;
+    /** The id of a visible explanation of the choice, read with the group. */
+    describedby?: string;
     size?: 'md' | 'sm';
     onchange?: (value: string) => void;
   }
 
-  let { options, value = $bindable(), label, size = 'md', onchange }: Props = $props();
+  let { options, value = $bindable(), label, describedby, size = 'md', onchange }: Props = $props();
 
   /* Roving tabindex (spec §20): the group is one tab stop and the arrow keys
      move focus and selection together, per the ARIA radiogroup pattern. */
@@ -42,7 +44,7 @@
   }
 </script>
 
-<div class="track {size}" role="radiogroup" aria-label={label}>
+<div class="track {size}" role="radiogroup" aria-label={label} aria-describedby={describedby}>
   {#each options as option, index (option.value)}
     <!-- The handler lives on the radios, not the group: in a roving-tabindex
          radiogroup the container is never itself focusable. -->

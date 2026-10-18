@@ -265,6 +265,19 @@ export interface ResolveResult {
   warnings: string[];
 }
 
+/*
+ * Three warnings by name, so a surface that already states the same fact some
+ * other way can leave them out without matching on prose. Settings is the one
+ * that does: it never measures the stage font (a take does), and it explains an
+ * uncalibrated display's sizing in its own words above the readout.
+ */
+export const UNCALIBRATED_READER_WARNING =
+  'This display has not been calibrated, so the text size is a reading-distance guess (about 55 cm) rather than a measurement.';
+export const UNCALIBRATED_PROMPTER_WARNING =
+  'This rig has not been calibrated. Text size is a desk-distance guess (about 1.2 m) rather than a measurement.';
+export const UNMEASURED_FONT_WARNING =
+  'The stage font could not be measured, so sizes are estimated from standard proportions.';
+
 /**
  * Turn a rig profile into stage geometry.
  *
@@ -391,15 +404,11 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   /* ---- warnings the operator can act on ---- */
   if (!calibrated) {
     warnings.push(
-      readingContext === 'reader'
-        ? 'This display has not been calibrated, so the text size is a reading-distance guess (about 55 cm) rather than a measurement.'
-        : 'This rig has not been calibrated. Text size is a desk-distance guess (about 1.2 m) rather than a measurement.',
+      readingContext === 'reader' ? UNCALIBRATED_READER_WARNING : UNCALIBRATED_PROMPTER_WARNING,
     );
   }
   if (!metrics.measured) {
-    warnings.push(
-      'The stage font could not be measured, so sizes are estimated from standard proportions.',
-    );
+    warnings.push(UNMEASURED_FONT_WARNING);
   }
   if (fit.advice) warnings.push(fit.advice);
   if (bodyArcminutes !== null && bodyArcminutes < ANGULAR_HARD_FLOOR_ARCMIN) {

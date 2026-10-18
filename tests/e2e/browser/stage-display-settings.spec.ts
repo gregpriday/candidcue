@@ -308,8 +308,8 @@ test('an unplugged pin names where the take opens and where previews go, separat
     .getByRole('button', { name: 'Prompter display and rigs', exact: true })
     .click();
 
-  const alert = page.locator('.inline-alert[role="alert"]');
-  await expect(alert).toContainText('The display you chose is not connected.');
+  const alert = page.locator('.notice[role="alert"]');
+  await expect(alert).toContainText('Your chosen display is not connected.');
   await expect(alert).toContainText('prompter takes open on Built-in Display, where the CandidCue window is');
   await expect(alert).toContainText('previews, tests and calibration use Teleprompter Display');
 });
