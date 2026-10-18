@@ -61,9 +61,17 @@
      * behind an open menu somebody is arrowing through.
      */
     onopenchange?: (open: boolean) => void;
+    /** The 28px trigger, beside a small button such as a list row's Present. */
+    compact?: boolean;
   }
 
-  let { items, label = 'More actions', align = 'right', onopenchange }: Props = $props();
+  let {
+    items,
+    label = 'More actions',
+    align = 'right',
+    onopenchange,
+    compact = false,
+  }: Props = $props();
 
   let open = $state(false);
   let activeIndex = $state(-1);
@@ -276,6 +284,7 @@
   <IconButton
     icon="dots"
     {label}
+    {compact}
     active={open}
     haspopup="menu"
     expanded={open}

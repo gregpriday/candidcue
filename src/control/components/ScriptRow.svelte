@@ -11,37 +11,33 @@
   a list feel like a page of links.
 
   This is a 52px row on one continuous surface, separated by hairlines, with the
-  metadata in stable columns. §10.1's anatomy, in order: selection background,
+  metadata in stable columns. §10.1's anatomy, in order: selection highlight,
   title (with readiness beside it, when there is any), one line of excerpt,
   duration, modified, trailing action.
 
   ---------------------------------------------------------------------------
-  SELECTION AND FOCUS ARE DIFFERENT THINGS, DRAWN DIFFERENTLY
+  ONE HIGHLIGHT FOR HOVER, SELECTION AND FOCUS
   ---------------------------------------------------------------------------
-  §10.2 and §23.3 both insist on this and it is the property most easily lost.
-  Three states have to be told apart:
+  §10.2 and §23.3 insist that selected-and-focused be told apart from
+  selected-and-not, and it is the property most easily lost. A list that draws
+  them the same tells a keyboard user nothing about where their next keystroke
+  lands.
 
-    selected, list focused      accent marker + accent tint
-    selected, list NOT focused  the same marker, dimmed, over the faintest tint
-    focused, not selected       the quiet inset edge from the central focus policy
+  Every state is the same rounded highlight, inset from the row's edges, in one
+  neutral ink at rising strength — hover, selected, selected with the list
+  focused — plus the quiet 2px edge on that highlight when the keyboard put
+  focus there. The ramp is in tokens.css (`--bg-row-*`). The selected row
+  alone carries a trailing check, grey or clay as the list has focus, because
+  the fill is too light to carry "selected" by itself (see `.selected-mark`).
 
-  A list that draws all three the same way tells a keyboard user nothing about
-  where their next keystroke lands, which is the entire content of §23.3.
-
-  WHAT CHANGED, AND WHY THE OLD PAIR WAS WRONG
-  --------------------------------------------
-  Selection used to be a FILL, and the unfocused half of it was a flat warm grey
-  (#e8e3db). Two things went wrong with that. Spread across a full-width row on a
-  white list it read as dirt rather than as a state — this project's own design
-  rules name that failure and forbid it. And the pair was incoherent:
-  neutral-grey and terracotta are not two steps of one idea, so the two states
-  looked like two unrelated things rather than "selected" and "selected, and the
-  keyboard is here".
-
-  So selection is carried by a MARKER — the inset accent bar used everywhere
-  else in this codebase for exactly this — and focus is carried by the strength
-  of that marker and its tint. One idea, two intensities. The row stays white,
-  so a run of them still reads as a table, and nothing is grey-on-white.
+  WHAT IT REPLACED
+  ----------------
+  Hover was a warm grey and selection a clay tint with an accent bar at its
+  leading edge: two unrelated colours, so hover never read as a lighter version
+  of selection, and the faintest selection step was so close to white that only
+  the bar found it. Any clay light enough to sit behind body text reads pink or
+  peach on white. The bar was a second signal for a state the fill already
+  carries, and on a focused row it stacked against the keyboard edge.
 
   ---------------------------------------------------------------------------
   ACTIONS APPEAR ON HOVER, FOCUS OR SELECTION
@@ -54,6 +50,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import Icon from './Icon.svelte';
 
   interface Props {
     title: string;
@@ -249,9 +246,15 @@
       The line is kept even when there is no excerpt, so every title sits at the
       same height in its row. A script with nothing in it used to centre its
       title, and the column of titles stepped up and down as the eye ran it.
+      Kept blank, it read as a gap where something had failed to load; it says
+      the script is empty instead.
     -->
     {#if !compact}
-      <span class="excerpt" aria-hidden={excerpt ? undefined : 'true'}>{excerpt || '\u00a0'}</span>
+      {#if excerpt}
+        <span class="excerpt">{excerpt}</span>
+      {:else}
+        <span class="excerpt absent">No text yet</span>
+      {/if}
     {/if}
   </div>
 
@@ -265,7 +268,12 @@
   <span class="col modified">{modified}</span>
 
   {#if actions}
-    <div class="actions">{@render actions()}</div>
+    <div class="actions">
+      {@render actions()}
+      <span class="selected-mark" aria-hidden="true">
+        {#if selected}<Icon name="check" size={14} />{/if}
+      </span>
+    </div>
   {/if}
 </div>
 
@@ -280,9 +288,11 @@
     /* No radius, no border, no shadow. The rows sit on one continuous surface
        and are separated by the list's own hairlines (§10.1). */
     background: transparent;
-    /* The selection marker below is positioned against this. */
+    /* The highlight below is positioned against this. NOT a stacking context
+       (no isolation, no z-index): the overflow menu opens inside this row and
+       has to paint over the rows after it, and a row that isolated itself
+       trapped the menu under the next row's dates. */
     position: relative;
-    transition: background var(--dur-fast) var(--ease-out);
   }
   /* Same gap as comfortable, so switching density does not slide the columns
      sideways under the headings. */
@@ -293,61 +303,74 @@
     cursor: default;
   }
 
-  .interactive:hover {
-    background: var(--bg-hover-surface);
+  /*
+   * ONE HIGHLIGHT, FIVE STRENGTHS.
+   *
+   * Every row state is the same rounded shape, inset from the row's edges, in
+   * one colour family at rising strength:
+   *
+   *   hover  <  selected  <  selected + hover  <  focused  <  focused + hover
+   *
+   * so hover reads as a lighter version of selection rather than as a second,
+   * unrelated colour, and "the keyboard is here" (§23.3) is the same mark,
+   * firmer. There is no marker bar: the fill is the selection.
+   *
+   * Drawn on a pseudo-element rather than on the row, so the row keeps its full
+   * height — the list's paging arithmetic reads a row's height as its pitch —
+   * and inset so the highlight never meets the collection's border or its
+   * rounded corners.
+   */
+  .row::before {
+    content: '';
+    position: absolute;
+    inset: 2px 4px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  /* A compact row's Present button is 28px in a 38px row: inset the
+     highlight less, so the keyboard edge keeps clear of the button. */
+  .compact::before {
+    inset: 1px 4px;
+  }
+  .interactive:hover::before {
+    background: var(--bg-row-hover);
+  }
+  .selected::before {
+    background: var(--bg-row-selected-quiet);
+  }
+  .selected:hover::before {
+    background: var(--bg-row-selected-quiet-hover);
+  }
+  .selected.list-focused::before {
+    background: var(--bg-row-selected);
+  }
+  .selected.list-focused:hover::before {
+    background: var(--bg-row-selected-hover);
+  }
+  /*
+   * The keyboard edge goes on the highlight, not around the full-width row.
+   * Drawn on the row it was a square frame pressed against the collection's
+   * own border; here it is the same quiet 2px inset edge the central focus
+   * policy uses, following the highlight's corners.
+   */
+  .row:focus-visible {
+    outline: none;
+  }
+  .row:focus-visible::before {
+    outline: 2px solid var(--focus-quiet);
+    outline-offset: -2px;
   }
 
   /*
-   * SELECTION IS A MARKER, NOT A WASH.
-   *
-   * The bar is the state; the tint only ties the row to it. That ordering is
-   * what keeps a selected row from looking soiled — the strongest thing on the
-   * row is 3px of brand colour rather than a full-width block of grey.
-   *
-   * Inset, never a one-sided border: the list has a radius and clips its rows,
-   * so a border-left would cut a straight edge through the rounded corner on
-   * the first and last row.
+   * Positioned (with no z-index) so each paints after the highlight, which is
+   * the row's first positioned box — the order that keeps text on top of the
+   * fill without making the row a stacking context.
    */
-  .selected::before {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-    /*
-     * Dimmed while the keyboard is elsewhere. Opacity rather than a second
-     * colour, so the two states are visibly the same mark at two strengths —
-     * which is the distinction §23.3 actually wants drawn.
-     *
-     * Dimmed, not faded out: the selection is still what every File command
-     * acts on, so it must still be findable. 0.85 keeps the bar at 3.4:1
-     * against the resting tint (SC 1.4.11's 3:1 for a state); the 0.45 it
-     * used to be was 1.8:1, and with search focused the selected script was
-     * barely distinguishable from its neighbours.
-     */
-    opacity: 0.85;
-    transition: opacity var(--dur-fast) var(--ease-out);
-  }
-  .selected {
-    background: var(--accent-wash);
-  }
-  .selected.list-focused::before {
-    opacity: 1;
-  }
-  .selected.list-focused,
-  .selected.list-focused:hover {
-    background: var(--bg-row-selected);
-  }
-  /*
-   * Hover over an already-selected row DEEPENS rather than resets. The old rule
-   * repainted it with the resting selection colour, so passing the pointer over
-   * the selected row was the one place in the list where hover did nothing.
-   */
-  .selected:hover {
-    background: var(--bg-row-selected-hover);
+  .main,
+  .col,
+  .actions {
+    position: relative;
   }
 
   .main {
@@ -392,14 +415,32 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Says the script is empty, in the voice the app uses for anything absent
+     (the editor outline's untitled section): italic, so it cannot be mistaken
+     for a script that happens to begin with those words. */
+  .excerpt.absent {
+    font-style: italic;
+    color: var(--text-faint);
+  }
 
   .col {
     flex: 0 0 auto;
     font-size: var(--text-xs);
+    line-height: 20px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     text-align: right;
+  }
+  /*
+   * On the title's line, not floating between the title and the excerpt where
+   * it lines up with neither. The offset is where the centred two-line text
+   * block starts: the row less the title line, the gap and the excerpt line,
+   * halved. Compact rows are one line, and everything there stays centred.
+   */
+  .row:not(.compact) .col {
+    align-self: flex-start;
+    margin-top: calc((var(--list-row-h) - 21px - var(--lh-meta)) / 2);
   }
   .duration {
     width: var(--col-length, 72px);
@@ -428,8 +469,36 @@
     justify-content: flex-end;
     gap: var(--space-1);
     flex: 0 0 auto;
-    width: var(--col-actions, 120px);
+    width: var(--col-actions, 132px);
     visibility: hidden;
+  }
+  /*
+   * THE SELECTED SCRIPT CARRIES A CHECK.
+   *
+   * The highlight groups the row; it cannot carry the state on its own. A fill
+   * light enough to keep the metadata readable is about 1.1:1 against white,
+   * and SC 1.4.11 wants the information that a component is selected at 3:1 —
+   * which is why the APG's own listbox marks its selected option with a check.
+   * Hover gets the fill and the actions but never the check, so the row under
+   * the pointer cannot pass for the one File commands will act on.
+   *
+   * Trailing, in a slot every row reserves so Present never shifts between a
+   * hovered row and the selected one. Grey while the keyboard is elsewhere,
+   * clay while the list has it: the platform's unemphasized and emphasized
+   * selection, at the size of a glyph, and the sidebar's own grammar (a
+   * neutral fill, the accent kept for the icon).
+   */
+  .selected-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    margin-left: var(--space-1);
+    color: var(--text-muted);
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .selected.list-focused .selected-mark {
+    color: var(--accent-strong);
   }
   .row:hover .actions,
   .row:focus-within .actions,

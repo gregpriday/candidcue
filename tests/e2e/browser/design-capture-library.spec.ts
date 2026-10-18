@@ -217,6 +217,21 @@ test('04 row overflow menu open', async ({ page }) => {
   await page.getByRole('button', { name: 'Actions for Sample: read this aloud' }).click();
   await expect(page.locator('[role="menu"]')).toBeVisible();
   await expect(page.getByRole('menuitem', { name: /Reveal in Finder/ })).toBeVisible();
+  /*
+   * On top, not merely open: each item must be what the pointer would hit at
+   * its own centre. A row that became a stacking context once painted the
+   * next rows' dates over this menu, and "visible" still passed.
+   */
+  const buried = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .filter((item) => {
+        const r = item.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !hit || !item.contains(hit);
+      })
+      .map((item) => item.textContent?.trim()),
+  );
+  if (buried.length > 0) throw new Error(`menu items painted under the list: ${buried.join(', ')} — refusing to write`);
   await shoot(page, '04-row-menu');
 });
 
@@ -442,4 +457,77 @@ test('22 paging up a scrolled list keeps the row clear of the headings', async (
     );
   }
   await shoot(page, '22-page-up-under-headings');
+});
+
+/**
+ * The top of the collection, close up: the rows are where the design decisions
+ * live, and at window scale a selection tint is a few pixels of colour.
+ */
+async function shootRows(page: Page, name: string, rows = 6): Promise<void> {
+  if (!OUT) throw new Error('DESIGN_CAPTURE_DIR must be set');
+  await page.waitForTimeout(150);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
+  const box = await page.locator('.collection').boundingBox();
+  const pitch = await collection(page)
+    .getByRole('option')
+    .first()
+    .evaluate((el) => (el as HTMLElement).offsetHeight + 1);
+  if (!box) throw new Error('the collection is not laid out — refusing to write');
+  const height = Math.min(box.height, 28 + rows * pitch);
+  await page.screenshot({
+    path: path.join(OUT, `library--${name}.png`),
+    clip: { x: box.x - 12, y: box.y - 12, width: box.width + 24, height: height + 24 },
+  });
+}
+
+test('23 pointer over one row while the keyboard selection is on another', async ({ page }) => {
+  await boot(page);
+  await waitForRows(page, LIVE_COUNT);
+  await row(page, 'Sample: read this aloud').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(row(page, 'Daintree intro')).toHaveAttribute('aria-selected', 'true');
+  await expect(row(page, 'Daintree intro')).toBeFocused();
+  await row(page, 'Sample: read this aloud').hover();
+  await expect(row(page, 'Sample: read this aloud').getByRole('button', { name: 'Present' })).toBeVisible();
+  await shootRows(page, '23-rows-hover-beside-selection');
+});
+
+test('24 an empty script selected, list focused', async ({ page }) => {
+  await boot(page);
+  await waitForRows(page, LIVE_COUNT);
+  await row(page, 'Untitled script').click();
+  await expect(row(page, 'Untitled script')).toHaveAttribute('aria-selected', 'true');
+  await expect(row(page, 'Untitled script')).toBeFocused();
+  await parkPointer(page);
+  await shootRows(page, '24-rows-empty-selected', 5);
+});
+
+test('25 pointer over the selected row', async ({ page }) => {
+  await boot(page);
+  await waitForRows(page, LIVE_COUNT);
+  await row(page, 'Daintree intro').click();
+  await expect(row(page, 'Daintree intro')).toBeFocused();
+  await row(page, 'Daintree intro').hover();
+  await shootRows(page, '25-rows-hover-on-selection', 4);
+});
+
+test('26 rows at rest, selection unfocused', async ({ page }) => {
+  await boot(page);
+  await waitForRows(page, LIVE_COUNT);
+  await parkPointer(page);
+  await expect(collection(page).locator('[aria-selected="true"]')).toHaveCount(1);
+  await expect(collection(page).locator(':focus')).toHaveCount(0);
+  await shootRows(page, '26-rows-unfocused-selection', 10);
+});
+
+test('27 compact rows, keyboard selection', async ({ page }) => {
+  await boot(page, { workspace: { libraryDensity: 'compact' } });
+  await waitForRows(page, LIVE_COUNT);
+  await row(page, 'Sample: read this aloud').focus();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await expect(row(page, 'Untitled script')).toBeFocused();
+  await row(page, 'Daintree intro').hover();
+  await shootRows(page, '27-rows-compact', 8);
 });

@@ -255,15 +255,29 @@
      `--bg-hover-chrome` was tuned for, so on it that step all but vanishes. */
   --bg-hover-statusbar: #242932;
   --bg-active-statusbar: #2b313b;
-  --bg-row-selected: rgba(224, 138, 99, 0.18);
+  /*
+   * The Library's row states: ONE ink at five strengths, so hover reads as a
+   * lighter version of selection rather than as an unrelated colour, and the
+   * list having the keyboard is the same mark, firmer.
+   *
+   *   --bg-row-hover                  pointer over an unselected row
+   *   --bg-row-selected-quiet         selected, the keyboard elsewhere
+   *   --bg-row-selected-quiet-hover   ... and the pointer over it
+   *   --bg-row-selected               selected, the list has the keyboard
+   *   --bg-row-selected-hover         ... and the pointer over it
+   *
+   * The Library renders only under the workspace theme; these keep the set
+   * defined, and in the same order, here.
+   */
+  --bg-row-hover: rgba(255, 255, 255, 0.03);
+  --bg-row-selected-quiet: rgba(255, 255, 255, 0.05);
+  --bg-row-selected-quiet-hover: rgba(255, 255, 255, 0.06);
+  --bg-row-selected: rgba(255, 255, 255, 0.07);
   /* The current row of a SOURCE LIST (sidebar, Settings index): neutral, the
      way a Finder sidebar marks where you are, with the accent left to the
      row's icon. See the workspace value for why it is not the accent tint. */
   --bg-source-selected: rgba(255, 255, 255, 0.08);
-  /* Hover over an ALREADY-selected row: one step between the resting tint
-     (--accent-wash) and the focused one above, so passing the pointer over the
-     selection still does something without pretending the keyboard moved. */
-  --bg-row-selected-hover: rgba(224, 138, 99, 0.12);
+  --bg-row-selected-hover: rgba(255, 255, 255, 0.08);
   /*
    * #252a32, not the #262b33 this started as.
    *
@@ -406,7 +420,18 @@
      danger text still clear 4.5:1 on it (4.97 and 4.85; 4.69 and 4.58 pressed). */
   --bg-hover-statusbar: #e1dbd2;
   --bg-active-statusbar: #dcd5cb;
-  --bg-row-selected: rgba(183, 94, 59, 0.14);
+  /*
+   * A selected script in the Library, in the same neutral ink as the source
+   * list's "you are here" (below), on white rather than on paper.
+   *
+   * It used to be a clay tint, with a warm grey for hover. The two were never
+   * one idea: hover looked like the canvas showing through and selection like
+   * a blush, and the faintest selection step could only be found by the accent
+   * bar beside it. Any clay light enough to sit behind body text reads pink or
+   * peach on white. Neutral ink at rising strength does not, and it is what
+   * the sidebar beside the list already says.
+   */
+  --bg-row-selected: rgba(24, 25, 29, 0.1);
   /*
    * A source list's current row, in neutral rather than in clay.
    *
@@ -418,17 +443,19 @@
    * icon, is how a Mac sidebar says it.
    */
   --bg-source-selected: rgba(24, 25, 29, 0.075);
-  /* See the studio value: the step between resting and focused selection. */
-  --bg-row-selected-hover: rgba(183, 94, 59, 0.09);
+  /* The rest of the Library ramp — see the studio block for the order. */
+  --bg-row-hover: rgba(24, 25, 29, 0.03);
+  --bg-row-selected-quiet: rgba(24, 25, 29, 0.055);
+  --bg-row-selected-quiet-hover: rgba(24, 25, 29, 0.07);
+  --bg-row-selected-hover: rgba(24, 25, 29, 0.115);
   /*
    * RETIRED, and kept only so a stale reference fails visibly rather than
    * silently falling back to transparent.
    *
-   * This was the unfocused half of Library selection, and spread across a
-   * full-width row on a white list it read as dirt rather than as a state.
-   * Selection is now a marker plus a tint from the accent family — see
-   * `ScriptRow.svelte`, which explains why grey-and-terracotta were never two
-   * steps of one idea. Do not reach for this for a new surface.
+   * This was the unfocused half of Library selection: an opaque warm grey,
+   * which spread across a full-width row on a white list read as dirt rather
+   * than as a state. The Library now draws every row state from one neutral
+   * ink ramp (`--bg-row-*`). Do not reach for this for a new surface.
    */
   --bg-row-selected-inactive: #e8e3db;
   --divider: #e2ded6;

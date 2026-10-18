@@ -2381,10 +2381,11 @@
     cursor: default;
     color: var(--text-muted);
   }
-  /* Flat, per §15.2 — a tonal fill, no elevation, no raised card. */
+  /* Flat, per §15.2 — a tonal fill, no elevation, no raised card. The Settings
+     rail's neutral "you are here", not a clay wash beside a grey hover. */
   .step-item.active,
   .step-item.active:hover {
-    background: var(--bg-row-selected);
+    background: var(--bg-source-selected);
     color: var(--text-primary);
     font-weight: 600;
   }
