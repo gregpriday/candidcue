@@ -574,10 +574,14 @@ export interface StageVoicePillPayload {
  * silently rescaled itself — which on the one element whose job is to report a
  * level honestly would read as the level changing when it had not.
  *
- * Twenty-four at the ~100 ms publish cadence is about 2.4 seconds of history:
- * enough to read as a voice, short enough to stay a pill.
+ * Twenty at the ~100 ms publish cadence is about two seconds of history:
+ * enough to read as a voice, short enough to stay a pill. And it is twenty
+ * rather than the twenty-four it was because the trace is 60px wide on a
+ * non-Retina panel: twenty bars of 2px with 1px gaps are whole pixels, where
+ * twenty-four came to 0.58px a bar and drew as an uneven run of single and
+ * doubled dots.
  */
-export const STAGE_VOICE_PILL_TRACE_SAMPLES = 24;
+export const STAGE_VOICE_PILL_TRACE_SAMPLES = 20;
 
 /**
  * §16.9. How long a first Escape stays "armed" for the second one.

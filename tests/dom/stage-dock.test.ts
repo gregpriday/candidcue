@@ -916,10 +916,10 @@ describe('operable without a mouse', () => {
   it('names both controls', () => {
     const { container } = mount({ appearancePanel: PANEL });
     expect(menuTrigger(container).getAttribute('aria-label')).toBe('Take menu');
-    expect(endButton(container).getAttribute('aria-label')).toBe('End Take');
-    // A tooltip as well as a name: an unlabelled × is also a plausible "close
-    // this small panel", and the two readings have very different consequences.
-    expect(endButton(container).getAttribute('title')).toBe('End Take');
+    // The way out is named in words on the glass, not by a glyph and a
+    // tooltip: a bare × is also a plausible "close this small panel", and the
+    // two readings have very different consequences.
+    expect(endButton(container).textContent?.trim()).toBe('End take');
   });
 
   it('skips the audio readout in the tab order', () => {
@@ -944,8 +944,7 @@ describe('operable without a mouse', () => {
 describe('a practice says so where it matters', () => {
   it('names the exit for what it finishes', () => {
     const { container } = mount({ practice: true });
-    expect(endButton(container).getAttribute('aria-label')).toBe('Finish Practice');
-    expect(endButton(container).getAttribute('title')).toBe('Finish Practice');
+    expect(endButton(container).textContent?.trim()).toBe('Finish practice');
   });
 
   it('asks about practising, and promises only what is true', () => {
@@ -959,7 +958,7 @@ describe('a practice says so where it matters', () => {
     flushSync();
     expect(container.querySelector('.confirm-title')?.textContent).toBe('Finish practising?');
     expect(container.querySelector('.confirm-body')?.textContent).toContain('Nothing is reported');
-    expect(confirmEnd(container)?.textContent?.trim()).toBe('Finish Practice');
+    expect(confirmEnd(container)?.textContent?.trim()).toBe('Finish practice');
   });
 
   it('still ends through the same confirmed path', () => {
@@ -975,7 +974,7 @@ describe('a practice says so where it matters', () => {
 
   it('leaves a take talking about takes', () => {
     const { container } = mount();
-    expect(endButton(container).getAttribute('aria-label')).toBe('End Take');
+    expect(endButton(container).textContent?.trim()).toBe('End take');
     endButton(container).click();
     flushSync();
     expect(container.querySelector('.confirm-title')?.textContent).toBe('End take?');

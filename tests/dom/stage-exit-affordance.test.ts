@@ -557,7 +557,7 @@ describe('the stage exit affordance', () => {
     expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
   });
 
-  it('does not offer itself over a blanked stage', async () => {
+  it('keeps the way out over a blanked stage, and nothing else', async () => {
     const root = await mountLiveStage();
     dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
       stageGeneration: STAGE_GENERATION,
@@ -566,9 +566,11 @@ describe('the stage exit affordance', () => {
     await settle();
     movePointer(root);
     await settle();
-    // A blank is a deliberate "show nothing", and Escape is already the answer
-    // to one — the hint that says so is the thing on screen at that moment.
-    // The whole dock goes, not just the button.
-    expect(document.querySelector('.stage-dock')).toBeNull();
+    // A blank is a deliberate "show nothing", so the audio readout is withheld
+    // — but a black full-screen window that answers the mouse with nothing is
+    // the "looks like it has hung" state this affordance exists to prevent, so
+    // the controls still come up on the pointer.
+    expect(document.querySelector('.stage-dock .dock-button.end')).not.toBeNull();
+    expect(document.querySelector('.stage-dock .voice-pill')).toBeNull();
   });
 });
