@@ -2688,70 +2688,70 @@
           />
 
           <p class="hint-line">
-            Your voice never leaves this computer, and neither the audio nor the words are saved —
-            they are used only to find your place in the script.
+            Your voice never leaves this computer. The audio is never saved, and the words are not
+            saved either: they are used only to find your place in the script.
           </p>
         </Section>
       {:else if section === 'audio'}
+        <!--
+          Capture tuning sits directly under the meter it changes. At the foot of
+          the section it was a screen away from the level it promises to move,
+          so every adjustment meant scrolling back up to see what it did. When
+          access is not granted there is no meter, and it falls back to the
+          foot of the section.
+        -->
+        {#snippet captureTuning()}
+          <!--
+            "Follow system default microphone" used to be a toggle here, three
+            controls away from the picker it disabled and blanked. One control
+            now: it is the first row of the input picker above.
+          -->
+          <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
+            <p class="mic-tuning-lead">
+              For difficult rooms. The meter above shows each change straight away.
+            </p>
+            <Toggle
+              checked={$settings.audio.noiseSuppression}
+              label="Noise suppression"
+              description="Filters out steady background noise, such as a fan or air conditioning."
+              onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
+            />
+            <Toggle
+              checked={$settings.audio.echoCancellation}
+              label="Echo cancellation"
+              description="Removes sound from your speakers that the microphone picks up."
+              onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
+            />
+            <Toggle
+              checked={$settings.audio.autoGainControl}
+              label="Automatic gain control"
+              description="Evens out your level as you move nearer to or further from the microphone."
+              onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
+            />
+            <!--
+              §28.4. It is a property of a room and a microphone, not of a take,
+              and the meter above observes at this value — so a change to it shows
+              immediately instead of being discovered mid-take.
+            -->
+            <Slider
+              label={VAD_SENSITIVITY_COPY.label}
+              description={VAD_SENSITIVITY_COPY.description}
+              value={Math.round($settings.audio.vadSensitivity * 100)}
+              min={0}
+              max={100}
+              format={VAD_SENSITIVITY_COPY.format}
+              onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
+            />
+          </Disclosure>
+        {/snippet}
         <Section
           title="Microphone"
-          description="Choose the input your takes listen to, check its level, then check that CandidCue understands you. The meter listens while this page is open."
+          description="Choose the input your takes listen to, check its level, then check that CandidCue understands you. The input meter listens while this page is open."
         >
           <!-- Mounted for as long as the section is, so a notice that arrives
                is spoken into a region that was already there (the cards and
                the fallback below carry no live role of their own). -->
           <p class="visually-hidden" role="status" aria-atomic="true">{micAnnouncement}</p>
-          <!--
-            Capture tuning sits directly under the meter it changes. At the foot of
-            the section it was a screen away from the level it promises to move,
-            so every adjustment meant scrolling back up to see what it did. When
-            access is not granted there is no meter, and it falls back to the
-            foot of the section.
-          -->
-          {#snippet captureTuning()}
-            <!--
-              "Follow system default microphone" used to be a toggle here, three
-              controls away from the picker it disabled and blanked. One control
-              now: it is the first row of the input picker above.
-            -->
-            <Disclosure label="Capture tuning: noise, echo, gain and voice detection" bind:open={captureTuningOpen}>
-              <p class="mic-tuning-lead">
-                For difficult rooms. The meter above shows each change straight away.
-              </p>
-              <Toggle
-                checked={$settings.audio.noiseSuppression}
-                label="Noise suppression"
-                description="Filters out steady background noise, such as a fan or air conditioning."
-                onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
-              />
-              <Toggle
-                checked={$settings.audio.echoCancellation}
-                label="Echo cancellation"
-                description="Removes sound from your speakers that the microphone picks up."
-                onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
-              />
-              <Toggle
-                checked={$settings.audio.autoGainControl}
-                label="Automatic gain control"
-                description="Evens out your level as you move nearer to or further from the microphone."
-                onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
-              />
-              <!--
-                §28.4. It is a property of a room and a microphone, not of a take,
-                and the meter above observes at this value — so a change to it shows
-                immediately instead of being discovered mid-take.
-              -->
-              <Slider
-                label={VAD_SENSITIVITY_COPY.label}
-                description={VAD_SENSITIVITY_COPY.description}
-                value={Math.round($settings.audio.vadSensitivity * 100)}
-                min={0}
-                max={100}
-                format={VAD_SENSITIVITY_COPY.format}
-                onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
-              />
-            </Disclosure>
-          {/snippet}
 
           {#if micPermission !== 'granted'}
             <!--
@@ -2971,8 +2971,8 @@
           <p class="mic-privacy" data-search-row>
             <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
             <span>
-              Speech is transcribed on this Mac and never recorded, saved or uploaded. The
-              microphone is open only during a test or a take, and while the meter is on screen —
+              Speech is transcribed on this Mac and never recorded, saved or uploaded. CandidCue
+              uses the microphone during a test or a take, and while the input meter is on screen —
               which measures loudness and nothing else.
             </span>
           </p>

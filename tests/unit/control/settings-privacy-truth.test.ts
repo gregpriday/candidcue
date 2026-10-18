@@ -115,7 +115,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * the last control are the real boundaries.
      */
     expect(privacySection, 'capture starts before the first copy block').toMatch(
-      /Local by default/,
+      /<h3 class="privacy-head">Your data<\/h3>/,
     );
     expect(privacySection, 'capture runs to the last control in the section').toMatch(
       /data-testid="update-policy"/,
@@ -235,7 +235,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     // The sentence that used to send people to the retention row. Its
     // replacement has to make the claim the row's absence implies, not just
     // stop making the old one.
-    const speechHint = flatSource.match(/Once the language is downloaded[^<]*/);
+    const speechHint = flatSource.match(/Your voice never leaves this computer[^<]*/);
     expect(speechHint, 'the Speech settings hint could not be located').not.toBeNull();
     expect(speechHint?.[0]).toMatch(/\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsave/i);
     expect(speechHint?.[0], 'and audio is still never saved').toMatch(/audio is never[^.]*saved/i);
@@ -249,18 +249,20 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * last take ended" from — and still make the one claim about audio that
      * the retention row's hint used to make in passing.
      */
-    const local = privacySection.match(/Local by default<\/h3>\s*<p class="privacy-body">([^<]*)/);
-    expect(local, 'the "Local by default" paragraph could not be located').not.toBeNull();
+    const local = privacySection.match(/Your data<\/h3>\s*<p class="privacy-body">([^<]*)/);
+    expect(local, 'the "Your data" paragraph could not be located').not.toBeNull();
     const kept = local?.[1] ?? '';
     expect(kept).toMatch(/\bscripts\b/i);
     expect(kept, 'saved versions are kept too').toMatch(/saved versions|revisions/i);
     expect(kept).toMatch(/\bsettings\b/i);
-    expect(kept, 'and the session history').toMatch(/\bsessions?\b/i);
-    expect(kept).toMatch(/this device/i);
+    expect(kept, 'and the session history').toMatch(/\bsessions?\b|history of your takes/i);
+    expect(kept).toMatch(/this (?:device|computer)/i);
 
-    expect(privacySection, 'audio is never saved').toMatch(/CandidCue does not save it/);
+    // The claims, not one wording of them: each must be a negation in the
+    // same sentence as the thing it is about.
+    expect(privacySection, 'audio is never saved').toMatch(/\baudio\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i);
     expect(privacySection, 'nor are the recognised words').toMatch(
-      /words are recognised here[^.]*not saved/i,
+      /\bwords\b[^.]*\b(?:not|never)\b[^.]*\bsaved?\b/i,
     );
   });
 
