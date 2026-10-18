@@ -13,6 +13,7 @@
   import { ICON_STROKE_WIDTH, type IconName } from './icon-names';
 
   import BookOpen from '@lucide/svelte/icons/book-open';
+  import Bold from '@lucide/svelte/icons/bold';
   import Check from '@lucide/svelte/icons/check';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -26,9 +27,11 @@
   import FileText from '@lucide/svelte/icons/file-text';
   import Flag from '@lucide/svelte/icons/flag';
   import Gauge from '@lucide/svelte/icons/gauge';
+  import Heading from '@lucide/svelte/icons/heading';
   import Image from '@lucide/svelte/icons/image';
   import Import from '@lucide/svelte/icons/import';
   import Info from '@lucide/svelte/icons/info';
+  import Italic from '@lucide/svelte/icons/italic';
   import Keyboard from '@lucide/svelte/icons/keyboard';
   import Link from '@lucide/svelte/icons/link';
   import Mic from '@lucide/svelte/icons/mic';
@@ -43,6 +46,7 @@
   import Search from '@lucide/svelte/icons/search';
   import Settings2 from '@lucide/svelte/icons/settings-2';
   import Square from '@lucide/svelte/icons/square';
+  import StickyNote from '@lucide/svelte/icons/sticky-note';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import Upload from '@lucide/svelte/icons/upload';
@@ -80,9 +84,17 @@
     info: Info,
     x: X,
     pencil: Pencil,
+    // The formatting row's own marks, drawn rather than typeset so they share
+    // the set's stroke and scale with the icons beside them.
+    heading: Heading,
+    bold: Bold,
+    italic: Italic,
     link: Link,
     image: Image,
     flag: Flag,
+    // A note to the presenter that is never read aloud. Not `info`, which is a
+    // lint note in the status bar of the same window.
+    cue: StickyNote,
     gauge: Gauge,
     eye: Eye,
     'eye-off': EyeOff,

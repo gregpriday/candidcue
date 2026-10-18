@@ -1666,6 +1666,21 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   function onToolbarKeydown(event: KeyboardEvent): void {
+    /*
+     * Escape goes back to the text without inserting anything, and shows the
+     * caret where it was left. Without it the only way back from the row was
+     * Tab, which stops at Syntax reference on the way. The most local thing
+     * answers the key, so nothing behind the editor sees it.
+     */
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      withView((view) => {
+        view.focus();
+        view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'nearest' }) });
+      });
+      return;
+    }
     const buttons = toolbarButtons();
     if (buttons.length === 0) return;
     const from = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -1689,9 +1704,30 @@ import type { PresentationMode } from '../services/settings-types';
     buttons[next]?.focus();
   }
 
-  /** A button reached with the pointer becomes the group's tab stop. */
+  /** A button reached any other way becomes the group's tab stop. */
   function onToolbarFocusIn(event: FocusEvent): void {
     const index = toolbarButtons().indexOf(event.target as HTMLButtonElement);
+    if (index >= 0) toolbarIndex = index;
+  }
+
+  /*
+   * The pointer never takes focus out of the text.
+   *
+   * Every insert hands focus back to the editor anyway, but a press that
+   * landed between two buttons — on a divider, in a gap — focused the toolbar
+   * itself and left it there, so the next keystroke went nowhere. Refusing the
+   * focus change on press keeps the caret where the writer left it whatever
+   * the pointer hits, and the click still runs. Because focus no longer moves
+   * on a click, the clicked button is made the group's tab stop here rather
+   * than in `focusin`.
+   */
+  function onToolbarMousedown(event: MouseEvent): void {
+    if (event.button === 0) event.preventDefault();
+  }
+
+  function onToolbarClick(event: MouseEvent): void {
+    const button = (event.target as Element | null)?.closest('button');
+    const index = button ? toolbarButtons().indexOf(button) : -1;
     if (index >= 0) toolbarIndex = index;
   }
 </script>
@@ -1820,13 +1856,22 @@ import type { PresentationMode } from '../services/settings-types';
             undifferentiated run of nine controls, so "insert a cue" sat beside
             "bold" with nothing to say they are different kinds of thing.
 
-            Heading is a typographic glyph rather than an icon, like Bold and
-            Italic beside it: the icon set has no heading mark. It wore a
-            chevron, which means "go forward" everywhere else in the product.
+            ONE KIND OF CONTROL. Heading, Bold and Italic were typeset letters
+            in private 28px buttons beside 32px IconButtons, so the row had two
+            sizes, two focus treatments and a press only half of it showed, and
+            the italic I read as a slash. They are drawn marks from the icon
+            set now, and every member is a compact IconButton — the 28px tier,
+            which is what leaves the 36px row room to draw a whole focus ring.
+
+            Heading must not wear a chevron, which means "go forward"
+            everywhere else in the product.
 
             "Insert cue" gives up `flag` to the part break. The compiler models
             part breaks as navigation targets — a flag is exactly that — and a
-            cue is an aside to the presenter.
+            cue is an aside to the presenter, drawn as a note.
+
+            The tooltips carry what the icon cannot: the key that does the same
+            thing, and for the two teleprompter inserts, what they are.
           -->
           <div
             class="insert-toolbar"
@@ -1837,18 +1882,20 @@ import type { PresentationMode } from '../services/settings-types';
             bind:this={toolbarEl}
             onkeydown={onToolbarKeydown}
             onfocusin={onToolbarFocusIn}
+            onmousedown={onToolbarMousedown}
+            onclick={onToolbarClick}
           >
-            <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
+            <IconButton compact size={16} icon="heading" label="Cycle heading level" title="Cycle heading level (H1 to H6, then plain text)" onclick={() => withView(inserts.cycleHeading)} />
             <span class="toolbar-rule" aria-hidden="true"></span>
-            <button type="button" class="glyph" aria-label="Bold" title={`Bold (${accel('Mod+B')})`} onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
-            <button type="button" class="glyph" aria-label="Italic" title={`Italic (${accel('Mod+I')})`} onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
-            <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
+            <IconButton compact size={16} icon="bold" label="Bold" title={`Bold (${accel('Mod+B')})`} onclick={() => withView(inserts.insertBold)} />
+            <IconButton compact size={16} icon="italic" label="Italic" title={`Italic (${accel('Mod+I')})`} onclick={() => withView(inserts.insertItalic)} />
+            <IconButton compact size={16} icon="link" label="Insert link" title={`Insert link (${accel('Mod+K')})`} onclick={() => withView(inserts.insertLink)} />
             <span class="toolbar-rule" aria-hidden="true"></span>
-            <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
-            <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
+            <IconButton compact size={16} icon="image" label="Insert image" title="Insert image…" onclick={() => void insertImage()} />
+            <IconButton compact size={16} icon="diagram" label="Insert diagram block" title="Insert diagram block (Mermaid)" onclick={() => withView(inserts.insertDiagram)} />
             <span class="toolbar-rule" aria-hidden="true"></span>
-            <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
-            <IconButton icon="flag" label="Insert part break" onclick={() => withView(inserts.insertTakeMarker)} />
+            <IconButton compact size={16} icon="cue" label="Insert cue" title="Insert cue (a direction to you, never read aloud)" onclick={() => withView(inserts.insertCue)} />
+            <IconButton compact size={16} icon="flag" label="Insert part break" title="Insert part break (starts a new named part)" onclick={() => withView(inserts.insertTakeMarker)} />
           </div>
           <!--
             The syntax reference, beside the controls that insert two of the
@@ -2238,13 +2285,21 @@ import type { PresentationMode } from '../services/settings-types';
    * no band of its own — no background, no border, no page inset. Those belong
    * to the row that hosts it, which is what keeps the two rows reading as one
    * piece of chrome rather than two stacked strips.
+   *
+   * NOT `overflow: hidden`. A focus ring paints 4px outside its button, and
+   * clipping here cut every ring down to a pair of brackets (and the last
+   * button's to one). The host row clips sideways only, so a ring at the
+   * row's height is drawn whole.
+   *
+   * Pulled out by --space-1, as the title bar's back control is, so the first
+   * mark sits under the back chevron rather than on an edge of its own.
    */
   .insert-toolbar {
     display: flex;
     align-items: center;
     gap: 2px;
     min-width: 0;
-    overflow: hidden;
+    margin-inline-start: calc(-1 * var(--space-1));
   }
   .insert-toolbar:focus {
     outline: none;
@@ -2258,26 +2313,6 @@ import type { PresentationMode } from '../services/settings-types';
     flex: 0 0 auto;
     background: var(--divider);
     margin: 0 var(--space-2);
-  }
-  .glyph {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--toolbar-control-h);
-    height: var(--toolbar-control-h);
-    flex: 0 0 auto;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    transition:
-      background var(--dur-fast) var(--ease-out),
-      color var(--dur-fast) var(--ease-out);
-  }
-  .glyph:hover {
-    background: var(--bg-hover-chrome);
-    color: var(--text-primary);
   }
 
   .body {

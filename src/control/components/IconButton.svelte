@@ -1,6 +1,11 @@
 <!--
   Compact 32px icon control. `label` is mandatory — it becomes the accessible
   name and tooltip (spec §20).
+
+  `compact` is the 28px tier (`--toolbar-control-h`), the size of a small
+  `Button` and of every control in the editor's 36px formatting row. A 32px
+  control there filled the row to within 2px of its edges, so its focus ring —
+  which paints 4px outside the button — had nowhere to go and was cut off.
 -->
 <script lang="ts">
   import Icon from './Icon.svelte';
@@ -13,6 +18,13 @@
     active?: boolean;
     danger?: boolean;
     size?: number;
+    /** The 28px tier, for a row of controls inside a 36px band. */
+    compact?: boolean;
+    /**
+     * The tooltip, when it should say more than the name — a keyboard
+     * shortcut, say. The accessible name stays `label` either way.
+     */
+    title?: string;
     /**
      * Set for a control that opens a popup. A menu button is NOT a toggle
      * button, so `aria-pressed` is dropped in favour of
@@ -32,6 +44,8 @@
     active = false,
     danger = false,
     size = 18,
+    compact = false,
+    title,
     haspopup,
     expanded,
     onclick,
@@ -44,12 +58,13 @@
   class="icon-button"
   class:active
   class:danger
+  class:compact
   data-focus="control"
   aria-label={label}
   aria-pressed={haspopup === undefined && active ? 'true' : undefined}
   aria-haspopup={haspopup}
   aria-expanded={haspopup === undefined ? undefined : expanded ? 'true' : 'false'}
-  title={label}
+  title={title ?? label}
   {disabled}
   {onclick}
   {onkeydown}
@@ -73,6 +88,10 @@
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out);
+  }
+  .compact {
+    width: var(--toolbar-control-h);
+    height: var(--toolbar-control-h);
   }
   .icon-button:hover:not(:disabled) {
     background: var(--bg-hover-chrome);

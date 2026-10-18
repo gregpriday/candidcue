@@ -204,24 +204,25 @@ describe('block inserts', () => {
      glass, where the image became part of the paragraph above it. */
   it.each([
     // The reported case: the blank line between two paragraphs.
-    ['P\n|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
-    ['P\n \t|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
-    ['P\n| \t\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n|\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n \t|\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n| \t\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
     // Four spaces left in front of the block would make it indented code.
-    ['P\n    |\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n    |\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
     // Already a blank line away from the paragraph: no second one.
-    ['P\n\n|\nQ', `P\n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
-    ['P\n \t\n|\nQ', `P\n \t\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
-    ['P\n|\n\nQ', `P\n\n${IMAGE}\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n\n|\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n \t\n|\nQ', `P\n \t\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n|\n\nQ', `P\n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
     // Document edges.
-    ['|\nQ', `${IMAGE}\n|\nQ`, ['image', 'paragraph']],
-    ['|', `${IMAGE}\n|`, ['image']],
-    ['P\n|', `P\n\n${IMAGE}\n|`, ['paragraph', 'image']],
+    ['|\nQ', `${IMAGE}\n\n|\n\nQ`, ['image', 'paragraph']],
+    ['|', `${IMAGE}\n\n|`, ['image']],
+    ['P\n|', `P\n\n${IMAGE}\n\n|`, ['paragraph', 'image']],
     // A caret line with text keeps its behaviour: the block goes after it.
-    ['P|Q\nR', `PQ\n\n${IMAGE}\n|\nR`, ['paragraph', 'image', 'paragraph']],
-    ['P|', `P\n\n${IMAGE}\n|`, ['paragraph', 'image']],
+    // (With no syntax tree to consult, as here, it never splits a line.)
+    ['P|Q\nR', `PQ\n\n${IMAGE}\n\n|\n\nR`, ['paragraph', 'image', 'paragraph']],
+    ['P|', `P\n\n${IMAGE}\n\n|`, ['paragraph', 'image']],
     // A no-break space is text to Markdown, so the line is not blank.
-    ['P\n |\nQ', `P\n \n\n${IMAGE}\n|\nQ`, ['paragraph', 'image', 'paragraph']],
+    ['P\n |\nQ', `P\n \n\n${IMAGE}\n\n|\n\nQ`, ['paragraph', 'image', 'paragraph']],
   ])('inserts an image into %j as a block of its own', (before, after, kinds) => {
     const { view, text, selection } = caretView(before);
     insertImage(view, 'assets/x.png', 'a');
@@ -235,21 +236,23 @@ describe('block inserts', () => {
   it('keeps the selected text when a selection starts on the blank line', () => {
     const { view, text, selection } = fakeView('P\n \t\nQ', 2, 6);
     insertImage(view, 'assets/x.png', 'a');
-    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n|\nQ`);
+    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n|\n\nQ`);
     expect(blockKinds(text())).toEqual(['paragraph', 'image', 'paragraph']);
   });
 
+  /* The part's name comes out selected: naming it is the next thing to do. */
   it('makes a part break between two paragraphs a cue of its own', () => {
     const { view, text, selection } = caretView('P\n|\nQ');
     insertTakeMarker(view);
-    expect(drawn(text(), selection())).toBe('P\n\n[Take: name this part]\n|\nQ');
+    expect(text()).toBe('P\n\n[Take: name this part]\n\nQ');
+    expect(text().slice(selection().from, selection().to)).toBe('name this part');
     expect(blockKinds(text())).toEqual(['paragraph', 'cue', 'paragraph']);
   });
 
   it('keeps several dropped images apart from the paragraph and each other', () => {
     const { view, text, selection } = caretView('P\n|\nQ');
     insertMarkdownBlocks(view, [IMAGE, '![b](assets/y.png)']);
-    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n![b](assets/y.png)\n|\nQ`);
+    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n![b](assets/y.png)\n\n|\n\nQ`);
     expect(blockKinds(text())).toEqual(['paragraph', 'image', 'image', 'paragraph']);
   });
 
@@ -264,17 +267,19 @@ describe('block inserts', () => {
   it('spaces a diagram like every other block', () => {
     const { view, text, selection } = caretView('P\n|\nQ');
     insertDiagram(view);
-    expect(drawn(text(), selection())).toBe('P\n\n```mermaid\nflowchart LR\n  A --> B\n```\n|\nQ');
+    expect(text()).toBe('P\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nQ');
+    expect(text().slice(selection().from, selection().to)).toBe('A --> B');
     expect(blockKinds(text())).toEqual(['paragraph', 'diagram', 'paragraph']);
   });
 
-  /* The caret ends on the empty line under the block it just wrote, so the
-     second of two inserts in a row starts in exactly the reported position. */
+  /* The caret ends on an empty line a blank line under the block it just
+     wrote, so typing starts a paragraph of its own and a second insert in a
+     row starts in exactly the reported position. */
   it('keeps consecutive inserts at the end of a document apart', () => {
-    const { view, text, selection } = caretView('P|');
+    const { view, text } = caretView('P|');
     insertImage(view, 'assets/x.png', 'a');
     insertTakeMarker(view);
-    expect(drawn(text(), selection())).toBe(`P\n\n${IMAGE}\n\n[Take: name this part]\n|`);
+    expect(text()).toBe(`P\n\n${IMAGE}\n\n[Take: name this part]`);
     expect(blockKinds(text())).toEqual(['paragraph', 'image', 'cue']);
   });
 });

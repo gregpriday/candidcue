@@ -367,6 +367,13 @@
     border-top: var(--divider-w) solid var(--divider);
     background: var(--bg-toolbar);
     min-width: 0;
-    overflow: hidden;
+    /*
+     * Clipped sideways only. The band never paints into its neighbours, but a
+     * 28px control's focus ring reaches 4px above and below it and the band
+     * has 3.5px under its hairline — `hidden` shaved the ring's outer edge off
+     * top and bottom. `clip` (unlike `hidden`) leaves the other axis visible.
+     */
+    overflow-x: clip;
+    overflow-y: visible;
   }
 </style>
