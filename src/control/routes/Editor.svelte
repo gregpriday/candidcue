@@ -16,6 +16,10 @@
   import OverflowMenu from '../components/OverflowMenu.svelte';
 import SplitButton from '../components/SplitButton.svelte';
   import PaneDivider from '../components/PaneDivider.svelte';
+  import ScriptConflictSheet, {
+    type ConflictArm,
+    type ConflictFailure,
+  } from '../components/ScriptConflictSheet.svelte';
   import StatusBar from '../components/StatusBar.svelte';
   import Toolbar from '../components/Toolbar.svelte';
   import type { StatusBarItem } from '../components/status-bar-item';
@@ -75,10 +79,12 @@ import type { PresentationMode } from '../services/settings-types';
   import { requestConfirm } from '../stores/confirm';
   import {
     conflictCopyTitle,
+    DiskChangedAgainError,
     editor,
     flushEditorEdits,
     keepEditorVersion,
     openScript,
+    revisionHistoryRequest,
     saveNow,
     setSource,
     setTitle,
@@ -86,7 +92,7 @@ import type { PresentationMode } from '../services/settings-types';
     type ConflictOutcome,
   } from '../stores/editor';
   import { duplicateScript, loadLibrary, moveScriptToTrash } from '../stores/library';
-  import { navigate } from '../stores/router';
+  import { currentRoute, navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
   import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
 
@@ -116,7 +122,11 @@ import type { PresentationMode } from '../services/settings-types';
   }
   let saveIssueOpen = $state(false);
   let conflictOpen = $state(false);
-  let conflictResolving = $state(false);
+  /** The conflict arm in flight, if any. */
+  let conflictArm = $state<ConflictArm | null>(null);
+  let conflictFailure = $state<ConflictFailure | null>(null);
+  /** Bumped to make the open sheet read the file again. */
+  let conflictReread = $state(0);
   let revisionsOpen = $state(false);
   let previewScroller: HTMLElement | null = $state(null);
   let toolbarEl: HTMLElement | null = $state(null);
@@ -1165,25 +1175,89 @@ import type { PresentationMode } from '../services/settings-types';
    * is most likely to be needed again. On a failure the sheet stays up with
    * the editor's text still behind it, so the user can pick the other arm or
    * try the same one again.
+   *
+   * The failure is reported INSIDE the sheet, beside the choice it belongs to.
+   * It used to be a danger toast at the foot of the window: outside a modal the
+   * keyboard cannot leave, and — danger toasts never expire — still up after a
+   * retry had succeeded, contradicting the success beneath it.
+   *
+   * `reviewed` is the disk text the sheet showed. An arm refuses a file that
+   * has changed since, and the sheet reads it again so the next choice is made
+   * against what is really there.
    */
-  async function resolveConflict(
-    run: () => Promise<ConflictOutcome>,
-    done: (outcome: ConflictOutcome, copyName: string) => string,
-  ): Promise<void> {
-    if (conflictResolving) return;
-    conflictResolving = true;
+  async function resolveConflict(arm: ConflictArm, reviewed: string): Promise<void> {
+    if (conflictArm !== null) return;
+    conflictArm = arm;
+    conflictFailure = null;
     // Read before the await: a successful arm replaces the title with the
     // disk one, and the toast has to name the copy that was actually made.
     const copyName = conflictCopyName;
     try {
-      const outcome = await run();
-      conflictOpen = false;
-      showToast(done(outcome, copyName), 'success');
+      if (arm === 'disk') {
+        const outcome = await useDiskVersion({ source: reviewed });
+        conflictOpen = false;
+        reportDiskVersion(outcome, copyName);
+      } else {
+        const kept = scriptId;
+        await keepEditorVersion({ source: reviewed });
+        conflictOpen = false;
+        showToast('Kept your edits. The disk version is in this script’s revision history.', 'success', {
+          key: CONFLICT_TOAST,
+          durationMs: 0,
+          action: { label: 'Open revision history', run: () => void openRevisionHistory(kept) },
+        });
+      }
+      // The toolbar notice that opened the sheet went with the conflict, so the
+      // Dialog has nothing to hand focus back to. The author was writing.
+      await tick();
+      editorRef?.focus();
     } catch (err) {
-      showToast(`Nothing was changed. ${describeError(err)}`, 'danger');
+      conflictFailure =
+        err instanceof DiskChangedAgainError
+          ? {
+              tone: 'warning',
+              title: 'The file changed again while you were choosing.',
+              detail: 'Nothing was changed. Check the comparison again before you choose.',
+            }
+          : {
+              tone: 'danger',
+              title:
+                arm === 'disk'
+                  ? 'Couldn’t save a copy of your edits, so nothing was changed.'
+                  : 'Couldn’t save your edits, so nothing was changed.',
+              detail: `Your text is still open here. ${describeError(err)}`,
+            };
+      if (err instanceof DiskChangedAgainError) conflictReread += 1;
     } finally {
-      conflictResolving = false;
+      conflictArm = null;
     }
+  }
+
+  /** One receipt per resolution: a second conflict replaces the first's. */
+  const CONFLICT_TOAST = 'script-conflict';
+
+  /**
+   * Say where the editor's text went, with the way to it.
+   *
+   * The receipts stay until dismissed: they carry the only one-step route to
+   * the version that was not kept, and a link that times out is one the author
+   * then has to go looking for.
+   */
+  function reportDiskVersion(outcome: ConflictOutcome, copyName: string): void {
+    if (!outcome.copied) {
+      showToast('Saving has resumed. The file already matched your edits.', 'success', {
+        key: CONFLICT_TOAST,
+      });
+      return;
+    }
+    const copyId = outcome.copyId;
+    showToast(`Loaded the disk version. Your edits are in the Library as “${copyName}”.`, 'success', {
+      key: CONFLICT_TOAST,
+      durationMs: 0,
+      ...(copyId === undefined
+        ? {}
+        : { action: { label: 'Open copy', run: () => void navigate({ name: 'editor', scriptId: copyId }) } }),
+    });
   }
 
   const conflictCopyName = $derived(conflictCopyTitle($editor.title));
@@ -1195,9 +1269,32 @@ import type { PresentationMode } from '../services/settings-types';
    * script the user had already left, and it would also drop the only sheet
    * offering the choice at the moment it is most needed.
    */
+  /**
+   * Open a script's Revision history from a receipt that may outlive this editor.
+   *
+   * The receipt stays until dismissed, so by the time it is pressed the author
+   * may be in another script or out of the editor altogether. The request names
+   * the script; the editor showing it answers below, once it has finished
+   * opening — this one if it still is, or the one the navigation brings up.
+   */
+  async function openRevisionHistory(id: string): Promise<void> {
+    revisionHistoryRequest.set(id);
+    const here = currentRoute();
+    if (here.name === 'editor' && here.scriptId === id) return;
+    if (!(await navigate({ name: 'editor', scriptId: id }))) revisionHistoryRequest.set(null);
+  }
+
+  $effect(() => {
+    if (opening || $revisionHistoryRequest !== scriptId) return;
+    revisionHistoryRequest.set(null);
+    revisionsOpen = true;
+  });
+
   function closeConflict(): void {
-    if (conflictResolving) return;
+    if (conflictArm !== null) return;
     conflictOpen = false;
+    // A failure belongs to the attempt it reports; reopening starts afresh.
+    conflictFailure = null;
   }
 
   async function trashFromEditor(): Promise<void> {
@@ -1743,45 +1840,24 @@ import type { PresentationMode } from '../services/settings-types';
   "Save both" is gone: once the disk arm preserves the editor's text, it and
   "Save both" did the same thing, and two buttons with one outcome is a worse
   choice than one honest button.
+
+  The sheet itself — the comparison, its states and its footer — is
+  ScriptConflictSheet; the arms stay here, beside the toasts and navigation
+  that report them.
 -->
-<Dialog
+<ScriptConflictSheet
   open={conflictOpen}
-  title="This script changed on disk"
+  {scriptId}
+  title={$editor.title}
+  source={$editor.source}
+  copyName={conflictCopyName}
+  busy={conflictArm}
+  failure={conflictFailure}
+  reread={conflictReread}
+  onusedisk={(reviewed) => void resolveConflict('disk', reviewed)}
+  onkeep={(reviewed) => void resolveConflict('keep', reviewed)}
   onclose={closeConflict}
->
-  <p class="dialog-body">
-    Choose which version stays in this script. Nothing is discarded either way.
-  </p>
-  <p class="dialog-detail">
-    Use the disk version and your current edits are saved to the Library as
-    “{conflictCopyName}”. Keep your edits and the disk version stays in this
-    script's revision history.
-  </p>
-  {#snippet footer()}
-    <Button
-      disabled={conflictResolving}
-      onclick={() =>
-        void resolveConflict(useDiskVersion, (outcome, copyName) =>
-          outcome.copied
-            ? `Loaded the disk version. Your edits were saved as “${copyName}”.`
-            : 'Loaded the disk version. It already matched your text, so no copy was needed.',
-        )}
-    >
-      Use disk version
-    </Button>
-    <Button
-      variant="primary"
-      disabled={conflictResolving}
-      onclick={() =>
-        void resolveConflict(
-          keepEditorVersion,
-          () => 'Kept your edits. The disk version is in this script’s revision history.',
-        )}
-    >
-      Keep my edits
-    </Button>
-  {/snippet}
-</Dialog>
+/>
 
 <style>
   .page {
