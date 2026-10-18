@@ -84,7 +84,7 @@
     type SnapshotRejectReason,
   } from './motion';
   import ScriptLayer, { type StageLayoutMeasurement } from './renderer/ScriptLayer.svelte';
-  import SuggestionChip from './renderer/SuggestionChip.svelte';
+  import SuggestionChip, { distancePhrase } from './renderer/SuggestionChip.svelte';
   import AckChip from './renderer/AckChip.svelte';
   import HoldStatus from './renderer/HoldStatus.svelte';
   import CalibrationCard from './renderer/CalibrationCard.svelte';
@@ -697,17 +697,19 @@
    *
    * The engine reports a match it refused because it was off the glass
    * (`holdOffScreen`, `suggestionToken`). In a reading window that place is
-   * offered — never taken — as "Possible match below · <section>" with the
-   * reader's own words and a "Read from here" that asks control for one
-   * deliberate reposition.
+   * offered — never taken — as the reader's own words, which way and how far
+   * ("Possible match 2 paragraphs down · <section>"), and a "Read from there"
+   * that asks control for one deliberate reposition.
    *
    * Latched, because the engine names the place only on the snapshots that
    * refused it: the next hold may carry no suggestion, and a card that blinked
    * out between partials would be unreadable. It is withdrawn when following
    * resumes, when the document is moved on purpose (a relocation, or the
-   * reader's own hand — they are finding their place themselves), when it is
-   * ignored, and when nothing has renewed it for a while. The last is a timer,
-   * not a check on the next snapshot: a take that goes quiet sends none.
+   * reader's own hand — they are finding their place themselves), and when it
+   * is ignored. When nothing has renewed it for a while it folds to a pill in
+   * the dock's row instead, out of the way of the script but still one click
+   * from the place. That is a timer, not a check on the next snapshot: a take
+   * that goes quiet sends none.
    */
   interface PendingSuggestion {
     token: number;
@@ -717,10 +719,35 @@
     receivedAtMs: number;
   }
   const SUGGESTION_STALE_MS = 12_000;
+  /**
+   * How long the offer stays open once the pointer or the keyboard has left
+   * it. While either is ON it, it does not fold at all: somebody reaching for
+   * the button is not to have it taken away as they arrive.
+   */
+  const SUGGESTION_RELEASE_MS = 4_000;
   /** Two places this close are the same place said twice. */
   const SUGGESTION_SAME_PLACE_TOKENS = 3;
   let pendingSuggestion = $state<PendingSuggestion | null>(null);
   let ignoredSuggestionToken: number | null = null;
+  let suggestionEngaged = $state(false);
+  let suggestionReleasedAtMs = 0;
+  /**
+   * A different place, named while somebody was on the offer. It waits for
+   * them to let go: the words they are reading, and the place their press
+   * would go, are not swapped under them.
+   */
+  let deferredSuggestion: PendingSuggestion | null = null;
+  /**
+   * Nothing has renewed the offer for `SUGGESTION_STALE_MS`: it folds to a
+   * pill in the dock's row rather than going, and stays one click away until
+   * a withdrawal that means something — following, a move, Ignore, a blank.
+   */
+  let suggestionStale = $state(false);
+  let suggestionOpenedAtMs = 0;
+  /** The dock's row as drawn — the offer folds into the same row, beside it. */
+  let dockRowWidthPx = $state(0);
+  /** The hold message as drawn, 0 while it is not showing — the card sits below it. */
+  let holdStatusHeightPx = $state(0);
   /*
    * The last snapshot this has judged. `app` is replaced whole on every
    * dispatch, so the effect below re-runs on a blank, a settings push, a
@@ -741,6 +768,31 @@
     if (pendingSuggestion === null) return;
     handFocusFromSuggestion();
     pendingSuggestion = null;
+    deferredSuggestion = null;
+    suggestionEngaged = false;
+    suggestionReleasedAtMs = 0;
+    suggestionStale = false;
+    suggestionOpenedAtMs = 0;
+  }
+
+  /** The reader opened the folded offer: it is shown again, on a fresh clock. */
+  function openSuggestion(): void {
+    if (!pendingSuggestion) return;
+    suggestionStale = false;
+    suggestionOpenedAtMs = Date.now();
+  }
+
+  function engageSuggestion(engaged: boolean): void {
+    if (engaged === suggestionEngaged) return;
+    if (!engaged && pendingSuggestion) {
+      suggestionReleasedAtMs = Date.now();
+      if (deferredSuggestion) {
+        pendingSuggestion = deferredSuggestion;
+        suggestionStale = false;
+      }
+    }
+    deferredSuggestion = null;
+    suggestionEngaged = engaged;
   }
 
   /**
@@ -786,26 +838,54 @@
           ignoredSuggestionToken !== null &&
           Math.abs(token - ignoredSuggestionToken) <= SUGGESTION_SAME_PLACE_TOKENS;
         if (!ignored) {
-          pendingSuggestion = {
+          const next: PendingSuggestion = {
             token,
             seq: snapshot.seq,
             sessionGeneration: snapshot.sessionGeneration,
             receivedAtMs: Date.now(),
           };
+          const current = pendingSuggestion;
+          if (suggestionEngaged && current) {
+            // Somebody is reading this offer or reaching for it. The same
+            // place renews it without moving its words; another one waits.
+            if (Math.abs(token - current.token) <= SUGGESTION_SAME_PLACE_TOKENS) {
+              pendingSuggestion = { ...next, token: current.token };
+            } else {
+              deferredSuggestion = next;
+            }
+          } else {
+            pendingSuggestion = next;
+            suggestionStale = false;
+          }
         }
       }
     });
   });
 
   // Renewed by every refusal that names the place again: each one replaces
-  // the latch, which re-runs this and restarts the clock.
+  // the latch, which re-runs this and restarts the clock. Held while the offer
+  // is engaged, given a moment's grace once it is let go, and a fresh clock
+  // when the reader opens it again. Expiry folds it; it does not withdraw it.
   $effect(() => {
     const suggestion = pendingSuggestion;
-    if (!suggestion) return;
-    const remaining = Math.max(0, suggestion.receivedAtMs + SUGGESTION_STALE_MS - Date.now());
-    const timer = window.setTimeout(() => untrack(dropSuggestion), remaining);
+    if (!suggestion || suggestionEngaged || suggestionStale) return;
+    const expiresAtMs = Math.max(
+      suggestion.receivedAtMs + SUGGESTION_STALE_MS,
+      suggestionReleasedAtMs + SUGGESTION_RELEASE_MS,
+      suggestionOpenedAtMs + SUGGESTION_STALE_MS,
+    );
+    const remaining = Math.max(0, expiresAtMs - Date.now());
+    const timer = window.setTimeout(() => untrack(foldSuggestion), remaining);
     return () => clearTimeout(timer);
   });
+
+  function foldSuggestion(): void {
+    if (!pendingSuggestion) return;
+    // The card's buttons go with it; the keyboard goes to the reading window,
+    // as for any withdrawal, rather than to the page.
+    handFocusFromSuggestion();
+    suggestionStale = true;
+  }
 
   const suggestionDescription = $derived(
     pendingSuggestion && scriptLayer ? scriptLayer.describeToken(pendingSuggestion.token) : null,
@@ -816,14 +896,38 @@
    *
    * The chip mounts already filled, and a live region that arrives with its
    * text is not reliably announced — so the announcement lives in a region
-   * that is always there, and changes only when the offered PLACE does (not
-   * when its direction flips as the document moves).
+   * that is always there, and changes only when the offered PLACE does. The
+   * distance is the one it had when it was offered: as the reader reads on,
+   * "2 paragraphs down" becomes "1 paragraph down" on the card, and saying
+   * the offer again for that would be saying it twice.
    */
-  const suggestionAnnouncement = $derived.by(() => {
+  let announcedSuggestion = $state<{ token: number; text: string } | null>(null);
+  $effect(() => {
     const description = suggestionDescription;
-    if (!description) return '';
-    const section = description.section ? `, in ${description.section}` : '';
-    return `Possible match${section}: ${description.excerpt}`;
+    untrack(() => {
+      if (!description) {
+        announcedSuggestion = null;
+        return;
+      }
+      if (announcedSuggestion?.token === description.sentenceStartToken) return;
+      const section = description.section ? `, in ${description.section}` : '';
+      announcedSuggestion = {
+        token: description.sentenceStartToken,
+        text: `Possible match ${distancePhrase(description)}${section}: ${description.excerpt}`,
+      };
+    });
+  });
+  const suggestionAnnouncement = $derived(announcedSuggestion?.text ?? '');
+
+  /*
+   * The reading line, in the operator plane's pixels: the card is placed
+   * there, and keeps clear of the line the reader is on.
+   */
+  const suggestionReadingLine = $derived.by(() => {
+    if (!scriptLayer || !readingWindow) return null;
+    const { centerPx, pitchPx } = scriptLayer.readingLineGeometry();
+    if (!Number.isFinite(centerPx) || !(pitchPx > 0)) return null;
+    return { centerPx: centerPx - (safeInsets.y / 100) * vh, pitchPx };
   });
 
   function acceptSuggestion(): void {
@@ -2515,6 +2619,7 @@
             hint={holdStatus.hint}
             secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
             {reducedMotion}
+            bind:heightPx={holdStatusHeightPx}
           />
         {/if}
 
@@ -2812,8 +2917,17 @@
         <SuggestionChip
           description={suggestionDescription}
           fontSizePx={overlayFontSizePx}
+          readingLine={suggestionReadingLine}
+          areaWidthPx={(safeInsets.width / 100) * vw}
+          dockRowWidthPx={dockRowWidthPx}
+          holdHeightPx={holdStatusHeightPx}
+          areaHeightPx={(safeInsets.height / 100) * vh}
+          stale={suggestionStale}
+          {reducedMotion}
           onread={acceptSuggestion}
           onignore={ignoreSuggestion}
+          onengage={engageSuggestion}
+          onopen={openSuggestion}
         />
       {/if}
 
@@ -2833,6 +2947,7 @@
           onend={requestExit}
           onhold={(held) => (dockHeld = held)}
           onpopover={(open) => (dockPopoverOpen = open)}
+          bind:rowWidthPx={dockRowWidthPx}
         />
       {/if}
     </div>
@@ -3002,6 +3117,10 @@
     --stage-chrome-highlight: rgb(36 30 20 / 7%);
     --stage-chrome-control-border: rgb(36 30 20 / 18%);
     --stage-chrome-control-hover: rgb(36 30 20 / 6%);
+    /* The workspace clay, for the one action a reading window ever offers. */
+    --stage-action-bg: #b35a38;
+    --stage-action-bg-hover: #9c4a2c;
+    --stage-action-text: #ffffff;
     --stage-focus-ring: rgb(36 36 36 / 70%);
     --stage-dock-icon: rgb(36 36 36 / 72%);
     --stage-dock-end: rgb(36 36 36 / 58%);

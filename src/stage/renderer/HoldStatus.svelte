@@ -74,6 +74,12 @@
      * presenter who turned motion off in CandidCue should not still get a fade.
      */
     reducedMotion?: boolean;
+    /**
+     * The chip's height while it is showing, 0 while it is not — for the
+     * reading window's offer, which sits below this row rather than over a
+     * two-line message.
+     */
+    heightPx?: number;
   }
 
   let {
@@ -84,6 +90,7 @@
     secondaryMinPx,
     glyph = null,
     reducedMotion = false,
+    heightPx = $bindable(0),
   }: Props = $props();
 
   /**
@@ -158,6 +165,11 @@
     else if (visible) latchedHint = null;
   });
 
+  let drawnHeight = $state(0);
+  $effect(() => {
+    heightPx = visible ? drawnHeight : 0;
+  });
+
   /**
    * The floor, floored again.
    *
@@ -187,6 +199,7 @@
   role="status"
   aria-live="polite"
   style:font-size="{fontSizePx}px"
+  bind:offsetHeight={drawnHeight}
 >
   {#if latchedGlyph === 'held'}
     <!--

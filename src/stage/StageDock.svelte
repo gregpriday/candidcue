@@ -213,6 +213,13 @@
      * be read through a panel.
      */
     onpopover?: (open: boolean) => void;
+    /**
+     * The row's rendered width, hidden buttons included — they keep their
+     * place in it. Read by the stage so something sharing the dock's row sits
+     * beside the dock as it actually is, a fault label in the readout and all,
+     * rather than beside a guess at its widest.
+     */
+    rowWidthPx?: number;
   }
 
   let {
@@ -230,6 +237,7 @@
     onend,
     onhold,
     onpopover,
+    rowWidthPx = $bindable(0),
   }: Props = $props();
 
   let confirmOpen = $state(false);
@@ -775,7 +783,7 @@
     focusInside = false;
   }}
 >
-  <div class="dock-row">
+  <div class="dock-row" bind:offsetWidth={rowWidthPx}>
     <!--
       The audio readout, in the corner, first in the row. See the note above:
       the one control that never hides is the one nothing that hides may sit

@@ -66,6 +66,20 @@
     section: string | null;
     /** Where it is relative to the glass now. */
     direction: 'above' | 'below' | 'visible';
+    /**
+     * How many paragraphs on from the one the reader is in, counted the way a
+     * reader counts — the next paragraph is one away, headings are not
+     * paragraphs. 0 when it is further along the paragraph they are in; null
+     * when it is on the glass or the stage does not know where they are.
+     */
+    blocksAway: number | null;
+  }
+
+  /** Where the reading line is drawn, in this layer's own pixels. */
+  export interface ReadingLineGeometry {
+    centerPx: number;
+    /** One rendered line, top of one to top of the next. */
+    pitchPx: number;
   }
 </script>
 
@@ -3703,12 +3717,31 @@
     const range = visibleTokenRange();
     const direction: TokenDescription['direction'] =
       range === null ? 'below' : at > range[1] ? 'below' : at < range[0] ? 'above' : 'visible';
-    return {
-      sentenceStartToken: start,
-      excerpt: words.join(' ') + (truncated ? '…' : ''),
-      section,
-      direction,
-    };
+    let blocksAway: number | null = null;
+    const here = currentBlockIndex;
+    if (blockIndex !== undefined && here >= 0 && direction !== 'visible') {
+      // The destination counts and the reader's own paragraph does not.
+      const [first, last] = blockIndex > here ? [here + 1, blockIndex] : [blockIndex, here - 1];
+      blocksAway = 0;
+      for (let i = first; i <= last; i++) {
+        const block = performanceBlocks[i];
+        if (block?.spoken && block.kind !== 'heading') blocksAway++;
+      }
+    }
+    // A clause cut short ends on its last word, not on the comma after it:
+    // "station,…" reads as a typo.
+    const excerpt = truncated
+      ? words.join(' ').replace(/[,;:\u2013\u2014-]+$/u, '') + '…'
+      : words.join(' ');
+    return { sentenceStartToken: start, excerpt, section, direction, blocksAway };
+  }
+
+  /**
+   * The reading line, for a stage overlay that has to keep clear of it. Read
+   * reactively: it moves with the window and the type, never with the script.
+   */
+  export function readingLineGeometry(): ReadingLineGeometry {
+    return { centerPx: bandCenterPx, pitchPx: linePx };
   }
 
   /** Operator diagnostics (§64) — never rendered on the presenter's glass. */
