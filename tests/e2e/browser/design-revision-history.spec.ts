@@ -260,7 +260,7 @@ async function boot(page: Page, size: (typeof SIZES)[number]): Promise<void> {
 
 async function openHistory(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Script actions' }).click();
-  await page.getByRole('menuitem', { name: /Revision history/ }).click();
+  await page.getByRole('menuitem', { name: /Revision History/ }).click();
   await expect(dialog(page)).toBeVisible();
 }
 

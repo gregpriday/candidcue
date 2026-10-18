@@ -506,7 +506,7 @@ test('the script actions menu moves an autosaved script to Trash', async ({ page
 
   await page.getByRole('button', { name: 'Script actions' }).click();
   await page.getByRole('menuitem', { name: 'Move to Trash' }).click();
-  await page.getByRole('dialog', { name: 'Delete script?' }).getByRole('button', { name: 'Move to Trash' }).click();
+  await page.getByRole('dialog', { name: 'Move to Trash?' }).getByRole('button', { name: 'Move to Trash' }).click();
 
   // Back in the Library, with the script gone from it — not left in the editor
   // under a toast about a change made outside CandidCue.

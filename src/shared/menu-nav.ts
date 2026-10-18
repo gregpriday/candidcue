@@ -14,11 +14,12 @@
  *  - the menu is ONE tab stop: only the active item has tabindex 0;
  *  - Arrow keys move focus, wrapping; Home/End jump to the ends;
  *  - disabled items are skipped, never landed on;
+ *  - a printable character jumps to the next item that starts with it;
  *  - Escape closes and returns focus to the trigger.
  */
 
 export interface MenuItemLike {
-  /** Only the disabled flag matters here; the label keeps call sites honest. */
+  /** The disabled flag drives the arrows; the label drives first-letter jumps. */
   label?: string;
   disabled?: boolean;
 }
@@ -74,6 +75,40 @@ export function nextMenuIndex(
   for (let hop = 1; hop <= count; hop += 1) {
     const index = (((start + step * hop) % count) + count) % count;
     if (items[index]?.disabled !== true) return index;
+  }
+  return null;
+}
+
+/**
+ * First-letter navigation (§18.3 "typeahead"): the index of the next enabled
+ * item whose label starts with the typed character, or null when the key is
+ * not a letter for this menu.
+ *
+ * Searches forward from the active item and wraps, so pressing D twice in a
+ * menu holding Duplicate and Delete walks between them rather than sticking on
+ * the first. Only a single printable character counts, and never Space: Space
+ * is how a keyboard user activates the focused item, and treating it as a
+ * letter made half the activation keys dead in the menu that first had this.
+ * A modified key is a command, not a letter, so the caller passes the modifier
+ * state too.
+ */
+export function typeaheadIndex(
+  items: readonly MenuItemLike[],
+  fromIndex: number,
+  key: string,
+  modified = false,
+): number | null {
+  if (modified || key.length !== 1 || key === ' ') return null;
+  const lower = key.toLowerCase();
+  const count = items.length;
+  // With nothing active yet the search starts AT the first item, not after it.
+  const start = fromIndex >= 0 ? fromIndex : count - 1;
+  for (let step = 1; step <= count; step += 1) {
+    const index = (start + step) % count;
+    const item = items[index];
+    if (item && item.disabled !== true && (item.label ?? '').toLowerCase().startsWith(lower)) {
+      return index;
+    }
   }
   return null;
 }

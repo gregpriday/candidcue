@@ -30,7 +30,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { closeContextMenu, contextMenu, type ContextMenuItem } from '../stores/context-menu';
-  import { firstEnabledIndex, menuItemTabIndex, nextMenuIndex } from '../../shared/menu-nav';
+  import {
+    firstEnabledIndex,
+    menuItemTabIndex,
+    nextMenuIndex,
+    typeaheadIndex,
+  } from '../../shared/menu-nav';
 
   let menu: HTMLElement | null = $state(null);
   let activeIndex = $state(-1);
@@ -102,17 +107,28 @@
       }
       position = { x, y };
       placed = true;
-      /*
-       * Focus the MENU, not an item.
-       *
-       * A native context menu opens with nothing highlighted — the pointer has
-       * not chosen anything yet, and painting the first item as selected makes a
-       * destructive row at the top look one Return away from firing. The
-       * container is focusable so the arrows have somewhere to arrive; the first
-       * arrow press moves onto an item and highlights it.
-       */
-      menu.focus();
     });
+  });
+
+  /*
+   * Focus the MENU, not an item — once it can take focus.
+   *
+   * A native context menu opens with nothing highlighted — the pointer has not
+   * chosen anything yet, and painting the first item as selected makes a
+   * destructive row at the top look one Return away from firing. The container
+   * is focusable so the arrows have somewhere to arrive; the first arrow press
+   * moves onto an item and highlights it.
+   *
+   * An effect on `placed`, because effects run after the DOM has caught up.
+   * This used to be a `menu.focus()` straight after `placed = true`, while the
+   * element was still `visibility: hidden` — and a browser silently refuses
+   * focus to a hidden element. So the menu opened with focus left on the row
+   * behind it: the arrows walked the Library list under an open menu, and
+   * Escape and the letters never reached it. A further `tick()` was not enough
+   * either; whether the style had flushed by then depended on timing.
+   */
+  $effect(() => {
+    if (placed) menu?.focus();
   });
 
   function focusItem(index: number): void {
@@ -135,25 +151,6 @@
     item.onselect();
   }
 
-  /**
-   * First-letter navigation (§18.3 "typeahead", §7.4 "first-letter navigation").
-   *
-   * Wraps from the active item, so pressing D twice on a menu with Duplicate and
-   * Delete walks between them rather than sticking on the first.
-   */
-  function typeahead(key: string): void {
-    const lower = key.toLowerCase();
-    const count = items.length;
-    for (let step = 1; step <= count; step += 1) {
-      const index = (Math.max(activeIndex, 0) + step) % count;
-      const item = items[index];
-      if (item && !item.disabled && item.label.toLowerCase().startsWith(lower)) {
-        focusItem(index);
-        return;
-      }
-    }
-  }
-
   function keydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -166,31 +163,20 @@
       closeContextMenu(false);
       return;
     }
-    const next = nextMenuIndex(items, activeIndex, event.key);
-    if (next !== null) {
-      event.preventDefault();
-      focusItem(next);
-      return;
-    }
-    /*
-     * Single printable characters only, and NOT Space.
-     *
-     * Space is `' '` — one character — so an unqualified length check caught it,
-     * called `preventDefault()`, and looked for an item beginning with a space.
-     * Space is how a keyboard user activates the focused menu item, so this
-     * silently made half the activation keys dead. Modifiers are excluded for
-     * the same reason: a modified key is a command, not a letter.
-     */
-    if (
-      event.key.length === 1 &&
-      event.key !== ' ' &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey
-    ) {
-      event.preventDefault();
-      typeahead(event.key);
-    }
+    // Arrows, then first-letter navigation (§18.3, §7.4) — the arithmetic
+    // lives in `menu-nav.ts`, shared with the row's ⋯ menu, which is what keeps
+    // the two answering a letter the same way.
+    const next =
+      nextMenuIndex(items, activeIndex, event.key) ??
+      typeaheadIndex(
+        items,
+        activeIndex,
+        event.key,
+        event.metaKey || event.ctrlKey || event.altKey,
+      );
+    if (next === null) return;
+    event.preventDefault();
+    focusItem(next);
   }
 
   $effect(() => {
@@ -279,11 +265,23 @@
     max-width: 320px;
     display: flex;
     flex-direction: column;
-    padding: var(--space-1);
+    /* The ⋯ menu's metrics, row for row. The two draw ONE list of actions
+       (`rowMenuItems`), and a right-click that produced a tighter menu with
+       squarer highlights read as a second, separately designed control. */
+    padding: var(--space-2);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-pop);
+    /*
+     * Nothing here animates, and that has to be said out loud. Under Reduce
+     * Motion, tokens.css gives every element a 0.01ms transition, and an
+     * element that declares none transitions `all` — `visibility` included. The
+     * reveal from `hidden` then starts a transition whose first frame is still
+     * hidden, the focus that follows is refused, and the menu opens with the
+     * keyboard left on the row behind it.
+     */
+    transition-property: none;
   }
   .menu:focus {
     outline: none;
@@ -291,7 +289,8 @@
 
   .separator {
     height: 1px;
-    margin: var(--space-1) 0;
+    /* Inset to the label column, as in OverflowMenu. */
+    margin: var(--space-1) var(--space-3);
     background: var(--border-faint);
   }
 
@@ -300,17 +299,19 @@
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    height: 28px;
+    height: 32px;
     text-align: left;
-    padding: 0 var(--space-2);
+    padding: 0 var(--space-3);
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-primary);
     font-size: var(--text-sm);
     font-weight: 500;
     white-space: nowrap;
-    transition: background var(--dur-fast) var(--ease-out);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
   }
   /* The highlight IS the focus affordance — see the long note in OverflowMenu
      for why a menu row declines both the ring and the quiet edge. */
