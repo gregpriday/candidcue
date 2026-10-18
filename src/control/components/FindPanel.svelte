@@ -34,6 +34,14 @@
     snap = next;
   }
 
+  /*
+   * CodeMirror finds the search field by a bare `main-field` attribute:
+   * `openSearchPanel` focuses and selects it when Find is chosen with the bar
+   * already open. Spread rather than written inline, because Svelte's element
+   * types have no such attribute and svelte-check rejects it as a literal.
+   */
+  const MAIN_FIELD = { 'main-field': 'true' };
+
   const uid = $props.id();
   const mac = detectPlatform() === 'macos';
   const keys = (accelerator: string) => formatAccelerator(accelerator, mac);
@@ -164,7 +172,7 @@
       <input
         class="input"
         name="search"
-        main-field="true"
+        {...MAIN_FIELD}
         type="text"
         placeholder="Find in script"
         aria-label="Find"
