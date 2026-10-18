@@ -139,10 +139,13 @@ describe('startMenuItems part rows', () => {
   it('leaves "From here" unbounded on an undivided script', () => {
     const chosen: Array<[number, TakePartRequest | undefined]> = [];
     const items = startMenuItems(
-      input({ hereTokenIndex: 14, hereLabel: 'From here', herePart: null }),
+      input({ hereTokenIndex: 14, hereLabel: '“Raise prices.”', herePart: null }),
       (token, p) => chosen.push([token, p]),
     );
-    items.find((i) => i.label === 'From here')?.onselect();
+    const here = items.find((i) => i.label === 'From here')!;
+    // No part to name, so the place stands alone.
+    expect(here.description).toBe('“Raise prices.”');
+    here.onselect();
     expect(chosen).toEqual([[14, undefined]]);
   });
 
@@ -150,7 +153,7 @@ describe('startMenuItems part rows', () => {
     const items = startMenuItems(
       input({
         hereTokenIndex: 5,
-        hereLabel: 'From “Opening”',
+        hereLabel: 'Opening',
         lastEndingTokenIndex: 12,
         lastEndingLabel: 'somewhere',
         parts: [part(1, 'Opening', 0, 9), part(2, 'Pricing', 10, 19)],

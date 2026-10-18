@@ -279,7 +279,7 @@
   {#if open}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="menu" role="menu" tabindex="-1" aria-label={menuLabel} bind:this={menu} onkeydown={onMenuKeydown}>
-      {#each groups as group, g (group.rows[0]?.item.label ?? g)}
+      {#each groups as group, g (group.rows[0]?.index ?? g)}
         {#if g > 0}<div class="separator" role="separator"></div>{/if}
         {#snippet rows()}
           {#each group.rows as { item, index } (item.label)}

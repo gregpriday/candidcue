@@ -200,20 +200,79 @@ function quoteSentence(sentence: SentenceUnit, blocks: readonly CompiledBlock[] 
  * inside the sentence's range. An unspoken word between two that are (an em
  * dash) is kept, so the quotation reads the way the line does.
  *
- * Words are rebuilt across node boundaries first. A link, a bold run or a code
- * span ends one text node and starts another, and the full stop after
- * `[Ready](…)` is a node of its own: taken node by node it became a separate
- * "word", quoted as “Ready now .” and counted against the six. Pieces with no
- * whitespace between them are one word, anchored where its first spoken piece
- * is.
+ * A link, a bold run or a code span ends one text node and starts another, and
+ * the full stop after `[Ready](…)` is a node of its own: taken node by node it
+ * became a separate "word", quoted as “Ready now .” and counted against the
+ * six. So a piece with no whitespace before it joins the word before it — but
+ * only when both belong to this sentence, or `[First.](…)Second` would weld
+ * two sentences into one word.
+ *
+ * Unspoken words (inline code that is not read, a dash) are held until the
+ * next spoken word shows whether they sit inside the sentence or after its
+ * end; a run left over when the sentence ends is dropped.
+ *
+ * Null when the words cannot represent the sentence faithfully: when some of
+ * its spoken tokens are carried by no text node. Spoken image alt text is the
+ * case that exists today — an image is not a text node, so its words would
+ * vanish from the quotation, at the front, the middle or the end.
  */
 function writtenWords(sentence: SentenceUnit, blocks: readonly CompiledBlock[] | undefined): string[] | null {
   const block = blocks?.find((b) => b.id === sentence.blockId);
   if (block === undefined) return null;
 
-  const visual: { text: string; token: number | null }[] = [];
-  let joined = false;
-  let anchored = false;
+  const words: string[] = [];
+  let held: string[] = [];
+  let inside = false;
+  // A property, not a `let`: it is only ever set inside `place`, and a `let`
+  // would still read as its initial null to the type checker afterwards.
+  const seen = { first: null as number | null };
+  const covered = new Set<number>();
+  // No whitespace and no other node since the previous piece.
+  let attached = false;
+  // Where the previous piece went: into `words`, into `held`, or nowhere.
+  let last: 'word' | 'held' | null = null;
+
+  const append = (list: string[], piece: string): void => {
+    list[list.length - 1] = `${list[list.length - 1] ?? ''}${piece}`;
+  };
+
+  const place = (piece: string, token: number | null): void => {
+    if (token !== null) {
+      inside = token >= sentence.startTokenIndex && token <= sentence.endTokenIndex;
+      if (!inside) {
+        held = [];
+        last = null;
+        return;
+      }
+      seen.first ??= token;
+      if (attached && last === 'word') {
+        append(words, piece);
+      } else if (attached && last === 'held') {
+        append(held, piece);
+        words.push(...held);
+      } else {
+        words.push(...held, piece);
+      }
+      held = [];
+      last = 'word';
+      return;
+    }
+    if (!inside) {
+      last = null;
+      return;
+    }
+    // Unspoken, inside so far: stuck to a word, it goes where that word went;
+    // free-standing, it waits for the next spoken word to vouch for it.
+    if (attached && last === 'word') {
+      append(words, piece);
+    } else if (attached && last === 'held') {
+      append(held, piece);
+    } else {
+      held.push(piece);
+      last = 'held';
+    }
+  };
+
   const visit = (nodes: readonly SafeRenderNode[]): void => {
     for (const node of nodes) {
       if (node.type === 'link') {
@@ -221,40 +280,30 @@ function writtenWords(sentence: SentenceUnit, blocks: readonly CompiledBlock[] |
         continue;
       }
       if (node.type !== 'text') {
-        joined = false;
+        attached = false;
         continue;
       }
-      if (node.wordTokens !== undefined) anchored = true;
+      for (const token of node.tokenIndexes ?? []) {
+        if (token >= sentence.startTokenIndex && token <= sentence.endTokenIndex) covered.add(token);
+      }
       let word = 0;
       for (const piece of node.text.split(/(\s+)/)) {
         if (piece === '') continue;
         if (/^\s+$/.test(piece)) {
-          joined = false;
+          attached = false;
           continue;
         }
-        const token = node.wordTokens?.[word] ?? null;
+        place(piece, node.wordTokens?.[word] ?? null);
         word += 1;
-        const last = visual[visual.length - 1];
-        if (joined && last !== undefined) {
-          last.text += piece;
-          last.token ??= token;
-        } else {
-          visual.push({ text: piece, token });
-        }
-        joined = true;
+        attached = true;
       }
     }
   };
   visit(block.renderNodes);
-  if (!anchored) return null;
 
-  const words: string[] = [];
-  let inside = false;
-  for (const { text, token } of visual) {
-    if (token !== null) inside = token >= sentence.startTokenIndex && token <= sentence.endTokenIndex;
-    if (inside) words.push(text);
-  }
-  return words.length > 0 ? words : null;
+  if (covered.size !== sentence.endTokenIndex - sentence.startTokenIndex + 1) return null;
+  if (seen.first !== sentence.startTokenIndex) return null;
+  return words;
 }
 
 /**
