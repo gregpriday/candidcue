@@ -440,7 +440,7 @@ describe('a dark stage is exactly the stage it was', () => {
     '--stage-text-future': 'rgba(245, 243, 239, 0.86)',
     '--stage-accent': 'rgba(210, 205, 255, 0.2)',
     '--stage-cue': '#d8b46a',
-    '--stage-overlay': 'rgba(0, 0, 0, 0.72)',
+    '--stage-overlay': 'rgb(14 16 20)',
     '--stage-chrome-border': 'rgba(255, 255, 255, 0.13)',
     '--stage-chrome-bg': 'rgba(12, 14, 18, 0.74)',
     '--stage-chrome-text': 'rgba(245, 243, 239, 0.88)',

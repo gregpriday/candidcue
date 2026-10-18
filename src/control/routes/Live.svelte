@@ -82,6 +82,7 @@ import { onShortcut } from '../lib/shortcuts';
     toggleBlankStage,
     togglePlayPause,
     toggleStageMirror,
+    acknowledgeOnStage,
     toggleVoiceFollow,
   } from '../stores/session';
   import { patchSettings, settings } from '../stores/settings';
@@ -374,7 +375,24 @@ import { onShortcut } from '../lib/shortcuts';
   function jumpToSection(node: OutlineNode): void {
     const first = $session.sentences.find((s) => s.startTokenIndex >= node.startTokenIndex);
     goToToken(first?.startTokenIndex ?? node.startTokenIndex);
-    showToast(node.title, 'info');
+    acknowledgeOnStage(node.title);
+  }
+
+  /**
+   * ⌥↑ / ⌥↓ one section along, or say why not.
+   *
+   * At either end these used to do nothing at all, and a key that does nothing
+   * looks exactly like a key that was missed — so the presenter presses it
+   * again, harder, mid-sentence.
+   */
+  function stepSection(delta: -1 | 1): void {
+    if (flatOutline.length === 0) {
+      acknowledgeOnStage('No sections in this script');
+      return;
+    }
+    const target = flatOutline[navigationSectionIndex + delta];
+    if (target) jumpToSection(target.node);
+    else acknowledgeOnStage(delta < 0 ? 'Already at the first section' : 'Already at the last section');
   }
 
   /**
@@ -817,32 +835,33 @@ import { onShortcut } from '../lib/shortcuts';
      * `adjustStageFontSize` steps its reader preference instead.
      */
     if ($session.stageRigResolved) {
-      showToast(
-        stageSizedAutomatically
-          ? 'Sized automatically — trade size for line width with the size slider in Settings'
-          : 'This display sizes its text from its calibration',
-        'info',
-        { durationMs: 2200 },
+      // The answer, not the lesson: how to trade size for line width belongs to
+      // Settings, where the slider is, not to the glass mid-sentence.
+      acknowledgeOnStage(
+        stageSizedAutomatically ? 'Size is set automatically' : 'Size is set by calibration',
       );
       return;
     }
     const next = adjustStageFontSize(delta);
-    showToast(`Text ${next} px`, 'info', { durationMs: 1600 });
+    acknowledgeOnStage(`Text ${next}\u00a0px`);
   }
 
   function toggleMirror(): void {
     // Says what the glass now shows, rather than "mirrored" for both directions
     // — and names why nothing happened in a reading window, which has no glass
     // to read it off.
+    //
+    // On the glass, where it is read through the same flip it reports: the
+    // toast this used to be sat outside the mirror, so the confirmation that
+    // the text was now mirrored was the one thing on the panel reading
+    // backwards.
     const mirrored = toggleStageMirror('x');
-    showToast(
+    acknowledgeOnStage(
       mirrored === null
         ? 'A reading window is never mirrored'
         : mirrored
-          ? 'Text mirrored for this take'
-          : 'Text unmirrored for this take',
-      'info',
-      { durationMs: 1600 },
+          ? 'Mirrored for this take'
+          : 'Unmirrored for this take',
     );
   }
 
@@ -896,12 +915,10 @@ import { onShortcut } from '../lib/shortcuts';
           moveSentences(1);
           break;
         case 'prev-chapter':
-          if (navigationSectionIndex > 0)
-            jumpToSection(flatOutline[navigationSectionIndex - 1]!.node);
+          stepSection(-1);
           break;
         case 'next-chapter':
-          if (navigationSectionIndex < flatOutline.length - 1)
-            jumpToSection(flatOutline[navigationSectionIndex + 1]!.node);
+          stepSection(1);
           break;
         case 'stage-text-up':
           adjustFontSize(2);
@@ -1818,6 +1835,7 @@ import { onShortcut } from '../lib/shortcuts';
         alignment: $session.snapshot,
         transcript: $session.transcriptTail.at(-1) ?? '',
         voicePill: $session.voicePill,
+        ack: $session.stageAck,
         // The switch, not the symptom: an automatic hold stops following too,
         // and the stage words that one as the fault it is (§48).
         followPaused: $session.followPausedByUser,

@@ -73,6 +73,7 @@
     initialStageState,
     stageReducer,
     displayPhase,
+    type StageAckState,
     type StageAction,
   } from './renderer/stageState';
   import { fallbackFontMetrics } from '../shared/optics';
@@ -103,6 +104,17 @@
     alignment: StageAlignmentPayload | null;
     transcript: string;
     voicePill: StageVoicePillPayload | null;
+    /**
+     * §33.10. The answer to the command the presenter just pressed — a section,
+     * a pace, a mirror — for the acknowledgement chip.
+     *
+     * The `ack` directive is the separate window's road and stands down at
+     * stage generation 0, so before this every single-window take answered its
+     * keys with a control-window toast: unmirrored on a mirrored rig, sized for
+     * a desk, stacking one per press. Passed through as the host's own object,
+     * so the bridge being rebuilt for a snapshot is not a new answer.
+     */
+    ack?: StageAckState | null;
     /**
      * §48. Voice following is off — the host's own switch, read straight rather
      * than through a directive.
@@ -529,6 +541,26 @@
    * and a rig whose safe rectangle is that short has a bigger problem than this
    * popover. Better to overflow one clearly than to render a sliver.
    */
+  /**
+   * Where the acknowledgement chip starts, in px down the safe rectangle.
+   *
+   * The chip sits in the top-right corner, and in a single-window take that
+   * corner of the WINDOW belongs to control's "Take controls" tab: 16px down,
+   * 32px tall, flush right (`.tc-tab` in Live.svelte). The chip clears it by the
+   * chrome inset's own breathing room. A separate stage window has no tab, and
+   * a safe rectangle already inset past it needs no extra clearance.
+   */
+  const ackTopPx = $derived.by(() => {
+    const inset = 20;
+    if (!embedded) return inset;
+    const tabBottom = 16 + 32;
+    const safeTop = (vh * safeInsets.y) / 100;
+    return Math.max(inset, Math.round(tabBottom + 12 - safeTop));
+  });
+
+  /** The chip's answer: the host's in a single-window take, the directive's otherwise. */
+  const stageAck = $derived(embedded ? (embedded.ack ?? null) : app.ack);
+
   const dockPopoverMaxPx = $derived.by(() => {
     if (vh === 0) return null;
     // The dock's own geometry, matching StageDock's CSS: 16px bottom inset,
@@ -570,6 +602,35 @@
   const overlayFontSizePx = $derived(
     Number.isFinite(secondaryMinPx) && secondaryMinPx > 0 ? Math.max(14, secondaryMinPx) : 18,
   );
+
+  /**
+   * How wide the acknowledgement chip may be, in px.
+   *
+   * It shares the top edge with the hold chip, which sits in the opposite
+   * corner and may be up to 40vw wide (HoldStatus's cap, border-box). A cap in
+   * percent of the SAFE rectangle cannot promise daylight between them: a hood
+   * that crops the panel shrinks the rectangle but not the viewport the hold
+   * chip measures against. So the budget is what is left of the safe width
+   * once the hold chip's widest outer box, both insets and a gap are taken out
+   * — and never more than half the rectangle, where a single answer would
+   * start to read as a banner.
+   */
+  const ackMaxWidthPx = $derived.by(() => {
+    if (vw === 0) return null;
+    const inset = 20;
+    const gap = 16;
+    const safeWidth = (vw * safeInsets.width) / 100;
+    const holdOuter = vw * 0.4 + inset;
+    return Math.max(0, Math.min(safeWidth * 0.52, safeWidth - holdOuter - inset - gap));
+  });
+
+  /**
+   * The safe rectangle is too narrow for both chips side by side: the budget
+   * would not hold the chip's own minimum width. Then a hold that is up wins
+   * the top edge — it names a fault the presenter can act on, and an
+   * acknowledgement is only ever a confirmation of something they just did.
+   */
+  const ackCrowded = $derived(ackMaxWidthPx !== null && ackMaxWidthPx < 6 * overlayFontSizePx);
 
   /** This is a reading window, as the host presents it. */
   const readingWindow = $derived(embedded?.presentationMode === 'reader');
@@ -2395,10 +2456,25 @@
         style:width="{safeInsets.width}%"
         style:height="{safeInsets.height}%"
       >
-        <!-- Layer 7: transient command acknowledgement (§33.10). -->
-        {#if (settings?.stageAcknowledgements ?? true) && !app.blanked}
-          <AckChip ack={app.ack} secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0} />
-        {/if}
+        <!--
+          Layer 7: transient command acknowledgement (§33.10).
+
+          Always mounted, so its status region outlives each message. It stands
+          down for a blank, and for the Escape prompt: that one is about how to
+          stop a take, shares the top of the glass with it, and wins. On a
+          rectangle too narrow for it and the hold chip side by side, a hold that
+          is up wins too.
+        -->
+        <AckChip
+          ack={stageAck}
+          enabled={(settings?.stageAcknowledgements ?? true) &&
+            !app.blanked &&
+            !escapeHintVisible &&
+            !(ackCrowded && holdStatus.rung !== 'none')}
+          secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
+          topPx={ackTopPx}
+          maxWidthPx={ackMaxWidthPx}
+        />
 
         <!--
           The top rung of the hold ladder.
@@ -2775,7 +2851,8 @@
     --stage-text-future: rgba(245, 243, 239, 0.86);
     --stage-accent: rgba(210, 205, 255, 0.2);
     --stage-cue: #d8b46a;
-    --stage-overlay: rgba(0, 0, 0, 0.72);
+    /* See stage.css: a transient pill is a card over the script, not a hole in it. */
+    --stage-overlay: rgb(14 16 20);
     --stage-secondary-min: 0.67em;
 
     /*
@@ -3065,6 +3142,7 @@
     transform: translateX(-50%);
     padding: 0.5em 1.1em;
     border-radius: 999px;
+    border: 1px solid var(--stage-chrome-border);
     background: var(--stage-overlay);
     color: var(--stage-text);
     font-weight: 550;
@@ -3105,6 +3183,7 @@
     transform: translateX(-50%);
     padding: 0.3em 0.9em;
     border-radius: var(--radius-pill, 999px);
+    border: 1px solid var(--stage-chrome-border);
     background: var(--stage-overlay);
     color: var(--stage-text);
     font-weight: 650;

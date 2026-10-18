@@ -22,7 +22,12 @@ export type FrozenReason = 'directive' | 'control_lost';
 
 export interface StageAckState {
   label: string;
-  durationMs: number;
+  /**
+   * How long the answer stays fully in, after its fade in. Absent or null, the
+   * chip sizes it to the label's reading time — which is what every sender
+   * should want unless it has a reason the chip cannot know.
+   */
+  durationMs?: number | null;
   /** Monotonic sequence so repeated identical acks still re-trigger. */
   seq: number;
 }
@@ -203,7 +208,7 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
             ...state,
             ack: {
               label: d.label,
-              durationMs: d.durationMs ?? 900,
+              durationMs: d.durationMs ?? null,
               seq: (state.ack?.seq ?? 0) + 1,
             },
           };
