@@ -1095,7 +1095,8 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     );
   }
 
-  const lastToast = () => get(toasts).at(-1)?.message;
+  /** What the glass answered last (§33.10) — the stage chip, not a toast. */
+  const lastAck = () => get(session).stageAck?.label;
 
   beforeEach(() => {
     seq = 0;
@@ -1113,7 +1114,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(get(autoScrollLive).running).toBe(false);
     expect(s.voiceFollow).toBe(true);
     expect(s.followPausedByUser).toBe(false);
-    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
+    expect(lastAck()).toBe('Following your voice again');
     expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
   });
 
@@ -1129,8 +1130,12 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     expect(s.voiceFollow).toBe(true);
     expect(s.followPausedByUser).toBe(false);
     expect(get(smoothFollow).followingPaused).toBe(false);
-    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
-    expect(get(toasts).filter((t) => t.message.startsWith('Auto-scroll off'))).toHaveLength(1);
+    expect(lastAck()).toBe('Following your voice again');
+    // Answered once — "on", then this — on the glass, and not again as a toast.
+    expect(get(session).stageAck?.seq).toBe(2);
+    expect(
+      get(toasts).filter((t) => /^(Auto-scroll|Following)/.test(t.message)),
+    ).toHaveLength(0);
     expect(voiceReaches(compiled.sentences[2]!.startTokenIndex)).toBe(true);
   });
 
@@ -1208,7 +1213,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
 
     toggleAutoScroll();
     expect(get(session).micState, 'the microphone itself is fine').toBe('live');
-    expect(lastToast()).toBe('Auto-scroll off');
+    expect(lastAck()).toBe('Auto-scroll off');
 
     hold(false);
     expect(get(session).voiceFollow).toBe(true);
@@ -1236,7 +1241,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     togglePlayPause();
     toggleAutoScroll();
     expect(get(session).voiceFollow).toBe(true);
-    expect(lastToast()).toBe('Auto-scroll off');
+    expect(lastAck()).toBe('Auto-scroll off');
   });
 
   it('says following is back when stopping the roll gave it back', async () => {
@@ -1244,7 +1249,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     toggleAutoScroll();
     toggleAutoScroll();
     expect(get(session).voiceFollow).toBe(true);
-    expect(lastToast()).toBe('Auto-scroll off — following your voice again');
+    expect(lastAck()).toBe('Following your voice again');
   });
 
   it('leaves following off, and says so, when the presenter had switched it off first', async () => {
@@ -1256,7 +1261,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     const s = get(session);
     expect(s.voiceFollow).toBe(false);
     expect(s.followPausedByUser).toBe(true);
-    expect(lastToast()).toBe('Auto-scroll off — voice following is still off');
+    expect(lastAck()).toBe('Auto-scroll\u00a0off, follow\u00a0is\u00a0off');
   });
 
   it('claims nothing about a voice a manual take never had', async () => {
@@ -1268,7 +1273,7 @@ describe('#277 — auto-scroll and voice following never both carry the take', (
     const s = get(session);
     expect(s.voiceFollow, 'the roll gave back nothing it did not take').toBe(false);
     expect(s.followPausedByUser).toBe(false);
-    expect(lastToast()).toBe('Auto-scroll off');
+    expect(lastAck()).toBe('Auto-scroll off');
   });
 
   it('ignores an end report from a roll the voice has already taken over', async () => {

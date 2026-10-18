@@ -46,7 +46,20 @@
   --stage-text-future: rgba(245, 243, 239, 0.86);
   --stage-accent: rgba(210, 205, 255, 0.2);
   --stage-cue: #d8b46a;
-  --stage-overlay: rgba(0, 0, 0, 0.72);
+  /*
+   * The plate under a transient pill — the command acknowledgement, the Escape
+   * prompt, the calibration sample's name — which also draw the chrome border.
+   *
+   * Opaque, and a shade off the field. At 72% black the script showed through
+   * it, and words over fainter words read as a fragment of the sentence beneath
+   * rather than a message on top of it. Pure black with no edge was no better:
+   * the pill's outline existed only as a bite out of the script, with the
+   * letters it half-covered left hanging round its corners. A neutral the
+   * chrome's own hue and a faint edge make it a card laid over the page. On a
+   * beamsplitter this is all but invisible, which is right — the plate's job
+   * there is to hide what is under it.
+   */
+  --stage-overlay: rgb(14 16 20);
 
   /*
    * The chrome geometry system — one inset, one radius, one border, one fill

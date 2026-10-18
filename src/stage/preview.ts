@@ -650,7 +650,7 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
       directive({ kind: 'settings', settings });
     },
     ack(label: string) {
-      directive({ kind: 'ack', label, durationMs: 900 });
+      directive({ kind: 'ack', label });
     },
     jump() {
       // A large forward skip: the position moves a long way at once and the

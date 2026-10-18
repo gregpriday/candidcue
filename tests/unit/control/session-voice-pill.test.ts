@@ -659,7 +659,7 @@ describe('a take whose voice cannot be resumed', () => {
     toggleAutoScroll();
     // Following is handed back, but nothing is listening to follow.
     expect(get(session).micState).toBe('disconnected');
-    expect(get(toasts).at(-1)?.message).toBe('Auto-scroll off');
+    expect(get(session).stageAck?.label).toBe('Auto-scroll off');
   });
 
   it('releases a hard pause whose microphone cannot come back', async () => {

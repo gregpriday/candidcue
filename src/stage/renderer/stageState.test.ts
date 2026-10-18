@@ -190,7 +190,8 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
     const firstSeq = s.ack?.seq;
     s = stageReducer(s, ackDirective);
     expect(s.ack?.seq).toBe((firstSeq ?? 0) + 1);
-    expect(s.ack?.durationMs).toBe(900);
+    // No duration sent: the chip sizes it to the label's reading time.
+    expect(s.ack?.durationMs).toBeNull();
   });
 
   it('freezes on control loss and recovers on the next heartbeat', () => {

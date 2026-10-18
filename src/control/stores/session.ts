@@ -478,6 +478,13 @@ export interface SessionState {
   displayChangedTo: string | null;
   /** Exact stage instrument payload, rendered locally in single-window mode. */
   voicePill: StageVoicePillPayload | null;
+  /**
+   * §33.10. The answer the glass gives to the last command pressed mid-take —
+   * "Pricing", "170 wpm", "Mirrored for this take" — read by the stage's
+   * acknowledgement chip through its bridge. One slot: a newer answer replaces
+   * the last, and `seq` makes the same answer twice count as two.
+   */
+  stageAck: { label: string; seq: number } | null;
   /** The full production stage document rendered inside the control webview. */
   stageEnvelope: StageSessionEnvelope | null;
   outline: OutlineNode[];
@@ -577,6 +584,7 @@ const initial: SessionState = {
   heardAnything: false,
   displayChangedTo: null,
   voicePill: null,
+  stageAck: null,
   stageEnvelope: null,
   outline: [],
   sentences: [],
@@ -2389,7 +2397,7 @@ const followActions = {
   reAnchor(): void {
     driver?.reacquire();
     noteReposition();
-    showToast('Re-finding your place', 'info', { durationMs: 1600 });
+    acknowledgeOnStage('Re-finding your place');
   },
   acceptCandidate(candidate: { tokenIndex: number }): void {
     driver?.moveToToken(candidate.tokenIndex);
@@ -2443,7 +2451,7 @@ const followActions = {
        */
       ...(deliberate ? { followPausedByUser: paused } : {}),
     }));
-    if (handover) showToast(autoScrollOffMessage(), 'info', { durationMs: 1800 });
+    if (handover) acknowledgeOnStage(autoScrollOffMessage());
   },
   /**
    * §62 recovery. Re-issuing the current stage settings ASKS the stage to
@@ -3188,6 +3196,32 @@ export const autoScrollLive = derived(
 );
 
 /**
+ * Answer a command on the glass (§33.10).
+ *
+ * The words are read off the glass mid-sentence at two thirds of body size, so
+ * a long answer wraps — and the chip wraps prose evenly, which would happily
+ * split "Auto-scroll on" from its state. So an answer joins each group that must
+ * be read whole — "140 wpm", "follow is off" — with no-break spaces (U+00A0),
+ * leaving the only break where a reader would put one.
+ *
+ * Take-time commands used to answer with a toast, and in a single-window take
+ * control's toasts float over the prompter: in the unmirrored layer, so the one
+ * confirming a mirror read backwards through the glass; at desk size, a few
+ * pixels tall from where the presenter stands; and one per press, so three
+ * taps of the pace key left three cards over the next lines. The stage's chip
+ * is mirrored with the script, sized for the reading distance, and replaces
+ * itself — so the answer goes there, and only there.
+ *
+ * Failures still toast. They have to stay until somebody deals with them, and
+ * an acknowledgement is gone in a couple of seconds by design.
+ */
+export function acknowledgeOnStage(label: string): void {
+  state.update((prev) =>
+    prev.active ? { ...prev, stageAck: { label, seq: (prev.stageAck?.seq ?? 0) + 1 } } : prev,
+  );
+}
+
+/**
  * Start or stop rolling the script at a fixed pace.
  *
  * Starting pauses voice following through the follow store rather than by
@@ -3235,10 +3269,8 @@ export function toggleAutoScroll(): void {
     if (restore && !s.voiceFollow) smoothFollow.setFollowingPaused(false);
   }
 
-  showToast(
-    running ? `Auto-scroll on — ${s.autoScroll.wordsPerMinute} wpm` : autoScrollOffMessage(),
-    'info',
-    { durationMs: 1800 },
+  acknowledgeOnStage(
+    running ? `Auto-scroll ${s.autoScroll.wordsPerMinute}\u00a0wpm` : autoScrollOffMessage(),
   );
 }
 
@@ -3249,10 +3281,13 @@ export function toggleAutoScroll(): void {
  * It used to say "following your voice again" every time, over a presenter who
  * had switched following off themselves and over a take whose voice never
  * started — in both, following stayed off and the toast said it was back.
+ *
+ * Short, because it is read off the glass mid-sentence: when the voice has the
+ * script back, that is the whole answer — it is what moves the script now.
  */
 function autoScrollOffMessage(): string {
   const s = get(state);
-  if (s.followPausedByUser) return 'Auto-scroll off — voice following is still off';
+  if (s.followPausedByUser) return 'Auto-scroll\u00a0off, follow\u00a0is\u00a0off';
   // "Again" is a claim about the next thing the script does. A paused take does
   // nothing until Space, and a take with nothing listening does nothing at all.
   const listening =
@@ -3260,9 +3295,7 @@ function autoScrollOffMessage(): string {
     s.paused === 'none' &&
     s.micState === 'live' &&
     s.connection === 'connected';
-  return s.voiceFollow && listening
-    ? 'Auto-scroll off — following your voice again'
-    : 'Auto-scroll off';
+  return s.voiceFollow && listening ? 'Following your voice again' : 'Auto-scroll off';
 }
 
 /**
@@ -3285,22 +3318,18 @@ export function nudgeAutoScrollWpm(deltaWpm: number): void {
      * key that did not register, and the operator presses it harder. Naming the
      * limit answers the actual question in one glance.
      */
-    showToast(
-      `Auto-scroll ${wordsPerMinute} wpm — ${
-        wordsPerMinute >= AUTO_SCROLL_MAX_WPM ? 'fastest' : 'slowest'
-      }`,
-      'info',
-      { durationMs: 1200 },
+    acknowledgeOnStage(
+      `${wordsPerMinute}\u00a0wpm · ${wordsPerMinute >= AUTO_SCROLL_MAX_WPM ? 'fastest' : 'slowest'}`,
     );
     return;
   }
   publishAutoScroll({ ...s.autoScroll, wordsPerMinute });
   /*
    * A pace key with no feedback at all reads as a key that did not register,
-   * and the operator presses it again. The toast is what reports it, exactly as
-   * it does for the mirror.
+   * and the operator presses it again. The number leads because it is the only
+   * thing that changed — the presenter knows which key they pressed.
    */
-  showToast(`Auto-scroll ${wordsPerMinute} wpm`, 'info', { durationMs: 1200 });
+  acknowledgeOnStage(`${wordsPerMinute}\u00a0wpm`);
 }
 
 /**

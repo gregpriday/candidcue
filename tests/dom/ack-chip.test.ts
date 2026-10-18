@@ -65,7 +65,8 @@ describe('AckChip', () => {
     const { container } = render(AckChip, { props: { ack: ack({ durationMs: 700 }) } });
     expect(chip(container).dataset.visible).toBe('true');
 
-    await vi.advanceTimersByTimeAsync(800);
+    // `durationMs` is the time fully in, after the 150ms fade in.
+    await vi.advanceTimersByTimeAsync(900);
 
     expect(chip(container).dataset.visible).toBe('false');
     // Still mounted, still carrying the word it is fading with.
