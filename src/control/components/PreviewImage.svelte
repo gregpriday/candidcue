@@ -76,9 +76,11 @@
 {/if}
 
 <style>
+  /* Sized with the document (View › Larger / Smaller Editor Text), like the
+     words around it, rather than at the chrome's fixed size. */
   .image-ref {
     color: var(--text-muted);
-    font-size: var(--text-sm);
+    font-size: calc(var(--text-sm) * var(--doc-scale, 1));
   }
 
   /* Sized and placed the way the stage places it (BlockView `.figure img`):
@@ -88,7 +90,7 @@
     max-width: 100%;
     height: auto;
     max-height: 70vh;
-    margin: var(--space-2) auto;
+    margin: calc(var(--space-2) * var(--doc-scale, 1)) auto;
     border-radius: var(--radius-sm);
   }
 
@@ -98,17 +100,17 @@
     display: inline-flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 0 var(--space-2);
+    gap: 0 calc(var(--space-2) * var(--doc-scale, 1));
     max-width: 100%;
-    padding: var(--space-1) var(--space-3);
+    padding: calc(var(--space-1) * var(--doc-scale, 1)) calc(var(--space-3) * var(--doc-scale, 1));
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius-sm);
     background: var(--bg-sunken);
     color: var(--text-secondary);
-    font-size: var(--text-sm);
+    font-size: calc(var(--text-sm) * var(--doc-scale, 1));
     font-style: normal;
     font-weight: 400;
-    line-height: var(--lh-label);
+    line-height: calc(var(--lh-label) * var(--doc-scale, 1));
     letter-spacing: normal;
     overflow-wrap: anywhere;
   }

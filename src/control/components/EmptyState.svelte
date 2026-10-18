@@ -36,15 +36,21 @@
      * for by the one screen that has earned it.
      */
     variant?: 'plain' | 'editorial' | 'compact';
+    /**
+     * A secondary line under the body — the technical reason behind an error,
+     * kept apart from the sentence that says what to do about it.
+     */
+    detail?: string;
     actions?: Snippet;
   }
 
-  let { title, body, variant = 'plain', actions }: Props = $props();
+  let { title, body, variant = 'plain', detail, actions }: Props = $props();
 </script>
 
 <div class="empty {variant}">
   <h2 class="title">{title}</h2>
   {#if body}<p class="body">{body}</p>{/if}
+  {#if detail}<p class="detail">{detail}</p>{/if}
   {#if actions}
     <div class="actions">{@render actions()}</div>
   {/if}
@@ -69,6 +75,15 @@
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     color: var(--empty-text);
+  }
+
+  .detail {
+    margin: 0;
+    max-width: var(--prose-measure-narrow);
+    font-size: var(--text-xs);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
   }
 
   .actions {

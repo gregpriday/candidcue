@@ -10,6 +10,7 @@
   import { EditorView } from '@codemirror/view';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
+  import EmptyState from '../components/EmptyState.svelte';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
   import MarkdownEditor from '../components/MarkdownEditor.svelte';
@@ -33,7 +34,7 @@ import SplitButton from '../components/SplitButton.svelte';
     workspace,
     type EditorLayout,
   } from '../stores/workspace';
-  import RenderBlocks from '../components/RenderBlocks.svelte';
+  import RenderBlocks, { type PreviewBlockClick } from '../components/RenderBlocks.svelte';
   import RevisionHistory from '../components/RevisionHistory.svelte';
   import ScriptLintPanel from '../components/ScriptLintPanel.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
@@ -69,6 +70,7 @@ import type { PresentationMode } from '../services/settings-types';
   } from '../lib/preview-images';
   import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
   import * as inserts from '../lib/markdown-insert';
+  import { markLanding } from '../lib/landing-marker';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { showLintRun } from '../lib/lint-run';
   import { onShortcut } from '../lib/shortcuts';
@@ -87,6 +89,7 @@ import type { PresentationMode } from '../services/settings-types';
     flushEditorEdits,
     keepEditorVersion,
     openScript,
+    retryCompile,
     revisionHistoryRequest,
     saveNow,
     setSource,
@@ -98,7 +101,7 @@ import type { PresentationMode } from '../services/settings-types';
   import { currentRoute, navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
   import type { ContextMenuItem } from '../stores/context-menu';
-  import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
+  import type { CompileDiagnostic, CompiledBlock, OutlineNode } from '../../shared/contracts';
 
   interface Props {
     scriptId: string;
@@ -447,6 +450,24 @@ import type { PresentationMode } from '../services/settings-types';
   const previewImages = $derived(previewImageStates(result?.script, imageResolution));
 
   /*
+   * A broken directive, drawn where it is (§23.8). Every directive problem the
+   * compiler reports carries `fix_directive`; each is filed under the block its
+   * source starts in. One that falls between blocks (a stray closing fence) has
+   * no block to sit in and stays with the rail's list.
+   */
+  const previewProblems = $derived.by(() => {
+    const byBlock = new Map<string, CompileDiagnostic[]>();
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.suggestedAction !== 'fix_directive' || !diagnostic.source) continue;
+      const at = diagnostic.source.utf16Start;
+      const block = blocks.find((b) => b.source.utf16Start <= at && at < b.source.utf16End);
+      if (!block) continue;
+      byBlock.set(block.id, [...(byBlock.get(block.id) ?? []), diagnostic]);
+    }
+    return byBlock;
+  });
+
+  /*
    * A compile that FAILED, as opposed to a document with nothing in it.
    *
    * Both leave `blocks` empty, and the preview branched on that alone — so a
@@ -473,6 +494,19 @@ import type { PresentationMode } from '../services/settings-types';
     const message = ($compiled.error ?? '').replace(/^Error:?\s*/, '').trim();
     return message === '' ? '' : describeError(message);
   });
+
+  /*
+   * The same reason, for the preview's failed state — without the compiler
+   * service's own advice to try again. The pane has a Try again button, and
+   * "Try opening the script again" sent the author out of a document that one
+   * click can now recover in place. Advice that is not about retrying (split a
+   * very large script) is kept.
+   */
+  const previewFailureDetail = $derived(
+    compileErrorDetail
+      .replace(/\s*Try (?:opening the script )?again\.$/, '')
+      .replace(/\s*Try again, or (\S)(.*)$/, (_all, first: string, rest: string) => ` ${first.toUpperCase()}${rest}`),
+  );
 
   /*
    * Gated on `result` for the same reason `compileFailed` above exists: a
@@ -1253,10 +1287,56 @@ import type { PresentationMode } from '../services/settings-types';
    * Preview had already unmounted, so the one thing the handler exists to do —
    * land the caret on the block you clicked — never happened in the one mode it
    * was written for.
+   *
+   * Two things on top of that. The caret goes to the WORD that was clicked,
+   * when the click was on a spoken one: the compiler knows where every spoken
+   * token sits in the source, and a long paragraph is one long source line, so
+   * "the start of the block" left the author hunting along it. And the source
+   * is scrolled so that line sits where the click was — beside it in Both, under
+   * the pointer after Preview gives way to Edit. `scrollIntoView: true` used to
+   * take the nearest edge, which put a lower paragraph on the pane's last row
+   * with the rest of it out of sight.
    */
-  async function previewBlockClick(block: CompiledBlock): Promise<void> {
+  async function previewBlockClick(block: CompiledBlock, at: PreviewBlockClick): Promise<void> {
+    // Measured before the switch: in Preview the block is about to disappear.
+    const targetTop = at.clientY ?? at.element.getBoundingClientRect().top;
+    const token =
+      at.tokenIndex === undefined ? undefined : result?.script?.spokenTokens[at.tokenIndex];
+    const offset =
+      token && token.index === at.tokenIndex && token.blockId === block.id
+        ? token.source.utf16Start
+        : block.source.utf16Start;
     await ensureEditingSurface();
-    goToOffset(block.source.utf16Start);
+    withView((view) => {
+      const pos = Math.min(offset, view.state.doc.length);
+      const pane = view.scrollDOM.getBoundingClientRect();
+      // Where the click was, but never in the outer bands of the pane: the line
+      // keeps some context above it and most of the pane below it.
+      const wanted = targetTop - pane.top - (at.clientY === undefined ? 0 : view.defaultLineHeight / 2);
+      const yMargin = Math.min(Math.max(wanted, pane.height * 0.15), pane.height * 0.6);
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin }),
+      });
+      view.focus();
+      markLanding(view, pos);
+    });
+  }
+
+  /** "Show in editor" on a problem in the preview: the caret at its source. */
+  async function goToProblem(problem: CompileDiagnostic): Promise<void> {
+    if (!problem.source) return;
+    const start = problem.source.utf16Start;
+    await ensureEditingSurface();
+    withView((view) => {
+      const pos = Math.min(start, view.state.doc.length);
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+      });
+      view.focus();
+      markLanding(view, pos);
+    });
   }
 
   /** A section's length at the rate the whole script was estimated at. */
@@ -2014,25 +2094,61 @@ import type { PresentationMode } from '../services/settings-types';
             />
           {/if}
           <div class="preview" hidden={layout === 'edit'} bind:this={previewScroller}>
+            <!-- Mounted for the life of the pane, so the failure is a CHANGE to
+                 a live region a screen reader is already watching — a region
+                 inserted together with its message can go unannounced. -->
+            <p class="sr-only" role="status">
+              {compileFailed ? 'This script could not be rendered. Your text is safe in the editor.' : ''}
+            </p>
             {#if compileFailed}
-              <div class="preview-failed" role="status">
-                <p class="preview-failed-title">This script could not be rendered.</p>
-                <p class="preview-failed-body">
-                  Your text is safe and still in the editor. Fix the problem below, and the
-                  preview comes back on its own.
-                </p>
-                {#if compileErrorDetail}
-                  <p class="preview-failed-detail">{compileErrorDetail}</p>
-                {/if}
+              <!--
+                What happened, that nothing is lost, and two ways on (NN/g): try
+                the compile again — a compiler that died is started afresh — or,
+                from Preview, go back to the text. Beside the source the editor is
+                already on screen, so the narrow pane takes the compact message.
+              -->
+              <div class="preview-state" class:compact={layout === 'split'}>
+                <EmptyState
+                  variant={layout === 'split' ? 'compact' : 'plain'}
+                  title="This script could not be rendered"
+                  body="Your text is safe in the editor. The preview tries again each time you change the script."
+                  detail={previewFailureDetail || undefined}
+                >
+                  {#snippet actions()}
+                    <Button size="sm" onclick={retryCompile}>Try again</Button>
+                    {#if layout === 'preview'}
+                      <Button size="sm" onclick={() => void ensureEditingSurface()}>Edit the script</Button>
+                    {/if}
+                  {/snippet}
+                </EmptyState>
               </div>
             {:else if blocks.length > 0}
               <RenderBlocks
                 {blocks}
                 images={previewImages}
-                onblockclick={(b) => void previewBlockClick(b)}
+                problems={previewProblems}
+                onblockclick={(b, at) => void previewBlockClick(b, at)}
+                onproblemclick={(p) => void goToProblem(p)}
               />
             {:else}
-              <p class="preview-empty">Your rendered script will appear here.</p>
+              <div class="preview-state" class:compact={layout === 'split'}>
+                {#if layout === 'split'}
+                  <EmptyState
+                    variant="compact"
+                    title="Nothing to preview yet"
+                    body="Your script appears here as you write it."
+                  />
+                {:else}
+                  <EmptyState
+                    title="Nothing to preview yet"
+                    body="Write your script in Edit, and it appears here the way it will read."
+                  >
+                    {#snippet actions()}
+                      <Button size="sm" onclick={() => void ensureEditingSurface()}>Start writing</Button>
+                    {/snippet}
+                  </EmptyState>
+                {/if}
+              </div>
             {/if}
           </div>
         </div>
@@ -2470,39 +2586,23 @@ import type { PresentationMode } from '../services/settings-types';
   .panes.split .preview {
     padding-inline: var(--page-x);
   }
-  .preview-empty {
-    margin: var(--space-6) 0;
-    color: var(--text-muted);
-    font-size: var(--text-sm);
+  /*
+   * The blank and failed states: the house `EmptyState`, in the reading
+   * column. Beside the source it is the compact one, pulled out to the pane's
+   * own inset so its first line sits level with the source's first line and its
+   * text on the column edge the document's text uses, rather than inset by the
+   * message's padding on top of the pane's.
+   */
+  .preview-state {
+    width: 100%;
+    max-width: var(--prose-measure);
   }
-
-  /* A failed compile, which used to be indistinguishable from a blank
-     document because both render no blocks. */
-  .preview-failed {
-    margin: var(--space-6) 0;
-    max-width: 52ch;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-  .preview-failed-title {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--danger);
-  }
-  .preview-failed-body {
-    margin: 0;
-    font-size: var(--text-sm);
-    line-height: var(--lh-label);
-    color: var(--text-secondary);
-  }
-  .preview-failed-detail {
-    margin: 0;
-    font-size: var(--text-meta);
-    line-height: var(--lh-meta);
-    color: var(--text-muted);
-    font-family: var(--font-mono);
+  .preview-state.compact {
+    /* Stretched rather than centred: the pane centres its column, and a centred
+       box splits a negative margin evenly between its two sides. */
+    align-self: stretch;
+    width: auto;
+    margin: calc(-1 * var(--space-5)) calc(-1 * var(--space-4)) 0;
   }
 
   /* Outline / vocabulary rail — warm chrome, seam on the left via border on
