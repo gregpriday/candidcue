@@ -56,7 +56,12 @@ import { startTake, takeStarting, type TakePartRequest } from '../lib/start-take
   import { openSyntaxReference } from '../stores/syntax-reference';
 import type { PresentationMode } from '../services/settings-types';
   import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
-  import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
+  import {
+    describeSectionTime,
+    estimateDurationSeconds,
+    formatSectionTime,
+    formatSpeakingDuration,
+  } from '../lib/format';
   import { sectionWordCounts } from '../lib/outline-words';
   import {
     beginImageResolution,
@@ -1233,18 +1238,365 @@ import type { PresentationMode } from '../services/settings-types';
     });
   }
 
-  function blockFor(node: OutlineNode): CompiledBlock | undefined {
-    return blocks.find((b) => b.id === node.blockId);
+  /* --- Outline rail ---------------------------------------------------- */
+
+  /**
+   * One row of the outline, in document order, with where its section starts
+   * in the SOURCE.
+   *
+   * Source offsets, not token indexes, decide which section the caret is in:
+   * a heading with nothing spoken under it starts at the same token as the
+   * heading after it, so by tokens the two are the same place and the empty
+   * one could never be current. The compiler's synthetic "Opening" (prose
+   * before the first heading) has no block of its own and starts at the top.
+   */
+  interface OutlineEntry {
+    node: OutlineNode;
+    depth: number;
+    start: number;
+    seconds: number;
   }
 
-  function outlineNavigate(node: OutlineNode): void {
-    const block = blockFor(node);
-    if (block) {
-      goToOffset(block.source.utf16Start);
-      const target = previewScroller?.querySelector(`[data-block-id="${block.id}"]`);
-      target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  const outlineEntries = $derived.by(() => {
+    const starts = new Map(blocks.map((b) => [b.id, b.source.utf16Start]));
+    const flat: OutlineEntry[] = [];
+    const walk = (nodes: OutlineNode[], depth: number): void => {
+      for (const node of nodes) {
+        // A section with one word in it is short, not empty: the estimate
+        // rounds one word to zero seconds, and zero is reserved for a section
+        // with nothing spoken in it at all.
+        const words = sectionWords.get(node.id) ?? 0;
+        flat.push({
+          node,
+          depth,
+          start: node.blockId === '' ? 0 : (starts.get(node.blockId) ?? 0),
+          seconds: words > 0 ? Math.max(1, estimateDurationSeconds(words, speakingRate)) : 0,
+        });
+        walk(node.children, depth + 1);
+      }
+    };
+    walk(outline, 0);
+    return flat;
+  });
+  const outlineEntryById = $derived(new Map(outlineEntries.map((e) => [e.node.id, e])));
+
+  /*
+   * Headings somebody actually wrote. A script without any compiles to one
+   * synthetic "Script" node spanning everything, and the rail used to list it
+   * as a row that went nowhere when clicked — under a heading that said
+   * "Outline", in place of the sentence explaining how to get one.
+   */
+  const hasHeadings = $derived(outlineEntries.some((e) => e.node.blockId !== ''));
+
+  /** The section the caret is in: the last one starting at or before it. */
+  const caretSectionId = $derived.by(() => {
+    let current: string | null = null;
+    for (const entry of outlineEntries) {
+      if (entry.start <= caretOffset) current = entry.node.id;
+      else break;
     }
+    return current;
+  });
+
+  /*
+   * In Preview there is no caret to follow — the place you are is what you are
+   * reading. So Preview reads its own scroll: the last heading at or above the
+   * top of the pane. A jump the rail made sets the answer itself and holds it
+   * for the two frames its own scroll event takes to arrive, so a short last
+   * section that cannot reach the top is not immediately re-read as the one
+   * above it.
+   */
+  let previewSectionId = $state<string | null>(null);
+  let previewJumpPending = false;
+
+  function readPreviewSection(): void {
+    const scroller = previewScroller;
+    if (!scroller || previewJumpPending) return;
+    const edge = scroller.getBoundingClientRect().top + paddingTop(scroller) + 1;
+    let current: string | null = outlineEntries[0]?.node.id ?? null;
+    for (const entry of outlineEntries) {
+      if (entry.node.blockId === '') continue;
+      const heading = scroller.querySelector(`[data-block-id="${entry.node.blockId}"]`);
+      if (!heading) continue;
+      if (heading.getBoundingClientRect().top <= edge) current = entry.node.id;
+      else break;
+    }
+    previewSectionId = current;
   }
+
+  $effect(() => {
+    const scroller = previewScroller;
+    if (!scroller || layout !== 'preview') return;
+    void outlineEntries;
+    let frame = 0;
+    const onScroll = (): void => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(readPreviewSection);
+    };
+    void tick().then(() => untrack(readPreviewSection));
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      scroller.removeEventListener('scroll', onScroll);
+    };
+  });
+
+  const currentSectionId = $derived(
+    layout === 'preview' ? (previewSectionId ?? caretSectionId) : caretSectionId,
+  );
+
+  /*
+   * The current row stays on screen in the rail. Only when it CHANGES, and
+   * only as far as it has to (`nearest`): someone scrolling the rail to look
+   * at the end of the script must not be dragged back while they read it.
+   */
+  let outlineScroller: HTMLElement | null = $state(null);
+  $effect(() => {
+    const id = currentSectionId;
+    const scroller = outlineScroller;
+    if (id === null || !scroller) return;
+    void tick().then(() => revealOutlineRow(id));
+  });
+
+  /*
+   * Where the rail last scrolled ITSELF to. A scroll event that arrives at this
+   * position is the rail revealing a row, not somebody scrolling it — and only
+   * somebody scrolling it closes the opened-out title (`outlinePeek`).
+   */
+  let railScrolledTo: number | null = null;
+
+  /** Bring a row fully into the rail's view, as far as it has to move and no further. */
+  function revealOutlineRow(id: string): HTMLElement | null {
+    const scroller = outlineScroller;
+    const row = scroller?.querySelector<HTMLElement>(`[data-outline-id="${id}"]`) ?? null;
+    if (!scroller || !row) return row;
+    const view = scroller.getBoundingClientRect();
+    const box = row.getBoundingClientRect();
+    if (box.top < view.top) scroller.scrollTop -= view.top - box.top;
+    else if (box.bottom > view.bottom) scroller.scrollTop += box.bottom - view.bottom;
+    // Recorded even when nothing moved here: Tab focus scrolls the row in by
+    // itself before the focus handler runs, and its scroll event arrives
+    // afterwards at exactly this position.
+    railScrolledTo = scroller.scrollTop;
+    return row;
+  }
+
+  function onRailScroll(): void {
+    if (outlineScroller !== null && outlineScroller.scrollTop === railScrolledTo) return;
+    railScrolledTo = null;
+    outlinePeek = null;
+  }
+
+  function paddingTop(el: Element): number {
+    return parseFloat(getComputedStyle(el).paddingTop) || 0;
+  }
+
+  /*
+   * A heading the rail jumps to comes to rest where the first line of the
+   * script sits when nothing is scrolled: at the pane's own top padding. That
+   * is the one position a reader already knows means "the start of this".
+   *
+   * Instant, in every pane, rather than smooth. A smooth jump through four
+   * minutes of script is motion nobody asked for (and it ignored reduced
+   * motion outright), and it is a jump the rail would otherwise watch pass
+   * through every heading on the way.
+   */
+  function revealInEditor(offset: number, focus: boolean): void {
+    withView((view) => {
+      const pos = Math.min(offset, view.state.doc.length);
+      const reveal = () =>
+        EditorView.scrollIntoView(pos, { y: 'start', yMargin: paddingTop(view.contentDOM) });
+      view.dispatch({ selection: { anchor: pos }, effects: reveal() });
+      if (focus) view.focus();
+      /*
+       * Twice, a frame apart. Wrapped lines off screen have ESTIMATED heights,
+       * so the first scroll lands wherever the estimate says the heading is —
+       * in a long script, a section or more short of it. By the next frame the
+       * editor has drawn and measured the lines it scrolled to, and the second
+       * scroll lands on the heading itself.
+       */
+      requestAnimationFrame(() => view.dispatch({ effects: reveal() }));
+    });
+  }
+
+  function revealInPreview(entry: OutlineEntry): void {
+    const scroller = previewScroller;
+    if (!scroller) return;
+    const heading =
+      entry.node.blockId === ''
+        ? null
+        : scroller.querySelector<HTMLElement>(`[data-block-id="${entry.node.blockId}"]`);
+    const top = heading
+      ? heading.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop -
+        paddingTop(scroller)
+      : 0;
+    previewSectionId = entry.node.id;
+    previewJumpPending = true;
+    scroller.scrollTop = Math.max(0, top);
+    requestAnimationFrame(() => requestAnimationFrame(() => (previewJumpPending = false)));
+  }
+
+  function outlineNavigate(entry: OutlineEntry): void {
+    // In Preview the editor is hidden: its caret still moves, so going back to
+    // Edit lands here too, but focus stays in the rail rather than vanishing
+    // into a pane nobody can see.
+    revealInEditor(entry.start, layout !== 'preview');
+    if (layout !== 'edit') revealInPreview(entry);
+  }
+
+  /*
+   * ONE tab stop, like every source list in the app (Sidebar.svelte, §23.1).
+   *
+   * Tab lands on the current section and the arrows walk the rest. Eighteen
+   * headings as eighteen tab stops was eighteen presses to get past the rail
+   * to the notes and the readiness line under it.
+   */
+  let outlineFocusId = $state<string | null>(null);
+  const outlineTabStopId = $derived(
+    outlineFocusId ?? currentSectionId ?? outlineEntries[0]?.node.id ?? null,
+  );
+
+  /*
+   * Reveal FIRST, then focus without the browser's own scroll. Focus scrolled
+   * an off-screen row into view by itself, and that scroll closed the
+   * opened-out title the same focus had just opened — so the rows most likely
+   * to need it, the ones arrowed onto past the bottom of the rail, never showed
+   * it.
+   */
+  function focusOutlineRow(id: string): void {
+    outlineFocusId = id;
+    revealOutlineRow(id)?.focus({ preventScroll: true });
+  }
+
+  function outlineKeydown(event: KeyboardEvent, id: string): void {
+    if (event.key === 'Escape' && outlinePeek !== null) {
+      event.preventDefault();
+      outlinePeek = null;
+      return;
+    }
+    const ids = outlineEntries.map((e) => e.node.id);
+    const index = ids.indexOf(id);
+    let next: number;
+    switch (event.key) {
+      case 'ArrowDown':
+        next = (index + 1) % ids.length;
+        break;
+      case 'ArrowUp':
+        next = (index - 1 + ids.length) % ids.length;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = ids.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const target = ids[next];
+    if (target !== undefined) focusOutlineRow(target);
+  }
+
+  /*
+   * The full title, offered only when the row has cut it short — measured when
+   * the pointer arrives, the way a Library row does it (ScriptRow.svelte).
+   */
+  let outlineTip = $state<{ id: string; text: string } | null>(null);
+
+  function titleIsCut(row: HTMLElement): boolean {
+    const title = row.querySelector<HTMLElement>('.outline-title');
+    return title !== null && title.scrollHeight > title.clientHeight + 1;
+  }
+
+  function measureOutlineTitle(row: HTMLElement, node: OutlineNode): void {
+    outlineTip = titleIsCut(row) ? { id: node.id, text: node.title } : null;
+  }
+
+  /*
+   * …and the same title for somebody arriving by KEYBOARD, who gets no
+   * tooltip. The focused row opens out in place to its full length, drawn over
+   * the rows below it rather than pushing them down, so arrowing through the
+   * rail never makes the list jump. Fixed-position, so the rail's scroll box
+   * cannot clip it; it carries the row's focus edge, because it covers the row
+   * that would otherwise show one. Escape, a scroll, or leaving the row closes
+   * it. Pointer focus does not open it — the tooltip is the pointer's.
+   */
+  let outlinePeek = $state<{
+    entry: OutlineEntry;
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+
+  /*
+   * Kept inside the window. The overlay grows DOWN from the row, so a long
+   * title focused near the bottom of a short window would run off it; measured
+   * once it has drawn, and lifted just far enough to fit. It moves, the list
+   * does not.
+   */
+  let outlinePeekEl: HTMLElement | null = $state(null);
+  let outlinePeekTop = $state<number | null>(null);
+
+  $effect(() => {
+    const peek = outlinePeek;
+    const el = outlinePeekEl;
+    if (!peek || !el) {
+      outlinePeekTop = null;
+      return;
+    }
+    const margin = 8;
+    const overflow = peek.top + el.offsetHeight - (window.innerHeight - margin);
+    outlinePeekTop = overflow > 0 ? Math.max(margin, peek.top - overflow) : peek.top;
+  });
+
+  function offerOutlinePeek(row: HTMLElement, entry: OutlineEntry): void {
+    if (!row.matches(':focus-visible') || !titleIsCut(row)) {
+      outlinePeek = null;
+      return;
+    }
+    const box = row.getBoundingClientRect();
+    outlinePeek = { entry, top: box.top, left: box.left, width: box.width };
+  }
+
+  /** What a row says to a screen reader: the whole title, then its length. */
+  function outlineRowLabel(entry: OutlineEntry): string {
+    const length = describeSectionTime(entry.seconds);
+    const scope = entry.node.children.length > 0 && entry.seconds > 0 ? ', including subsections' : '';
+    return `${entry.node.title || 'Untitled heading'}, ${length}${scope}`;
+  }
+
+  /** The time column's own tooltip. */
+  function outlineTimeTip(entry: OutlineEntry): string {
+    const length = describeSectionTime(entry.seconds);
+    const sentence = length.charAt(0).toUpperCase() + length.slice(1);
+    return entry.node.children.length > 0 && entry.seconds > 0
+      ? `${sentence} to say, including subsections`
+      : entry.seconds > 0
+        ? `${sentence} to say`
+        : 'Nothing spoken in this section';
+  }
+
+  /*
+   * §parts and cues, in the rail's head rather than under the list.
+   *
+   * Under the list they scrolled away with it on exactly the scripts long
+   * enough to have parts worth counting. Parts rather than the take-marker
+   * count this replaced: a script with no markers still has parts, divided on
+   * its headings, so it is the number that means something for every script.
+   * Each count appears only when there is something to count — "0 cues" told
+   * nobody anything.
+   */
+  const outlineCounts = $derived(
+    [
+      parts.length > 0 ? `${parts.length} ${parts.length === 1 ? 'part' : 'parts'}` : '',
+      cueCount > 0 ? `${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
 
   /**
    * Preview click returns to Edit mode at the block's source (§13.2).
@@ -1257,22 +1609,6 @@ import type { PresentationMode } from '../services/settings-types';
   async function previewBlockClick(block: CompiledBlock): Promise<void> {
     await ensureEditingSurface();
     goToOffset(block.source.utf16Start);
-  }
-
-  /** A section's length at the rate the whole script was estimated at. */
-  function sectionDuration(node: OutlineNode): string {
-    return formatSpeakingDuration(
-      estimateDurationSeconds(sectionWords.get(node.id) ?? 0, speakingRate),
-    );
-  }
-
-  function flattenOutline(nodes: OutlineNode[], depth = 0): Array<{ node: OutlineNode; depth: number }> {
-    const flat: Array<{ node: OutlineNode; depth: number }> = [];
-    for (const node of nodes) {
-      flat.push({ node, depth });
-      flat.push(...flattenOutline(node.children, depth + 1));
-    }
-    return flat;
   }
 
   async function revealFolder(): Promise<void> {
@@ -1777,6 +2113,61 @@ import type { PresentationMode } from '../services/settings-types';
   }
 </script>
 
+<!--
+  One level of the outline, and the levels under it.
+
+  Three voices for four-plus levels: a top-level section in semibold, the level
+  under it in regular weight, and anything deeper in the secondary grey. The
+  indent says how deep; the voice says which rows are the script's big pieces,
+  without anybody having to trace left edges down the rail.
+-->
+{#snippet outlineBranch(nodes: OutlineNode[], depth: number)}
+  <!-- `role="list"` is not redundant: WebKit drops list semantics from a
+       `<ul>` whose markers are styled away (see Welcome.svelte). -->
+  <ul class="outline" class:nested={depth > 0} role="list">
+    {#each nodes as node (node.id)}
+      {@const entry = outlineEntryById.get(node.id)}
+      {#if entry}
+        {@const current = currentSectionId === node.id}
+        <li class="outline-node" class:part={depth === 0} class:branch={node.children.length > 0}>
+          <button
+            type="button"
+            class="outline-item level-{Math.min(depth, 2)}"
+            class:current
+            data-outline-id={node.id}
+            aria-current={current ? 'location' : undefined}
+            aria-label={outlineRowLabel(entry)}
+            title={outlineTip?.id === node.id ? outlineTip.text : undefined}
+            tabindex={outlineTabStopId === node.id ? 0 : -1}
+            style="padding-left: {10 + depth * 14}px"
+            onclick={() => outlineNavigate(entry)}
+            onkeydown={(event) => outlineKeydown(event, node.id)}
+            onfocus={(event) => {
+              outlineFocusId = node.id;
+              revealOutlineRow(node.id);
+              offerOutlinePeek(event.currentTarget, entry);
+            }}
+            onblur={() => {
+              if (outlinePeek?.entry.node.id === node.id) outlinePeek = null;
+            }}
+            onpointerenter={(event) => measureOutlineTitle(event.currentTarget, node)}
+          >
+            <span class="outline-title" class:untitled={node.title === ''}>
+              {node.title || 'Untitled heading'}
+            </span>
+            <span class="outline-time" class:zero={entry.seconds <= 0} title={outlineTimeTip(entry)}>
+              {formatSectionTime(entry.seconds)}
+            </span>
+          </button>
+          {#if node.children.length > 0}
+            {@render outlineBranch(node.children, depth + 1)}
+          {/if}
+        </li>
+      {/if}
+    {/each}
+  </ul>
+{/snippet}
+
 <div class="page">
   {#if opening}
     <!--
@@ -2059,45 +2450,54 @@ import type { PresentationMode } from '../services/settings-types';
         <aside class="panel" aria-label="Outline" style="width: {$workspace.outlineWidth}px">
           <div class="panel-head">
             <p class="panel-title">Outline</p>
+            {#if hasHeadings && outlineCounts !== ''}
+              <p class="panel-count">{outlineCounts}</p>
+            {/if}
           </div>
 
-          <div class="panel-body">
-              {#if outline.length > 0}
-                <ul class="outline">
-                  {#each flattenOutline(outline) as entry (entry.node.id)}
-                    <li>
-                      <button
-                        type="button"
-                        class="outline-item"
-                        style="padding-left: {10 + entry.depth * 14}px"
-                        onclick={() => outlineNavigate(entry.node)}
-                      >
-                        <span class="outline-title">{entry.node.title}</span>
-                        <span class="outline-meta">{sectionDuration(entry.node)}</span>
-                      </button>
-                    </li>
-                  {/each}
-                </ul>
-                <p class="panel-meta">
-                  {cueCount}
-                  {cueCount === 1 ? 'cue' : 'cues'}
-                  <!--
-                    Parts rather than the take-marker count this replaced. They
-                    are not the same number — a script with no markers still has
-                    parts, divided on its headings — and of the two it is the one
-                    that means something for every script. Two counts describing
-                    the same authored marks, in two vocabularies, was the worse
-                    half of the pair.
-                  -->
-                  {#if parts.length > 0}
-                    · {parts.length}
-                    {parts.length === 1 ? 'part' : 'parts'}
-                  {/if}
+          <div class="panel-body" bind:this={outlineScroller} onscroll={onRailScroll}>
+            {#if hasHeadings}
+              <!--
+                Nested lists, so the structure a sighted reader gets from the
+                indents is the structure a screen reader is told: "list, 3
+                items" inside the part they belong to. The indent lives inside
+                each full-width button, so the space left of a deep row is still
+                that row's to click.
+              -->
+              <nav
+                class="outline-nav"
+                aria-label="Sections"
+                onfocusout={(event) => {
+                  const next = event.relatedTarget;
+                  if (!(next instanceof Node) || !event.currentTarget.contains(next)) outlineFocusId = null;
+                }}
+              >
+                {@render outlineBranch(outline, 0)}
+              </nav>
+            {:else if result && !compileFailed}
+              <div class="outline-empty">
+                <p class="outline-empty-title">No headings yet</p>
+                <p class="outline-empty-hint">
+                  Start a line with <kbd>#</kbd> and a space to add a section.
                 </p>
-              {:else}
-                <p class="panel-empty">Headings appear here as you write.</p>
-              {/if}
+              </div>
+            {/if}
           </div>
+
+          {#if outlinePeek}
+            {@const peek = outlinePeek}
+            <div
+              class="outline-peek level-{Math.min(peek.entry.depth, 2)}"
+              class:current={currentSectionId === peek.entry.node.id}
+              aria-hidden="true"
+              bind:this={outlinePeekEl}
+              style="top: {outlinePeekTop ?? peek.top}px; left: {peek.left}px; width: {peek.width}px; padding-left: {10 +
+                peek.entry.depth * 14}px"
+            >
+              <span class="outline-peek-title">{peek.entry.node.title}</span>
+              <span class="outline-time">{formatSectionTime(peek.entry.seconds)}</span>
+            </div>
+          {/if}
 
           <!-- Advisory only, and placed accordingly: above the compile status
                rather than inside it, so prose advice never sits in the same list
@@ -2513,10 +2913,10 @@ import type { PresentationMode } from '../services/settings-types';
        inline width is what decides, rather than being a basis flex can override. */
     flex: 0 0 auto;
     /* A flex item's automatic minimum is its CONTENT's minimum, and a heading
-       row is `white-space: nowrap` — so one long headline made the rail's
+       row was `white-space: nowrap` — so one long headline made the rail's
        min-content width the width of that headline and the basis above stopped
        meaning anything. The rail grew to ~750px and took the editor's column
-       with it. The row still ellipsizes; this is what lets it. */
+       with it. Rows clamp to two lines now; this is still what lets them. */
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -2526,6 +2926,10 @@ import type { PresentationMode } from '../services/settings-types';
        two-pixel rule with a seam down the middle. */
   }
   .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
     padding: var(--space-3) var(--space-4) var(--space-2);
   }
   /* The rail's section label. Sized here rather than left to the UA, which
@@ -2536,6 +2940,16 @@ import type { PresentationMode } from '../services/settings-types';
     font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-secondary);
+  }
+  .panel-count {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-meta);
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
   }
   /* ONE text edge for the whole rail.
      A row carries a 10px inset of its own so its hover pill has somewhere to
@@ -2562,51 +2976,161 @@ import type { PresentationMode } from '../services/settings-types';
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
   }
+  .outline.nested {
+    margin-top: 1px;
+  }
+  /* A little air around each top-level section that has sections of its own,
+     so the script reads as its parts before it reads as its rows. Only around
+     branches: a script of flat headings stays one even column. */
+  .outline-node.part.branch + .outline-node.part,
+  .outline-node.part + .outline-node.part.branch {
+    margin-top: var(--space-2);
+  }
+
+  /* The house source-list row (Sidebar.svelte): 30px, a 5px radius, primary
+     text, a neutral hover — with two lines allowed for the title. One line cut
+     a deep heading in a narrow rail down to "Fallback i…", which named
+     nothing; two lines let almost every real heading be read without a hover,
+     and the few longer ones still end in an ellipsis with the full title on
+     hover. The left padding is inline: 10px plus 14px per level. */
   .outline-item {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--space-2);
+    gap: var(--space-3);
     width: 100%;
-    min-height: 30px;
-    padding: var(--space-1) 10px;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
+    min-height: var(--source-row-h);
+    padding-block: 6px;
+    padding-right: 10px;
+    border: none;
+    border-radius: 5px;
     background: transparent;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: var(--text-sm);
+    line-height: var(--lh-label);
     text-align: left;
     transition:
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
   }
+  .outline-item.level-0 {
+    font-weight: 600;
+  }
+  .outline-item.level-1 {
+    font-weight: 400;
+  }
+  .outline-item.level-2 {
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
   .outline-item:hover {
     background: var(--bg-hover-chrome);
     color: var(--text-primary);
   }
-  .outline-title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
+  /*
+   * Where the caret is (or, in Preview, what is at the top of the pane): the
+   * neutral fill and 600 text every source list uses for "you are here". No
+   * bar and no clay — see Sidebar.svelte for why.
+   *
+   * The time goes to primary too. On this fill the faint grey measures 4.25:1,
+   * under the floor the rest of the column clears.
+   */
+  .outline-item.current,
+  .outline-item.current:hover {
+    background: var(--bg-source-selected);
+    color: var(--text-primary);
+    font-weight: 600;
   }
-  .outline-meta {
+  .outline-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .outline-title.untitled {
+    font-style: italic;
+    color: var(--text-muted);
+  }
+  .outline-time {
     flex: 0 0 auto;
-    font-size: var(--text-2xs);
+    font-size: var(--text-xs);
+    font-weight: 400;
     color: var(--text-faint);
     font-variant-numeric: tabular-nums;
   }
+  .outline-item.current .outline-time {
+    color: var(--text-primary);
+  }
 
-  /* Plain text in the rail: no pill of its own, so it pays the row inset
-     itself and lands on the same edge as the rows and the label. */
-  .panel-meta {
+  /* The focused row, opened out to its full title (see `offerOutlinePeek`).
+     The row's own type and padding, so it reads as that row grown rather than
+     as a tooltip; the floating surface and shadow say it sits over the rows
+     beneath. */
+  .outline-peek {
+    position: fixed;
+    z-index: 20;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-block: 6px;
+    padding-right: 10px;
+    border-radius: 5px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-pop);
+    outline: 2px solid var(--focus-quiet);
+    outline-offset: -2px;
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    pointer-events: none;
+  }
+  .outline-peek.level-0,
+  .outline-peek.current {
+    font-weight: 600;
+  }
+  .outline-peek.level-2:not(.current) {
+    color: var(--text-secondary);
+  }
+  .outline-peek-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* No headings yet: what the rail is for, and the one keystroke that starts
+     it. Plain text on the rail's edge — there is nothing here to click. */
+  .outline-empty {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--rail-pill-inset, 10px) 0;
+  }
+  /* Primary and regular weight: in the label's own grey and weight it read as
+     a second "Outline" heading rather than as what the rail has to say. */
+  .outline-empty-title {
     margin: 0;
-    padding: 0 var(--rail-pill-inset, 10px);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .outline-empty-hint {
+    margin: 0;
     font-size: var(--text-meta);
+    line-height: var(--lh-meta);
     color: var(--text-muted);
+  }
+  .outline-empty-hint kbd {
+    font-family: var(--font-mono);
+    font-size: var(--text-meta);
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .vocab {
@@ -2652,13 +3176,6 @@ import type { PresentationMode } from '../services/settings-types';
   .vocab-generated {
     font-size: var(--text-2xs);
     color: var(--accent-strong);
-  }
-  .panel-empty {
-    margin: 0;
-    padding: 0 var(--rail-pill-inset, 10px);
-    font-size: var(--text-sm);
-    line-height: var(--lh-label);
-    color: var(--text-muted);
   }
   .panel-note {
     margin: 0;

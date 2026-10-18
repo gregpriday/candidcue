@@ -37,6 +37,35 @@ export function formatSpeakingDuration(seconds: number): string {
   return `≈ ${minutes} min`;
 }
 
+/**
+ * A section's length for the outline's time column: "1:30", "0:20", "0:00".
+ *
+ * Minutes and seconds rather than `formatSpeakingDuration`'s whole minutes,
+ * because the column is read down its length to decide what to cut, and whole
+ * minutes gave 90 seconds and 149 seconds the same "≈ 2 min". Five-second steps
+ * are as fine as an estimate at a speaking rate deserves. A section with nothing
+ * spoken in it is a real zero, not an unknown, so it says so.
+ */
+export function formatSectionTime(seconds: number): string {
+  if (seconds <= 0) return '0:00';
+  const rounded = Math.max(5, Math.round(seconds / 5) * 5);
+  const minutes = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+/** The same length in words, for a screen reader and a tooltip. */
+export function describeSectionTime(seconds: number): string {
+  if (seconds <= 0) return 'no spoken text';
+  const rounded = Math.max(5, Math.round(seconds / 5) * 5);
+  const minutes = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  const parts: string[] = [];
+  if (minutes > 0) parts.push(`${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`);
+  if (rest > 0) parts.push(`${rest} seconds`);
+  return `about ${parts.join(' ')}`;
+}
+
 /** Compiled statistics behind the editor's metadata line. */
 export interface ScriptMetaCounts {
   wordCount: number;
