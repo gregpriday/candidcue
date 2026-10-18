@@ -351,6 +351,38 @@ export function conflictCopyTitle(title: string): string {
 export interface ConflictOutcome {
   /** Whether the editor's text was filed as a separate script. */
   copied: boolean;
+  /** That script, so the toast can open it. */
+  copyId?: string;
+}
+
+/**
+ * The disk text the author was shown when they chose.
+ *
+ * The sheet describes the file as it was when it opened. If the file changes
+ * again before a button is pressed, acting anyway would load — or overwrite —
+ * a version nobody looked at, so an arm handed this refuses instead.
+ */
+export interface ReviewedDisk {
+  source: string;
+}
+
+/**
+ * A script whose Revision history should open as soon as an editor shows it.
+ *
+ * The receipt for "Keep my edits" offers that history, and a receipt stays up
+ * until dismissed — so it can be pressed after the author has moved to another
+ * script or left the editor. It names the script it belongs to and the editor
+ * showing that script answers it, rather than whichever editor happens to be
+ * mounted.
+ */
+export const revisionHistoryRequest = writable<string | null>(null);
+
+/** The file changed again between the review and the choice. Nothing was done. */
+export class DiskChangedAgainError extends Error {
+  constructor() {
+    super('The file changed again while you were choosing.');
+    this.name = 'DiskChangedAgainError';
+  }
 }
 
 /**
@@ -394,10 +426,11 @@ function isStillCurrent(started: EditorState): boolean {
  * version, which is why the text lands in the Library rather than in this
  * script's history.
  */
-export async function useDiskVersion(): Promise<ConflictOutcome> {
+export async function useDiskVersion(reviewed?: ReviewedDisk): Promise<ConflictOutcome> {
   const s = get(state);
   if (s.scriptId === null) throw new Error('No script is open.');
   const disk = await scriptsService.getScript(s.scriptId);
+  if (reviewed && disk.source !== reviewed.source) throw new DiskChangedAgainError();
 
   /*
    * Title as well as body: `setTitle` writes the new name into the store
@@ -405,15 +438,17 @@ export async function useDiskVersion(): Promise<ConflictOutcome> {
    * change is unsaved work too, and comparing only the source would drop it.
    */
   const copied = s.source !== disk.source || s.title !== disk.title;
+  let copyId: string | undefined;
   if (copied) {
-    await scriptsService.createScript({
+    const copy = await scriptsService.createScript({
       title: conflictCopyTitle(s.title),
       source: s.source,
     });
+    copyId = copy.id;
   }
-  if (!isStillCurrent(s)) return { copied };
+  if (!isStillCurrent(s)) return { copied, copyId };
   adoptDocument(disk);
-  return { copied };
+  return { copied, copyId };
 }
 
 /**
@@ -433,17 +468,24 @@ export async function useDiskVersion(): Promise<ConflictOutcome> {
  * over the text the first press had just rescued. The editor already holds
  * exactly what was written, so the revision the save returns is all it needs.
  */
-export async function keepEditorVersion(): Promise<ConflictOutcome> {
+export async function keepEditorVersion(reviewed?: ReviewedDisk): Promise<ConflictOutcome> {
   const s = get(state);
   if (s.scriptId === null) throw new Error('No script is open.');
   const disk = await scriptsService.getScript(s.scriptId);
-  const result = await scriptsService.saveScript(s.scriptId, disk.scriptRevision, s.source, {
-    title: s.title,
-  });
-  // Only the mock backend answers a conflict by value; see `saveNow`.
-  if (result.status === 'conflict') {
-    throw new Error('This script changed on disk again. Review the versions once more.');
+  if (reviewed && disk.source !== reviewed.source) throw new DiskChangedAgainError();
+  let result: Awaited<ReturnType<typeof scriptsService.saveScript>>;
+  try {
+    result = await scriptsService.saveScript(s.scriptId, disk.scriptRevision, s.source, {
+      title: s.title,
+    });
+  } catch (err) {
+    // Refused because the file moved again between that read and this write:
+    // the same news as the check above, arriving later.
+    if (errorCode(err) === 'SCRIPT_CONFLICT') throw new DiskChangedAgainError();
+    throw err;
   }
+  // Only the mock backend answers a conflict by value; see `saveNow`.
+  if (result.status === 'conflict') throw new DiskChangedAgainError();
   if (!isStillCurrent(s)) return { copied: false };
   state.update((prev) => ({
     ...prev,

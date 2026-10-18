@@ -62,7 +62,7 @@ test('the conflict dialog traps focus and returns it to the opener on Escape', a
   }
 
   // Shift+Tab from the first control wraps to the last ("Keep my edits").
-  await dialog.getByRole('button', { name: 'Use disk version' }).focus();
+  await dialog.getByRole('button', { name: 'Back to the script' }).focus();
   await page.keyboard.press('Shift+Tab');
   await expect(dialog.getByRole('button', { name: 'Keep my edits' })).toBeFocused();
 
