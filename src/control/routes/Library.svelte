@@ -634,15 +634,23 @@
           label: shown === 1 ? '1 script' : `${shown.toLocaleString()} scripts`,
         });
       }
-      if ($library.query.trim() !== '') {
-        items.push({ key: 'filter', label: `Filtered by “${$library.query.trim()}”` });
+      const query = $library.query.trim();
+      if (query !== '') {
+        // Shortened here rather than left to the bar's ellipsis, which would
+        // cut the closing quote off and leave the phrase open-ended.
+        const shown = query.length > 28 ? `${query.slice(0, 27).trimEnd()}…` : query;
+        items.push({ key: 'filter', label: `Filtered by “${shown}”`, title: query });
       }
       return items;
     })(),
   );
 
+  // Named as the selection: a bare title in the bar beside a search phrase
+  // read as more of the search.
   const trailingStatus = $derived<StatusBarItem[]>(
-    selected ? [{ key: 'selected', label: selected.title, title: selected.title }] : [],
+    selected
+      ? [{ key: 'selected', label: `Selected: ${selected.title}`, title: selected.title }]
+      : [],
   );
 
   type Column = 'name' | 'length' | 'date';

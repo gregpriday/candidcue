@@ -484,62 +484,163 @@ import type { PresentationMode } from '../services/settings-types';
   const statusItems = $derived<StatusBarItem[]>(
     (() => {
       const items: StatusBarItem[] = [];
+      /*
+       * The counts stay up while the next compile is in flight. One runs about
+       * 90 ms after every pause in typing, and swapping the counts for "Reading
+       * the script…" each time took the number away at exactly the moment
+       * somebody glanced down for it. They are one compile behind for that
+       * moment, which is the same trade the outline and the lint notes make.
+       * Only a script with no compile of its own yet says it is being read.
+       */
+      const counted = result !== null && result.scriptId === scriptId;
       if (compileFailed) {
         items.push({
           key: 'compile',
           label: 'Could not render',
           icon: 'alert',
           tone: 'danger',
-          title: compileErrorDetail ?? undefined,
+          title: compileErrorDetail || undefined,
         });
-      } else if ($compiled.status === 'compiling') {
-        items.push({ key: 'compile', label: 'Reading the script…' });
-      } else if ($compiled.status === 'ready') {
+      } else if (counted) {
         items.push({
           key: 'words',
           label: `${wordCount.toLocaleString()} ${wordCount === 1 ? 'word' : 'words'}`,
         });
-        items.push({ key: 'duration', label: formatSpeakingDuration(durationSeconds) });
+        // No length to estimate from no words, and a lone "—" says nothing.
+        if (wordCount > 0) {
+          items.push({ key: 'duration', label: formatSpeakingDuration(durationSeconds) });
+        }
         if (cueCount > 0) {
           items.push({ key: 'cues', label: `${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}` });
         }
+      } else if ($compiled.status === 'compiling') {
+        items.push({ key: 'compile', label: 'Reading the script…' });
       }
       if (diagnostics.length > 0) {
+        /*
+         * Both severities, each in its own tone. Reporting only the errors hid
+         * the notes until the errors were fixed, so "1 issue" turned into
+         * "2 notes" — work that had been there all along.
+         */
         const errors = diagnostics.filter((d) => d.severity === 'error').length;
+        const notes = diagnostics.length - errors;
+        const parts: StatusBarItem['parts'] = [];
+        if (errors > 0) {
+          parts.push({
+            key: 'errors',
+            label: `${errors} ${errors === 1 ? 'error' : 'errors'}`,
+            icon: 'alert',
+            tone: 'danger',
+          });
+        }
+        if (notes > 0) {
+          parts.push({
+            key: 'notes',
+            label: `${notes} ${notes === 1 ? 'note' : 'notes'}`,
+            icon: 'info',
+            tone: 'warning',
+          });
+        }
         items.push({
           key: 'issues',
-          label:
-            errors > 0
-              ? `${errors} ${errors === 1 ? 'issue' : 'issues'}`
-              : `${diagnostics.length} ${diagnostics.length === 1 ? 'note' : 'notes'}`,
-          icon: errors > 0 ? 'alert' : 'info',
-          tone: errors > 0 ? 'danger' : 'warning',
-          // Clicking opens the panel that lists them, which is a meaningful
+          label: '',
+          parts,
+          title: 'Show in the outline',
+          // Clicking goes to the list of them, which is a meaningful
           // destination — so, and only so, this one is a button (§11.7).
-          onclick: () => updateWorkspace({ outlineVisible: true }),
+          onclick: () => void showDiagnostics(errors > 0),
         });
       }
       return items;
     })(),
   );
 
+  /**
+   * Open the outline and put focus on the first diagnostic in it.
+   *
+   * Opening alone did nothing at all when the outline was already open, which
+   * is most of the time, and left a keyboard user in the status bar rather
+   * than on something they could fix. The first error when there is one,
+   * because that is the one stopping the script.
+   */
+  async function showDiagnostics(preferErrors: boolean): Promise<void> {
+    const from = document.activeElement;
+    const asked = scriptId;
+    updateWorkspace({ outlineVisible: true });
+    // The outline lists diagnostics only between compiles — while one is in
+    // flight it says "Reading the script…" in their place, and this would find
+    // nothing to go to. The summary in the bar kept its count, so wait it out.
+    await compileSettled();
+    await tick();
+    // Abandoned if somebody has opened another script, or put focus somewhere
+    // else of their own accord, in the meantime.
+    if (scriptId !== asked || document.activeElement !== from) return;
+    const list = document.querySelector('aside[aria-label="Outline"] .diagnostics');
+    const target =
+      (preferErrors ? list?.querySelector<HTMLElement>('.error button') : null) ??
+      list?.querySelector<HTMLElement>('button');
+    target?.scrollIntoView({ block: 'nearest' });
+    target?.focus();
+  }
+
+  /** Resolves once no compile is in flight — at once when none is. */
+  function compileSettled(): Promise<void> {
+    return new Promise((resolve) => {
+      let stop = () => {};
+      stop = compiled.subscribe((current) => {
+        if (current.status === 'compiling') return;
+        resolve();
+        // `subscribe` calls back before it returns, so `stop` may not be the
+        // real unsubscriber yet.
+        queueMicrotask(() => stop());
+      });
+    });
+  }
+
+  /**
+   * Back to 100%. The button goes with the size it showed, so focus goes back
+   * to the text — or, in Preview, where the text is hidden, to the mode switch
+   * that says so.
+   */
+  async function resetDocumentScale(): Promise<void> {
+    updateWorkspace({ documentScale: 1 });
+    await tick();
+    if (layout !== 'preview') editorRef?.focus();
+    else {
+      document
+        .querySelector<HTMLElement>('[role="radiogroup"][aria-label="Editor mode"] [aria-checked="true"]')
+        ?.focus();
+    }
+  }
+
   const trailingStatus = $derived<StatusBarItem[]>(
     (() => {
       const items: StatusBarItem[] = [];
-      if ($workspace.documentScale !== 1) {
-        items.push({
-          key: 'scale',
-          label: `${Math.round($workspace.documentScale * 100)}%`,
-          title: 'Editor text size',
-        });
-      }
       /*
        * Only the NORMAL save states appear here; `error` and `conflict` are in
        * the toolbar beside the title, because they need acting on and the
        * status bar is not where somebody looks for something to do.
+       *
+       * "Saved" only while it is still true. The store leaves `saved` in place
+       * until its badge times out, and typing does not clear it, so for up to
+       * two seconds the bar went on saying "Saved" over text that was not.
+       *
+       * Before the text size, not after: the group is right-aligned, so the
+       * item that comes and goes sits on the inside and the one that stays put
+       * keeps the edge.
        */
       if ($editor.saveState === 'saving') items.push({ key: 'save', label: 'Saving…' });
-      else if ($editor.saveState === 'saved') items.push({ key: 'save', label: 'Saved' });
+      else if ($editor.saveState === 'saved' && !$editor.dirty) {
+        items.push({ key: 'save', label: 'Saved' });
+      }
+      if ($workspace.documentScale !== 1) {
+        items.push({
+          key: 'scale',
+          label: `${Math.round($workspace.documentScale * 100)}%`,
+          title: `Editor text size. Click for actual size (${formatAccelerator('Mod+0', mac)}).`,
+          onclick: () => void resetDocumentScale(),
+        });
+      }
       return items;
     })(),
   );

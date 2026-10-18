@@ -9,19 +9,38 @@
  */
 import type { IconName } from './icon-names';
 
+/**
+ * `normal` is the overwhelming majority and is deliberately low-contrast.
+ * §24.3: danger-red is for genuine faults, never for "not configured yet".
+ */
+export type StatusBarTone = 'normal' | 'warning' | 'danger' | 'accent';
+
+/** One run of an item that says two things in two tones. */
+export interface StatusBarPart {
+  key: string;
+  label: string;
+  icon?: IconName;
+  tone?: StatusBarTone;
+}
+
 export interface StatusBarItem {
   /** Stable across state changes so Svelte does not re-create the node. */
   key: string;
   label: string;
   icon?: IconName;
-  /**
-   * `normal` is the overwhelming majority and is deliberately low-contrast.
-   * §24.3: danger-red is for genuine faults, never for "not configured yet".
-   */
-  tone?: 'normal' | 'warning' | 'danger' | 'accent';
+  tone?: StatusBarTone;
   title?: string;
   /**
-   * Present only when clicking opens something meaningful (§11.7).
+   * Drawn in place of `icon` and `label` when present: one item, and so one
+   * button, whose runs keep their own tones.
+   *
+   * The diagnostic summary is the case. "1 error" and "2 notes" go to the same
+   * place, so two buttons would be two tab stops for one destination — and one
+   * label in one tone either hides the notes or paints them red.
+   */
+  parts?: StatusBarPart[];
+  /**
+   * Present only when clicking does something meaningful (§11.7).
    *
    * Its absence is what makes the item plain text rather than a button, and
    * therefore not a tab stop — a focusable thing that does nothing is worse for
