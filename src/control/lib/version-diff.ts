@@ -307,8 +307,15 @@ function passage(own: string[], flags: boolean[], full: boolean): Passage {
   if (full) return { segments: segmentsOf(own, flags, 0, own.length), clippedStart: false, clippedEnd: false };
   const first = flags.indexOf(true);
   const last = flags.lastIndexOf(true);
+  /*
+   * A change that opens with a break belongs to the line the break ends. A
+   * line added under "Hello and welcome." starts with the break after it, and
+   * starting the preview at that break hid the sentence the new line follows,
+   * leaving "… ↵ colliding edit" with nothing to say where it went.
+   */
+  const from = first > 0 && own[first] === BREAK ? first - 1 : first;
   // Nothing of its own (the other side added to it): its opening sentences.
-  let [start, end] = first === -1 ? toSentences(own, 0, 1) : toSentences(own, first, last + 1);
+  let [start, end] = first === -1 ? toSentences(own, 0, 1) : toSentences(own, from, last + 1);
   if (first === -1) {
     while (end < own.length && end - start < CONTEXT_WORDS * 2) [, end] = toSentences(own, end, end + 1);
   }
