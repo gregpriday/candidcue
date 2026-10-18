@@ -466,8 +466,7 @@ describe('a dark stage is exactly the stage it was', () => {
   const FALLBACKS: Array<[file: string, role: string, literal: string]> = [
     ['src/stage/renderer/ReadingCue.svelte', '--stage-wash-clear', 'rgb(245 243 239 / 0%)'],
     ['src/stage/renderer/ReadingCue.svelte', '--stage-wash', 'rgb(245 243 239 / 6%)'],
-    ['src/stage/renderer/ReadingCue.svelte', '--stage-wash-hollow', 'rgb(245 243 239 / 2%)'],
-    ['src/stage/renderer/ReadingCue.svelte', '--stage-wash-rule', 'rgb(245 243 239 / 16%)'],
+    ['src/stage/renderer/ReadingCue.svelte', '--stage-reading-mark-opacity', '0.5'],
     ['src/stage/VoicePill.svelte', '--stage-mark-ink', '#000'],
     ['src/stage/VoicePill.svelte', '--stage-chrome-bg-solid', 'rgb(12 14 18 / 92%)'],
     ['src/stage/StageApp.svelte', '--stage-diag-fault', '#ffb4a2'],

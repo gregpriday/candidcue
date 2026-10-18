@@ -435,14 +435,14 @@ export function clampProvisionalTarget(
  * pitch every line and only the PHASE of that travel is available. Every phase
  * buys the middle of a line by selling both of its ends.
  *
- * What answers it is the mark's SHAPE, and `ReadingCue` now carries it: the
- * reading position does not go BELOW the mark — it starts there and rises — so
- * the cue marks the pitch of glass above itself, as a hairline under `ticks` and
- * as the plateau under `wash`. Exact on an ordinary line at every phase of it,
- * where a phase offset is a compromise at all of them; `ReadingCue`'s header
- * enumerates the lines it is short on (paragraph-final, before a visual block,
- * and anything whose knot clamped). So this constant stays at zero and line entry
- * stays exact; if the perception returns, the band is the thing to make louder.
+ * What answers it is a SHAPE rather than a phase: the reading position does not
+ * go BELOW the mark — it starts there and rises — so `wash` lights the pitch of
+ * glass above the mark, as a one-pitch plateau ending on it. Exact on an
+ * ordinary line at every phase of it, where a phase offset is a compromise at
+ * all of them. (A hairline marking the same pitch beside the ticks was tried and
+ * removed; `ReadingCue`'s header says why.) So this constant stays at zero and
+ * line entry stays exact; if the perception returns, the band is the thing to
+ * make louder.
  */
 const LINE_ENTRY_PITCH_FRACTION = 0;
 
