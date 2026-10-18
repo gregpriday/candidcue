@@ -80,7 +80,7 @@ async function presentInWindow(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'How to present' }).click();
   await page
     .getByRole('menu', { name: 'How to present' })
-    .getByRole('menuitemradio', { name: /Present in a window/ })
+    .getByRole('menuitemradio', { name: /Reading window/ })
     .click();
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready', {
     timeout: 20_000,
@@ -255,7 +255,7 @@ test('a teleprompter take keeps its name and shows no end marker', async ({ page
   await page.getByRole('button', { name: 'How to present' }).click();
   await page
     .getByRole('menu', { name: 'How to present' })
-    .getByRole('menuitemradio', { name: /Present full screen/ })
+    .getByRole('menuitemradio', { name: /Teleprompter/ })
     .click();
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready', {

@@ -1043,7 +1043,7 @@ test.describe('on a page that identifies as macOS', () => {
     await page.getByRole('button', { name: 'How to present' }).click();
     await page
       .getByRole('menu', { name: 'How to present' })
-      .getByRole('menuitemradio', { name: /Present in a window/ })
+      .getByRole('menuitemradio', { name: /Reading window/ })
       .click();
     await expect(page.getByRole('region', { name: /^Reading: / })).toBeVisible({
       timeout: 20_000,
@@ -1162,8 +1162,8 @@ test('the Present menu offers both shapes and marks the current default', async 
   await expect(menu).toBeVisible();
 
   // Modes, not commands: the menu says which one a take would open in.
-  const fullScreen = menu.getByRole('menuitemradio', { name: /Present full screen/ });
-  const inWindow = menu.getByRole('menuitemradio', { name: /Present in a window/ });
+  const fullScreen = menu.getByRole('menuitemradio', { name: /Teleprompter/ });
+  const inWindow = menu.getByRole('menuitemradio', { name: /Reading window/ });
   await expect(fullScreen).toHaveAttribute('aria-checked', 'true');
   await expect(inWindow).toHaveAttribute('aria-checked', 'false');
 
@@ -1180,7 +1180,7 @@ test('choosing a shape presents in it and makes it the default for next time', a
   await page.getByRole('button', { name: 'How to present' }).click();
   await page
     .getByRole('menu', { name: 'How to present' })
-    .getByRole('menuitemradio', { name: /Present in a window/ })
+    .getByRole('menuitemradio', { name: /Reading window/ })
     .click();
 
   await expect(page.getByRole('region', { name: /^Reading: / })).toBeVisible({

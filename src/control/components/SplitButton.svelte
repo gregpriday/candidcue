@@ -41,6 +41,13 @@
     selected?: boolean;
     disabled?: boolean;
     /**
+     * A row that informs rather than acts — the parts-overflow notice. It is
+     * never chosen (give it `disabled` too, so the arrows skip it), but unlike a
+     * command that happens to be unavailable it is drawn at full contrast in the
+     * secondary colour: a greyed-out instruction is one nobody reads.
+     */
+    note?: boolean;
+    /**
      * Starts a new group: a rule above this row and, when given, a small
      * heading naming the group. The Present menu mixes three kinds of row —
      * where to start, how to show it, and the rarer commands — and drawn as
@@ -69,6 +76,40 @@
     items,
     onclick,
   }: Props = $props();
+
+  const uid = $props.id();
+
+  /**
+   * The rows in their groups, for the markup only — `items` stays the flat
+   * array every index refers to, because `menu-nav.ts` walks it and the DOM
+   * order of the rows is unchanged by wrapping them.
+   *
+   * A headed group is a named `role="group"`: the WAI-ARIA pattern for radio
+   * items sharing a menu with unrelated commands, and the only way the heading
+   * a sighted operator reads ("Present as") reaches anybody else. A row that
+   * cannot be chosen is information rather than a command — the arrows skip it
+   * — so its group carries it as a description instead.
+   */
+  interface MenuGroup {
+    heading?: string;
+    rows: { item: SplitMenuItem; index: number }[];
+  }
+
+  const groups = $derived.by(() => {
+    const out: MenuGroup[] = [];
+    items.forEach((item, index) => {
+      if (item.group || out.length === 0) out.push({ heading: item.group?.heading, rows: [] });
+      out[out.length - 1]!.rows.push({ item, index });
+    });
+    return out;
+  });
+
+  function groupDescription(group: MenuGroup): string | undefined {
+    const ids = group.rows
+      .filter(({ item }) => item.disabled)
+      .flatMap(({ item, index }) => [`${uid}-label-${index}`, ...(item.description ? [`${uid}-desc-${index}`] : [])]);
+    return ids.length > 0 ? ids.join(' ') : undefined;
+  }
 
   let open = $state(false);
   let activeIndex = $state(-1);
@@ -165,9 +206,32 @@
       return;
     }
     const index = nextMenuIndex(items, activeIndex, event.key);
-    if (index === null) return;
-    event.preventDefault();
-    focusItem(index);
+    if (index !== null) {
+      event.preventDefault();
+      focusItem(index);
+      return;
+    }
+    // First-letter navigation, as ContextMenu does it — and for its reasons:
+    // one printable character, never Space (it activates the row), never a
+    // modified key (that is a command).
+    if (event.key.length === 1 && event.key !== ' ' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+      typeahead(event.key);
+    }
+  }
+
+  /** Wraps from the active row, so a second F walks on to the next F. */
+  function typeahead(key: string): void {
+    const lower = key.toLowerCase();
+    const count = items.length;
+    for (let step = 1; step <= count; step += 1) {
+      const index = (Math.max(activeIndex, 0) + step) % count;
+      const item = items[index];
+      if (item && !item.disabled && item.label.toLowerCase().startsWith(lower)) {
+        focusItem(index);
+        return;
+      }
+    }
   }
 
   function choose(item: SplitMenuItem): void {
@@ -215,32 +279,50 @@
   {#if open}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="menu" role="menu" tabindex="-1" aria-label={menuLabel} bind:this={menu} onkeydown={onMenuKeydown}>
-      {#each items as item, index (item.label)}
-        {#if item.group}
-          {#if index > 0}<div class="separator" role="separator"></div>{/if}
-          <!-- Visual only: every row's own label already says what it does. -->
-          {#if item.group.heading}<div class="group-label" aria-hidden="true">{item.group.heading}</div>{/if}
+      {#each groups as group, g (group.rows[0]?.index ?? g)}
+        {#if g > 0}<div class="separator" role="separator"></div>{/if}
+        {#snippet rows()}
+          {#each group.rows as { item, index } (item.label)}
+            <!--
+              Named by the label alone and described by the second line: a
+              button's text content would otherwise make its whole explanation
+              its name, and first-letter navigation and every announcement would
+              run through it.
+            -->
+            <button
+              type="button"
+              class="item"
+              class:note={item.note}
+              class:active={highlighted && index === activeIndex}
+              {...menuItemRole(item)}
+              aria-labelledby="{uid}-label-{index}"
+              aria-describedby={item.description ? `${uid}-desc-${index}` : undefined}
+              tabindex={menuItemTabIndex(activeIndex, index)}
+              disabled={item.disabled}
+              onclick={() => choose(item)}
+              onpointerenter={() => {
+                if (!item.disabled) focusItem(index);
+              }}
+            >
+              <span class="tick" aria-hidden="true">
+                {#if item.selected}<Icon name="check" size={15} />{/if}
+              </span>
+              <span class="text">
+                <span class="item-label" id="{uid}-label-{index}">{item.label}</span>
+                {#if item.description}<span class="item-desc" id="{uid}-desc-{index}">{item.description}</span>{/if}
+              </span>
+            </button>
+          {/each}
+        {/snippet}
+        {#if group.heading}
+          <div role="group" aria-labelledby="{uid}-group-{g}" aria-describedby={groupDescription(group)}>
+            <!-- Drawn for the eye; reaches assistive tech as the group's name. -->
+            <div class="group-label" id="{uid}-group-{g}" aria-hidden="true">{group.heading}</div>
+            {@render rows()}
+          </div>
+        {:else}
+          {@render rows()}
         {/if}
-        <button
-          type="button"
-          class="item"
-          class:active={highlighted && index === activeIndex}
-          {...menuItemRole(item)}
-          tabindex={menuItemTabIndex(activeIndex, index)}
-          disabled={item.disabled}
-          onclick={() => choose(item)}
-          onpointerenter={() => {
-            if (!item.disabled) focusItem(index);
-          }}
-        >
-          <span class="tick" aria-hidden="true">
-            {#if item.selected}<Icon name="check" size={15} />{/if}
-          </span>
-          <span class="text">
-            <span class="item-label">{item.label}</span>
-            {#if item.description}<span class="item-desc">{item.description}</span>{/if}
-          </span>
-        </button>
       {/each}
     </div>
   {/if}
@@ -311,7 +393,13 @@
     transition: background var(--dur-fast) var(--ease-out);
   }
 
-  .split:not(.disabled):hover {
+  /*
+    Only the outlined variant firms its border, and only for a hover over one of
+    its own halves. A bare `.split:hover` matched the open MENU too — it is a
+    descendant — and outranked `.primary`, so pointing at any row repainted the
+    clay button with a grey ring.
+  */
+  .split:not(.primary):has(> .main:hover:not(:disabled), > .caret:hover:not(:disabled)) {
     border-color: var(--border-strong);
   }
   .main:hover:not(:disabled),
@@ -376,7 +464,14 @@
     */
     right: 0;
     z-index: 40;
+    /*
+      As wide as its longest line, like a native menu, so a description sits on
+      one line instead of wrapping in a fixed column — within a ceiling, past
+      which a line wraps rather than the menu reaching across the editor.
+    */
+    width: max-content;
     min-width: 264px;
+    max-width: min(360px, calc(100vw - 2 * var(--space-4)));
     /*
       Bounded by the window. The menu grows with the script — a start row per
       part, "From here", "From last ending" — and at the 680px minimum window a
@@ -391,12 +486,36 @@
     display: flex;
     flex-direction: column;
     padding: var(--space-2);
-    background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-pop);
     /* The trigger may be a clay fill; the menu is never one. */
     color: var(--text-primary);
+    /*
+      A quiet shade at whichever edge has more menu beyond it, and nothing when
+      it all fits. Without it a menu clipped by the window ended on a whole row
+      with its full bottom padding and read as complete — the shapes, Practise
+      and setup were simply not there. The covers scroll with the content and
+      the shades stay put, so a shade shows only while there is more to see.
+    */
+    background:
+      linear-gradient(var(--bg-elevated) 30%, transparent) top / 100% 32px,
+      linear-gradient(transparent, var(--bg-elevated) 70%) bottom / 100% 32px,
+      radial-gradient(farthest-side at 50% 0, var(--menu-shade), transparent) top / 100% 10px,
+      radial-gradient(farthest-side at 50% 100%, var(--menu-shade), transparent) bottom / 100% 10px,
+      var(--bg-elevated);
+    background-repeat: no-repeat;
+    background-attachment: local, local, scroll, scroll;
+    --menu-shade: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  }
+  /*
+    Nothing in a scrolling column may give up height to fit: a rule is 1px with
+    no content, so a bounded menu squeezed it to nothing — on the smallest
+    window, exactly where the groups most needed telling apart.
+  */
+  .menu > :global(*),
+  .menu [role='group'] > :global(*) {
+    flex: none;
   }
 
   .item {
@@ -405,7 +524,12 @@
     gap: var(--space-2);
     width: 100%;
     text-align: left;
-    padding: var(--space-2) var(--space-2);
+    /*
+      With the label's 24px line, a one-line row is 32px — the height
+      OverflowMenu's rows are — and a row with a description is still clearly
+      one target rather than two lines that happen to touch.
+    */
+    padding: var(--space-1) var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -423,13 +547,24 @@
     background: var(--accent-strong);
     color: var(--accent-contrast);
   }
-  .item.active:not(:disabled) .tick,
-  .item.active:not(:disabled) .item-desc {
+  .item.active:not(:disabled) .tick {
     color: inherit;
+  }
+  /* Inverse, but a step back from the label so the row keeps its two levels —
+     5.1:1 on the clay, still clear of AA. */
+  .item.active:not(:disabled) .item-desc {
+    color: color-mix(in srgb, var(--accent-contrast) 88%, transparent);
   }
   .item:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+  }
+  /* Information, not an unavailable command: readable (6.1:1), and no
+     forbidden cursor over text that is only there to be read. */
+  .item.note:disabled {
+    opacity: 1;
+    cursor: default;
+    color: var(--text-secondary);
   }
 
   .tick {
@@ -437,9 +572,10 @@
     align-items: center;
     justify-content: center;
     /* Reserved whether or not a check is drawn, so the labels of a checked and
-       an unchecked item start at the same x. */
+       an unchecked item start at the same x; as tall as the label's line, so
+       the check sits on it. */
     width: 15px;
-    height: 20px;
+    height: 24px;
     flex: none;
     color: var(--accent-strong);
   }
@@ -447,28 +583,33 @@
   .text {
     display: flex;
     flex-direction: column;
-    gap: 1px;
     min-width: 0;
   }
   .item-label {
     font-size: var(--text-sm);
     font-weight: 500;
-    line-height: 20px;
+    line-height: 24px;
   }
   .item-desc {
     font-size: var(--text-xs);
     color: var(--text-secondary);
     line-height: 1.35;
+    /* When a quotation does run long, no single word is left on the last line. */
+    text-wrap: pretty;
   }
 
+  /*
+    As wide as the row highlight, in the hairline the other menus use: a rule
+    narrower than the clay fill beside it read as a second, unrelated inset.
+  */
   .separator {
     height: 1px;
-    margin: var(--space-1) var(--space-2);
-    background: var(--divider);
+    margin: var(--space-1) 0;
+    background: var(--border-faint);
   }
   .group-label {
     /* Lines up with the item labels: the item's inset, the tick, the gap. */
-    padding: var(--space-1) var(--space-2) 2px calc(var(--space-2) + 15px + var(--space-2));
+    padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) + 15px + var(--space-2));
     font-size: var(--text-2xs);
     font-weight: 600;
     letter-spacing: var(--ls-caps);

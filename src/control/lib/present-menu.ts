@@ -3,11 +3,12 @@
  *
  * The copy lives here rather than in the component that renders it because it
  * is the only place in the app that has to EXPLAIN the difference between the
- * modes at the moment somebody is choosing between them. Settings names them
- * ("Teleprompter" / "Reading window") next to a picture; this has one line to
- * say what will happen to the window.
+ * modes at the moment somebody is choosing between them. It uses the names
+ * Settings and the destination readout use ("Teleprompter" / "Reading
+ * window"), and has one line to say what will happen to the window.
  */
 import type { ScriptPart } from '../../shared/contracts';
+import { NOUNS } from '../../shared/take-vocabulary';
 import type { PresentationMode } from '../services/settings-types';
 import type { TakePartRequest } from './start-take';
 
@@ -26,6 +27,8 @@ export interface PresentMenuItem {
   description?: string;
   selected?: boolean;
   disabled?: boolean;
+  /** Informs rather than acts: drawn readable, never chosen. */
+  note?: boolean;
   /** Starts a new group in the menu: a rule above, and an optional heading. */
   group?: { heading?: string };
   onselect: () => void;
@@ -69,7 +72,11 @@ export interface PresentMenuItem {
 export interface StartMenuInput {
   /** Snapped caret/selection position, or null when the editor has no caret. */
   hereTokenIndex: number | null;
-  /** Label for the caret position, e.g. a heading or a quoted phrase. */
+  /**
+   * Where the caret position IS — a quoted opening phrase or a heading — never
+   * the row's own name. It used to be `describeStartPoint`'s "From here",
+   * which put "From here. Records part 1." under a row called From here.
+   */
   hereLabel: string | null;
   /**
    * The part the caret sits in, or null on an undivided script.
@@ -95,13 +102,23 @@ export function startMenuItems(
   input: StartMenuInput,
   present: (tokenIndex: number, part?: TakePartRequest) => void,
 ): PresentMenuItem[] {
+  /*
+   * ONE LINE EACH, AND EACH ONE A FACT THE LABEL DOES NOT ALREADY STATE.
+   *
+   * This menu is read seconds before a take, often with someone waiting, and
+   * its descriptions had grown into sentences: two or three wrapped lines a row,
+   * so nine rows stood 750px tall and a long script pushed the shapes, Practise
+   * and setup below the window. A description now answers the one question its
+   * label leaves open — for a start row, WHERE — and stops.
+   *
+   * "From beginning" names its relation to the main button rather than
+   * restating itself: it is what Present does, and saying so is the only place
+   * the menu answers "what happens if I just click the button?".
+   */
   const items: PresentMenuItem[] = [
     {
       label: 'From beginning',
-      description:
-        input.parts.length > 0
-          ? 'Reads the whole script, straight through every part.'
-          : 'The default. Reads the script from the top.',
+      description: 'The whole script · same as clicking Present',
       onselect: () => present(0),
     },
   ];
@@ -109,10 +126,7 @@ export function startMenuItems(
   if (input.hereTokenIndex !== null && input.hereTokenIndex > 0) {
     items.push({
       label: 'From here',
-      description:
-        input.herePart === null
-          ? (input.hereLabel ?? 'Starts at the cursor, snapped to a whole sentence.')
-          : `${input.hereLabel ?? 'Starts at the cursor'}. Records part ${input.herePart.ordinal}.`,
+      description: locate(input.hereLabel ?? 'The sentence at the cursor', input.herePart),
       onselect: () =>
         present(
           input.hereTokenIndex as number,
@@ -122,10 +136,14 @@ export function startMenuItems(
   }
 
   if (input.lastEndingTokenIndex !== null) {
+    const token = input.lastEndingTokenIndex;
     items.push({
       label: 'From last ending',
-      description: input.lastEndingLabel ?? 'Picks up where the last take stopped.',
-      onselect: () => present(input.lastEndingTokenIndex as number),
+      description: locate(
+        input.lastEndingLabel ?? 'Where the last take stopped',
+        input.parts.find((p) => token >= p.startTokenIndex && token <= p.endTokenIndex) ?? null,
+      ),
+      onselect: () => present(token),
     });
   }
 
@@ -145,10 +163,20 @@ export function startMenuItems(
    * heading that is not read aloud has no sentence of its own, and a caret on
    * one resolves to the last sentence above it, in the previous part.
    */
+  /*
+   * A part row is its name and nothing else.
+   *
+   * It used to carry "Part 1 of 2. Done where “Second attempt” begins; carries
+   * on if you do." — three lines a row, the same sentence on every one, and
+   * "Part 1" said twice. The count is visible in the list itself, and the
+   * boundary is advisory (see `ScriptPart`): nothing stops there, so the row
+   * makes no promise about it at all rather than a careful one. What happens at
+   * the boundary — the part is marked covered and the next one offered — is
+   * shown at that moment, on the stage, which is where it means something.
+   */
   for (const part of input.parts.slice(0, MAX_PART_ROWS)) {
     items.push({
       label: `Part ${part.ordinal} · ${part.label}`,
-      description: describePartRange(input.parts, part),
       // The token is only where to open if the part has gone by launch: it was
       // measured against the compile the menu was drawn from, and `whole` makes
       // `startTake` use the part's re-measured start instead.
@@ -159,10 +187,10 @@ export function startMenuItems(
   const hidden = input.parts.length - MAX_PART_ROWS;
   if (hidden > 0) {
     items.push({
-      label: `${hidden} more ${hidden === 1 ? 'part' : 'parts'} below`,
-      description:
-        'To record a whole part, put the cursor on its first spoken words and choose “From here”.',
+      label: `${hidden} more ${hidden === 1 ? 'part' : 'parts'} not listed`,
+      description: 'Click a part’s first words, then From here',
       disabled: true,
+      note: true,
       onselect: () => {},
     });
   }
@@ -170,21 +198,15 @@ export function startMenuItems(
   return items;
 }
 
-/** What a part row promises about where the take stops. */
 /**
- * What a part row promises — and, as carefully, what it does not.
+ * A start row's place: what is there, and which part it is in.
  *
- * "Ends where X begins" was the first wording and it was a lie by implication:
- * nothing stops there. The bound is advisory (see `ScriptPart`), the engine
- * still holds the whole script, and reading straight on past the boundary is a
- * legitimate thing to do. What the app does at that point is mark the part
- * covered and offer the next one, so that is what the row says.
+ * The part, not the heading above the sentence. The part is the unit this menu
+ * lists two rows down, so "· Part 2" is an answer somebody can check against the
+ * list; a sub-heading the list never mentions was a second, unrelated address.
  */
-function describePartRange(parts: readonly ScriptPart[], part: ScriptPart): string {
-  const next = parts.find((p) => p.ordinal === part.ordinal + 1);
-  return next === undefined
-    ? `Part ${part.ordinal} of ${parts.length}. Done at the end of the script.`
-    : `Part ${part.ordinal} of ${parts.length}. Done where “${next.label}” begins; carries on if you do.`;
+function locate(place: string, part: ScriptPart | null): string {
+  return part === null ? place : `${place} · Part ${part.ordinal}`;
 }
 
 /**
@@ -201,16 +223,24 @@ export function presentMenuItems(
   current: PresentationMode,
   choose: (mode: PresentationMode) => void,
 ): PresentMenuItem[] {
+  /*
+   * The product's own nouns, under a "Present as" heading that reads as the
+   * verb: "Present as — Teleprompter". They were "Present full screen" and
+   * "Present in a window", so the readout beside the button said "Reading
+   * window" and the ticked row in the menu said something else, and Settings
+   * said a third thing. Each description is the shape in a few words, then the
+   * fact a tick does not convey: choosing it starts a take now, from the top.
+   */
   return [
     {
-      label: 'Present full screen',
-      description: 'Fills the display, above the menu bar. For reading off glass at a distance.',
+      label: NOUNS.prompter,
+      description: 'Fills the display · from the beginning',
       selected: current === 'prompter',
       onselect: () => choose('prompter'),
     },
     {
-      label: 'Present in a window',
-      description: 'An ordinary window you can size and sit beside a call.',
+      label: NOUNS.reader,
+      description: 'A window beside a call · from the beginning',
       selected: current === 'reader',
       onselect: () => choose('reader'),
     },

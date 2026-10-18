@@ -493,7 +493,7 @@ test.describe('a reading window draws the document', () => {
     await page.getByRole('button', { name: 'How to present' }).click();
     await page
       .getByRole('menu', { name: 'How to present' })
-      .getByRole('menuitemradio', { name: /Present in a window/ })
+      .getByRole('menuitemradio', { name: /Reading window/ })
       .click();
     await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', /ready|live/, {
       timeout: 20_000,
