@@ -109,7 +109,7 @@
       <!-- A floor keeps the baseline visible while silent, so the trace reads
            as "listening and hearing nothing" rather than as a component that
            has failed to render. -->
-      <span class="bar" style:height="{Math.max(8, level * 100)}%"></span>
+      <span class="bar" style:height="{Math.max(12.5, level * 100)}%"></span>
     {/each}
   </div>
 
@@ -204,7 +204,10 @@
   .wave {
     display: flex;
     align-items: center;
-    gap: 2px;
+    /* Packed against the mark, so the one spare pixel of the 60 is at the
+       old end of the history rather than between the trace and its mark. */
+    justify-content: flex-end;
+    gap: 1px;
     /* Fixed, so the pill does not resize as the trace fills — a container that
        grew with its contents would drag the mark across the screen. */
     width: 60px;
@@ -215,8 +218,10 @@
     opacity: 0.64;
   }
 
+  /* Whole pixels on a 1x panel: twenty 2px bars and 1px gaps make 59 of the
+     60, and the floor is 2px (12.5% of 16) rather than a 1.3px smudge. */
   .bar {
-    flex: 1 1 0;
+    flex: 0 0 2px;
     border-radius: var(--radius-pill, 999px);
     background: var(--stage-text, #f5f3ef);
     /* Just longer than the ~100 ms publish cadence, so the trace flows instead

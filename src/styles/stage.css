@@ -180,8 +180,10 @@
   --stage-chrome-text-faint: rgb(36 36 36 / 52%);
   --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
   --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
-  --stage-chrome-highlight: rgb(36 30 20 / 7%);
+  --stage-chrome-highlight: rgb(96 89 79);
+  --stage-chrome-highlight-text: #fcfaf6;
   --stage-chrome-control-border: rgb(36 30 20 / 18%);
+  --stage-chrome-control-bg: rgb(36 30 20 / 4%);
   --stage-chrome-control-hover: rgb(36 30 20 / 6%);
   /* The workspace clay, for the one action a reading window ever offers. */
   --stage-action-bg: #b35a38;
@@ -189,7 +191,7 @@
   --stage-action-text: #ffffff;
   --stage-focus-ring: rgb(36 36 36 / 70%);
   --stage-dock-icon: rgb(36 36 36 / 72%);
-  --stage-dock-end: rgb(36 36 36 / 58%);
+  --stage-dock-end: rgb(36 36 36 / 70%);
   --stage-flag: #7a5310;
   --stage-flag-hover: #5f400b;
   --stage-flag-bg: rgb(154 103 22 / 10%);

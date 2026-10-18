@@ -2099,6 +2099,17 @@
     switch (event.key) {
       case 'Escape': {
         event.preventDefault();
+        /*
+         * A HELD key is one press.
+         *
+         * Auto-repeat starts within about half a second, well inside the
+         * double-press window, so counting repeats let a single sustained
+         * Escape show the hint and then end the take — and a press that began
+         * by dismissing a dock popup (which stops only its own first event)
+         * went on to arm and fire the exit on the repeats behind it. The rule
+         * is two deliberate presses; a key resting on the keyboard is neither.
+         */
+        if (event.repeat) break;
         const now = performance.now();
         const double = now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
         // Back to "never" on consumption, for the same reason the seed is:
@@ -2898,9 +2909,15 @@
       <!--
         The session dock: adjustments, audio, end.
 
-        Not shown during a blank. A blank is a deliberate "show nothing", and
-        the answer to a blank is Escape — which the hint on the talent plane is
-        already there to explain.
+        STILL THERE DURING A BLANK, WITH NOTHING ON SHOW.
+
+        A blank is a deliberate "show nothing", so the audio readout is
+        withheld (`readout`) and the buttons stay faded until somebody moves the
+        pointer. What a blank may not do is take the way out with it: a black
+        full-screen window that answers the mouse with nothing is the exact
+        "looks like it has hung" state the dock exists to prevent, and in the
+        standalone stage window there is no host drawer to fall back on. Escape
+        still works, as ever.
 
         The audio readout inside it is gated on the ENVELOPE ALONE, not on
         `phase === 'live'` and not on the handshake having finished. That is the
@@ -2931,25 +2948,24 @@
         />
       {/if}
 
-      {#if !app.blanked}
-        <StageDock
-          pill={app.envelope !== null ? presenterVoicePill : null}
-          revealed={dockVisible}
-          {followPaused}
-          onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
-          presentationMode={embedded?.presentationMode ?? 'prompter'}
-          onpresentationtoggle={embedded?.onpresentationtoggle}
-          practice={embedded?.practice ?? false}
-          appearancePanel={embedded?.appearancePanel ?? null}
-          appearanceOpen={embedded?.appearanceOpen ?? false}
-          onappearanceopen={() => embedded?.onappearanceopen?.()}
-          onappearanceclose={() => embedded?.onappearanceclose?.()}
-          onend={requestExit}
-          onhold={(held) => (dockHeld = held)}
-          onpopover={(open) => (dockPopoverOpen = open)}
-          bind:rowWidthPx={dockRowWidthPx}
-        />
-      {/if}
+      <StageDock
+        pill={app.envelope !== null ? presenterVoicePill : null}
+        readout={!app.blanked}
+        revealed={dockVisible}
+        {followPaused}
+        onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
+        presentationMode={embedded?.presentationMode ?? 'prompter'}
+        onpresentationtoggle={embedded?.onpresentationtoggle}
+        practice={embedded?.practice ?? false}
+        appearancePanel={embedded?.appearancePanel ?? null}
+        appearanceOpen={embedded?.appearanceOpen ?? false}
+        onappearanceopen={() => embedded?.onappearanceopen?.()}
+        onappearanceclose={() => embedded?.onappearanceclose?.()}
+        onend={requestExit}
+        onhold={(held) => (dockHeld = held)}
+        onpopover={(open) => (dockPopoverOpen = open)}
+        bind:rowWidthPx={dockRowWidthPx}
+      />
     </div>
 
     {#if preview}
@@ -3114,8 +3130,10 @@
     --stage-chrome-text-faint: rgb(36 36 36 / 52%);
     --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
     --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
-    --stage-chrome-highlight: rgb(36 30 20 / 7%);
+    --stage-chrome-highlight: rgb(96 89 79);
+    --stage-chrome-highlight-text: #fcfaf6;
     --stage-chrome-control-border: rgb(36 30 20 / 18%);
+    --stage-chrome-control-bg: rgb(36 30 20 / 4%);
     --stage-chrome-control-hover: rgb(36 30 20 / 6%);
     /* The workspace clay, for the one action a reading window ever offers. */
     --stage-action-bg: #b35a38;
@@ -3123,7 +3141,7 @@
     --stage-action-text: #ffffff;
     --stage-focus-ring: rgb(36 36 36 / 70%);
     --stage-dock-icon: rgb(36 36 36 / 72%);
-    --stage-dock-end: rgb(36 36 36 / 58%);
+    --stage-dock-end: rgb(36 36 36 / 70%);
     --stage-flag: #7a5310;
     --stage-flag-hover: #5f400b;
     --stage-flag-bg: rgb(154 103 22 / 10%);

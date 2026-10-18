@@ -163,11 +163,15 @@ export const PRACTICE_LABEL = 'Practise';
 /**
  * Ending one.
  *
- * "End Take" is the wrong promise here in both halves: there is no take, and
+ * "End take" is the wrong promise here in both halves: there is no take, and
  * "end" is the word for the thing that produces a report. A rehearsal is
  * finished, and nothing follows it.
+ *
+ * Sentence case, like `TAKE_ACTIONS.endTake` beside which it stands: it is a
+ * button's label in the dock and in the host's confirmation, not a menu-bar
+ * command.
  */
-export const FINISH_PRACTICE_LABEL = 'Finish Practice';
+export const FINISH_PRACTICE_LABEL = 'Finish practice';
 
 /**
  * What every confirmation over a rehearsal asks.

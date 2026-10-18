@@ -57,7 +57,7 @@ describe('VoicePill', () => {
     // And the oldest padding is a visible baseline rather than nothing, so a
     // silent input reads as "listening and hearing nothing" instead of as a
     // component that failed to render.
-    expect(bars[0]?.style.height).toBe('8%');
+    expect(bars[0]?.style.height).toBe('12.5%');
   });
 
   it('stays mounted when it is told to go away, and only fades', () => {

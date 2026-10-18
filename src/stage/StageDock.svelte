@@ -125,13 +125,12 @@
 -->
 <script lang="ts">
   import {
-    END_TAKE_LABEL,
     FINISH_PRACTICE_CONFIRM_BODY,
     FINISH_PRACTICE_CONFIRM_TITLE,
     FINISH_PRACTICE_LABEL,
     TAKE_ACTIONS,
   } from '../shared/take-vocabulary';
-  import { tick, type Snippet } from 'svelte';
+  import { tick, untrack, type Snippet } from 'svelte';
   import type { PresentationMode, StageVoicePillPayload } from '../shared/contracts';
   import {
     firstEnabledIndex,
@@ -144,6 +143,13 @@
   interface Props {
     /** The audio reading, or null before control has said anything about it. */
     pill: StageVoicePillPayload | null;
+    /**
+     * Whether the readout belongs on the glass at all right now. False during a
+     * blank, which shows nothing until somebody moves the pointer: then there
+     * is no readout AND no space held for one, so the controls that do appear
+     * sit in the corner instead of a readout's width in from it.
+     */
+    readout?: boolean;
     /**
      * The pointer has been moved, or something wants the controls up.
      *
@@ -224,6 +230,7 @@
 
   let {
     pill,
+    readout = true,
     revealed,
     presentationMode = 'prompter',
     onpresentationtoggle,
@@ -240,12 +247,15 @@
     rowWidthPx = $bindable(0),
   }: Props = $props();
 
+  const uid = $props.id();
+
   let confirmOpen = $state(false);
   let menuOpen = $state(false);
   let pointerInside = $state(false);
   let focusInside = $state(false);
 
   let dockRoot: HTMLElement | null = $state(null);
+  let audioSlot: HTMLElement | null = $state(null);
   let endButton: HTMLButtonElement | null = $state(null);
   let menuButton: HTMLButtonElement | null = $state(null);
   let menuPanel: HTMLElement | null = $state(null);
@@ -265,11 +275,25 @@
    * a dialog with sliders in it — form controls inside `role="menu"` lose their
    * own arrow keys to the menu's; and an action row is a plain `menuitem` that
    * does one thing and closes the menu, the way any menu command does.
+   *
+   * `group` is what the separators are drawn from, and it is a different thing
+   * from `kind`: the prompter's "Fill the display" and "Follow voice" are both
+   * modes and sit together, while the reading window's switch to the
+   * teleprompter can move the window to another panel and mirror it, so it is
+   * set apart at the end rather than wedged between two settings.
    */
+  type MenuGroup = 'level' | 'mode' | 'window';
   type MenuRow =
-    | { kind: 'panel'; id: 'appearance'; label: string; select: () => void }
-    | { kind: 'action'; id: 'present'; label: string; select: () => void }
-    | { kind: 'checkbox'; id: 'follow' | 'present'; label: string; checked: boolean; select: () => void };
+    | { kind: 'panel'; group: 'level'; id: 'appearance'; label: string; select: () => void }
+    | { kind: 'action'; group: 'window'; id: 'present'; label: string; select: () => void }
+    | {
+        kind: 'checkbox';
+        group: MenuGroup;
+        id: 'follow' | 'present';
+        label: string;
+        checked: boolean;
+        select: () => void;
+      };
 
   const reading = $derived(presentationMode === 'reader');
 
@@ -278,6 +302,7 @@
       ? [
           {
             kind: 'panel' as const,
+            group: 'level' as const,
             id: 'appearance' as const,
             // The ellipsis is the desktop convention it has always been: this
             // row asks for more input rather than doing something. A reading
@@ -290,6 +315,32 @@
         ]
       : []),
     /*
+     * A prompter take keeps the ticked "Fill the display" it has always had: it
+     * IS filling the display, unticking it gives the window back, and a control
+     * presenters use at the glass does not change shape under them. It is a
+     * mode, so it sits with the other mode.
+     */
+    ...(onpresentationtoggle && !reading
+      ? [
+          {
+            kind: 'checkbox' as const,
+            group: 'mode' as const,
+            id: 'present' as const,
+            label: 'Fill the display',
+            checked: true,
+            select: () => onpresentationtoggle?.(),
+          },
+        ]
+      : []),
+    {
+      kind: 'checkbox' as const,
+      group: 'mode' as const,
+      id: 'follow' as const,
+      label: TAKE_ACTIONS.follow,
+      checked: !followPaused,
+      select: () => onfollowtoggle?.(),
+    },
+    /*
      * IN A READING WINDOW, NAMED FOR WHAT IT DOES — WHICH IS NOT "FILL THE DISPLAY".
      *
      * From a reading window this row switches the take's presentation MODE: it
@@ -297,37 +348,20 @@
      * for that panel and apply that panel's saved mirroring. Nobody reading
      * "fill the display" expects their script to jump to another monitor and
      * turn back to front, so there it names the switch — an action, not a
-     * state, which is why it is a plain `menuitem` with no `aria-checked`.
-     *
-     * A prompter take keeps the ticked "Fill the display" it has always had: it
-     * IS filling the display, unticking it gives the window back, and a control
-     * presenters use at the glass does not change shape under them.
+     * state, which is why it is a plain `menuitem` with no `aria-checked` — and
+     * it comes last, behind its own separator, apart from the settings.
      */
-    ...(onpresentationtoggle
+    ...(onpresentationtoggle && reading
       ? [
-          reading
-            ? {
-                kind: 'action' as const,
-                id: 'present' as const,
-                label: 'Switch to teleprompter',
-                select: () => onpresentationtoggle?.(),
-              }
-            : {
-                kind: 'checkbox' as const,
-                id: 'present' as const,
-                label: 'Fill the display',
-                checked: true,
-                select: () => onpresentationtoggle?.(),
-              },
+          {
+            kind: 'action' as const,
+            group: 'window' as const,
+            id: 'present' as const,
+            label: 'Switch to teleprompter',
+            select: () => onpresentationtoggle?.(),
+          },
         ]
       : []),
-    {
-      kind: 'checkbox' as const,
-      id: 'follow' as const,
-      label: TAKE_ACTIONS.follow,
-      checked: !followPaused,
-      select: () => onfollowtoggle?.(),
-    },
   ]);
 
   /** Which row the arrows have walked to. -1 before focus has landed. */
@@ -351,7 +385,7 @@
   const faulted = $derived(pill !== null && pill.reading === 'fault' && pill.visible);
 
   /** What the exit control is called, and what its confirmation asks. */
-  const exitLabel = $derived(practice ? FINISH_PRACTICE_LABEL : END_TAKE_LABEL);
+  const exitLabel = $derived(practice ? FINISH_PRACTICE_LABEL : TAKE_ACTIONS.endTake);
   const confirmTitle = $derived(practice ? FINISH_PRACTICE_CONFIRM_TITLE : 'End take?');
   const confirmBody = $derived(
     practice ? FINISH_PRACTICE_CONFIRM_BODY : 'Your place in the script will be saved.',
@@ -364,12 +398,89 @@
 
   const popoverOpen = $derived(confirmOpen || menuOpen || appearanceOpen);
 
+  /*
+   * THE CONTROLS DO NOT MOVE UNDER A HAND THAT IS USING THEM.
+   *
+   * The readout sizes itself to its contents, so a fault name widens it and the
+   * controls beside it step right, and step back when the fault clears — a
+   * trade made on purpose (see `.dock-audio`). It is the wrong trade at one
+   * moment: while somebody is pointing at the dock, has the keyboard in it, or
+   * has a popup open from it. A fault clearing under an open "End take?" would
+   * slide the confirmation left by the width of the word, and the place Cancel
+   * had been would then be the destructive button.
+   *
+   * So while the dock is in use its readout slot may grow but never shrink: the
+   * widest it has been since the interaction began is a floor, released when
+   * the interaction ends. A fault ARRIVING still moves things right — away from
+   * the pointer, onto the panel's own body — which is the direction that cannot
+   * turn one answer into the other.
+   */
+  const engaged = $derived(pointerInside || focusInside || popoverOpen);
+  let audioFloorPx = $state<number | null>(null);
+
+  $effect(() => {
+    if (!engaged) {
+      audioFloorPx = null;
+      return;
+    }
+    // Re-measured whenever the readout's width can have changed.
+    void pill?.reading;
+    void pill?.label;
+    if (!audioSlot) return;
+    const width = Math.ceil(audioSlot.getBoundingClientRect().width);
+    audioFloorPx = Math.max(untrack(() => audioFloorPx) ?? 0, width);
+  });
+
   $effect(() => {
     onhold?.(held);
   });
 
   $effect(() => {
     onpopover?.(popoverOpen);
+  });
+
+  /*
+   * HOVER AND FOCUS ARE RECONCILED, NOT ONLY TRACKED.
+   *
+   * `pointerenter`/`pointerleave` report the pointer crossing the dock's edge
+   * and say nothing when the thing under a resting pointer is taken away. Every
+   * popup here unmounts under the hand that dismissed it — Escape over a menu
+   * row, Cancel, the reading window's switch — and the root then never heard a
+   * leave: `pointerInside` stayed true, `held` with it, and the controls and the
+   * cursor stayed on the glass for the rest of the take. So the hover is
+   * re-derived from what is actually under the pointer whenever it moves, and
+   * both flags are re-read from the document once a popup has gone and layout
+   * has settled.
+   */
+  function reconcileHold(): void {
+    if (!dockRoot) return;
+    pointerInside = dockRoot.matches(':hover');
+    focusInside = dockRoot.contains(document.activeElement);
+  }
+
+  $effect(() => {
+    const onMove = (event: PointerEvent): void => {
+      const target = event.target;
+      pointerInside = target instanceof Node && dockRoot !== null && dockRoot.contains(target);
+    };
+    window.addEventListener('pointermove', onMove, { capture: true, passive: true });
+    return () => window.removeEventListener('pointermove', onMove, { capture: true });
+  });
+
+  let popoverWasOpen = false;
+  $effect(() => {
+    const closed = popoverWasOpen && !popoverOpen;
+    popoverWasOpen = popoverOpen;
+    if (!closed) return undefined;
+    let cancelled = false;
+    let frame = 0;
+    void tick().then(() => {
+      if (!cancelled) frame = requestAnimationFrame(reconcileHold);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
   });
 
   /* ------------------------------------------------------------ the menu */
@@ -568,12 +679,11 @@
          * hands the keyboard back to the TRIGGER before doing so, rather than
          * leaving it on a row that is about to unmount.
          *
-         * That is not tidiness. The menu is rendered after the button row, so
-         * tabbing out of a row skips the End control entirely and Shift+Tab
-         * walks backwards INTO it, both of which disagree with where the menu
-         * visibly hangs from. Returning to the trigger first makes Tab continue
-         * from the control the operator actually opened. Deliberately not
-         * prevented: the browser's own Tab then does the moving.
+         * That is not tidiness. A row is about to unmount, and focus dropped
+         * with it lands on `<body>`; returning to the trigger first makes Tab
+         * continue from the control the operator actually opened, onto the way
+         * out beside it. Deliberately not prevented: the browser's own Tab then
+         * does the moving.
          */
         closeMenu(true);
         return;
@@ -789,224 +899,252 @@
       the one control that never hides is the one nothing that hides may sit
       outside of.
     -->
-    <div class="dock-audio">
-      {#if pill}
-        <VoicePill {pill} />
-      {:else}
-        <!-- The audio display's space, held before control has said anything.
-             Without it the buttons would start the take against the corner and
-             then step sideways the moment the first level frame arrived. -->
-        <div class="audio-placeholder" aria-hidden="true"></div>
-      {/if}
-    </div>
-
-    <!--
-      THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
-
-      Everything behind it is a verb somebody reaches for and then forgets:
-      adjust the appearance, switch to the teleprompter and back. One of them
-      is not —
-      voice following sets a MODE, and a mode that hides itself is how a
-      presenter ends up staring at a script that will not move, with the control
-      that explains it invisible until they happen to move the mouse.
-
-      So the trigger obeys `buttonsVisible` in exactly one direction. While
-      following is on — the ordinary case, the whole take — it fades with the
-      rest, because it is then reporting the state everybody already assumes.
-      While it is off it stays lit and amber, because it is then the answer to
-      the only question the presenter is going to ask.
-
-      It is NOT disabled while the appearance panel is up, unlike the End
-      control: it is the panel's anchor and stays drawn as expanded. Pressing it
-      then does not cancel — that threw away whatever had just been tuned — it
-      calls the panel's attention, exactly as a click away does, and the panel's
-      own Cancel and Done end it.
-    -->
-    <button
-      type="button"
-      class="dock-button menu-trigger"
-      class:flagged={followPaused}
-      data-hidden={!buttonsVisible && !followPaused}
-      aria-haspopup="menu"
-      aria-expanded={menuOpen || appearanceOpen}
-      aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
-      title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
-      bind:this={menuButton}
-      onpointerdown={(event) => {
-        // Pressed while the appearance panel is up, it only calls that panel's
-        // attention — so the keyboard stays inside the panel instead of
-        // following the press out to a trigger the panel's trap reaches past.
-        if (appearanceOpen) event.preventDefault();
-      }}
-      onclick={toggleMenu}
-      onkeydown={onTriggerKeydown}
-    >
-      <!--
-        Lucide's cog, inlined.
-
-        Inlined rather than taken from `Icon.svelte` because that component
-        lives in control's tree, and the standalone stage window is a separate
-        entry point that must not pull control in behind one glyph. Every other
-        icon in this dock is drawn here for the same reason.
-      -->
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
+    {#if readout}
+      <div
+        class="dock-audio"
+        bind:this={audioSlot}
+        style:min-width={audioFloorPx === null ? null : `${audioFloorPx}px`}
       >
-        <path
-          d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
-        />
-        <circle cx="12" cy="12" r="3" />
-      </svg>
-      <!--
-        The mode mark, drawn as well as tinted.
-
-        A hue shift and a shape fail under different conditions — colour goes
-        first through a beamsplitter, geometry goes first at 16px on a
-        non-Retina panel — so the state that must never be missed is carried by
-        both. `aria-hidden`, because the trigger's own name already says it.
-      -->
-      {#if followPaused}
-        <span class="flag" aria-hidden="true"></span>
-      {/if}
-    </button>
-
-    <!-- The destructive control is deliberately further away. It is the one
-         thing in this dock nobody wants to hit while reaching for something
-         else. -->
-    <!--
-      Stood down while the appearance panel is up, because that panel says it is
-      `aria-modal`.
-
-      A live control beside a modal is a promise the modal does not keep: it is
-      told to the keyboard and to assistive technology that everything outside
-      is inert, while a pointer can still reach this one — and reaching it here
-      does two things at once, cancelling the appearance transaction and opening
-      a second popover. The old top-right corner solved the same problem by
-      removing its trigger entirely; the dock cannot do that without the row
-      collapsing, so it disables instead. Escape and Cancel are still the way
-      out of the panel, so nothing is trapped.
-    -->
-    <button
-      type="button"
-      class="dock-button end"
-      data-hidden={!buttonsVisible}
-      disabled={appearanceOpen}
-      aria-label={exitLabel}
-      aria-expanded={confirmOpen}
-      title={exitLabel}
-      bind:this={endButton}
-      onclick={openConfirm}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M18 6 6 18M6 6l12 12" stroke-linecap="round" />
-      </svg>
-    </button>
-  </div>
-
-  <!--
-    LEVEL ONE. It is not rendered at the same time as level two: choosing the
-    panel row replaces the menu with it, in the same place, rising from the same
-    control.
-
-    `role="menu"` ends here on purpose. The level it opens is a form with
-    sliders in it, and inside a menu a slider loses its own left/right arrows to
-    the menu's — so the appearance popover below claims `dialog` and this claims
-    nothing about it beyond `aria-haspopup` on the row.
-  -->
-  <!--
-    `!appearanceOpen` makes the two levels exclusive STRUCTURALLY rather than by
-    every path that opens one happening to close the other. The dock does not
-    own `appearanceOpen` — the host does — so a second opener added over there
-    later would otherwise put both levels on the glass at once, and this file
-    promises in several places that it cannot.
-  -->
-  {#if menuOpen && !appearanceOpen}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="dock-popover menu-popover"
-      role="menu"
-      tabindex="-1"
-      aria-label="Take menu"
-      bind:this={menuPanel}
-      onpointerdown={onMenuPointerDown}
-    >
-      {#each rows as row, index (row.id)}
-        <button
-          type="button"
-          class="menu-row"
-          class:active={highlighted && index === activeIndex}
-          data-menu-row={row.id}
-          role={row.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitem'}
-          aria-checked={row.kind === 'checkbox' ? row.checked : undefined}
-          aria-haspopup={row.kind === 'panel' ? 'dialog' : undefined}
-          tabindex={menuItemTabIndex(activeIndex, index)}
-          onclick={() => chooseRow(row)}
-          onpointerenter={() => focusRow(index)}
-        >
-          <!--
-            A fixed gutter, filled only by a checked row.
-
-            The tick is the state — `aria-checked` says it to a screen reader
-            and this says it to an eye — and it has to hold its column whether
-            or not it is drawn, or every label in the menu shifts sideways as
-            modes are flipped from inside it.
-          -->
-          <span class="menu-mark" aria-hidden="true">
-            {#if row.kind === 'checkbox' && row.checked}
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            {/if}
-          </span>
-          <span class="menu-label">{row.label}</span>
-          {#if row.kind === 'panel'}
-            <!-- The chevron says "there is another level", which is the one
-                 thing the ellipsis in the label cannot say on its own. -->
-            <svg
-              class="menu-into"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              aria-hidden="true"
-            >
-              <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          {/if}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  {#if appearanceOpen && appearancePanel}
-    <div class="dock-popover appearance-popover" data-attention={appearanceAttention ? '' : undefined}>
-      {@render appearancePanel()}
-    </div>
-  {/if}
-
-  {#if confirmOpen}
-    <div
-      class="dock-popover confirm-popover"
-      role="dialog"
-      aria-label={exitLabel}
-      bind:this={confirmPanel}
-    >
-      <p class="confirm-title">{confirmTitle}</p>
-      <p class="confirm-body">{confirmBody}</p>
-      <div class="confirm-actions">
-        <button type="button" class="confirm-cancel" bind:this={cancelButton} onclick={closeConfirm}>
-          Cancel
-        </button>
-        <button type="button" class="confirm-end" onclick={confirmEnd}>{exitLabel}</button>
+        {#if pill}
+          <VoicePill {pill} />
+        {:else}
+          <!-- The audio display's space, held before control has said anything.
+               Without it the buttons would start the take against the corner and
+               then step sideways the moment the first level frame arrived. -->
+          <div class="audio-placeholder" aria-hidden="true"></div>
+        {/if}
       </div>
+    {/if}
+
+    <!--
+      EACH CONTROL CARRIES ITS OWN POPOVERS.
+
+      A slot per control, and the slot is the positioning context, so the menu
+      and the panel it opens rise from the cog's own left edge and the
+      confirmation from the way out's. They used to hang from the dock's left
+      edge, which put the menu over the audio readout a hundred-odd pixels from
+      the cog that raised it and made it read as the readout's.
+    -->
+    <div class="dock-slot">
+      <!--
+        THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
+
+        Everything behind it is a verb somebody reaches for and then forgets:
+        adjust the appearance, switch to the teleprompter and back. One of them
+        is not —
+        voice following sets a MODE, and a mode that hides itself is how a
+        presenter ends up staring at a script that will not move, with the control
+        that explains it invisible until they happen to move the mouse.
+
+        So the trigger obeys `buttonsVisible` in exactly one direction. While
+        following is on — the ordinary case, the whole take — it fades with the
+        rest, because it is then reporting the state everybody already assumes.
+        While it is off it stays lit and amber, because it is then the answer to
+        the only question the presenter is going to ask.
+
+        It is NOT disabled while the appearance panel is up, unlike the End
+        control: it is the panel's anchor and stays drawn as expanded. Pressing
+        it then does not cancel — that threw away whatever had just been tuned —
+        it calls the panel's attention, exactly as a click away does, and the
+        panel's own Cancel and Done end it.
+      -->
+      <button
+        type="button"
+        class="dock-button menu-trigger"
+        class:flagged={followPaused}
+        data-hidden={!buttonsVisible && !followPaused}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen || appearanceOpen}
+        aria-label={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
+        title={followPaused ? 'Take menu — voice following is off' : 'Take menu'}
+        bind:this={menuButton}
+        onpointerdown={(event) => {
+          // Pressed while the appearance panel is up, it only calls that panel's
+          // attention — so the keyboard stays inside the panel instead of
+          // following the press out to a trigger the panel's trap reaches past.
+          if (appearanceOpen) event.preventDefault();
+        }}
+        onclick={toggleMenu}
+        onkeydown={onTriggerKeydown}
+      >
+        <!--
+          Lucide's cog, inlined.
+
+          Inlined rather than taken from `Icon.svelte` because that component
+          lives in control's tree, and the standalone stage window is a separate
+          entry point that must not pull control in behind one glyph. Every other
+          icon in this dock is drawn here for the same reason.
+        -->
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path
+            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+          />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+        <!--
+          The mode mark, drawn as well as tinted.
+
+          A hue shift and a shape fail under different conditions — colour goes
+          first through a beamsplitter, geometry goes first at 16px on a
+          non-Retina panel — so the state that must never be missed is carried by
+          both. `aria-hidden`, because the trigger's own name already says it.
+        -->
+        {#if followPaused}
+          <span class="flag" aria-hidden="true"></span>
+        {/if}
+      </button>
+
+      <!--
+        LEVEL ONE. It is not rendered at the same time as level two: choosing the
+        panel row replaces the menu with it, in the same place, rising from the
+        same control.
+
+        `role="menu"` ends here on purpose. The level it opens is a form with
+        sliders in it, and inside a menu a slider loses its own left/right arrows
+        to the menu's — so the appearance popover below claims `dialog` and this
+        claims nothing about it beyond `aria-haspopup` on the row.
+
+        `!appearanceOpen` makes the two levels exclusive STRUCTURALLY rather than
+        by every path that opens one happening to close the other. The dock does
+        not own `appearanceOpen` — the host does — so a second opener added over
+        there later would otherwise put both levels on the glass at once, and
+        this file promises in several places that it cannot.
+      -->
+      {#if menuOpen && !appearanceOpen}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+          class="dock-popover menu-popover"
+          role="menu"
+          tabindex="-1"
+          aria-label="Take menu"
+          bind:this={menuPanel}
+          onpointerdown={onMenuPointerDown}
+        >
+          {#each rows as row, index (row.id)}
+            <!-- A rule between kinds of row, never an index of its own: the
+                 arrows walk `rows`, and a separator is not somewhere to land. -->
+            {#if index > 0 && rows[index - 1]?.group !== row.group}
+              <div class="menu-separator" role="separator"></div>
+            {/if}
+            <button
+              type="button"
+              class="menu-row"
+              class:active={highlighted && index === activeIndex}
+              data-menu-row={row.id}
+              role={row.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitem'}
+              aria-checked={row.kind === 'checkbox' ? row.checked : undefined}
+              aria-haspopup={row.kind === 'panel' ? 'dialog' : undefined}
+              tabindex={menuItemTabIndex(activeIndex, index)}
+              onclick={() => chooseRow(row)}
+              onpointerenter={() => focusRow(index)}
+            >
+              <!--
+                A fixed gutter, filled only by a checked row.
+
+                The tick is the state — `aria-checked` says it to a screen reader
+                and this says it to an eye — and it has to hold its column whether
+                or not it is drawn, or every label in the menu shifts sideways as
+                modes are flipped from inside it.
+              -->
+              <span class="menu-mark" aria-hidden="true">
+                {#if row.kind === 'checkbox' && row.checked}
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                {/if}
+              </span>
+              <span class="menu-label">{row.label}</span>
+              {#if row.kind === 'panel'}
+                <!-- The chevron says "there is another level", which is the one
+                     thing the ellipsis in the label cannot say on its own. -->
+                <svg
+                  class="menu-into"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  aria-hidden="true"
+                >
+                  <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+
+      {#if appearanceOpen && appearancePanel}
+        <div class="dock-popover appearance-popover" data-attention={appearanceAttention ? '' : undefined}>
+          {@render appearancePanel()}
+        </div>
+      {/if}
     </div>
-  {/if}
+
+    <!--
+      THE WAY OUT SAYS WHAT IT DOES, AND STANDS APART.
+
+      It used to be a bare ×, and a × on a full-screen window means "close this"
+      or "dismiss that" — neither of which is what it does, and the take's one
+      irreversible verb is the last control that can afford to be guessed at. So
+      it carries its name, in the take's own words, at the dock's quiet weight:
+      no red until somebody is pointing at it, because a red mark in the corner
+      of a black field would be the loudest thing on the glass reporting nothing.
+
+      It sits further from the cog than the cog sits from the readout, so a hand
+      reaching for the menu does not land on it, and it fades with the rest.
+
+      Stood down while the appearance panel is up, because that panel says it is
+      `aria-modal`. A live control beside a modal is a promise the modal does not
+      keep: it is told to the keyboard and to assistive technology that
+      everything outside is inert, while a pointer can still reach this one — and
+      reaching it here does two things at once, cancelling the appearance
+      transaction and opening a second popover. Escape and Cancel are still the
+      way out of the panel, so nothing is trapped.
+    -->
+    <div class="dock-slot end-slot">
+      <button
+        type="button"
+        class="dock-button end"
+        data-hidden={!buttonsVisible}
+        disabled={appearanceOpen}
+        aria-expanded={confirmOpen}
+        bind:this={endButton}
+        onclick={openConfirm}
+      >
+        {exitLabel}
+      </button>
+
+      {#if confirmOpen}
+        <!-- Named by its question and described by its promise, so a screen
+             reader landing on Cancel hears what is being asked and what ending
+             will and will not do — not only the button's own name. -->
+        <div
+          class="dock-popover confirm-popover"
+          role="dialog"
+          aria-labelledby="{uid}-confirm-title"
+          aria-describedby="{uid}-confirm-body"
+          bind:this={confirmPanel}
+        >
+          <p class="confirm-title" id="{uid}-confirm-title">{confirmTitle}</p>
+          <p class="confirm-body" id="{uid}-confirm-body">{confirmBody}</p>
+          <div class="confirm-actions">
+            <button type="button" class="confirm-cancel" bind:this={cancelButton} onclick={closeConfirm}>
+              Cancel
+            </button>
+            <button type="button" class="confirm-end" onclick={confirmEnd}>{exitLabel}</button>
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
 </div>
 
 <style>
@@ -1068,6 +1206,13 @@
     margin-right: 4px;
   }
 
+  /* The positioning context for the popovers each control raises. */
+  .dock-slot {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+  }
+
   /*
    * 40px of visible surface, 44px of target.
    *
@@ -1076,6 +1221,10 @@
    * 1024x600 panel while the thing a mouse has to hit is comfortably bigger
    * than the 24px WCAG floor. This is a control that may be aimed at from
    * across a room.
+   *
+   * The inset is 3px, not 2: an absolutely placed box is measured from its
+   * container's PADDING edge, which sits inside the 1px border, so -2px made
+   * a 42px target while claiming 44.
    */
   .dock-button {
     position: relative;
@@ -1104,7 +1253,7 @@
   .dock-button::after {
     content: '';
     position: absolute;
-    inset: -2px;
+    inset: -3px;
   }
 
   .dock-button svg {
@@ -1140,8 +1289,23 @@
     border-color: var(--stage-flag-border, rgb(232 182 97 / 38%));
   }
 
+  /*
+   * Open is drawn as open, however it was opened.
+   *
+   * The lifted material used to come only from `:hover`, so a menu raised with
+   * the mouse showed its cog pressed and one raised from the keyboard, or the
+   * appearance panel it leads to, left the cog looking idle under its own
+   * popup.
+   */
+  .menu-trigger[aria-expanded='true'] {
+    background: var(--stage-chrome-bg-hover, rgb(24 28 35 / 88%));
+    border-color: var(--stage-chrome-border-hover, rgb(255 255 255 / 30%));
+    color: var(--stage-chrome-text-hover, #fff);
+  }
+
   .menu-trigger.flagged:hover,
-  .menu-trigger.flagged:focus-visible {
+  .menu-trigger.flagged:focus-visible,
+  .menu-trigger.flagged[aria-expanded='true'] {
     color: var(--stage-flag-hover, #f2c97e);
     background: var(--stage-flag-bg-hover, rgb(232 182 97 / 18%));
     border-color: var(--stage-flag-border-hover, rgb(232 182 97 / 52%));
@@ -1160,11 +1324,24 @@
     box-shadow: 0 0 0 2px var(--stage-flag-ring, rgb(12 14 18 / 92%));
   }
 
+  /*
+   * The way out is a word, not a glyph — see the markup.
+   *
+   * Same material, height and radius as the cog, so the row is one family; a
+   * label instead of an icon, so it is the one control in the row that says
+   * what it does. Quiet at rest: it is not tinted at all until somebody is
+   * actually pointing at it, because a persistent red mark in the corner of a
+   * take would be the loudest thing on a black field, reporting nothing.
+   */
   .end {
-    /* Quietest of the three at rest. It is not tinted at all until somebody is
-       actually pointing at it: a persistent red mark in the corner of a take
-       would be the loudest thing on a black field, reporting nothing. */
+    width: auto;
+    padding: 0 14px;
     color: var(--stage-dock-end, rgb(245 243 239 / 58%));
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
   }
 
   .dock-button:hover,
@@ -1175,7 +1352,8 @@
   }
 
   .end:hover,
-  .end:focus-visible {
+  .end:focus-visible,
+  .end[aria-expanded='true'] {
     color: var(--stage-danger, #ef7168);
     background: var(--stage-danger-bg, rgb(239 113 104 / 12%));
     border-color: var(--stage-danger-border, rgb(239 113 104 / 38%));
@@ -1215,9 +1393,14 @@
     cursor: default;
   }
 
-  /* The larger gap before the destructive control (6px + 4px). */
-  .end {
-    margin-left: 4px;
+  /*
+   * The larger gap before the destructive control: 20px of glass between it
+   * and the cog (6px + 14px), twice the 10px between the cog and the readout,
+   * so the way out reads as standing apart rather than as the next button in
+   * a toolbar, and a hand travelling to the menu has room to stop short of it.
+   */
+  .end-slot {
+    margin-left: 14px;
   }
 
   /*
@@ -1249,16 +1432,21 @@
     animation: dock-pop-in 140ms var(--ease-out, ease-out);
   }
 
+  /*
+   * Every popover rises from its own control's left edge (`.dock-slot`).
+   *
+   * Left rather than right because the controls sit hard against the left of
+   * the screen: a panel hung off a control's RIGHT edge starts left of it by
+   * its own width less the control's, which off a 40px cog or a word-wide
+   * button is off the screen, and `.stage-root` is `overflow: hidden`, so it
+   * would be silently cropped. Verified at 1024x600, the panel this is judged
+   * on.
+   */
   .appearance-popover {
     left: 0;
   }
 
   /*
-   * Left-aligned with the dock, like the other two, and for the reason set out
-   * at `.confirm-popover` below: a panel hung off the right edge of a control
-   * this close to the left edge of the screen starts at a negative x and is
-   * silently cropped by `.stage-root`'s `overflow: hidden`.
-   *
    * Sized to its longest row rather than to a round number. It carries three
    * short labels and nothing else, and a menu wider than its content over a
    * running script is glass bought for nothing.
@@ -1306,20 +1494,39 @@
   }
 
   /*
-   * A menu highlights, it does not ring.
+   * A menu highlights, it does not ring — and the highlight has to be SEEN.
    *
    * Driven by `activeIndex` rather than by `:focus`/`:hover`, so exactly one
    * row is ever marked no matter which device is driving it — and so the mark
    * does not depend on how the engine chooses to interpret programmatic focus
    * for `:focus-visible`. An outline as well would read as a second selection
-   * sitting underneath the wash marking the very same row.
+   * sitting underneath the fill marking the very same row.
+   *
+   * Because it is the only focus indicator the menu has, it is a solid fill
+   * that clears the 3:1 non-text floor against the menu (3.4:1 dark, 6:1 on
+   * paper) — the same answer control's menus reached when their faint wash
+   * measured 1.1:1 (`OverflowMenu`). The wash it replaces here measured 1.35:1
+   * on the dark stage and 1.14:1 on paper. Neutral rather than clay, because
+   * the stage's chrome carries no brand accent.
    */
   .menu-row:focus,
   .menu-row:focus-visible {
     outline: none;
   }
   .menu-row.active {
-    background: var(--stage-chrome-highlight, rgb(255 255 255 / 12%));
+    background: var(--stage-chrome-highlight, rgb(98 102 110));
+    color: var(--stage-chrome-highlight-text, #fff);
+  }
+  .menu-row.active .menu-into {
+    color: inherit;
+  }
+
+  /* Between kinds of row. Inset, so it reads as a pause inside one menu. */
+  .menu-separator {
+    flex: 0 0 auto;
+    height: 1px;
+    margin: 5px 10px;
+    background: var(--stage-chrome-border);
   }
 
   .menu-mark {
@@ -1345,20 +1552,7 @@
     color: var(--stage-chrome-text-faint, rgb(245 243 239 / 52%));
   }
 
-  /*
-   * LEFT-ALIGNED, NOT RIGHT-ALIGNED TO THE × IT BELONGS TO.
-   *
-   * Anchoring it to the right edge of its own button is the tidier idea and it
-   * does not survive the geometry: the dock is about 150px wide and starts 20px
-   * from the edge of the panel, so a 236px panel hung off its right edge starts
-   * at roughly minus sixty — off the screen, and silently cropped by
-   * `.stage-root`'s `overflow: hidden`. Verified at 1024x600, which is the
-   * panel this is actually judged on.
-   *
-   * Left-aligning costs nothing in the connection it was protecting: the panel
-   * is wider than the dock, so it still sits directly over the × that raised
-   * it. It just does so from the other end.
-   */
+  /* Rises from the way out's own left edge — see `.appearance-popover`. */
   .confirm-popover {
     left: 0;
     width: 236px;
@@ -1387,6 +1581,8 @@
     font-size: 12px;
     line-height: 1.4;
     color: var(--stage-chrome-text-muted, rgb(245 243 239 / 62%));
+    /* Two short lines rather than a long one and an orphaned "saved." */
+    text-wrap: pretty;
   }
 
   .confirm-actions {
@@ -1396,10 +1592,22 @@
     margin-top: 12px;
   }
 
+  /*
+   * Two buttons of one size, told apart by colour and not by weight.
+   *
+   * Cancel is a real button — bordered and lightly filled — rather than a bare
+   * word beside a filled red one, so the safe answer does not look like the
+   * lesser one. It also holds the keyboard on open. The border and fill are
+   * set per button below and NOT reset here: a shared `border-color` on
+   * `.confirm-actions button` outranked both classes and quietly erased the
+   * border of each.
+   */
   .confirm-actions button {
-    padding: 6px 12px;
+    min-height: 34px;
+    padding: 0 14px;
     border-radius: 8px;
-    border: 1px solid transparent;
+    border-width: 1px;
+    border-style: solid;
     font: inherit;
     font-size: 12px;
     font-weight: 600;
@@ -1408,8 +1616,8 @@
 
   .confirm-cancel {
     border-color: var(--stage-chrome-control-border, rgb(255 255 255 / 18%));
-    background: transparent;
-    color: var(--stage-chrome-text, rgb(245 243 239 / 88%));
+    background: var(--stage-chrome-control-bg, rgb(255 255 255 / 6%));
+    color: var(--stage-chrome-text-strong, #f5f3ef);
   }
   .confirm-cancel:hover {
     background: var(--stage-chrome-control-hover, rgb(255 255 255 / 10%));

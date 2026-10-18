@@ -12,11 +12,12 @@
  *
  * `app.blanked` gates six surfaces, not one (script visibility, the
  * motion/render loop, the ack chip, hold status, the transcript tap and the
- * dock) — a single derived read site the way `followPaused` is bridged would
- * have left five of them visibly wrong. This drives the real bridge prop
- * through the real reducer path and checks the surfaces that do not depend
- * on diagnostic mode being on: the script holder, the hold status chip, and
- * the session dock.
+ * dock's audio readout) — a single derived read site the way `followPaused`
+ * is bridged would have left five of them visibly wrong. This drives the real
+ * bridge prop through the real reducer path and checks the surfaces that do
+ * not depend on diagnostic mode being on: the script holder, the hold status
+ * chip, and the session dock — which stays, so a blank keeps a way out, while
+ * its readout goes.
  */
 import { render } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
@@ -141,7 +142,8 @@ describe('mounting embedded, blanked from the start', () => {
     expect(phaseOf(container)).toBe('blank');
     expect(scriptHolderBlanked(container)).toBe(true);
     expect(container.querySelector('.hold-status')).toBeNull();
-    expect(container.querySelector('.stage-dock')).toBeNull();
+    expect(container.querySelector('.stage-dock')).not.toBeNull();
+    expect(container.querySelector('.stage-dock .dock-audio')).toBeNull();
   });
 });
 
@@ -152,7 +154,7 @@ describe('mounting embedded, not blanked', () => {
     expect(phaseOf(container)).not.toBe('blank');
     expect(scriptHolderBlanked(container)).toBe(false);
     expect(container.querySelector('.hold-status')).not.toBeNull();
-    expect(container.querySelector('.stage-dock')).not.toBeNull();
+    expect(container.querySelector('.stage-dock .dock-audio')).not.toBeNull();
   });
 });
 
@@ -180,7 +182,8 @@ describe('the switch flipping mid-take', () => {
     expect(phaseOf(container)).toBe('blank');
     expect(scriptHolderBlanked(container)).toBe(true);
     expect(container.querySelector('.hold-status')).toBeNull();
-    expect(container.querySelector('.stage-dock')).toBeNull();
+    expect(container.querySelector('.stage-dock')).not.toBeNull();
+    expect(container.querySelector('.stage-dock .dock-audio')).toBeNull();
 
     /*
      * An unrelated bridge tick — a transcript word arriving, envelope
@@ -201,7 +204,7 @@ describe('the switch flipping mid-take', () => {
     flushSync();
     expect(phaseOf(container)).toBe('blank');
     expect(scriptHolderBlanked(container)).toBe(true);
-    expect(container.querySelector('.stage-dock')).toBeNull();
+    expect(container.querySelector('.stage-dock .dock-audio')).toBeNull();
 
     await rerender({
       embedded: {
@@ -220,6 +223,6 @@ describe('the switch flipping mid-take', () => {
     expect(phaseOf(container)).not.toBe('blank');
     expect(scriptHolderBlanked(container)).toBe(false);
     expect(container.querySelector('.hold-status')).not.toBeNull();
-    expect(container.querySelector('.stage-dock')).not.toBeNull();
+    expect(container.querySelector('.stage-dock .dock-audio')).not.toBeNull();
   });
 });
