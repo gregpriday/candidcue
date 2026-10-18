@@ -217,9 +217,17 @@
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,
           cmPlaceholder(placeholder),
-          // CodeMirror's contenteditable is the editing surface; without this
-          // it is an unnamed textbox to a screen reader (spec §20).
-          EditorView.contentAttributes.of({ 'aria-label': ariaLabel }),
+          /*
+           * CodeMirror's contenteditable is the editing surface; without the
+           * label it is an unnamed textbox to a screen reader (spec §20).
+           *
+           * Spelling on: CodeMirror turns it off because it is built for code,
+           * and this is prose — a script full of typos with nothing underlined,
+           * and a right-click menu with no spelling suggestions in it. The
+           * autocorrect and autocapitalise defaults stay off: a substitution
+           * that curls the quotes in `{say="…"}` or a URL breaks the script.
+           */
+          EditorView.contentAttributes.of({ 'aria-label': ariaLabel, spellcheck: 'true' }),
           editorTheme,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
