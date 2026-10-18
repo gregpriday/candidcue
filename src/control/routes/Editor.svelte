@@ -76,6 +76,7 @@ import type { PresentationMode } from '../services/settings-types';
   import {
     conflictCopyTitle,
     editor,
+    editorHasUnsavedWork,
     flushEditorEdits,
     keepEditorVersion,
     openScript,
@@ -1141,17 +1142,192 @@ import type { PresentationMode } from '../services/settings-types';
     return flat;
   }
 
-  async function copyAllText(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText($editor.source);
-      showToast('Script text copied', 'success');
-    } catch {
-      showToast('Could not copy to the clipboard', 'danger');
-    }
-  }
-
   async function revealFolder(): Promise<void> {
     await scriptsService.revealScriptFolder(scriptId);
+  }
+
+  /* --- F.8 save-failure sheet ----------------------------------------- */
+
+  /*
+   * Every answer the sheet gives stays IN the sheet.
+   *
+   * Retry used to close it before the save had even started, so a second
+   * failure looked exactly like the first one and the person had to reopen the
+   * sheet to reach Copy all text — the one action that actually protects the
+   * text while saving is broken. Copying answered with a toast at the bottom of
+   * the window, and a reveal that failed answered with nothing at all.
+   *
+   * One line under the explanation reports all three, and it is a status
+   * region, so a screen reader hears each result without focus moving. With
+   * nothing to report it carries the standing advice instead.
+   *
+   * The three outcomes are kept apart and composed, not written over each
+   * other: copying while a retry is in flight must not erase "Saving…", and a
+   * retry that then fails must not tell somebody who has already copied their
+   * text to go and copy it.
+   */
+  let saveRetry = $state<'idle' | 'saving' | 'failed'>('idle');
+  /** Failed retries since the sheet opened, so a repeat failure reads as new. */
+  let saveRetryFailures = $state(0);
+  let saveCopy = $state<'idle' | 'copied' | 'failed'>('idle');
+  let saveRevealFailure = $state<string | null>(null);
+  /**
+   * Which opening of the sheet an answer belongs to. A copy, reveal or save
+   * that settles after the sheet was closed reports nothing, rather than
+   * leaving a stale line for the next time it opens.
+   */
+  let saveSheetOpening = 0;
+  let retryButton: HTMLButtonElement | null = $state(null);
+
+  /** The platform's words for this action, as the Library and the File menu say it. */
+  const revealLabel = mac ? 'Reveal in Finder' : 'Show in File Explorer';
+
+  /**
+   * A save is on the wire — this sheet's Retry, or an autosave that was already
+   * scheduled when the sheet opened. Both read the same way here.
+   */
+  const saveInFlight = $derived(saveRetry === 'saving' || $editor.saveState === 'saving');
+
+  const saveSheetStatus = $derived.by(() => {
+    const parts: string[] = [];
+    if (saveInFlight) parts.push('Saving your changes…');
+    if (saveRetry === 'failed') {
+      parts.push(
+        `Still not saved after ${saveRetryFailures === 1 ? 'one more try' : `${saveRetryFailures} more tries`}.`,
+      );
+    }
+    if (saveCopy === 'copied') {
+      parts.push('Your text is copied. Paste it into another app and save it there.');
+    } else if (saveCopy === 'failed') {
+      parts.push(
+        'Couldn’t copy to the clipboard. Close this message, then select the text in the editor and copy it.',
+      );
+    } else if (saveRetry === 'failed') {
+      parts.push('Copy all text and paste it into another app to keep it safe.');
+    }
+    if (saveRevealFailure !== null) parts.push(saveRevealFailure);
+    if (parts.length === 0) return null;
+    const failed = saveRetry === 'failed' || saveCopy === 'failed' || saveRevealFailure !== null;
+    const tone = failed ? 'danger' : saveInFlight ? 'progress' : 'success';
+    return { tone, text: parts.join(' ') };
+  });
+
+  /*
+   * Escape and the scrim always work, even mid-save: a save that never answers
+   * must not hold the person away from their script. The save carries on, and
+   * the toolbar reports how it ends.
+   *
+   * Focus then goes to the editor when the toolbar control that opened the
+   * sheet has gone — it is hidden while a save is in flight and after one
+   * lands — because the dialog has nothing else to hand it back to.
+   */
+  function closeSaveIssue(): void {
+    saveIssueOpen = false;
+    saveSheetOpening += 1;
+    saveRetry = 'idle';
+    saveRetryFailures = 0;
+    saveCopy = 'idle';
+    saveRevealFailure = null;
+    void tick().then(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) editorRef?.focus();
+    });
+  }
+
+  /*
+   * The sheet follows the store, not only its own Retry.
+   *
+   * An autosave scheduled by typing just before the sheet opened can land
+   * underneath it, and then the sheet went on saying "Your changes aren't
+   * saved" over a document that was — with its cause line gone, because a
+   * save that works clears `lastError`. A save this sheet's Retry started is
+   * left to `retrySave`, which reports its own outcome.
+   */
+  $effect(() => {
+    if (!saveIssueOpen || saveRetry === 'saving') return;
+    const outcome = $editor.saveState;
+    if (outcome === 'conflict') {
+      untrack(() => {
+        closeSaveIssue();
+        conflictOpen = true;
+      });
+      return;
+    }
+    if ((outcome === 'saved' || outcome === 'idle') && !editorHasUnsavedWork()) {
+      untrack(() => {
+        closeSaveIssue();
+        showToast('Your changes are saved.', 'success');
+      });
+    }
+  });
+
+  /**
+   * Save again, and report the result where it was asked for.
+   *
+   * `saveNow()` RESOLVES when the save fails — the failure is store state — so
+   * the outcome is read from the store afterwards rather than inferred from the
+   * promise. The sheet closes only on a save that landed.
+   *
+   * Retry is disabled while it runs, as the conflict sheet's arms are. Disabling
+   * the focused button drops focus, so a failed retry puts it back.
+   */
+  async function retrySave(): Promise<void> {
+    if (saveRetry === 'saving') return;
+    const opening = saveSheetOpening;
+    const savingScript = $editor.scriptId;
+    saveRetry = 'saving';
+    await saveNow();
+    const outcome = $editor.saveState;
+    /*
+     * "Saved" only when it is true of everything on screen. A save can land
+     * while newer typing is still unsaved (the sheet was dismissed mid-save and
+     * the author carried on), and `saveState` says `saved` for it all the same.
+     */
+    const allSaved = $editor.scriptId === savingScript && !editorHasUnsavedWork();
+    if (opening !== saveSheetOpening) {
+      if (allSaved) showToast('Your changes are saved.', 'success');
+      return;
+    }
+    if (outcome === 'error') {
+      saveRetryFailures += 1;
+      saveRetry = 'failed';
+      await tick();
+      const active = document.activeElement;
+      if (active === null || active === document.body) retryButton?.focus();
+      return;
+    }
+    closeSaveIssue();
+    // The file changed on disk in the meantime: that question has its own sheet.
+    if (outcome === 'conflict') {
+      conflictOpen = true;
+      return;
+    }
+    if (allSaved) showToast('Your changes are saved.', 'success');
+  }
+
+  async function copyAllText(): Promise<void> {
+    const opening = saveSheetOpening;
+    let copied = true;
+    try {
+      await navigator.clipboard.writeText($editor.source);
+    } catch {
+      copied = false;
+    }
+    if (opening === saveSheetOpening) saveCopy = copied ? 'copied' : 'failed';
+  }
+
+  async function revealFromSaveSheet(): Promise<void> {
+    const opening = saveSheetOpening;
+    saveRevealFailure = null;
+    try {
+      await scriptsService.revealScriptFolder(scriptId);
+    } catch (err) {
+      if (opening !== saveSheetOpening) return;
+      const failed = mac ? 'Couldn’t reveal this script in Finder.' : 'Couldn’t show this script in File Explorer.';
+      const why = describeError(err);
+      // A missing file is usually why the save failed too, and the sheet already says so.
+      saveRevealFailure = why === $editor.lastError ? failed : `${failed} ${why}`;
+    }
   }
 
   /* --- F.8 external-conflict resolution ------------------------------- */
@@ -1712,23 +1888,61 @@ import type { PresentationMode } from '../services/settings-types';
   onrestored={() => void afterRestore()}
 />
 
-<!-- F.8 save-failure sheet -->
-<Dialog open={saveIssueOpen} title="Save failed" onclose={() => (saveIssueOpen = false)}>
-  <p class="dialog-body">Your current text is still open and has not been discarded.</p>
+<!--
+  F.8 save-failure sheet.
+
+  It answers the person's first question before it explains anything: the text
+  is still here, and what would lose it. Focus opens on that answer rather than
+  on a button (the house rule for a status sheet), so a screen reader starts
+  with it and Return cannot fire an action nobody chose. The cause is the
+  authored copy from `describeError`, set as prose: it is a sentence for a
+  person, not a log line.
+-->
+<Dialog open={saveIssueOpen} title="Your changes aren’t saved" onclose={closeSaveIssue}>
+  <div class="save-verdict" tabindex="-1" data-autofocus>
+    <p class="save-verdict-title">Your text is still open in this window.</p>
+    <p class="save-verdict-next">
+      Press Esc or click outside this message to go back to it. Until your latest changes are saved,
+      they exist only in this window, so quitting CandidCue or a crash could lose them.
+    </p>
+  </div>
   {#if $editor.lastError}
-    <p class="dialog-detail">{$editor.lastError}</p>
+    <p class="save-cause">{$editor.lastError}</p>
   {/if}
+  <p class="save-status {saveSheetStatus?.tone ?? 'advice'}" role="status" aria-atomic="true">
+    <span class="save-status-mark" aria-hidden="true">
+      <Icon
+        name={saveSheetStatus === null
+          ? 'info'
+          : saveSheetStatus.tone === 'success'
+            ? 'check'
+            : saveSheetStatus.tone === 'danger'
+              ? 'alert'
+              : 'refresh'}
+        size={14}
+      />
+    </span>
+    <span>{saveSheetStatus?.text ?? 'If Retry keeps failing, copy all text and paste it into another app.'}</span>
+  </p>
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => void revealFolder()}>Reveal data folder</Button>
-    <Button variant="ghost" onclick={() => void copyAllText()}>Copy all text</Button>
+    <Button variant="ghost" onclick={() => void revealFromSaveSheet()}>{revealLabel}</Button>
+    <Button onclick={() => void copyAllText()}>Copy all text</Button>
+    <!--
+      Both labels are laid out and only one is visible, so the button is as wide
+      as the longer one in both states and the row does not jump left while the
+      save is in flight. `visibility: hidden` also keeps the idle one out of the
+      accessible name.
+    -->
     <Button
       variant="primary"
-      onclick={() => {
-        saveIssueOpen = false;
-        void manualSave();
-      }}
+      disabled={saveInFlight}
+      bind:element={retryButton}
+      onclick={() => void retrySave()}
     >
-      Retry
+      <span class="retry-label" class:busy={saveInFlight}>
+        <span class="idle">Retry</span>
+        <span class="pending">Saving…</span>
+      </span>
     </Button>
   {/snippet}
 </Dialog>
@@ -2253,6 +2467,78 @@ import type { PresentationMode } from '../services/settings-types';
     font-size: var(--text-meta);
     color: var(--text-muted);
     font-family: var(--font-mono);
+  }
+
+  /*
+   * The save-failure sheet has classes of its own: `.dialog-body` and
+   * `.dialog-detail` also dress the conflict sheet.
+   *
+   * The verdict is set like the take-readiness verdict — a 15px line that
+   * answers, then the 13px line that qualifies it — and unframed, as the
+   * session summary's outcome is: the dialog is the only box.
+   */
+  .save-verdict {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  /* A reading position, not a control: it takes focus only so a screen reader
+     and the next Tab start from it. */
+  .save-verdict:focus {
+    outline: none;
+  }
+  .save-verdict-title {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: 21px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .save-verdict-next,
+  .save-cause {
+    margin: 0;
+    color: var(--text-secondary);
+    text-wrap: pretty;
+  }
+
+  .save-status {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    column-gap: var(--space-2);
+    align-items: start;
+    margin: 0;
+    color: var(--text-muted);
+    text-wrap: pretty;
+  }
+  .save-status-mark {
+    display: grid;
+    place-items: center;
+    height: var(--lh-label);
+  }
+  .save-status.success,
+  .save-status.danger {
+    font-weight: 600;
+  }
+  .save-status.success {
+    color: var(--success);
+  }
+  .save-status.danger {
+    color: var(--danger);
+  }
+
+  .retry-label {
+    display: inline-grid;
+  }
+  .retry-label > span {
+    grid-area: 1 / 1;
+    text-align: center;
+  }
+  .retry-label .pending,
+  .retry-label.busy .idle {
+    visibility: hidden;
+  }
+  .retry-label.busy .pending {
+    visibility: visible;
   }
 
   /*
