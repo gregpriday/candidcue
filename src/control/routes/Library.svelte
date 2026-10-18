@@ -928,7 +928,11 @@
                   {:else}
                     <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
                   {/if}
-                  <OverflowMenu items={rowMenuItems(script)} label={`Actions for ${script.title}`} />
+                  <OverflowMenu
+                    compact
+                    items={rowMenuItems(script)}
+                    label={`Actions for ${script.title}`}
+                  />
                 {/snippet}
               </ScriptRow>
             </div>
@@ -1068,7 +1072,7 @@
   .collection {
     --col-length: 72px;
     --col-modified: 112px;
-    --col-actions: 120px;
+    --col-actions: 132px;
     border: 1px solid var(--border-faint);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);

@@ -163,8 +163,10 @@ test('the selected row is visibly selected, and focus is distinguishable from it
   const list = collection(page);
   await list.getByRole('option').first().waitFor();
 
+  // The row's state is drawn on its inset highlight (`::before`), not on the
+  // row box itself, which stays transparent in every state.
   const background = (title: string) =>
-    row(page, title).evaluate((el) => getComputedStyle(el).backgroundColor);
+    row(page, title).evaluate((el) => getComputedStyle(el, '::before').backgroundColor);
 
   // Click one to select it — a single click selects and does NOT open.
   await row(page, 'Weekly product update').click();

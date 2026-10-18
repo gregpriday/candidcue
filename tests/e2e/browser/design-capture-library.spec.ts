@@ -217,6 +217,21 @@ test('04 row overflow menu open', async ({ page }) => {
   await page.getByRole('button', { name: 'Actions for Sample: read this aloud' }).click();
   await expect(page.locator('[role="menu"]')).toBeVisible();
   await expect(page.getByRole('menuitem', { name: /Reveal in Finder/ })).toBeVisible();
+  /*
+   * On top, not merely open: each item must be what the pointer would hit at
+   * its own centre. A row that became a stacking context once painted the
+   * next rows' dates over this menu, and "visible" still passed.
+   */
+  const buried = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+      .filter((item) => {
+        const r = item.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !hit || !item.contains(hit);
+      })
+      .map((item) => item.textContent?.trim()),
+  );
+  if (buried.length > 0) throw new Error(`menu items painted under the list: ${buried.join(', ')} — refusing to write`);
   await shoot(page, '04-row-menu');
 });
 
@@ -453,7 +468,10 @@ async function shootRows(page: Page, name: string, rows = 6): Promise<void> {
   await page.waitForTimeout(150);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
   const box = await page.locator('.collection').boundingBox();
-  const pitch = await collection(page).getByRole('option').first().evaluate((el) => el.offsetHeight + 1);
+  const pitch = await collection(page)
+    .getByRole('option')
+    .first()
+    .evaluate((el) => (el as HTMLElement).offsetHeight + 1);
   if (!box) throw new Error('the collection is not laid out — refusing to write');
   const height = Math.min(box.height, 28 + rows * pitch);
   await page.screenshot({
