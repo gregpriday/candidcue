@@ -65,6 +65,7 @@ import type { PresentationMode } from '../services/settings-types';
   import { DEFAULT_WORDS_PER_MINUTE } from '../../shared/speaking-rate';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
+  import { showLintRun } from '../lib/lint-run';
   import { onShortcut } from '../lib/shortcuts';
   import { onDroppedImages, onInsertCommand, onRouteCommand } from '../stores/command-bus';
   import * as assetsService from '../services/assets';
@@ -1092,8 +1093,16 @@ import type { PresentationMode } from '../services/settings-types';
          * and the line the note is actually about — above the top of the view.
          * The findings most worth clicking are the longest ones, so that was the
          * common case, not the corner.
+         *
+         * Always to the top, with a line of context above it: the nearest edge
+         * left a sentence in the bottom third running off the page, and a run
+         * already in view did not move at all. The mark (lib/lint-run.ts) is
+         * what says which words the note meant.
          */
-        effects: EditorView.scrollIntoView(EditorSelection.range(end, anchor)),
+        effects: [
+          EditorView.scrollIntoView(EditorSelection.range(end, anchor), { y: 'start', yMargin: 48 }),
+          showLintRun.of({ from: anchor, to: end }),
+        ],
       });
       view.focus();
     });

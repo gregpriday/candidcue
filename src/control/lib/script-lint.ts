@@ -61,6 +61,20 @@ export interface ScriptLintFinding {
   length?: number;
   message: string;
   hint?: string;
+  /**
+   * The words the note is about, the way the author will recognise them in a
+   * list: Markdown removed, whitespace collapsed, and cut at a word boundary to
+   * about a line and a half of rail.
+   *
+   * Taken from the same pass that produced the finding, never by slicing the
+   * editor's text with these offsets later — the notes on screen can be a
+   * compile behind the text, and a quote from newer text would put the right
+   * words beside the wrong note. A paragraph without a closing mark is quoted
+   * from its END, because the end is what the note is about.
+   */
+  excerpt?: string;
+  /** Spoken words in the flagged paragraph or sentence (the two length rules). */
+  words?: number;
 }
 
 /** Spoken words after which a paragraph starts costing recovery time. */
@@ -601,6 +615,31 @@ function caseClass(surface: string): CaseClass {
   return surface.replace(/[^\p{Lu}]/gu, '').length >= 2 ? 'caps' : 'neutral';
 }
 
+/** Roughly a line and a half of the rail at its default width. */
+const EXCERPT_CHARS = 72;
+/**
+ * Shorter for a quote taken from the end: the rail clamps a quote to two lines
+ * from the START, so a long tail would lose exactly the words it is there for.
+ */
+const TAIL_EXCERPT_CHARS = 44;
+
+/** Spoken text as a short quote. `fromEnd` keeps the last words instead. */
+function excerptOf(spoken: string, fromEnd = false): string {
+  const flat = spoken.replace(/\s+/g, ' ').trim();
+  const limit = fromEnd ? TAIL_EXCERPT_CHARS : EXCERPT_CHARS;
+  if (flat.length <= limit) return flat;
+  if (fromEnd) {
+    const cut = flat.slice(flat.length - limit);
+    const space = cut.indexOf(' ');
+    return `…${space >= 0 ? cut.slice(space + 1) : cut}`;
+  }
+  const cut = flat.slice(0, limit);
+  const space = cut.lastIndexOf(' ');
+  // "changed,…" reads as a typo: the ellipsis replaces whatever punctuation
+  // the cut happened to stop on.
+  return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:—–-]+$/, '')}…`;
+}
+
 /** Closers that may sit after the sentence terminator and still be an ending. */
 const TRAILING_CLOSERS = /["'”’)\]]+$/;
 const TERMINAL_PUNCTUATION = /[.?!:…]$/;
@@ -610,6 +649,7 @@ function longParagraphFinding(
   words: number,
   start: number,
   end: number,
+  spoken: string,
 ): ScriptLintFinding {
   const severe = words > VERY_LONG_PARAGRAPH_WORDS;
   const { line, column } = positionAt(lines, start);
@@ -627,6 +667,8 @@ function longParagraphFinding(
     hint: severe
       ? 'Split this into three or four paragraphs at the natural pauses.'
       : 'A blank line at the next natural pause splits it in two.',
+    excerpt: excerptOf(spoken),
+    words,
   };
 }
 
@@ -662,6 +704,7 @@ export function lintScriptSource(source: string): ScriptLintFinding[] {
           tokens.length,
           paragraph.start + first.start,
           paragraph.start + last.end,
+          text,
         ),
       );
     }
@@ -689,6 +732,7 @@ export function lintScriptSource(source: string): ScriptLintFinding[] {
             'continuously — every word is the same flat rectangle, so the eye has to spell ' +
             'them out instead of recognising their shape at a glance.',
           hint: 'Use sentence case here, and carry the emphasis with bold or a cue.',
+          excerpt: excerptOf(text.slice(runStart, runEnd)),
         });
       }
       runStart = -1;
@@ -731,6 +775,7 @@ export function lintScriptSource(source: string): ScriptLintFinding[] {
             'read, so without it the stage has nowhere to breathe here and the tracker loses ' +
             'the clearest evidence it gets that you finished the paragraph.',
           hint: 'End it with a full stop, even if you would not pause there.',
+          excerpt: excerptOf(text, true),
         });
       }
     }
@@ -751,6 +796,8 @@ export function lintScriptSource(source: string): ScriptLintFinding[] {
           'inside it for the display to breathe at or for the tracker to settle on, so it ' +
           'arrives as one unbroken wall and stays that way until you reach the end of it.',
         hint: 'Split it at the breath you would actually take.',
+        excerpt: excerptOf(sentence.text),
+        words: sentenceTokens.length,
       });
     }
   }
