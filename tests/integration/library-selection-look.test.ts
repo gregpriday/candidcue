@@ -4,12 +4,12 @@
  * ---------------------------------------------------------------------------
  * WHY A TEST AND NOT JUST A COMMENT
  * ---------------------------------------------------------------------------
- * Selection used to be a FILL, and the unfocused half of it was a flat warm
- * grey. Across a full-width row on a white list that reads as dirt rather than
- * as a state, and it is the failure this project's design rules name and
- * forbid — "never muddy grey washes". It is also the failure that comes back
- * first, because "make the selected row a bit darker" is the obvious thing to
- * reach for and it is wrong here.
+ * The row states have been redrawn three times, and each time the failure was
+ * the same shape: hover and selection drawn as two unrelated colours (a warm
+ * grey and a clay tint), with a decoration — an accent bar — doing the work
+ * the fill could not. It is also the failure that comes back first, because
+ * "give hover its own colour" and "add a marker so the selection pops" are
+ * the obvious things to reach for.
  *
  * jsdom resolves no stylesheets, so a component test cannot read a computed
  * colour. What CAN be checked is the rule set itself, and the properties below
@@ -26,62 +26,86 @@ const TOKENS = readFileSync(join(REPO_ROOT, 'src/styles/tokens.css'), 'utf8');
 /** The component's `<style>` block, so prose about the design is not matched. */
 const ROW_CSS = ROW.slice(ROW.lastIndexOf('<style>'));
 
-describe('a selected row is a marker, not a wash', () => {
-  it('draws the selection with an inset accent bar', () => {
-    // Inset ::before, never a one-sided border: the list has a radius and clips
-    // its rows, so a border-left would cut a straight edge through the rounded
-    // corner on the first and last row.
-    expect(ROW_CSS).toMatch(/\.selected::before\s*\{/);
-    expect(ROW_CSS).toMatch(/position:\s*absolute/);
-    expect(ROW_CSS, 'the marker is the brand colour').toMatch(/background:\s*var\(--accent\)/);
+/** The five row states, weakest first. */
+const RAMP = [
+  '--bg-row-hover',
+  '--bg-row-selected-quiet',
+  '--bg-row-selected-quiet-hover',
+  '--bg-row-selected',
+  '--bg-row-selected-hover',
+];
+
+/** The value a token is given inside one theme block. */
+function valueIn(selector: string, token: string): string {
+  const start = TOKENS.indexOf(`${selector} {`);
+  const block = TOKENS.slice(start, TOKENS.indexOf('\n}', start));
+  const match = block.match(new RegExp(`\\n\\s*${token}:\\s*([^;]+);`));
+  if (!match?.[1]) throw new Error(`${token} is not defined under ${selector}`);
+  return match[1].trim();
+}
+
+describe('a selected row is one highlight, not a marker', () => {
+  it('draws no accent bar', () => {
+    // The owner's ruling: the fill already says "selected", so a bar at the
+    // row's leading edge is a second signal for the same state.
+    expect(ROW_CSS).not.toMatch(/background:\s*var\(--accent\)/);
+    expect(ROW_CSS).not.toMatch(/\.selected::before\s*\{[^}]*width:\s*3px/);
   });
 
-  it('uses no neutral fill for selection', () => {
+  it('draws every state on the same inset highlight', () => {
+    expect(ROW_CSS).toMatch(/\.row::before\s*\{[^}]*inset:/);
+    expect(ROW_CSS).toMatch(/\.interactive:hover::before\s*\{[^}]*var\(--bg-row-hover\)/);
+    expect(ROW_CSS).toMatch(/\.selected::before\s*\{[^}]*var\(--bg-row-selected-quiet\)/);
+    expect(ROW_CSS).toMatch(/\.selected\.list-focused::before\s*\{[^}]*var\(--bg-row-selected\)/);
+  });
+
+  it('lets hover deepen a selected row, focused or not', () => {
+    // A focused selection used to swallow hover entirely: its rule named
+    // `:hover` itself and repainted the same fill.
+    expect(ROW_CSS).toMatch(/\.selected:hover::before\s*\{[^}]*var\(--bg-row-selected-quiet-hover\)/);
+    expect(ROW_CSS).toMatch(
+      /\.selected\.list-focused:hover::before\s*\{[^}]*var\(--bg-row-selected-hover\)/,
+    );
+  });
+
+  it('draws hover and selection from one family, in rising strength', () => {
     /*
-     * The specific regression. `--bg-row-selected-inactive` is the retired
-     * muddy grey; any of the neutral surface tokens would be the same mistake
-     * wearing a different name.
+     * The specific regression: a hover in one colour and a selection in
+     * another. Every step must be the same ink at a higher alpha than the step
+     * before it, so hover can never be mistaken for a selection and the
+     * keyboard-focused selection is always the strongest.
      */
-    const banned = [
-      '--bg-row-selected-inactive',
-      '--bg-hover-chrome',
-      '--bg-secondary',
-      '--bg-sunken',
-    ];
-    const selectionRules = ROW_CSS.split('\n').filter((line) => /background/.test(line));
+    for (const selector of ["[data-theme='workspace']", ":root,\n[data-theme='studio']"]) {
+      const steps = RAMP.map((token) => {
+        const match = valueIn(selector, token).match(
+          /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/,
+        );
+        expect(match, `${token} under ${selector} is one rgba ink`).not.toBeNull();
+        return { ink: match!.slice(1, 4).join(','), alpha: Number(match![4]) };
+      });
+      expect(new Set(steps.map((step) => step.ink)).size, `one ink under ${selector}`).toBe(1);
+      for (let i = 1; i < steps.length; i += 1) {
+        expect(steps[i]!.alpha, `${RAMP[i]} is stronger than ${RAMP[i - 1]}`).toBeGreaterThan(
+          steps[i - 1]!.alpha,
+        );
+      }
+    }
+  });
+
+  it('uses no retired or neutral surface fill for a row state', () => {
+    const banned = ['--bg-row-selected-inactive', '--bg-hover-surface', '--bg-hover-chrome', '--accent-wash'];
+    const fills = ROW_CSS.split('\n').filter((line) => /background/.test(line));
     for (const token of banned) {
       expect(
-        selectionRules.some((line) => line.includes(token)),
-        `${token} is a neutral fill; selection is drawn from the accent family`,
+        fills.some((line) => line.includes(token)),
+        `${token} is not part of the row ramp`,
       ).toBe(false);
     }
   });
 
-  it('separates selected-and-focused from selected-and-not by strength', () => {
-    /*
-     * §23.3 needs the two told apart. They are now the same mark at two
-     * intensities rather than two unrelated colours, which is both calmer and a
-     * truer description of the difference: one is "selected", the other is
-     * "selected, and the keyboard is here".
-     */
-    expect(ROW_CSS).toMatch(/\.selected\.list-focused::before\s*\{[^}]*opacity:\s*1/);
-    expect(ROW_CSS).toMatch(/\.selected::before\s*\{[\s\S]*?opacity:\s*0\.85/);
-    expect(ROW_CSS).toMatch(/\.selected\.list-focused[\s\S]*?background:\s*var\(--bg-row-selected\)/);
-  });
-
-  it('lets hover deepen a selected row instead of resetting it', () => {
-    // The old rule repainted a hovered selected row with the resting selection
-    // colour, so the selected row was the one place in the list where hover did
-    // nothing at all.
-    expect(ROW_CSS).toMatch(/\.selected:hover\s*\{[^}]*var\(--bg-row-selected-hover\)/);
-  });
-
-  it('defines the selection ramp in both themes', () => {
-    // Three steps, all from the accent family: resting, hover, focused.
-    for (const token of ['--accent-wash', '--bg-row-selected-hover', '--bg-row-selected']) {
-      const occurrences = TOKENS.split(token).length - 1;
-      expect(occurrences, `${token} must be defined in the studio and light themes`).toBeGreaterThanOrEqual(2);
-    }
+  it('puts the keyboard edge on the highlight, not around the row', () => {
+    expect(ROW_CSS).toMatch(/\.row:focus-visible\s*\{[^}]*outline:\s*none/);
+    expect(ROW_CSS).toMatch(/\.row:focus-visible::before\s*\{[^}]*var\(--focus-quiet\)/);
   });
 
   it('adds no color-mix dependency to a core interaction', () => {

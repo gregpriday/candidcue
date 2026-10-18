@@ -792,6 +792,9 @@
         rows that are the right shape make it look like a list filling in.
       -->
       <div class="skeletons" aria-hidden="true">
+        <!-- The headings' band, empty, so the rows that replace these land
+             exactly where the placeholders were rather than 28px lower. -->
+        <div class="skeleton-columns"></div>
         {#each SKELETON_WIDTHS as width, index (index)}
           <div class="skeleton" class:compact>
             <span class="bar" style:width={`${width}%`}></span>
@@ -1072,14 +1075,10 @@
     /*
      * NOT `overflow: hidden`. A row's menu is positioned inside the row, and a
      * clipping collection cut it off at the bottom edge of a short list —
-     * Recent with three scripts could not show its own row menu. The one
-     * thing the clip was doing, keeping the last row's tint inside the
-     * rounded corners, the rule below does instead.
+     * Recent with three scripts could not show its own row menu. Nothing
+     * needs clipping now: a row's highlight is inset from its edges, so it
+     * never reaches the rounded corners.
      */
-  }
-  .row-slot:last-child :global(.row) {
-    border-bottom-left-radius: calc(var(--radius-sm) - 1px);
-    border-bottom-right-radius: calc(var(--radius-sm) - 1px);
   }
   .list {
     display: flex;
@@ -1186,6 +1185,11 @@
     background: var(--bg-panel);
     overflow: hidden;
   }
+  .skeleton-columns {
+    flex: 0 0 auto;
+    height: 28px;
+    border-bottom: 1px solid var(--border-faint);
+  }
   .skeleton {
     display: flex;
     flex-direction: column;
@@ -1193,10 +1197,18 @@
     gap: 9px;
     height: var(--list-row-h);
     padding: 0 var(--space-3);
-    border-bottom: 1px solid var(--border-faint);
   }
   .skeleton.compact {
     height: var(--list-row-h-compact);
+  }
+  /* The hairline goes BETWEEN rows, on top of a full row's height, exactly as
+     the real list draws it — so each placeholder has a real row's pitch. */
+  .skeleton + .skeleton {
+    height: calc(var(--list-row-h) + 1px);
+    border-top: 1px solid var(--border-faint);
+  }
+  .skeleton.compact + .skeleton.compact {
+    height: calc(var(--list-row-h-compact) + 1px);
   }
   /*
    * Static placeholder lines, not a shimmer. §23.5 and §3.2: no perpetual
@@ -1215,9 +1227,6 @@
     width: 58%;
     height: 7px;
     opacity: 0.7;
-  }
-  .skeleton:last-child {
-    border-bottom: none;
   }
 
   .stale {

@@ -789,30 +789,25 @@
     color: var(--text-primary);
     transition: background var(--dur-fast) var(--ease-out);
   }
+  /* A lighter step of the selection's own ink. Every revision's reason is
+     already 600, so nothing but the fill tells the selected one from the one
+     under the pointer, and the rail's warm hover grey sat level with it. */
   .row:hover:not(:disabled) {
-    background: var(--bg-hover-chrome);
+    background: var(--bg-row-hover);
   }
   .row:disabled {
     cursor: default;
   }
   /*
-   * Selected: the Library's grammar — a tonal fill and an inset marker. Inset,
-   * never a one-sided border on a rounded box. No white card: on warm paper a
+   * Selected: the neutral tonal fill every row on a paper rail uses (the
+   * sidebar, the Settings index, the editor outline). No marker bar, and no
+   * clay wash beside a grey hover: the two read as unrelated colours rather
+   * than as one state at two strengths. No white card either: on warm paper a
    * raised white pill reads as a web nav (Sidebar.svelte retired it).
    */
   .row.active,
   .row.active:hover {
-    background: var(--bg-row-selected);
-  }
-  .row.active::before {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
+    background: var(--bg-source-selected);
   }
 
   .row-top {
