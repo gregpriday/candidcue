@@ -302,7 +302,11 @@ jobs:
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           PASSWORD="$(uuidgen)"
           security create-keychain -p "$PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          # Locks only after the job's own 120-minute limit. Tauri signs at the
+          # END of `tauri build`, and a cold universal compile outlasts a short
+          # timeout: at 900 s the keychain locked mid-build and codesign sat
+          # on a password prompt no runner can answer until the job timed out.
+          security set-keychain-settings -lut 10800 "$KEYCHAIN"
           security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
           # Removed on every exit path, not only the successful one: a failed
           # `security import` used to leave the decoded .p12 sitting in the
