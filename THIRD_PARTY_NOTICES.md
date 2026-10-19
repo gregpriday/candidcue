@@ -29,6 +29,23 @@ Licensed under the SIL Open Font License 1.1. The woff2 subsets are the ones
 published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,
 unmodified. Full text: `LICENSE-fonts.txt`, beside this file.
 
+## Shared libraries in the Linux AppImage
+
+The AppImage carries the shared libraries CandidCue needs from Ubuntu 22.04
+("jammy") so that it runs on distributions that lack them: chiefly WebKitGTK,
+GTK 3, GLib, GStreamer, cairo, pango, HarfBuzz, libsoup, GnuTLS and Nettle,
+and their dependencies. The `.deb` carries none of them; the package manager
+installs them. Each is the unmodified Ubuntu build, dynamically linked and
+replaceable, under its own licence — most under the GNU LGPL (2.1 or later, or
+3), the rest under permissive licences (MIT, BSD, the Unicode licence for ICU),
+with some offered under a choice that includes the GPL. None is under the GPL
+alone. The exact list is the AppImage's `usr/lib` directory, and the
+corresponding source for each is published in the Ubuntu 22.04 archive
+(<https://launchpad.net/ubuntu/jammy>), under the package that ships it. On
+request, the source for any of them is also available from the CandidCue
+project at <https://github.com/gregpriday/candidcue/issues>, for at least three
+years after the release that carried it.
+
 ## Statically linked native components
 
 Speech recognition runs through **sherpa-onnx**, linked statically. Its
