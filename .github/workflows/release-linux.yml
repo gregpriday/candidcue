@@ -50,10 +50,23 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+
+      # A tag on an unmerged commit would otherwise publish whatever it
+      # points at. Releases come from main (docs/release-runbook.md).
+      - name: The tag must be on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git fetch --no-tags --quiet origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_REF_NAME} (${GITHUB_SHA}) is not on main. Merge it to main, then tag the merge."
+            exit 1
+          fi
 
       - name: The tag must name the version being built
         if: startsWith(github.ref, 'refs/tags/v')
@@ -207,21 +220,32 @@ jobs:
           smoke appimage "$APPIMAGE" --appimage-extract-and-run
 
       - name: Stage the release
+        env:
+          CANDIDCUE_PUBLIC_URL: ${{ vars.CANDIDCUE_PUBLIC_URL }}
         run: |
           set -euo pipefail
           TAG="v$(node scripts/version.mjs print)"
           node scripts/release-notes.mjs "$TAG" > "$RUNNER_TEMP/notes.md"
           node scripts/release-feed.mjs stage --os linux \
             --bundle src-tauri/target/release/bundle \
-            --out stage --notes "$RUNNER_TEMP/notes.md"
-          (cd stage/files/*/ && sha256sum -c SHA256SUMS-linux.txt)
+            --out handover/stage --notes "$RUNNER_TEMP/notes.md"
+          (cd handover/stage/files/*/ && sha256sum -c SHA256SUMS-linux.txt)
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidcue-release-linux
-          path: stage/
+          # The PARENT of stage/: an artifact holds what is under its path,
+          # and publishing reads stage/release.json from the artifact's root.
+          path: handover/
           retention-days: 90
           if-no-files-found: error
+
+      # What the publish job will download, downloaded and checked here, so
+      # a dry run proves the handover and not only the upload.
+      - uses: ./.github/actions/receive-candidcue
+        with:
+          artifact_name: candidcue-release-linux
+          path: handover-check
 
   publish:
     name: Publish the release
@@ -230,6 +254,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
     permissions:
       contents: write
+    # One publish per platform at a time, across tags: two versions both
+    # passing the monotonic gate against the same live feed would otherwise
+    # race, and the older could land last.
+    concurrency:
+      group: publish-candidcue-linux
+      cancel-in-progress: false
     environment:
       name: ${{ contains(github.ref_name, '-') && 'release-prerelease' || 'release-stable' }}
     steps:

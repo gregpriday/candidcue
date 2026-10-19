@@ -59,6 +59,17 @@ interface NetworkOptions {
   delayMs?: number;
 }
 
-export declare function monotonic(stageDir: string, options?: NetworkOptions): Promise<{ skip: boolean }>;
+export type MonotonicVerdict = 'first' | 'published' | 'newer' | 'older';
+export declare function monotonic(
+  stageDir: string,
+  options?: NetworkOptions,
+): Promise<{ verdicts: MonotonicVerdict[] }>;
+export declare function writeOnce(
+  stageDir: string,
+  options?: NetworkOptions,
+): Promise<{ unpublished: string[]; published: string[] }>;
+export declare function checkOrigin(stageDir: string, publicUrl: string): void;
+export declare function newestStable(tags: readonly string[]): string | null;
+export declare function rustLines(text: string): string[];
 export declare function verifyFiles(stageDir: string, options?: NetworkOptions): Promise<void>;
 export declare function verifyFeed(stageDir: string, options?: NetworkOptions): Promise<void>;

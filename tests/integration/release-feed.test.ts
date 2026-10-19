@@ -206,6 +206,41 @@ describe('staging lays out exactly what will be uploaded', () => {
     ).toThrow(/exactly one/);
   });
 
+  /*
+   * The installed updater decodes base64 strictly; Node skips what it does not
+   * understand. Staging what only Node can read would publish an update every
+   * client refuses.
+   */
+  it('refuses a signature only a lenient decoder can read', () => {
+    const key = minisignKey();
+    const payload = Buffer.from('the payload');
+    const sig = minisignSign(payload, key);
+    const publicKey = feed.updaterPublicKey(key.pubkey);
+    expect(() => feed.verifyUpdaterSignature(sig, payload, publicKey)).not.toThrow();
+    expect(() => feed.verifyUpdaterSignature(`!${sig}`, payload, publicKey)).toThrow(/standard base64/);
+    expect(() => feed.verifyUpdaterSignature(`${sig}\n`, payload, publicKey)).toThrow(/standard base64/);
+    const inner = Buffer.from(sig, 'base64').toString('utf8').replace('\n', '\n ');
+    expect(() =>
+      feed.verifyUpdaterSignature(Buffer.from(inner).toString('base64'), payload, publicKey),
+    ).toThrow(/standard base64/);
+  });
+
+  it('splits lines as Rust does, keeping a bare carriage return at the end', () => {
+    expect(feed.rustLines('a\nb\n')).toEqual(['a', 'b', '']);
+    expect(feed.rustLines('a\r\nb\r\n')).toEqual(['a', 'b', '']);
+    expect(feed.rustLines('a\nb')).toEqual(['a', 'b']);
+    expect(feed.rustLines('a\nb\r')).toEqual(['a', 'b\r']);
+  });
+
+  it('refuses a signature whose last line ends in a carriage return Rust would keep', () => {
+    const key = minisignKey();
+    const payload = Buffer.from('the payload');
+    const inner = Buffer.from(minisignSign(payload, key), 'base64').toString('utf8').replace(/\n$/, '\r');
+    expect(() =>
+      feed.verifyUpdaterSignature(Buffer.from(inner).toString('base64'), payload, feed.updaterPublicKey(key.pubkey)),
+    ).toThrow(/standard base64/);
+  });
+
   it('accepts the public key this repository ships', () => {
     const conf = JSON.parse(readFileSync(join(__dirname, '../../src-tauri/tauri.conf.json'), 'utf8'));
     expect(() => feed.updaterPublicKey(conf.plugins.updater.pubkey)).not.toThrow();
@@ -218,9 +253,11 @@ type Route = { status: number; body?: string | Buffer; headers?: Record<string, 
 
 function fakeFetch(routes: Record<string, Route | (() => Route)>) {
   const seen: string[] = [];
+  const asked: string[] = [];
   const fetchFn = async (url: string) => {
     const path = url.replace(/[?&]cb=[^&]+/, '');
     seen.push(path);
+    asked.push(url);
     const entry = routes[path];
     const route = typeof entry === 'function' ? entry() : entry ?? { status: 404 };
     const body = typeof route.body === 'string' ? route.body : new Uint8Array(route.body ?? []);
@@ -229,7 +266,7 @@ function fakeFetch(routes: Record<string, Route | (() => Route)>) {
       headers: route.headers,
     });
   };
-  return { fetchFn, seen };
+  return { fetchFn, seen, asked };
 }
 
 const quiet = { log: () => {}, attempts: 2, delayMs: 0 };
@@ -238,7 +275,9 @@ describe('the monotonic gate', () => {
   it('lets a first release through when no feed exists yet', async () => {
     const { out } = stageMac();
     const { fetchFn } = fakeFetch({});
-    await expect(feed.monotonic(out, { fetchFn, log: () => {} })).resolves.toEqual({ skip: false });
+    await expect(feed.monotonic(out, { fetchFn, log: () => {} })).resolves.toEqual({
+      verdicts: ['first', 'first'],
+    });
   });
 
   it('refuses a version older than the one the feed serves', async () => {
@@ -251,23 +290,118 @@ describe('the monotonic gate', () => {
     await expect(feed.monotonic(out, { fetchFn, log: () => {} })).rejects.toThrow(/older/);
   });
 
-  it('skips the upload only when every platform already serves this version', async () => {
+  /*
+   * A publish that failed half way (one architecture's entry up, the other
+   * not, or the downloads manifest missing) is repaired by running it again.
+   * Skipping every write because one feed already serves the version used to
+   * leave the rest broken, and skip the checks that would have said so.
+   */
+  it('lets a re-run through to repair a partial publish', async () => {
     const { out } = stageMac();
     const same = { status: 200, body: JSON.stringify({ version: '0.1.0' }) };
     const both = fakeFetch({
       [`${PUBLIC}/releases/latest-darwin-aarch64.json`]: same,
       [`${PUBLIC}/releases/latest-darwin-x86_64.json`]: same,
     });
-    await expect(feed.monotonic(out, { fetchFn: both.fetchFn, log: () => {} })).resolves.toEqual({ skip: true });
+    await expect(feed.monotonic(out, { fetchFn: both.fetchFn, log: () => {} })).resolves.toEqual({
+      verdicts: ['published', 'published'],
+    });
 
     const one = fakeFetch({ [`${PUBLIC}/releases/latest-darwin-aarch64.json`]: same });
-    await expect(feed.monotonic(out, { fetchFn: one.fetchFn, log: () => {} })).resolves.toEqual({ skip: false });
+    await expect(feed.monotonic(out, { fetchFn: one.fetchFn, log: () => {} })).resolves.toEqual({
+      verdicts: ['published', 'first'],
+    });
   });
 
   it('fails closed on anything but a 200 or a 404', async () => {
     const { out } = stageMac();
     const { fetchFn } = fakeFetch({ [`${PUBLIC}/releases/latest-darwin-aarch64.json`]: { status: 503 } });
     await expect(feed.monotonic(out, { fetchFn, log: () => {} })).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe('a published file never changes', () => {
+  function published(out: string, override: Record<string, Route> = {}) {
+    const dir = join(out, 'files', '0.1.0');
+    const routes: Record<string, Route> = {};
+    for (const name of readdirSync(dir)) {
+      routes[`${PUBLIC}/releases/0.1.0/${name}`] = { status: 200, body: readFileSync(join(dir, name)) };
+    }
+    return { ...routes, ...override };
+  }
+
+  it('calls every file new on a first publish', async () => {
+    const { out } = stageMac();
+    const { fetchFn } = fakeFetch({});
+    const { unpublished, published: there } = await feed.writeOnce(out, { fetchFn, log: () => {} });
+    expect(there).toEqual([]);
+    expect(unpublished).toHaveLength(4);
+  });
+
+  it('lets a re-run of the same build through, file for file', async () => {
+    const { out } = stageMac();
+    const { fetchFn } = fakeFetch(published(out));
+    const result = await feed.writeOnce(out, { fetchFn, log: () => {} });
+    expect(result.unpublished).toEqual([]);
+    expect(result.published).toHaveLength(4);
+  });
+
+  /*
+   * The defect: a whole release re-run rebuilds the payload with new bytes and
+   * a new signature under the same name, and uploading it would put one
+   * build's bytes beside another build's signature in a live feed entry.
+   */
+  it('refuses a rebuild under a version already published', async () => {
+    const { out } = stageMac();
+    const { fetchFn } = fakeFetch(
+      published(out, {
+        [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.app.tar.gz`]: { status: 200, body: 'the first build' },
+      }),
+    );
+    await expect(feed.writeOnce(out, { fetchFn, log: () => {} })).rejects.toThrow(/already published with different bytes/);
+  });
+
+  it('asks the origin past the cache, so a cached 404 cannot outlive the upload', async () => {
+    const { out } = stageMac();
+    const { fetchFn, asked } = fakeFetch({});
+    await feed.writeOnce(out, { fetchFn, log: () => {} });
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((url) => /[?&]cb=/.test(url))).toBe(true);
+  });
+
+  it('fails closed on anything but a 200 or a 404', async () => {
+    const { out } = stageMac();
+    const { fetchFn } = fakeFetch({ [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.dmg`]: { status: 403 } });
+    await expect(feed.writeOnce(out, { fetchFn, log: () => {} })).rejects.toThrow(/HTTP 403/);
+  });
+});
+
+describe('a release is published through the origin it was staged for', () => {
+  it('accepts the same origin, with or without a trailing slash', () => {
+    const { out } = stageMac();
+    expect(() => feed.checkOrigin(out, PUBLIC)).not.toThrow();
+    expect(() => feed.checkOrigin(out, `${PUBLIC}/`)).not.toThrow();
+  });
+
+  it('refuses another one', () => {
+    const { out } = stageMac();
+    expect(() => feed.checkOrigin(out, 'https://updates.candidcue.com')).toThrow(/staged for/);
+  });
+});
+
+describe('only the newest stable release may be called Latest', () => {
+  it('picks the newest stable tag by semver, not by the order it is given', () => {
+    expect(feed.newestStable(['v0.1.0'])).toBe('v0.1.0');
+    expect(feed.newestStable(['v0.2.0', 'v0.10.0', 'v0.9.1'])).toBe('v0.10.0');
+  });
+
+  it('never hands Latest to a prerelease', () => {
+    expect(feed.newestStable(['v0.2.0', 'v0.3.0-rc.1', 'v0.3.0-beta.2'])).toBe('v0.2.0');
+  });
+
+  it('names nothing when there is no stable release yet', () => {
+    expect(feed.newestStable([])).toBeNull();
+    expect(feed.newestStable(['v0.1.0-rc.1', 'nightly', '0.1.0'])).toBeNull();
   });
 });
 

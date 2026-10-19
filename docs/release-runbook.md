@@ -175,28 +175,48 @@ git push origin v1.0.0-rc.2
 ```
 
 A hyphen in the version is what makes it a prerelease: the workflows pass
-`--prerelease --latest=false` for `v1.0.0-rc.2` and `--latest` for `v1.0.0`,
-and a prerelease publishes to its own update channel (`rc`, or `beta` when the
-prerelease part says so), which no stable install polls. Check which one you
-are about to become before pushing.
+`--prerelease --latest=false` for `v1.0.0-rc.2`, and mark `v1.0.0` Latest
+unless a newer stable release already exists. A prerelease publishes to its
+own update channel (`rc`, or `beta` when the prerelease part says so), which
+no stable install polls. Check which one you are about to become before
+pushing.
+
+The gates refuse a tag whose commit is not on `main`.
 
 ### What publishing does
 
 Each OS's `publish` job runs `.github/actions/publish-candidcue`, in this
 order, and stops at the first failure:
 
-1. Refuses a version that is not newer than what that OS's update feed
-   already serves; skips the upload entirely if the feed already serves
-   exactly this version (a re-run of a release that went out).
-2. Uploads the installers, the updater payload and its `.sig`, and
+1. Receives the build job's artifact and checks every file against its
+   `SHA256SUMS` (`.github/actions/receive-candidcue`, which the build job
+   also runs on its own upload, so a dry run proves this handover too).
+2. Refuses a version older than what that OS's update feed already serves.
+   The same version is allowed through, so a re-run can finish a publish
+   that failed half way.
+3. Refuses to change a file that is already published: every file already
+   under `releases/<version>/` must be byte for byte the one staged.
+4. Uploads the installers, the updater payload and its `.sig`, and
    `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `candidcue` R2
    bucket, cached as immutable.
-3. Downloads every one of them back from `https://updates.candidcue.com` and
+5. Downloads every one of them back from `https://updates.candidcue.com` and
    compares the bytes.
-4. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
+6. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
    download page reads. Both are served `no-cache`, and both are read back.
-5. Creates the GitHub Release, or adds to it if another OS got there first.
+7. Creates the GitHub Release (empty, so no draft is ever left for another
+   OS to lose its files in), or finds the one another OS created, then
+   attaches its files and checks each one arrived.
+
+Only one publish per OS runs at a time, across tags. GitHub keeps one more
+waiting behind it and cancels that one if a third arrives, so release one
+version at a time and let it finish publishing before tagging the next.
+
+**If a publish fails**, re-run only the failed `publish` job. It reuses the
+build that was staged, so step 3 passes and the rest repairs whatever the
+first attempt left undone. Re-running the whole workflow rebuilds every
+file with new bytes under the same names, and step 3 refuses that once any
+of them is published: release a new version instead.
 
 `scripts/release-feed.mjs` is the whole layout, with the reasons.
 

@@ -1762,6 +1762,7 @@ const RELEASE_WORKFLOWS = {
   linux: '.github/workflows/release-linux.yml',
 } as const;
 const PUBLISH_ACTION = '.github/actions/publish-candidcue/action.yml';
+const RECEIVE_ACTION = '.github/actions/receive-candidcue/action.yml';
 
 const stripComments = (source: string) =>
   source
@@ -1845,7 +1846,9 @@ describe('the release workflow cannot publish an unverified build', () => {
     expect(publish).toContain('./.github/actions/publish-candidcue');
 
     const order = [
+      './.github/actions/receive-candidcue',
       'release-feed.mjs monotonic',
+      'release-feed.mjs write-once',
       'aws s3 cp verified/stage/files/',
       'release-feed.mjs verify-files',
       'aws s3 cp verified/stage/feed/',
@@ -1857,6 +1860,43 @@ describe('the release workflow cannot publish an unverified build', () => {
       return at;
     });
     expect([...order].sort((a, b) => a - b), 'and in exactly this order').toEqual(order);
+  });
+
+  /*
+   * The publish used to skip every write, and every check, when the updater
+   * feeds already served the version, so a re-run after a half-finished
+   * publish reported success and repaired nothing.
+   */
+  it('runs every check on a re-run, rather than skipping to success', () => {
+    expect(action).not.toContain('skip_upload');
+    expect(action).not.toMatch(/^\s*if:/m);
+  });
+
+  /*
+   * `gh release create` given files makes a draft, fills it, publishes it,
+   * and deletes it if anything fails. Another platform uploading into that
+   * draft lost its files with it.
+   */
+  it('creates the GitHub Release empty and attaches files to it afterwards', () => {
+    const create = action.slice(action.indexOf('gh release create'));
+    const createCall = create.slice(0, create.indexOf('; then'));
+    expect(createCall).not.toContain('files[@]');
+    expect(action.indexOf('gh release upload')).toBeGreaterThan(action.indexOf('gh release create'));
+    expect(action, 'and checks every file arrived').toContain('gh release view "$TAG" --json assets');
+  });
+
+  /*
+   * GitHub makes every new release Latest unless told otherwise; an older
+   * version whose publish ran late would take the label from a newer one.
+   */
+  it('lets only the newest stable release become Latest', () => {
+    // Never at creation, where the last one created would win...
+    const create = action.slice(action.indexOf('flags=('), action.indexOf('gh release create'));
+    expect(create).toContain('flags=(--latest=false)');
+    // ...but at the end of every publish, to the newest stable tag.
+    expect(action).toContain('release-feed.mjs newest-stable');
+    expect(action).toContain('gh release edit "$newest" --latest');
+    expect(action.indexOf('gh release edit')).toBeGreaterThan(action.indexOf('gh release upload'));
   });
 
   it('serves versioned files as immutable and the feed as uncached', () => {
@@ -1942,6 +1982,21 @@ describe('the release workflow cannot publish an unverified build', () => {
   });
 });
 
+describe('the handover is checked where it is received', () => {
+  const receive = stripComments(readWorkflow(RECEIVE_ACTION));
+
+  it('downloads the artifact and finds stage/ at its root', () => {
+    expect(receive).toContain('actions/download-artifact@');
+    expect(receive).toContain('test -s "$RECEIVED/stage/release.json"');
+  });
+
+  it('checks every file against the checksums staged with it', () => {
+    expect(receive).toMatch(/sha256sum -c "\$\{sums\[0\]\}"/);
+    expect(receive).toMatch(/shasum -a 256 -c "\$\{sums\[0\]\}"/);
+    expect(receive).toContain('set -euo pipefail');
+  });
+});
+
 describe('every operating system gates, verifies and stages before it publishes', () => {
   it.each(Object.entries(RELEASE_WORKFLOWS))('%s', (os, relPath) => {
     const uncommented = stripComments(readWorkflow(relPath));
@@ -1974,9 +2029,39 @@ describe('every operating system gates, verifies and stages before it publishes'
       expect(build.indexOf('sherpa-no-tts.mjs')).toBeLessThan(build.indexOf('pnpm tauri build'));
     }
 
+    // Staging records the origin publishing will be given, and checks it.
+    const staging = build.slice(build.indexOf('- name: Stage the release'));
+    expect(staging.slice(0, staging.indexOf('run: |'))).toContain('CANDIDCUE_PUBLIC_URL: ${{ vars.CANDIDCUE_PUBLIC_URL }}');
+
+    // The build downloads its own artifact the way publishing will, so a dry
+    // run proves the handover: an artifact uploaded from the single path
+    // `stage/` has no stage/ in it, and only a real publish used to notice.
+    const upload = build.indexOf(`name: candidcue-release-${os}`);
+    const receive = build.indexOf('./.github/actions/receive-candidcue');
+    expect(upload).toBeGreaterThan(-1);
+    expect(receive, 'the build must receive its own artifact').toBeGreaterThan(upload);
+    const uploadStep = build.slice(upload, build.indexOf('if-no-files-found', upload));
+    if (os === 'macos') {
+      // Several paths: the artifact keeps each one's own directory.
+      expect(uploadStep).toMatch(/path: \|\n\s+stage\/\n\s+sbom\/\n\s+provenance\//);
+    } else {
+      // One path: the artifact holds what is UNDER it, so it must be the
+      // parent of the stage directory.
+      expect(uploadStep).toMatch(/path: handover\/\n/);
+      expect(build).toContain('--out handover/stage');
+    }
+
+    // A tag must be on main before anything is built from it.
+    const gates = jobOf(uncommented, 'gates', relPath);
+    expect(gates).toContain('git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD');
+    expect(gates).toContain('fetch-depth: 0');
+
     const publish = jobOf(uncommented, 'publish', relPath);
     expect(publish).toContain('./.github/actions/publish-candidcue');
     expect(publish).toMatch(/if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true/);
+    // One publish per platform at a time, whichever tag it is for.
+    expect(publish).toContain(`group: publish-candidcue-${os}\n`);
+    expect(publish).toContain('cancel-in-progress: false');
   });
 });
 
@@ -2345,7 +2430,7 @@ describe('third-party actions are pinned to immutable commits', () => {
    * standard practice was of a widely-used action, and "we trust the owner" is
    * the assumption it broke.
    */
-  const WORKFLOWS = ['.github/workflows/ci.yml', ...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION];
+  const WORKFLOWS = ['.github/workflows/ci.yml', ...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION, RECEIVE_ACTION];
 
   it('has workflows to check', () => {
     expect(WORKFLOWS.length).toBeGreaterThan(1);

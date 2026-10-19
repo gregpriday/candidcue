@@ -11,8 +11,9 @@
  * ## The layout under `<public url>/releases/`
  *
  *   <version>/<installer, updater payload, .sig, SHA256SUMS-<os>.txt>
- *       Written once, served `immutable`. A version directory never changes
- *       after its feed entry points at it.
+ *       Written once, served `immutable`. A file already there is only ever
+ *       written again with the same bytes (`write-once`), so a re-run can
+ *       repair a partial publish but never change what a feed entry signed.
  *
  *   <channel>-<target>-<arch>.json
  *       What the in-app updater polls (`src-tauri/src/updater.rs` builds the
@@ -41,11 +42,14 @@
  *   node scripts/release-feed.mjs channel <version>
  *   node scripts/release-feed.mjs stage --os <macos|windows|linux> --bundle <dir> --out <dir> [--notes <file>]
  *   node scripts/release-feed.mjs monotonic --stage <dir>
+ *   node scripts/release-feed.mjs write-once --stage <dir>
  *   node scripts/release-feed.mjs verify-files --stage <dir>
  *   node scripts/release-feed.mjs verify-feed --stage <dir>
+ *   node scripts/release-feed.mjs newest-stable [tags…]
  *
  * `CANDIDCUE_PUBLIC_URL` overrides the public origin (default
- * https://updates.candidcue.com).
+ * https://updates.candidcue.com). `stage` records it, and every later command
+ * refuses a stage recorded for a different origin than the one it was given.
  */
 
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
@@ -126,10 +130,11 @@ export function compareVersions(a, b) {
 /**
  * What the live feed means for a candidate version, per platform.
  *
- * Equal is "already published", not a failure: re-running a release whose
- * feed already went up must upload nothing rather than rewrite what clients
- * are being served. Lower is a refusal — the updater would never offer it,
- * and a feed that names it hides every newer build until it is corrected.
+ * Equal is "already published", not a failure: a re-run repairs whatever a
+ * failed publish left half done, and `write-once` keeps it from changing a
+ * file a live entry already signed. Lower is a refusal — the updater would
+ * never offer it, and a feed that names it hides every newer build until it
+ * is corrected.
  */
 export function monotonicVerdict(live, candidate) {
   if (live === null) return 'first';
@@ -198,15 +203,48 @@ function findOne(bundle, dir, suffix) {
 /* ------------------------------------------------------------- signatures */
 
 /**
+ * Standard, padded base64, decoded only if it is exactly that.
+ *
+ * Node's decoder skips characters it does not know and ignores stray padding,
+ * and the installed updater's does neither. A signature only Node can read
+ * would stage, publish, and then be refused by every client.
+ */
+function strictBase64(text, what) {
+  const decoded = Buffer.from(text, 'base64');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text) || text.length % 4 !== 0 || decoded.toString('base64') !== text) {
+    throw new Error(`${what} is not standard base64`);
+  }
+  return decoded;
+}
+
+/** UTF-8 that is valid as written, as Rust's `String::from_utf8` demands. */
+function strictUtf8(bytes, what) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(`${what} is not valid UTF-8`);
+  }
+}
+
+/**
+ * Rust's `str::lines`: split on `\n`, and drop a `\r` only where it is half of
+ * a `\r\n`. A bare `\r` at the very end is kept, as Rust keeps it. Nothing is
+ * trimmed.
+ */
+export function rustLines(text) {
+  const parts = text.split('\n');
+  return parts.map((line, index) => (index < parts.length - 1 ? line.replace(/\r$/, '') : line));
+}
+
+/**
  * The updater public key from `tauri.conf.json`, as an Ed25519 key object.
  *
  * Tauri's key is base64 of a minisign public key FILE: an untrusted comment
  * line, then base64 of `Ed` + 8-byte key id + 32-byte key.
  */
 export function updaterPublicKey(pubkeyBase64) {
-  const text = Buffer.from(pubkeyBase64, 'base64').toString('utf8');
-  const line = text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('untrusted comment:'));
-  const raw = Buffer.from(line ?? '', 'base64');
+  const text = strictUtf8(strictBase64(pubkeyBase64, 'the updater public key'), 'the updater public key');
+  const raw = strictBase64(rustLines(text)[1] ?? '', 'the updater public key line');
   if (raw.length !== 42 || raw.subarray(0, 2).toString('latin1') !== 'Ed') {
     throw new Error('the updater public key is not a minisign Ed25519 public key');
   }
@@ -231,12 +269,13 @@ export function updaterPublicKey(pubkeyBase64) {
  * that into a failed release.
  */
 export function verifyUpdaterSignature(sigBase64, data, publicKey) {
-  const text = Buffer.from(sigBase64.trim(), 'base64').toString('utf8');
-  const lines = text.split('\n').map((l) => l.trim());
+  // Exactly as the feed will carry it and the updater will decode it.
+  const text = strictUtf8(strictBase64(sigBase64, 'the signature'), 'the signature');
+  const lines = rustLines(text);
   if (!lines[0]?.startsWith('untrusted comment:')) throw new Error('not a minisign signature');
-  const sig = Buffer.from(lines[1] ?? '', 'base64');
+  const sig = strictBase64(lines[1] ?? '', 'the signature line');
   const trusted = lines[2] ?? '';
-  const globalSig = Buffer.from(lines[3] ?? '', 'base64');
+  const globalSig = strictBase64(lines[3] ?? '', 'the trusted comment signature');
   if (sig.length !== 74 || !trusted.startsWith('trusted comment: ') || globalSig.length !== 64) {
     throw new Error('malformed minisign signature');
   }
@@ -377,6 +416,23 @@ function readRelease(stageDir) {
 }
 
 /**
+ * The stage must have been made for the origin this command was given.
+ *
+ * Every URL in the feed entries was written at staging, from the origin the
+ * build had. Publishing them through a different origin would verify one host
+ * and announce another.
+ */
+export function checkOrigin(stageDir, publicUrl) {
+  const staged = readRelease(stageDir).publicUrl;
+  if (releasesUrl(staged) !== releasesUrl(publicUrl)) {
+    throw new Error(
+      `the release was staged for ${staged}, but this step was given ${publicUrl}. ` +
+        'Stage and publish with the same CANDIDCUE_PUBLIC_URL.',
+    );
+  }
+}
+
+/**
  * Refuse a version that is not newer than what each platform's feed already
  * serves; report when every platform already serves exactly this version.
  */
@@ -407,7 +463,71 @@ export async function monotonic(stageDir, { fetchFn = fetch, log = console.log }
     }
     verdicts.push(verdict);
   }
-  return { skip: verdicts.every((verdict) => verdict === 'published') };
+  return { verdicts };
+}
+
+/**
+ * Refuse to change a file that is already published.
+ *
+ * The versioned files are served `immutable`, and a feed entry may already be
+ * pointing at them with its signature. Re-running a whole release rebuilds
+ * every payload — new bytes, new signature, same name — and uploading that
+ * over the first build would hand clients one build's bytes beside the other's
+ * signature, or leave edges serving the old bytes for a year. So a file that
+ * is there must be byte for byte the one staged; one that is not there yet is
+ * new. Re-running only the publish job reuses the build's artifact, so it
+ * passes here and repairs whatever the first attempt left undone.
+ *
+ * Asked of the origin, past any cache: a 404 cached for the plain URL would
+ * outlive the upload and fail `verify-files`.
+ */
+export async function writeOnce(stageDir, { fetchFn = fetch, log = console.log } = {}) {
+  const release = readRelease(stageDir);
+  const base = releasesUrl(release.publicUrl);
+  const filesDir = join(stageDir, 'files', release.version);
+  const unpublished = [];
+  const published = [];
+  for (const name of readdirSync(filesDir).sort()) {
+    const url = `${base}/${release.version}/${name}`;
+    const response = await fetchWithTimeout(fresh(url), { headers: { 'cache-control': 'no-cache' } }, fetchFn);
+    if (response.status === 404) {
+      unpublished.push(name);
+      log(`[write-once] ${name}: not published yet`);
+      continue;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}; refusing to guess what is there`);
+    const actual = await sha256OfResponse(response);
+    if (actual !== sha256File(join(filesDir, name))) {
+      throw new Error(
+        `${url} is already published with different bytes (sha256 ${actual}). A version's files never ` +
+          'change once uploaded: re-run only the publish job, which reuses the build that was published, ' +
+          'or release a new version.',
+      );
+    }
+    published.push(name);
+    log(`[write-once] ${name}: already published, identical`);
+  }
+  return { unpublished, published };
+}
+
+/**
+ * The tag of the newest stable release among `tags`, which is the one GitHub
+ * should call Latest, or `null` when there is none.
+ *
+ * GitHub makes each newly published release Latest unless told otherwise, so
+ * an older version whose publish ran late would take the label from a newer
+ * one. Every publish therefore ends by handing Latest to this release, whoever
+ * created theirs last; the publishes converge on the same answer. Prereleases
+ * and tags that are not `v` plus a version are not candidates.
+ */
+export function newestStable(tags) {
+  let newest = null;
+  for (const tag of tags) {
+    const version = tag.startsWith('v') ? tag.slice(1) : '';
+    if (!SEMVER.test(version) || version.includes('-')) continue;
+    if (newest === null || compareVersions(version, newest.slice(1)) > 0) newest = tag;
+  }
+  return newest;
 }
 
 async function sha256OfResponse(response) {
@@ -545,17 +665,24 @@ async function main(argv) {
       for (const name of readdirSync(join(required(args, '--out'), 'feed'))) console.log(`  ${name}`);
       return;
     }
-    case 'monotonic': {
-      const { skip } = await monotonic(required(args, '--stage'));
-      setOutput('skip_upload', String(skip));
-      if (skip) console.log('[monotonic] every platform already serves this version; nothing to upload.');
+    case 'monotonic':
+      checkOrigin(required(args, '--stage'), publicUrl);
+      await monotonic(required(args, '--stage'));
       return;
-    }
+    case 'write-once':
+      checkOrigin(required(args, '--stage'), publicUrl);
+      await writeOnce(required(args, '--stage'));
+      return;
     case 'verify-files':
+      checkOrigin(required(args, '--stage'), publicUrl);
       await verifyFiles(required(args, '--stage'));
       return;
     case 'verify-feed':
+      checkOrigin(required(args, '--stage'), publicUrl);
       await verifyFeed(required(args, '--stage'));
+      return;
+    case 'newest-stable':
+      console.log(newestStable(args) ?? '');
       return;
     default:
       throw new Error(`unknown command "${command ?? ''}"`);

@@ -102,12 +102,25 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
-      # First, because it is the cheapest gate and the most expensive failure.
+      # A tag on an unmerged commit would otherwise publish whatever it
+      # points at. Releases come from main (docs/release-runbook.md).
+      - name: The tag must be on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          git fetch --no-tags --quiet origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_REF_NAME} (${GITHUB_SHA}) is not on main. Merge it to main, then tag the merge."
+            exit 1
+          fi
+
+      # Early, because it is a cheap gate and the most expensive failure.
       # `v1.0.0` building source version `1.0.0-rc.2` produces a signed,
       # notarised artifact whose About box disagrees with its own download page.
       #
@@ -571,6 +584,8 @@ jobs:
       # updater signature verified against the key the app ships with.
       # `shasum -a 256` runs inside the staging step and writes SHA256SUMS.
       - name: Stage the release
+        env:
+          CANDIDCUE_PUBLIC_URL: ${{ vars.CANDIDCUE_PUBLIC_URL }}
         run: |
           set -euo pipefail
           TAG="v$(node scripts/version.mjs print)"
@@ -590,6 +605,13 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      # What the publish job will download, downloaded and checked here, so
+      # a dry run proves the handover and not only the upload.
+      - uses: ./.github/actions/receive-candidcue
+        with:
+          artifact_name: candidcue-release-macos
+          path: handover-check
+
   # ------------------------------------------------------------------
   # Only now, and in a job that can write.
   # ------------------------------------------------------------------
@@ -600,6 +622,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
     permissions:
       contents: write
+    # One publish per platform at a time, across tags: two versions both
+    # passing the monotonic gate against the same live feed would otherwise
+    # race, and the older could land last.
+    concurrency:
+      group: publish-candidcue-macos
+      cancel-in-progress: false
     # A stable tag can be made to wait for a human; a prerelease flows. See the
     # header — neither environment has to exist for this to run.
     environment:
