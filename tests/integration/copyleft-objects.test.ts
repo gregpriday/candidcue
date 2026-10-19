@@ -149,9 +149,11 @@ const ANCHOR_LIVE = {
  *
  * Not on Windows. The gate reads ld64 maps — the macOS linker's — of the macOS
  * universal binary, and these fixtures are built with the `cc` and `ar` that
- * toolchain provides. Windows has neither, and no Windows build exists for the
- * gate to vouch for; the release that does run it is the macOS one, and CI's
- * node tests, this suite among them, run on macOS for every push.
+ * toolchain provides. Windows has neither, and a Windows build is not this
+ * gate's to vouch for: it links the text-to-speech-free libraries, and
+ * `verify-no-gpl-in-binary.mjs` checks it. The release that runs this gate is
+ * the macOS one, and CI's node tests, this suite among them, run on macOS for
+ * every push.
  */
 describe.skipIf(process.platform === 'win32')('the copyleft gate', { timeout: 30_000 }, () => {
   it('passes when every copyleft object was dead-stripped', () => {
