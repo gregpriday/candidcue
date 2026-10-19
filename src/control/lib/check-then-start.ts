@@ -18,7 +18,7 @@ import { get, writable, type Readable } from 'svelte/store';
 import { resolveReadiness, type ReadinessVerdict } from './take-readiness';
 import { startTake, type StartTakeOptions } from './start-take';
 import { isCompileSettledForScript } from './editor-readiness';
-import { matchRememberedMicrophone } from '../services/audio/devices';
+import { inputsWithheld, matchRememberedMicrophone } from '../services/audio/devices';
 import { getVoiceFacade } from '../services/voice-facade';
 import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
 import { describeError } from '../services/errors';
@@ -126,6 +126,10 @@ async function pinnedMicrophone(): Promise<{ label: string | null; available: bo
   const label = audio.preferredDeviceLabel ?? pinned;
   // No list — it failed, or the pin is newer than it. Not proven absent.
   if (devices === null) return { label, available: true };
+  // A list that names nothing: the first take after every launch, because the
+  // webview hides inputs until this window has opened one. Not proven absent
+  // either — and the take resolves the pin again once it can see.
+  if (inputsWithheld(devices)) return { label, available: true };
   // `undefined`, not null, is the matcher's "not connected". Comparing with
   // null was always true, so a missing microphone was never reported.
   const match = matchRememberedMicrophone(devices, {

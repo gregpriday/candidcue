@@ -22,7 +22,7 @@
  * cross-webview transport from the critical presentation path.
  */
 import { get } from 'svelte/store';
-import { matchRememberedMicrophone } from '../services/audio';
+import { inputsWithheld, matchRememberedMicrophone } from '../services/audio';
 import { compileScript, type CompileOutput } from '../services/compiler';
 import { describeError } from '../services/errors';
 import {
@@ -223,7 +223,12 @@ type CompiledTake = CompileOutput & { script: NonNullable<CompileOutput['script'
  * this used to pass unconditionally.
  */
 async function resolvePinnedMicrophone(s: AppSettings): Promise<string | undefined> {
-  if (s.audio.followSystemDefault || s.audio.preferredDeviceId === undefined) return undefined;
+  const pinned = s.audio.preferredDeviceId;
+  // Older builds auto-pinned the browser's own `default` pseudo-device, which
+  // is the system-default choice spelled a second way (as Settings reads it).
+  if (s.audio.followSystemDefault || pinned === undefined || pinned === '' || pinned === 'default') {
+    return undefined;
+  }
   try {
     const devices = await getVoiceFacade().listMicrophones();
     const match = matchRememberedMicrophone(devices, {
@@ -231,6 +236,14 @@ async function resolvePinnedMicrophone(s: AppSettings): Promise<string | undefin
       label: s.audio.preferredDeviceLabel,
     });
     if (match) return match.deviceId;
+    /*
+     * The first take after every launch: the webview names no inputs until
+     * this window has opened one, so nothing here can say whether the pin is
+     * plugged in. Honour it. If the id has gone stale the take finds the
+     * microphone by its name once it can see (`findPinnedMicrophone`), and says
+     * so if it really is not connected.
+     */
+    if (inputsWithheld(devices)) return s.audio.preferredDeviceId;
     // Not plugged in. Presenting on the system default beats not presenting,
     // and it is said out loud for the same reason the wrong-display case above
     // is: a take that quietly runs on a different microphone is discovered from
@@ -854,6 +867,9 @@ export async function startTake(
       // "Follow system default" means exactly that: no pinned device id, so the
       // pipeline opens (and keeps following) whatever the system input is.
       ...(micDeviceId === undefined ? {} : { micDeviceId }),
+      ...(micDeviceId === undefined || s.audio.preferredDeviceLabel === undefined
+        ? {}
+        : { micDeviceLabel: s.audio.preferredDeviceLabel }),
       audioProcessing: {
         echoCancellation: s.audio.echoCancellation,
         noiseSuppression: s.audio.noiseSuppression,

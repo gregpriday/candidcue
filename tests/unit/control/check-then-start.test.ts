@@ -293,6 +293,35 @@ describe('a pinned microphone', () => {
     expect(h.startTake).toHaveBeenCalledTimes(1);
   });
 
+  it('is not reported off a list the webview has not named yet', async () => {
+    /*
+     * The report this fixes: every launch, a pinned RØDE that was plugged in
+     * and working was "not connected". WKWebView answers a window that has not
+     * opened a microphone with ONE input, no id and no name — whatever is
+     * attached, and whatever macOS has granted — so the pin could never match.
+     */
+    pinYeti();
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    h.listMicrophones.mockResolvedValue([
+      { deviceId: '', label: 'Microphone 1', isDefault: false, available: true, withheld: true },
+    ]);
+    await checkThenStartTake('script-1');
+    expect(get(takeReadinessPrompt)).toBeNull();
+    expect(h.startTake).toHaveBeenCalledTimes(1);
+    // Passive: nothing was opened to find out.
+    expect(h.requestMicrophoneAccess).not.toHaveBeenCalled();
+  });
+
+  it('is still reported once the webview names the inputs and it is not among them', async () => {
+    pinYeti();
+    h.readMicrophonePermission.mockResolvedValue('granted');
+    h.listMicrophones.mockResolvedValue([
+      { deviceId: 'built-in', label: 'MacBook Pro Microphone', isDefault: false, available: true },
+    ]);
+    await checkThenStartTake('script-1');
+    expect(findingIds()).toEqual(['mic_missing']);
+  });
+
   it('is not reported for the legacy `default` pin, which is the system default', async () => {
     // Older builds auto-pinned the browser's own `default` pseudo-device;
     // Settings reads that as "follow the system default", and so must this.

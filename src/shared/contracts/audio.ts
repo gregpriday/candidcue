@@ -43,6 +43,12 @@ export interface AudioDeviceInfo {
   label: string;
   isDefault: boolean;
   available: boolean;
+  /**
+   * The webview withheld this input's id or name, and `label` is a placeholder.
+   * It does so until the page has opened a microphone itself — see
+   * `inputsWithheld`.
+   */
+  withheld?: boolean;
 }
 
 export interface AudioLevelSnapshot {

@@ -968,6 +968,8 @@ export interface StartSessionInput {
   stageDisplay?: DisplayDescriptor | null;
   transcription?: TranscriptionConfig;
   micDeviceId?: string;
+  /** The name `micDeviceId` was remembered by, to find it again under a new id. */
+  micDeviceLabel?: string;
   /** §28.3 capture processing (Settings → Audio / Preflight → Advanced). */
   audioProcessing?: {
     echoCancellation?: boolean;
@@ -1160,6 +1162,7 @@ export function startLiveSession(input: StartSessionInput): string {
         : {}),
       ...(input.transcription?.model !== undefined ? { modelId: input.transcription.model } : {}),
       deviceId: input.micDeviceId,
+      ...(input.micDeviceLabel === undefined ? {} : { deviceLabel: input.micDeviceLabel }),
       audioProcessing: input.audioProcessing,
       // §28.4: the slider had no reader at all. The saved value is the default
       // so every caller of `startLiveSession` gets it, not only Preflight.
@@ -1403,13 +1406,13 @@ export function startLiveSession(input: StartSessionInput): string {
        * has to keep without being asked twice, so the pills clear themselves.
        */
       /*
-       * §28.2: the chosen device was busy and the system default was opened
-       * instead. Said out loud, once: a take running on the built-in
-       * microphone when the user selected an interface is a take whose audio
-       * is not what they think it is, and the status bar's input picker is
-       * where they change it.
+       * §28.2: the chosen device was busy, is not connected, or could not be
+       * found, and the system default was opened instead. Said out loud, once: a take running on the
+       * built-in microphone when the user selected an interface is a take whose
+       * audio is not what they think it is, and the status bar's input picker
+       * is where they change it.
        */
-      onInputFellBackToDefault: () => {
+      onInputFellBackToDefault: (reason) => {
         /*
          * The epoch guard its neighbours already have. A pipeline that has been
          * superseded can still report a fallback it was in the middle of when
@@ -1432,8 +1435,15 @@ export function startLiveSession(input: StartSessionInput): string {
          * stays calm and stays put. `clearConditionToasts` retires it with the
          * take; a successful switch retires it immediately.
          */
+        const chosen = input.micDeviceLabel ?? 'The microphone you chose';
         showToast(
-          'The microphone you chose was busy, so CandidCue is using the system default input. ' +
+          (reason === 'missing'
+            ? `${chosen} is not connected, so CandidCue is using the system default input. `
+            : reason === 'unknown'
+              ? // Its id opened nothing and the webview would not name the inputs,
+                // so whether it is plugged in is not known — and not claimed.
+                `CandidCue could not open ${input.micDeviceLabel ?? 'the microphone you chose'}, so it is using the system default input. `
+              : 'The microphone you chose was busy, so CandidCue is using the system default input. ') +
             'Pick another input in the take controls if that is wrong.',
           'info',
           { key: TOAST_INPUT_FELL_BACK, durationMs: 0 },
@@ -1442,6 +1452,29 @@ export function startLiveSession(input: StartSessionInput): string {
         // picker that the take-controls drawer would not render, because the
         // picker's condition is `inputDeviceLost` and nothing was lost.
         state.update((s) => ({ ...s, usingFallbackInput: true }));
+      },
+      /*
+       * The pin opened under a new id (see `findPinnedMicrophone`). Remembered,
+       * so the next launch's first take opens it straight away — but only while
+       * Settings still pins what this take was started with: a choice made
+       * there meanwhile is newer than anything this take found out.
+       */
+      onPinnedMicrophoneFound: (deviceId, label) => {
+        if (pillEpoch !== voicePillEpoch) return;
+        // Open on the chosen input now. A resume is what finds it after a
+        // start that could not, and the notice from then is no longer true.
+        state.update((s) => ({ ...s, usingFallbackInput: false }));
+        dismissToastByKey(TOAST_INPUT_FELL_BACK);
+        const audio = getSettingsSnapshot().audio;
+        if (!audio || audio.followSystemDefault || audio.preferredDeviceId !== input.micDeviceId) {
+          return;
+        }
+        void patchSettings('audio', {
+          preferredDeviceId: deviceId,
+          preferredDeviceLabel: label,
+        }).catch(() => {
+          /* a remembered preference is a convenience, never a gate */
+        });
       },
       onInputRestored: () => {
         if (pillEpoch === voicePillEpoch) voicePillDeviceLost = false;

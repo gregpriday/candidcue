@@ -125,6 +125,7 @@ const {
 const { smoothFollow } = await import('../../../src/control/stores/smooth-follow');
 const { resolveTakeOutcome } = await import('../../../src/control/lib/take-outcome');
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
+const { getSettingsSnapshot, patchSettings } = await import('../../../src/control/stores/settings');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
 function compiledStub(): CompiledScript {
@@ -155,6 +156,8 @@ interface StartOverrides {
     normalizedText: string;
   }>;
   practice?: boolean;
+  micDeviceId?: string;
+  micDeviceLabel?: string;
 }
 
 function start(overrides: StartOverrides = {}): string {
@@ -172,6 +175,8 @@ function start(overrides: StartOverrides = {}): string {
     compiled: overrides.compiled ?? compiledStub(),
     sessionGeneration: overrides.sessionGeneration ?? 7,
     practice: overrides.practice,
+    ...(overrides.micDeviceId === undefined ? {} : { micDeviceId: overrides.micDeviceId }),
+    ...(overrides.micDeviceLabel === undefined ? {} : { micDeviceLabel: overrides.micDeviceLabel }),
   });
 }
 
@@ -840,6 +845,82 @@ describe('§115 — the fallback-input notice is followable', () => {
     expect(get(session).usingFallbackInput).toBe(true);
     expect(get(session).micState).toBe('live');
     expect(get(toasts)).toHaveLength(1);
+  });
+});
+
+/**
+ * The first take after a launch opens the stored pin unchecked, because the
+ * webview names no inputs until the window has opened one. When that id
+ * answers nothing, the pipeline finds the microphone by name or falls back.
+ */
+describe('a pinned microphone the take had to look for', () => {
+  const RODE = { micDeviceId: 'rode-old', micDeviceLabel: 'RØDE NT-USB Mini' };
+
+  function deps() {
+    return pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: (reason: 'busy' | 'missing' | 'unknown') => void;
+      onPinnedMicrophoneFound?: (deviceId: string, label: string) => void;
+    };
+  }
+
+  /*
+   * Synchronous, and read back synchronously: the IPC double refuses the write,
+   * so the optimistic value is rolled back at the next await.
+   */
+  function pin(deviceId: string | undefined): void {
+    void patchSettings('audio', {
+      followSystemDefault: deviceId === undefined,
+      preferredDeviceId: deviceId,
+      preferredDeviceLabel: 'RØDE NT-USB Mini',
+    }).catch(() => {});
+  }
+
+  afterEach(() => {
+    pin(undefined);
+  });
+
+  it('names it, rather than calling it busy, when it is not connected', () => {
+    start(RODE);
+    startPrompting();
+    deps().onInputFellBackToDefault?.('missing');
+    expect(get(toasts).map((t) => t.message)).toEqual([
+      expect.stringContaining('RØDE NT-USB Mini is not connected'),
+    ]);
+    expect(get(session).usingFallbackInput).toBe(true);
+  });
+
+  it('does not claim it is unplugged when the inputs could not be named', () => {
+    start(RODE);
+    startPrompting();
+    deps().onInputFellBackToDefault?.('unknown');
+    const [message] = get(toasts).map((t) => t.message);
+    expect(message).toContain('could not open RØDE NT-USB Mini');
+    expect(message).not.toContain('not connected');
+  });
+
+  it('retracts the notice when a resume finds it after all', () => {
+    start(RODE);
+    startPrompting();
+    deps().onInputFellBackToDefault?.('unknown');
+    expect(get(session).usingFallbackInput).toBe(true);
+
+    deps().onPinnedMicrophoneFound?.('rode-new', 'RØDE NT-USB Mini');
+    expect(get(session).usingFallbackInput).toBe(false);
+    expect(get(toasts)).toHaveLength(0);
+  });
+
+  it('remembers the id it was found under', () => {
+    pin('rode-old');
+    start(RODE);
+    deps().onPinnedMicrophoneFound?.('rode-new', 'RØDE NT-USB Mini');
+    expect(getSettingsSnapshot().audio.preferredDeviceId).toBe('rode-new');
+  });
+
+  it('leaves alone a pin that was changed while the take opened', () => {
+    pin('yeti');
+    start(RODE);
+    deps().onPinnedMicrophoneFound?.('rode-new', 'RØDE NT-USB Mini');
+    expect(getSettingsSnapshot().audio.preferredDeviceId).toBe('yeti');
   });
 });
 
