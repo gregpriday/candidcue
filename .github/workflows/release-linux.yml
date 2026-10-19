@@ -37,7 +37,7 @@ env:
   # to run the result on a display-less runner.
   LINUX_BUILD_PACKAGES: >-
     libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev
-    libayatana-appindicator3-dev librsvg2-dev xdg-utils
+    libayatana-appindicator3-dev librsvg2-dev xdg-utils bzip2
 
 jobs:
   gates:
