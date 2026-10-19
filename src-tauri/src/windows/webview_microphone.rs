@@ -24,6 +24,14 @@
 //! in a debug build). The OS setting stays the one real gate — a refusal there
 //! still fails `getUserMedia`, and the app still says where to fix it.
 //!
+//! Two layers, because one is not enough. A decision WebView2 has already
+//! saved in its profile answers later requests itself, without raising
+//! `PermissionRequested` — so a Block clicked in an earlier build would have
+//! outlived the handler. On every launch the app's origin is therefore set to
+//! Allow in the profile (`ICoreWebView2Profile4::SetPermissionState`, which
+//! replaces whatever was saved), and the request handler covers what that
+//! cannot reach: a runtime too old for the profile API, and the dev server.
+//!
 //! macOS needs none of this: WKWebView defers to the system's own per-app
 //! prompt, which is the macOS convention.
 
@@ -62,11 +70,37 @@ pub fn is_own_origin(uri: &str) -> bool {
 mod grant {
     use tauri::{Runtime, Webview};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
-        COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+        ICoreWebView2, ICoreWebView2Profile4, ICoreWebView2_13, COREWEBVIEW2_PERMISSION_KIND,
+        COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
     };
-    use webview2_com::{take_pwstr, PermissionRequestedEventHandler};
-    use windows_core::PWSTR;
+    use webview2_com::{
+        take_pwstr, PermissionRequestedEventHandler, SetPermissionStateCompletedHandler,
+    };
+    use windows_core::{Interface, PCWSTR, PWSTR};
+
+    /// The packaged origin, as the profile API names an origin.
+    const APP_ORIGIN: &str = "http://tauri.localhost";
+
+    /// Replace any microphone decision the profile holds for the app's origin
+    /// with Allow. Best-effort: an older runtime without the profile API keeps
+    /// only the request handler, which is what every launch had before.
+    ///
+    /// SAFETY (caller): `core` is this webview's live `ICoreWebView2`, used on
+    /// the thread `with_webview` runs its closure on.
+    unsafe fn allow_in_profile(core: &ICoreWebView2) -> windows_core::Result<()> {
+        let profile = core.cast::<ICoreWebView2_13>()?.Profile()?.cast::<ICoreWebView2Profile4>()?;
+        let origin: Vec<u16> = APP_ORIGIN.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: `origin` is NUL-terminated and outlives the call, which
+        // copies it; the completion handler owns nothing borrowed.
+        unsafe {
+            profile.SetPermissionState(
+                COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+                PCWSTR(origin.as_ptr()),
+                COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+                &SetPermissionStateCompletedHandler::create(Box::new(|_| Ok(()))),
+            )
+        }
+    }
 
     pub fn install<R: Runtime>(webview: &Webview<R>) {
         let label = webview.label().to_string();
@@ -76,6 +110,9 @@ mod grant {
             // the call because WebView2 holds a reference to it.
             let installed = unsafe {
                 platform.controller().CoreWebView2().and_then(|core| {
+                    if let Err(err) = allow_in_profile(&core) {
+                        tracing::debug!(error = %err, "the profile microphone grant is unavailable");
+                    }
                     let mut token = 0i64;
                     core.add_PermissionRequested(
                         &PermissionRequestedEventHandler::create(Box::new(|_, args| {

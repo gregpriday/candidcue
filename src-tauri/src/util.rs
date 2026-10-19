@@ -148,23 +148,45 @@ pub fn create_dir_all_durable(dir: &Path) -> Result<(), AppError> {
 /// and access denied (5), which is how the same race reads while the other
 /// handle is being closed. A refusal that is still there after that is
 /// returned as it is. Everywhere else this is exactly `fs::rename`.
+///
+/// The waiting is done off the async runtime's books: most callers are async
+/// commands, and two seconds of `sleep` on a Tokio worker would stall every
+/// other command queued behind it. `block_in_place` hands the worker's other
+/// tasks on before blocking — and only once a refusal has happened, so the
+/// ordinary rename that succeeds first time pays nothing for it.
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
     let (from, to) = (from.as_ref(), to.as_ref());
     #[cfg(windows)]
     {
         use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut delay = Duration::from_millis(10);
-        loop {
-            match fs::rename(from, to) {
-                Err(err)
-                    if matches!(err.raw_os_error(), Some(5 | 32 | 33)) && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(delay);
-                    delay = (delay * 2).min(Duration::from_millis(200));
+        let retryable = |err: &std::io::Error| matches!(err.raw_os_error(), Some(5 | 32 | 33));
+        match fs::rename(from, to) {
+            Err(err) if retryable(&err) => {}
+            result => return result,
+        }
+        let wait_it_out = || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut delay = Duration::from_millis(10);
+            loop {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_millis(200));
+                match fs::rename(from, to) {
+                    Err(err) if retryable(&err) && Instant::now() < deadline => {}
+                    result => return result,
                 }
-                result => return result,
             }
+        };
+        // `block_in_place` exists only on a multi-threaded runtime (the app's);
+        // on a current-thread one — `#[tokio::test]` — or outside any runtime,
+        // waiting in place is the only option, and stalls nothing but that
+        // runtime. (A `LocalSet` would panic here even on a multi-threaded
+        // runtime; nothing in the app runs one.)
+        let multi_threaded = tokio::runtime::Handle::try_current()
+            .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
+        if multi_threaded {
+            tokio::task::block_in_place(wait_it_out)
+        } else {
+            wait_it_out()
         }
     }
     #[cfg(not(windows))]

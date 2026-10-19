@@ -190,8 +190,15 @@ function rustCrates() {
    * `-e normal` because a test runner is not in the artifact; the default
    * includes dev and build dependencies, which made this describe the machine
    * that built CandidCue rather than the application anyone received.
+   *
+   * And the Windows triple, since the installer ships this same file: Windows
+   * pulls in crates macOS never selects (`webview2-com`, the `windows` family),
+   * and a notices file that omits code in the artifact is the failure that
+   * matters. The union is the honest answer for both artifacts — naming a
+   * crate one of them does not contain costs nothing, leaving out one it does
+   * contain is the gap.
    */
-  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-pc-windows-msvc'];
   const seen = new Map();
   let failedTrees = 0;
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {

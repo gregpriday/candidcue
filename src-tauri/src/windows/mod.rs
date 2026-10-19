@@ -746,6 +746,21 @@ pub fn open_stage<R: Runtime>(
         existing.destroy()?;
     }
 
+    /*
+     * Registered BEFORE the window exists, not after.
+     *
+     * The new page announces `stage://listening` once, and `register_stage`
+     * resets that flag along with the rest of the stage's state. Registered
+     * after `build()`, a page quick enough to announce in the gap had its
+     * announcement wiped, and calibration waited for one that had already
+     * happened. On macOS the command ran on the main thread and the page could
+     * not run in that gap; off macOS it is async and nothing guaranteed it. A
+     * build that fails takes the registration back out below. The late close
+     * of the window destroyed above cannot undo this one: `stage_closed` is
+     * qualified by generation.
+     */
+    coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
+
     // Position and size go into the BUILDER, not a post-build set_position:
     // creating a window at the origin and then moving it makes the OS assign it
     // to the wrong screen first, which on mixed-DPI setups bakes in the wrong
@@ -775,14 +790,13 @@ pub fn open_stage<R: Runtime>(
         .shadow(!cfg!(windows))
         .position(position.x as f64 / scale, position.y as f64 / scale)
         .inner_size(size.width as f64 / scale, size.height as f64 / scale)
-        .build()?;
+        .build()
+        .inspect_err(|_| coordinator.stage_closed(generation))?;
 
     // Re-assert in physical units: exact, and immune to the logical rounding
     // above.
     window.set_position(tauri::Position::Physical(position))?;
     window.set_size(tauri::Size::Physical(size))?;
-
-    coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
 
     // Window › Stage is enabled from here on — see `menu::refresh_stage_item`
     // for why the menu cannot learn this from a renderer.

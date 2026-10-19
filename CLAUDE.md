@@ -108,8 +108,10 @@ the stage, identify and preferences windows are created at runtime from
 
 ### The menu bar belongs to the application, not to a window
 
-`src-tauri/src/menu.rs` owns the native menu. Two properties are easy to break
-and both have bitten:
+`src-tauri/src/menu.rs` owns the native menu. (On Windows it is attached to
+the control window instead, which is the only way a window gets a menu bar
+there — see "Windows" below; the routing is the same.) Two properties are easy
+to break and both have bitten:
 
 - a menu command is delivered to the **focused** window (`command_target`),
   never unconditionally to control — otherwise ⌘W with Settings in front closes
@@ -312,6 +314,49 @@ nothing automated on this machine can drive the packaged app. A large green
 suite here has repeatedly coexisted with a broken product — when a change
 touches the live follow loop, say what the suite leaves unproven rather than
 implying it covered the change.
+
+## Windows
+
+The app builds, tests and runs on Windows 11 (x64); CI's `windows` job runs
+both vitest projects, both Rust workspaces with Clippy, and builds the NSIS
+installer. The macOS paths are unchanged. What is different there, and has
+already bitten:
+
+- **Never build a window from a synchronous command or event handler.** On
+  Windows that runs inside WebView2's own IPC callback and deadlocks the event
+  loop. `open_preferences`, `open_stage` and `identify_displays` are `async`
+  off macOS for this reason (synchronous on macOS, where `NSScreen` must be
+  read on the main thread).
+- **Window events are synchronous.** `SetWindowPos` delivers `WM_MOVE`/`WM_SIZE`
+  on the same thread, inside the call — so a window-event handler must never
+  take a lock a geometry-changing command holds (`present::is_presenting` uses
+  `try_lock` for this).
+- **The menu lives on the control window**, not the app (`menu.rs::attach`),
+  and is hidden — with the window shadow, whose invisible frame offsets an
+  undecorated window — while presenting. WebView2 swallows menu accelerators,
+  so `src/control/lib/menu-keys.ts` hears them in the page on Windows.
+- **Platform config**: `src-tauri/tauri.windows.conf.json` overlays the CSP
+  (`http://asset.localhost`) and the NSIS target; `bundle_config_tests.rs`
+  holds the two CSPs equal otherwise.
+- **Files**: rename through `util::rename` (retries the sharing violations
+  scanners cause) and flush through `util::open_for_sync` (`FlushFileBuffers`
+  needs write access). SQLite holds its files without delete sharing, so tests
+  that move a database must let the pool really close (`close_fully`).
+- **Tests are host-independent on purpose**: `.gitattributes` forces LF, the
+  node vitest project pins `navigator.platform` to a Mac
+  (`tests/setup/node-platform.ts`), and Playwright's `Desktop Chrome` device
+  reports a Windows user agent on every host.
+- **DO NOT DISTRIBUTE a Windows build yet — it contains GPL-3.0 code.** The
+  link map of the Windows release binary (2026-10-19) has 784 eSpeak NG, 179
+  ucd-tools and 129 piper-phonemize symbols with addresses. MSVC loads the TTS
+  objects to resolve the C API object's references (as ld64 does), but keeps
+  their C++ static initialisers as roots, and those reach eSpeak NG — where
+  ld64's dead-stripping removes all of it. `THIRD_PARTY_NOTICES.md` says no
+  eSpeak NG code is in the binary, which is measured true on macOS only. The
+  fix in reach: build sherpa-onnx v1.13.4 for Windows with
+  `-DSHERPA_ONNX_ENABLE_TTS=OFF` and point `SHERPA_ONNX_LIB_DIR` at it (with
+  empty `espeak-ng`/`ucd`/`piper_phonemize` libs for the crate's fixed link
+  line) — or ship Windows builds on GPL-3.0 terms. Decide before any release.
 
 ## Gotchas
 

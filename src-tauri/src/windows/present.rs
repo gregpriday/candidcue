@@ -763,6 +763,10 @@ fn restore_position<R: Runtime>(
  * message lands. That is what the separate stage window has always done
  * (`open_stage` builds with `position / scale`), and it is what every setter
  * here does now: the caller says which monitor's scale its numbers are in.
+ *
+ * Linux takes the same path, for the same reason: tao's GTK setters convert
+ * with the window's current scale too. Windows is the exception — see
+ * [`place`], where every move in this module is made.
  */
 
 /// The logical point a physical position is at, on a monitor of this scale.
@@ -781,6 +785,62 @@ fn to_logical_size(size: PhysicalSize<u32>, scale: f64) -> tauri::LogicalSize<f6
     }
 }
 
+/// Move and size the window: `position` and `size` are physical pixels, each
+/// in the scale of the monitor it was measured on.
+///
+/// macOS (and Linux) take them as points converted with those scales (the
+/// module note above). Windows is the mirror image. There PHYSICAL pixels are
+/// the global space — `Monitor::position` and the virtual desktop agree on
+/// them — and it is a LOGICAL value tao converts with the window's current
+/// scale: a laptop at 125% handing its window the 100% prompter's origin at
+/// x = 1920 as 1920 points landed it at x = 2400, most of the take off the
+/// panel's right edge. So there the position goes in as it is, and the size
+/// keeps the logical size it was measured at, in the scale of the monitor the
+/// position lands on — the same pixels when the two scales agree, which is
+/// every presentation; a frame rescued onto a monitor of another DPI keeps the
+/// rectangle somebody chose rather than its pixel count. A move that crosses
+/// into a monitor of another DPI also has Windows resize the window itself
+/// (`WM_DPICHANGED`) once the position lands, so position and size are applied
+/// twice — the order the launch restore uses for the same reason
+/// (`shell_cmds::placements`).
+fn place<R: Runtime>(
+    window: &WebviewWindow<R>,
+    position: PhysicalPosition<i32>,
+    position_scale: f64,
+    size: PhysicalSize<u32>,
+    size_scale: f64,
+) -> Result<(), AppError> {
+    #[cfg(not(windows))]
+    {
+        set_logical_position(window, position, position_scale)?;
+        set_logical_size(window, size, size_scale)
+    }
+    #[cfg(windows)]
+    {
+        let size = rescaled(size, size_scale, position_scale);
+        for _ in 0..2 {
+            window
+                .set_position(tauri::Position::Physical(position))
+                .map_err(presentation_failed)?;
+            window
+                .set_size(tauri::Size::Physical(size))
+                .map_err(presentation_failed)?;
+        }
+        Ok(())
+    }
+}
+
+/// A physical size measured at `from`, as the same logical size at `to`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn rescaled(size: PhysicalSize<u32>, from: f64, to: f64) -> PhysicalSize<u32> {
+    let logical = to_logical_size(size, from);
+    PhysicalSize::new(
+        (logical.width * to).round() as u32,
+        (logical.height * to).round() as u32,
+    )
+}
+
+#[cfg_attr(windows, allow(dead_code))]
 fn set_logical_position<R: Runtime>(
     window: &WebviewWindow<R>,
     position: PhysicalPosition<i32>,
@@ -791,6 +851,7 @@ fn set_logical_position<R: Runtime>(
         .map_err(presentation_failed)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn set_logical_size<R: Runtime>(
     window: &WebviewWindow<R>,
     size: PhysicalSize<u32>,
@@ -1004,8 +1065,7 @@ fn apply_windowed<R: Runtime>(
     // scale it was measured in — a rescued frame keeps the rectangle somebody
     // chose even when its origin has to move.
     let (position, position_scale) = restore_position(app, frame);
-    set_logical_position(window, position, position_scale)?;
-    set_logical_size(window, frame.inner_size, frame.scale)?;
+    place(window, position, position_scale, frame.inner_size, frame.scale)?;
     if frame.maximized {
         let _ = window.maximize();
     }
@@ -1218,12 +1278,11 @@ fn apply_presentation<R: Runtime>(
     set_min_size(window, declared_min_size(app));
     chrome::strip(app, window)?;
     pin::above_everything(app, window)?;
-    // In the TARGET monitor's scale, never the window's — see
-    // `set_logical_position`. Inner size, and on a window with no decorations
-    // inner IS outer — which is what makes filling the monitor's bounds exact
-    // rather than approximately right by a titlebar.
-    set_logical_position(window, *monitor.position(), scale)?;
-    set_logical_size(window, bounds, scale)?;
+    // In the TARGET monitor's scale, never the window's — see `place`. Inner
+    // size, and on a window with no decorations inner IS outer — which is what
+    // makes filling the monitor's bounds exact rather than approximately right
+    // by a titlebar.
+    place(window, *monitor.position(), scale, bounds, scale)?;
     Ok((bounds, scale, display))
 }
 
@@ -2270,6 +2329,20 @@ mod tests {
         // is in its OWN scale, so dividing by 2 would put it inside the laptop.
         let origin = to_logical_position(PhysicalPosition { x: 2880, y: 0 }, 1.0);
         assert_eq!((origin.x, origin.y), (2880.0, 0.0));
+    }
+
+    /// Windows takes sizes in physical pixels, so a frame rescued onto a
+    /// monitor of another DPI is resized to keep its logical size — 1500x1000
+    /// at 125% is 1200x800 at 100%, the rectangle the editor had — and a
+    /// presentation, measured on the monitor it fills, keeps its pixels.
+    #[test]
+    fn a_rescued_frame_keeps_its_logical_size_on_a_monitor_of_another_scale() {
+        let rescued = rescaled(PhysicalSize { width: 1500, height: 1000 }, 1.25, 1.0);
+        assert_eq!((rescued.width, rescued.height), (1200, 800));
+        let presented = rescaled(PhysicalSize { width: 1024, height: 600 }, 1.0, 1.0);
+        assert_eq!((presented.width, presented.height), (1024, 600));
+        let odd = rescaled(PhysicalSize { width: 1567, height: 1019 }, 1.25, 1.25);
+        assert_eq!((odd.width, odd.height), (1567, 1019));
     }
 
     /// A frame remembers the scale it was measured in, so the un-present after
