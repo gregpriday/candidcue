@@ -3,17 +3,19 @@
 # src-tauri/icons/source/. macOS only (iconutil), and it needs rsvg-convert and
 # python3: `brew install librsvg`.
 #
-#   bash scripts/build-icons.sh
+#   bash scripts/build-icons.sh            # into src-tauri/icons
+#   bash scripts/build-icons.sh <dir>      # into <dir>, leaving the tree alone
 #
 # icon.svg is the 1024 master on the macOS icon grid; icon-small.svg is the
-# same mark redrawn for 16 and 32 px, which is what the 16/32 slots of the .icns
+# same mark redrawn for 16 and 32 px, which is what the small slots of the .icns
 # and the .ico get. `tauri icon` would downsample the master into those slots
 # instead, which is exactly what the small drawing exists to avoid.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-icons="$root/src-tauri/icons"
-src="$icons/source"
+src="$root/src-tauri/icons/source"
+icons="${1:-$root/src-tauri/icons}"
+mkdir -p "$icons"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -23,13 +25,22 @@ done
 
 big() { rsvg-convert -w "$1" -h "$1" "$src/icon.svg" -o "$2"; }
 small() { rsvg-convert -w "$1" -h "$1" "$src/icon-small.svg" -o "$2"; }
+# The master framed for Windows: the macOS grid's 100px margin cropped to the
+# small drawing's, so every .ico entry fills its canvas by the same share
+# (87.5%) and Explorer does not shrink the tile as the view grows.
+sed 's/viewBox="0 0 1024 1024"/viewBox="41 41 942 942"/' "$src/icon.svg" > "$work/icon-wide.svg"
+grep -q 'viewBox="41 41 942 942"' "$work/icon-wide.svg" || { echo "build-icons: icon.svg has no 1024 viewBox" >&2; exit 1; }
+wide() { rsvg-convert -w "$1" -h "$1" "$work/icon-wide.svg" -o "$2"; }
 
 # macOS: the .icns, from an .iconset with the small drawing in the small slots.
+# Only the 2x small slots: macOS 26 sets a 1x 16 or 32 px representation in a
+# legacy .icns on a grey plate, whichever drawing is in it, and leaves the 2x
+# ones alone. Without the 1x slots a 2x screen draws 16 pt from the small
+# drawing (16@2x) and 32 pt from the master (32@2x); a 1x screen scales the
+# master down for both — softer at 16 px, but never on the plate.
 set_dir="$work/icon.iconset"
 mkdir -p "$set_dir"
-small 16 "$set_dir/icon_16x16.png"
 small 32 "$set_dir/icon_16x16@2x.png"
-small 32 "$set_dir/icon_32x32.png"
 big 64 "$set_dir/icon_32x32@2x.png"
 big 128 "$set_dir/icon_128x128.png"
 big 256 "$set_dir/icon_128x128@2x.png"
@@ -46,11 +57,12 @@ big 128 "$icons/128x128.png"
 big 256 "$icons/128x128@2x.png"
 big 1024 "$icons/icon.png"
 
-# Windows: the .ico (small drawing at 16-32, master above), and the Store tiles.
-# Every entry PNG-compressed (Vista and later read that), so the 256px entry is
-# kilobytes rather than ImageMagick's uncompressed bitmap of several hundred.
+# Windows: the .ico (small drawing at 16-32, the framed master above), and the
+# Store tiles. Every entry PNG-compressed (Vista and later read that), so the
+# 256px entry is kilobytes rather than ImageMagick's uncompressed bitmap of
+# several hundred.
 for size in 16 24 32; do small "$size" "$work/ico-$size.png"; done
-for size in 48 64 256; do big "$size" "$work/ico-$size.png"; done
+for size in 48 64 256; do wide "$size" "$work/ico-$size.png"; done
 python3 -I - "$icons/icon.ico" "$work"/ico-{16,24,32,48,64,256}.png <<'PY'
 import struct, sys
 out, pngs = sys.argv[1], sys.argv[2:]
