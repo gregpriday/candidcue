@@ -413,6 +413,10 @@ jobs:
       - name: The maps must describe the slices that were packaged
         run: |
           set -euo pipefail
+          # Link maps carry raw symbol bytes that are not UTF-8, and BSD sed
+          # and grep refuse them under a UTF-8 locale ("illegal byte
+          # sequence"). Byte semantics are what these comparisons want anyway.
+          export LC_ALL=C
           UNIVERSAL=src-tauri/target/universal-apple-darwin/release/candidcue
           test -f "$UNIVERSAL" || { echo "::error::no universal binary at $UNIVERSAL"; exit 1; }
           for pair in aarch64:arm64 x86_64:x86_64; do
