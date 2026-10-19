@@ -320,8 +320,9 @@ implying it covered the change.
 
 The app builds, tests and runs on Windows 11 (x64); CI's `windows` job runs
 both vitest projects, both Rust workspaces with Clippy, and builds the NSIS
-installer. The macOS paths are unchanged. What is different there, and has
-already bitten:
+installer — all against the text-to-speech-free sherpa-onnx (below) — then
+checks the executable for GPL code. The macOS paths are unchanged. What is
+different there, and has already bitten:
 
 - **Never build a window from a synchronous command or event handler.** On
   Windows that runs inside WebView2's own IPC callback and deadlocks the event
@@ -347,17 +348,27 @@ already bitten:
   node vitest project pins `navigator.platform` to a Mac
   (`tests/setup/node-platform.ts`), and Playwright's `Desktop Chrome` device
   reports a Windows user agent on every host.
-- **DO NOT DISTRIBUTE a Windows build yet — it contains GPL-3.0 code.** The
-  link map of the Windows release binary (2026-10-19) has 784 eSpeak NG, 179
-  ucd-tools and 129 piper-phonemize symbols with addresses. MSVC loads the TTS
-  objects to resolve the C API object's references (as ld64 does), but keeps
-  their C++ static initialisers as roots, and those reach eSpeak NG — where
-  ld64's dead-stripping removes all of it. `THIRD_PARTY_NOTICES.md` says no
-  eSpeak NG code is in the binary, which is measured true on macOS only. The
-  fix in reach: build sherpa-onnx v1.13.4 for Windows with
-  `-DSHERPA_ONNX_ENABLE_TTS=OFF` and point `SHERPA_ONNX_LIB_DIR` at it (with
-  empty `espeak-ng`/`ucd`/`piper_phonemize` libs for the crate's fixed link
-  line) — or ship Windows builds on GPL-3.0 terms. Decide before any release.
+- **Windows and Linux link sherpa-onnx WITHOUT text-to-speech — never ship
+  one that doesn't.** The stock `sherpa-onnx-sys` archive carries eSpeak NG
+  and ucd-tools (GPL-3.0). ld64 dead-strips them on macOS; MSVC keeps the TTS
+  objects' C++ static initialisers as roots (784 eSpeak NG symbols in the
+  2026-10-19 link map), and a GNU ld link keeps eSpeak NG as well — measured
+  the same day, the stripped release binary linked from the stock archive
+  carries eSpeak NG's strings and ucd-tools' tables on both. So a
+  distributable build sets
+  `SHERPA_ONNX_LIB_DIR` to what
+  `node scripts/sherpa-no-tts.mjs --target <win-x64|linux-x64> --dest <dir>`
+  prints: upstream's `-no-tts` static libraries of the same release (SHA-256
+  pinned, scanned for eSpeak NG/ucd-tools/piper-phonemize markers) plus empty
+  stand-ins for the three libraries the crate links unconditionally — on
+  Windows a minimal COFF archive, because `link.exe` refuses a zero-member one
+  (LNK1107). Keep `--dest` outside `target/` (rust-cache empties it). Then
+  `node scripts/verify-no-gpl-in-binary.mjs <executable>` checks the finished
+  binary; its header records the markers and the controls they were proven
+  on. CI's `windows` job does both. A build made WITHOUT `SHERPA_ONNX_LIB_DIR`
+  is fine to test locally and contains GPL code: never distribute one. There
+  is no `-no-tts` archive for linux-aarch64, and a sherpa-onnx bump must
+  re-pin both archives and re-establish the markers.
 
 ## Gotchas
 

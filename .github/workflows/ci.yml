@@ -258,6 +258,17 @@ jobs:
         shell: bash
         run: rm -rf src-tauri/target/sherpa-onnx-prebuilt crates/target/sherpa-onnx-prebuilt
 
+      # Windows never links the stock sherpa-onnx archive: eSpeak NG and
+      # ucd-tools (GPL-3.0) survive an MSVC link of it, where ld64 strips them.
+      # This fetches upstream's text-to-speech-free build of the same release
+      # (digest pinned), refuses a library that carries any text-to-speech
+      # code, writes empty stand-ins for the three libraries the crate still
+      # names, and exports SHERPA_ONNX_LIB_DIR to every later step — so the
+      # tests, Clippy and the installer all link what a release ships. It goes
+      # in RUNNER_TEMP, not target/, which rust-cache would hollow out.
+      - name: Fetch sherpa-onnx without text-to-speech
+        run: node scripts/sherpa-no-tts.mjs --target win-x64 --dest "${{ runner.temp }}/sherpa-onnx-no-tts"
+
       - run: pnpm install --frozen-lockfile
 
       - name: Typecheck, both vitest projects, both Rust workspaces and Clippy
@@ -269,3 +280,10 @@ jobs:
         # NSIS only: the per-user installer is the Windows artifact, and an MSI
         # would spend minutes proving the same compile again.
         run: pnpm tauri build --bundles nsis
+
+      - name: The executable must carry no GPL code
+        # The step above is about inputs; this is about the artifact. The
+        # stripped executable linked from the stock archive carries eSpeak NG's
+        # strings and ucd-tools' Unicode tables, and the one the installer packs
+        # must carry none of them (the script's header has the evidence).
+        run: node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue.exe

@@ -84,6 +84,21 @@ development with C++" workload (the MSVC linker and Windows SDK). Everything
 else is the same: `pnpm install`, `pnpm dev`, and `pnpm tauri build` produces
 the NSIS installer (`src-tauri/tauri.windows.conf.json` sets the target).
 
+On its own, that installer links the sherpa-onnx archive the build downloads,
+which carries eSpeak NG (GPL-3.0); the macOS linker strips it, but MSVC keeps
+it. That is fine for a build you run yourself. A Windows (or Linux) build you
+give to anyone must link sherpa-onnx's text-to-speech-free libraries instead,
+and be checked:
+
+```powershell
+$env:SHERPA_ONNX_LIB_DIR = node scripts/sherpa-no-tts.mjs --target win-x64 --dest "$env:TEMP\sherpa-onnx-no-tts"
+pnpm tauri build
+node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue.exe
+```
+
+On Linux it is `--target linux-x64` and `src-tauri/target/release/candidcue`.
+The Windows section of [`CLAUDE.md`](CLAUDE.md) has the reasoning.
+
 The speech model is not in the repository or the app bundle. Install it from
 the Welcome screen or **Settings › Speech**. To skip that download while
 developing:
