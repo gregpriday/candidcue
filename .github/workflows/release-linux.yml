@@ -16,7 +16,6 @@ name: Release (Linux)
 on:
   push:
     tags: ['v*']
-    branches: ['feature/release-pipeline'] # TEMPORARY: rehearsal runs; remove before merging
   workflow_dispatch:
     inputs:
       dry_run:
