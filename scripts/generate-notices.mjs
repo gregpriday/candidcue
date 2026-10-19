@@ -197,8 +197,21 @@ function rustCrates() {
    * matters. The union is the honest answer for both artifacts — naming a
    * crate one of them does not contain costs nothing, leaving out one it does
    * contain is the gap.
+   *
+   * Linux likewise: its AppImage and .deb ship this file, and select `gtk`,
+   * `webkit2gtk` and the rest of the GTK stack that no other target does.
+   *
+   * The resolution is still not perfectly host-independent — asked from a
+   * Windows host, the macOS triples drop `swift-rs` — so the file is
+   * generated and checked on macOS, the host whose answer is the complete
+   * one, and the Windows and Linux release jobs do not re-check it.
    */
-  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-pc-windows-msvc'];
+  const RELEASE_TARGETS = [
+    'aarch64-apple-darwin',
+    'x86_64-apple-darwin',
+    'x86_64-pc-windows-msvc',
+    'x86_64-unknown-linux-gnu',
+  ];
   const seen = new Map();
   let failedTrees = 0;
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {

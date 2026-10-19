@@ -143,10 +143,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Not `third-party notices`: that file is generated and checked on
+      # macOS (release-macos.yml), where cargo's answer for every release
+      # target is the complete one. See generate-notices.mjs.
       - name: The configuration the bundle is built from
         run: >
           node scripts/release-verify.mjs
-          --only='production frontend build,supply chain,third-party notices,no model weights'
+          --only='production frontend build,supply chain,no model weights'
 
       - name: Build the installer
         shell: bash
