@@ -108,27 +108,47 @@ and it checks that *before* the build rather than at the publish step — a
 notarisation round trip is an expensive way to discover an undescribed release.
 
 A tester's notes need, at minimum: what changed, what to focus on, known
-limitations, that the app is English-only, the OS and hardware claim, that
-updates are manual and how to do one, whether data from the previous RC
-survives, the privacy and network note, and how to report a problem.
+limitations, that the app is English-only, the OS and hardware claim, how
+the update check behaves and how to turn it off, whether data from the
+previous version survives, the privacy and network note, and how to report a problem.
 
 The section reaches `develop` the same way the version bump did, through a pull
 request.
 
 ## 4. Prove the credentials without publishing anything
 
-Dispatch the workflow manually against `develop` with `dry_run` ticked. It
-builds, signs, notarises and inspects, and the `publish` job does not run.
+There are three release workflows, one per operating system —
+`release-macos.yml`, `release-windows.yml` and `release-linux.yml` — and the
+same `v*` tag starts all three. Each is a full vertical slice (gates, tests,
+build, inspection, R2, GitHub Release) and publishes the moment its own
+pipeline is green, so a failing Windows run never strands a good macOS build.
+
+Dispatch each one against `develop` with `dry_run` ticked (the default). They
+build, sign where they sign, inspect and stage the release, and the `publish`
+jobs do not run.
 
 ```bash
-gh workflow run Release --ref develop -f dry_run=true
-gh run watch
+for os in macos windows linux; do
+  gh workflow run "release-$os.yml" --ref develop -f dry_run=true
+done
+gh run list --limit 3
+gh run watch <id>
 ```
 
-Read the log for: the keychain import, the universal build, notarisation, the
-step that compares each link map against the slice lipo packaged, the copyleft
-check for both architectures, `verify-signed-bundle.mjs`, the SBOM, the
-checksums, and the credential cleanup step reporting that it ran.
+Read the macOS log for: the keychain import, the universal build,
+notarisation of the app AND the DMG, the step that compares each link map
+against the slice lipo packaged, the copyleft check for both architectures,
+`verify-signed-bundle.mjs`, the DMG and updater-payload inspection, the smoke
+launch, and the credential cleanup step reporting that it ran. Read the Windows
+and Linux logs for the TTS-free recogniser (`sherpa-no-tts.mjs`), the GPL check
+on the linked binary (`verify-no-gpl-in-binary.mjs`), and the installer smoke
+test.
+
+In every one of them, the `Stage the release` step is the one that matters
+most for updates: it refuses a payload with no `.sig` and verifies the
+signature against the public key in `tauri.conf.json`. A signing secret that
+does not match that key would otherwise publish cleanly and be refused by every
+installed copy.
 
 ## 5. Publish the tag deliberately
 
@@ -154,9 +174,31 @@ git show v1.0.0-rc.2        # right commit? signed?
 git push origin v1.0.0-rc.2
 ```
 
-A hyphen in the version is what makes it a prerelease: the workflow passes
-`--prerelease --latest=false` for `v1.0.0-rc.2` and `--latest` for `v1.0.0`.
-Check which one you are about to become before pushing.
+A hyphen in the version is what makes it a prerelease: the workflows pass
+`--prerelease --latest=false` for `v1.0.0-rc.2` and `--latest` for `v1.0.0`,
+and a prerelease publishes to its own update channel (`rc`, or `beta` when the
+prerelease part says so), which no stable install polls. Check which one you
+are about to become before pushing.
+
+### What publishing does
+
+Each OS's `publish` job runs `.github/actions/publish-candidcue`, in this
+order, and stops at the first failure:
+
+1. Refuses a version that is not newer than what that OS's update feed
+   already serves; skips the upload entirely if the feed already serves
+   exactly this version (a re-run of a release that went out).
+2. Uploads the installers, the updater payload and its `.sig`, and
+   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `candidcue` R2
+   bucket, cached as immutable.
+3. Downloads every one of them back from `https://updates.candidcue.com` and
+   compares the bytes.
+4. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
+   which installed copies poll, and `releases/<channel>-<os>.json`, which a
+   download page reads. Both are served `no-cache`, and both are read back.
+5. Creates the GitHub Release, or adds to it if another OS got there first.
+
+`scripts/release-feed.mjs` is the whole layout, with the reasons.
 
 A stable tag routes its publication through the `release-stable` GitHub
 Environment. Give that environment a required reviewer in Settings →
@@ -299,8 +341,20 @@ file.
 
 The procedure:
 
-1. **Take the download away first, explain second.** Point the download page at
-   the previous good version, or take it down. A page that serves a bad build
+1. **Take the download away first, explain second.** Installed copies update
+   themselves from the R2 feed, so the feed is the first thing to stop. Point
+   each affected `releases/latest-<target>-<arch>.json` (and the download
+   page's `releases/latest-<os>.json`) back at the previous good version — the
+   previous release's feed files are in its GitHub Actions artifact
+   (`candidcue-release-<os>`, under `stage/feed/`) — and upload them with the
+   same `no-cache` header the workflow uses:
+   ```bash
+   wrangler r2 object put candidcue/releases/latest-darwin-aarch64.json \
+     --file stage/feed/latest-darwin-aarch64.json --remote \
+     --content-type application/json --cache-control "no-cache, no-store, must-revalidate"
+   ```
+   That stops new installs of the bad build; copies that already took it stay
+   on it, because the updater never downgrades. A page that serves a bad build
    while you write an announcement keeps making the problem bigger.
 2. **Mark the release.** Do not delete it — a deleted release breaks every link
    anyone has shared and destroys the evidence.
@@ -316,9 +370,9 @@ The procedure:
    destroys the provenance of a build people are already running.
 4. **Tell the people who have it.** Every tester, by the channel you gave them,
    naming: what is wrong, what it can do to their data, whether to stop using
-   it, and what to do instead. If there is a release-announcement list, this is
-   what it exists for — the app does not check for updates, so nothing else
-   will tell them.
+   it, and what to do instead. The fix-forward release in step 5 is what
+   reaches everybody who installed it: the updater offers a newer version, and
+   nothing older.
 5. **Fix forward.** Never re-cut a tag that has been published. The replacement
    is a new version — `1.0.0-rc.3` — even if the fix is one line, and the fix
    lands on `develop` and reaches `main` through a release merge like any other.

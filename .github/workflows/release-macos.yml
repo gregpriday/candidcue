@@ -1,0 +1,616 @@
+name: Release (macOS)
+
+# Build a signed, notarised, inspectable macOS release from a tag, and publish
+# it to R2 and the GitHub Release.
+#
+# Per-OS release workflows: macOS, Windows and Linux each run their own full
+# vertical slice (gates → tests → build → R2 → GitHub Release) from the same
+# `v*` tag. A failing Windows run no longer strands a green macOS build behind
+# it: each OS publishes the moment its own pipeline is green, and re-running a
+# failed OS is one workflow, not the whole release. The R2 feed is per-OS by
+# construction (`scripts/release-feed.mjs`), so there is no shared state to
+# coordinate; the GitHub Release is created by whichever finishes first.
+#
+# Its shape follows one rule — **nothing is published until every gate has
+# passed.**
+#
+# ## What you must supply before this can run
+#
+# Six repository secrets, from your Apple Developer account — three for the
+# signing identity and three for the notarisation API key:
+#
+#   APPLE_CERTIFICATE          Developer ID Application .p12, base64-encoded
+#   APPLE_CERTIFICATE_PASSWORD the .p12 export password
+#   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_API_KEY              App Store Connect API key .p8, base64-encoded
+#   APPLE_API_ISSUER           the key's issuer UUID
+#   APPLE_API_KEY_ID           the key id
+#
+# Until they exist this workflow fails at the signing step, which is the
+# correct behaviour: an unsigned build is not a release, and a workflow that
+# quietly produced one would be worse than no workflow.
+#
+# The updater signing key (`TAURI_SIGNING_PRIVATE_KEY` and its password) and
+# the R2 credentials (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+# `R2_ENDPOINT`, `CANDIDCUE_R2_BUCKET`) are shared with the other two release
+# workflows, as is the `CANDIDCUE_PUBLIC_URL` repository variable.
+#
+# ## Read-only builds, a separate job that publishes
+#
+# `build` has **read-only** repository permissions. It is the job that runs the
+# most code — the bundler and every verification script — and none of that
+# needs the ability to write to the repository. `publish` gets
+# `contents: write` and does nothing but upload already-verified files. A
+# compromised dependency in the build job therefore cannot create a release,
+# move a tag, or push a commit.
+#
+# ## Stable releases can be made to wait for a human
+#
+# `publish` names a GitHub Environment, and which one depends on the tag: a
+# version containing a hyphen (`v1.0.0-rc.2`) uses `release-prerelease`, and a
+# stable one (`v1.0.0`) uses `release-stable`. Configure `release-stable` in
+# Settings → Environments with a required reviewer and every stable publication
+# then waits for a deliberate human approval, while RC tags keep flowing.
+#
+# ## Third-party actions are pinned to commit SHAs
+#
+# A tag is a moving pointer: `actions/checkout@v4` is whatever the owner last
+# pushed to that tag, which is the supply-chain shape that has actually been
+# exploited in the wild. Each `uses:` below names an immutable commit with the
+# version it corresponded to in a comment. Update them deliberately.
+#
+# ## The whole release plan runs here, native licence review included
+#
+# The jobs below divide `release-verify.mjs`'s plan between them with
+# `--only=`, so they run in parallel, and
+# `tests/integration/release-gates.test.ts` asserts that together they claim
+# EVERY step — including `native licence review`, the one step `ci.yml`
+# deliberately never names. It refuses while any statically linked native
+# component in `sbom/native-components.json` is unreviewed: a shipped binary is
+# the one place an unconfirmed licence cannot be taken back.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build, sign, notarise and inspect, but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Real releases serialise per ref; a dry run never waits behind a stale one.
+  group: release-macos-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && github.run_id || 'release' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ------------------------------------------------------------------
+  # Everything that can refuse, before anything is built.
+  # ------------------------------------------------------------------
+  gates:
+    name: Gates
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      # First, because it is the cheapest gate and the most expensive failure.
+      # `v1.0.0` building source version `1.0.0-rc.2` produces a signed,
+      # notarised artifact whose About box disagrees with its own download page.
+      #
+      # The condition is on the REF, not on the event, and deliberately: a
+      # manual dispatch can be pointed at a tag (`gh workflow run --ref v1.0.0`)
+      # and with `dry_run` unticked such a run does publish. A dispatch against
+      # a branch has no tag to check and cannot publish, because the publish
+      # job tests the same `refs/tags/v` predicate.
+      - name: The tag must name the version being built
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/version.mjs tag "${GITHUB_REF_NAME}"
+
+      # Also before the build: a release whose notes were never written is
+      # discovered at the publish step otherwise, with a signed artifact
+      # already made and nothing to say about it.
+      - name: The release must be described
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}" --check
+
+      - name: Completeness, versions and the native licence review
+        run: >
+          node scripts/release-verify.mjs
+          --only='repository completeness,version sync,native licence review'
+
+  frontend:
+    name: Frontend (typecheck, node, dom)
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and both vitest projects
+        run: >
+          node scripts/release-verify.mjs
+          --only='typecheck,node tests,dom tests'
+
+  rust:
+    name: Rust (${{ matrix.workspace }})
+    runs-on: macos-15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workspace: app
+            cache: src-tauri
+            steps: rust tests (app),clippy (app)
+          - workspace: alignment
+            cache: crates
+            steps: rust tests (alignment),clippy (alignment)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The benchmark fixtures are Git LFS and `read_events_jsonl` refuses
+          # a pointer file outright.
+          lfs: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ matrix.cache }}
+
+      # rust-cache restores sherpa-onnx-sys's unpacked download as an empty
+      # folder, which the crate's build script then links against; see ci.yml.
+      - name: Drop the empty sherpa-onnx download the cache restores
+        run: rm -rf '${{ matrix.cache }}/target/sherpa-onnx-prebuilt'
+
+      - name: Tests and Clippy
+        run: node scripts/release-verify.mjs --only='${{ matrix.steps }}'
+
+  browser:
+    name: Browser journeys
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright
+        run: node scripts/release-verify.mjs --only='browser journeys'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: playwright-report
+          path: .playwright/
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Sign, build, notarise — with a link map per slice.
+  # ------------------------------------------------------------------
+  build:
+    name: Build, sign and verify
+    needs: [gates, frontend, rust, browser]
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          run_install: false
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - name: Both architectures must be installable
+        # The universal build needs each slice's target, and a missing one
+        # fails inside the bundler with a message about a path rather than
+        # about a toolchain.
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      # The copyleft check below reads the per-arch prebuilt directory, and a
+      # cache restore leaves it hollow; see ci.yml. Without it the build
+      # script fetches the archives again, exactly as on a cold cache.
+      - name: Drop the empty sherpa-onnx download the cache restores
+        run: rm -rf src-tauri/target/sherpa-onnx-prebuilt
+
+      - name: Install with the committed lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: The configuration the bundle is built from
+        run: >
+          node scripts/release-verify.mjs
+          --only='production frontend build,supply chain,third-party notices,no model weights'
+
+      - name: Record the exact toolchain used
+        run: |
+          mkdir -p provenance
+          {
+            echo "tag: ${GITHUB_REF_NAME}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "version: $(node scripts/version.mjs print)"
+            echo "node: $(node --version)"
+            echo "pnpm: $(pnpm --version)"
+            echo "rustc: $(rustc --version)"
+            echo "cargo: $(cargo --version)"
+            echo "macos: $(sw_vers -productVersion)"
+            echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
+          } | tee provenance/toolchain.txt
+
+      - name: Import the signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+            echo "::error::APPLE_CERTIFICATE is not set. An unsigned build is not a release."
+            exit 1
+          fi
+          # A throwaway keychain, unlocked only for this job.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          # Removed on every exit path, not only the successful one: a failed
+          # `security import` used to leave the decoded .p12 sitting in the
+          # workspace. INT/TERM are trapped as well as EXIT, because a
+          # cancelled workflow signals the process rather than letting it
+          # return, and an EXIT-only trap does not run for a signal.
+          cleanup() { rm -f "$RUNNER_TEMP/certificate.p12"; }
+          trap cleanup EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
+          # Nobody but this job, for as long as it exists.
+          (umask 077; printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12")
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Build, sign and notarise
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/apple-api-key.p8
+          # Through `env:`, like the certificate, rather than interpolated into
+          # the `run:` body — a `${{ secrets.… }}` inside the script embeds the
+          # secret in the temporary shell file GitHub generates for the step.
+          # Named for what it holds so it cannot be confused with
+          # APPLE_API_KEY, which Tauri expects to be the key ID.
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY }}
+          # The updater payload's signature. `tauri build` exits 0 and writes
+          # no .sig at all when these are missing; `release-feed.mjs stage`
+          # refuses that, and verifies the signature against the key the app
+          # ships with.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # ------------------------------------------------------------
+          # A link map per slice, written by the links that ship.
+          # ------------------------------------------------------------
+          #
+          # sherpa-onnx-sys links libespeak-ng.a and libucd.a — both
+          # GPL-3.0-or-later — into an MIT-licensed binary, and no feature or
+          # environment variable removes them from the link line. What saves
+          # it on macOS is dead-stripping, and "the linker threw it away" is a
+          # claim about a SPECIFIC BINARY.
+          #
+          # `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`: cargo applies each to its own
+          # target, so the bundler's OWN two links write the two maps. There
+          # is no second build to reconcile, and the maps describe the slices
+          # lipo combines by construction rather than by argument.
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: -C link-arg=-Wl,-map,${{ runner.temp }}/link-aarch64.map
+          CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS: -C link-arg=-Wl,-map,${{ runner.temp }}/link-x86_64.map
+        run: |
+          set -euo pipefail
+          # A map left over from an earlier run of this job would be accepted
+          # by every check below it. Start from nothing.
+          rm -f "$RUNNER_TEMP"/link-*.map
+          # A trap, not a trailing `rm`. Under `set -e` a failed build exits
+          # the step immediately, so the decoded App Store Connect private key
+          # would be left on the runner's disk for every failure. INT and TERM
+          # too: a cancelled workflow signals the process.
+          cleanup() { rm -f "$APPLE_API_KEY_PATH"; }
+          trap cleanup EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
+          (umask 077; printf '%s' "$APPLE_API_KEY_BASE64" | base64 --decode > "$APPLE_API_KEY_PATH")
+          # Not inherited by the build. Tauri needs the FILE, not the base64.
+          unset APPLE_API_KEY_BASE64
+          # Both architectures, from one universal build. The updater
+          # artifacts are switched on here rather than in tauri.conf.json, so
+          # a local or CI build without the signing key still bundles.
+          pnpm tauri build --target universal-apple-darwin \
+            --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+          # The DMG is what a browser downloads, so it carries its own
+          # signature and notarisation ticket: Gatekeeper assesses a
+          # quarantined disk image before anybody gets to the app inside it.
+          DMG="$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
+          xcrun notarytool submit "$DMG" --wait \
+            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER"
+          xcrun stapler staple "$DMG"
+
+      # Defence in depth: the traps above cover the step, and this covers the
+      # step never finishing. `always()` runs it on failure and on cancellation.
+      - name: Make sure no decoded credential survives the job
+        if: always()
+        run: rm -f "${{ runner.temp }}/apple-api-key.p8" "${{ runner.temp }}/certificate.p12"
+
+      # ------------------------------------------------------------------
+      # Ask the artifact, not the source.
+      # ------------------------------------------------------------------
+
+      # Every claim the copyleft check makes is a claim about a map. This is
+      # where the maps are tied to the bytes that ship.
+      #
+      # Three things, per architecture: the map exists and says which slice it
+      # describes; the thin binary the linker wrote is still there; and it is
+      # BYTE-IDENTICAL to the slice lipo put in the universal binary.
+      #
+      # The universal binary is taken before signing, deliberately. Tauri lipos
+      # these two thin binaries into it and then copies and SIGNS that copy, so
+      # the executable inside the .app differs in its signature bytes while the
+      # code is the same. The chain proved here is map → linked slice → lipo
+      # input → the executable the bundler copied.
+      - name: The maps must describe the slices that were packaged
+        run: |
+          set -euo pipefail
+          UNIVERSAL=src-tauri/target/universal-apple-darwin/release/candidcue
+          test -f "$UNIVERSAL" || { echo "::error::no universal binary at $UNIVERSAL"; exit 1; }
+          for pair in aarch64:arm64 x86_64:x86_64; do
+            arch="${pair%%:*}"; slice="${pair##*:}"
+            map="$RUNNER_TEMP/link-$arch.map"
+            if [ ! -s "$map" ]; then
+              echo "::error::no link map for $arch. The build did not link that slice, or"
+              echo "::error::CARGO_TARGET_${arch}_APPLE_DARWIN_RUSTFLAGS did not reach cargo."
+              exit 1
+            fi
+            # ld64 records the slice it linked. A map copied from, or left over
+            # by, the other architecture is not evidence about this one.
+            if ! grep -qE "^# Arch: +$slice\$" "$map"; then
+              echo "::error::$map does not declare '# Arch: $slice'"
+              exit 1
+            fi
+            thin="src-tauri/target/$arch-apple-darwin/release/candidcue"
+            test -f "$thin" || { echo "::error::no linked binary at $thin"; exit 1; }
+            # ld64 also records what it was linking, which binds the map to
+            # THIS program rather than a plausible neighbour.
+            linked="$(sed -n 's/^# Path: *//p' "$map" | head -1)"
+            case "$(basename "${linked:-}")" in
+              candidcue*) ;;
+              *)
+                echo "::error::$map was written linking '${linked:-nothing}', which is not CandidCue"
+                exit 1
+                ;;
+            esac
+            if [ -f "$linked" ] && ! cmp -s "$linked" "$thin"; then
+              echo "::error::$map describes $linked, which differs from $thin"
+              exit 1
+            fi
+            lipo "$UNIVERSAL" -thin "$slice" -output "$RUNNER_TEMP/packaged-$arch"
+            if ! cmp -s "$thin" "$RUNNER_TEMP/packaged-$arch"; then
+              echo "::error::the packaged $slice slice is not the binary its link map describes"
+              exit 1
+            fi
+            echo "$slice: mapped, and the packaged slice is byte-identical to the linked one"
+          done
+
+      # One invocation per architecture, each with ITS OWN prebuilt archives:
+      # after a universal build a single glob matches both extraction
+      # directories, and membership has to be resolved against the archives
+      # actually linked into the slice being checked.
+      - name: No copyleft code may reach the binary
+        run: |
+          set -euo pipefail
+          # A loop rather than an array: macOS runners still ship bash 3.2,
+          # and `${#a[@]}` on an empty array is an unbound-variable error
+          # there under `set -u`.
+          check() {
+            local pattern="$1" map="$2" dir count=0 found=
+            for dir in $pattern; do
+              [ -d "$dir" ] || continue
+              count=$((count + 1))
+              found="$dir"
+            done
+            if [ "$count" -ne 1 ]; then
+              echo "::error::expected exactly one prebuilt directory matching $pattern, found $count"
+              exit 1
+            fi
+            node scripts/verify-no-copyleft-objects.mjs "$found" "$map"
+          }
+          check 'src-tauri/target/sherpa-onnx-prebuilt/*-osx-arm64-static-lib/lib' \
+                "$RUNNER_TEMP/link-aarch64.map"
+          check 'src-tauri/target/sherpa-onnx-prebuilt/*-osx-x64-static-lib/lib' \
+                "$RUNNER_TEMP/link-x86_64.map"
+
+      # A dylib is invisible to the map check — a dynamically linked library
+      # contributes no object files — so a shared sherpa-onnx or eSpeak would
+      # pass everything above. This is the narrow last word on that.
+      #
+      # The executable is `candidcue`, lowercase — the Cargo bin name. Read it
+      # from the bundle rather than assuming.
+      - name: The packaged executable dynamically links no speech synthesis
+        run: |
+          set -euo pipefail
+          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+          EXE="$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+          otool -L "$APP/Contents/MacOS/$EXE" | tee "$RUNNER_TEMP/otool.txt"
+          if grep -Eiq 'espeak|piper|sherpa|libttspico|festival' "$RUNNER_TEMP/otool.txt"; then
+            echo "::error::the packaged executable dynamically links a speech-synthesis library"
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/otool.txt" provenance/linked-libraries.txt
+          cp "$RUNNER_TEMP/link-aarch64.map" "$RUNNER_TEMP/link-x86_64.map" provenance/
+
+      - name: Inspect the signed bundle
+        run: |
+          node scripts/verify-signed-bundle.mjs \
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+
+      # What a browser downloads and what the updater installs are two more
+      # artifacts, and each is asked directly. The DMG must carry its own
+      # ticket. The updater payload is unpacked and its app must be the
+      # signed, stapled one: Tauri tars the bundle, and anything that touched
+      # it after signing would surface here rather than as InvalidSignature
+      # on every installed copy.
+      - name: Inspect the disk image and the updater payload
+        run: |
+          set -euo pipefail
+          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          DMG="$(ls "$BUNDLE"/dmg/*.dmg)"
+          hdiutil verify "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+          rm -rf "$RUNNER_TEMP/payload" && mkdir -p "$RUNNER_TEMP/payload"
+          tar -xzf "$BUNDLE"/macos/*.app.tar.gz -C "$RUNNER_TEMP/payload"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/payload/CandidCue.app"
+          xcrun stapler validate "$RUNNER_TEMP/payload/CandidCue.app"
+          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/payload/CandidCue.app"
+
+      # The bundle opens and stays open. Nothing here can hear a voice or see
+      # the glass, but an app that dies at launch on a clean machine dies here
+      # first.
+      - name: Smoke test the packaged app
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          APP=src-tauri/target/universal-apple-darwin/release/bundle/macos/CandidCue.app
+          EXE="$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")"
+          "$APP/Contents/MacOS/$EXE" > "$RUNNER_TEMP/smoke.log" 2>&1 &
+          pid=$!
+          sleep 25
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::CandidCue exited within 25 s of launch"
+            cat "$RUNNER_TEMP/smoke.log"
+            exit 1
+          fi
+          kill "$pid" || true
+          echo "CandidCue stayed up for 25 s"
+
+      - name: Record what the release is made of
+        run: node scripts/verify-supply-chain.mjs all
+
+      # Advisories are NOT a gate, and that is a decision rather than an
+      # oversight: they query a database that changes without the repository
+      # changing, so a tag that built yesterday would refuse to build today for
+      # a reason nobody here introduced. They run so a new advisory is news
+      # attached to the release, and the provenance records what was found.
+      - name: Dependency advisories (reported, not enforced)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          cargo install cargo-audit --locked --quiet 2>/dev/null || true
+          node scripts/report-advisories.mjs --save provenance 2>&1 | tee provenance/advisories.txt
+
+      # Everything publish uploads, laid out as it will sit on R2, with the
+      # updater signature verified against the key the app ships with.
+      # `shasum -a 256` runs inside the staging step and writes SHA256SUMS.
+      - name: Stage the release
+        run: |
+          set -euo pipefail
+          TAG="v$(node scripts/version.mjs print)"
+          node scripts/release-notes.mjs "$TAG" > "$RUNNER_TEMP/notes.md"
+          node scripts/release-feed.mjs stage --os macos \
+            --bundle src-tauri/target/universal-apple-darwin/release/bundle \
+            --out stage --notes "$RUNNER_TEMP/notes.md"
+          (cd stage/files/*/ && shasum -a 256 -c SHA256SUMS-macos.txt)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: candidcue-release-macos
+          path: |
+            stage/
+            sbom/
+            provenance/
+          retention-days: 90
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # Only now, and in a job that can write.
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true
+    permissions:
+      contents: write
+    # A stable tag can be made to wait for a human; a prerelease flows. See the
+    # header — neither environment has to exist for this to run.
+    environment:
+      name: ${{ contains(github.ref_name, '-') && 'release-prerelease' || 'release-stable' }}
+    steps:
+      # For CHANGELOG.md and the release scripts. Nothing is built here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: ./.github/actions/publish-candidcue
+        with:
+          artifact_name: candidcue-release-macos
+          extra_assets: 'sbom/* provenance/*'
+          public_url: ${{ vars.CANDIDCUE_PUBLIC_URL }}
+          r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.CANDIDCUE_R2_BUCKET }}
+          github_token: ${{ github.token }}

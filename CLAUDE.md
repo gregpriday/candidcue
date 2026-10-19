@@ -90,9 +90,10 @@ and it would rewrite unrelated files.
 and `bugfix/*` from `develop`, open pull requests against `develop`, and merge
 them with a merge commit. `main` moves only on releases: `develop` is merged into
 `main` (a merge commit, and never `--delete-branch`, which would delete
-`develop`), then a `v*` tag is pushed from `main`, which is what `release.yml`
-builds. CI runs on pushes to both branches and on every pull request.
-`docs/release-runbook.md` has the full release procedure.
+`develop`), then a `v*` tag is pushed from `main`, which the three per-OS
+release workflows (`release-{macos,windows,linux}.yml`) build and publish to
+R2 and the GitHub Release. CI runs on pushes to both branches and on every pull
+request. `docs/release-runbook.md` has the full release procedure.
 
 ## Architecture
 

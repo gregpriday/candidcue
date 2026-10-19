@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "candidcue"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
@@ -524,14 +524,14 @@ dependencies = [
 
 [[package]]
 name = "cc-align"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "cc-stt"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "sherpa-onnx",

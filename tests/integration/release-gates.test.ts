@@ -1740,57 +1740,124 @@ describe('CI runs on both gitflow branches', () => {
 
 /* ------------------------------------------------ the release workflow */
 
-describe('the release workflow cannot publish an unverified build', () => {
-  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
-  const uncommented = workflow
+/* ------------------------------------------------ the release workflows */
+
+/**
+ * One workflow per operating system, and one composite action every one of
+ * them publishes through.
+ *
+ * Comments are stripped before anything is searched for: the headers explain
+ * steps in prose, and a step named in a comment would satisfy "the workflow
+ * does this" without any job doing it.
+ */
+const RELEASE_WORKFLOWS = {
+  macos: '.github/workflows/release-macos.yml',
+  windows: '.github/workflows/release-windows.yml',
+  linux: '.github/workflows/release-linux.yml',
+} as const;
+const PUBLISH_ACTION = '.github/actions/publish-candidcue/action.yml';
+
+const stripComments = (source: string) =>
+  source
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('#'))
     .join('\n');
 
-  it('runs the whole release plan before it builds anything', () => {
+const readWorkflow = (relPath: string) => readFileSync(join(REPO_ROOT, relPath), 'utf8');
+
+/** A job's body: from its key to the next key at the same indentation. */
+function jobOf(uncommented: string, name: string, label: string): string {
+  const start = uncommented.indexOf(`\n  ${name}:`);
+  expect(start, `${label} has no ${name} job`).toBeGreaterThan(-1);
+  const rest = uncommented.slice(start + 1);
+  const next = rest.search(/\n {2}[a-z][\w-]*:\n/);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe('the release workflow cannot publish an unverified build', () => {
+  const workflow = readWorkflow(RELEASE_WORKFLOWS.macos);
+  const uncommented = stripComments(workflow);
+  const action = stripComments(readWorkflow(PUBLISH_ACTION));
+
+  it('runs the whole release plan, native licence review included, before it builds anything', async () => {
     /*
      * `ci.yml` never names the native licence review. That is only safe
-     * because a release runs the plan bare — no `--only`, no `--tier` — so the
-     * full tier reaches it. Finding `release-verify.mjs` somewhere in the file
-     * is not enough: a narrowed invocation would skip the one step that exists
-     * for releases.
+     * because a release claims EVERY step of the plan — the jobs divide it
+     * between them with `--only=` so they run in parallel, and the union has
+     * to be the whole plan. A step added to `release-verify.mjs` with no home
+     * here fails this rather than quietly never running before a release.
      */
-    const bare = /^\s*run: node scripts\/release-verify\.mjs\s*$/m.exec(uncommented);
-    expect(bare, 'the release must run release-verify.mjs with no arguments').not.toBeNull();
-    expect(
-      uncommented.match(/release-verify\.mjs/g)?.length,
-      'and must not also run a narrowed copy of it',
-    ).toBe(1);
-    expect(bare!.index, 'and before the build').toBeLessThan(uncommented.indexOf('pnpm tauri build'));
+    const { PLAN } = await import('../../scripts/release-verify.mjs');
+    const unclaimed = PLAN.filter((step) => !uncommented.includes(step.name));
+    expect(unclaimed.map((step) => step.name), 'these plan steps run in no release job').toEqual([]);
+    expect(uncommented, 'the licence review must be named by a release job').toContain(
+      'native licence review',
+    );
+
+    // Every invocation selects steps: a bare one would run the whole plan
+    // inside a single job and defeat the split.
+    const invocations = uncommented.match(/release-verify\.mjs/g) ?? [];
+    const selected = uncommented.match(/release-verify\.mjs\s+--only=/g) ?? [];
+    expect(invocations.length).toBeGreaterThan(3);
+    expect(selected.length).toBe(invocations.length);
+
+    // And all of it gates the build: the build job needs every job that runs
+    // a part of the plan, and its own part runs before the bundler.
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    expect(build).toMatch(/needs: \[gates, frontend, rust, browser\]/);
+    expect(build.indexOf('release-verify.mjs')).toBeLessThan(build.indexOf('pnpm tauri build'));
   });
 
   it('inspects the artifact rather than trusting the build', () => {
     /*
-     * The review's point: a Tauri app can pass every test in the repository
-     * and still fail after signing — entitlements, nested binaries,
-     * quarantine, a missing resource, an architecture mismatch. None of that
-     * is visible from source.
+     * A Tauri app can pass every test in the repository and still fail after
+     * signing — entitlements, nested binaries, quarantine, a missing resource,
+     * an architecture mismatch. None of that is visible from source.
      */
     expect(uncommented).toContain('verify-signed-bundle.mjs');
     expect(uncommented, 'and without the unsigned escape hatch').not.toMatch(
       /verify-signed-bundle\.mjs[^\n]*--unsigned/,
     );
+    // The DMG and the updater payload are artifacts too, and each is asked.
+    expect(uncommented).toMatch(/stapler validate "\$DMG"/);
+    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/CandidCue\.app"/);
   });
 
   it('publishes only after everything else has run', () => {
     /*
-     * Ordering is the guarantee. A publish step that ran before the
-     * inspection would put an unverified artifact on a download page, and no
-     * later failure could take it back.
+     * Ordering is the guarantee. An upload that ran before the inspection
+     * would put an unverified artifact on a download page, and a feed entry
+     * that went up before its file was readable would point every installed
+     * copy at a 404.
      */
-    const inspect = uncommented.indexOf('verify-signed-bundle.mjs');
-    const checksums = uncommented.indexOf('shasum -a 256');
-    const publish = uncommented.indexOf('gh release create');
+    const build = jobOf(uncommented, 'build', RELEASE_WORKFLOWS.macos);
+    expect(build.indexOf('verify-signed-bundle.mjs')).toBeGreaterThan(-1);
+    expect(build.indexOf('verify-signed-bundle.mjs')).toBeLessThan(build.indexOf('release-feed.mjs stage'));
 
-    expect(inspect, 'the inspection step must exist').toBeGreaterThan(-1);
-    expect(publish, 'the publish step must exist').toBeGreaterThan(-1);
-    expect(inspect).toBeLessThan(publish);
-    expect(checksums).toBeLessThan(publish);
+    const publish = jobOf(uncommented, 'publish', RELEASE_WORKFLOWS.macos);
+    expect(publish).toContain('needs: build');
+    expect(publish).toContain('./.github/actions/publish-candidcue');
+
+    const order = [
+      'release-feed.mjs monotonic',
+      'aws s3 cp verified/stage/files/',
+      'release-feed.mjs verify-files',
+      'aws s3 cp verified/stage/feed/',
+      'release-feed.mjs verify-feed',
+      'gh release create',
+    ].map((marker) => {
+      const at = action.indexOf(marker);
+      expect(at, `${PUBLISH_ACTION} must run: ${marker}`).toBeGreaterThan(-1);
+      return at;
+    });
+    expect([...order].sort((a, b) => a - b), 'and in exactly this order').toEqual(order);
+  });
+
+  it('serves versioned files as immutable and the feed as uncached', () => {
+    const files = action.slice(action.indexOf('aws s3 cp verified/stage/files/'));
+    expect(files.slice(0, files.indexOf('\n\n'))).toContain('immutable');
+    const feedUpload = action.slice(action.indexOf('aws s3 cp verified/stage/feed/'));
+    expect(feedUpload.slice(0, feedUpload.indexOf('\n\n'))).toContain('no-cache, no-store, must-revalidate');
   });
 
   it('records the provenance a release has to carry', () => {
@@ -1818,51 +1885,6 @@ describe('the release workflow cannot publish an unverified build', () => {
     ).toMatch(/An unsigned build is not a release/);
   });
 
-  /*
-   * The tag and the source version are two independent declarations of the
-   * same fact, and nothing forced them to agree. `v1.0.0` building
-   * `1.0.0-rc.2` produces a signed, notarised artifact whose About box, its
-   * download page and its checksum record each name a different thing — and it
-   * is published before anyone reads the version.
-   */
-  it('refuses a tag that does not name the version being built', () => {
-    expect(uncommented, 'the tag gate must run').toContain('version.mjs tag');
-    const gate = uncommented.indexOf('version.mjs tag');
-    const build = uncommented.indexOf('tauri build');
-    expect(build, 'the build step must exist').toBeGreaterThan(-1);
-    expect(gate, 'checking after the build wastes a notarisation round trip').toBeLessThan(build);
-  });
-
-  /*
-   * The published notes used to be one sentence in this file, identical for
-   * every release: true, and no help at all to somebody deciding whether to
-   * install it. Reading them from the repository puts them under review with
-   * the code, and CHECKING them before the build makes an undescribed release
-   * a fast failure rather than a published one.
-   */
-  it('publishes notes written in the repository', () => {
-    expect(uncommented).toContain('release-notes.mjs');
-    expect(uncommented, 'the notes must come from a file, not a literal').toContain('--notes-file');
-    expect(uncommented, 'and not from the old fixed sentence').not.toContain(
-      '--notes "Signed and notarised',
-    );
-    const check = uncommented.indexOf('release-notes.mjs');
-    expect(check).toBeLessThan(uncommented.indexOf('tauri build'));
-  });
-
-  /*
-   * `set -e` exits the step the moment the build fails, so a trailing `rm`
-   * never ran on exactly the runs where somebody afterwards goes digging
-   * through the workspace. The decoded App Store Connect private key has to be
-   * removed on every exit path, not only the happy one.
-   */
-  /*
-   * `set -e` exits the step the moment the build fails, so a trailing `rm`
-   * never ran on exactly the runs where somebody afterwards goes digging
-   * through the workspace. And an EXIT trap alone does not run for a SIGNAL,
-   * which is how a cancelled workflow ends — so the decoded App Store Connect
-   * private key and the decoded .p12 both need INT/TERM as well.
-   */
   it('removes every decoded credential on failure and on cancellation', () => {
     for (const signal of ['EXIT', 'INT', 'TERM']) {
       const traps = uncommented.match(new RegExp(`trap [^\\n]*\\b${signal}\\s*$`, 'gm')) ?? [];
@@ -1874,19 +1896,10 @@ describe('the release workflow cannot publish an unverified build', () => {
   });
 
   /*
-   * The header said "Four repository secrets" and then listed six. A release
-   * operator provisioning from that comment stops two short and discovers it
-   * at the signing step of a real release.
-   *
-   * Compared as two SETS, not as a count. A count stays green when a real
-   * `secrets.APPLE_*` reference is deleted but the header still lists it —
-   * which is the same defect pointing the other way, and the more dangerous
-   * one: the release then builds unsigned-adjacent with a secret nobody knows
-   * stopped being used.
+   * Compared as two SETS, not as a count: a count stays green when a real
+   * `secrets.APPLE_*` reference is deleted but the header still lists it.
    */
   it('documents exactly the Apple secrets it uses', () => {
-    // Up to the first line that IS `on:`, not the first occurrence of those
-    // two characters — the header prose contains several.
     const header = workflow.slice(0, workflow.search(/^on:$/m));
     const documented = new Set(header.match(/\bAPPLE_[A-Z_0-9]+\b/g) ?? []);
     const used = new Set(
@@ -1895,26 +1908,69 @@ describe('the release workflow cannot publish an unverified build', () => {
     expect([...used].sort(), 'every secret used must be documented').toEqual([...documented].sort());
     expect(used.size, 'six, as the header now says').toBe(6);
     expect(workflow).toMatch(/Six repository secrets/);
-    expect(workflow).not.toMatch(/Four repository secrets/);
   });
 
   /*
    * `gh release create` defaults to a full release, so `v1.0.0-rc.1` would
-   * have published as the Latest release of CandidCue — offered on the
-   * releases page as the thing to download.
+   * have published as the Latest release of CandidCue.
    */
   it('marks a prerelease tag as a prerelease', () => {
-    expect(uncommented).toContain('--prerelease');
-    expect(uncommented, 'and must not be able to become Latest').toContain('--latest=false');
+    expect(action).toContain('--prerelease');
+    expect(action, 'and must not be able to become Latest').toContain('--latest=false');
   });
 
   /*
    * `gh release create` CREATES a missing tag from the default branch. A tag
-   * deleted or moved while the run was building would be silently recreated at
-   * a different commit, with artifacts built from the original one attached.
+   * deleted or moved while the run was building would be silently recreated
+   * at a different commit, with artifacts built from the original attached.
    */
-  it('publishes only against a tag that already exists', () => {
-    expect(uncommented).toContain('--verify-tag');
+  it('publishes only against a tag that already exists, at the commit that was built', () => {
+    expect(action).toContain('--verify-tag');
+    expect(action).toContain('git ls-remote');
+    expect(action).toMatch(/"\$now" != "\$\{GITHUB_SHA\}"/);
+  });
+
+  it('publishes notes written in the repository', () => {
+    expect(action).toContain('release-notes.mjs');
+    expect(action, 'the notes must come from a file, not a literal').toContain('--notes-file');
+  });
+});
+
+describe('every operating system gates, verifies and stages before it publishes', () => {
+  it.each(Object.entries(RELEASE_WORKFLOWS))('%s', (os, relPath) => {
+    const uncommented = stripComments(readWorkflow(relPath));
+
+    // The same tag-scoped gates, before the build.
+    for (const gate of ['version.mjs tag', 'release-notes.mjs "${GITHUB_REF_NAME}" --check', 'native licence review']) {
+      expect(uncommented, `${relPath} must run: ${gate}`).toContain(gate);
+      expect(uncommented.indexOf(gate)).toBeLessThan(uncommented.indexOf('pnpm tauri build'));
+    }
+    const build = jobOf(uncommented, 'build', relPath);
+    expect(build, 'the build waits for the gates').toMatch(/needs: \[gates/);
+
+    // The updater artifacts are switched on for the release build, and only
+    // there: a build without the key must still bundle everywhere else.
+    expect(build).toContain(`--config '{"bundle":{"createUpdaterArtifacts":true}}'`);
+    expect(build).toContain('secrets.TAURI_SIGNING_PRIVATE_KEY');
+
+    // Staging is what verifies the updater signature against the key the
+    // app ships with, so it has to happen in the build, before upload.
+    expect(build).toContain(`release-feed.mjs stage --os ${os}`);
+    expect(build.indexOf('pnpm tauri build')).toBeLessThan(build.indexOf('release-feed.mjs stage'));
+
+    // The packaged app is launched before it is offered to anyone.
+    expect(build).toMatch(/Smoke test/);
+
+    // Windows and Linux link the TTS-free recogniser and prove it.
+    if (os !== 'macos') {
+      expect(build).toContain('sherpa-no-tts.mjs');
+      expect(build).toContain('verify-no-gpl-in-binary.mjs');
+      expect(build.indexOf('sherpa-no-tts.mjs')).toBeLessThan(build.indexOf('pnpm tauri build'));
+    }
+
+    const publish = jobOf(uncommented, 'publish', relPath);
+    expect(publish).toContain('./.github/actions/publish-candidcue');
+    expect(publish).toMatch(/if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true/);
   });
 });
 
@@ -1996,8 +2052,10 @@ describe('the release notes gate refuses what it exists to refuse', () => {
     'Apple Silicon and Intel. Voice following is English only and the speech model ' +
     'is a separate download you start yourself.';
 
+  const SHIPPED = `v${JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version}`;
+
   it('accepts the notes this repository actually ships', () => {
-    expect(notesFor(REAL).status).toBe(0);
+    expect(notesFor(REAL, SHIPPED).status).toBe(0);
   });
 
   it('refuses a tag with no section', () => {
@@ -2007,7 +2065,7 @@ describe('the release notes gate refuses what it exists to refuse', () => {
   });
 
   it('lets a candidate read the release it is a candidate for', () => {
-    expect(notesFor(REAL, 'v1.0.0-rc.7').status).toBe(0);
+    expect(notesFor(REAL, `${SHIPPED}-rc.7`).status).toBe(0);
   });
 
   it('refuses a section that is empty or a stub', () => {
@@ -2103,38 +2161,39 @@ describe('the notes this tree would actually publish', () => {
   });
 
   /*
-   * The 1.0 contract, as a test. Each of these is a fact a buyer needs before
-   * downloading, and each is one the readiness review named as required.
+   * The contract, as a test. Each of these is a fact somebody needs before
+   * downloading: where it runs, what it needs, and what it does on its own.
    */
-  it('states the 1.0 contract a buyer needs before downloading', () => {
+  it('states the contract a user needs before downloading', () => {
     for (const fact of [
       /macOS 12/,
       /Apple Silicon and Intel/i,
+      /Windows 11/,
+      /Linux/,
+      /AppImage/,
       /English only/i,
       /separate download|not in the installer/i,
-      /manual|manually/i,
       /no cloud/i,
       /probabilistic/i,
+      /MIT/,
     ]) {
       expect(extracted.output, `the notes must state: ${fact}`).toMatch(fact);
     }
   });
 
   /*
-   * The exclusions, stated rather than merely unclaimed.
-   *
-   * Note what this deliberately does NOT try to be: a blacklist of overclaims.
-   * "No telemetry opt-out; CandidCue collects analytics" evades any phrase ban
-   * anyone can write, so a blacklist here would buy confidence it cannot
-   * deliver. What a test CAN check is that each exclusion the review named is
-   * present and specific — which is the thing that goes missing when notes are
-   * rewritten in a hurry.
+   * The exclusions and the behaviours a user would not guess, stated rather
+   * than merely unclaimed. What a test CAN check is that each is present and
+   * specific — which is the thing that goes missing when notes are rewritten
+   * in a hurry. It cannot be a blacklist of overclaims.
    */
-  it('states each exclusion the 1.0 contract depends on', () => {
-    expect(extracted.output, 'macOS-only must be explicit').toMatch(/no Windows or Linux build/i);
-    expect(extracted.output, 'the absence of an updater must be explicit').toMatch(
-      /contains no updater/i,
-    );
+  it('states each exclusion and each automatic behaviour', () => {
+    expect(extracted.output, 'the unsigned Windows build must be explicit').toMatch(/not code-signed/i);
+    expect(extracted.output, 'and what SmartScreen will say about it').toMatch(/SmartScreen/);
+    expect(extracted.output, 'the update check must be disclosed').toMatch(/checks for updates/i);
+    expect(extracted.output, 'and that it never interrupts a take').toMatch(/never prompts[^.]*during a take/i);
+    expect(extracted.output, 'and that it can be turned off').toMatch(/automatic check off/i);
+    expect(extracted.output, 'and where it goes').toContain('updates.candidcue.com');
     expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
 
     // The two documented degraded analyses must be listed as limitations,
@@ -2180,73 +2239,50 @@ describe('the notes this tree would actually publish', () => {
 /* -------------------------------------------- the release pipeline's authority */
 
 describe('the release pipeline holds no more authority than it needs', () => {
-  const RELEASE = '.github/workflows/release.yml';
-  const workflow = readFileSync(join(REPO_ROOT, RELEASE), 'utf8');
-  const uncommented = workflow
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith('#'))
-    .join('\n');
-
-  /** A job's body: from its key to the next key at the same indentation. */
-  const job = (name: string): string => {
-    const start = uncommented.indexOf(`\n  ${name}:`);
-    expect(start, `${RELEASE} has no ${name} job`).toBeGreaterThan(-1);
-    const rest = uncommented.slice(start + 1);
-    const next = rest.search(/\n {2}[a-z][\w-]*:\n/);
-    return next === -1 ? rest : rest.slice(0, next);
-  };
-
   /*
    * The readiness review's point, and it is about blast radius rather than
-   * about trust. The build job runs the whole test suite, a cargo build, the
-   * bundler and every verification script — thousands of packages' worth of
-   * code — and none of it needs to be able to write to the repository. A
-   * compromised dependency in that job must not be able to create a release,
-   * move a tag, or push a commit.
+   * about trust. The build jobs run the bundler and every verification script
+   * — thousands of packages' worth of code — and none of it needs to be able
+   * to write to the repository. A compromised dependency there must not be
+   * able to create a release, move a tag, or push a commit.
    */
-  it('builds with read-only permissions and publishes from a separate job', () => {
-    expect(uncommented, 'the workflow default must be read-only').toMatch(
-      /^permissions:\n\s+contents: read/m,
-    );
+  it.each(Object.values(RELEASE_WORKFLOWS))(
+    '%s builds with read-only permissions and publishes from a separate job',
+    (relPath) => {
+      const uncommented = stripComments(readWorkflow(relPath));
+      expect(uncommented, 'the workflow default must be read-only').toMatch(
+        /^permissions:\n\s+contents: read/m,
+      );
 
-    const build = job('build');
-    expect(build, 'the build job must state its permissions rather than inherit them').toContain(
-      'permissions:',
-    );
-    expect(
-      build.includes('contents: write'),
-      'the build job can write to the repository. It runs the most third-party ' +
-        'code in the pipeline and needs none of that authority — move whatever ' +
-        'needs it into the publish job.',
-    ).toBe(false);
+      const build = jobOf(uncommented, 'build', relPath);
+      expect(build, 'the build job must state its permissions rather than inherit them').toContain(
+        'permissions:',
+      );
+      expect(
+        build.includes('contents: write'),
+        'the build job can write to the repository. It runs the most third-party ' +
+          'code in the pipeline and needs none of that authority.',
+      ).toBe(false);
+      for (const secret of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) {
+        expect(build, `the build job must not hold ${secret}`).not.toContain(secret);
+      }
 
-    const publish = job('publish');
-    expect(publish, 'publishing needs write, and is the only step that does').toContain(
-      'contents: write',
-    );
-    expect(publish, 'and it must consume the build job rather than rebuild').toContain(
-      'needs: build',
-    );
-    expect(
-      publish.includes('tauri build'),
-      'the publish job builds. Then a write-capable job is running the bundler ' +
-        'and the whole point of the split is gone.',
-    ).toBe(false);
-  });
+      const publish = jobOf(uncommented, 'publish', relPath);
+      expect(publish, 'publishing needs write, and is the only job that does').toContain(
+        'contents: write',
+      );
+      expect(publish, 'and it must consume the build job rather than rebuild').toContain(
+        'needs: build',
+      );
+      expect(publish.includes('tauri build'), 'the publish job must not run the bundler').toBe(false);
 
-  /*
-   * A GitHub Environment is the only mechanism that can make a publication
-   * wait for a person. Naming one costs nothing when it is unconfigured —
-   * GitHub creates an unprotected environment on demand — and the moment
-   * somebody adds a required reviewer to `release-stable`, every stable
-   * release needs a deliberate human action.
-   */
-  it('routes stable and prerelease publications through separate environments', () => {
-    const publish = job('publish');
-    expect(publish, 'the publish job must name an environment').toContain('environment:');
-    expect(publish).toContain('release-stable');
-    expect(publish).toContain('release-prerelease');
-  });
+      // A GitHub Environment is the only mechanism that can make a
+      // publication wait for a person.
+      expect(publish).toContain('environment:');
+      expect(publish).toContain('release-stable');
+      expect(publish).toContain('release-prerelease');
+    },
+  );
 
   /*
    * The copyleft evidence has to be about the bytes that ship.
@@ -2263,6 +2299,7 @@ describe('the release pipeline holds no more authority than it needs', () => {
    * against the slices lipo actually combined.
    */
   it('takes its copyleft maps from the links that ship', () => {
+    const uncommented = stripComments(readWorkflow(RELEASE_WORKFLOWS.macos));
     expect(uncommented, 'the map check must still run').toContain(
       'verify-no-copyleft-objects.mjs',
     );
@@ -2302,7 +2339,7 @@ describe('third-party actions are pinned to immutable commits', () => {
    * standard practice was of a widely-used action, and "we trust the owner" is
    * the assumption it broke.
    */
-  const WORKFLOWS = ['.github/workflows/ci.yml', '.github/workflows/release.yml'];
+  const WORKFLOWS = ['.github/workflows/ci.yml', ...Object.values(RELEASE_WORKFLOWS), PUBLISH_ACTION];
 
   it('has workflows to check', () => {
     expect(WORKFLOWS.length).toBeGreaterThan(1);
@@ -2311,9 +2348,10 @@ describe('third-party actions are pinned to immutable commits', () => {
   it.each(WORKFLOWS)('%s pins every action it uses', (relPath) => {
     const source = readFileSync(join(REPO_ROOT, relPath), 'utf8');
     const uses = [...source.matchAll(/^\s*-?\s*uses:\s*(\S+)/gm)].map((match) => match[1]!);
-    expect(uses.length, `${relPath} declares no actions — the scan has rotted`).toBeGreaterThan(3);
+    expect(uses.length, `${relPath} declares no actions — the scan has rotted`).toBeGreaterThan(0);
 
-    const unpinned = uses.filter((ref) => !/@[0-9a-f]{40}$/.test(ref));
+    // A local composite action is part of this repository, not a pointer.
+    const unpinned = uses.filter((ref) => !ref.startsWith('./') && !/@[0-9a-f]{40}$/.test(ref));
     expect(
       unpinned,
       `${relPath} uses actions by a mutable reference:\n` +

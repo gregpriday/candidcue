@@ -36,7 +36,7 @@ Use Vitest for unit/integration tests, jsdom for components, Playwright for jour
 
 ## Branching (gitflow)
 
-`develop` is the integration branch and the GitHub default. Branch `feature/*` and `bugfix/*` from `develop` and target pull requests at `develop`. `main` moves only on releases: `develop` is merged into `main` with a merge commit (never `--delete-branch`, which would delete `develop`), and a `v*` tag pushed from `main` triggers `release.yml`. See `docs/release-runbook.md`.
+`develop` is the integration branch and the GitHub default. Branch `feature/*` and `bugfix/*` from `develop` and target pull requests at `develop`. `main` moves only on releases: `develop` is merged into `main` with a merge commit (never `--delete-branch`, which would delete `develop`), and a `v*` tag pushed from `main` triggers the three per-OS release workflows (`release-macos.yml`, `release-windows.yml`, `release-linux.yml`). See `docs/release-runbook.md`.
 
 ## Commit & Pull Request Guidelines
 

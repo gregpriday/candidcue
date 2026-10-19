@@ -1,6 +1,6 @@
 [package]
 name = "cc-align"
-version = "0.1.0"
+version = "0.0.0"
 description = "CandidCue deterministic speech-to-script alignment core (no I/O, no clocks, no network)"
 edition.workspace = true
 rust-version.workspace = true
