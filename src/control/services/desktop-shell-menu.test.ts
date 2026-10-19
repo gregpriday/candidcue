@@ -285,6 +285,64 @@ describe('the Settings window', () => {
   });
 });
 
+describe('the menu chords, heard by the page', () => {
+  /*
+   * Off macOS the native bar cannot always hear its own keys — never on
+   * WebView2, and on GTK not while a take hides the bar or in Settings, which
+   * has none — so `installWindowMenuCommands` also listens for them in the page
+   * (`lib/menu-keys.ts`). On macOS the application menu takes every chord
+   * first and a second listener would run each command twice.
+   */
+  function asPlatform(platform: string, run: () => Promise<void>): Promise<void> {
+    const pinned = Object.getOwnPropertyDescriptor(navigator, 'platform');
+    Object.defineProperty(navigator, 'platform', { value: platform, configurable: true });
+    return run().finally(() => {
+      if (pinned) Object.defineProperty(navigator, 'platform', pinned);
+    });
+  }
+
+  /** A window that can be listened on, and a way to press a chord at it. */
+  function keyedWindow() {
+    const listeners = new Set<(event: unknown) => void>();
+    vi.stubGlobal('window', {
+      __TAURI_INTERNALS__: runtime.internals,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      addEventListener: (_type: string, listener: (event: unknown) => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: (event: unknown) => void) => listeners.delete(listener),
+    });
+    return (key: string) => {
+      const event = {
+        key,
+        ctrlKey: true,
+        metaKey: false,
+        altKey: false,
+        shiftKey: false,
+        repeat: false,
+        isComposing: false,
+        defaultPrevented: false,
+        preventDefault() {},
+        stopImmediatePropagation() {},
+      };
+      for (const listener of listeners) listener(event);
+    };
+  }
+
+  it.each([
+    ['Linux x86_64', 1],
+    ['Win32', 1],
+    ['MacIntel', 0],
+  ])('on %s, Ctrl+W in Settings runs its Close %i time(s)', async (platform, runs) => {
+    await asPlatform(platform, async () => {
+      const press = keyedWindow();
+      const close = vi.fn();
+      await inWindow('preferences', () => installWindowMenuCommands({ 'file.close-script': close }));
+
+      press('w');
+      expect(close).toHaveBeenCalledTimes(runs);
+    });
+  });
+});
+
 describe('teardown', () => {
   it('stops listening', async () => {
     const close = vi.fn();

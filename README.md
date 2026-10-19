@@ -60,10 +60,12 @@ path in the app and exactly what each one sends.
 
 ## Requirements
 
-- macOS 12 or later, Apple Silicon or Intel; Windows 11, 64-bit (x64); or
-  64-bit Linux with WebKitGTK 4.1 (Ubuntu 22.04 or newer). Windows 10 should
-  work — it has the same WebView2 runtime, which the installer fetches where it
-  is missing — but is not tested.
+- macOS 12 or later, Apple Silicon or Intel; or Windows 11, 64-bit (x64).
+  Windows 10 should work — it has the same WebView2 runtime, which the
+  installer fetches where it is missing — but is not tested.
+- Linux x64: Ubuntu 22.04 or later, as a `.deb` or an AppImage, with a
+  PulseAudio or PipeWire sound server for the microphone. Other distributions
+  with glibc 2.35 and WebKitGTK 4.1 should work but are not tested.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following
@@ -83,6 +85,16 @@ On Windows you also need the Visual Studio Build Tools with the "Desktop
 development with C++" workload (the MSVC linker and Windows SDK). Everything
 else is the same: `pnpm install`, `pnpm dev`, and `pnpm tauri build` produces
 the NSIS installer (`src-tauri/tauri.windows.conf.json` sets the target).
+
+On Linux (Ubuntu 22.04 or later) install the WebKitGTK toolchain first:
+
+```bash
+sudo apt-get install build-essential pkg-config file xdg-utils patchelf \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev
+```
+
+`pnpm tauri build` then produces a `.deb` and an AppImage
+(`src-tauri/tauri.linux.conf.json` sets the targets).
 
 On its own, that installer links the sherpa-onnx archive the build downloads,
 which carries eSpeak NG (GPL-3.0); the macOS linker strips it, but MSVC keeps

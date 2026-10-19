@@ -119,6 +119,21 @@ core-graphics = "0.25"
 webview2-com = "0.38"
 windows-core = "0.61"
 
+# Linux. All three are already in the tree at these versions — wry, tao and muda
+# bring GTK and WebKitGTK, and the single-instance plugin brings zbus — so naming
+# them compiles nothing new; it makes the calls explicit:
+#   - webkit2gtk: the microphone, which WebKitGTK refuses by default
+#     (`windows/webview_microphone.rs`). `v2_24` is the oldest API used
+#     (`DeviceInfoPermissionRequest`); wry already asks for `v2_38`.
+#   - gtk: the panel's size in millimetres from GDK (`windows/panel_size.rs`)
+#     and fullscreen on a chosen monitor (`windows/present.rs`).
+#   - zbus: holding the display awake through the session's ScreenSaver
+#     service (`windows/sleep.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_24"] }
+gtk = "0.18"
+zbus = "5"
+
 [dev-dependencies]
 tempfile = "3"
 # `tauri/test` gives the MockRuntime, which is what makes it possible to assert

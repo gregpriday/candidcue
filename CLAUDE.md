@@ -370,6 +370,56 @@ different there, and has already bitten:
   is no `-no-tts` archive for linux-aarch64, and a sherpa-onnx bump must
   re-pin both archives and re-establish the markers.
 
+## Linux
+
+The app builds, tests and runs on Ubuntu 22.04 (x64, WebKitGTK 4.1); CI's
+`linux` job runs both vitest projects, both Rust workspaces with Clippy, and
+builds the `.deb` and the AppImage (`src-tauri/tauri.linux.conf.json`). Both
+packages were run on a clean 22.04 container under Xvfb — launch, Settings,
+microphone capture from a PulseAudio source — and the `.deb` through Present,
+End Take and File › Exit as well. Not yet used on a real desktop, under
+Wayland, or on two real monitors. What is different there:
+
+- **WebKitGTK refuses the microphone unless asked.** `enable-media-stream` is
+  off by default (no `navigator.mediaDevices` at all) and a `permission-request`
+  nobody answers is a denial. `windows/webview_microphone.rs` turns the setting
+  on and grants the app's own pages (`tauri://localhost`) audio-only capture
+  and the device list, on every web view. Capture is GStreamer → PulseAudio/
+  PipeWire; WebKit ignores *monitor* sources as microphones. The `.deb` gets the
+  plugins through `libwebkit2gtk-4.1-0`'s own Depends; the AppImage bundles
+  them (`bundleMediaFramework`).
+- **Present is fullscreen on a named monitor**, on top of the borderless frame
+  (`present.rs::linux_fullscreen`): Wayland ignores `set_position`, so a
+  borderless move would leave the take on the desk monitor. `chrome::restore`
+  leaves fullscreen before any frame is replayed.
+- **GTK honours a menu accelerator only while its bar is on screen.** The bar is
+  the control window's alone and a take hides it, so presented takes and
+  Settings hear their chords through `menu-keys.ts`, as on Windows; while the
+  bar is visible GTK takes the key first and the page never sees it. muda's GTK
+  backend has no predefined Quit, Undo, Redo, Minimize or Maximize: File › Exit
+  is a plain item (`menu.rs::LINUX_EXIT_ID`) and the rest are left out. Edit's
+  Cut/Copy/Paste/Select All are listed with their keys, which work; clicking
+  them does nothing, because muda's `libxdo` feature is off.
+- **Display sleep** is held over the session bus
+  (`org.freedesktop.ScreenSaver.Inhibit`, then the desktop portal) on a thread
+  that owns the connection (`windows/sleep.rs`).
+- **Panel millimetres come from GDK**, which is main-thread only, so an
+  off-thread snapshot is empty (`windows/panel_size.rs`); `list_displays` is a
+  synchronous command and so runs on the main thread.
+- **Building**: `build-essential pkg-config file xdg-utils patchelf
+  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev`, then
+  `pnpm tauri build --bundles deb,appimage`. `patchelf` is the AppImage's
+  GStreamer plugin's; set `APPIMAGE_EXTRACT_AND_RUN=1` where FUSE is missing.
+  Under Rosetta/qemu the bundler's own AppImages fail with "Exec format error"
+  (binfmt refuses the `AI\x02` ELF magic) — an emulation artifact only.
+- The AppImage's GTK hook exports `GDK_BACKEND=x11`, so it runs under XWayland
+  on a Wayland session; the `.deb` runs as a native Wayland client.
+- **DO NOT DISTRIBUTE a Linux build linked against the stock sherpa-onnx
+  archive either.** Its x64 release binary carries eSpeak NG's own strings
+  (`%s/espeak-ng-data`, `phontab`, `phondata`; measured 2026-10-19): GNU ld keeps
+  the TTS objects as MSVC does. Link the TTS-free archive through
+  `SHERPA_ONNX_LIB_DIR` for a release.
+
 ## Gotchas
 
 - `vite.config.ts` pins `decode-named-character-reference` to its non-DOM build.

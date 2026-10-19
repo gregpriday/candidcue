@@ -198,11 +198,11 @@ function rustCrates() {
    * crate one of them does not contain costs nothing, leaving out one it does
    * contain is the gap.
    *
-   * Linux likewise: its AppImage and .deb ship this file, and select `gtk`,
-   * `webkit2gtk` and the rest of the GTK stack that no other target does.
+   * Linux likewise: its AppImage and .deb ship this file, and select the
+   * GTK/WebKitGTK bindings and zbus that no other target does.
    *
    * The resolution is still not perfectly host-independent — asked from a
-   * Windows host, the macOS triples drop `swift-rs` — so the file is
+   * Windows or Linux host, the macOS triples drop `swift-rs` — so the file is
    * generated and checked on macOS, the host whose answer is the complete
    * one, and the Windows and Linux release jobs do not re-check it.
    */
@@ -554,7 +554,8 @@ function render() {
     'from the application itself rather than from a repository.',
     '',
     'It ships inside the app. On macOS it is at',
-    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.',
+    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux',
+    'packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.',
     '',
     'CandidCue itself is free software under the MIT licence. Its text is in',
     '`Contents/Resources/LICENSE.txt`, beside this file.',

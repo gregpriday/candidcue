@@ -1,4 +1,5 @@
-//! The microphone, as WebView2 would otherwise ask about it (Windows).
+//! The microphone, as WebView2 would otherwise ask about it (Windows), and as
+//! WebKitGTK would otherwise refuse it (Linux).
 //!
 //! ---------------------------------------------------------------------------
 //! WHY THE APP ANSWERS FOR ITS OWN PAGES
@@ -34,6 +35,32 @@
 //!
 //! macOS needs none of this: WKWebView defers to the system's own per-app
 //! prompt, which is the macOS convention.
+//!
+//! ---------------------------------------------------------------------------
+//! LINUX: WEBKITGTK SAYS NO UNLESS SOMEBODY SAYS YES
+//! ---------------------------------------------------------------------------
+//! WebKitGTK is the opposite problem. It has no prompt of its own and no
+//! profile to remember one in: a page's `getUserMedia` raises the web view's
+//! `permission-request` signal, and a request nobody handles is DENIED. wry
+//! connects no handler, and before that the API is not even there to call:
+//! `enable-media-stream` is off by default, which leaves
+//! `navigator.mediaDevices` undefined. Out of the box, Settings said
+//! "Microphone access is off" and no take on Linux ever opened the input.
+//!
+//! So on Linux this turns the media-stream setting on for each of the app's
+//! web views and answers their permission requests itself, with the same rule
+//! as Windows: the app's own pages (`tauri://localhost`, plus the dev server in
+//! a debug build) get the MICROPHONE — an audio-only
+//! `UserMediaPermissionRequest` — and the device list that names the inputs in
+//! Settings; anything else, from any page, is denied, which is what WebKitGTK
+//! would have done.
+//! Linux desktops have no per-app microphone switch for an unsandboxed
+//! application, so PulseAudio/PipeWire's own device and mute state is the only
+//! gate left, and a muted or missing source still fails `getUserMedia`.
+//!
+//! The settings are applied before the first document of each view is
+//! created: `on_webview_ready` runs on the main thread straight after the view
+//! is built, and the page's first byte is served from that same thread later.
 
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::Runtime;
@@ -43,17 +70,30 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
         .on_webview_ready(|webview| {
             #[cfg(windows)]
             grant::install(&webview);
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            webkit::install(&webview);
+            #[cfg(not(any(windows, target_os = "linux")))]
             let _ = webview;
         })
         .build()
 }
 
+/// The scheme and host the packaged app serves its own pages from.
+///
+/// WebView2 cannot register a custom scheme, so Tauri serves the app over
+/// `http://tauri.localhost` there; WebKitGTK (and WKWebView) take the custom
+/// scheme itself, `tauri://localhost`.
+const APP_ORIGIN: (&str, &str) = if cfg!(windows) {
+    ("http", "tauri.localhost")
+} else {
+    ("tauri", "localhost")
+};
+
 /// Whether a permission request comes from one of the app's own pages: the
-/// packaged origin, `http://tauri.localhost`, or — in a debug build only — the
-/// Vite dev server `tauri dev` loads instead.
+/// packaged origin ([`APP_ORIGIN`]), or — in a debug build only — the Vite dev
+/// server `tauri dev` loads instead.
 pub fn is_own_origin(uri: &str) -> bool {
-    let Some(rest) = uri.strip_prefix("http://") else {
+    let Some((scheme, rest)) = uri.split_once("://") else {
         return false;
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
@@ -63,7 +103,8 @@ pub fn is_own_origin(uri: &str) -> bool {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    host == "tauri.localhost" || (cfg!(debug_assertions) && matches!(host, "localhost" | "127.0.0.1"))
+    (scheme, host) == APP_ORIGIN
+        || (cfg!(debug_assertions) && scheme == "http" && matches!(host, "localhost" | "127.0.0.1"))
 }
 
 #[cfg(windows)]
@@ -143,15 +184,85 @@ mod grant {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod webkit {
+    use tauri::{Runtime, Webview};
+    use webkit2gtk::glib::prelude::*;
+    use webkit2gtk::{
+        DeviceInfoPermissionRequest, PermissionRequest, PermissionRequestExt, SettingsExt,
+        UserMediaPermissionRequest, UserMediaPermissionRequestExt, WebViewExt,
+    };
+
+    /// What the app's own pages may have: the microphone alone — a capture
+    /// request for audio that does not also ask for the camera — and the
+    /// device list, which is what lets Settings name the inputs before the
+    /// first take has opened one. Everything else is refused.
+    fn grantable(request: &PermissionRequest) -> bool {
+        if let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() {
+            return media.is_for_audio_device() && !media.is_for_video_device();
+        }
+        request.is::<DeviceInfoPermissionRequest>()
+    }
+
+    pub fn install<R: Runtime>(webview: &Webview<R>) {
+        let label = webview.label().to_string();
+        let dispatched = webview.with_webview(move |platform| {
+            let view = platform.inner();
+            match WebViewExt::settings(&view) {
+                Some(settings) => {
+                    // Off by default, and with it off `navigator.mediaDevices`
+                    // does not exist. Web Audio (the PCM tap and the level
+                    // meter) is on already — wry turns it on — and is named
+                    // here so this one place states what capture depends on.
+                    settings.set_enable_media_stream(true);
+                    settings.set_enable_webaudio(true);
+                    settings.set_enable_mediasource(true);
+                }
+                None => tracing::warn!(
+                    webview = %label,
+                    "the web view has no settings; the microphone stays unavailable"
+                ),
+            }
+            view.connect_permission_request(|view, request| {
+                let own = view.uri().is_some_and(|uri| super::is_own_origin(&uri));
+                if own && grantable(request) {
+                    request.allow();
+                } else {
+                    tracing::debug!(
+                        kind = %request.type_().name(),
+                        own,
+                        "a web permission request was refused"
+                    );
+                    request.deny();
+                }
+                // Answered either way, so WebKit's default — refuse — never
+                // runs on top of an allow.
+                true
+            });
+        });
+        if let Err(err) = dispatched {
+            tracing::warn!(error = %err, "the microphone grant could not be dispatched");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_own_origin;
 
     #[test]
     fn grants_the_app_origin_and_nothing_that_merely_looks_like_it() {
-        assert!(is_own_origin("http://tauri.localhost/control.html"));
-        assert!(is_own_origin("http://tauri.localhost"));
-        assert!(is_own_origin("http://tauri.localhost/preferences.html?x=1#y"));
+        // The origin this platform's webview serves the app from, and the
+        // other platform's, which is only ever a stranger here.
+        let (app, other) = if cfg!(windows) {
+            ("http://tauri.localhost", "tauri://localhost")
+        } else {
+            ("tauri://localhost", "http://tauri.localhost")
+        };
+        assert!(is_own_origin(&format!("{app}/control.html")));
+        assert!(is_own_origin(app));
+        assert!(is_own_origin(&format!("{app}/preferences.html?x=1#y")));
+        assert!(!is_own_origin(&format!("{other}/control.html")));
         for foreign in [
             "https://tauri.localhost/control.html",
             "http://tauri.localhost.example.com/",
@@ -159,6 +270,11 @@ mod tests {
             "http://evil@tauri.localhost/",
             "http://tauri.localhost:evil/",
             "file:///C:/tauri.localhost/x.html",
+            "tauri://localhost.example.com/control.html",
+            "tauri://evil@localhost/control.html",
+            "tauris://localhost/control.html",
+            "https://localhost/control.html",
+            "http://example.com/?tauri://localhost",
             "",
         ] {
             assert!(!is_own_origin(foreign), "{foreign}");

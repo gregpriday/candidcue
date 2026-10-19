@@ -53,6 +53,12 @@ use crate::windows::CONTROL_LABEL;
 /// the two spellings identical.
 pub const MENU_COMMAND_EVENT: &str = "menu://command";
 
+/// File › Exit on Linux, where GTK offers no predefined Quit (see `build`).
+/// Answered here rather than by a window: it is the application's exit, not a
+/// command any page implements, so it is never forwarded as a menu command.
+#[cfg(target_os = "linux")]
+const LINUX_EXIT_ID: &str = "app.exit";
+
 /// One menu item's state, as the frontend reports it.
 ///
 /// `checked` and `label` are optional because most items have neither: an item
@@ -287,6 +293,13 @@ pub fn install(app: &AppHandle) {
     let handle = app.clone();
     app.on_menu_event(move |_app, event| {
         let id = event.id().0.as_str();
+        // The same request a predefined Quit makes: `ExitRequested`, which
+        // `app.rs` holds open for the frontend's flush before it lets go.
+        #[cfg(target_os = "linux")]
+        if id == LINUX_EXIT_ID {
+            handle.exit(0);
+            return;
+        }
         /*
          * TO THE FOCUSED WINDOW, not to control.
          *
@@ -540,7 +553,17 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         file.append(&sep()?)?;
         file.append(&item("view.settings", "Settings…", Some("CmdOrCtrl+,"))?)?;
         file.append(&sep()?)?;
+        #[cfg(not(target_os = "linux"))]
         file.append(&PredefinedMenuItem::quit(app, Some("Exit"))?)?;
+        /*
+         * GTK has no predefined Quit: muda builds nothing for one there, and
+         * File ended in a rule with no Exit under it — while the recovery
+         * screen's copy tells a Linux user to choose File › Exit. So Linux gets
+         * a plain item that asks for the same exit a predefined Quit does
+         * (`on_menu_event` below), through the flush handshake in `app.rs`.
+         */
+        #[cfg(target_os = "linux")]
+        file.append(&MenuItem::with_id(app, LINUX_EXIT_ID, "Exit", true, None::<&str>)?)?;
     }
 
     /*
@@ -551,25 +574,30 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      * key handling, but Undo does NOT reliably reach CodeMirror, and a text
      * field has no context-menu Cut/Copy/Paste at all.
      */
-    let edit = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
+    let edit = Submenu::new(app, "Edit", true)?;
+    /*
+     * GTK has no predefined Undo or Redo — muda builds nothing for either — so
+     * on Linux the menu opened on a bare rule. The web view answers Ctrl+Z and
+     * Ctrl+Shift+Z itself there.
+     */
+    if cfg!(not(target_os = "linux")) {
+        edit.append_items(&[
             &PredefinedMenuItem::undo(app, None)?,
             &PredefinedMenuItem::redo(app, None)?,
             &sep()?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-            &sep()?,
-            &item("edit.find", "Find…", Some(keys::FIND))?,
-            &item("edit.find-next", "Find Next", Some(keys::FIND_NEXT))?,
-            &item("edit.find-previous", "Find Previous", Some(keys::FIND_PREVIOUS))?,
-            &item("edit.replace", "Find and Replace…", Some(keys::REPLACE))?,
-        ],
-    )?;
+        ])?;
+    }
+    edit.append_items(&[
+        &PredefinedMenuItem::cut(app, None)?,
+        &PredefinedMenuItem::copy(app, None)?,
+        &PredefinedMenuItem::paste(app, None)?,
+        &PredefinedMenuItem::select_all(app, None)?,
+        &sep()?,
+        &item("edit.find", "Find…", Some(keys::FIND))?,
+        &item("edit.find-next", "Find Next", Some(keys::FIND_NEXT))?,
+        &item("edit.find-previous", "Find Previous", Some(keys::FIND_PREVIOUS))?,
+        &item("edit.replace", "Find and Replace…", Some(keys::REPLACE))?,
+    ])?;
     menu.append(&edit)?;
 
     /*
@@ -710,13 +738,23 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      * webview pushed: no renderer knows whether this window exists.
      */
     let stage_window = item("window.stage", "Stage", None)?;
-    window_items.push(&minimize);
-    window_items.push(&maximize);
+    /*
+     * GTK has no predefined Minimize or Maximize — muda builds nothing for
+     * either — so on Linux the menu would open on a bare rule. The window
+     * manager's own controls do both there.
+     */
+    let window_controls = cfg!(not(target_os = "linux"));
+    if window_controls {
+        window_items.push(&minimize);
+        window_items.push(&maximize);
+    }
     #[cfg(target_os = "macos")]
     let bring_all = PredefinedMenuItem::bring_all_to_front(app, None)?;
     #[cfg(target_os = "macos")]
     window_items.push(&bring_all);
-    window_items.push(&separator);
+    if window_controls {
+        window_items.push(&separator);
+    }
     window_items.push(&main_window);
     window_items.push(&settings_window);
     window_items.push(&stage_window);
@@ -776,7 +814,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
-/// Finder on macOS, File Explorer everywhere else (§25.3).
+/// Finder on macOS, File Explorer on Windows, and on Linux the generic name,
+/// since each desktop's file manager is called something else (§25.3).
 ///
 /// A compile-time choice rather than a runtime one: the binary only ever runs on
 /// the platform it was built for, and a `cfg` cannot drift the way a
@@ -786,7 +825,11 @@ const fn reveal_label() -> &'static str {
     {
         "Reveal in Finder"
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        "Show in File Manager"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         "Show in File Explorer"
     }

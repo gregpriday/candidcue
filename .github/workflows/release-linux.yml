@@ -33,11 +33,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # What Tauri 2 needs to build on Ubuntu 22.04, and what the smoke test needs
-  # to run the result on a display-less runner.
+  # What Tauri 2 needs to compile and bundle on Ubuntu 22.04 (ci.yml's linux
+  # job says why each is there), and bzip2 for the recogniser archive.
   LINUX_BUILD_PACKAGES: >-
-    libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev
-    libayatana-appindicator3-dev librsvg2-dev xdg-utils bzip2
+    build-essential pkg-config file xdg-utils patchelf bzip2
+    libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev
+  # The AppImage bundler's tools are AppImages themselves; extract-and-run
+  # spares them a FUSE mount the runner may not offer.
+  APPIMAGE_EXTRACT_AND_RUN: 1
 
 jobs:
   gates:
@@ -87,7 +90,7 @@ jobs:
       - name: System libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y $LINUX_BUILD_PACKAGES
+          sudo apt-get install -y --no-install-recommends $LINUX_BUILD_PACKAGES
 
       - name: Install the pinned toolchain
         run: rustup show
@@ -132,7 +135,7 @@ jobs:
       - name: System libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y $LINUX_BUILD_PACKAGES xvfb
+          sudo apt-get install -y --no-install-recommends $LINUX_BUILD_PACKAGES xvfb
 
       - name: Install the pinned toolchain
         run: rustup show
@@ -176,9 +179,12 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/release/bundle
+          # A session bus, as a desktop has: single-instance and the
+          # display-sleep inhibitor both talk D-Bus. Xvfb has no GPU.
+          export LIBGL_ALWAYS_SOFTWARE=1
           smoke() {
             local label="$1"; shift
-            xvfb-run -a "$@" > "$RUNNER_TEMP/smoke-$label.log" 2>&1 &
+            dbus-run-session -- xvfb-run -a "$@" > "$RUNNER_TEMP/smoke-$label.log" 2>&1 &
             local pid=$!
             sleep 25
             if ! kill -0 "$pid" 2>/dev/null; then
@@ -192,7 +198,7 @@ jobs:
           }
           DEB="$(ls "$BUNDLE"/deb/*.deb)"
           PKG="$(dpkg-deb -f "$DEB" Package)"
-          sudo apt-get install -y "./$DEB"
+          sudo apt-get install -y --no-install-recommends "./$DEB"
           BIN="$(dpkg -L "$PKG" | grep -E '^/usr/bin/' | head -1)"
           smoke deb "$BIN"
           sudo apt-get remove -y "$PKG"

@@ -9,7 +9,8 @@ question "what is in this application, and under what terms?" can be answered
 from the application itself rather than from a repository.
 
 It ships inside the app. On macOS it is at
-`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.
+`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux
+packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.
 
 CandidCue itself is free software under the MIT licence. Its text is in
 `Contents/Resources/LICENSE.txt`, beside this file.

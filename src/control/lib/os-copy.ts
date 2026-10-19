@@ -46,10 +46,11 @@
  * ---------------------------------------------------------------------------
  * `detectPlatform()` falls back to `linux` for anything it cannot identify —
  * jsdom included — so this column must never promise a prompt, a pane or a
- * path that may not exist. It says "your system settings" and "this
- * computer". The file-manager name is the exception: it matches the native
- * menu, which says "Show in File Explorer" everywhere but macOS, because one
- * command must have one name.
+ * path that may not exist. It says "your system settings", "this computer"
+ * and "the file manager" — each desktop's has its own name — which is also
+ * what the native menu says on Linux (`menu.rs::reveal_label`), because one
+ * command must have one name. Its Exit is a real File › Exit there too: GTK has
+ * no predefined Quit, so `menu.rs` builds one.
  */
 import { detectPlatform, type Platform } from './platform';
 
@@ -246,8 +247,8 @@ const LINUX: OsCopy = {
   quit: 'Exit',
   quitLower: 'exit',
   quitFailed: 'CandidCue didn’t close. Choose File › Exit, or close its window.',
-  revealInFileManager: 'Show in File Explorer',
-  revealScriptFailed: 'Couldn’t show this script in File Explorer.',
+  revealInFileManager: 'Show in File Manager',
+  revealScriptFailed: 'Couldn’t show this script in the file manager.',
   windowFocusFailed: 'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
 
   openMicrophoneSettings: 'Open system settings',
