@@ -137,6 +137,8 @@ export const APP_ERROR_CODES = [
   'UPDATE_CHECK_DISABLED',
   /** An install while a take is running or the window is presenting. */
   'UPDATE_BLOCKED_BY_TAKE',
+  /** A take started while an installed update is about to restart the app. */
+  'UPDATE_RESTART_PENDING',
   'UPDATE_BUSY',
   'UPDATE_NOT_AVAILABLE',
   /** A copy that cannot replace itself: a Linux package, a dev build. */

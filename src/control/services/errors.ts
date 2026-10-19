@@ -161,6 +161,8 @@ const ERROR_COPY: Record<string, string> = {
   UPDATE_CHECK_DISABLED: 'Automatic update checks are turned off in Settings.',
   UPDATE_BLOCKED_BY_TAKE:
     'An update cannot be installed during a take. It will wait until the take ends.',
+  UPDATE_RESTART_PENDING:
+    'CandidCue is restarting to finish installing an update. Start the take after it reopens.',
   UPDATE_BUSY: 'An update is already being installed.',
   UPDATE_NOT_AVAILABLE:
     'There is no update waiting to be installed. Choose Check for Updates… in the Help menu to look again.',

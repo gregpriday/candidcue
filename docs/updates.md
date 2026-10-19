@@ -37,17 +37,23 @@ nothing and runs again at the next tick.
 
 **It installs only when asked.** **Install and Restart** flushes the editor
 (an install is refused if a script could not be saved), downloads the payload
-with a progress bar, verifies its signature, installs it, and restarts:
+with a progress bar, verifies its signature, installs it, and restarts. A
+download whose connection goes silent for a minute fails and can be retried.
 
-- **macOS**: the `.app` bundle is replaced in place, then the app restarts
-  through the ordinary quit handshake, so the editor and session flush as they
-  would on ⌘Q. If the app sits somewhere the user cannot write, macOS asks for
-  an administrator password.
-- **Windows**: the plugin hands over to the NSIS installer in `passive` mode — a
-  progress bar and no questions — which closes CandidCue itself and reopens it
-  when it is done. The install call does not return.
-- **Linux**: an AppImage is replaced in place and the app restarts. See below
-  for `.deb`.
+Rust runs the quit handshake itself just before the process goes away
+(`updater::flush_before_restart`), so whatever was typed during the download
+is saved as it would be on ⌘Q. It has to: Tauri ignores `prevent_exit` for a
+restart, so the handshake an ordinary quit starts could not hold it.
+
+- **macOS**: the `.app` bundle is replaced in place, the handshake runs, then
+  the app restarts. If the app sits somewhere the user cannot write, macOS
+  asks for an administrator password.
+- **Windows**: the plugin writes the new installer, runs the handshake in its
+  `on_before_exit` hook, and hands over to the NSIS installer in `passive`
+  mode (a progress bar and no questions), which reopens CandidCue when it is
+  done. The install call does not return.
+- **Linux**: an AppImage is replaced in place, the handshake runs, and the app
+  restarts. See below for `.deb`.
 
 ## Never during a take, never on the glass
 
@@ -59,7 +65,10 @@ enforced twice:
 - **In Rust.** `install_update` refuses with `UPDATE_BLOCKED_BY_TAKE` while the
   control window is presenting (`present::is_presenting`) or a take's session is
   open in the coordinator — and checks again after the download, because a take
-  can start while one runs (`updater::install_refusal`, unit-tested).
+  can start while one runs (`updater::install_refusal`, unit-tested). From that
+  last check until the restart, `start_session` refuses a new take with
+  `UPDATE_RESTART_PENDING` (`updater::restart_refusal`), so no take can begin
+  in the seconds the install and restart take.
 - **In the window.** The notice renders nothing from the moment a take starts
   arming until the glass is gone (`takeStarting`, `session.active`, the
   presenting phase). An update found during a take is held, not dropped, and

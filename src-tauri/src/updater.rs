@@ -62,6 +62,13 @@ pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
 /// the download, which is as large as the app and may be slow for minutes.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long the connection may go silent, during a check or a download, before
+/// it is given up. A limit on silence rather than on the whole transfer: a slow
+/// line still finishes, and a server that stops sending without closing the
+/// connection no longer leaves the notice on "Downloading" forever with no way
+/// to retry.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// The least interval between two download-progress events. A download arrives
 /// in thousands of chunks, and an event per chunk would be an IPC flood for a
 /// progress bar that cannot draw that fast.
@@ -294,6 +301,98 @@ fn take_gate<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     }
 }
 
+/// Set from the moment an install passes its last take check until the app
+/// restarts, and cleared if the install fails instead.
+///
+/// [`take_gate`] alone is a snapshot: a take started a second after it passed
+/// would be running when the restart lands. So the install claims this latch
+/// and checks for a take as ONE step, and a take begins only through
+/// [`begin_take_unless_restarting`], which reads the latch and records the
+/// session as one step too. [`LIFECYCLE`] makes each of the two atomic with
+/// respect to the other: whichever runs first, the second one sees it.
+static RESTART_COMMITTED: AtomicBool = AtomicBool::new(false);
+
+/// Held across "claim the restart, then look for a take" and across "look for
+/// a restart, then record the take". Nothing else takes it, and neither side
+/// awaits while holding it.
+static LIFECYCLE: Mutex<()> = Mutex::new(());
+
+fn lifecycle() -> std::sync::MutexGuard<'static, ()> {
+    LIFECYCLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record the start of a take with `begin`, unless an installed update is about
+/// to restart the app, in which case `begin` is not called.
+pub fn begin_take_unless_restarting<T>(begin: impl FnOnce() -> T) -> Result<T, AppError> {
+    let _lifecycle = lifecycle();
+    match restart_refusal() {
+        Some(refusal) => Err(refusal),
+        None => Ok(begin()),
+    }
+}
+
+/// The refusal for a take started while an installed update is about to
+/// restart the app, or `None`.
+pub fn restart_refusal() -> Option<AppError> {
+    if !RESTART_COMMITTED.load(Ordering::SeqCst) {
+        return None;
+    }
+    Some(
+        AppError::structured(
+            "UPDATE_RESTART_PENDING",
+            ErrorCategory::Validation,
+            "CandidCue is restarting to finish installing an update. Start the take after it reopens.",
+            true,
+        )
+        .with_log("take refused: an installed update is about to restart the app"),
+    )
+}
+
+/// Holds [`RESTART_COMMITTED`] and lets it go again unless the install got as
+/// far as restarting.
+struct RestartCommitment {
+    kept: bool,
+}
+
+impl RestartCommitment {
+    fn claim() -> Self {
+        RESTART_COMMITTED.store(true, Ordering::SeqCst);
+        Self { kept: false }
+    }
+
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for RestartCommitment {
+    fn drop(&mut self) {
+        if !self.kept {
+            RESTART_COMMITTED.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Run the quit handshake (`windows/shutdown.rs`) so the editor flushes before
+/// the process goes away, and say whether this caller owns it.
+///
+/// The updater has to ask itself. Tauri ignores `prevent_exit` for a restart,
+/// so the handshake the run loop starts on an ordinary quit never gets to wait
+/// for a restart; and on Windows the plugin ends the process itself, with
+/// `std::process::exit`, without an exit request at all. When a quit is
+/// already flushing, this waits for it to finish instead of starting another.
+fn flush_before_restart<R: Runtime>(app: &AppHandle<R>) -> bool {
+    use crate::windows::shutdown::{run_shutdown_handshake, ShutdownState, SHUTDOWN_DEADLINE};
+    if run_shutdown_handshake(app) {
+        return true;
+    }
+    let deadline = Instant::now() + SHUTDOWN_DEADLINE + Duration::from_secs(1);
+    while Instant::now() < deadline && !app.state::<ShutdownState>().is_finished() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
 /* ------------------------------------------------------------------ state */
 
 /// The update the last check found, held for the install that may follow.
@@ -405,11 +504,22 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<UpdateCheckResult, 
         AppError::Internal(format!("the update endpoint {endpoint} is not a URL: {err}"))
     })?;
 
+    // The update this returns carries the hook and the client settings into
+    // `install`. On Windows the plugin runs `on_before_exit` after the new
+    // installer is on disk and just before it ends this process.
+    let handshake_app = app.clone();
     let updater = app
         .updater_builder()
         .endpoints(vec![url])
         .and_then(|builder| builder.header("User-Agent", format!("CandidCue/{current_version}")))
-        .map(|builder| builder.timeout(CHECK_TIMEOUT))
+        .map(|builder| {
+            builder
+                .timeout(CHECK_TIMEOUT)
+                .configure_client(|client| client.read_timeout(READ_TIMEOUT))
+                .on_before_exit(move || {
+                    flush_before_restart(&handshake_app);
+                })
+        })
         .and_then(|builder| builder.build())
         .map_err(check_error)?;
 
@@ -490,12 +600,16 @@ fn check_error(err: tauri_plugin_updater::Error) -> AppError {
 /// key in `tauri.conf.json`, before `install` is ever called. An update whose
 /// signature does not verify is never written anywhere the app would run it.
 ///
-/// On macOS and Linux the files are replaced in place and the app then asks to
-/// restart, which goes through the ordinary quit handshake (`app.rs`) — the
-/// editor flushes, then the new build opens. On Windows the plugin hands over to
-/// the NSIS installer (`installMode: passive`, so a progress bar and no
-/// questions), which closes this process itself and reopens the app when it is
-/// done: `install` does not return there.
+/// On macOS and Linux the files are replaced in place, the quit handshake runs
+/// ([`flush_before_restart`]) so the editor flushes, and then the app restarts
+/// into the new build. On Windows the plugin hands over to the NSIS installer
+/// (`installMode: passive`, so a progress bar and no questions): the handshake
+/// runs in `on_before_exit`, the plugin ends this process, and the installer
+/// reopens the app when it is done, so `install` does not return there.
+///
+/// From the last take check on, `start_session` is refused
+/// ([`restart_refusal`]), so no take can begin in the seconds before the
+/// restart.
 pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
     take_gate(app)?;
 
@@ -551,23 +665,54 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
 
     // A take may have started while the download ran. The verified bytes are
     // dropped rather than held: the next attempt checks the signature again.
-    take_gate(app)?;
+    // The commitment and the check are one step, so a take that starts after
+    // it is refused rather than cut off by the restart.
+    let commitment = {
+        let _lifecycle = lifecycle();
+        let commitment = RestartCommitment::claim();
+        take_gate(app)?;
+        commitment
+    };
 
     tracing::info!(version = %update.version, "update verified; installing");
     emit_progress(app, UpdateProgress::Installing);
     let installer = update.clone();
-    tauri::async_runtime::spawn_blocking(move || installer.install(bytes))
+    let installed = tauri::async_runtime::spawn_blocking(move || installer.install(bytes))
         .await
-        .map_err(|err| AppError::Internal(format!("the update installer stopped: {err}")))?
-        .map_err(install_error)?;
+        .map_err(|err| AppError::Internal(format!("the update installer stopped: {err}")))
+        .and_then(|result| result.map_err(install_error));
+    if let Err(err) = installed {
+        // On Windows the plugin runs the quit handshake (`on_before_exit`)
+        // before it launches the installer, and the launch can still fail.
+        // The editor has flushed and the recogniser is stopped by then, and
+        // the handshake does not run twice, so carrying on would leave the
+        // next quit unflushed. Start again cleanly, on the current version.
+        if app
+            .state::<crate::windows::shutdown::ShutdownState>()
+            .is_finished()
+        {
+            tracing::warn!("the update installer did not start after the app shut down; restarting");
+            app.request_restart();
+        }
+        return Err(err);
+    }
 
+    // Only macOS and Linux get here: on Windows `install` ran the handshake in
+    // `on_before_exit` and then ended the process.
     tracing::info!(version = %update.version, "update installed; restarting");
     emit_progress(app, UpdateProgress::Restarting);
     state.set_pending(None);
-    // The reliable restart: an exit request the run loop handles, so `app.rs`
-    // runs the shutdown handshake before the process is replaced. `restart()`
-    // would block this worker forever waiting for the same thing.
-    app.request_restart();
+    commitment.keep();
+    let flush_app = app.clone();
+    let owner = tauri::async_runtime::spawn_blocking(move || flush_before_restart(&flush_app))
+        .await
+        .unwrap_or(false);
+    // The editor has flushed, so the run loop lets this exit through at once.
+    // A quit that was already under way owns the exit instead, and the new
+    // version opens the next time CandidCue does.
+    if owner {
+        app.request_restart();
+    }
     Ok(())
 }
 
@@ -686,6 +831,26 @@ mod tests {
     #[test]
     fn nothing_refuses_an_install_at_rest() {
         assert!(install_refusal(false, false).is_none());
+    }
+
+    /// The other half of "never during a take": once an install is committed,
+    /// a take is refused, and a failed install lets takes start again.
+    /// (`keep` is not exercised: it holds the latch for the life of the
+    /// process, and this process runs every other test in the crate.)
+    #[test]
+    fn a_take_is_refused_only_while_an_install_is_committed() {
+        let mut began = 0;
+        assert!(begin_take_unless_restarting(|| began += 1).is_ok(), "no install: takes start");
+        let commitment = RestartCommitment::claim();
+        let refused = begin_take_unless_restarting(|| began += 1)
+            .expect_err("a committed install must refuse a take");
+        assert_eq!(refused.code(), "UPDATE_RESTART_PENDING");
+        assert_eq!(began, 1, "a refused take must not be recorded at all");
+        drop(commitment);
+        assert!(
+            begin_take_unless_restarting(|| began += 1).is_ok(),
+            "an install that failed must not block takes"
+        );
     }
 
     #[test]
