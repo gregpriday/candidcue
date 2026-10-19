@@ -197,8 +197,17 @@ function rustCrates() {
    * matters. The union is the honest answer for both artifacts — naming a
    * crate one of them does not contain costs nothing, leaving out one it does
    * contain is the gap.
+   *
+   * And Linux x64, for the same reason: the `.deb` and the AppImage ship this
+   * file too, and they contain the GTK/WebKitGTK bindings and zbus that no
+   * other platform selects.
    */
-  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-pc-windows-msvc'];
+  const RELEASE_TARGETS = [
+    'aarch64-apple-darwin',
+    'x86_64-apple-darwin',
+    'x86_64-pc-windows-msvc',
+    'x86_64-unknown-linux-gnu',
+  ];
   const seen = new Map();
   let failedTrees = 0;
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {
@@ -541,7 +550,8 @@ function render() {
     'from the application itself rather than from a repository.',
     '',
     'It ships inside the app. On macOS it is at',
-    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.',
+    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux',
+    'packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.',
     '',
     'CandidCue itself is free software under the MIT licence. Its text is in',
     '`Contents/Resources/LICENSE.txt`, beside this file.',

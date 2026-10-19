@@ -1,5 +1,6 @@
 /**
- * Menu accelerators for a webview the native menu cannot hear (Windows).
+ * Menu accelerators for a webview the native menu cannot hear (Windows), or
+ * cannot always hear (Linux).
  *
  * ---------------------------------------------------------------------------
  * WHY THE MENU'S OWN KEYS DO NOTHING ON WINDOWS
@@ -14,11 +15,22 @@
  * menu was dead the moment a webview had focus, which in this app is always:
  * Present, End Take, Save, Close, the zoom keys, Settings.
  *
- * So on Windows the window listens for the chords itself and runs them through
- * the SAME path a menu click takes. The registry in `commands.ts` already
- * carries every accelerator `menu.rs` publishes (a Rust test holds the two sets
- * equal in both directions), which is what lets this resolve a chord without a
- * second table.
+ * ---------------------------------------------------------------------------
+ * WHY THEY STOP ON LINUX
+ * ---------------------------------------------------------------------------
+ * GTK does what AppKit does while the bar is visible: the window activates a
+ * menu accelerator before the focused web view sees the key. But the bar is
+ * part of ONE window. Settings has none, so Ctrl+W and the zoom keys were dead
+ * there, and a take hides the control window's bar (`present.rs`) — and GTK
+ * will not activate an accelerator whose menu is not on screen, so End Take
+ * and Present went dead exactly when they matter.
+ *
+ * So on Windows and Linux the window listens for the chords itself and runs
+ * them through the SAME path a menu click takes. On Linux a chord the visible
+ * bar answers never reaches the page, so the two never both run it. The
+ * registry in `commands.ts` already carries every accelerator `menu.rs`
+ * publishes (a Rust test holds the two sets equal in both directions), which is
+ * what lets this resolve a chord without a second table.
  *
  * ---------------------------------------------------------------------------
  * WHAT IT COPIES FROM THE MENU, AND WHAT IT DOES NOT

@@ -24,6 +24,14 @@
 //! approach applied to the control window: no Space, no animation, no titlebar,
 //! nothing left over to paint.
 //!
+//! Linux is the exception, and adds fullscreen ON TOP of the borderless frame
+//! rather than instead of it: there is no Space and no animation to avoid, and
+//! under Wayland a client cannot place its own window at all — `set_position`
+//! is ignored, so a borderless window "moved" to the prompter panel stays on
+//! the desk monitor at the panel's size. Fullscreen on a named monitor is the
+//! one request every Linux compositor and X11 window manager honours, so that
+//! is what puts the take on the glass there (see [`linux_fullscreen`]).
+//!
 //! ---------------------------------------------------------------------------
 //! THE MONITOR IS THE PINNED ONE, OR FAILING THAT THE ONE THE WINDOW IS ON
 //! ---------------------------------------------------------------------------
@@ -1148,12 +1156,19 @@ fn leave_native_fullscreen<R: Runtime>(window: &WebviewWindow<R>) {
 
 /// Nothing to leave. No other platform has AppKit's cross-Space exit animation,
 /// and `set_fullscreen(false)` where it applies is not raced by one.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn leave_native_fullscreen<R: Runtime>(window: &WebviewWindow<R>) {
     if window.is_fullscreen().unwrap_or(false) {
         let _ = window.set_fullscreen(false);
     }
 }
+
+/// Linux presents IN fullscreen ([`linux_fullscreen`]), and GTK moves a
+/// fullscreen window from one monitor to another directly. Leaving first would
+/// only flash the desk frame between the two on every reassert; the way out of
+/// fullscreen is [`chrome::restore`], which every un-present goes through.
+#[cfg(target_os = "linux")]
+fn leave_native_fullscreen<R: Runtime>(_window: &WebviewWindow<R>) {}
 
 /// Fill a monitor with the control window, borderless and pinned above the
 /// menu bar — the pinned panel when `wanted` names one that is connected,
@@ -1283,7 +1298,91 @@ fn apply_presentation<R: Runtime>(
     // makes filling the monitor's bounds exact rather than approximately right
     // by a titlebar.
     place(window, *monitor.position(), scale, bounds, scale)?;
+    #[cfg(target_os = "linux")]
+    linux_fullscreen::fill(window, &monitor);
     Ok((bounds, scale, display))
+}
+
+/// Fullscreen on the chosen monitor, and out of it again (Linux).
+///
+/// ---------------------------------------------------------------------------
+/// WHY LINUX NEEDS IT WHEN THE OTHERS DO NOT
+/// ---------------------------------------------------------------------------
+/// The borderless monitor-sized frame [`apply_presentation`] applies is enough
+/// on an X11 desktop: the window manager takes it where it is sent, and
+/// mutter even treats an undecorated monitor-sized window as fullscreen. It is
+/// not enough under Wayland, which gives a client no say in where its window
+/// goes: the move is dropped, and the take opens on the desk monitor at the
+/// prompter panel's size — with GNOME's top bar over it. Asking for
+/// fullscreen ON A NAMED MONITOR (`gtk_window_fullscreen_on_monitor`) is the
+/// request both display servers honour: `_NET_WM_FULLSCREEN_MONITORS` on X11,
+/// `xdg_toplevel.set_fullscreen(output)` on Wayland. The borderless frame stays
+/// underneath it, so the size reported to the renderer is the same either way.
+///
+/// Through GTK rather than `set_fullscreen(true)`: Tauri's flag means "the
+/// monitor the window is on", which under Wayland is the desk monitor again.
+/// GTK is main-thread-only, hence the hop; on the main thread it runs at once.
+///
+/// Unlike macOS there is no animation across Spaces to race, so leaving is a
+/// plain `set_fullscreen(false)` — Tauri's, which reaches the same
+/// `gtk_window_unfullscreen` and is harmless on a window that is not
+/// fullscreen, since tao does not know about the GTK call above.
+#[cfg(target_os = "linux")]
+mod linux_fullscreen {
+    use gtk::prelude::*;
+    use tauri::{Monitor, Runtime, WebviewWindow};
+
+    use crate::errors::AppError;
+
+    use super::presentation_failed;
+
+    pub fn fill<R: Runtime>(window: &WebviewWindow<R>, monitor: &Monitor) {
+        let target = window.clone();
+        let position = *monitor.position();
+        let size = *monitor.size();
+        let scheduled = window.run_on_main_thread(move || {
+            let gtk_window = match target.gtk_window() {
+                Ok(gtk_window) => gtk_window,
+                Err(err) => {
+                    tracing::warn!(error = %err, "no GTK window to put on the prompter monitor");
+                    return;
+                }
+            };
+            let display = gtk::prelude::WidgetExt::display(&gtk_window);
+            /*
+             * GDK numbers its monitors and tao does not hand the number on, so
+             * the monitor is found again by the geometry tao reported for it:
+             * GDK's application-pixel rectangle times the monitor's scale is
+             * exactly what tao computed `position` and `size` from.
+             */
+            let index = (0..display.n_monitors()).find(|&index| {
+                display.monitor(index).is_some_and(|candidate| {
+                    let rect = candidate.geometry();
+                    let scale = candidate.scale_factor().max(1);
+                    rect.x() * scale == position.x
+                        && rect.y() * scale == position.y
+                        && i64::from(rect.width() * scale) == i64::from(size.width)
+                        && i64::from(rect.height() * scale) == i64::from(size.height)
+                })
+            });
+            match (index, gtk::prelude::WidgetExt::screen(&gtk_window)) {
+                (Some(index), Some(screen)) => gtk_window.fullscreen_on_monitor(&screen, index),
+                _ => {
+                    tracing::warn!(
+                        "the prompter monitor is not one GDK knows; fullscreen on the current one"
+                    );
+                    gtk_window.fullscreen();
+                }
+            }
+        });
+        if let Err(err) = scheduled {
+            tracing::warn!(error = %err, "fullscreen for the prompter could not be scheduled");
+        }
+    }
+
+    pub fn leave<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), AppError> {
+        window.set_fullscreen(false).map_err(presentation_failed)
+    }
 }
 
 /// Putting the prompter above everything, and taking it back down.
@@ -1772,8 +1871,14 @@ mod chrome {
 /// backwards — and it is hidden BEFORE the window is sized to the monitor,
 /// because a visible bar is part of the frame: the client area would come out
 /// a menu-height short of the panel. Hiding detaches the bar and nothing
-/// else; its accelerators stay registered, so the take's own keys (End Take,
-/// the zoom chords) keep working with nothing drawn.
+/// else. The take's own keys (End Take, the zoom chords) keep working with
+/// nothing drawn, though not through the bar: WebView2 never let them reach it
+/// and GTK stops honouring a hidden bar's accelerators, so on both the page's
+/// own key bridge (`src/control/lib/menu-keys.ts`) answers them.
+///
+/// On Linux the way back also leaves the fullscreen [`linux_fullscreen`] put
+/// the prompter in, before any frame is restored: a fullscreen window ignores
+/// the geometry it is given.
 ///
 /// And the SHADOW. On Windows an undecorated window that keeps its shadow
 /// keeps an invisible resize frame to cast it from — and, on Windows 11,
@@ -1804,6 +1909,8 @@ mod chrome {
         window: &WebviewWindow<R>,
         decorations: bool,
     ) -> Result<(), AppError> {
+        #[cfg(target_os = "linux")]
+        super::linux_fullscreen::leave(window)?;
         window
             .set_decorations(decorations)
             .map_err(presentation_failed)?;

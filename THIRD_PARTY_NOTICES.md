@@ -9,7 +9,8 @@ question "what is in this application, and under what terms?" can be answered
 from the application itself rather than from a repository.
 
 It ships inside the app. On macOS it is at
-`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.
+`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux
+packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.
 
 CandidCue itself is free software under the MIT licence. Its text is in
 `Contents/Resources/LICENSE.txt`, beside this file.
@@ -111,7 +112,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-349 crates across both workspaces, with the SPDX expression each
+430 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -122,7 +123,18 @@ declares in its own manifest.
 | alloc-stdlib | 0.2.4 | BSD-3-Clause |
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | anyhow | 1.0.104 | MIT OR Apache-2.0 |
+| async-broadcast | 0.7.2 | MIT OR Apache-2.0 |
+| async-channel | 2.5.0 | Apache-2.0 OR MIT |
+| async-executor | 1.14.0 | Apache-2.0 OR MIT |
+| async-io | 2.6.0 | Apache-2.0 OR MIT |
+| async-lock | 3.4.2 | Apache-2.0 OR MIT |
+| async-process | 2.5.0 | Apache-2.0 OR MIT |
+| async-recursion | 1.1.1 | MIT OR Apache-2.0 |
+| async-signal | 0.2.14 | Apache-2.0 OR MIT |
+| async-task | 4.7.1 | Apache-2.0 OR MIT |
 | async-trait | 0.1.91 | MIT OR Apache-2.0 |
+| atk | 0.18.2 | MIT |
+| atk-sys | 0.18.2 | MIT |
 | atoi | 2.0.0 | MIT |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
 | base64 | 0.21.7 | MIT OR Apache-2.0 |
@@ -134,6 +146,7 @@ declares in its own manifest.
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
 | block2 | 0.6.2 | MIT |
+| blocking | 1.6.2 | Apache-2.0 OR MIT |
 | brotli | 8.0.4 | BSD-3-Clause AND MIT |
 | brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
@@ -142,6 +155,8 @@ declares in its own manifest.
 | byteorder-lite | 0.1.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
 | bzip2 | 0.6.1 | MIT OR Apache-2.0 |
+| cairo-rs | 0.18.5 | MIT |
+| cairo-sys-rs | 0.18.2 | MIT |
 | camino | 1.2.4 | MIT OR Apache-2.0 |
 | cargo-platform | 0.1.9 | MIT OR Apache-2.0 |
 | cargo_metadata | 0.19.2 | MIT |
@@ -149,6 +164,7 @@ declares in its own manifest.
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
 | color_quant | 1.1.0 | MIT |
+| concurrent-queue | 2.5.0 | Apache-2.0 OR MIT |
 | cookie | 0.18.1 | MIT OR Apache-2.0 |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
@@ -169,6 +185,7 @@ declares in its own manifest.
 | darling | 0.23.0 | MIT |
 | darling_core | 0.23.0 | MIT |
 | darling_macro | 0.23.0 | MIT |
+| dbus | 0.9.12 | Apache-2.0/MIT |
 | deranged | 0.5.8 | MIT OR Apache-2.0 |
 | derive_more | 2.1.1 | MIT |
 | derive_more-impl | 2.1.1 | MIT |
@@ -177,6 +194,8 @@ declares in its own manifest.
 | dirs-sys | 0.5.0 | MIT OR Apache-2.0 |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT |
 | displaydoc | 0.2.6 | MIT OR Apache-2.0 |
+| dlopen2 | 0.8.2 | MIT |
+| dlopen2_derive | 0.4.3 | MIT |
 | dom_query | 0.27.0 | MIT |
 | dotenvy | 0.15.7 | MIT |
 | dpi | 0.1.2 | Apache-2.0 AND MIT |
@@ -186,11 +205,17 @@ declares in its own manifest.
 | dyn-clone | 1.0.20 | MIT OR Apache-2.0 |
 | either | 1.16.0 | MIT OR Apache-2.0 |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 |
+| endi | 1.1.1 | MIT |
+| enumflags2 | 0.7.12 | MIT OR Apache-2.0 |
+| enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT |
+| event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
+| field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | filetime | 0.2.29 | MIT/Apache-2.0 |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 |
 | flume | 0.11.1 | Apache-2.0/MIT |
@@ -206,19 +231,38 @@ declares in its own manifest.
 | futures-executor | 0.3.33 | MIT OR Apache-2.0 |
 | futures-intrusive | 0.5.0 | MIT OR Apache-2.0 |
 | futures-io | 0.3.33 | MIT OR Apache-2.0 |
+| futures-lite | 2.6.1 | Apache-2.0 OR MIT |
+| futures-macro | 0.3.33 | MIT OR Apache-2.0 |
 | futures-sink | 0.3.33 | MIT OR Apache-2.0 |
 | futures-task | 0.3.33 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
+| gdk | 0.18.2 | MIT |
+| gdk-pixbuf | 0.18.5 | MIT |
+| gdk-pixbuf-sys | 0.18.0 | MIT |
+| gdk-sys | 0.18.2 | MIT |
+| gdkwayland-sys | 0.18.2 | MIT |
+| gdkx11 | 0.18.2 | MIT |
+| gdkx11-sys | 0.18.2 | MIT |
 | generic-array | 0.14.7 | MIT |
 | getrandom | 0.2.17 | MIT OR Apache-2.0 |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 |
 | gif | 0.14.2 | MIT OR Apache-2.0 |
+| gio | 0.18.4 | MIT |
+| gio-sys | 0.18.1 | MIT |
+| glib | 0.18.5 | MIT |
+| glib-macros | 0.18.5 | MIT |
+| glib-sys | 0.18.1 | MIT |
 | glob | 0.3.4 | MIT OR Apache-2.0 |
+| gobject-sys | 0.18.0 | MIT |
+| gtk | 0.18.2 | MIT |
+| gtk-sys | 0.18.2 | MIT |
+| gtk3-macros | 0.18.2 | MIT |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 |
 | hashbrown | 0.15.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | hashlink | 0.10.0 | MIT OR Apache-2.0 |
+| heck | 0.4.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
 | hex | 0.4.3 | MIT OR Apache-2.0 |
 | html5ever | 0.38.0 | MIT OR Apache-2.0 |
@@ -248,20 +292,27 @@ declares in its own manifest.
 | indexmap | 2.14.0 | Apache-2.0 OR MIT |
 | infer | 0.19.0 | MIT |
 | ipnet | 2.12.0 | MIT OR Apache-2.0 |
+| is-docker | 0.2.0 | MIT |
+| is-wsl | 0.4.0 | MIT |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
+| javascriptcore-rs | 1.1.2 | MIT |
+| javascriptcore-rs-sys | 1.1.1 | MIT |
 | json-patch | 3.0.1 | MIT/Apache-2.0 |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 |
 | libbz2-rs-sys | 0.2.5 | bzip2-1.0.6 |
 | libc | 0.2.189 | MIT OR Apache-2.0 |
+| libdbus-sys | 0.2.7 | Apache-2.0/MIT |
 | libsqlite3-sys | 0.30.1 | MIT |
+| linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | litemap | 0.8.2 | Unicode-3.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
 | log | 0.4.33 | MIT OR Apache-2.0 |
 | markup5ever | 0.38.0 | MIT OR Apache-2.0 |
 | matchers | 0.2.0 | MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
+| memoffset | 0.9.1 | MIT |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | mio | 1.2.2 | MIT |
@@ -284,6 +335,9 @@ declares in its own manifest.
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | open | 5.4.0 | MIT |
 | option-ext | 0.2.0 | MPL-2.0 |
+| ordered-stream | 0.2.0 | MIT OR Apache-2.0 |
+| pango | 0.18.3 | MIT |
+| pango-sys | 0.18.0 | MIT |
 | parking | 2.2.1 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
@@ -293,12 +347,19 @@ declares in its own manifest.
 | phf_macros | 0.13.1 | MIT |
 | phf_shared | 0.13.1 | MIT |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT |
+| piper | 0.2.5 | MIT OR Apache-2.0 |
 | plist | 1.10.0 | MIT |
 | png | 0.17.16 | MIT OR Apache-2.0 |
 | png | 0.18.1 | MIT OR Apache-2.0 |
+| polling | 3.11.0 | Apache-2.0 OR MIT |
 | potential_utf | 0.1.5 | Unicode-3.0 |
 | powerfmt | 0.2.0 | MIT OR Apache-2.0 |
 | precomputed-hash | 0.1.1 | MIT |
+| proc-macro-crate | 1.3.1 | MIT OR Apache-2.0 |
+| proc-macro-crate | 2.0.2 | MIT OR Apache-2.0 |
+| proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 |
+| proc-macro-error | 1.0.4 | MIT OR Apache-2.0 |
+| proc-macro-error-attr | 1.0.4 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 |
 | quick-error | 2.0.1 | MIT/Apache-2.0 |
@@ -312,6 +373,7 @@ declares in its own manifest.
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
+| rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.15 | ISC |
@@ -329,6 +391,7 @@ declares in its own manifest.
 | serde_derive_internals | 0.29.1 | MIT OR Apache-2.0 |
 | serde_json | 1.0.151 | MIT OR Apache-2.0 |
 | serde_repr | 0.1.21 | MIT OR Apache-2.0 |
+| serde_spanned | 0.6.9 | MIT OR Apache-2.0 |
 | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
 | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 |
 | serde_with | 3.21.0 | MIT OR Apache-2.0 |
@@ -340,12 +403,15 @@ declares in its own manifest.
 | sharded-slab | 0.1.7 | MIT |
 | sherpa-onnx | 1.13.4 | Apache-2.0 |
 | sherpa-onnx-sys | 1.13.4 | Apache-2.0 |
+| signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
 | simd-adler32 | 0.3.10 | MIT |
 | siphasher | 1.0.3 | MIT/Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 |
 | softbuffer | 0.4.8 | MIT OR Apache-2.0 |
+| soup3 | 0.5.0 | MIT |
+| soup3-sys | 0.5.0 | MIT |
 | spin | 0.9.9 | MIT |
 | sqlx | 0.8.6 | MIT OR Apache-2.0 |
 | sqlx-core | 0.8.6 | MIT OR Apache-2.0 |
@@ -358,6 +424,7 @@ declares in its own manifest.
 | subtle | 2.6.1 | BSD-3-Clause |
 | swift-rs | 1.0.7 | MIT OR Apache-2.0 |
 | symlink | 0.1.0 | MIT/Apache-2.0 |
+| syn | 1.0.109 | MIT OR Apache-2.0 |
 | syn | 2.0.119 | MIT OR Apache-2.0 |
 | syn | 3.0.3 | MIT OR Apache-2.0 |
 | sync_wrapper | 1.0.2 | Apache-2.0 |
@@ -389,7 +456,11 @@ declares in its own manifest.
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 |
 | tokio-stream | 0.1.19 | MIT |
 | toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_datetime | 0.6.3 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_edit | 0.19.15 | MIT OR Apache-2.0 |
+| toml_edit | 0.20.2 | MIT OR Apache-2.0 |
+| toml_edit | 0.25.13+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_writer | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
 | tower | 0.5.3 | MIT |
@@ -421,6 +492,8 @@ declares in its own manifest.
 | walkdir | 2.5.0 | Unlicense/MIT |
 | want | 0.3.1 | MIT |
 | web_atoms | 0.2.5 | MIT OR Apache-2.0 |
+| webkit2gtk | 2.0.2 | MIT |
+| webkit2gtk-sys | 2.0.2 | MIT |
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 |
 | webview2-com | 0.38.2 | MIT |
 | webview2-com-macros | 0.8.1 | MIT |
@@ -448,11 +521,17 @@ declares in its own manifest.
 | windows-version | 0.1.7 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
+| winnow | 0.5.40 | MIT |
 | winnow | 1.0.4 | MIT |
 | writeable | 0.6.3 | Unicode-3.0 |
 | wry | 0.55.1 | Apache-2.0 OR MIT |
+| x11 | 2.21.0 | MIT |
+| x11-dl | 2.21.0 | MIT |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
+| zbus | 5.18.0 | MIT |
+| zbus_macros | 5.18.0 | MIT |
+| zbus_names | 4.3.4 | MIT |
 | zerofrom | 0.1.8 | Unicode-3.0 |
 | zerofrom-derive | 0.1.7 | Unicode-3.0 |
 | zeroize | 1.9.0 | Apache-2.0 OR MIT |
@@ -465,6 +544,9 @@ declares in its own manifest.
 | zopfli | 0.8.3 | Apache-2.0 |
 | zune-core | 0.5.1 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
+| zvariant | 5.13.1 | MIT |
+| zvariant_derive | 5.13.1 | MIT |
+| zvariant_utils | 3.5.0 | MIT |
 
 ## JavaScript packages
 

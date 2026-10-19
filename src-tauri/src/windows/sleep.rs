@@ -18,8 +18,10 @@
 //! operator's idle timer partway through the read.
 //!
 //! Implemented with direct platform FFI rather than a dependency: macOS
-//! `IOPMAssertionCreateWithName`, Windows `SetThreadExecutionState`. Everything
-//! else is a no-op.
+//! `IOPMAssertionCreateWithName`, Windows `SetThreadExecutionState`. Linux asks
+//! the session bus (`org.freedesktop.ScreenSaver.Inhibit`, then the desktop
+//! portal), through the zbus the single-instance plugin already links.
+//! Everything else is a no-op.
 
 use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
@@ -292,7 +294,135 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+// ---------------------------------------------------------------------------
+// Linux — org.freedesktop.ScreenSaver.Inhibit over the session bus
+// ---------------------------------------------------------------------------
+//
+// The freedesktop idle-inhibit interface, which GNOME (through its
+// screensaver proxy), KDE Plasma, Xfce, Cinnamon and MATE all answer, with the
+// XDG desktop portal's `Inhibit` as the fallback for a session that only has a
+// portal. Both inhibitions belong to the D-Bus CONNECTION that asked: the
+// session drops them when it closes, so a crashed app cannot leave the display
+// held. That is also why the connection lives exactly as long as the claim —
+// on a thread of its own, like the Windows arm, so a slow or missing bus never
+// stalls Present: `create` answers at once and the thread does the talking.
+//
+// A session with neither service (a bare window manager, a container) gets a
+// warning in the log and the system's own idle policy, which is what every
+// Linux build had before this.
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::sync::mpsc::{sync_channel, SyncSender};
+
+    use zbus::blocking::Connection;
+    use zbus::zvariant::{OwnedObjectPath, Value};
+
+    const APP: &str = "CandidCue";
+    const REASON: &str = "A teleprompter take is on screen";
+
+    /// What has to be undone when the claim is withdrawn.
+    enum Held {
+        ScreenSaver(u32),
+        Portal(OwnedObjectPath),
+    }
+
+    fn inhibit(connection: &Connection) -> zbus::Result<Held> {
+        let screensaver = connection.call_method(
+            Some("org.freedesktop.ScreenSaver"),
+            "/org/freedesktop/ScreenSaver",
+            Some("org.freedesktop.ScreenSaver"),
+            "Inhibit",
+            &(APP, REASON),
+        );
+        match screensaver {
+            Ok(reply) => Ok(Held::ScreenSaver(reply.body().deserialize::<u32>()?)),
+            Err(screensaver_error) => {
+                // Flag 8 is "idle": the session may not blank or lock.
+                let mut options = std::collections::HashMap::new();
+                options.insert("reason", Value::from(REASON));
+                let portal = connection.call_method(
+                    Some("org.freedesktop.portal.Desktop"),
+                    "/org/freedesktop/portal/desktop",
+                    Some("org.freedesktop.portal.Inhibit"),
+                    "Inhibit",
+                    &("", 8u32, options),
+                );
+                match portal {
+                    Ok(reply) => Ok(Held::Portal(reply.body().deserialize::<OwnedObjectPath>()?)),
+                    Err(portal_error) => {
+                        tracing::warn!(
+                            screensaver = %screensaver_error,
+                            portal = %portal_error,
+                            "neither the ScreenSaver service nor the desktop portal will hold the display awake"
+                        );
+                        Err(portal_error)
+                    }
+                }
+            }
+        }
+    }
+
+    fn uninhibit(connection: &Connection, held: Held) {
+        let result = match &held {
+            Held::ScreenSaver(cookie) => connection
+                .call_method(
+                    Some("org.freedesktop.ScreenSaver"),
+                    "/org/freedesktop/ScreenSaver",
+                    Some("org.freedesktop.ScreenSaver"),
+                    "UnInhibit",
+                    &(*cookie,),
+                )
+                .map(drop),
+            Held::Portal(request) => connection
+                .call_method(
+                    Some("org.freedesktop.portal.Desktop"),
+                    request.as_str(),
+                    Some("org.freedesktop.portal.Request"),
+                    "Close",
+                    &(),
+                )
+                .map(drop),
+        };
+        // Closing the connection drops the inhibition anyway; this only makes
+        // it prompt.
+        if let Err(err) = result {
+            tracing::debug!(error = %err, "the display-sleep inhibition was not withdrawn explicitly");
+        }
+    }
+
+    pub struct Assertion(SyncSender<()>);
+
+    impl Assertion {
+        pub fn create() -> Option<Self> {
+            let (tx, rx) = sync_channel::<()>(1);
+            std::thread::Builder::new()
+                .name("candidcue-keep-awake".into())
+                .spawn(move || {
+                    let connection = match Connection::session() {
+                        Ok(connection) => connection,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "no session bus; the display may sleep during this take");
+                            return;
+                        }
+                    };
+                    let Ok(held) = inhibit(&connection) else { return };
+                    // Park until released; the inhibition lives as long as
+                    // the connection does.
+                    let _ = rx.recv();
+                    uninhibit(&connection, held);
+                })
+                .ok()?;
+            Some(Self(tx))
+        }
+
+        pub fn release(self) {
+            let _ = self.0.send(());
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod platform {
     pub struct Assertion;
 

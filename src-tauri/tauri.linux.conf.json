@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "category": "Video",
+    "longDescription": "Write a script in Markdown, press Present, and CandidCue scrolls it as you speak. Speech is transcribed on this computer by an on-device model and never leaves it.",
+    "linux": {
+      "deb": {
+        "section": "video"
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  }
+}

@@ -450,6 +450,7 @@ dependencies = [
  "cc-stt",
  "chrono",
  "core-graphics",
+ "gtk",
  "hex",
  "image",
  "libc",
@@ -474,8 +475,10 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "webkit2gtk",
  "webview2-com",
  "windows-core 0.61.2",
+ "zbus",
  "zip",
 ]
 

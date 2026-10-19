@@ -799,8 +799,14 @@ describe('the installer is proven to carry no speech-model weights', () => {
  * each crate it prints. What that proves is the generator's ORDER and its
  * failure reporting; that real cargo unpacks is a measured fact about cargo,
  * not something a fake can establish.
+ *
+ * The timeout is the spawn count, not slowness in the generator: every run
+ * starts the fake cargo once per workspace per release target — eight Node
+ * processes since Linux became a release target — and a test that generates
+ * twice starts sixteen. That is under two seconds on a Mac and can pass five on
+ * a cold Windows runner.
  */
-describe('the notices gate works on a runner that has never unpacked a crate', () => {
+describe('the notices gate works on a runner that has never unpacked a crate', { timeout: 30_000 }, () => {
   const NEEDS = [
     'scripts/generate-notices.mjs',
     'sbom/native-inputs.json',

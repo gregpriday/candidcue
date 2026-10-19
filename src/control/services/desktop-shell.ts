@@ -318,16 +318,19 @@ export function installWindowMenuCommands(
 }
 
 /**
- * The menu's chords, heard by the window itself — on Windows only.
+ * The menu's chords, heard by the window itself — on Windows and Linux.
  *
- * Windows cannot deliver a menu accelerator to a focused WebView2 at all
- * (`lib/menu-keys.ts` says why), so there every installer that answers menu
- * commands also answers their keys, through the same handlers. Everywhere else
- * the native menu takes the key before the page sees it, and a second listener
- * would run every command twice.
+ * Windows cannot deliver a menu accelerator to a focused WebView2 at all, and
+ * on Linux the menu bar is the control window's alone and stops answering its
+ * keys while a take hides it (`lib/menu-keys.ts` says why). So there every
+ * installer that answers menu commands also answers their keys, through the
+ * same handlers. On macOS the application menu takes every key before the page
+ * sees it, and a second listener would run every command twice. GTK takes a
+ * chord the visible bar answers before the page does too, so the bridge only
+ * ever hears the ones the bar did not.
  */
 function installMenuKeys(dispatch: MenuKeyDispatch): () => void {
-  if (!isTauriRuntime() || detectPlatform() !== 'windows') return () => {};
+  if (!isTauriRuntime() || detectPlatform() === 'macos') return () => {};
   // A runtime with no event target to listen on (a test's stand-in window)
   // has no keys to hear.
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
