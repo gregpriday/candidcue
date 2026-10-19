@@ -275,3 +275,54 @@ test('the overflow menu opens upward rather than off the bottom of the list', as
   expect(menuBox.y).toBeGreaterThanOrEqual(0);
   expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport!.height);
 });
+
+test('a row menu opens on the press, selects its row, and keeps focus once released', async ({
+  page,
+}) => {
+  // The menu opens on mousedown, as a Mac menu does, so everything is asserted
+  // with the button still held: `.click()` cannot tell a press from a release.
+  await page.goto('/control.html');
+  await collection(page).getByRole('option').first().waitFor();
+  await row(page, 'Launch keynote').click();
+  await expect(row(page, 'Launch keynote')).toHaveAttribute('aria-selected', 'true');
+
+  const other = row(page, 'Weekly product update');
+  await other.hover();
+  const box = await rowMenu(page, 'Weekly product update').boundingBox();
+  if (!box) throw new Error('the row menu trigger is not laid out');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+
+  const menu = page.locator('[role="menu"]');
+  await expect(menu).toBeVisible();
+  // The row whose menu this is, as right-click does: selection used to follow
+  // only from the click on release, so a press dragged off the row left the
+  // highlight on one script and its menu on another.
+  await expect(other).toHaveAttribute('aria-selected', 'true');
+
+  // Released away from the trigger, so no click completes on it.
+  await page.mouse.move(box.x - 400, box.y + 200);
+  await page.mouse.up();
+  await expect(menu).toBeVisible();
+  await expect(other).toHaveAttribute('aria-selected', 'true');
+  // The press's default would have taken focus off the first item.
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).toBe('menuitem');
+});
+
+test('double-clicking a row menu trigger does not open the script', async ({ page }) => {
+  // Each press of a double click toggles the menu; the dblclick that follows
+  // lands on the icon's SVG and bubbles to the row, whose own double click
+  // opens the script.
+  await page.goto('/control.html');
+  await collection(page).getByRole('option').first().waitFor();
+  const target = row(page, 'Launch keynote');
+  await target.hover();
+  await rowMenu(page, 'Launch keynote').dblclick();
+
+  // Navigation is fired and not awaited; give it the frames it would take.
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(collection(page)).toBeVisible();
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+});

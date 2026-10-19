@@ -60,13 +60,31 @@ async function pressOn(node: Element, key: string, init: KeyboardEventInit = {})
  * browser produces for Enter/Space on a button — not for a pointer. The component
  * reads exactly that field to decide whether to show the highlight, so a test
  * using the bare `.click()` would be asserting the keyboard path while claiming to
- * test the mouse. A click count of one is what a real press carries.
+ * test the mouse. A click count of one is what a real press carries — and the
+ * whole sequence is sent, because the menu opens on the mousedown and has to
+ * survive the click that follows it.
  */
 async function openByClick() {
-  trigger().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  await press();
+  release();
+  await tick();
+}
+
+/** The button going down, and nothing after it. */
+async function press(init: MouseEventInit = {}): Promise<MouseEvent> {
+  const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, detail: 1, ...init });
+  trigger().dispatchEvent(event);
   flushSync();
   await tick();
   await tick();
+  return event;
+}
+
+/** The button coming back up over the trigger: a mouseup, then the click it completes. */
+function release() {
+  trigger().dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, detail: 1 }));
+  trigger().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  flushSync();
 }
 
 /** Open the way Enter or Space does — the browser synthesises a detail-0 click. */
@@ -92,6 +110,103 @@ describe('OverflowMenu — trigger', () => {
   it('renders no menu until it is opened', () => {
     renderMenu(items({ label: 'Rename' }));
     expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+});
+
+/**
+ * The press opens it, as a Mac menu does — not the release.
+ */
+describe('OverflowMenu — opens on the press', () => {
+  const isOpen = () => document.querySelector('[role="menu"]') !== null;
+
+  it('is open while the button is still down', async () => {
+    renderMenu(items({ label: 'Rename' }, { label: 'Delete' }));
+    await press();
+    expect(isOpen()).toBe(true);
+    expect(document.activeElement?.textContent?.trim()).toBe('Rename');
+  });
+
+  it('stays open when the button comes back up', async () => {
+    // The release still sends a click; answering it too would close the menu
+    // the press had just opened.
+    renderMenu(items({ label: 'Rename' }));
+    await press();
+    release();
+    await tick();
+    expect(isOpen()).toBe(true);
+  });
+
+  it('cancels the press, whose default would take focus back off the item', async () => {
+    renderMenu(items({ label: 'Rename' }));
+    const event = await press();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('a second press on the trigger closes it', async () => {
+    renderMenu(items({ label: 'Rename' }));
+    await openByClick();
+    await press();
+    expect(isOpen()).toBe(false);
+    release();
+    expect(isOpen(), 'the release must not reopen it').toBe(false);
+  });
+
+  it('leaves a secondary press alone, Control-click included', async () => {
+    renderMenu(items({ label: 'Rename' }));
+    expect((await press({ button: 2 })).defaultPrevented).toBe(false);
+    expect(isOpen()).toBe(false);
+    expect((await press({ ctrlKey: true })).defaultPrevented).toBe(false);
+    expect(isOpen()).toBe(false);
+  });
+
+  it('a Control-click opens on its click, without a highlight, even after an abandoned press', async () => {
+    // Control-click on Windows: the press is left alone, so the click is what
+    // opens the menu, and it is still a pointer that did. A press that slid off
+    // first left its flag set; the ignored press must clear it, or this click
+    // would be taken for that press's release and swallowed.
+    renderMenu(items({ label: 'Rename' }));
+    await press();
+    await pressOn(document.activeElement as Element, 'Escape');
+    expect(isOpen()).toBe(false);
+
+    await press({ ctrlKey: true });
+    expect(isOpen()).toBe(false);
+    release();
+    await tick();
+    await tick();
+    expect(isOpen()).toBe(true);
+    expect(menuItems().filter((el) => el.classList.contains('active'))).toHaveLength(0);
+  });
+
+  it('reports each open and close once, whichever device opened it', async () => {
+    const onopenchange = vi.fn();
+    render(OverflowMenu, { props: { items: items({ label: 'Rename' }), onopenchange } });
+    flushSync();
+
+    await openByClick();
+    await press();
+    release();
+    expect(onopenchange.mock.calls.map(([open]) => open)).toEqual([true, false]);
+
+    // Opened by Enter, closed by a press: the release must not open it again.
+    onopenchange.mockClear();
+    await openByActivationKey();
+    await press();
+    release();
+    await tick();
+    expect(isOpen()).toBe(false);
+    expect(onopenchange.mock.calls.map(([open]) => open)).toEqual([true, false]);
+  });
+
+  it('a press that slid off before release does not swallow the next Enter', async () => {
+    renderMenu(items({ label: 'Rename' }));
+    await press();
+    // Released elsewhere, so no click reached the trigger; dismiss and come back
+    // by keyboard.
+    await pressOn(document.activeElement as Element, 'Escape');
+    expect(isOpen()).toBe(false);
+    await openByActivationKey();
+    expect(isOpen()).toBe(true);
   });
 });
 

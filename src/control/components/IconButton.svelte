@@ -34,6 +34,8 @@
     haspopup?: 'menu' | 'dialog' | 'listbox' | 'true';
     expanded?: boolean;
     onclick?: (event: MouseEvent) => void;
+    /** For a control that acts on the press rather than the release, as a menu trigger does. */
+    onmousedown?: (event: MouseEvent) => void;
     onkeydown?: (event: KeyboardEvent) => void;
   }
 
@@ -49,6 +51,7 @@
     haspopup,
     expanded,
     onclick,
+    onmousedown,
     onkeydown,
   }: Props = $props();
 </script>
@@ -67,6 +70,7 @@
   title={title ?? label}
   {disabled}
   {onclick}
+  {onmousedown}
   {onkeydown}
 >
   <Icon name={icon} {size} />

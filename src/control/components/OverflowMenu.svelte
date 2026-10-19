@@ -188,34 +188,77 @@
   }
 
   /**
-   * Open from the trigger, deciding whether the highlight has anything to say.
+   * Open or close from the trigger, saying whether the highlight has anything
+   * to say.
    *
-   * A POINTER click opens with nothing highlighted: focus still lands on the
-   * first item, because the menu-button pattern requires it and a keyboard user
-   * must be able to carry on with the arrows — but painting that item as chosen
-   * is a different claim, and a false one, since nobody pointed at it. It also
-   * made the top action look pre-armed, one Return away from firing.
+   * A POINTER opens with nothing highlighted: focus still lands on the first
+   * item, because the menu-button pattern requires it and a keyboard user must
+   * be able to carry on with the arrows — but painting that item as chosen is a
+   * different claim, and a false one, since nobody pointed at it. It also made
+   * the top action look pre-armed, one Return away from firing.
    *
-   * ENTER or SPACE must highlight, though, and that is the whole reason this
-   * function inspects the event. Both keys reach a button as a `click`, so
-   * treating every click as pointer-originated left a keyboard user with focus
-   * inside a menu and NOTHING drawn to say where — the outline that used to do
-   * that job is suppressed now. On the Live transport that is the only route to
-   * "Hard pause — mic off", so the failure mode is arming a destructive-looking
-   * action invisibly.
-   *
-   * `detail` is the discriminator: pointer clicks carry a click count of at least
-   * one, while a click synthesised from a key press (and one dispatched by
-   * assistive technology) carries zero. Modality is not otherwise recoverable
-   * from a click event.
+   * ENTER or SPACE must highlight, though. Both keys reach a button as a
+   * `click`, so treating every click as pointer-originated left a keyboard user
+   * with focus inside a menu and NOTHING drawn to say where — the outline that
+   * used to do that job is suppressed now. On the Live transport that is the
+   * only route to "Hard pause — mic off", so the failure mode is arming a
+   * destructive-looking action invisibly.
    */
-  function toggle(event?: MouseEvent): void {
+  function toggle(highlight: boolean): void {
     if (open) {
       closeMenu(true);
       return;
     }
-    const fromKeyboard = !event || event.detail === 0;
-    openMenu(firstEnabledIndex(items), fromKeyboard);
+    openMenu(firstEnabledIndex(items), highlight);
+  }
+
+  /**
+   * Set while the click a handled press will send on release is still to come.
+   *
+   * Not reset when that click never arrives (the pointer slid off the trigger
+   * before release): the next press sets it afresh, and a keyboard click is
+   * told apart by its click count, so a stale flag can swallow neither.
+   */
+  let pressHandled = false;
+
+  /**
+   * The menu opens on the PRESS, as a Mac menu does, not when the button is
+   * released.
+   *
+   * The default action is cancelled because it moves focus: onto the trigger in
+   * Chromium, and in the Mac's WKWebView — where a click does not focus a plain
+   * button — onto the nearest mouse-focusable ancestor, which in the Library is
+   * the row. Either one
+   * lands after `openMenu` has put focus on the first item, and takes it away
+   * again, leaving the arrows and Escape talking to nothing.
+   *
+   * Control-click is the Mac's secondary click, which opens the row's context
+   * menu; it is left to that.
+   */
+  function onTriggerMouseDown(event: MouseEvent): void {
+    pressHandled = false;
+    if (event.button !== 0 || event.ctrlKey) return;
+    event.preventDefault();
+    pressHandled = true;
+    toggle(false);
+  }
+
+  /**
+   * The click is the keyboard's route in, and the release of a press that has
+   * already acted.
+   *
+   * `detail` is the discriminator: pointer clicks carry a click count of at
+   * least one, while a click synthesised from Enter or Space (and one
+   * dispatched by assistive technology) carries zero. Modality is not otherwise
+   * recoverable from a click event.
+   */
+  function onTriggerClick(event: MouseEvent): void {
+    const fromKeyboard = event.detail === 0;
+    if (pressHandled && !fromKeyboard) {
+      pressHandled = false;
+      return;
+    }
+    toggle(fromKeyboard);
   }
 
   function onTriggerKeydown(event: KeyboardEvent): void {
@@ -288,7 +331,8 @@
     active={open}
     haspopup="menu"
     expanded={open}
-    onclick={toggle}
+    onclick={onTriggerClick}
+    onmousedown={onTriggerMouseDown}
     onkeydown={onTriggerKeydown}
   />
   {#if open}

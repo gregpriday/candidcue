@@ -26,9 +26,7 @@
   Every state is the same rounded highlight, inset from the row's edges, in one
   neutral ink at rising strength — hover, selected, selected with the list
   focused — plus the quiet 2px edge on that highlight when the keyboard put
-  focus there. The ramp is in tokens.css (`--bg-row-*`). The selected row
-  alone carries a trailing check, grey or clay as the list has focus, because
-  the fill is too light to carry "selected" by itself (see `.selected-mark`).
+  focus there. The ramp is in tokens.css (`--bg-row-*`).
 
   WHAT IT REPLACED
   ----------------
@@ -50,7 +48,6 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import Icon from './Icon.svelte';
 
   interface Props {
     title: string;
@@ -160,7 +157,10 @@
    */
   function fromRowItself(event: Event): boolean {
     const target = event.target;
-    if (!(target instanceof HTMLElement)) return true;
+    // `Element`, not `HTMLElement`: a press on a button's icon targets the
+    // SVG inside it, and a double click on the overflow trigger's dots counted
+    // as the row's own surface and opened the script.
+    if (!(target instanceof Element)) return true;
     if (target === event.currentTarget) return true;
     const control = target.closest(CONTROL_SELECTOR);
     // A control OUTSIDE this row cannot have produced an event that bubbled to
@@ -268,12 +268,7 @@
   <span class="col modified">{modified}</span>
 
   {#if actions}
-    <div class="actions">
-      {@render actions()}
-      <span class="selected-mark" aria-hidden="true">
-        {#if selected}<Icon name="check" size={14} />{/if}
-      </span>
-    </div>
+    <div class="actions">{@render actions()}</div>
   {/if}
 </div>
 
@@ -469,36 +464,8 @@
     justify-content: flex-end;
     gap: var(--space-1);
     flex: 0 0 auto;
-    width: var(--col-actions, 132px);
+    width: var(--col-actions, 120px);
     visibility: hidden;
-  }
-  /*
-   * THE SELECTED SCRIPT CARRIES A CHECK.
-   *
-   * The highlight groups the row; it cannot carry the state on its own. A fill
-   * light enough to keep the metadata readable is about 1.1:1 against white,
-   * and SC 1.4.11 wants the information that a component is selected at 3:1 —
-   * which is why the APG's own listbox marks its selected option with a check.
-   * Hover gets the fill and the actions but never the check, so the row under
-   * the pointer cannot pass for the one File commands will act on.
-   *
-   * Trailing, in a slot every row reserves so Present never shifts between a
-   * hovered row and the selected one. Grey while the keyboard is elsewhere,
-   * clay while the list has it: the platform's unemphasized and emphasized
-   * selection, at the size of a glyph, and the sidebar's own grammar (a
-   * neutral fill, the accent kept for the icon).
-   */
-  .selected-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    margin-left: var(--space-1);
-    color: var(--text-muted);
-    transition: color var(--dur-fast) var(--ease-out);
-  }
-  .selected.list-focused .selected-mark {
-    color: var(--accent-strong);
   }
   .row:hover .actions,
   .row:focus-within .actions,

@@ -928,10 +928,17 @@
                   {:else}
                     <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
                   {/if}
+                  <!-- Selects on opening, as right-click does (`openRowMenu`):
+                       the menu opens on the press, and the row's own select
+                       waits for a click that a press released outside the row
+                       may never send it. -->
                   <OverflowMenu
                     compact
                     items={rowMenuItems(script)}
                     label={`Actions for ${script.title}`}
+                    onopenchange={(open) => {
+                      if (open) selectScript(script.id);
+                    }}
                   />
                 {/snippet}
               </ScriptRow>
@@ -1072,7 +1079,7 @@
   .collection {
     --col-length: 72px;
     --col-modified: 112px;
-    --col-actions: 132px;
+    --col-actions: 120px;
     border: 1px solid var(--border-faint);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
