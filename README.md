@@ -1,6 +1,6 @@
 # CandidCue
 
-A voice-following teleprompter for macOS and Windows. Write your script in
+A voice-following teleprompter for macOS, Windows and Linux. Write your script in
 Markdown, press Present, and read. CandidCue listens with a speech recogniser
 that runs on your computer, works out where you are in the script, and scrolls
 to keep your next words in the reading band. Ad-lib, pause, or start a
@@ -10,11 +10,21 @@ It is free and open source, built for recording videos on a prompter rig (an
 Elgato Prompter or any display behind glass), and it works in an ordinary
 window on a single screen too.
 
-## Status
+## Download
 
-CandidCue is getting ready for v1.0.0. There is no signed download yet, so for
-now you build it from source (below). The remaining work is tracked in the
-[issues](https://github.com/gregpriday/candidcue/issues).
+The current release is on the
+[releases page](https://github.com/gregpriday/candidcue/releases/latest), and
+every file is also served from `https://updates.candidcue.com/releases/`:
+
+- **macOS** (12 or later, Apple Silicon and Intel): the universal `.dmg`,
+  signed and notarised.
+- **Windows** (11, 64-bit): the `-setup.exe` installer. It is not code-signed,
+  so SmartScreen asks first: choose **More info**, then **Run anyway**.
+- **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
+
+CandidCue updates itself after that. Each update is signed and checked against
+the key the app was built with, and it is never offered or installed during a
+take.
 
 ## What it does
 
@@ -48,9 +58,10 @@ when it lands.
 
 ## Requirements
 
-- macOS 12 or later, Apple Silicon or Intel; or Windows 11, 64-bit (x64).
-  Windows 10 should work — it has the same WebView2 runtime, which the
-  installer fetches where it is missing — but is not tested.
+- macOS 12 or later, Apple Silicon or Intel; Windows 11, 64-bit (x64); or
+  64-bit Linux with WebKitGTK 4.1 (Ubuntu 22.04 or newer). Windows 10 should
+  work — it has the same WebView2 runtime, which the installer fetches where it
+  is missing — but is not tested.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following
@@ -126,8 +137,6 @@ there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
 
 ## Licence
 
-CandidCue is moving to the MIT licence
-([#223](https://github.com/gregpriday/candidcue/issues/223)). Until that change
-lands, the `LICENSE` file still carries an earlier proprietary notice.
+CandidCue is free and open source under the [MIT licence](LICENSE).
 Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
 and security reports go through [`.github/SECURITY.md`](.github/SECURITY.md).
