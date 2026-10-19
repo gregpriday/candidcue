@@ -223,7 +223,8 @@ function fakeFetch(routes: Record<string, Route | (() => Route)>) {
     seen.push(path);
     const entry = routes[path];
     const route = typeof entry === 'function' ? entry() : entry ?? { status: 404 };
-    return new Response(route.status === 404 ? 'not found' : route.body ?? '', {
+    const body = typeof route.body === 'string' ? route.body : new Uint8Array(route.body ?? []);
+    return new Response(route.status === 404 ? 'not found' : body, {
       status: route.status,
       headers: route.headers,
     });
