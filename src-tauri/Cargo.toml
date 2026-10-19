@@ -98,6 +98,14 @@ libc = "0.2.189"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 
+# The WebView2 COM surface, for the one event wry does not expose: granting the
+# app's own pages the microphone (`windows/webview_microphone.rs`). Both are
+# already in the tree through wry at these versions; named here so the handler
+# types are the same ones wry's controller hands back.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+
 [dev-dependencies]
 tempfile = "3"
 # `tauri/test` gives the MockRuntime, which is what makes it possible to assert

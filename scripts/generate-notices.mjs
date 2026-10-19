@@ -31,7 +31,7 @@
  * the font's OFL) do travel, as their own files. Every dependency is named
  * with its version and SPDX identifier, which is what makes the claim checkable.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -43,7 +43,36 @@ const OUTPUT = join(ROOT, 'THIRD_PARTY_NOTICES.md');
 const problems = [];
 
 function run(command, args) {
-  return execFileSync(command, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const options = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+  return process.platform === 'win32'
+    ? execSync(throughCmd(command, args), options)
+    : execFileSync(command, args, options);
+}
+
+/**
+ * A command line for cmd.exe, which is how a tool is reached on Windows.
+ *
+ * There `pnpm` is not an executable but a `pnpm.cmd` shim. Spawned directly,
+ * Node looks only for `pnpm.com` and `pnpm.exe`, so `execFileSync('pnpm', …)`
+ * fails with ENOENT before pnpm ever runs — and naming `pnpm.cmd` does not
+ * help, because since the fix for CVE-2024-27980 Node refuses to spawn a batch
+ * file without a shell. cmd.exe resolves a bare name through PATHEXT, so a
+ * tool is found the way a terminal would find it. It receives the arguments
+ * unquoted, which is exact only for plain tokens — every argument this script
+ * passes is one, and anything else is refused rather than handed to cmd.exe's
+ * own parser.
+ *
+ * Kept in step with the copies in verify-supply-chain.mjs, release-verify.mjs
+ * and report-advisories.mjs; the gates' tests run each script alone in a
+ * scratch tree, so they cannot share a module.
+ */
+function throughCmd(command, args) {
+  const tokens = [command, ...args];
+  const unsafe = tokens.find((token) => !/^[\w@+=:,./\\-]+$/.test(token));
+  if (unsafe !== undefined) {
+    throw new Error(`${JSON.stringify(unsafe)} cannot be passed through cmd.exe unquoted`);
+  }
+  return tokens.join(' ');
 }
 
 /* ------------------------------------------------------------- JavaScript */

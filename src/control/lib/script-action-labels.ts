@@ -14,6 +14,9 @@
  * Contextual menus drop the File menu's "Script" noun ("Duplicate", not
  * "Duplicate Script"): the menu's name already says which script it is about.
  */
+import { osCopy } from './os-copy';
+import { detectPlatform, type Platform } from './platform';
+
 export interface ScriptActionLabels {
   duplicate: string;
   revisionHistory: string;
@@ -24,12 +27,12 @@ export interface ScriptActionLabels {
   deletePermanently: string;
 }
 
-export function scriptActionLabels(isMac: boolean): ScriptActionLabels {
+export function scriptActionLabels(platform: Platform = detectPlatform()): ScriptActionLabels {
   return {
     duplicate: 'Duplicate',
     revisionHistory: 'Revision History…',
     exportMarkdown: 'Export Markdown…',
-    reveal: isMac ? 'Reveal in Finder' : 'Show in File Explorer',
+    reveal: osCopy(platform).revealInFileManager,
     moveToTrash: 'Move to Trash',
     restore: 'Restore',
     deletePermanently: 'Delete Permanently',

@@ -529,8 +529,29 @@ fn lock() -> std::sync::MutexGuard<'static, Option<PresentState>> {
 ///
 /// Reads the same latch `plan` does, so there is one answer to "is a take on the
 /// glass" rather than two that can disagree.
+///
+/// ---------------------------------------------------------------------------
+/// IT NEVER WAITS FOR THE LATCH, AND ON WINDOWS THAT IS NOT AN OPTIMISATION
+/// ---------------------------------------------------------------------------
+/// [`set_control_presenting`] holds the latch for the whole of a change, and
+/// on Windows the change's own geometry calls deliver `WM_MOVE` and `WM_SIZE`
+/// SYNCHRONOUSLY — inside `SetWindowPos`, on the same thread — so the window
+/// event handlers that ask this question run while the latch is held, by the
+/// thread holding it. A plain `lock()` there waited on itself: the first
+/// Present on Windows froze the whole application with the window half
+/// reshaped (menu bar gone, title bar still up). macOS delivers those events
+/// later, which is how it went unseen.
+///
+/// A latch that is busy means a change is in flight, and every caller wants to
+/// stand down during one — the resting-frame recorder must not store a
+/// mid-transition rectangle, and a drop must not land on a window that is
+/// becoming the prompter — so busy answers "presenting".
 pub fn is_presenting() -> bool {
-    lock().is_some()
+    match saved_frame().try_lock() {
+        Ok(guard) => guard.is_some(),
+        Err(std::sync::TryLockError::WouldBlock) => true,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner().is_some(),
+    }
 }
 
 /// The window's frame as it stands right now.
@@ -1683,8 +1704,25 @@ mod chrome {
     }
 }
 
-/// Everywhere else the decorations flag is the whole story, and tao's own
-/// bookkeeping is the right owner of it.
+/// Everywhere else the chrome is the decorations flag, which tao's own
+/// bookkeeping owns, and the MENU BAR, which macOS keeps at the top of the
+/// screen and Windows and Linux keep inside the window's frame (`menu.rs`
+/// puts it on the control window there).
+///
+/// Left up, the bar sits across the top of the prompter — on mirrored glass,
+/// backwards — and it is hidden BEFORE the window is sized to the monitor,
+/// because a visible bar is part of the frame: the client area would come out
+/// a menu-height short of the panel. Hiding detaches the bar and nothing
+/// else; its accelerators stay registered, so the take's own keys (End Take,
+/// the zoom chords) keep working with nothing drawn.
+///
+/// And the SHADOW. On Windows an undecorated window that keeps its shadow
+/// keeps an invisible resize frame to cast it from — and, on Windows 11,
+/// rounded corners and a one-pixel border. The prompter measured 1938 x 1090
+/// on a 1920 x 1080 panel with its content starting at (9, 1): shifted right,
+/// nine pixels of the take off the panel's edge (onto the neighbouring display
+/// on a two-monitor rig) and a strip of desktop showing down the left of the
+/// glass. Without the shadow the client area is the whole window.
 #[cfg(not(target_os = "macos"))]
 mod chrome {
     use tauri::{AppHandle, Runtime, WebviewWindow};
@@ -1697,7 +1735,9 @@ mod chrome {
         _app: &AppHandle<R>,
         window: &WebviewWindow<R>,
     ) -> Result<(), AppError> {
-        window.set_decorations(false).map_err(presentation_failed)
+        window.hide_menu().map_err(presentation_failed)?;
+        window.set_decorations(false).map_err(presentation_failed)?;
+        window.set_shadow(false).map_err(presentation_failed)
     }
 
     pub fn restore<R: Runtime>(
@@ -1707,7 +1747,9 @@ mod chrome {
     ) -> Result<(), AppError> {
         window
             .set_decorations(decorations)
-            .map_err(presentation_failed)
+            .map_err(presentation_failed)?;
+        window.set_shadow(true).map_err(presentation_failed)?;
+        window.show_menu().map_err(presentation_failed)
     }
 }
 
@@ -2415,6 +2457,15 @@ mod tests {
     /// The distinction is the whole reason `plan` takes an `Option<PresentMode>`
     /// rather than the old bool: `Some(Reader)` must save a frame, acquire the
     /// sleep assertion and be `Restore`-able, all of which `None` must not do.
+    /// The Windows freeze, in miniature: a window event handler asking while the
+    /// SAME thread holds the latch mid-change. A blocking read never returned.
+    #[test]
+    fn asking_mid_change_answers_presenting_instead_of_waiting_on_itself() {
+        let held = lock();
+        assert!(is_presenting(), "a change in flight is a presentation in flight");
+        drop(held);
+    }
+
     #[test]
     fn entering_reader_mode_is_presenting() {
         assert_eq!(plan(None, READER), PresentAction::Enter(PresentMode::Reader));

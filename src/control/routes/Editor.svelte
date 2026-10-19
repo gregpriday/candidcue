@@ -27,6 +27,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { formatAccelerator } from '../lib/commands';
   import { setDropTargetScript } from '../services/desktop-shell';
   import { detectPlatform } from '../lib/platform';
+  import { osCopy } from '../lib/os-copy';
   import {
     PANE_LIMITS,
     setPaneWidth,
@@ -1735,7 +1736,7 @@ import type { PresentationMode } from '../services/settings-types';
   let retryButton: HTMLButtonElement | null = $state(null);
 
   /** The platform's words for this action, as the Library and the File menu say it. */
-  const revealLabel = mac ? 'Reveal in Finder' : 'Show in File Explorer';
+  const revealLabel = osCopy().revealInFileManager;
 
   /**
    * A save is on the wire — this sheet's Retry, or an autosave that was already
@@ -1878,7 +1879,7 @@ import type { PresentationMode } from '../services/settings-types';
       await scriptsService.revealScriptFolder(scriptId);
     } catch (err) {
       if (opening !== saveSheetOpening) return;
-      const failed = mac ? 'Couldn’t reveal this script in Finder.' : 'Couldn’t show this script in File Explorer.';
+      const failed = osCopy().revealScriptFailed;
       const why = describeError(err);
       // A missing file is usually why the save failed too, and the sheet already says so.
       saveRevealFailure = why === $editor.lastError ? failed : `${failed} ${why}`;
@@ -2069,7 +2070,7 @@ import type { PresentationMode } from '../services/settings-types';
    * the destructive one. The names come from `scriptActionLabels`, which the
    * Library's row menus use too.
    */
-  const actionLabels = scriptActionLabels(mac);
+  const actionLabels = scriptActionLabels();
   // Typed, as the Library's `rowMenuItems` is: left to inference, the handlers'
   // return types were circular through the derived list and came out `any`.
   const overflowItems = $derived<ContextMenuItem[]>([

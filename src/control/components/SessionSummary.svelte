@@ -34,6 +34,7 @@
 <script lang="ts">
   import Button from './Button.svelte';
   import { openMicrophonePrivacySettings } from '../lib/open-settings';
+  import { osCopy } from '../lib/os-copy';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
   import {
@@ -216,7 +217,7 @@
         {#if summary.microphoneRefused}
           <div class="outcome-actions">
             <Button size="sm" onclick={() => void openMicrophonePrivacySettings()}>
-              Open System Settings
+              {osCopy().openMicrophoneSettings}
             </Button>
           </div>
         {/if}

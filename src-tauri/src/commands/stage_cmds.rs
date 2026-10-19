@@ -14,8 +14,18 @@ pub fn list_displays<R: Runtime>(app: AppHandle<R>) -> Result<Vec<DisplayDescrip
     windows::list_displays(&app)
 }
 
+/// Synchronous on macOS, asynchronous everywhere else — see
+/// `shell_cmds::open_preferences` for why the split, and why it is the right
+/// way round on both.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn identify_displays<R: Runtime>(app: AppHandle<R>) -> Result<IdentificationSession, AppError> {
+    windows::identify_displays(&app)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn identify_displays<R: Runtime>(app: AppHandle<R>) -> Result<IdentificationSession, AppError> {
     windows::identify_displays(&app)
 }
 
@@ -33,8 +43,30 @@ pub fn current_window_display<R: Runtime>(
     windows::window_display(&app, windows::CONTROL_LABEL)
 }
 
+/// Synchronous on macOS, asynchronous everywhere else — see
+/// `shell_cmds::open_preferences` for why.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn open_stage<R: Runtime>(app: AppHandle<R>, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
+    open_stage_now(&app, request)
+}
+
+/// Off macOS the command is async, and an async command is not serialised the
+/// way a synchronous one is by running on the main thread: two requests — the
+/// control window and Settings both asking — could interleave generation
+/// allocation, teardown, construction and registration, one destroying the
+/// other's new stage. So they queue here. `close_stage` deliberately does NOT
+/// take this lock: it is synchronous, on the main thread, and an open holding
+/// the lock may be waiting for that thread to build its window.
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn open_stage<R: Runtime>(app: AppHandle<R>, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
+    static OPENING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _queued = OPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    open_stage_now(&app, request)
+}
+
+fn open_stage_now<R: Runtime>(app: &AppHandle<R>, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
     // M2: opening the stage used to add BOTH managed roots to the asset scope
     // recursively, every time, and nothing ever took them back out. That put
     // every script's canonical Markdown and revision history behind an
@@ -44,7 +76,7 @@ pub fn open_stage<R: Runtime>(app: AppHandle<R>, request: OpenStageRequest) -> R
     // The scope is now static (tauri.conf.json: `$APPDATA/scripts/*/assets/*`
     // plus an explicit deny list), so there is nothing to widen here and
     // nothing to revoke.
-    windows::open_stage(&app, request)
+    windows::open_stage(app, request)
 }
 
 #[tauri::command]

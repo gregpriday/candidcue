@@ -82,18 +82,33 @@ fn silence_pcm16(ms: usize) -> Vec<u8> {
     vec![0u8; (24_000 * 2 * ms) / 1000]
 }
 
-/// Is there a `say` on this machine at all?
+/// Is there a speech synthesiser on this machine at all — macOS `say`, or on
+/// Windows the System.Speech engine every desktop edition ships?
 ///
 /// The ONLY sanctioned reason to skip a speech test. Separated from synthesis
-/// itself on purpose: "this is not a Mac" is a skip, and "`say` is here and it
-/// failed" is a FAILURE. Collapsing both into one `Option` is how a suite ends
-/// up reporting success while running no assertions, which this file has been
-/// bitten by before — every test in it once skipped silently through an entire
-/// model swap and said `ok` the whole time.
-fn say_available() -> bool {
-    std::process::Command::new("say")
-        .arg("-v")
-        .arg("?")
+/// itself on purpose: "this machine has no synthesiser" is a skip, and "the
+/// synthesiser is here and it failed" is a FAILURE. Collapsing both into one
+/// `Option` is how a suite ends up reporting success while running no
+/// assertions, which this file has been bitten by before — every test in it
+/// once skipped silently through an entire model swap and said `ok` the whole
+/// time.
+fn synthesizer_available() -> bool {
+    let mut probe = if cfg!(windows) {
+        let mut command = std::process::Command::new("powershell");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Add-Type -AssemblyName System.Speech; \
+             if ((New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices().Count -eq 0) { exit 1 }",
+        ]);
+        command
+    } else {
+        let mut command = std::process::Command::new("say");
+        command.arg("-v").arg("?");
+        command
+    };
+    probe
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -101,11 +116,12 @@ fn say_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Synthesise `phrase` as 24 kHz mono PCM16 with macOS `say`.
+/// Synthesise `phrase` as 24 kHz mono PCM16 with the machine's synthesiser.
 ///
-/// PANICS on any failure. Callers gate on [`say_available`] first, so by the
-/// time this runs, `say` exists and anything going wrong is a broken machine or
-/// a broken helper — neither of which may be reported as a passing test. It is
+/// PANICS on any failure. Callers gate on [`synthesizer_available`] first, so
+/// by the time this runs, a synthesiser exists and anything going wrong is a
+/// broken machine or a broken helper — neither of which may be reported as a
+/// passing test. It is
 /// the only way to get real speech in here: the benchmark corpus commits event
 /// logs and gold timelines, never audio, so there is no fixture to read.
 fn speech_pcm16(phrase: &str) -> Vec<u8> {
@@ -120,18 +136,41 @@ fn speech_pcm16(phrase: &str) -> Vec<u8> {
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let wav = dir.join(format!("{n}.wav"));
 
-    // No `-v`: naming a voice makes the test depend on that voice being
+    // No voice named: naming one makes the test depend on that voice being
     // installed, and Samantha is removable. The default voice is whatever the
     // machine has, which is all this needs.
-    let status = std::process::Command::new("say")
-        .args(["-r", "150", "--data-format=LEI16@24000", "-o"])
-        .arg(&wav)
-        .arg(phrase)
-        .status()
-        .expect("`say` runs");
-    assert!(status.success(), "`say` failed on {phrase:?}");
+    let status = if cfg!(windows) {
+        // System.Speech writes the same 24 kHz mono PCM16 the app captures.
+        // The phrase and path travel in the environment rather than the
+        // command line, so no phrase can be read as PowerShell.
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Add-Type -AssemblyName System.Speech; \
+                 $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
+                 $f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(24000, \
+                   [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, \
+                   [System.Speech.AudioFormat.AudioChannel]::Mono); \
+                 $s.SetOutputToWaveFile($env:CC_STT_WAV, $f); \
+                 $s.Speak($env:CC_STT_PHRASE); $s.Dispose()",
+            ])
+            .env("CC_STT_WAV", &wav)
+            .env("CC_STT_PHRASE", phrase)
+            .status()
+            .expect("PowerShell runs")
+    } else {
+        std::process::Command::new("say")
+            .args(["-r", "150", "--data-format=LEI16@24000", "-o"])
+            .arg(&wav)
+            .arg(phrase)
+            .status()
+            .expect("`say` runs")
+    };
+    assert!(status.success(), "speech synthesis failed on {phrase:?}");
 
-    let bytes = std::fs::read(&wav).expect("`say` wrote a file");
+    let bytes = std::fs::read(&wav).expect("the synthesiser wrote a file");
     let _ = std::fs::remove_file(&wav);
     let pcm = wave_pcm16_24k_mono(&bytes);
 
@@ -139,13 +178,13 @@ fn speech_pcm16(phrase: &str) -> Vec<u8> {
     // below run against silence and pass by doing nothing.
     assert!(
         pcm.len() > 24_000,
-        "`say` produced under 0.5 s of audio for {phrase:?} — {} bytes",
+        "the synthesiser produced under 0.5 s of audio for {phrase:?} — {} bytes",
         pcm.len()
     );
     assert!(
         pcm.chunks_exact(2)
             .any(|s| i16::from_le_bytes([s[0], s[1]]).abs() > 500),
-        "`say` produced silence for {phrase:?}"
+        "the synthesiser produced silence for {phrase:?}"
     );
     pcm
 }
@@ -312,9 +351,10 @@ fn assert_timing_is_sound(words: &[cc_stt::WordTime], item_start: f64, frame_ms:
 /// library reads a byte of it. If the check ever lets one through, this test
 /// does not fail politely — the test process aborts, which is the bug.
 ///
-/// The undamaged graphs are symlinked rather than copied: `detect` follows
-/// symlinks, and copying 150 MB of encoder per run would prove nothing extra.
-#[cfg(unix)]
+/// The undamaged graphs are linked rather than copied: `detect` follows
+/// links, and copying 150 MB of encoder per run would prove nothing extra.
+/// Symlinks on Unix; hard links on Windows, where a symlink needs a privilege
+/// an ordinary account does not have and a hard link on NTFS does not.
 #[test]
 fn a_damaged_copy_of_the_shipped_bundle_is_refused_rather_than_loaded() {
     let Some(dir) = require_model() else { return };
@@ -342,7 +382,14 @@ fn a_damaged_copy_of_the_shipped_bundle_is_refused_rather_than_loaded() {
         for entry in std::fs::read_dir(&dir).unwrap().flatten() {
             let name = entry.file_name();
             if name.to_string_lossy() != files.decoder {
+                #[cfg(unix)]
                 std::os::unix::fs::symlink(entry.path(), copy.join(&name)).unwrap();
+                // A hard link cannot cross volumes — a model on D: with the
+                // temp directory on C: — so that case copies instead.
+                #[cfg(windows)]
+                std::fs::hard_link(entry.path(), copy.join(&name))
+                    .or_else(|_| std::fs::copy(entry.path(), copy.join(&name)).map(drop))
+                    .unwrap();
             }
         }
         std::fs::write(copy.join(&files.decoder), damaged).unwrap();
@@ -424,8 +471,8 @@ fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
 #[test]
 fn real_speech_arrives_with_per_word_timing_inside_its_own_utterance() {
     let Some(dir) = require_model() else { return };
-    if !say_available() {
-        eprintln!("SKIPPING {}: `say` is unavailable", module_path!());
+    if !synthesizer_available() {
+        eprintln!("SKIPPING {}: no speech synthesiser on this machine", module_path!());
         return;
     }
     let speech = speech_pcm16("The quick brown fox jumps over the lazy dog");
@@ -509,8 +556,8 @@ fn real_speech_arrives_with_per_word_timing_inside_its_own_utterance() {
 #[test]
 fn a_second_utterance_is_timed_against_its_own_segment() {
     let Some(dir) = require_model() else { return };
-    if !say_available() {
-        eprintln!("SKIPPING {}: `say` is unavailable", module_path!());
+    if !synthesizer_available() {
+        eprintln!("SKIPPING {}: no speech synthesiser on this machine", module_path!());
         return;
     }
     let one = speech_pcm16("The quick brown fox jumps over the lazy dog");

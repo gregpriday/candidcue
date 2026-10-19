@@ -1,3 +1,15 @@
+# Every text file is LF in every checkout, Windows included.
+#
+# Git for Windows installs with `core.autocrlf=true`, which checks text out
+# with CRLF. Nothing in the tree is CRLF in the index, and a lot depends on it
+# staying LF on disk: tests read sources and generated files and compare them
+# byte for byte, the release gates parse the workflow YAML, and the Rust stage
+# protocol test `include_str!`s a TypeScript file. A CRLF checkout failed dozens
+# of those on a Windows machine for no reason but the line endings, and an
+# editor there would commit CRLF back. `text=auto` leaves binaries alone; the
+# LFS rules below still win for their paths.
+* text=auto eol=lf
+
 # Captured benchmark fixtures live in Git LFS.
 #
 # `bench/runs*/` holds frozen recogniser captures — the baselines every

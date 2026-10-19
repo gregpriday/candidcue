@@ -28,6 +28,8 @@ import {
   type CommandContext,
   type WebDestination,
 } from '../lib/commands';
+import { installMenuKeyBridge, type MenuKeyDispatch } from '../lib/menu-keys';
+import { detectPlatform } from '../lib/platform';
 import { ipcInvoke, isTauriRuntime } from './ipc';
 
 /**
@@ -301,10 +303,35 @@ function listenForMenuCommands(onId: (id: unknown) => void): () => void {
 export function installWindowMenuCommands(
   handlers: Partial<Record<CommandId, () => void>>,
 ): () => void {
-  return listenForMenuCommands((id) => {
+  const stopMenu = listenForMenuCommands((id) => {
     if (typeof id !== 'string') return;
     handlers[id as CommandId]?.();
   });
+  const stopKeys = installMenuKeys({
+    available: (id) => handlers[id] !== undefined,
+    run: (id) => handlers[id]?.(),
+  });
+  return () => {
+    stopMenu();
+    stopKeys();
+  };
+}
+
+/**
+ * The menu's chords, heard by the window itself — on Windows only.
+ *
+ * Windows cannot deliver a menu accelerator to a focused WebView2 at all
+ * (`lib/menu-keys.ts` says why), so there every installer that answers menu
+ * commands also answers their keys, through the same handlers. Everywhere else
+ * the native menu takes the key before the page sees it, and a second listener
+ * would run every command twice.
+ */
+function installMenuKeys(dispatch: MenuKeyDispatch): () => void {
+  if (!isTauriRuntime() || detectPlatform() !== 'windows') return () => {};
+  // A runtime with no event target to listen on (a test's stand-in window)
+  // has no keys to hear.
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
+  return installMenuKeyBridge(dispatch);
 }
 
 /**
@@ -614,7 +641,7 @@ export function installMenuCommands(
   context: () => CommandContext,
   actions: () => CommandActions,
 ): () => void {
-  return listenForMenuCommands((id) => {
+  const stopMenu = listenForMenuCommands((id) => {
     if (typeof id !== 'string' || !(id in COMMANDS)) {
       // A menu carrying an id this build does not know is a version skew
       // between the packaged binary and the bundled frontend. Logged, not
@@ -624,4 +651,12 @@ export function installMenuCommands(
     }
     runCommand(id as CommandId, actions(), context());
   });
+  const stopKeys = installMenuKeys({
+    available: (id) => COMMANDS[id].available(context()),
+    run: (id) => runCommand(id, actions(), context()),
+  });
+  return () => {
+    stopMenu();
+    stopKeys();
+  };
 }

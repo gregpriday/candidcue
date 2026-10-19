@@ -32,6 +32,8 @@
  */
 import type { FollowingTime } from '../stores/session';
 import { formatClock } from './format';
+import { osCopy } from './os-copy';
+import type { Platform } from './platform';
 
 /** Everything the outcome is allowed to look at. */
 export interface TakeOutcomeInput {
@@ -137,7 +139,11 @@ const FREQUENT_HELP_BELOW = 0.4;
 /** Above this, following was steady enough not to comment on. */
 const STEADY_ABOVE = 0.8;
 
-export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
+/**
+ * `platform` names whose words a refused microphone is described in
+ * (`lib/os-copy.ts`) — this window's unless a caller says otherwise.
+ */
+export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform): TakeOutcome {
   /*
    * A take with no microphone is not a following result at all. Reporting
    * "nothing was transcribed" for a manual take would be reporting the absence
@@ -196,11 +202,11 @@ export function resolveTakeOutcome(input: TakeOutcomeInput): TakeOutcome {
      * never asked for.
      */
     if (input.microphoneRefused) {
+      const os = osCopy(platform);
       return {
         headline: 'CandidCue could not use the microphone',
-        detail: 'This Mac did not allow CandidCue to use the microphone, so it could not follow your voice.',
-        suggestion:
-          'Allow CandidCue in System Settings → Privacy & Security → Microphone before the next take.',
+        detail: os.micRefusedOutcomeDetail,
+        suggestion: os.micRefusedOutcomeSuggestion,
         // Not "no speech detected": nothing was listening to detect it.
         health: 'no_tracking',
         tone: 'attention',

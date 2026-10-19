@@ -16,6 +16,11 @@
 //! at a temporary directory once, before any app is built — something no file
 //! sharing a process with other tests could do safely, and the reason the
 //! planted model can never land in a real `~/Library`.
+//!
+//! Windows resolves app data through the Known Folder API, which no
+//! environment variable redirects. There the app is given an identifier of its
+//! own for this run, so its app-data directory is a fresh one under the real
+//! `AppData\Roaming` — never CandidCue's — and the test removes it after.
 
 use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::Path;
@@ -35,10 +40,45 @@ use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_K
 use tauri::webview::InvokeRequest;
 use tauri::{Listener as _, Manager as _, WebviewWindow, WebviewWindowBuilder};
 
+/// The URL the app's own pages are served from, which the ACL checks every
+/// invoke against: `tauri://localhost` on macOS and Linux, and
+/// `http://tauri.localhost` on Windows, where WebView2 cannot register a custom
+/// scheme and Tauri serves the app over HTTP instead. An invoke from anything
+/// else is a REMOTE caller and is refused before the command runs — which is
+/// how every test here failed on Windows with "not allowed".
+const APP_URL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
+
 struct Harness {
     _db_dir: tempfile::TempDir,
     app: tauri::App<MockRuntime>,
     webview: WebviewWindow<MockRuntime>,
+}
+
+/// The identifier this run's app answers to on Windows (see the module doc).
+fn windows_test_identifier() -> String {
+    format!("com.candidcue.test.damaged-model.{}", std::process::id())
+}
+
+fn test_context() -> tauri::Context<MockRuntime> {
+    let mut context = mock_context(noop_assets());
+    if cfg!(windows) {
+        context.config_mut().identifier = windows_test_identifier();
+    }
+    context
+}
+
+/// Removes this run's app-data directory on Windows, however the test ends
+/// short of an abort.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn harness() -> Harness {
@@ -56,7 +96,7 @@ fn harness() -> Harness {
             commands::preload_speech_engine,
             commands::start_transcription,
         ])
-        .build(mock_context(noop_assets()))
+        .build(test_context())
         .expect("mock app builds");
 
     app.manage(candidcue_lib::database::BootStatus::Ready);
@@ -86,7 +126,7 @@ impl Harness {
                 cmd: command.into(),
                 callback: CallbackFn(0),
                 error: CallbackFn(1),
-                url: "tauri://localhost".parse().expect("url"),
+                url: APP_URL.parse().expect("url"),
                 body: InvokeBody::Json(args),
                 headers: Default::default(),
                 invoke_key: INVOKE_KEY.to_string(),
@@ -180,11 +220,21 @@ fn a_damaged_download_is_reported_and_never_reaches_the_recogniser() {
 
     let h = harness();
     let app_data = h.app.path().app_data_dir().expect("app data dir");
-    assert!(
-        app_data.starts_with(home.path()),
-        "the planted model must land under the temporary HOME, not in {}",
-        app_data.display()
-    );
+    let _cleanup = if cfg!(windows) {
+        assert!(
+            app_data.ends_with(windows_test_identifier()),
+            "the planted model must land in this run's own directory, not in {}",
+            app_data.display()
+        );
+        Some(RemoveOnDrop(app_data.clone()))
+    } else {
+        assert!(
+            app_data.starts_with(home.path()),
+            "the planted model must land under the temporary HOME, not in {}",
+            app_data.display()
+        );
+        None
+    };
     let model = catalogue::default_model();
     let dir = model.install_path(&model_store::models_root(&app_data));
 

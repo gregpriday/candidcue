@@ -17,6 +17,7 @@
  * actually built from.
  */
 import { APP_ERROR_CODES, type AppError } from '../../shared/contracts';
+import { osCopy } from '../lib/os-copy';
 
 /**
  * A SCREAMING_SNAKE_CASE token: two or more upper-case segments joined by
@@ -158,8 +159,13 @@ const ERROR_COPY: Record<string, string> = {
     'The server did not respond in time. Check your internet connection, then try again.',
 
   /* -- microphone --------------------------------------------------------- */
-  MIC_PERMISSION_DENIED:
-    'CandidCue is not allowed to use the microphone. Allow it in System Settings → Privacy & Security → Microphone, then try again.',
+  //
+  // A getter, like the two window entries below, because the remedy is in the
+  // OS's own settings and is named in the OS's own words (lib/os-copy.ts). Read
+  // when the copy is asked for, not when this module loads.
+  get MIC_PERMISSION_DENIED() {
+    return osCopy().micPermissionDeniedError;
+  },
   MIC_DEVICE_MISSING:
     'No microphone was found. Connect an input device, then try again.',
   MIC_DEVICE_LOST:
@@ -242,11 +248,14 @@ const ERROR_COPY: Record<string, string> = {
     'The stage could not lay out this script. Stop and start the take to rebuild it.',
   // Window › CandidCue / Stage. Names what to do instead, because the window is
   // still there — it simply would not come forward.
-  WINDOW_FOCUS_FAILED:
-    'That window could not be brought forward. Switch to it from the Dock or the taskbar.',
+  get WINDOW_FOCUS_FAILED() {
+    return osCopy().windowFocusFailed;
+  },
   // File › Close Window. The window is still open and nothing was lost, so the
   // copy names the other way out rather than an error to investigate.
-  WINDOW_CLOSE_FAILED: 'The window could not be closed. Quit CandidCue instead.',
+  get WINDOW_CLOSE_FAILED() {
+    return `The window could not be closed. ${osCopy().quit} CandidCue instead.`;
+  },
   WINDOW_CLOSE_REFUSED: 'Only the main window can close itself this way.',
   // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
   // post-show check (§52.7).

@@ -113,6 +113,19 @@ describe('followStatus', () => {
     expect(refused.tone).toBe('warning');
   });
 
+  it('names the platform’s own settings for a refusal', () => {
+    // Named, not read from the host: this suite runs as a Mac everywhere.
+    const input = healthy({ micState: 'disconnected', inputDeviceLost: false, microphoneRefused: true });
+    expect(followStatus(input, 'windows').detail).toMatch(
+      /Allow apps to use the microphone in Windows Settings, then choose Try again\.$/,
+    );
+    expect(followStatus(input, 'linux').detail).toMatch(
+      /Allow CandidCue in your system settings, then choose Try again\.$/,
+    );
+    // The line itself is not the platform's to change.
+    expect(followStatus(input, 'windows').line).toBe('Microphone not allowed');
+  });
+
   it('reports nothing-heard-yet without calling it a fault', () => {
     /*
      * At the top of every take this is simply true — the presenter has not

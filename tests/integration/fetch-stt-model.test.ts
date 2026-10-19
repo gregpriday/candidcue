@@ -258,7 +258,17 @@ afterAll(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
-describe('fetch-stt-model.sh', () => {
+/*
+ * Not on Windows. The script is a POSIX dev convenience behind
+ * `pnpm models:fetch`, and these cases run it under `bash` with a bash `curl`
+ * shim — which on Windows resolves to WSL's `bash.exe`, a different machine
+ * that cannot read the `C:\…` paths it is handed. Every user installs the
+ * model through Settings › Speech instead, on every platform, and that path is
+ * Rust (`speech/model_download.rs`, `model_store.rs`) with tests of its own.
+ * The catalogue helper and the committed-notice check below are plain node and
+ * run everywhere; the archive built in `beforeAll` is still what they hash.
+ */
+describe.skipIf(process.platform === 'win32')('fetch-stt-model.sh', () => {
   it('installs exactly the files the catalogue lists', () => {
     const dir = freshModelsDir();
     const { ok, output } = runFetch(catalogueFor(), dir);

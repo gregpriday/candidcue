@@ -257,7 +257,7 @@ pub async fn export_all_data(
      * them.
      */
     sync_dir(&staging)?;
-    std::fs::rename(&staging, &final_path)?;
+    crate::util::rename(&staging, &final_path)?;
     sync_dir(dest_root)?;
 
     Ok(DataExportResult {
@@ -547,7 +547,7 @@ fn write_json_durably<T: Serialize>(marker: &Path, value: &T) -> Result<(), AppE
         (&file).write_all(&bytes)?;
         file.sync_all()?;
     }
-    std::fs::rename(&temporary, marker)?;
+    crate::util::rename(&temporary, marker)?;
     // And the directory entry itself. Without this the rename can be lost even
     // though the file's own bytes survived — and a discarded error here would
     // mean reporting a durable write that is not one.
@@ -1253,9 +1253,9 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// fsync one file by path.
+/// fsync one file by path (see `util::open_for_sync` for why not a plain open).
 fn sync_file(path: &Path) -> std::io::Result<()> {
-    std::fs::File::open(path)?.sync_all()
+    crate::util::open_for_sync(path)?.sync_all()
 }
 
 /// The directory an entry lives in, for the two syncs a move needs.
@@ -1264,7 +1264,7 @@ fn parent_of(path: &Path) -> &Path {
 }
 
 fn move_or_copy(from: &Path, to: &Path) -> Result<(), AppError> {
-    match std::fs::rename(from, to) {
+    match crate::util::rename(from, to) {
         Ok(()) => {
             // Both ends: the entry appeared in one directory and vanished from
             // another, and either half can be lost on its own.
@@ -1275,9 +1275,12 @@ fn move_or_copy(from: &Path, to: &Path) -> Result<(), AppError> {
             }
             Ok(())
         }
-        Err(err) if err.raw_os_error() == Some(18) => {
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
             /*
-             * EXDEV. Copy, get it onto the platter, and only then remove the
+             * EXDEV, or Windows' ERROR_NOT_SAME_DEVICE — the same refusal with
+             * a different number (17, not 18), which a raw `18` check never
+             * matched, so a move onto another drive failed outright there.
+             * Copy, get it onto the platter, and only then remove the
              * source.
              *
              * The order is the whole point: `fs::copy` reaching the page cache
@@ -1492,12 +1495,12 @@ pub fn finish_interrupted_rebuild(paths: &DataPaths) -> Result<(), AppError> {
              * put on top of the original, and it is not the original, so it
              * goes beside it under a name that says what it is.
              */
-            std::fs::rename(
+            crate::util::rename(
                 &from,
                 sidecar_of(&stem, &format!("{suffix}.after-interruption")),
             )?;
         } else {
-            std::fs::rename(&from, &to)?;
+            crate::util::rename(&from, &to)?;
         }
     }
     sync_dir(&quarantine)?;
@@ -1543,7 +1546,7 @@ pub fn quarantine_database_files(
     for suffix in ["", "-wal", "-shm"] {
         let from = root.join(format!("{DATABASE_NAME}{suffix}"));
         let to = sidecar_of(to_stem, suffix);
-        match std::fs::rename(&from, &to) {
+        match crate::util::rename(&from, &to) {
             Ok(()) => {
                 sync_dir(parent_of(&to))?;
                 sync_dir(root)?;

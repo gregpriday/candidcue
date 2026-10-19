@@ -40,7 +40,7 @@
   import { describeError, isAppErrorPayload, looksLikeCode } from '../services/errors';
   import { requestConfirm } from '../stores/confirm';
   import { relativeTime } from '../lib/format';
-  import { isMacPlatform } from '../lib/shortcuts';
+  import { osCopy } from '../lib/os-copy';
 
   const { status }: { status: recovery.BootStatusReport } = $props();
 
@@ -90,8 +90,13 @@
   let revealButton = $state<HTMLButtonElement | null>(null);
   let bundleButton = $state<HTMLButtonElement | null>(null);
 
-  const mac = isMacPlatform();
-  const revealLabel = mac ? 'Reveal in Finder' : 'Show in File Explorer';
+  /*
+   * The platform's words: Finder or File Explorer, and Quit or Exit — the verb
+   * on the native menu's own item (`menu.rs`), so every "quit and reopen" here
+   * names the command the menu actually shows.
+   */
+  const os = osCopy();
+  const revealLabel = os.revealInFileManager;
   /*
    * Once a repair has run, the headline is what to do next. Left as the
    * failure ("CandidCue's database is damaged") it outranked "Ready to
@@ -235,7 +240,7 @@
         'session history after that date isn’t in the backup. Every script keeps the text it ' +
         'has now. CandidCue moves its current database into the ' +
         '“quarantine” folder in its data folder rather than deleting it, and the restore ' +
-        'finishes when you quit and reopen CandidCue.',
+        `finishes when you ${os.quitLower} and reopen CandidCue.`,
       confirmLabel: 'Restore backup',
       danger: true,
     });
@@ -250,7 +255,7 @@
       title: 'Rebuild the database from your script files?',
       body:
         'CandidCue moves its current database into the “quarantine” folder in its data folder ' +
-        'rather than deleting it, and builds a new one from your script files when you quit ' +
+        `rather than deleting it, and builds a new one from your script files when you ${os.quitLower} ` +
         'and reopen it. Session history doesn’t come back, and names, the Trash and reading ' +
         'settings come back only where the old database can still be read.',
       confirmLabel: 'Rebuild database',
@@ -273,12 +278,12 @@
       done = { kind, previousStateAt: outcome.previousStateAt, when };
       void say(
         kind === 'restore'
-          ? 'Backup restored. Quit and reopen CandidCue to finish.'
-          : 'Ready to rebuild. Quit and reopen CandidCue to finish.',
+          ? `Backup restored. ${os.quit} and reopen CandidCue to finish.`
+          : `Ready to rebuild. ${os.quit} and reopen CandidCue to finish.`,
       );
     } catch (err) {
       halted = { kind, detail: failureText(err) };
-      void say(`${haltedTitle(kind)}. Quit and reopen CandidCue before trying again.`, true);
+      void say(`${haltedTitle(kind)}. ${os.quit} and reopen CandidCue before trying again.`, true);
     } finally {
       busy = null;
     }
@@ -301,9 +306,7 @@
     try {
       await closeControlWindow();
     } catch {
-      quitError = mac
-        ? 'CandidCue didn’t quit. Choose CandidCue › Quit CandidCue, or press ⌘Q.'
-        : 'CandidCue didn’t close. Close its window to quit.';
+      quitError = os.quitFailed;
       void say(quitError, true);
     } finally {
       busy = null;
@@ -406,7 +409,7 @@
               {done.kind === 'restore' ? 'Backup restored' : 'Ready to rebuild'}
             </h2>
             <p class="outcome-text">
-              Quit and reopen CandidCue to finish.
+              {os.quit} and reopen CandidCue to finish.
               {#if done.kind === 'restore'}
                 It opens with the backup{#if done.when !== null}&#32;from <span class="moment"
                     >{done.when}</span
@@ -588,7 +591,7 @@
 
 {#snippet quitAction()}
   <div class="actions">
-    <Button variant="primary" disabled={busy !== null} onclick={() => void quit()}>Quit CandidCue</Button>
+    <Button variant="primary" disabled={busy !== null} onclick={() => void quit()}>{os.quit} CandidCue</Button>
   </div>
   {#if quitError}
     <div class="result bad">
@@ -609,9 +612,9 @@
     <p class="option-text">
       {#if status.code === 'DATABASE_BACKUP_REQUIRED'}
         Free up some space on this computer’s disk, or check that CandidCue is allowed to write
-        to its data folder. Then quit and reopen CandidCue, and it tries the update again.
+        to its data folder. Then {os.quitLower} and reopen CandidCue, and it tries the update again.
       {:else}
-        Quit and reopen CandidCue — a problem like this can be a one-off. If this screen comes
+        {os.quit} and reopen CandidCue — a problem like this can be a one-off. If this screen comes
         back, export a support bundle below and report the problem.
       {/if}
     </p>

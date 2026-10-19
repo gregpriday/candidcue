@@ -303,6 +303,10 @@ fn write_new_cache_entry(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 }
 
 fn make_private(path: &Path) -> anyhow::Result<()> {
+    // Unix permissions only; elsewhere the user's profile directory is already
+    // private to them.
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

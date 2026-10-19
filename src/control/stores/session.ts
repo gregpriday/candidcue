@@ -80,6 +80,7 @@ import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, onSettingsCommitted, patchSettings } from './settings';
 import { clearConditionToasts, dismissToastByKey, showToast } from './toasts';
 import { openMicrophonePrivacySettings } from '../lib/open-settings';
+import { osCopy } from '../lib/os-copy';
 
 /**
  * Lost audio is worth interrupting for — words were said and will never be
@@ -2706,15 +2707,11 @@ export function resumeSession(): Promise<void> {
  * state it clears.
  */
 function reportMicrophoneRefused(): void {
-  showToast(
-    'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. ' +
-      'Allow it in System Settings, then choose Try again in the take controls.',
-    'danger',
-    {
-      key: TOAST_MIC_REFUSED,
-      action: { label: 'Open System Settings', run: () => void openMicrophonePrivacySettings() },
-    },
-  );
+  const os = osCopy();
+  showToast(os.micRefusedToast, 'danger', {
+    key: TOAST_MIC_REFUSED,
+    action: { label: os.openMicrophoneSettings, run: () => void openMicrophonePrivacySettings() },
+  });
 }
 
 /**

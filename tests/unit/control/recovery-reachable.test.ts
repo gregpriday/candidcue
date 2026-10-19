@@ -234,7 +234,9 @@ describe('the recovery screen offers the actions the review asked for', () => {
      */
     expect(recoverySource).toMatch(/where it can still be read/);
     expect(recoverySource).toMatch(/named after its first line/);
-    expect(recoverySource).toMatch(/Quit and reopen CandidCue to finish/);
+    // "Quit" on macOS and "Exit" elsewhere, the native menu's own verb, so the
+    // source carries it as `{os.quit}` (lib/os-copy.ts).
+    expect(recoverySource).toMatch(/\{os\.quit\} and reopen CandidCue to finish/);
     expect(recoverySource).not.toMatch(/`Rebuilt\./);
   });
 });

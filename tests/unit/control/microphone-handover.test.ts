@@ -66,7 +66,8 @@ function sources(): Array<{ path: string; text: string }> {
         continue;
       }
       if (!/\.(ts|svelte)$/.test(entry)) continue;
-      files.push({ path: full.slice(SRC.length + 1), text: readFileSync(full, 'utf8') });
+      // Forward slashes on every host, as the expectations spell them.
+      files.push({ path: full.slice(SRC.length + 1).replaceAll('\\', '/'), text: readFileSync(full, 'utf8') });
     }
   };
   walk(SRC);

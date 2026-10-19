@@ -29,9 +29,20 @@
 
 import { accessSync, constants, globSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/*
+ * Repository-relative paths, spelled with `/` on every platform.
+ *
+ * `globSync` answers in the platform's separator, so on Windows it yields
+ * `src\shared\markdown\compile.ts` — which matches no entry written below, so
+ * the COMPILER_VERSION exemption silently stopped applying and the committed
+ * tree failed its own check. Splitting on `sep` is the identity on macOS and
+ * Linux, where a backslash is a legal filename character and not a separator.
+ */
+const repoGlob = (pattern) => globSync(pattern, { cwd: ROOT }).map((rel) => rel.split(sep).join('/'));
 
 const PACKAGE_JSON = join(ROOT, 'package.json');
 const CARGO_TOML = join(ROOT, 'src-tauri', 'Cargo.toml');
@@ -157,7 +168,7 @@ const INDEPENDENT_VERSIONS = [
  */
 function strayVersionLiterals(problems) {
   const found = [];
-  const files = globSync('src/**/*.{ts,svelte}', { cwd: ROOT });
+  const files = repoGlob('src/**/*.{ts,svelte}');
   let examined = 0;
 
   for (const rel of files) {
@@ -207,7 +218,7 @@ function strayVersionLiterals(problems) {
  */
 function internalCrateDrift(canonical, problems) {
   const drifted = [];
-  const manifests = globSync('crates/*/Cargo.toml', { cwd: ROOT });
+  const manifests = repoGlob('crates/*/Cargo.toml');
   if (manifests.length === 0) {
     problems.push('no crates/*/Cargo.toml matched — the internal-crate check scanned nothing.');
     return drifted;

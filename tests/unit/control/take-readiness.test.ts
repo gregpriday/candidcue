@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasReadinessWarnings,
+  microphoneAccessFinding,
   resolveReadiness,
   summariseReadiness,
   voiceModelFinding,
@@ -399,6 +400,36 @@ describe('microphone access', () => {
 
   it('says nothing about access in a manual take', () => {
     expect(resolveReadiness(ready({ voiceTake: false, micPermission: 'denied' })).show).toBe(false);
+  });
+
+  /*
+   * The platform is named, never inferred from the host: this suite runs as a
+   * Mac everywhere (tests/setup/node-platform.ts), so the Windows and Linux
+   * sentences are only tested at all because these pass the platform in.
+   */
+  it('sends Windows to the switches it actually has, and never to a relaunch', () => {
+    const denied = microphoneAccessFinding('denied', 'windows')!;
+    expect(denied.action).toEqual({ label: 'Open Windows Settings', microphone: 'privacy' });
+    expect(denied.detail).toContain('Windows Settings → Privacy & security → Microphone');
+    expect(denied.detail).toContain('“Let desktop apps access your microphone”');
+    // Windows caches nothing: reopening CandidCue changes nothing there.
+    expect(denied.detail).not.toMatch(/reopen|quit/i);
+
+    const restricted = microphoneAccessFinding('restricted', 'windows')!;
+    expect(restricted.id).toBe('mic_permission_restricted');
+    expect(restricted.detail).toMatch(/whole PC/);
+    expect(restricted.action?.label).toBe('Open Windows Settings');
+
+    for (const finding of [denied, restricted]) {
+      expect(finding.detail).not.toMatch(/macOS|\bMac\b|System Settings|Screen Time/);
+    }
+  });
+
+  it('promises no pane, path or prompt where the platform is unknown', () => {
+    const denied = microphoneAccessFinding('denied', 'linux')!;
+    expect(denied.detail).toContain('your system settings');
+    expect(denied.detail).not.toMatch(/macOS|Windows|\bMac\b|→/);
+    expect(microphoneAccessFinding('prompt', 'linux')!.detail).not.toMatch(/asks here/);
   });
 
   it('does not call a pinned microphone missing while access is the problem', () => {

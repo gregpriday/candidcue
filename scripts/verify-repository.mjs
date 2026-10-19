@@ -31,9 +31,21 @@
 
 import { existsSync, readFileSync, statSync, globSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve, relative, extname } from 'node:path';
+import { dirname, join, posix, resolve, relative, extname, sep } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/*
+ * Every repository-relative path this gate compares or prints is spelled with
+ * `/`, whatever the platform.
+ *
+ * `globSync` answers in the platform's separator, and on Windows that broke
+ * the gate on the committed tree: `tests\integration\release-gates.test.ts`
+ * is not the allow-listed spelling, and `src-tauri\src\…` does not start with
+ * `src-tauri/`, so the migrations directory was looked for in the wrong crate.
+ * Splitting on `sep` is the identity wherever `/` is already the separator.
+ */
+const toRepoPath = (path) => path.split(sep).join('/');
 
 const problems = [];
 let checked = 0;
@@ -93,7 +105,7 @@ function globOrFail(pattern, why) {
     return [];
   }
   if (matches.length === 0) fail(`glob ${pattern} matched nothing — ${why}`);
-  return matches;
+  return matches.map(toRepoPath);
 }
 
 /* ------------------------------------------------------- reproducibility */
@@ -404,8 +416,10 @@ for (const rel of globOrFail('src/**/*.css', 'the bundled-font scan would check 
 
 /* ------------------------------------------------------- Tauri resources */
 
+// `posix.join` throughout: these are repository-relative names that end up in
+// the report, so they read the same whichever platform produced it.
 for (const icon of tauriConfRaw?.bundle?.icon ?? []) {
-  requireNonEmpty(join('src-tauri', icon), 'a bundle icon declared by tauri.conf.json');
+  requireNonEmpty(posix.join('src-tauri', icon), 'a bundle icon declared by tauri.conf.json');
 }
 
 /*
@@ -426,11 +440,11 @@ for (const resource of resourcePaths) {
   if (!target) continue;
   checked += 1;
   if (target.includes('*')) {
-    if (globSync(join('src-tauri', target), { cwd: ROOT }).length === 0) {
+    if (globSync(posix.join('src-tauri', target), { cwd: ROOT }).length === 0) {
       fail(`tauri.conf.json declares resource glob "${target}", which matches nothing`);
     }
   } else {
-    require_(join('src-tauri', target), 'a bundle resource declared by tauri.conf.json');
+    require_(posix.join('src-tauri', target), 'a bundle resource declared by tauri.conf.json');
   }
 }
 
@@ -439,7 +453,7 @@ for (const resource of resourcePaths) {
 const entitlements = tauriConfRaw?.bundle?.macOS?.entitlements;
 if (entitlements) {
   requireNonEmpty(
-    join('src-tauri', entitlements),
+    posix.join('src-tauri', entitlements),
     'the macOS entitlements declared by tauri.conf.json — the microphone permission lives there',
   );
 }

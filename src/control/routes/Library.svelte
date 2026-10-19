@@ -525,7 +525,7 @@
   }
 
   /** The editor's Script actions menu draws its names from the same place. */
-  const actionLabels = scriptActionLabels(mac);
+  const actionLabels = scriptActionLabels();
 
   /**
    * The row's actions, as one list used by BOTH the context menu and the

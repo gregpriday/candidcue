@@ -1182,6 +1182,8 @@ async fn a_bundle_symlink_entry_is_refused() {
     assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
 }
 
+/// Unix only: NTFS has no mode bits for an archive entry's to reach.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_bundle_asset_lands_without_its_archive_permission_bits() {
     use std::os::unix::fs::PermissionsExt;

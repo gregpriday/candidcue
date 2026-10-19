@@ -15,7 +15,10 @@
  * 1420 from tauri.conf.json — this launcher is the only thing that moves.
  */
 import { createServer } from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const WINDOWS = process.platform === 'win32';
 
 const DEFAULT_PORT = 1420;
 const PORT_SCAN_LIMIT = 100;
@@ -68,25 +71,52 @@ if (port !== DEFAULT_PORT) {
  * relied upon.
  */
 const overlay = JSON.stringify({ build: { devUrl: `http://localhost:${port}` } });
-const child = spawn(
-  'pnpm',
-  ['tauri', 'dev', '--config', overlay, ...process.argv.slice(2)],
-  {
-    // stdin is deliberately NOT inherited. In its own process group the tree is
-    // a background job as far as the terminal is concerned, and a background
-    // process that reads the TTY takes SIGTTIN and stops — which Vite would do,
-    // since it binds stdin for its keyboard shortcuts whenever stdin is a TTY.
-    // Nothing in a dev run needs typed input; output still goes to the terminal.
-    stdio: ['ignore', 'inherit', 'inherit'],
-    detached: true,
-    env: { ...process.env, CANDIDCUE_DEV_PORT: String(port) },
-  },
-);
+const tauriArgs = ['dev', '--config', overlay, ...process.argv.slice(2)];
+const env = { ...process.env, CANDIDCUE_DEV_PORT: String(port) };
+/*
+ * WINDOWS HAS NEITHER HALF OF THE ABOVE.
+ *
+ * `pnpm` there is `pnpm.cmd`, which Node will not start without a shell — and
+ * through cmd.exe the JSON overlay's quotes and braces would need escaping
+ * cmd.exe does not reliably do. So the Tauri CLI's own entry point is run with
+ * this Node, which is exactly what `pnpm tauri` runs, and Node quotes the
+ * arguments itself. Nor are there process groups: `detached` would open the
+ * tree in a console window of its own. It stays attached instead — Ctrl-C in a
+ * Windows console reaches every process in it, the whole tree included — and
+ * the sweeps below go through `taskkill /T`, which walks the tree by parent.
+ */
+const child = WINDOWS
+  ? spawn(
+      process.execPath,
+      [createRequire(import.meta.url).resolve('@tauri-apps/cli/tauri.js'), ...tauriArgs],
+      { stdio: ['ignore', 'inherit', 'inherit'], env },
+    )
+  : spawn('pnpm', ['tauri', ...tauriArgs], {
+      // stdin is deliberately NOT inherited. In its own process group the tree
+      // is a background job as far as the terminal is concerned, and a
+      // background process that reads the TTY takes SIGTTIN and stops — which
+      // Vite would do, since it binds stdin for its keyboard shortcuts whenever
+      // stdin is a TTY. Nothing in a dev run needs typed input; output still
+      // goes to the terminal.
+      stdio: ['ignore', 'inherit', 'inherit'],
+      detached: true,
+      env,
+    });
 
 let exiting = false;
 
 /** Signal the child's entire process group, ignoring an already-dead group. */
 function signalGroup(signal) {
+  if (WINDOWS) {
+    // The tree by parent, forcibly only for the final sweep. A console process
+    // has no window to receive taskkill's polite close, so the first call
+    // mostly reports what Ctrl-C has already done; the forced one is the one
+    // that guarantees nothing keeps the port.
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', ...(signal === 'SIGKILL' ? ['/F'] : [])], {
+      stdio: 'ignore',
+    });
+    return;
+  }
   try {
     process.kill(-child.pid, signal);
   } catch {
@@ -109,6 +139,13 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 
 child.on('exit', (code, signal) => {
+  /*
+   * Not on Windows. Once the root has exited its PID is free, `taskkill /T`
+   * finds a tree by its ROOT, so it cannot reach orphans through a dead parent
+   * — and the PID may already belong to something unrelated. The Tauri CLI
+   * stops the Vite it started as it exits, which is what this sweep is for.
+   */
+  if (WINDOWS) process.exit(signal ? 1 : (code ?? 0));
   // The root died — reap whatever it left behind before going quiet, or the
   // survivors keep the port and the terminal keeps receiving their output.
   exiting = true;

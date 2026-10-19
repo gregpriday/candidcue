@@ -81,6 +81,7 @@
   import { getVoiceFacade } from '../services/voice-facade';
   import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
   import { openMicrophonePrivacySettings } from '../lib/open-settings';
+  import { osCopy } from '../lib/os-copy';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
     DEFAULT_STAGE_APPEARANCE,
@@ -1639,6 +1640,12 @@
    * webview a grant made since launch, and the remedy then is a reopen.
    */
   let micRetryRefused = $state(false);
+  /**
+   * The OS's words for all of the above (lib/os-copy.ts). The cards below are
+   * one per permission state on every platform, but what each one says is not:
+   * macOS asks once and may need a relaunch, Windows never asks and never does.
+   */
+  const os = osCopy();
   /** Guards the one-shot adoption of an already-granted permission. */
   let micAdopted = false;
   let micDevices = $state<AudioDeviceInfo[]>([]);
@@ -1738,7 +1745,7 @@
       ? 'Remembered for when it is plugged back in.'
       : micPinned
         ? 'Every take uses this microphone.'
-        : 'Follows the input chosen in macOS.',
+        : os.micFollowsSystemInput,
   );
   /**
    * What changed about access or the input, as one sentence for the section's
@@ -1748,15 +1755,13 @@
   const micAnnouncement = $derived.by((): string => {
     if (micPermission === 'granted') {
       return micPinned && micPinMissing
-        ? `${micPinned.label} is not connected. Takes use ${micSystemDefaultLabel ?? "your Mac's default input"} until it is back.`
+        ? `${micPinned.label} is not connected. Takes use ${micSystemDefaultLabel ?? os.defaultInput} until it is back.`
         : '';
     }
-    if (micPermission === 'unknown') return micRequesting ? 'Answer the macOS prompt to continue.' : '';
-    if (micAccess === 'restricted') return 'Microphone access is managed on this Mac.';
+    if (micPermission === 'unknown') return micRequesting ? os.micRequestPending : '';
+    if (micAccess === 'restricted') return `${os.micRestrictedTitle}.`;
     if (micAccess === 'granted') {
-      return micRetryRefused
-        ? 'Quit and reopen CandidCue to use the microphone.'
-        : 'Microphone access is on.';
+      return micRetryRefused ? os.micAllowedButRefusedAnnouncement : 'Microphone access is on.';
     }
     return micRetryRefused ? 'Microphone access is still off.' : 'Microphone access is off.';
   });
@@ -2479,7 +2484,7 @@
       showToast(
         `Ready to restore ${result.scriptsInExport} scripts from the export taken on ` +
           `${result.createdAt?.slice(0, 10) ?? 'an earlier date'}. ` +
-          `Quit and reopen CandidCue to apply it — nothing has changed yet.`,
+          `${os.quit} and reopen CandidCue to apply it — nothing has changed yet.`,
         'success',
       );
     } catch (err) {
@@ -2850,11 +2855,7 @@
                 <div class="mic-access-body">
                   <p class="mic-access-title">Let CandidCue hear you</p>
                   <p class="mic-access-text">
-                    {#if micRequesting}
-                      Answer the macOS prompt to continue.
-                    {:else}
-                      Voice following needs the microphone, and macOS will ask you once.
-                    {/if}
+                    {micRequesting ? os.micRequestPending : os.micAskIntro}
                   </p>
                   <div class="row-actions">
                     <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
@@ -2867,14 +2868,10 @@
               <div class="mic-access warn" data-search-row>
                 <span class="mic-access-icon"><Icon name="alert" size={18} /></span>
                 <div class="mic-access-body">
-                  <p class="mic-access-title">Microphone access is managed on this Mac</p>
-                  <p class="mic-access-text">
-                    Screen Time or a device management profile is blocking the microphone, so the
-                    setting may not be yours to change. Ask whoever manages this Mac to allow
-                    CandidCue.
-                  </p>
+                  <p class="mic-access-title">{os.micRestrictedTitle}</p>
+                  <p class="mic-access-text">{os.micRestrictedText}</p>
                   <div class="row-actions">
-                    <Button onclick={() => void openMicrophonePrivacySettings()}>Open System Settings</Button>
+                    <Button onclick={() => void openMicrophonePrivacySettings()}>{os.openMicrophoneSettings}</Button>
                     <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
                   </div>
                 </div>
@@ -2883,11 +2880,8 @@
               <div class="mic-access warn" data-search-row>
                 <span class="mic-access-icon"><Icon name="refresh" size={18} /></span>
                 <div class="mic-access-body">
-                  <p class="mic-access-title">Quit and reopen CandidCue</p>
-                  <p class="mic-access-text">
-                    System Settings allows CandidCue, but macOS has not handed this window the
-                    microphone yet. It will once CandidCue restarts.
-                  </p>
+                  <p class="mic-access-title">{os.micAllowedButRefusedTitle}</p>
+                  <p class="mic-access-text">{os.micAllowedButRefusedText}</p>
                   <div class="row-actions">
                     <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
                   </div>
@@ -2898,7 +2892,7 @@
                 <span class="mic-access-icon"><Icon name="check" size={18} /></span>
                 <div class="mic-access-body">
                   <p class="mic-access-title">Microphone access is on</p>
-                  <p class="mic-access-text">CandidCue is allowed in System Settings.</p>
+                  <p class="mic-access-text">{os.micAllowedText}</p>
                   <div class="row-actions">
                     <Button variant="primary" disabled={micRequesting} onclick={() => allowMicrophone()}>
                       Use the microphone
@@ -2914,19 +2908,20 @@
                     {micRetryRefused ? 'Microphone access is still off' : 'Microphone access is off'}
                   </p>
                   <p class="mic-access-text">
-                    macOS will not ask again. Turn on CandidCue in System Settings, then choose Try
-                    again.
+                    {os.micDeniedText}
                     {#if micRetryRefused}
-                      If it is already on there, quit and reopen CandidCue.
+                      {os.micDeniedRetryText}
                     {/if}
                   </p>
                   <!-- Where, as its own line: a path is one name, and set
                        inside the sentence it broke at the arrow or inside
-                       "Privacy &". -->
-                  <p class="mic-path">System Settings › Privacy &amp; Security › Microphone</p>
+                       "Privacy &". Absent where there is no one place to name. -->
+                  {#if os.microphoneSettingsPath}
+                    <p class="mic-path">{os.microphoneSettingsPath}</p>
+                  {/if}
                   <div class="row-actions">
                     <Button variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
-                      Open System Settings
+                      {os.openMicrophoneSettings}
                     </Button>
                     <Button disabled={micRequesting} onclick={() => allowMicrophone()}>Try again</Button>
                   </div>
@@ -2962,7 +2957,7 @@
                     <div class="mic-fallback-body">
                       <p class="mic-fallback-title">{micPinned.label} is not connected</p>
                       <p class="mic-fallback-text">
-                        Takes, the level and the test use {micSystemDefaultLabel ?? "your Mac's default input"}
+                        Takes, the level and the test use {micSystemDefaultLabel ?? os.defaultInput}
                         until it is back.
                         <button
                           type="button"
@@ -3053,7 +3048,7 @@
           <p class="mic-privacy" data-search-row>
             <span class="mic-privacy-icon"><Icon name="info" size={14} /></span>
             <span>
-              Speech is transcribed on this Mac and never recorded, saved or uploaded. CandidCue
+              Speech is transcribed on {os.thisDevice} and never recorded, saved or uploaded. CandidCue
               uses the microphone during a test or a take, and while the input meter is on screen —
               which measures loudness and nothing else.
             </span>

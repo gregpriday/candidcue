@@ -1,5 +1,14 @@
-//! `bundle.targets` is pinned to the macOS formats, and stays pinned until a
-//! real build matrix proves the other platforms (issue #182).
+//! `bundle.targets` is pinned to the macOS formats in the shared config, and
+//! to the NSIS installer in the Windows overlay (`tauri.windows.conf.json`,
+//! which Tauri merges over the shared file when building on Windows). Linux
+//! stays unclaimed until a real build proves it (issue #182).
+//!
+//! Windows is claimed now because it has been proven the way the paragraphs
+//! below ask: built, tested and run on a real Windows 11 host — the
+//! `present.rs` cfg arms compile and present, `sherpa-onnx`'s static runtime
+//! links and transcribes, display sleep is held through
+//! `SetThreadExecutionState` — and CI's `windows` job builds the installer on
+//! every push. What follows is the history of why the pin exists at all.
 //!
 //! The config used to say `"targets": "all"`, which asks the bundler for every
 //! format the host can produce. Nothing in the tree backs that breadth up.
@@ -107,4 +116,63 @@ fn bundle_targets_stay_macos_only_until_other_hosts_are_proven() {
          implementation at all. Adding a Windows or Linux format here claims \
          otherwise. See issue #182. Found: {targets}"
     );
+}
+
+/// The Windows overlay asks for the NSIS installer and nothing else. The
+/// shared config's `app` and `dmg` are macOS formats a Windows host cannot
+/// produce, and an MSI would be a second installer nobody has exercised.
+#[test]
+fn windows_bundles_the_nsis_installer_and_nothing_else() {
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.windows.conf.json"))
+        .expect("tauri.windows.conf.json must be valid JSON");
+    assert_eq!(
+        overlay["bundle"]["targets"],
+        serde_json::json!(["nsis"]),
+        "the Windows overlay must name exactly the formats a Windows build has proven"
+    );
+}
+
+/// The Windows CSP is the shared one with `http://asset.localhost` added to the
+/// three directives that load assets, and differs in nothing else.
+///
+/// WebView2 cannot register a custom scheme, so Tauri serves the asset protocol
+/// there as `http://asset.localhost` — which a CSP naming only `asset:` blocks,
+/// and every script image on Windows failed to load. It lives in the overlay so
+/// the macOS policy is not widened by a host it never uses. Two copies of one
+/// policy is how a tightening reaches one platform and not the other, so they
+/// are held equal here, directive by directive.
+#[test]
+fn windows_csp_is_the_shared_csp_plus_the_asset_host() {
+    fn directives(csp: &str) -> Vec<(String, Vec<String>)> {
+        csp.split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut words = part.split_whitespace().map(str::to_string);
+                let name = words.next().expect("a directive has a name");
+                (name, words.collect())
+            })
+            .collect()
+    }
+    let shared: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+        .expect("tauri.conf.json must be valid JSON");
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.windows.conf.json"))
+        .expect("tauri.windows.conf.json must be valid JSON");
+    let shared = directives(shared["app"]["security"]["csp"].as_str().expect("a shared CSP"));
+    let windows = directives(overlay["app"]["security"]["csp"].as_str().expect("a Windows CSP"));
+
+    let expected: Vec<(String, Vec<String>)> = shared
+        .into_iter()
+        .map(|(name, mut sources)| {
+            if matches!(name.as_str(), "default-src" | "img-src" | "media-src") {
+                let at = sources
+                    .iter()
+                    .position(|source| source == "asset:")
+                    .map_or(sources.len(), |index| index + 1);
+                sources.insert(at, "http://asset.localhost".to_string());
+            }
+            (name, sources)
+        })
+        .collect();
+    assert_eq!(windows, expected, "the Windows CSP has drifted from the shared one");
 }

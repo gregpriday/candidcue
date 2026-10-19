@@ -100,6 +100,21 @@ describe('resolveTakeOutcome', () => {
     }
   });
 
+  it('says who refused in the platform’s own words', () => {
+    // Named, not read from the host: this suite runs as a Mac everywhere.
+    const refused = take({ wordsHeard: 0, durationSeconds: 120, microphoneRefused: true });
+    const windows = resolveTakeOutcome(refused, 'windows');
+    expect(windows.detail).toMatch(/^Windows did not allow CandidCue/);
+    expect(windows.suggestion).toContain('Windows Settings → Privacy & security → Microphone');
+    const linux = resolveTakeOutcome(refused, 'linux');
+    expect(linux.detail).toMatch(/^This computer did not allow CandidCue/);
+    expect(linux.suggestion).toContain('your system settings');
+    for (const outcome of [windows, linux]) {
+      expect(`${outcome.detail} ${outcome.suggestion}`).not.toMatch(/\bMac\b|System Settings/);
+      expect(outcome.headline).toBe('CandidCue could not use the microphone');
+    }
+  });
+
   it('reports what WAS heard when the refusal came later in the take', () => {
     // A take that heard words, then had a resume refused, followed for part of
     // its length; the refusal must not hide that.

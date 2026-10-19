@@ -35,6 +35,7 @@
   import Icon from './Icon.svelte';
   import StatusPill from './StatusPill.svelte';
   import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
+  import { osCopy } from '../lib/os-copy';
   import {
     hasReadinessWarnings,
     summariseReadiness,
@@ -147,6 +148,8 @@
   let micOutcome: 'allowed' | 'still-refused' | null = $state(null);
   /** The live announcement. Persistent, so a change to it is what gets read. */
   let announcement = $state('');
+  /** Whose prompt "Allow" waits on — macOS asks; Windows never does. */
+  const os = osCopy();
 
   let verdictEl: HTMLElement | null = $state(null);
 
@@ -164,10 +167,7 @@
     micBusy = true;
     micAsking = kind;
     micOutcome = null;
-    announcement =
-      kind === 'allow'
-        ? 'Waiting for your answer to the macOS microphone prompt.'
-        : 'Checking the microphone again.';
+    announcement = kind === 'allow' ? os.micPromptAnnouncement : 'Checking the microphone again.';
     try {
       await action();
     } finally {
@@ -294,7 +294,7 @@
                     disabled={micBusy}
                     onclick={() => void runMicrophoneAction('allow', onallowmicrophone)}
                   >
-                    {micAsking === 'allow' ? 'Waiting for macOS…' : finding.action.label}
+                    {micAsking === 'allow' ? os.micPromptWaiting : finding.action.label}
                   </Button>
                 </div>
                 {#if micAsking === 'allow'}
@@ -303,9 +303,7 @@
                     after the answer, and only a Present with nothing else to
                     say goes straight on.
                   -->
-                  <p class="finding-note">
-                    Answer the macOS prompt to continue. CandidCue checks again as soon as you do.
-                  </p>
+                  <p class="finding-note">{os.micPromptNote}</p>
                 {/if}
               {:else if finding.action?.microphone === 'privacy'}
                 <!--

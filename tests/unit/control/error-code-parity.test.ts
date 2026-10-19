@@ -95,12 +95,19 @@ function rustCodes(): Set<string> {
   return found;
 }
 
-/** The keys of `ERROR_COPY`, read from source so the map stays private. */
+/**
+ * The keys of `ERROR_COPY`, read from source so the map stays private.
+ *
+ * An entry is `CODE: '…'`, or `get CODE() {…}` for the few whose remedy names
+ * the operating system and so is read from lib/os-copy.ts when asked for.
+ */
 function authoredCopy(): Set<string> {
   const source = readFileSync(join(ROOT, 'src/control/services/errors.ts'), 'utf8');
   const start = source.indexOf('const ERROR_COPY');
   const body = source.slice(start, source.indexOf('\n};', start));
-  return new Set([...body.matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]!));
+  return new Set(
+    [...body.matchAll(/^ {2}(?:get )?([A-Z][A-Z0-9_]*)(?::|\(\) \{)/gm)].map((m) => m[1]!),
+  );
 }
 
 describe('the error registry and the code that raises errors agree', () => {

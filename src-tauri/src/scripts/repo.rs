@@ -985,7 +985,7 @@ pub async fn permanently_delete_script(
             chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ"),
             script_id.as_str()
         ));
-        fs::rename(&dir, &target).map_err(|e| {
+        crate::util::rename(&dir, &target).map_err(|e| {
             AppError::save_failed("CandidCue could not remove the script's folder.")
                 .with_log(format!("quarantine rename failed: {e}"))
         })?;
@@ -1053,7 +1053,7 @@ pub async fn permanently_delete_script(
         Err(err) => {
             // Put the folder back so the row and its files stay consistent.
             if let Some(target) = quarantined {
-                if let Err(restore_err) = fs::rename(&target, &dir) {
+                if let Err(restore_err) = crate::util::rename(&target, &dir) {
                     tracing::error!(
                         script_id = script_id.as_str(),
                         error = %restore_err,

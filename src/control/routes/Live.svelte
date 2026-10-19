@@ -33,6 +33,7 @@ import { onShortcut } from '../lib/shortcuts';
   import Disclosure from '../components/Disclosure.svelte';
   import { formatAccelerator } from '../lib/commands';
   import { detectPlatform } from '../lib/platform';
+  import { osCopy } from '../lib/os-copy';
   import PaneDivider from '../components/PaneDivider.svelte';
   import { PANE_LIMITS, setPaneWidth, workspace } from '../stores/workspace';
   import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
@@ -1821,13 +1822,10 @@ import { onShortcut } from '../lib/shortcuts';
   -->
   {#if micAccessRecoveryOffered}
     <div class="mic-access">
-      <p class="lf-note">
-        The switch is in Privacy &amp; Security → Microphone. If CandidCue is already on there,
-        quit and reopen CandidCue.
-      </p>
+      <p class="lf-note">{osCopy().micRecoveryNote}</p>
       <div class="mic-access-actions">
         <Button size="sm" variant="primary" onclick={() => void openMicrophonePrivacySettings()}>
-          Open System Settings
+          {osCopy().openMicrophoneSettings}
         </Button>
         <Button size="sm" disabled={micRetrying} onclick={() => void retryMicrophoneAccess()}>
           {micRetrying ? 'Trying…' : 'Try again'}

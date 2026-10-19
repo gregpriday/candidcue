@@ -24,12 +24,12 @@
  * exceptions accepted in `docs/advisory-exceptions.json`.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'sbom');
@@ -76,12 +76,30 @@ const REVIEWED_LICENCES = new Set([
 const problems = [];
 
 function run(command, args, options = {}) {
-  return execFileSync(command, args, {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    ...options,
-  });
+  const settings = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options };
+  return process.platform === 'win32'
+    ? execSync(throughCmd(command, args), settings)
+    : execFileSync(command, args, settings);
+}
+
+/**
+ * A command line for cmd.exe, which is how a tool is reached on Windows.
+ *
+ * There `pnpm` is a `pnpm.cmd` shim: a direct spawn finds no `pnpm.exe` and
+ * fails with ENOENT, and since the fix for CVE-2024-27980 Node will not spawn a
+ * batch file without a shell. cmd.exe resolves a bare name through PATHEXT, the
+ * way a terminal does, and receives the arguments unquoted: exact for the plain
+ * tokens this script passes, and refused for anything else rather than
+ * reinterpreted. Kept in step with the copy in generate-notices.mjs, which says
+ * more.
+ */
+function throughCmd(command, args) {
+  const tokens = [command, ...args];
+  const unsafe = tokens.find((token) => !/^[\w@+=:,./\\-]+$/.test(token));
+  if (unsafe !== undefined) {
+    throw new Error(`${JSON.stringify(unsafe)} cannot be passed through cmd.exe unquoted`);
+  }
+  return tokens.join(' ');
 }
 
 /* ------------------------------------------------------------- licences */
@@ -292,7 +310,9 @@ function recordNativeInputs() {
     const dir = join(ROOT, root);
     if (!existsSync(dir)) continue;
     for (const path of globNative(dir)) {
-      const relative = path.slice(ROOT.length + 1);
+      // With `/` on every platform: the record is committed, and the notices
+      // generator takes each library's name from after the last `/`.
+      const relative = path.slice(ROOT.length + 1).split(sep).join('/');
       found.push({
         path: relative,
         // The archive's own version and target, taken from the directory the

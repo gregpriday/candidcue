@@ -361,7 +361,7 @@ fn read_resume(path: &Path) -> Option<ResumeState> {
 fn write_resume(path: &Path, state: &ResumeState) -> std::io::Result<()> {
     let temp = path.with_extension("json.part");
     std::fs::write(&temp, serde_json::to_vec(state)?)?;
-    std::fs::rename(&temp, path)
+    crate::util::rename(&temp, path)
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,10 +1137,52 @@ fn available_bytes(path: &Path) -> Option<u64> {
     }
 }
 
-#[cfg(not(unix))]
+/// `GetDiskFreeSpaceExW`, which answers for the volume the path is on — a
+/// junction onto another drive included, the Windows twin of the symlinked
+/// app data directory above.
+#[cfg(windows)]
+fn available_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+
+    // Same walk as `statvfs` above: the call needs a directory that exists.
+    let mut probe = path;
+    loop {
+        if probe.exists() {
+            break;
+        }
+        probe = probe.parent()?;
+    }
+
+    let wide: Vec<u16> = probe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free_to_caller = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the total
+    // pointers may be null, and the out-parameter is only read on success.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_to_caller,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    // The bytes available to THIS caller, which honours per-user quotas — the
+    // counterpart of `f_bavail` rather than `f_bfree`.
+    (ok != 0).then_some(free_to_caller)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn available_bytes(_path: &Path) -> Option<u64> {
-    // Windows would use GetDiskFreeSpaceExW. 1.0 ships macOS only (§P2-05),
-    // and the caller treats `None` as "cannot say", which skips the preflight
+    // The caller treats `None` as "cannot say", which skips the preflight
     // rather than refusing — the same behaviour as an unreadable volume.
     None
 }
@@ -1365,7 +1407,7 @@ fn install_from_archive(
 
     let had_previous = target.exists();
     if had_previous {
-        std::fs::rename(&target, &backup).map_err(|e| {
+        crate::util::rename(&target, &backup).map_err(|e| {
             install_failed(format!("could not set the previous model aside: {e}"))
         })?;
     }
@@ -1394,7 +1436,7 @@ fn install_from_archive(
             }
         }
         if had_previous && !target.exists() {
-            if let Err(e) = std::fs::rename(&backup, &target) {
+            if let Err(e) = crate::util::rename(&backup, &target) {
                 tracing::error!(
                     error = %e,
                     backup = %backup.display(),
@@ -1406,7 +1448,7 @@ fn install_from_archive(
         err
     };
 
-    if let Err(e) = std::fs::rename(staging, &target) {
+    if let Err(e) = crate::util::rename(staging, &target) {
         // Nothing of ours is at `target` — the rename is precisely what did
         // not happen — so this must not delete whatever is.
         return Err(restore_backup(
@@ -4039,7 +4081,7 @@ mod tests {
     }
 
     /// The real reading reaches the verdict: no volume has `u64::MAX` free.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn free_space_read_from_the_volume_decides_the_preflight() {
         let temp = tempfile::tempdir().unwrap();
