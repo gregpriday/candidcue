@@ -10,7 +10,7 @@
  *
  * So this collects what a release contains — production JavaScript
  * dependencies, both Rust workspaces, the prebuilt native libraries
- * `sherpa-onnx-sys` fetches at build time, the bundled typeface, and the
+ * `sherpa-onnx-sys` fetches at build time, the bundled typefaces, and the
  * speech model the user installs afterwards — and writes one file that
  * `tauri.conf.json` copies into `Contents/Resources`.
  *
@@ -28,7 +28,7 @@
  * It does not reproduce every dependency's licence TEXT. Several hundred MIT
  * and ISC notices would bury the four things a reader actually needs — and the
  * two licences that genuinely require their text to travel (the model's, and
- * the font's OFL) do travel, as their own files. Every dependency is named
+ * the fonts' OFL) do travel, as their own files. Every dependency is named
  * with its version and SPDX identifier, which is what makes the claim checkable.
  */
 import { execFileSync, execSync } from 'node:child_process';
@@ -562,17 +562,26 @@ function render() {
     '',
     'Two third-party licences travel in full with the work they cover:',
     '',
-    '- the typeface, whose SIL Open Font License is in',
+    '- the typefaces, whose SIL Open Font License is in',
     '  `Contents/Resources/LICENSE-fonts.txt`;',
     '- the speech recognition model, whose licence is written into the model',
     '  directory beside the weights when you install it.',
     '',
-    '## The typeface',
+    '## The typefaces',
     '',
-    '**Atkinson Hyperlegible Next** — Braille Institute of America, Inc.',
-    'Licensed under the SIL Open Font License 1.1. The woff2 subsets are the ones',
-    'published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,',
-    'unmodified. Full text: `LICENSE-fonts.txt`, beside this file.',
+    '**Atkinson Hyperlegible Next** — Braille Institute of America, Inc. The',
+    "stage's high-legibility face. Licensed under the SIL Open Font License 1.1.",
+    'The woff2 subsets are the ones published as',
+    '`@fontsource-variable/atkinson-hyperlegible-next@5.3.0`, unmodified.',
+    '',
+    '**Archivo** — The Archivo Project Authors (Omnibus-Type). The brand face,',
+    'for the wordmark and a few display headings on the desk, and nothing on the',
+    'stage. Licensed under the SIL Open Font License 1.1. The upright latin and',
+    'latin-ext woff2 subsets are the ones published as',
+    '`@fontsource-variable/archivo@5.3.0`, unmodified.',
+    '',
+    'One file carries both copyright notices and the licence text:',
+    '`LICENSE-fonts.txt`, beside this file.',
     '',
     '## Shared libraries in the Linux AppImage',
     '',

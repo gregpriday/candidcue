@@ -155,7 +155,7 @@ const themeSpec = {
   '.cm-directive': { color: 'var(--warning)', fontWeight: '600' },
   /*
    * The run a followed reading note is about (lib/lint-run.ts). The rail's
-   * warm grey, not terracotta: the accent is the selection's colour here, and
+   * neutral grey, not the accent: the accent is the selection's colour here, and
    * this must never read as text the next keystroke would replace. Cloned
    * decoration so a run that wraps keeps its rounded ends on every line.
    */

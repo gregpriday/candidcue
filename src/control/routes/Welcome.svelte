@@ -257,9 +257,10 @@
     }
     if (isModelDamaged(modelStatus)) {
       // Not "Set up": this machine DID download it, and calling it a one-time
-      // download not yet done would be wrong on both counts (#258).
+      // download not yet done would be wrong on both counts (#258). A fault, so
+      // it warns: the accent is for expected setup, and must not read as one.
       return {
-        tone: 'accent',
+        tone: 'warning',
         pill: 'Damaged',
         detail: 'Download it again to restore voice following. Writing works without it.',
         emphasis: 'setup',
@@ -655,36 +656,50 @@
     gap: var(--space-3);
   }
 
+  /*
+   * The name as it is always written — title case, never small capitals — in
+   * the brand face and in one colour. The mark beside it carries the colour;
+   * the word is ink. Sized to sit with the 22px mark, while the line height
+   * stays the panel title's: the two columns' first lines share a 23px line
+   * box, though a 17px brand face and a 15px UI face cannot share a baseline.
+   *
+   * `font-synthesis: none` because a browser that cannot find the 600 weight
+   * would otherwise smear a bolder one out of the regular, and a faked bold is
+   * the one thing a wordmark cannot be.
+   */
   .wordmark {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     margin: 0;
     line-height: var(--lh-body);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-    color: var(--accent-strong);
+    font-family: var(--font-brand);
+    font-size: var(--text-lg);
+    font-weight: 600;
+    letter-spacing: var(--ls-brand);
+    font-synthesis: none;
+    color: var(--text-primary);
   }
 
   /*
-   * The page-title size, from 32.
+   * The page-title size, from 32, in the brand face.
    *
-   * The serif hero stays — this is the one screen where a little editorial
-   * storytelling is right, and §3.3 keeps the display face as a brand accent
-   * for exactly this moment. What comes down is the SCALE (§16.1): this is a
-   * setup assistant with three actions and a checklist beside it, and it
-   * should read as the top of a window, not as the top of a marketing site.
-   * The page-title token is what every other screen's title is set at.
+   * This is the one screen where a little editorial storytelling is right, so
+   * the heading is one of the desk's few branded display moments. What came
+   * down is the SCALE (§16.1): this is a setup assistant with three actions
+   * and a checklist beside it, and it should read as the top of a window, not
+   * as the top of a marketing site. The page-title token is what every other
+   * screen's title is set at. The tracking is a grotesque's at this size —
+   * the editorial title tracking was set for a serif.
    */
   .heading {
     margin: 0;
-    font-family: var(--font-serif);
+    font-family: var(--font-brand);
     font-size: var(--text-page-title);
     line-height: var(--lh-page-title);
     font-weight: 600;
-    letter-spacing: var(--ls-title);
+    letter-spacing: var(--ls-brand);
+    font-synthesis: none;
     color: var(--text-primary);
     text-wrap: balance;
   }
@@ -854,9 +869,9 @@
   .readiness-item .link {
     margin-top: var(--space-1);
   }
-  /* Small terracotta text must never drop to --accent (it sits right on the
-     AA line); hover darkens to the primary text colour instead, which also
-     reads as the right direction for a hover. */
+  /* Small accent text never lightens to --accent on hover; it darkens to the
+     primary text colour instead, which reads as the right direction for a
+     hover. */
   .link:hover {
     color: var(--text-primary);
     text-decoration-thickness: 2px;

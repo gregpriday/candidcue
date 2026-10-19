@@ -8,7 +8,7 @@
  * mentioned that field. So a boot-time database read error left `scripts` at
  * `[]` and fell through to the branch below it — the first-run creation state:
  *
- *     "Write the words. CandidCue keeps your place."
+ *     "Your words. Your pace."
  *     [ Create a script ]  [ Import Markdown ]  [ Try a sample script ]
  *
  * A failure to read presented as every script you had being gone, followed by
@@ -216,7 +216,7 @@ describe('a read that failed is not an empty library', () => {
 
     expect(text(container)).toContain('Scripts could not be loaded');
     // The exact copy of the state this used to fall through to.
-    expect(text(container)).not.toContain('Write the words');
+    expect(text(container)).not.toContain('Your words. Your pace.');
     expect(buttonNamed(container, 'Create a script')).toBeNull();
     expect(buttonNamed(container, 'Try again')).not.toBeNull();
   });
@@ -652,8 +652,20 @@ describe('Recent is not a first run', () => {
     const container = await mount();
 
     expect(text(container)).toContain('No recent scripts');
-    expect(text(container)).not.toContain('Write the words');
+    expect(text(container)).not.toContain('Your words. Your pace.');
     expect(buttonNamed(container, 'Create a script')).toBeNull();
+  });
+
+  it('keeps the invitation for a library that really is empty', async () => {
+    // The refusals in this file are worth something only while this is the
+    // copy a first run actually shows; reworded, they would pass vacuously.
+    setInvokeForTesting(serving([]));
+    await loadLibrary();
+    const container = await mount();
+
+    expect(text(container)).toContain('Your words. Your pace.');
+    expect(text(container)).toContain('Write or import a Markdown script.');
+    expect(buttonNamed(container, 'Create a script')).not.toBeNull();
   });
 });
 

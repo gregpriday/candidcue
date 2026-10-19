@@ -282,7 +282,7 @@ test('reader: paper', async ({ page }) => {
   await present(page, { mode: 'reader', size: READING });
   const panel = await openSheet(page, 'Reading appearance');
   await panel.getByRole('radiogroup', { name: 'Appearance' }).getByRole('radio', { name: 'Paper' }).click();
-  await expect(panel).toHaveAttribute('data-theme', 'workspace');
+  await expect(panel).toHaveAttribute('data-theme', 'paper');
   await expect(page.locator('.stage-root')).toHaveAttribute('data-theme', 'reader-paper');
   await shotWindow(page, 'reader-paper');
   await shotSheet(page, 'reader-paper');

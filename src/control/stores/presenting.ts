@@ -18,7 +18,7 @@
  *
  * It also owns `data-presenting` on the document element, which is what turns
  * the page canvas black. That matters independently of the cover: `body`'s
- * background is the workspace theme's warm paper (`--bg-app`), the stage's own
+ * background is the workspace theme's porcelain (`--bg-app`), the stage's own
  * black comes from `.stage-root`, and an area the viewport has grown into but
  * the layout has not reached yet is painted by the canvas, not by either of
  * them.

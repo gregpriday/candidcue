@@ -1,4 +1,14 @@
+CandidCue bundles two typefaces, each licensed under the SIL Open Font License,
+Version 1.1. Each copyright notice below covers the font files named above it;
+the one licence text that follows applies to both.
+
+Atkinson Hyperlegible Next (atkinson-hyperlegible-next-*.woff2):
+
 Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors (https://github.com/googlefonts/atkinson-hyperlegible-next) AtkinsonHyperlegibleNext-Italic[wght].ttf: Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors (https://github.com/googlefonts/atkinson-hyperlegible-next)
+
+Archivo (archivo-*.woff2):
+
+Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo) Archivo-Italic[wdth,wght].ttf: Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

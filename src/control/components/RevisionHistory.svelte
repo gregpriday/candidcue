@@ -13,7 +13,7 @@
   ---------------------------------------------------------------------------
   ONE FRAME FOR EVERY STATE
   ---------------------------------------------------------------------------
-  The browser is a fixed frame — a warm-paper rail of revisions beside a white
+  The browser is a fixed frame — a porcelain rail of revisions beside a white
   reading pane, over a footer band of constant height — and every state renders
   inside it: loading fills the frame with placeholder rows, an empty or failed
   list centres its message in it, a failed preview keeps the list, and asking to
@@ -716,7 +716,7 @@
     background: var(--bg-canvas);
   }
 
-  /* ---- The rail: warm paper, recessed beside the white reading pane ---- */
+  /* ---- The rail: porcelain, recessed beside the white reading pane ---- */
   .rail {
     flex: 0 0 288px;
     display: flex;
@@ -801,8 +801,8 @@
   /*
    * Selected: the neutral tonal fill every row on a paper rail uses (the
    * sidebar, the Settings index, the editor outline). No marker bar, and no
-   * clay wash beside a grey hover: the two read as unrelated colours rather
-   * than as one state at two strengths. No white card either: on warm paper a
+   * accent wash beside a grey hover: the two read as unrelated colours rather
+   * than as one state at two strengths. No white card either: on the rail a
    * raised white pill reads as a web nav (Sidebar.svelte retired it).
    */
   .row.active,

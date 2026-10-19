@@ -1,5 +1,7 @@
 import { mount } from 'svelte';
 import '../styles/tokens.css';
+// The brand face, for this window only: see the header of brand-fonts.css.
+import '../styles/brand-fonts.css';
 import App from './App.svelte';
 import { bindRealVoiceFacadeIfAvailable } from './services/voice-live';
 import { applyPlatformAttribute } from './lib/platform';

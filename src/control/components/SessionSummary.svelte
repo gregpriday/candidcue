@@ -454,8 +454,10 @@
   .outcome.good::before {
     background: var(--success);
   }
+  /* Warning, not the accent: the accent is the desk's brand colour and sits
+     close to --success in hue, so an attention bar in it read as a good take. */
   .outcome.attention::before {
-    background: var(--accent);
+    background: var(--warning);
   }
   .outcome-headline {
     margin: 0;

@@ -151,8 +151,8 @@ const SURFACE_TOKENS = [
  * The status bar's hover and press fills, which are NOT general surfaces.
  *
  * The bar sits a shade under the chrome, so a hover step dark enough to see on
- * it cannot also carry muted text at 4.5:1 (#e1dbd2 holds --text-muted at 4.38
- * in the light theme). StatusBar.svelte therefore never puts muted text on
+ * it cannot also carry muted text at 4.5:1 (#dbe1e0 holds --text-muted at 4.31
+ * in the workspace theme). StatusBar.svelte therefore never puts muted text on
  * them: a plain item turns --text-primary on hover and press, and a warning or
  * danger item keeps its tone. These are checked against exactly that, below,
  * rather than against the muted and faint greys SURFACE_TOKENS are held to.
@@ -212,7 +212,7 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
    * 1.4.11 Non-text Contrast, AA. Both focus treatments ARE the state signal
    * for the things that wear them, so each owes 3:1 against the surface it is
    * drawn against. For the quiet edge this is what stops somebody "simplifying"
-   * it back to --border-strong, which is 2.74:1 on the light canvas and 1.86:1
+   * it back to --border-strong, which is 2.81:1 on the light canvas and 1.86:1
    * on the dark elevated surface.
    *
    * The accent ring is included because nothing else checks it: the browser

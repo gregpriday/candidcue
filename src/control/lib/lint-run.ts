@@ -12,7 +12,7 @@
  * So the run is marked, as a passage rather than as a selection. A note
  * reveals and never selects (see `goToFinding` in `Editor.svelte`), and a mark
  * that looked like a selection would tell the author the next keystroke
- * replaces it. The mark is the rail's own warm grey, and the terracotta stays
+ * replaces it. The mark is the rail's own neutral grey, and the accent stays
  * with the real selection.
  *
  * It lasts exactly as long as the author is looking at it: typing, moving the

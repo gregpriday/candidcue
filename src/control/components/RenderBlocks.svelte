@@ -500,7 +500,7 @@
     font-weight: 650;
   }
   .h1 {
-    font-family: var(--font-serif);
+    font-family: var(--font-ui);
     font-size: calc(var(--text-3xl) * var(--doc-scale, 1));
     line-height: 1.25;
     margin-top: calc(var(--space-4) * var(--doc-scale, 1));

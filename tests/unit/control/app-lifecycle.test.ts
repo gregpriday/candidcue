@@ -7,6 +7,7 @@
  * fact is visible from a test that has to mount the shell, so neither was ever
  * asserted. These are the same decisions as functions.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   STOP_PRACTICE_CONFIRM_BODY,
@@ -296,5 +297,31 @@ describe('sessionEndConfirmation', () => {
       confirmLabel: FINISH_PRACTICE_LABEL,
       danger: true,
     });
+  });
+});
+
+/*
+ * The splash a launch shows until boot has finished.
+ *
+ * It is the same lockup as Welcome's wordmark — the mark beside the name — so
+ * the first frame of the window is not a second, plainer rendering of the
+ * name. The mark is decorative (BrandMark hides itself), so the name is still
+ * read exactly once. Nothing here can mount the shell, so the branch is read
+ * out of the source, comments stripped.
+ */
+describe('the startup splash', () => {
+  const app = readFileSync(new URL('../../../src/control/App.svelte', import.meta.url), 'utf8')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+
+  it('shows the mark beside the name while boot is unfinished', () => {
+    const branch = app.slice(app.indexOf('{:else if !ready}'));
+    const splash = branch.slice(0, branch.indexOf('{:else}'));
+    const mark = splash.match(/<p\b[^>]*\bclass="[^"]*\bboot-mark\b[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+
+    expect(mark, 'the splash renders its lockup').not.toBeNull();
+    // The mark first, then the name, and the name only once.
+    expect(mark?.[1]).toMatch(/<BrandMark\b[^>]*\/>[\s\S]*\bCandidCue\b/);
+    expect(mark?.[1]?.match(/CandidCue/g)).toHaveLength(1);
   });
 });

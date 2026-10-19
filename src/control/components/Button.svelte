@@ -1,5 +1,5 @@
 <!--
-  Flat button: a 1px outline on the neutral variants, a solid clay fill on
+  Flat button: a 1px outline on the neutral variants, a solid accent fill on
   primary, a darkening press. No shadow, no darker "lip" on the fill, no
   gradient, no glow — and one label size, 13px, on every variant.
 
@@ -137,7 +137,7 @@
     font-size: var(--text-sm);
   }
 
-  /* Primary — a solid clay fill, edge to edge in the fill's own colour. */
+  /* Primary — a solid accent fill, edge to edge in the fill's own colour. */
   .primary {
     background: var(--accent);
     border-color: var(--accent);

@@ -318,7 +318,7 @@
   /*
    * Selected: a neutral tonal fill and stronger text. No white surface, no
    * border, no shadow — see the note at the top for why the pill had to go —
-   * and no clay wash either (`--bg-source-selected`): the accent is the icon's.
+   * and no accent wash either (`--bg-source-selected`): the accent is the icon's.
    */
   .nav-item.active,
   .nav-item.active:hover {

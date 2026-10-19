@@ -497,10 +497,12 @@ describe('a reading window', () => {
   });
 
   it('turns into a sheet of paper over a paper reading window', () => {
-    // The workspace palette, by the attribute every light surface in the app
-    // already uses — so its controls are the light ones, not dark glass.
+    // The frozen paper palette, by the attribute every palette in the app is
+    // chosen with — so its controls are the light ones, not dark glass, and
+    // not the desk's either: a retune of the workspace palette must not reach a
+    // surface shown over the read.
     const onPaper = openReader({ readerTheme: 'paper' });
-    expect(onPaper.getByRole('dialog').getAttribute('data-theme')).toBe('workspace');
+    expect(onPaper.getByRole('dialog').getAttribute('data-theme')).toBe('paper');
 
     const onDark = openReader({ readerTheme: 'dark' });
     expect(onDark.getAllByRole('dialog').at(-1)!.hasAttribute('data-theme')).toBe(false);

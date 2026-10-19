@@ -20,7 +20,7 @@ test('[mock-backed] control window boots to Welcome and navigates to the Library
   // The Welcome -> Library path works and the Library renders its empty state.
   await page.getByRole('button', { name: 'Go to the library' }).click();
   await expect(page.getByRole('heading', { name: 'Scripts' })).toBeVisible();
-  await expect(page.getByText('Write the words. CandidCue keeps your place.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your words. Your pace.' })).toBeVisible();
 });
 
 test('[mock-backed] identify overlay renders the display number it was handed', async ({ page }) => {

@@ -2296,15 +2296,17 @@ import { onShortcut } from '../lib/shortcuts';
   what the layer actually does.
 -->
 <!--
-  On a paper read the drawer and its tab take the light workspace palette, so
-  the one control surface over the page is not a dark slab on it. Unset — the
-  studio palette, exactly as before — for every other take.
+  On a paper read the drawer and its tab take the frozen light `paper`
+  palette, so the one control surface over the page is not a dark slab on it.
+  Not the desk's `workspace` palette: the drawer is presented, and retuning the
+  desk must not reach it. Unset — the studio palette, exactly as before — for
+  every other take.
 -->
 <div
   class="take-controls"
   class:presenting={$session.active}
   inert={!$session.active}
-  data-theme={paperTake ? 'workspace' : undefined}
+  data-theme={paperTake ? 'paper' : undefined}
 >
   <button
     type="button"
@@ -2786,7 +2788,7 @@ import { onShortcut } from '../lib/shortcuts';
    * not: on black it falls on black, on paper it is a grey bar down the side
    * of the read. So on paper the shadow is only there while it is open.
    */
-  .take-controls[data-theme='workspace'] .tc-panel:not(.open) {
+  .take-controls[data-theme='paper'] .tc-panel:not(.open) {
     box-shadow: none;
   }
   @media (prefers-reduced-motion: reduce) {

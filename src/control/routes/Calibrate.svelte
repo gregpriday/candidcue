@@ -2382,7 +2382,7 @@
     color: var(--text-muted);
   }
   /* Flat, per §15.2 — a tonal fill, no elevation, no raised card. The Settings
-     rail's neutral "you are here", not a clay wash beside a grey hover. */
+     rail's neutral "you are here", not an accent wash beside a grey hover. */
   .step-item.active,
   .step-item.active:hover {
     background: var(--bg-source-selected);
@@ -2609,7 +2609,7 @@
   }
   /* Selected: the tinted fill and a firmer edge, with the tick in the
      corner saying it in a shape as well (SC 1.4.1). Not an accent border —
-     that is the heavy terracotta box the house keeps off large surfaces. */
+     that is the heavy accent box the house keeps off large surfaces. */
   .preset-card.selected,
   .preset-card.selected:hover {
     background: var(--bg-selected);

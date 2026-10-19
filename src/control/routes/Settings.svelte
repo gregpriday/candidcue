@@ -5139,7 +5139,7 @@
   }
   .override-tag {
     font-weight: 600;
-    /* Small terracotta TEXT has to use the strong ramp to clear AA in light. */
+    /* Small accent TEXT takes the strong step on the light desk. */
     color: var(--accent-strong);
     font-variant-numeric: tabular-nums;
   }

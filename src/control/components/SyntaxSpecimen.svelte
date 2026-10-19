@@ -1,16 +1,20 @@
 <!--
-  One syntax reference example as a take draws it on the glass, in the
-  control window's light palette.
+  One syntax reference example as a take draws it on the glass, in the frozen
+  light `paper` palette.
+
+  `data-theme="paper"` on the root, not the desk's `workspace` palette it sits
+  in: this is a rendered presentation example, so it keeps the colours a take
+  was drawn in when the desk around it is retuned.
 
   The blocks are the compiler's own, already projected for a take
   (`lib/syntax-specimens.ts`), and their text goes through RenderNodes, so what
   shows here is what compiling the example leaves on the glass. What this file
   adds is the glass's vocabulary at reading size: a cue is an upper-case
   capsule, an unspoken heading is a quiet label in the cue colour, and silent
-  and stage notes are quieter than the script. The colours are the workspace's
-  stand-ins for the stage's — the cue gold becomes `--warning`, as it is in the
-  editor's preview — because a black panel inside this one would be a second
-  frame on the page.
+  and stage notes are quieter than the script. The colours are the paper
+  palette's stand-ins for the stage's — the cue gold becomes `--warning`, as it
+  is in the editor's preview — because a black panel inside this one would be a
+  second frame on the page.
 
   Not a renderer for scripts. It draws the handful of shapes the reference's
   examples compile to, and draws anything else as a plain line.
@@ -27,7 +31,7 @@
   let { blocks }: Props = $props();
 </script>
 
-<div class="specimen">
+<div class="specimen" data-theme="paper">
   {#each blocks as block (block.id)}
     {#if block.kind === 'heading' && !block.spoken}
       <p class="quiet-heading"><RenderNodes nodes={block.renderNodes} /></p>

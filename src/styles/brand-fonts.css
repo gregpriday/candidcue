@@ -1,0 +1,123 @@
+/* ============================================================================
+   The bundled brand face.
+
+   WHAT IT IS FOR
+   --------------
+   `--font-brand` in `tokens.css` names Archivo first, and reserves it for the
+   handful of branded display moments on the desk — the startup splash, the
+   Welcome wordmark and heading, the Library's first-run invitation. This file
+   is what provides that family. Without it the token resolves to whatever
+   Archivo the machine happens to have installed, which is usually none, and
+   the wordmark sets itself in system-ui without a word to anybody.
+
+   Like the stage face, it is a FILE rather than a CDN link: the control
+   window's CSP is `font-src 'self' data:`, and the app is expected to work on
+   a machine with no network at all. The urls are relative on purpose.
+   `scripts/verify-repository.mjs` resolves every relative url() under `src/`
+   and fails on a missing file, but it skips absolute paths, so an
+   `/assets/...` url would let a missing font through to the splash.
+
+   WHY A FILE OF ITS OWN, AND ONLY THE CONTROL WINDOW
+   --------------------------------------------------
+   `fonts.css` is the stage's, and `font-hash.test.ts` holds it to exactly one
+   family. The stage must never wait on, inherit or fall back through a brand
+   face, and keeping the two registrations in separate files makes that a
+   property of the import graph rather than of anybody's care. This file is
+   imported by `src/control/main.ts` and by nothing else: not the stage entry,
+   not `stage.css` or `fonts.css`, and not Settings, which has no brand display
+   text. `brand-fonts.test.ts` pins all of that.
+
+   The control window is also where the stage renders during single-window
+   presentation, and that stage gates its reveal on `document.fonts.ready`.
+   Registering a face does not load it: a browser fetches an @font-face only
+   when rendered text resolves to it, or when a script asks with
+   `document.fonts.load`. Nothing on a presentation surface names
+   `--font-brand` and nothing calls `load` for it, so the stage never asks for
+   this face, and its stacks never fall through it. What it cannot rule out is
+   sharing: the embedded stage and the desk have ONE `document.fonts`, so an
+   Archivo load the desk starts at the moment a take begins joins the stage's
+   wait. That is the narrowest of windows — once any brand text has rendered,
+   the face stays loaded for the life of the document, which begins long
+   before anyone can press Present — and the file is local; the reveal's
+   wait is bounded in any case (`FONT_READY_TIMEOUT_MS` in `StageApp.svelte`).
+   Keep it that narrow: nothing that renders during a take should name
+   `--font-brand`.
+
+   WHAT IS SHIPPED, AND WHAT IS NOT
+   --------------------------------
+   One upright face on the weight axis alone (`wght` 100-900, default 600), in
+   the latin and latin-ext subsets. These files are exactly the width-100
+   instance of the width-and-weight files, and the brand sets its desk roles at
+   width 100%, so that is all the desk needs; the whole weight axis is there,
+   so a role at 600, 650 or 700 gets a true instance rather than a synthesised
+   bold.
+
+   Not shipped, deliberately:
+   - the italic: no in-app role sets brand text in italic;
+   - the width axis: the 95% width the brand uses for large marketing
+     headlines is a website setting, not a desk one, and it needs the `wdth`
+     files, which are 2.6x the size of these;
+   - the Vietnamese subset: brand display text is the app's own fixed copy.
+
+   If a desk role ever wants an italic or a narrower width, ship the files for
+   it then. Do not let the engine synthesise an oblique, and do not fake a
+   width with a transform — neither one is the face.
+
+   WHY font-display: block
+   -----------------------
+   The startup splash and the Welcome wordmark are what this face is for, and
+   they are the first thing on screen. `swap` would paint them in system-ui
+   and then visibly re-set the wordmark on every launch. The files are local,
+   so in practice the block period is a frame or two, and a missing file errors
+   at once and drops to the rest of `--font-brand`. The price is the case that
+   should never happen: a load that stalls rather than fails leaves the name
+   and the Welcome heading blank for up to the ~3s block period before the
+   fallback paints.
+
+   PROVENANCE — THE ASSET RECORD
+   -----------------------------
+   Archivo, Version 2.001 by its own name table (Omnibus-Type, built for Google
+   Fonts), as the woff2 subsets published in
+   `@fontsource-variable/archivo@5.3.0`. The latin / latin-ext split and the
+   instancing to the weight axis are fontsource's; the files here are
+   byte-for-byte UNMODIFIED — nothing was converted, subset or re-instanced:
+
+     archivo-latin-wght-normal.woff2      34928 B  sha256
+       8f704806dbedeaaeca334b11ec348bc3ac3a439d6431544b3afb54f534ee4967
+     archivo-latin-ext-wght-normal.woff2  32608 B  sha256
+       ff4f17d21930e36d6d93baba663e624cb767afc3feebf7adaebd82242638de05
+
+   Licensed OFL-1.1, with no Reserved Font Name. The copyright notice and the
+   licence text live beside the binaries in `assets/fonts/LICENSE.txt`, which
+   holds both bundled faces' notices over one licence body — so it is the same
+   file `tauri.conf.json` already copies into the bundle as
+   `Contents/Resources/LICENSE-fonts.txt`, and `THIRD_PARTY_NOTICES.md` names
+   the face.
+
+   The family is declared as plain `Archivo` rather than fontsource's
+   `Archivo Variable`, so it is character-for-character the first name
+   `--font-brand` asks for; `brand-fonts.test.ts` pins that agreement. The
+   rules and their unicode-ranges are the package's own, in its order — the
+   same split `fonts.css` uses for the stage face.
+   ============================================================================ */
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('../../assets/fonts/archivo-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Archivo';
+  font-style: normal;
+  font-display: block;
+  font-weight: 100 900;
+  src: url('../../assets/fonts/archivo-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}

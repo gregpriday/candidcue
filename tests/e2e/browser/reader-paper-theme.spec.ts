@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 import { watchPageErrors } from './fixtures/page-errors';
 import { openScript } from './fixtures/library';
@@ -73,6 +73,10 @@ const columnInk = (page: Page) =>
 const canvas = (page: Page) =>
   page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
+/** The ink a surface's palette gives its text — the frozen paper value on paper. */
+const textPrimary = (surface: Locator) =>
+  surface.evaluate((el) => getComputedStyle(el).getPropertyValue('--text-primary').trim());
+
 async function openDockMenu(page: Page): Promise<void> {
   await page.locator('.stage-root').hover();
   await page.locator('.stage-dock .dock-button.menu-trigger').click();
@@ -117,6 +121,11 @@ test('a paper reading window draws paper — field, ink and canvas — and a swi
   expect(await columnInk(page)).toBe(PAPER_INK);
   // The canvas under the stage: what a growing window shows before layout.
   expect(await canvas(page)).toBe(PAPER_FIELD);
+  // The take controls over the read are on the frozen paper palette, not the
+  // desk's, so a retune of the desk never reaches them (`tokens.css`).
+  const drawer = page.locator('.take-controls');
+  await expect(drawer).toHaveAttribute('data-theme', 'paper');
+  expect(await textPrimary(drawer)).toBe('#18191d');
 
   // Mid-take, to the teleprompter: the glass is black, whatever was saved.
   // The window moves BEFORE the geometry recomposes, and it moves onto the
@@ -157,6 +166,7 @@ test('a paper reading window draws paper — field, ink and canvas — and a swi
   await expect(page.locator('.stage-root')).toHaveAttribute('data-theme', 'stage-dark');
   await expect.poll(() => stageField(page)).toBe(BLACK);
   await expect.poll(() => canvas(page)).toBe(BLACK);
+  await expect(drawer).not.toHaveAttribute('data-theme');
 
   // And back: the reading window is paper again.
   await openDockMenu(page);
@@ -177,6 +187,7 @@ test('a prompter take stays black with Paper saved', async ({ page }) => {
   expect(await stageField(page)).toBe(BLACK);
   expect(await canvas(page)).toBe(BLACK);
   expect(await columnInk(page)).not.toBe(PAPER_INK);
+  await expect(page.locator('.take-controls')).not.toHaveAttribute('data-theme');
 
   errors.expectClean();
 });
@@ -198,7 +209,10 @@ test('Reading appearance switches the field live, Escape puts it back, and Done 
   await expect.poll(() => columnInk(page)).toBe(PAPER_INK);
   await expect(page.locator('.stage-dock .appearance-popover [role="dialog"]')).toHaveAttribute(
     'data-theme',
-    'workspace',
+    'paper',
+  );
+  expect(await textPrimary(page.locator('.stage-dock .appearance-popover [role="dialog"]'))).toBe(
+    '#18191d',
   );
 
   // Escape is Cancel: back to exactly what it was, and nothing saved.

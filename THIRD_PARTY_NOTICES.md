@@ -17,17 +17,26 @@ CandidCue itself is free software under the MIT licence. Its text is in
 
 Two third-party licences travel in full with the work they cover:
 
-- the typeface, whose SIL Open Font License is in
+- the typefaces, whose SIL Open Font License is in
   `Contents/Resources/LICENSE-fonts.txt`;
 - the speech recognition model, whose licence is written into the model
   directory beside the weights when you install it.
 
-## The typeface
+## The typefaces
 
-**Atkinson Hyperlegible Next** — Braille Institute of America, Inc.
-Licensed under the SIL Open Font License 1.1. The woff2 subsets are the ones
-published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,
-unmodified. Full text: `LICENSE-fonts.txt`, beside this file.
+**Atkinson Hyperlegible Next** — Braille Institute of America, Inc. The
+stage's high-legibility face. Licensed under the SIL Open Font License 1.1.
+The woff2 subsets are the ones published as
+`@fontsource-variable/atkinson-hyperlegible-next@5.3.0`, unmodified.
+
+**Archivo** — The Archivo Project Authors (Omnibus-Type). The brand face,
+for the wordmark and a few display headings on the desk, and nothing on the
+stage. Licensed under the SIL Open Font License 1.1. The upright latin and
+latin-ext woff2 subsets are the ones published as
+`@fontsource-variable/archivo@5.3.0`, unmodified.
+
+One file carries both copyright notices and the licence text:
+`LICENSE-fonts.txt`, beside this file.
 
 ## Shared libraries in the Linux AppImage
 

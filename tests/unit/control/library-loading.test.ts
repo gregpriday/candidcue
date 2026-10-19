@@ -110,7 +110,7 @@ describe('a read that fails', () => {
 
   it('keeps the rows already on screen when a re-query fails', async () => {
     // The list is stale, not wrong. Blanking it would put a read error behind
-    // the first-run "Write the words" invitation — apparent data loss, plus an
+    // the first-run "Your words. Your pace." invitation — apparent data loss, plus an
     // offer to start over.
     expect(get(library).scripts).toHaveLength(2);
 

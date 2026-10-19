@@ -446,7 +446,7 @@
   }
 
   /* The half the author can act on carries the warm accent — `--accent-strong`
-     because small terracotta text needs it to clear AA on the light paper. */
+     because small accent text takes the strong step on the light desk. */
   .action,
   .why-text {
     margin: 0;

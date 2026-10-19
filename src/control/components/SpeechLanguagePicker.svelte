@@ -1407,7 +1407,7 @@
   }
 
   /* Reads as a link, because it is one; it simply does not navigate this window.
-     Small terracotta text takes --accent-strong for AA in the light theme. */
+     Small accent text takes --accent-strong, the strong step, on the light desk. */
   .licence-link {
     background: none;
     border: 0;
