@@ -135,10 +135,86 @@ pub fn create_dir_all_durable(dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+/// `fs::rename`, patient on Windows. Every rename in the app goes through it.
+///
+/// Windows will not rename or replace a file that another process holds open
+/// without delete sharing — and on an ordinary Windows machine that other
+/// process is very often not ours: Defender and the search indexer open a file
+/// moments after it is written, to scan it, and hold it for a few
+/// milliseconds. On macOS that is invisible; on Windows it failed a save, an
+/// export or a restore at random with "being used by another process" (os
+/// error 32). Those refusals are transient by nature, so they are retried with
+/// a short backoff for up to two seconds: sharing and lock violations (32, 33)
+/// and access denied (5), which is how the same race reads while the other
+/// handle is being closed. A refusal that is still there after that is
+/// returned as it is. Everywhere else this is exactly `fs::rename`.
+///
+/// The waiting is done off the async runtime's books: most callers are async
+/// commands, and two seconds of `sleep` on a Tokio worker would stall every
+/// other command queued behind it. `block_in_place` hands the worker's other
+/// tasks on before blocking — and only once a refusal has happened, so the
+/// ordinary rename that succeeds first time pays nothing for it.
+pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
+    let (from, to) = (from.as_ref(), to.as_ref());
+    #[cfg(windows)]
+    {
+        use std::time::{Duration, Instant};
+        let retryable = |err: &std::io::Error| matches!(err.raw_os_error(), Some(5 | 32 | 33));
+        match fs::rename(from, to) {
+            Err(err) if retryable(&err) => {}
+            result => return result,
+        }
+        let wait_it_out = || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut delay = Duration::from_millis(10);
+            loop {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_millis(200));
+                match fs::rename(from, to) {
+                    Err(err) if retryable(&err) && Instant::now() < deadline => {}
+                    result => return result,
+                }
+            }
+        };
+        // `block_in_place` exists only on a multi-threaded runtime (the app's);
+        // on a current-thread one — `#[tokio::test]` — or outside any runtime,
+        // waiting in place is the only option, and stalls nothing but that
+        // runtime. (A `LocalSet` would panic here even on a multi-threaded
+        // runtime; nothing in the app runs one.)
+        let multi_threaded = tokio::runtime::Handle::try_current()
+            .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
+        if multi_threaded {
+            tokio::task::block_in_place(wait_it_out)
+        } else {
+            wait_it_out()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(from, to)
+    }
+}
+
 /// fsync one file by path, for callers that produced it some other way.
 pub fn sync_file(path: &Path) -> Result<(), AppError> {
-    fs::File::open(path)?.sync_all()?;
+    open_for_sync(path)?.sync_all()?;
     Ok(())
+}
+
+/// Open an existing file so that `sync_all` may be called on it.
+///
+/// On Unix any descriptor will do, read-only included. Windows is stricter:
+/// `sync_all` is `FlushFileBuffers`, which refuses a handle without write
+/// access — so the read-only open every caller used to make failed with
+/// "Access is denied" (os error 5) on every file, and with it every export,
+/// restore and duplicate that flushes what it copied. Write access without
+/// create or truncate changes nothing about the file.
+pub fn open_for_sync(path: &Path) -> std::io::Result<fs::File> {
+    if cfg!(windows) {
+        fs::OpenOptions::new().write(true).open(path)
+    } else {
+        fs::File::open(path)
+    }
 }
 
 pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), AppError> {
@@ -223,7 +299,7 @@ where
         let _ = fs::remove_file(&tmp_path);
         return Err(err);
     }
-    if let Err(err) = fs::rename(&tmp_path, dest) {
+    if let Err(err) = rename(&tmp_path, dest) {
         let _ = fs::remove_file(&tmp_path);
         return Err(err.into());
     }

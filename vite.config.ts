@@ -73,6 +73,13 @@ export default defineConfig({
   server: {
     port: devPort,
     strictPort: true,
+    watch: {
+      // Not the frontend, and cargo's output is under it. On Windows the
+      // watcher cannot even open a binary the linker or the running app has
+      // locked: `EBUSY` from the watch took the dev server down mid-build and
+      // `pnpm dev` with it. Tauri's own template ignores `src-tauri` for this.
+      ignored: ['**/src-tauri/**', '**/crates/target/**'],
+    },
   },
   build: {
     // macOS ships WKWebView; Windows ships WebView2 (Chromium).

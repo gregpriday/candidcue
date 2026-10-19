@@ -121,7 +121,9 @@ const COMMANDS = registeredCommands();
 const REACHABLE = reachableFromEntries();
 const SOURCES = allSources()
   .filter((path) => REACHABLE.has(path))
-  .map((path) => ({ path, text: readFileSync(path, 'utf8') }));
+  // Forward slashes from here on, on every host: the assertions below match
+  // `/src/stage/` and `lib/start-take.ts`, and Windows paths are backslashed.
+  .map((path) => ({ path: path.replaceAll('\\', '/'), text: readFileSync(path, 'utf8') }));
 
 /**
  * Quoted string literals only — a command NAMED in a doc comment (which this

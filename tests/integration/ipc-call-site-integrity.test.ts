@@ -58,7 +58,9 @@ function sourcesUnder(dir: string): string[] {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) out.push(...sourcesUnder(path));
-    else if (/\.(ts|svelte)$/.test(entry) && !entry.endsWith('.test.ts')) out.push(path);
+    // Forward slashes on every host: the filters and expectations below spell
+    // paths the POSIX way, and `join` hands Windows its backslashes.
+    else if (/\.(ts|svelte)$/.test(entry) && !entry.endsWith('.test.ts')) out.push(path.replaceAll('\\', '/'));
   }
   return out;
 }

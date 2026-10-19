@@ -146,8 +146,14 @@ const ANCHOR_LIVE = {
  * runner that alone has taken 5-7 s against well under a second locally. That
  * is the cost of the real archives above, not a hang, so the budget fits it
  * rather than vitest's 5 s unit-test default.
+ *
+ * Not on Windows. The gate reads ld64 maps — the macOS linker's — of the macOS
+ * universal binary, and these fixtures are built with the `cc` and `ar` that
+ * toolchain provides. Windows has neither, and no Windows build exists for the
+ * gate to vouch for; the release that does run it is the macOS one, and CI's
+ * node tests, this suite among them, run on macOS for every push.
  */
-describe('the copyleft gate', { timeout: 30_000 }, () => {
+describe.skipIf(process.platform === 'win32')('the copyleft gate', { timeout: 30_000 }, () => {
   it('passes when every copyleft object was dead-stripped', () => {
     const dir = workspace();
     const lib = archives(dir, LIB_SPEC);

@@ -160,8 +160,10 @@ test('a refused close says so, and Close Window works again afterwards', async (
   );
   await chooseMenuCommand(page, 'file.close-script');
 
+  // Windows wording on every host: the suite's `Desktop Chrome` device reports
+  // a Windows user agent, and there the remedy is File › Exit (`os-copy.ts`).
   await expect(page.getByRole('alert')).toContainText(
-    'The window could not be closed. Quit CandidCue instead.',
+    'The window could not be closed. Exit CandidCue instead.',
   );
   await expect(collection(page)).toBeVisible();
 

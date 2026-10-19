@@ -77,7 +77,11 @@ The webviews reach nothing remote: the single CSP in
 `src-tauri/tauri.conf.json` gives every window `connect-src 'self' ipc:
 http://ipc.localhost`, `img-src 'self' asset: blob: data:`, `frame-src 'none'`
 and `object-src 'none'`, so no fetch, socket or subresource can name a remote
-origin. That is a statement about fetches and subresources, not about top-level
+origin. On Windows, `src-tauri/tauri.windows.conf.json` adds
+`http://asset.localhost` to the asset-loading directives and nothing else
+(`bundle_config_tests.rs` holds the two equal otherwise). That host is not
+remote: it is how WebView2 spells the asset protocol, served by the app itself
+under the same scope as `asset:`. That is a statement about fetches and subresources, not about top-level
 navigation, which a CSP `connect-src` does not govern.
 
 ### The one fetch in the frontend

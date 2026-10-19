@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import FollowStatePanel from '../../src/control/components/FollowStatePanel.svelte';
 import { createSmoothFollowStore } from '../../src/control/stores/smooth-follow';
 import { defaultFollowingSettings } from '../../src/control/lib/follow-profiles';
+import { osCopy } from '../../src/control/lib/os-copy';
 import type { SmoothFollowState } from '../../src/control/stores/smooth-follow';
 import type { AlignmentSnapshot } from '../../src/shared/contracts';
 
@@ -173,7 +174,10 @@ describe('FollowStatePanel honesty', () => {
       microphoneRefused: true,
     });
     expect(text).toContain('Microphone not allowed');
-    expect(text).toMatch(/System Settings/);
+    // Where it is allowed, in the OS's own words. jsdom names no platform, so
+    // this is the neutral column on every host; what each platform's column
+    // says is pinned in os-copy.test.ts, and this proves the panel shows it.
+    expect(text).toContain(osCopy().micRefusedStatusDetail);
     expect(text).not.toMatch(/another input/i);
     expect(text).not.toMatch(/not the microphone/i);
   });

@@ -252,7 +252,10 @@ function main() {
     const [bin, argv] = step.command;
     process.stdout.write(`→ ${step.name}\n`);
     const started = process.hrtime.bigint();
-    const run = spawnSync(bin, argv, { cwd: ROOT, stdio: 'inherit', shell: false });
+    const run =
+      process.platform === 'win32'
+        ? spawnSync(throughCmd(bin, argv), { cwd: ROOT, stdio: 'inherit', shell: true })
+        : spawnSync(bin, argv, { cwd: ROOT, stdio: 'inherit', shell: false });
     const seconds = Number(process.hrtime.bigint() - started) / 1e9;
 
     const ok = run.status === 0;
@@ -304,4 +307,24 @@ function main() {
   }
 
   console.log('\nrelease:verify PASSED.');
+}
+
+/**
+ * A command line for cmd.exe, which is how a step is started on Windows.
+ *
+ * There `pnpm` is a `pnpm.cmd` shim: a direct spawn finds no `pnpm.exe`, so
+ * every pnpm step failed with ENOENT before it began, and since the fix for
+ * CVE-2024-27980 Node will not spawn a batch file without a shell. cmd.exe
+ * resolves a bare name through PATHEXT, the way a terminal does, and receives
+ * the arguments unquoted: exact for the plain tokens in STEPS, and refused for
+ * anything else rather than reinterpreted. Kept in step with the copy in
+ * generate-notices.mjs, which says more.
+ */
+function throughCmd(command, args) {
+  const tokens = [command, ...args];
+  const unsafe = tokens.find((token) => !/^[\w@+=:,./\\-]+$/.test(token));
+  if (unsafe !== undefined) {
+    throw new Error(`${JSON.stringify(unsafe)} cannot be passed through cmd.exe unquoted`);
+  }
+  return tokens.join(' ');
 }

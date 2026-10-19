@@ -15,6 +15,7 @@ pub mod preferences;
 pub mod present;
 pub mod shutdown;
 pub mod sleep;
+pub mod webview_microphone;
 
 pub use present::{set_control_presenting, ControlPresentationState, PresentMode, ReaderFrame};
 
@@ -285,11 +286,11 @@ pub fn display_topology_hash(
     format!("top-{}", &digest[..16])
 }
 
-fn monitor_topology_hash(monitor: &Monitor) -> String {
+fn monitor_topology_hash(monitor: &Monitor, identity: Option<&str>) -> String {
     let size = monitor.size();
     let position = monitor.position();
     display_topology_hash(
-        monitor.name().map(|n| n.as_str()),
+        identity,
         size.width,
         size.height,
         monitor.scale_factor(),
@@ -298,19 +299,69 @@ fn monitor_topology_hash(monitor: &Monitor) -> String {
     )
 }
 
+/// What a monitor is called: `label` for people, `identity` for fingerprints.
+///
+/// On macOS both are tao's name, `Monitor #<model number>` — the panel's
+/// model, unchanged by which port it is on or how the displays are arranged.
+///
+/// Windows is different. tao names a Windows monitor by its GDI device path,
+/// `\\.\DISPLAY2`, which is handed out in enumeration order: replug the
+/// prompter or reboot and it can come back as `\\.\DISPLAY3`, orphaning the
+/// pin and every rig keyed to it — and it means nothing to a person reading
+/// "Takes open on \\.\DISPLAY2". So there the panel's own EDID supplies both:
+/// the name it gives itself (`DELL U2720Q`) to read, and that name or, on a
+/// panel with none (most laptop panels), its manufacturer and product code
+/// (`LGD05E5`) to identify it by. A panel with neither falls back to tao's
+/// name, which is no worse than before.
+struct MonitorNames {
+    label: Option<String>,
+    identity: Option<String>,
+}
+
+fn monitor_names(monitors: &[Monitor], panels: &panel_size::PanelSizes) -> Vec<MonitorNames> {
+    monitors
+        .iter()
+        .map(|monitor| {
+            #[cfg(target_os = "windows")]
+            {
+                let label = panels.name_for_monitor(monitor);
+                let identity = label
+                    .clone()
+                    .or_else(|| panels.product_for_monitor(monitor))
+                    .or_else(|| monitor.name().cloned());
+                MonitorNames { label, identity }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = panels;
+                MonitorNames {
+                    label: monitor.name().cloned(),
+                    identity: monitor.name().cloned(),
+                }
+            }
+        })
+        .collect()
+}
+
 /// Fingerprints for a whole monitor list. The ordinal can only be assigned
 /// with the full list in hand, so fingerprints are always derived in a batch.
 fn monitor_fingerprints(monitors: &[Monitor]) -> Vec<String> {
+    let names = monitor_names(monitors, &panel_size::PanelSizes::for_naming());
+    fingerprints_from_names(monitors, &names)
+}
+
+fn fingerprints_from_names(monitors: &[Monitor], names: &[MonitorNames]) -> Vec<String> {
     let mut seen: std::collections::HashMap<(String, u32, u32), u32> =
         std::collections::HashMap::new();
     monitors
         .iter()
-        .map(|monitor| {
+        .zip(names)
+        .map(|(monitor, names)| {
             let size = monitor.size();
-            let name = monitor.name().cloned().unwrap_or_default();
-            let counter = seen.entry((name, size.width, size.height)).or_insert(0);
+            let identity = names.identity.clone().unwrap_or_default();
+            let counter = seen.entry((identity, size.width, size.height)).or_insert(0);
             let fingerprint = display_fingerprint(
-                monitor.name().map(|n| n.as_str()),
+                names.identity.as_deref(),
                 size.width,
                 size.height,
                 *counter,
@@ -332,6 +383,7 @@ fn monitor_descriptor(
     primary: bool,
     index: usize,
     fingerprint: String,
+    names: &MonitorNames,
     panel_sizes: &panel_size::PanelSizes,
 ) -> DisplayDescriptor {
     let size = monitor.size();
@@ -339,7 +391,7 @@ fn monitor_descriptor(
     let scale = monitor.scale_factor();
     DisplayDescriptor {
         id: format!("display-{index}"),
-        name: monitor.name().cloned(),
+        name: names.label.clone(),
         physical_position: PhysicalPoint {
             x: position.x,
             y: position.y,
@@ -355,7 +407,7 @@ fn monitor_descriptor(
         },
         primary,
         fingerprint,
-        topology_hash: monitor_topology_hash(monitor),
+        topology_hash: monitor_topology_hash(monitor, names.identity.as_deref()),
         physical_size_mm: panel_sizes.for_monitor(monitor),
     }
 }
@@ -363,9 +415,10 @@ fn monitor_descriptor(
 pub fn list_displays<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<DisplayDescriptor>, AppError> {
     let primary = app.primary_monitor()?;
     let monitors = app.available_monitors()?;
-    let fingerprints = monitor_fingerprints(&monitors);
     // One read of the panels for the whole list — see `PanelSizes`.
     let panel_sizes = panel_size::PanelSizes::snapshot();
+    let names = monitor_names(&monitors, &panel_sizes);
+    let fingerprints = fingerprints_from_names(&monitors, &names);
     Ok(monitors
         .iter()
         .enumerate()
@@ -376,6 +429,7 @@ pub fn list_displays<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<DisplayDescri
                 is_primary,
                 index,
                 fingerprints[index].clone(),
+                &names[index],
                 &panel_sizes,
             )
         })
@@ -692,6 +746,21 @@ pub fn open_stage<R: Runtime>(
         existing.destroy()?;
     }
 
+    /*
+     * Registered BEFORE the window exists, not after.
+     *
+     * The new page announces `stage://listening` once, and `register_stage`
+     * resets that flag along with the rest of the stage's state. Registered
+     * after `build()`, a page quick enough to announce in the gap had its
+     * announcement wiped, and calibration waited for one that had already
+     * happened. On macOS the command ran on the main thread and the page could
+     * not run in that gap; off macOS it is async and nothing guaranteed it. A
+     * build that fails takes the registration back out below. The late close
+     * of the window destroyed above cannot undo this one: `stage_closed` is
+     * qualified by generation.
+     */
+    coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
+
     // Position and size go into the BUILDER, not a post-build set_position:
     // creating a window at the origin and then moving it makes the OS assign it
     // to the wrong screen first, which on mixed-DPI setups bakes in the wrong
@@ -714,16 +783,20 @@ pub fn open_stage<R: Runtime>(
         // Paint the window black before the webview's first frame, so the
         // OS window-show cannot flash white on the way to a black stage.
         .background_color(tauri::window::Color(0, 0, 0, 255))
+        // No shadow on Windows, where an undecorated window that casts one
+        // keeps an invisible frame around its content and so lands offset
+        // from the monitor it is sized to (see `present.rs`, `chrome`).
+        // macOS keeps its default.
+        .shadow(!cfg!(windows))
         .position(position.x as f64 / scale, position.y as f64 / scale)
         .inner_size(size.width as f64 / scale, size.height as f64 / scale)
-        .build()?;
+        .build()
+        .inspect_err(|_| coordinator.stage_closed(generation))?;
 
     // Re-assert in physical units: exact, and immune to the logical rounding
     // above.
     window.set_position(tauri::Position::Physical(position))?;
     window.set_size(tauri::Size::Physical(size))?;
-
-    coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
 
     // Window › Stage is enabled from here on — see `menu::refresh_stage_item`
     // for why the menu cannot learn this from a renderer.

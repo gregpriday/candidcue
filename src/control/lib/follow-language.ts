@@ -12,6 +12,8 @@
  *     "something went wrong" language.
  */
 import type { AlignmentDecision, StageMotionState } from '../../shared/contracts';
+import { osCopy } from './os-copy';
+import type { Platform } from './platform';
 
 /* ---------------------------------------------------------------------------
  * Tracking state (§48 "tracking state in plain language")
@@ -209,8 +211,11 @@ export interface FollowStatus {
  *     — so a resolver that answered "Ready to follow" first would sit there
  *     saying "ready" for the whole take, which is precisely the failure
  *     CCUX-018 exists to remove.
+ *
+ * `platform` names whose words a refused microphone is described in
+ * (`lib/os-copy.ts`) — this window's unless a caller says otherwise.
  */
-export function followStatus(input: FollowStatusInput): FollowStatus {
+export function followStatus(input: FollowStatusInput, platform?: Platform): FollowStatus {
   const { voiceInput } = input;
 
   /*
@@ -230,7 +235,7 @@ export function followStatus(input: FollowStatusInput): FollowStatus {
     if (input.microphoneRefused) {
       return {
         line: 'Microphone not allowed',
-        detail: `${stillMoving}Allow CandidCue in System Settings, then choose Try again.`,
+        detail: `${stillMoving}${osCopy(platform).micRefusedStatusDetail}`,
         tone: 'warning',
       };
     }

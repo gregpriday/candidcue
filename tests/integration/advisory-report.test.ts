@@ -14,10 +14,11 @@
  * exception stops covering a finding the moment the production scan reports it.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { fakeTool } from '../helpers/fake-tool';
 
 const REPO_ROOT = resolve(__dirname, '../..');
 const SCRIPT = join(REPO_ROOT, 'scripts/report-advisories.mjs');
@@ -282,10 +283,8 @@ describe('the advisory report', () => {
      * reported failure into a failed publish.
      */
     const bin = scratch();
-    writeFileSync(join(bin, 'cargo'), '#!/bin/sh\necho "error: could not fetch advisory database" >&2\nexit 1\n');
-    writeFileSync(join(bin, 'pnpm'), `#!/bin/sh\necho '${JSON.stringify(pnpmReport())}'\n`);
-    chmodSync(join(bin, 'cargo'), 0o755);
-    chmodSync(join(bin, 'pnpm'), 0o755);
+    fakeTool(bin, 'cargo', "console.error('error: could not fetch advisory database');\nprocess.exit(1);\n");
+    fakeTool(bin, 'pnpm', `console.log(${JSON.stringify(JSON.stringify(pnpmReport()))});\n`);
     const out = scratch();
 
     const result = spawnSync(

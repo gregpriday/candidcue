@@ -81,7 +81,7 @@ On particular components:
 
 - **PortAudio** — In the sherpa-onnx archive, but not linked: sherpa-onnx-sys does not put it on CandidCue's link line, and CandidCue captures audio in the renderer. It is listed because it is in what the build downloads. The PortAudio community's requests that accompany its licence are, in its own words, non-binding.
 
-- **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is a measurement, not an argument: the linker does load most of its objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them. No eSpeak NG code or data is in the binary, and `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships.
+- **eSpeak NG** — The one that matters. sherpa-onnx-sys puts -lespeak-ng on the link line of every build (SHERPA_ONNX_STATIC_LIBS in its build.rs) and there is no feature or env var that removes it; the `shared` alternative is worse, because the sherpa-onnx dylib genuinely contains this code. k2-fsa acknowledge the incompatibility with their own Apache-2.0 and plan to drop espeak-ng and piper-phonemize in a 2.0. The source-build mitigation, -DSHERPA_ONNX_ENABLE_TTS=OFF, is unavailable to us because we consume their prebuilt archive. So the position is a measurement, not an argument: the linker does load most of its objects, because sherpa-onnx's C API refers to its text-to-speech code, and dead-stripping then removes every one of them. No eSpeak NG code or data is in the macOS binary, and `verify-no-copyleft-objects.mjs` checks that against the linker map of each architecture a release ships. Windows is different, which is why no Windows build is released: MSVC keeps the C++ static initialisers of the text-to-speech objects it loads, those reach eSpeak NG, and a Windows binary linked from the prebuilt archive contains it. A Windows build can be distributed once it links a sherpa-onnx built with -DSHERPA_ONNX_ENABLE_TTS=OFF, or on GPL-3.0 terms.
 
 - **kaldi-decoder** — Decoding graphs and search.
 
@@ -89,13 +89,13 @@ On particular components:
 
 - **kaldifst** — Kaldi's finite-state-transducer utilities on top of OpenFst. kaldi-decoder fetches it; sherpa-onnx renames the library.
 
-- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
+- **piper-phonemize** — Declares MIT. The reason it is often called GPL is that it CALLS espeak_TextToPhonemesWithTerminator, so a binary containing both piper's code and eSpeak's is distributed on eSpeak's terms. That is a statement about a binary, not about piper — and `verify-no-copyleft-objects.mjs` measures which binary we have. In CandidCue's macOS binary, two of piper's own symbols survive on arm64 (its translation-unit static initialiser and piper::DEFAULT_PHONEME_MAP, 416 bytes), three on x86_64, and NO eSpeak code does on either. So piper's own MIT terms are the operative ones there. A Windows binary keeps eSpeak NG beside it (see eSpeak NG), which is one reason no Windows build is released. `copyleftIfLinkedWith` is what makes that conditional machine-checked rather than an argument somebody remembers: the day eSpeak or ucd code appears alongside it, this becomes a failure.
 
 - **sherpa-onnx** — The inference runtime CandidCue calls. Its own licence text also travels with each installed model's ATTRIBUTION.md.
 
 - **simple-sentencepiece** — Tokenisation. The library is called ssentencepiece; the project is simple-sentencepiece.
 
-- **ucd-tools** — The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way.
+- **ucd-tools** — The Unicode character-database TOOLS, not the UCD data. The data tables are Unicode-DFS-2016; Reece Dunn's wrapper — which is what libucd.a is — is GPL-3.0-or-later. It arrives with eSpeak NG and goes out the same way: dead-stripped on macOS, kept in a Windows binary (see eSpeak NG).
 
 The model weights are **not** part of this application. They are downloaded
 after installation, at your request, and each carries its own attribution and
@@ -111,7 +111,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-324 crates across both workspaces, with the SPDX expression each
+349 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -345,6 +345,7 @@ declares in its own manifest.
 | slab | 0.4.12 | MIT |
 | smallvec | 1.15.2 | MIT OR Apache-2.0 |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 |
+| softbuffer | 0.4.8 | MIT OR Apache-2.0 |
 | spin | 0.9.9 | MIT |
 | sqlx | 0.8.6 | MIT OR Apache-2.0 |
 | sqlx-core | 0.8.6 | MIT OR Apache-2.0 |
@@ -421,8 +422,32 @@ declares in its own manifest.
 | want | 0.3.1 | MIT |
 | web_atoms | 0.2.5 | MIT OR Apache-2.0 |
 | webpki-roots | 1.0.9 | CDLA-Permissive-2.0 |
+| webview2-com | 0.38.2 | MIT |
+| webview2-com-macros | 0.8.1 | MIT |
+| webview2-com-sys | 0.38.2 | MIT |
 | weezl | 0.1.12 | MIT OR Apache-2.0 |
+| winapi-util | 0.1.11 | Unlicense OR MIT |
 | window-vibrancy | 0.6.0 | Apache-2.0 OR MIT |
+| windows | 0.61.3 | MIT OR Apache-2.0 |
+| windows-collections | 0.2.0 | MIT OR Apache-2.0 |
+| windows-core | 0.61.2 | MIT OR Apache-2.0 |
+| windows-future | 0.2.1 | MIT OR Apache-2.0 |
+| windows-implement | 0.60.2 | MIT OR Apache-2.0 |
+| windows-interface | 0.59.3 | MIT OR Apache-2.0 |
+| windows-link | 0.1.3 | MIT OR Apache-2.0 |
+| windows-link | 0.2.1 | MIT OR Apache-2.0 |
+| windows-numerics | 0.2.0 | MIT OR Apache-2.0 |
+| windows-result | 0.3.4 | MIT OR Apache-2.0 |
+| windows-strings | 0.4.2 | MIT OR Apache-2.0 |
+| windows-sys | 0.59.0 | MIT OR Apache-2.0 |
+| windows-sys | 0.60.2 | MIT OR Apache-2.0 |
+| windows-sys | 0.61.2 | MIT OR Apache-2.0 |
+| windows-targets | 0.52.6 | MIT OR Apache-2.0 |
+| windows-targets | 0.53.5 | MIT OR Apache-2.0 |
+| windows-threading | 0.1.0 | MIT OR Apache-2.0 |
+| windows-version | 0.1.7 | MIT OR Apache-2.0 |
+| windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
+| windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 |
 | winnow | 1.0.4 | MIT |
 | writeable | 0.6.3 | Unicode-3.0 |
 | wry | 0.55.1 | Apache-2.0 OR MIT |

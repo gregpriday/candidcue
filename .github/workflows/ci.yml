@@ -219,3 +219,53 @@ jobs:
         run: >
           node scripts/verify-no-model-weights.mjs
           src-tauri/target/release/bundle/macos/CandidCue.app
+
+  # Windows, end to end: the same suites, on the platform where the Windows-only
+  # code paths (`cfg(windows)` FFI, the WebView2 microphone grant, the window
+  # chrome and menu arms) actually compile — Clippy on macOS never sees them —
+  # and where the filesystem refuses what macOS allows (renaming an open file,
+  # flushing a read-only handle). Then the installer, unsigned, to prove it
+  # assembles. Line endings are pinned by `.gitattributes`, so the checkout is
+  # LF here too.
+  windows:
+    name: Windows (tests, Clippy, installer)
+    runs-on: windows-2025
+    needs: gates
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          lfs: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          run_install: false
+
+      - name: Install the pinned toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            src-tauri
+            crates
+
+      # The same empty folder the macOS Rust job drops; see the comment there.
+      - name: Drop the empty sherpa-onnx downloads the cache restores
+        shell: bash
+        run: rm -rf src-tauri/target/sherpa-onnx-prebuilt crates/target/sherpa-onnx-prebuilt
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck, both vitest projects, both Rust workspaces and Clippy
+        run: >
+          node scripts/release-verify.mjs
+          --only='typecheck,node tests,dom tests,rust tests (app),rust tests (alignment),clippy (app),clippy (alignment)'
+
+      - name: Build the installer
+        # NSIS only: the per-user installer is the Windows artifact, and an MSI
+        # would spend minutes proving the same compile again.
+        run: pnpm tauri build --bundles nsis

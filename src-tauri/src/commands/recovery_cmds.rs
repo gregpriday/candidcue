@@ -189,7 +189,7 @@ pub async fn restore_database_backup(
             quarantine.display()
         )));
     }
-    std::fs::rename(&staging, &live)?;
+    crate::util::rename(&staging, &live)?;
     crate::util::sync_dir(paths.root())?;
 
     Ok(RecoveryOutcome {

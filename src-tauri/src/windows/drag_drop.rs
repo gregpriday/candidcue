@@ -548,7 +548,11 @@ mod tests {
         // turn the remainder into a second link.
         assert_eq!(alt_text_from(Path::new("/tmp/a]x(evil).png")), "a x(evil)");
         assert_eq!(alt_text_from(Path::new("/tmp/[bracket].png")), "bracket");
-        assert_eq!(alt_text_from(Path::new("/tmp/back\\slash.png")), "back slash");
+        // A backslash is a separator on Windows, so no file there can be named
+        // with one — this case exists only where a name can contain it.
+        if cfg!(not(windows)) {
+            assert_eq!(alt_text_from(Path::new("/tmp/back\\slash.png")), "back slash");
+        }
     }
 
     #[test]

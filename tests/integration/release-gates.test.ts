@@ -39,6 +39,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { fakeTool, homeAt } from '../helpers/fake-tool';
 
 const REPO_ROOT = resolve(__dirname, '../..');
 const VERSION_SCRIPT = join(REPO_ROOT, 'scripts/version.mjs');
@@ -807,29 +808,45 @@ describe('the notices gate works on a runner that has never unpacked a crate', (
     'src-tauri/models/catalogue.json',
   ];
 
-  const FAKE_CARGO = `#!/bin/sh
-[ "$1" = tree ] || { echo "unexpected: cargo $*" >&2; exit 2; }
-if [ "$FAKE_TREE" = fail ]; then
-  echo 'error: failed to download from the registry' >&2
-  exit 101
-fi
-[ "$FAKE_TREE" = empty ] && exit 0
-if [ "$FAKE_TREE" = unpack ]; then
-  dir="$CARGO_HOME/registry/src/index.test/notices-fixture-$FAKE_CRATE_VERSION"
-  mkdir -p "$dir"
-  cat > "$dir/Cargo.toml" <<EOF
-[package]
-name = "notices-fixture"
-version = "$FAKE_CRATE_VERSION"
-license = "MIT"
-EOF
-fi
-echo "notices-fixture v$FAKE_CRATE_VERSION"
+  /*
+   * Module source for `fakeTool`, so the stand-ins run wherever the gates do.
+   * Plain concatenation inside, so nothing is interpolated by this file's own
+   * template literals. A relative CARGO_HOME resolves against the directory
+   * the fake runs in, as it would for cargo.
+   */
+  const FAKE_CARGO = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const args = process.argv.slice(2);
+if (args[0] !== 'tree') {
+  console.error('unexpected: cargo ' + args.join(' '));
+  process.exit(2);
+}
+const { FAKE_TREE: tree, FAKE_CRATE_VERSION: version, CARGO_HOME: home } = process.env;
+if (tree === 'fail') {
+  console.error('error: failed to download from the registry');
+  process.exit(101);
+}
+if (tree === 'empty') process.exit(0);
+if (tree === 'unpack') {
+  const dir = join(home, 'registry', 'src', 'index.test', 'notices-fixture-' + version);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, 'Cargo.toml'),
+    '[package]\\nname = "notices-fixture"\\nversion = "' + version + '"\\nlicense = "MIT"\\n',
+  );
+}
+console.log('notices-fixture v' + version);
 `;
 
-  const FAKE_PNPM = `#!/bin/sh
-[ "$1" = licenses ] || { echo "unexpected: pnpm $*" >&2; exit 2; }
-echo '{}'
+  const FAKE_PNPM = `
+const args = process.argv.slice(2);
+if (args[0] !== 'licenses') {
+  console.error('unexpected: pnpm ' + args.join(' '));
+  process.exit(2);
+}
+console.log('{}');
 `;
 
   type Repo = { dir: string; script: string; bin: string; notices: string };
@@ -838,8 +855,8 @@ echo '{}'
     const dir = scratchRepo(NEEDS);
     const bin = join(dir, 'fake-bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'cargo'), FAKE_CARGO, { mode: 0o755 });
-    writeFileSync(join(bin, 'pnpm'), FAKE_PNPM, { mode: 0o755 });
+    fakeTool(bin, 'cargo', FAKE_CARGO);
+    fakeTool(bin, 'pnpm', FAKE_PNPM);
     return {
       dir,
       script: join(dir, 'scripts/generate-notices.mjs'),
@@ -862,10 +879,10 @@ echo '{}'
       PATH: `${repo.bin}${delimiter}${process.env.PATH ?? ''}`,
       // A new, empty CARGO_HOME for every run unless one is named: a clean runner.
       CARGO_HOME: fake.cargoHome ?? mkdtempSync(join(repo.dir, 'cargo-home-')),
-      // And a HOME with no `.cargo` in it. The old generator ignored CARGO_HOME
+      // And a home with no `.cargo` in it. The old generator ignored CARGO_HOME
       // and read `~/.cargo`, so on a developer machine — where that is full —
       // a test of it would quietly be a test of the developer's registry.
-      HOME: mkdtempSync(join(repo.dir, 'home-')),
+      ...homeAt(mkdtempSync(join(repo.dir, 'home-'))),
       FAKE_TREE: fake.tree ?? 'unpack',
       FAKE_CRATE_VERSION: fake.version ?? '1.0.0',
     });
@@ -1204,44 +1221,68 @@ echo '{}'
  * developer's home directory 2,107 times, and every machine that regenerated
  * them rewrote every one of those lines. The stand-in `pnpm` and `cargo` print
  * the shapes the real ones print, in the order cargo puts `(proc-macro)` before
- * a source, and name the checkout the way a process running in it sees it
- * (`pwd -P`, which on macOS is `/private/var/…` for a temporary directory node
- * names `/var/…`). Each checkout sits inside its own HOME, which is the shape
- * of a developer machine and of the release runner.
+ * a source, with the platform's own separators, and name the checkout the way
+ * a process running in it sees it — resolved, as `pwd -P` would, which on
+ * macOS is `/private/var/…` for a temporary directory node names `/var/…`.
+ * Each checkout sits inside its own home directory, which is the shape of a
+ * developer machine and of the release runner.
  */
 describe('the SBOMs a release publishes name nothing on the machine that wrote them', () => {
   const SBOM_SCRIPT = 'scripts/verify-supply-chain.mjs';
   const OUTPUTS = ['sbom/javascript.json', 'sbom/rust-app.txt', 'sbom/rust-alignment.txt'];
 
-  const FAKE_PNPM = `#!/bin/sh
-[ "$1" = list ] || { echo "unexpected: pnpm $*" >&2; exit 2; }
-root=$(pwd -P)
-from=left-pad
-dep="$root/node_modules/.pnpm/left-pad@1.3.0/node_modules/left-pad"
-[ "$FAKE_OUTSIDE" = pnpm ] && dep=/opt/vendored/left-pad
-[ "$FAKE_OUTSIDE" = pnpm-embedded ] && from="left-pad@file:$HOME/left-pad.tgz"
-cat <<EOF
-[{"name":"fixture","version":"1.0.0","path":"$root","private":true,"dependencies":{
-  "left-pad":{"from":"$from","version":"1.3.0","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz","path":"$dep"},
-  "local-lib":{"from":"local-lib","version":"link:$root/packages/local-lib","path":"$root/packages/local-lib"}}}]
-EOF
+  /* Module source for `fakeTool`; plain concatenation inside, as above. */
+  const FAKE_PNPM = `
+import { realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const args = process.argv.slice(2);
+if (args[0] !== 'list') {
+  console.error('unexpected: pnpm ' + args.join(' '));
+  process.exit(2);
+}
+const root = realpathSync.native(process.cwd());
+let from = 'left-pad';
+let dep = join(root, 'node_modules', '.pnpm', 'left-pad@1.3.0', 'node_modules', 'left-pad');
+if (process.env.FAKE_OUTSIDE === 'pnpm') dep = '/opt/vendored/left-pad';
+if (process.env.FAKE_OUTSIDE === 'pnpm-embedded') from = 'left-pad@file:' + homedir() + '/left-pad.tgz';
+const local = join(root, 'packages', 'local-lib');
+console.log(JSON.stringify([{
+  name: 'fixture', version: '1.0.0', path: root, private: true, dependencies: {
+    'left-pad': {
+      from, version: '1.3.0',
+      resolved: 'https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz', path: dep,
+    },
+    'local-lib': { from: 'local-lib', version: 'link:' + local, path: local },
+  },
+}]));
 `;
 
-  const FAKE_CARGO = `#!/bin/sh
-[ "$1" = tree ] || { echo "unexpected: cargo $*" >&2; exit 2; }
-root=$(pwd -P)
-case "$*" in
-  *src-tauri/Cargo.toml*) echo "candidcue v1.0.0 ($root/src-tauri)" ;;
-  *) echo "cc-bench v0.1.0 ($root/crates/cc-bench)" ;;
-esac
-echo "cc-align v0.1.0 ($root/crates/cc-align)"
-echo "cc-macros v0.1.0 (proc-macro) ($root/crates/cc-macros)"
-echo "serde_derive v1.0.0 (proc-macro)"
-echo "serde_derive v1.0.0 (proc-macro)"
-echo "git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)"
-echo "[build-dependencies]"
-[ "$FAKE_OUTSIDE" = cargo ] && echo "vendored v0.1.0 (/opt/vendored)"
-exit 0
+  const FAKE_CARGO = `
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
+
+const args = process.argv.slice(2);
+if (args[0] !== 'tree') {
+  console.error('unexpected: cargo ' + args.join(' '));
+  process.exit(2);
+}
+const root = realpathSync.native(process.cwd());
+const at = (...parts) => '(' + join(root, ...parts) + ')';
+const lines = [
+  args.join(' ').includes('src-tauri/Cargo.toml')
+    ? 'candidcue v1.0.0 ' + at('src-tauri')
+    : 'cc-bench v0.1.0 ' + at('crates', 'cc-bench'),
+  'cc-align v0.1.0 ' + at('crates', 'cc-align'),
+  'cc-macros v0.1.0 (proc-macro) ' + at('crates', 'cc-macros'),
+  'serde_derive v1.0.0 (proc-macro)',
+  'serde_derive v1.0.0 (proc-macro)',
+  'git-dep v0.1.0 (https://github.com/example/git-dep#0123abcd)',
+  '[build-dependencies]',
+];
+if (process.env.FAKE_OUTSIDE === 'cargo') lines.push('vendored v0.1.0 (/opt/vendored)');
+console.log(lines.join('\\n'));
 `;
 
   function scratchCheckout(name: string) {
@@ -1252,8 +1293,8 @@ exit 0
     cpSync(join(REPO_ROOT, SBOM_SCRIPT), join(dir, SBOM_SCRIPT));
     const bin = join(home, 'fake-bin');
     mkdirSync(bin);
-    writeFileSync(join(bin, 'pnpm'), FAKE_PNPM, { mode: 0o755 });
-    writeFileSync(join(bin, 'cargo'), FAKE_CARGO, { mode: 0o755 });
+    fakeTool(bin, 'pnpm', FAKE_PNPM);
+    fakeTool(bin, 'cargo', FAKE_CARGO);
     return { home, dir, bin };
   }
 
@@ -1263,7 +1304,7 @@ exit 0
   ) {
     return run(join(via, SBOM_SCRIPT), ['sbom'], via, {
       PATH: `${checkout.bin}${delimiter}${process.env.PATH ?? ''}`,
-      HOME: checkout.home,
+      ...homeAt(checkout.home),
       FAKE_OUTSIDE: outside,
       ...env,
     });
@@ -1318,7 +1359,9 @@ exit 0
      */
     const checkout = scratchCheckout('candidcue');
     const linked = join(checkout.home, 'linked');
-    symlinkSync(checkout.dir, linked);
+    // A junction on Windows, which needs no symlink privilege and which Node
+    // resolves exactly as it does a symlink. The type is ignored elsewhere.
+    symlinkSync(checkout.dir, linked, 'junction');
 
     const result = writeSboms(checkout, { via: linked, env: { NODE_OPTIONS: '--preserve-symlinks-main' } });
     expect(result.status, result.output).toBe(0);

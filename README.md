@@ -1,10 +1,10 @@
 # CandidCue
 
-A voice-following teleprompter for macOS. Write your script in Markdown, press
-Present, and read. CandidCue listens with a speech recogniser that runs on your
-Mac, works out where you are in the script, and scrolls to keep your next words
-in the reading band. Ad-lib, pause, or start a sentence over, and it waits for
-you rather than running ahead.
+A voice-following teleprompter for macOS and Windows. Write your script in
+Markdown, press Present, and read. CandidCue listens with a speech recogniser
+that runs on your computer, works out where you are in the script, and scrolls
+to keep your next words in the reading band. Ad-lib, pause, or start a
+sentence over, and it waits for you rather than running ahead.
 
 It is free and open source, built for recording videos on a prompter rig (an
 Elgato Prompter or any display behind glass), and it works in an ordinary
@@ -48,7 +48,9 @@ when it lands.
 
 ## Requirements
 
-- macOS 12 or later, Apple Silicon or Intel
+- macOS 12 or later, Apple Silicon or Intel; or Windows 11, 64-bit (x64).
+  Windows 10 should work — it has the same WebView2 runtime, which the
+  installer fetches where it is missing — but is not tested.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following
@@ -64,6 +66,11 @@ You need Node 26.4 (`.nvmrc`), pnpm 10 and the Rust toolchain pinned in
 `rust-toolchain.toml`. `pnpm dev` starts the app on the first free port from
 1420.
 
+On Windows you also need the Visual Studio Build Tools with the "Desktop
+development with C++" workload (the MSVC linker and Windows SDK). Everything
+else is the same: `pnpm install`, `pnpm dev`, and `pnpm tauri build` produces
+the NSIS installer (`src-tauri/tauri.windows.conf.json` sets the target).
+
 The speech model is not in the repository or the app bundle. Install it from
 the Welcome screen or **Settings › Speech**. To skip that download while
 developing:
@@ -72,6 +79,10 @@ developing:
 pnpm models:fetch                                   # ~161 MB into src-tauri/models/
 export CANDIDCUE_MODELS_DIR="$PWD/src-tauri/models"
 ```
+
+`models:fetch` is a POSIX shell script. On Windows, install the model from the
+app instead; `CANDIDCUE_MODELS_DIR` can then point at the copy it keeps in
+`%APPDATA%\com.candidcue.app\models`.
 
 Then open the sample script from the Welcome screen and read it aloud. It tells
 you what to watch for.
@@ -101,9 +112,10 @@ bench/         replay corpora (Git LFS) and benchmark results
 style is single quotes and no Prettier. Please don't run `cargo fmt`; the tree
 predates it and it would rewrite unrelated files.
 
-No automated test can drive the packaged app (Apple ships no WebDriver for
-WKWebView), so a change to the live follow loop also needs a real take with a
-real microphone.
+The browser journeys exercise the frontend against the Vite server, not the
+packaged app — nothing here drives that (on macOS nothing can: Apple ships no
+WebDriver for WKWebView) — so a change to the live follow loop also needs a
+real take with a real microphone.
 
 ### Branches
 

@@ -205,7 +205,11 @@ function collect(scan) {
   }
 
   const [command, ...args] = scan.command;
-  const result = spawnSync(command, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const settings = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+  const result =
+    process.platform === 'win32'
+      ? spawnSync(throughCmd(command, args), { ...settings, shell: true })
+      : spawnSync(command, args, settings);
   const stdout = result.stdout ?? '';
   const stderr = result.error ? `could not run ${command}: ${result.error.message}` : (result.stderr ?? '');
   // Never an empty file: the publish job attaches every file in provenance/ to
@@ -216,6 +220,26 @@ function collect(scan) {
     writeFileSync(resolve(options.save, scan.saved), stdout);
   }
   return { stdout, stderr };
+}
+
+/**
+ * A command line for cmd.exe, which is how a scanner is reached on Windows.
+ *
+ * There `pnpm` is a `pnpm.cmd` shim: a direct spawn finds no `pnpm.exe`, so the
+ * pnpm scan failed with ENOENT before pnpm ran, and since the fix for
+ * CVE-2024-27980 Node will not spawn a batch file without a shell. cmd.exe
+ * resolves a bare name through PATHEXT, the way a terminal does, and receives
+ * the arguments unquoted: exact for the plain tokens in SCANS, and refused for
+ * anything else rather than reinterpreted. Kept in step with the copy in
+ * generate-notices.mjs, which says more.
+ */
+function throughCmd(command, args) {
+  const tokens = [command, ...args];
+  const unsafe = tokens.find((token) => !/^[\w@+=:,./\\-]+$/.test(token));
+  if (unsafe !== undefined) {
+    throw new Error(`${JSON.stringify(unsafe)} cannot be passed through cmd.exe unquoted`);
+  }
+  return tokens.join(' ');
 }
 
 function scanOne(scan) {

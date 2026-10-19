@@ -70,6 +70,7 @@
   } from './lib/app-lifecycle';
 import { rememberReaderFrame } from './lib/reader-frame';
   import { emitShortcut, installShortcuts, onShortcut } from './lib/shortcuts';
+  import { osCopy } from './lib/os-copy';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
   import { describeError, errorCode } from './services/errors';
@@ -1332,7 +1333,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
             to it — repeating the advice underneath, hedged with "if it happens
             again", contradicts the copy it sits below.
           -->
-          <p class="boot-failure-note">Quit CandidCue and open it again.</p>
+          <p class="boot-failure-note">{osCopy().quit} CandidCue and open it again.</p>
         </section>
       {/if}
     </div>

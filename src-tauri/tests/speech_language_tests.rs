@@ -35,6 +35,18 @@ use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_K
 use tauri::webview::InvokeRequest;
 use tauri::{Manager as _, WebviewWindow, WebviewWindowBuilder};
 
+/// The URL the app's own pages are served from, which the ACL checks every
+/// invoke against: `tauri://localhost` on macOS and Linux, and
+/// `http://tauri.localhost` on Windows, where WebView2 cannot register a custom
+/// scheme and Tauri serves the app over HTTP instead. An invoke from anything
+/// else is a REMOTE caller and is refused before the command runs — which is
+/// how every test here failed on Windows with "not allowed".
+const APP_URL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
+
 struct Harness {
     _dir: tempfile::TempDir,
     app: tauri::App<MockRuntime>,
@@ -148,7 +160,7 @@ fn invoke_from(
             cmd: command.into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: "tauri://localhost".parse().expect("url"),
+            url: APP_URL.parse().expect("url"),
             body: InvokeBody::Json(args),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),

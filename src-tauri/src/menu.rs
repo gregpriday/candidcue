@@ -232,6 +232,38 @@ mod keys {
     pub const LINK: &str = "CmdOrCtrl+K";
 }
 
+/// Where the menu lives.
+///
+/// macOS: the application, which is the only place a macOS menu can live.
+///
+/// Windows and Linux: the CONTROL window, and only that window. A menu bar
+/// there is part of a window's frame, and `AppHandle::set_menu` gives the
+/// app-wide menu to every window that exists — and, through
+/// `WebviewWindowBuilder`, to every window created afterwards. The stage, the
+/// "which display is this?" cards and Settings each grew a full
+/// File/Edit/Insert/View bar: across the top of the prompter glass, inside a
+/// 2.5-second identify card, and over a preferences window that answers three
+/// of its commands. Attaching to control alone leaves every later window
+/// without one. The command routing below is unchanged — events from a window
+/// menu arrive at the same `on_menu_event`, and the items are the same handles
+/// [`apply_state`] writes to.
+fn attach(app: &AppHandle, menu: Menu<Wry>) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        app.set_menu(menu).map(|_| ())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        match app.get_webview_window(CONTROL_LABEL) {
+            Some(control) => control.set_menu(menu).map(|_| ()),
+            None => {
+                tracing::error!("there is no control window to carry the menu");
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Build and install the application menu.
 ///
 /// Called from `setup`, after the control window exists. A failure is logged and
@@ -243,7 +275,7 @@ pub fn install(app: &AppHandle) {
     app.manage(MenuRegistry::default());
     match build(app) {
         Ok(menu) => {
-            if let Err(err) = app.set_menu(menu) {
+            if let Err(err) = attach(app, menu) {
                 tracing::error!(error = %err, "the application menu could not be installed");
             }
         }

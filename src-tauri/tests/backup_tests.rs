@@ -41,6 +41,36 @@ fn create_input(title: &str, source: &str) -> CreateScriptInput {
         .expect("create input")
 }
 
+/// Close the pool, and wait until SQLite has really let go of the database.
+///
+/// `close()` can return while a connection that was on its way back to the
+/// pool is still being closed by a task the runtime has not run yet — and
+/// `#[tokio::test]` is a single-threaded runtime, so that task runs only when
+/// the test yields. On macOS nothing notices: a file can be renamed while it
+/// is open. Windows refuses, because SQLite opens its files without delete
+/// sharing, so the moves these tests make next — standing in for a later
+/// launch, when no process holds the file — failed at random with "being used
+/// by another process" (os error 32). This yields until the database can be
+/// opened exclusively, which is the state a fresh process starts in.
+async fn close_fully(pool: &sqlx::SqlitePool, dir: &Path) {
+    pool.close().await;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let database = dir.join("candidcue.sqlite3");
+        for _ in 0..500 {
+            match fs::OpenOptions::new().read(true).share_mode(0).open(&database) {
+                Ok(_) => return,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        panic!("the database was still open five seconds after its pool closed");
+    }
+    #[cfg(not(windows))]
+    let _ = dir;
+}
+
 /// Hex → bytes, for forging a `_sqlx_migrations` checksum.
 fn hex_bytes(hex: &str) -> Vec<u8> {
     (0..hex.len())
@@ -159,7 +189,7 @@ async fn a_failed_database_snapshot_produces_an_incomplete_export() {
     repo::create_script(&h.pool, &h.paths, create_input("Opening", "# Opening"))
         .await
         .expect("create");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let dest = tempfile::tempdir().expect("dest");
     let result = backup::export_all_data(&h.pool, &h.paths, dest.path())
@@ -276,7 +306,7 @@ async fn a_restore_is_scheduled_and_applied_at_the_next_launch() {
     );
 
     // Destroy the live state as thoroughly as a user could, between launches.
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
     fs::remove_dir_all(h.paths.scripts_dir()).expect("wipe scripts");
     fs::remove_file(h.dir.path().join("candidcue.sqlite3")).ok();
 
@@ -359,7 +389,7 @@ async fn a_restore_refuses_an_incomplete_export_before_touching_anything() {
     repo::create_script(&h.pool, &h.paths, create_input("Live", "# Live\n\nStill here."))
         .await
         .expect("create");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // Produce a genuinely incomplete export (closed pool ⇒ no database).
     let dest = tempfile::tempdir().expect("dest");
@@ -490,7 +520,7 @@ async fn applying_a_restore_keeps_the_state_it_replaced() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let previous = backup::apply_pending_restore(&h.paths)
         .await
@@ -555,7 +585,7 @@ async fn an_interrupted_restore_is_resumed_rather_than_forgotten() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let marker = h.dir.path().join("restore-pending.json");
     assert!(marker.exists(), "scheduling leaves a marker");
@@ -588,7 +618,7 @@ async fn a_restore_that_cannot_succeed_gives_up_rather_than_looping() {
      * after three the marker is retired with an error naming where the data is.
      */
     let h = harness().await;
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let marker = h.dir.path().join("restore-pending.json");
     fs::write(
@@ -668,7 +698,7 @@ async fn a_rebuild_moves_the_database_aside_and_never_deletes_it() {
     repo::create_script(&h.pool, &h.paths, create_input("Kept", "# Kept\n\nBody."))
         .await
         .expect("create");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let quarantine = backup::rebuild_database_index(&h.paths).await.expect("rebuild");
 
@@ -818,7 +848,7 @@ async fn a_rebuild_keeps_names_trash_revisions_and_images() {
         .execute(&h.pool)
         .await
         .expect("age the trash");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     backup::rebuild_database_index(&h.paths).await.expect("rebuild");
     assert!(
@@ -915,7 +945,7 @@ async fn a_rebuild_interrupted_before_reading_names_reads_them_on_the_next_launc
     let created = repo::create_script(&h.pool, &h.paths, create_input("Interrupted", "Body."))
         .await
         .expect("create");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let quarantine = h.paths.quarantine_dir().join("pre-rebuild-interrupted");
     let database = quarantine.join("candidcue.sqlite3");
@@ -948,7 +978,15 @@ async fn a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry() {
     let stuck = repo::create_script(&h.pool, &h.paths, create_input("Stuck for now", "Later."))
         .await
         .expect("create");
-    h.pool.close().await;
+    // Both names into the main file before the move: a close still in flight
+    // on sqlx's worker thread would otherwise be checkpointing the WAL while
+    // the rebuild moves it, and the quarantined pair could miss a name.
+    let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&h.pool)
+        .await
+        .expect("checkpoint");
+    assert_eq!(busy, 0);
+    close_fully(&h.pool, h.dir.path()).await;
     backup::rebuild_database_index(&h.paths).await.expect("rebuild");
 
     let canonical = h.paths.canonical_file(&script_id(&stuck.id));
@@ -995,7 +1033,17 @@ async fn a_rebuild_over_an_unreadable_database_names_scripts_from_their_own_text
     )
     .await
     .expect("create");
-    h.pool.close().await;
+    // Into the main file now, with the WAL emptied: sqlx closes on a worker
+    // thread, and a close still in flight checkpoints whatever the WAL holds
+    // back into the main file — over the garbage written below. On Windows,
+    // where the close is slower, that put the real script back every time and
+    // the "unreadable" database was salvaged perfectly.
+    let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&h.pool)
+        .await
+        .expect("checkpoint");
+    assert_eq!(busy, 0);
+    close_fully(&h.pool, h.dir.path()).await;
     for suffix in ["-wal", "-shm"] {
         let _ = fs::remove_file(h.dir.path().join(format!("candidcue.sqlite3{suffix}")));
     }
@@ -1088,7 +1136,7 @@ async fn a_rescued_copy_says_which_folder_is_which_script() {
     repo::trash_script(&h.pool, &ScriptLocks::default(), &script_id(&old.id), old.script_revision)
         .await
         .expect("trash");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let dest = tempfile::tempdir().expect("dest");
     let rescue = |name: &str| dest.path().join(name);
@@ -1713,7 +1761,7 @@ async fn an_old_export_restores_and_is_scrubbed_on_the_next_launch() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("an old export still restores");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
@@ -1756,7 +1804,7 @@ async fn an_interrupted_scrub_is_finished_on_the_next_launch() {
         .await
         .expect("checkpoint");
     assert_eq!(busy, 0);
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
     assert!(
         contains(&fs::read(h.dir.path().join("candidcue.sqlite3")).expect("db"), RETAINED_WORDS),
         "the freed words must be on disk before the retry, or it proves nothing"
@@ -2153,7 +2201,7 @@ async fn an_export_made_before_display_profiles_went_still_restores() {
     backup::restore_all_data(&h.paths, export_root)
         .await
         .expect("a pre-#232 export still restores");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
@@ -2274,7 +2322,7 @@ async fn an_export_made_before_the_dead_settings_went_still_restores() {
     backup::restore_all_data(&h.paths, export_root)
         .await
         .expect("a pre-#219 export still restores");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let pool = candidcue_lib::database::init(h.dir.path())
         .await
@@ -2782,7 +2830,7 @@ async fn a_rollback_never_deletes_something_it_did_not_move() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let quarantine = pin_generation(h.dir.path(), "test-generation");
     fs::create_dir_all(quarantine.join("candidcue.sqlite3").join("blocker"))
@@ -2852,7 +2900,7 @@ async fn a_retry_reuses_the_first_attempt_s_quarantine_generation() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // Fail the same way, twice.
     let quarantine = pin_generation(h.dir.path(), "test-generation");
@@ -2911,20 +2959,23 @@ async fn a_restore_interrupted_mid_copy_finishes_on_the_next_launch() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // --- what the interrupted first attempt had already done -----------------
     let quarantine = pin_generation(h.dir.path(), "test-generation");
     fs::create_dir_all(&quarantine).expect("quarantine");
     // 1. the originals, evacuated — and JOURNALLED, which is what makes them
     //    recognisable as originals rather than as a half-finished copy;
+    //    Moved the way the app moves them (`util::rename`, which waits out a
+    //    handle Windows still has open — here, the pool's own close finishing
+    //    on its worker thread).
     let mut journalled = vec!["scripts".to_string()];
-    fs::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
+    candidcue_lib::util::rename(h.paths.scripts_dir(), quarantine.join("scripts")).expect("evacuate scripts");
     for suffix in ["", "-wal", "-shm"] {
         let name = format!("candidcue.sqlite3{suffix}");
         let from = h.dir.path().join(&name);
         if from.exists() {
-            fs::rename(&from, quarantine.join(&name)).expect("evacuate database");
+            candidcue_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate database");
             journalled.push(name);
         }
     }
@@ -3006,7 +3057,7 @@ async fn an_unjournalled_obstruction_is_refused_on_every_attempt() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // An obstruction of the RIGHT KIND — a file where the database's original
     // would go — so nothing but the journal can tell it apart from one.
@@ -3097,7 +3148,7 @@ async fn a_rollback_puts_back_an_absence_as_well_as_a_file() {
     backup::restore_all_data(&h.paths, &export_root)
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // The state the restore is FOR: the scripts tree is gone.
     fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the scripts");
@@ -3143,7 +3194,7 @@ async fn a_rolled_back_component_stops_being_trusted_in_quarantine() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // Attempt 1 fails during the DATABASE evacuation, so the scripts tree is
     // evacuated, journalled, and then rolled back.
@@ -3208,7 +3259,7 @@ async fn a_resume_does_not_mistake_its_own_output_for_the_users_data() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     // --- the interrupted first attempt ---------------------------------------
     let quarantine = pin_generation(h.dir.path(), "test-generation");
@@ -3216,13 +3267,14 @@ async fn a_resume_does_not_mistake_its_own_output_for_the_users_data() {
     // It found no scripts tree at all, and recorded that.
     fs::remove_dir_all(h.paths.scripts_dir()).expect("lose the scripts");
     journal_absent(h.dir.path(), &["scripts"]);
-    // It evacuated the database, and recorded that.
+    // It evacuated the database, and recorded that — moved the way the app
+    // moves it (see the interrupted-copy test above for why).
     let mut journalled: Vec<String> = Vec::new();
     for suffix in ["", "-wal", "-shm"] {
         let name = format!("candidcue.sqlite3{suffix}");
         let from = h.dir.path().join(&name);
         if from.exists() {
-            fs::rename(&from, quarantine.join(&name)).expect("evacuate");
+            candidcue_lib::util::rename(&from, quarantine.join(&name)).expect("evacuate");
             journalled.push(name);
         }
     }
@@ -3293,7 +3345,7 @@ async fn a_marker_flagged_completed_is_retired_rather_than_replayed() {
     backup::restore_all_data(&h.paths, Path::new(&export.path))
         .await
         .expect("schedule");
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let marker = h.dir.path().join("restore-pending.json");
     let mut pending: serde_json::Value =
@@ -3467,7 +3519,7 @@ async fn creating_a_script_commits_every_directory_it_makes() {
     assert!(h.paths.canonical_file(&id).is_file());
     assert!(h.paths.assets_dir(&id).is_dir());
     assert!(h.paths.revisions_dir(&id).is_dir());
-    h.pool.close().await;
+    close_fully(&h.pool, h.dir.path()).await;
 
     let repo_source = fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scripts/repo.rs"),

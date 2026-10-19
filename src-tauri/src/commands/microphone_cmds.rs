@@ -54,6 +54,39 @@ impl MicrophonePermission {
             _ => Self::Unsupported,
         }
     }
+
+    /// Windows' privacy settings for a DESKTOP application, which is what
+    /// CandidCue is to Windows.
+    ///
+    /// There is no "never asked": Windows does not prompt desktop apps one by
+    /// one, so the answer is always one of three. Each `Value` is the string
+    /// `Allow` or `Deny`, and a missing one is the default, which allows.
+    ///
+    ///   - `policy_denies`: Group Policy forces "Let Windows apps access the
+    ///     microphone" off (`LetAppsAccessMicrophone` = 2). Managed by an
+    ///     administrator — restricted.
+    ///   - `device`: Settings › Privacy & security › Microphone › "Microphone
+    ///     access", which is machine-wide and needs an administrator to change
+    ///     — restricted, for the same reason.
+    ///   - `user`: "Let apps access your microphone", the user's master switch.
+    ///   - `desktop_apps`: "Let desktop apps access your microphone", the one
+    ///     that actually names CandidCue. Either of these two off is a refusal
+    ///     the user made and can undo — denied.
+    pub fn from_windows_consent(
+        policy_denies: bool,
+        device: Option<&str>,
+        user: Option<&str>,
+        desktop_apps: Option<&str>,
+    ) -> Self {
+        let denies = |value: Option<&str>| value.is_some_and(|v| v.eq_ignore_ascii_case("Deny"));
+        if policy_denies || denies(device) {
+            Self::Restricted
+        } else if denies(user) || denies(desktop_apps) {
+            Self::Denied
+        } else {
+            Self::Granted
+        }
+    }
 }
 
 /// The microphone privacy pane for this platform, or `None` where there is no
@@ -90,9 +123,102 @@ pub async fn get_microphone_permission() -> Result<MicrophonePermission, AppErro
             .map(MicrophonePermission::from_av_authorization_status)
             .unwrap_or(MicrophonePermission::Unsupported))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(windows_consent::microphone())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(MicrophonePermission::Unsupported)
+    }
+}
+
+/// The microphone consent store, read straight from the registry — the same
+/// keys Settings › Privacy & security › Microphone writes. Raw FFI, matching
+/// `windows/panel_size.rs`, rather than a crate for one call.
+#[cfg(target_os = "windows")]
+mod windows_consent {
+    use super::MicrophonePermission;
+    use std::ffi::c_void;
+
+    /// `HKEY_LOCAL_MACHINE` and `HKEY_CURRENT_USER`, sign-extended to pointer
+    /// width the way `winreg.h` defines them.
+    const HKEY_LOCAL_MACHINE: isize = 0x8000_0002_u32 as i32 as isize;
+    const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+    const RRF_RT_REG_SZ: u32 = 0x0000_0002;
+    const RRF_RT_REG_DWORD: u32 = 0x0000_0010;
+    const STORE: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueW(
+            key: isize,
+            subkey: *const u16,
+            value: *const u16,
+            flags: u32,
+            kind: *mut u32,
+            data: *mut c_void,
+            size: *mut u32,
+        ) -> i32;
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn string(root: isize, key: &str) -> Option<String> {
+        let (key, value) = (wide(key), wide("Value"));
+        let mut buffer = [0u16; 64];
+        let mut size = std::mem::size_of_val(&buffer) as u32;
+        // SAFETY: NUL-terminated names; `size` describes `buffer` in bytes.
+        let status = unsafe {
+            RegGetValueW(
+                root,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        Some(String::from_utf16_lossy(&buffer[..len]))
+    }
+
+    fn policy_denies() -> bool {
+        let (key, value) = (
+            wide(r"SOFTWARE\Policies\Microsoft\Windows\AppPrivacy"),
+            wide("LetAppsAccessMicrophone"),
+        );
+        let mut data = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        // SAFETY: as above, with a DWORD out-parameter.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&mut data as *mut u32).cast(),
+                &mut size,
+            )
+        };
+        // 2 is "Force Deny"; 0 (user in control) and 1 (Force Allow) are not refusals.
+        status == 0 && data == 2
+    }
+
+    pub fn microphone() -> MicrophonePermission {
+        MicrophonePermission::from_windows_consent(
+            policy_denies(),
+            string(HKEY_LOCAL_MACHINE, STORE).as_deref(),
+            string(HKEY_CURRENT_USER, STORE).as_deref(),
+            string(HKEY_CURRENT_USER, &format!(r"{STORE}\NonPackaged")).as_deref(),
+        )
     }
 }
 
@@ -224,6 +350,25 @@ mod tests {
                 "\"unsupported\""
             ]
         );
+    }
+
+    #[test]
+    fn windows_consent_maps_each_switch_to_who_can_change_it() {
+        use MicrophonePermission as P;
+        let allow = Some("Allow");
+        let deny = Some("Deny");
+        // Nothing written anywhere is Windows' default: desktop apps allowed.
+        assert_eq!(P::from_windows_consent(false, None, None, None), P::Granted);
+        assert_eq!(P::from_windows_consent(false, allow, allow, allow), P::Granted);
+        // The user's own switches.
+        assert_eq!(P::from_windows_consent(false, allow, deny, allow), P::Denied);
+        assert_eq!(P::from_windows_consent(false, allow, allow, deny), P::Denied);
+        // The machine-wide switch and policy are an administrator's.
+        assert_eq!(P::from_windows_consent(false, deny, allow, allow), P::Restricted);
+        assert_eq!(P::from_windows_consent(true, allow, allow, allow), P::Restricted);
+        assert_eq!(P::from_windows_consent(true, None, deny, deny), P::Restricted);
+        // Spelled the way Windows writes it, or not.
+        assert_eq!(P::from_windows_consent(false, None, Some("deny"), None), P::Denied);
     }
 
     #[test]

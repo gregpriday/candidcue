@@ -25,6 +25,7 @@ import { emitSettingsSection } from '../services/settings-sync';
 import { openPreferences } from '../services/desktop-shell';
 import { describeError } from '../services/errors';
 import { openMicrophoneSettings } from '../services/microphone-permission';
+import { osCopy } from './os-copy';
 import type { SettingsSection } from '../stores/router';
 import { showToast } from '../stores/toasts';
 import { flushWorkspace, updateWorkspace } from '../stores/workspace';
@@ -53,9 +54,6 @@ export async function openMicrophonePrivacySettings(): Promise<void> {
   try {
     await openMicrophoneSettings();
   } catch (err) {
-    showToast(
-      `System Settings could not be opened. Open it yourself, then go to Privacy & Security → Microphone. ${describeError(err)}`,
-      'danger',
-    );
+    showToast(`${osCopy().openMicrophoneSettingsFailed} ${describeError(err)}`, 'danger');
   }
 }

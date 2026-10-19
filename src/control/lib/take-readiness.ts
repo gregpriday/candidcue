@@ -30,6 +30,8 @@
 
 import type { MicrophonePermission } from '../../shared/contracts';
 import type { SettingsSection } from '../stores/router';
+import { osCopy } from './os-copy';
+import type { Platform } from './platform';
 
 /** How serious a finding is, which decides whether it can be launched past. */
 export type ReadinessSeverity =
@@ -296,36 +298,38 @@ export function voiceModelFinding(
  * are doing goes past it. What this changes is WHEN they find out: before
  * Present turns the window into the prompter, rather than from a prompt or a
  * refusal on top of it.
+ *
+ * The words are the platform's (`lib/os-copy.ts`): this window's, unless a
+ * caller names another.
  */
 export function microphoneAccessFinding(
   permission: MicrophonePermission | undefined,
+  platform?: Platform,
 ): ReadinessFinding | null {
+  const os = osCopy(platform);
   switch (permission) {
     case 'denied':
       return {
         id: 'mic_permission_denied',
         severity: 'warning',
         label: 'Microphone',
-        detail:
-          'CandidCue is not allowed to use the microphone, so this take cannot follow your voice. Allow it in System Settings → Privacy & Security → Microphone, then try again. If it is already allowed there, quit and reopen CandidCue.',
-        action: { label: 'Open System Settings', microphone: 'privacy' },
+        detail: os.micDeniedFinding,
+        action: { label: os.openMicrophoneSettings, microphone: 'privacy' },
       };
     case 'restricted':
       return {
         id: 'mic_permission_restricted',
         severity: 'warning',
         label: 'Microphone',
-        detail:
-          'Microphone access is restricted on this Mac, by Screen Time or a device management profile, so this take cannot follow your voice.',
-        action: { label: 'Open System Settings', microphone: 'privacy' },
+        detail: os.micRestrictedFinding,
+        action: { label: os.openMicrophoneSettings, microphone: 'privacy' },
       };
     case 'prompt':
       return {
         id: 'mic_permission_prompt',
         severity: 'warning',
         label: 'Microphone',
-        detail:
-          'CandidCue has not been allowed to use the microphone yet. Allow it now, so your Mac asks here rather than over the prompter.',
+        detail: os.micPromptFinding,
         action: { label: 'Allow microphone', microphone: 'allow' },
       };
     default:

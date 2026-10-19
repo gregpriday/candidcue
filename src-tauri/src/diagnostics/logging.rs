@@ -388,7 +388,7 @@ pub(crate) fn rotate_client_trace(logs_dir: &Path) -> std::io::Result<()> {
     if !live.exists() {
         return Ok(());
     }
-    std::fs::rename(&live, logs_dir.join(CLIENT_TRACE_PREV))
+    crate::util::rename(&live, logs_dir.join(CLIENT_TRACE_PREV))
 }
 
 /// Append one pre-formatted line to the live client trace, enforcing the size

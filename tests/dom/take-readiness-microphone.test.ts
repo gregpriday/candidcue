@@ -21,6 +21,7 @@ vi.mock('../../src/control/lib/open-settings', () => ({
 
 import TakeReadinessSheet from '../../src/control/components/TakeReadinessSheet.svelte';
 import { resolveReadiness, type ReadinessInput } from '../../src/control/lib/take-readiness';
+import { osCopy } from '../../src/control/lib/os-copy';
 
 function verdict(micPermission: ReadinessInput['micPermission']) {
   return resolveReadiness({
@@ -55,7 +56,9 @@ describe('the readiness sheet for a refused microphone', () => {
       },
     });
 
-    await fireEvent.click(button('Open System Settings')!);
+    // "Open System Settings" on a Mac, "Open Windows Settings" on Windows; jsdom
+    // names no platform, so it is the neutral label here on every host.
+    await fireEvent.click(button(osCopy().openMicrophoneSettings)!);
     expect(opened.privacy).toHaveBeenCalledTimes(1);
     // Not the app's own Settings window: that has no switch for this.
     expect(opened.settings).not.toHaveBeenCalled();

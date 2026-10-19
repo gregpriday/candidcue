@@ -40,9 +40,10 @@
 //! until these millimetres existed. That is the whole reason this module is
 //! worth having.
 //!
-//! Other platforms answer `None` for now. Windows keeps the same EDID bytes in
-//! the registry and Linux exposes them through sysfs, but neither is wired
-//! here, and a `None` costs nothing but the automatic sizing on that platform.
+//! Windows keeps the same EDID bytes in the registry, under the PnP device
+//! each monitor enumerates as, and they are read from there. Linux exposes
+//! them through sysfs but is not wired here; a `None` costs nothing but the
+//! automatic sizing on that platform.
 
 use serde::Serialize;
 use tauri::Monitor;
@@ -170,7 +171,7 @@ fn is_72_dpi_estimate(mm: f64, points: f64) -> bool {
 /// One display as the operating system describes it, in the terms needed to
 /// pair it with a `tauri::Monitor`. Kept platform-neutral so the pairing rule
 /// can be tested without a window server.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PanelCandidate {
     pub pixel_width: u32,
     pub pixel_height: u32,
@@ -179,6 +180,14 @@ pub struct PanelCandidate {
     pub position_x: i32,
     pub position_y: i32,
     pub size_mm: Option<PhysicalSizeMm>,
+    /// The name the panel gives itself in its EDID, where the platform's own
+    /// monitor name is not one. Windows only: tao names a Windows monitor by
+    /// its GDI device path (`\\.\DISPLAY1`).
+    pub name: Option<String>,
+    /// The panel's manufacturer and product code from its EDID (`GSM5B7F`):
+    /// its model, the same on every port and after every reboot. Windows only,
+    /// for the same reason.
+    pub product: Option<String>,
 }
 
 /// Pair a monitor with the candidate that is the same display.
@@ -198,17 +207,29 @@ pub fn size_mm_for_monitor(
     position_x: i32,
     position_y: i32,
 ) -> Option<PhysicalSizeMm> {
+    paired(candidates, |c| c.size_mm, pixel_width, pixel_height, position_x, position_y)
+}
+
+/// The pairing rule above, for any one fact about the panel.
+fn paired<T: Clone + PartialEq>(
+    candidates: &[PanelCandidate],
+    fact: impl Fn(&PanelCandidate) -> Option<T>,
+    pixel_width: u32,
+    pixel_height: u32,
+    position_x: i32,
+    position_y: i32,
+) -> Option<T> {
     let same_grid: Vec<&PanelCandidate> = candidates
         .iter()
         .filter(|c| c.pixel_width == pixel_width && c.pixel_height == pixel_height)
         .collect();
-    let unanimous = |group: &[&PanelCandidate]| -> Option<PhysicalSizeMm> {
-        let first = group.first()?.size_mm;
-        group.iter().all(|c| c.size_mm == first).then_some(first).flatten()
+    let unanimous = |group: &[&PanelCandidate]| -> Option<T> {
+        let first = fact(group.first()?);
+        group.iter().all(|c| fact(c) == first).then_some(first).flatten()
     };
     match same_grid.as_slice() {
         [] => None,
-        [only] => only.size_mm,
+        [only] => fact(only),
         many => {
             let at_position: Vec<&PanelCandidate> = many
                 .iter()
@@ -239,18 +260,43 @@ impl PanelSizes {
         }
     }
 
+    /// What naming a monitor needs: a real snapshot where the platform's own
+    /// monitor name is not one (Windows — see [`PanelCandidate::name`]), and
+    /// nothing anywhere else, so fingerprinting there costs no display query.
+    pub fn for_naming() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::snapshot()
+        } else {
+            Self {
+                candidates: Vec::new(),
+            }
+        }
+    }
+
     /// The physical size of the panel this monitor is, or `None` when the
     /// platform cannot say or the panel's own answer is not believable.
     pub fn for_monitor(&self, monitor: &Monitor) -> Option<PhysicalSizeMm> {
+        self.fact(monitor, |c| c.size_mm)
+    }
+
+    /// The EDID name of the panel this monitor is (see [`PanelCandidate::name`]).
+    pub fn name_for_monitor(&self, monitor: &Monitor) -> Option<String> {
+        self.fact(monitor, |c| c.name.clone())
+    }
+
+    /// The EDID product code of the panel this monitor is.
+    pub fn product_for_monitor(&self, monitor: &Monitor) -> Option<String> {
+        self.fact(monitor, |c| c.product.clone())
+    }
+
+    fn fact<T: Clone + PartialEq>(
+        &self,
+        monitor: &Monitor,
+        fact: impl Fn(&PanelCandidate) -> Option<T>,
+    ) -> Option<T> {
         let size = monitor.size();
         let position = monitor.position();
-        size_mm_for_monitor(
-            &self.candidates,
-            size.width,
-            size.height,
-            position.x,
-            position.y,
-        )
+        paired(&self.candidates, fact, size.width, size.height, position.x, position.y)
     }
 }
 
@@ -303,6 +349,9 @@ mod platform {
                         points_width: bounds.size.width,
                         points_height: bounds.size.height,
                     }),
+                    // tao's `Monitor #<model>` is already the model here.
+                    name: None,
+                    product: None,
                 }
             })
             .collect()
@@ -336,7 +385,345 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// The image size an EDID block declares, in millimetres.
+///
+/// The first detailed timing descriptor carries the size to the millimetre
+/// (twelve bits per axis, at bytes 66–68); the basic display parameters carry
+/// it in whole centimetres (bytes 21–22). The descriptor is preferred when it
+/// is present and non-zero, because the centimetre field costs a 9-inch panel
+/// about five percent to rounding. Pure — the plausibility judgement is
+/// [`plausible_panel_mm`]'s, not this function's.
+pub fn edid_image_size_mm(edid: &[u8]) -> Option<(f64, f64)> {
+    const HEADER: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    if edid.len() < 128 || edid[..8] != HEADER {
+        return None;
+    }
+    // A zero pixel clock means the first descriptor is a display descriptor
+    // (a name, a serial), not a timing, and its bytes 66–68 mean something else.
+    let has_timing = edid[54] != 0 || edid[55] != 0;
+    if has_timing {
+        let width = u16::from(edid[66]) | (u16::from(edid[68] & 0xF0) << 4);
+        let height = u16::from(edid[67]) | (u16::from(edid[68] & 0x0F) << 8);
+        if width > 0 && height > 0 {
+            return Some((f64::from(width), f64::from(height)));
+        }
+    }
+    let (width_cm, height_cm) = (edid[21], edid[22]);
+    (width_cm > 0 && height_cm > 0)
+        .then(|| (f64::from(width_cm) * 10.0, f64::from(height_cm) * 10.0))
+}
+
+/// The monitor name an EDID block declares: the display descriptor tagged
+/// `0xFC`, in any of the four descriptor slots — `DELL U2720Q`, `LG HDR 4K`.
+///
+/// Up to thirteen bytes of code page 437, ended by a line feed and padded with
+/// spaces. Laptop panels commonly carry none (they use the `0xFE` free-text
+/// slots for a part number instead), and that is reported as `None` rather
+/// than read from the wrong descriptor.
+pub fn edid_monitor_name(edid: &[u8]) -> Option<String> {
+    if edid.len() < 128 {
+        return None;
+    }
+    [54usize, 72, 90, 108].iter().find_map(|&at| {
+        let descriptor = &edid[at..at + 18];
+        if descriptor[..3] != [0, 0, 0] || descriptor[3] != 0xFC {
+            return None;
+        }
+        let text: String = descriptor[5..]
+            .iter()
+            .take_while(|&&b| b != 0x0A && b != 0)
+            .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '?' })
+            .collect();
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    })
+}
+
+/// The manufacturer and product code an EDID block declares, as Windows
+/// spells them in a monitor's hardware ID: three letters and four hex digits,
+/// `GSM5B7F`.
+///
+/// The manufacturer is three five-bit letters packed big-endian into bytes
+/// 8–9 (`1` is `A`); the product code is little-endian in bytes 10–11.
+pub fn edid_product_id(edid: &[u8]) -> Option<String> {
+    const HEADER: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    if edid.len() < 128 || edid[..8] != HEADER {
+        return None;
+    }
+    let packed = u16::from_be_bytes([edid[8], edid[9]]);
+    let letter = |shift: u16| {
+        let code = (packed >> shift) & 0x1F;
+        (1..=26).contains(&code).then(|| (b'A' + code as u8 - 1) as char)
+    };
+    let product = u16::from_le_bytes([edid[10], edid[11]]);
+    Some(format!("{}{}{}{product:04X}", letter(10)?, letter(5)?, letter(0)?))
+}
+
+/// The registry key holding a monitor's EDID, from the device interface path
+/// `EnumDisplayDevicesW` hands back with `EDD_GET_DEVICE_INTERFACE_NAME`.
+///
+/// `\\?\DISPLAY#GSM5B7F#5&2b8e9fe0&0&UID4353#{e6f07b5f-…}` names the device
+/// `DISPLAY\GSM5B7F\5&2b8e9fe0&0&UID4353` in the PnP tree, and Windows keeps
+/// the EDID that panel last reported in its `Device Parameters`. Anything that
+/// does not have exactly that shape is refused rather than guessed at.
+pub fn edid_registry_key(device_interface: &str) -> Option<String> {
+    let path = device_interface.strip_prefix(r"\\?\")?;
+    let mut parts = path.split('#');
+    let (class, model, instance) = (parts.next()?, parts.next()?, parts.next()?);
+    let _interface_class = parts.next()?;
+    if parts.next().is_some() || !class.eq_ignore_ascii_case("DISPLAY") {
+        return None;
+    }
+    if model.is_empty() || instance.is_empty() || model.contains('\\') || instance.contains('\\') {
+        return None;
+    }
+    Some(format!(
+        r"SYSTEM\CurrentControlSet\Enum\DISPLAY\{model}\{instance}\Device Parameters"
+    ))
+}
+
+/// Windows keeps every panel's EDID in the registry, under the PnP device the
+/// monitor enumerates as. The path there runs monitor → adapter output →
+/// monitor device → registry key:
+///
+/// - `EnumDisplayMonitors` / `GetMonitorInfoW` give each monitor's rectangle
+///   in physical pixels — exactly the numbers tao turns into
+///   `Monitor::position` and `Monitor::size` for a per-monitor-DPI-aware
+///   process, which every Tauri app is — and the adapter output it is on
+///   (`\\.\DISPLAY1`);
+/// - `EnumDisplayDevicesW` on that output, with
+///   `EDD_GET_DEVICE_INTERFACE_NAME`, names each panel attached to it. An
+///   output normally has one; a duplicated pair has two, and each becomes its
+///   own candidate at the same rectangle so the mirroring rule in
+///   [`size_mm_for_monitor`] can refuse to pick between them;
+/// - the EDID itself is a `REG_BINARY` read with `RegGetValueW`.
+///
+/// Raw FFI, matching `sleep.rs`, rather than a `windows` crate dependency for
+/// four calls.
+#[cfg(target_os = "windows")]
+mod platform {
+    use super::{
+        edid_image_size_mm, edid_monitor_name, edid_product_id, edid_registry_key,
+        plausible_panel_mm, PanelCandidate, PanelReport,
+    };
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[repr(C)]
+    struct MonitorInfoExW {
+        cb_size: u32,
+        rc_monitor: Rect,
+        rc_work: Rect,
+        flags: u32,
+        device: [u16; 32],
+    }
+
+    #[repr(C)]
+    struct DisplayDeviceW {
+        cb: u32,
+        device_name: [u16; 32],
+        device_string: [u16; 128],
+        state_flags: u32,
+        device_id: [u16; 128],
+        device_key: [u16; 128],
+    }
+
+    type MonitorEnumProc = unsafe extern "system" fn(isize, isize, *mut Rect, isize) -> i32;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumDisplayMonitors(hdc: isize, clip: *const Rect, callback: MonitorEnumProc, data: isize) -> i32;
+        fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfoExW) -> i32;
+        fn EnumDisplayDevicesW(device: *const u16, index: u32, info: *mut DisplayDeviceW, flags: u32) -> i32;
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegGetValueW(
+            key: isize,
+            subkey: *const u16,
+            value: *const u16,
+            flags: u32,
+            kind: *mut u32,
+            data: *mut c_void,
+            size: *mut u32,
+        ) -> i32;
+    }
+
+    /// `HKEY_LOCAL_MACHINE` is `(HKEY)(ULONG_PTR)((LONG)0x80000002)`: the
+    /// value is sign-extended to pointer width, so the cast goes through `i32`.
+    const HKEY_LOCAL_MACHINE: isize = 0x8000_0002_u32 as i32 as isize;
+    const RRF_RT_REG_BINARY: u32 = 0x0000_0008;
+    const EDD_GET_DEVICE_INTERFACE_NAME: u32 = 0x0000_0001;
+    const DISPLAY_DEVICE_ACTIVE: u32 = 0x0000_0001;
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn from_wide(buffer: &[u16]) -> String {
+        let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..end])
+    }
+
+    /// Every monitor's rectangle and adapter output, in enumeration order.
+    fn monitors() -> Vec<(Rect, Vec<u16>)> {
+        unsafe extern "system" fn collect(monitor: isize, _: isize, _: *mut Rect, data: isize) -> i32 {
+            // SAFETY: `data` is the `&mut Vec` passed below, alive for the
+            // whole synchronous enumeration.
+            let found = unsafe { &mut *(data as *mut Vec<(Rect, Vec<u16>)>) };
+            let mut info = MonitorInfoExW {
+                cb_size: std::mem::size_of::<MonitorInfoExW>() as u32,
+                rc_monitor: Rect::default(),
+                rc_work: Rect::default(),
+                flags: 0,
+                device: [0; 32],
+            };
+            // SAFETY: `info` is a correctly sized MONITORINFOEXW.
+            if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+                let end = info.device.iter().position(|&c| c == 0).unwrap_or(32);
+                let mut device = info.device[..end].to_vec();
+                device.push(0);
+                found.push((info.rc_monitor, device));
+            }
+            1
+        }
+        let mut found: Vec<(Rect, Vec<u16>)> = Vec::new();
+        // SAFETY: the callback only touches `found` through the pointer it is
+        // given, and the enumeration is synchronous.
+        unsafe {
+            EnumDisplayMonitors(0, std::ptr::null(), collect, &mut found as *mut _ as isize);
+        }
+        found
+    }
+
+    /// The device interface path of every active panel on one adapter output.
+    fn panels_on(output: &[u16]) -> Vec<String> {
+        let mut panels = Vec::new();
+        for index in 0.. {
+            let mut device = DisplayDeviceW {
+                cb: std::mem::size_of::<DisplayDeviceW>() as u32,
+                device_name: [0; 32],
+                device_string: [0; 128],
+                state_flags: 0,
+                device_id: [0; 128],
+                device_key: [0; 128],
+            };
+            // SAFETY: `output` is NUL-terminated and `device` correctly sized.
+            let ok = unsafe {
+                EnumDisplayDevicesW(output.as_ptr(), index, &mut device, EDD_GET_DEVICE_INTERFACE_NAME)
+            };
+            if ok == 0 {
+                break;
+            }
+            if device.state_flags & DISPLAY_DEVICE_ACTIVE != 0 {
+                panels.push(from_wide(&device.device_id));
+            }
+        }
+        panels
+    }
+
+    fn read_edid(key: &str) -> Option<Vec<u8>> {
+        let (key, value) = (wide(key), wide("EDID"));
+        // EDID is 128 bytes per block, and the block count is one byte: 256
+        // blocks is the most any panel can declare.
+        let mut buffer = vec![0u8; 128 * 256];
+        let mut size = buffer.len() as u32;
+        // SAFETY: both strings are NUL-terminated; `size` describes `buffer`.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_BINARY,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        buffer.truncate(size as usize);
+        Some(buffer)
+    }
+
+    pub fn candidates() -> Vec<PanelCandidate> {
+        let mut out = Vec::new();
+        for (rect, output) in monitors() {
+            let pixel_width = (rect.right - rect.left).max(0) as u32;
+            let pixel_height = (rect.bottom - rect.top).max(0) as u32;
+            let mut panels = panels_on(&output);
+            // A monitor with no panel the API will name is still a monitor:
+            // it is reported with no size rather than dropped, so it can still
+            // make a same-grid neighbour ambiguous.
+            if panels.is_empty() {
+                panels.push(String::new());
+            }
+            for panel in panels {
+                let edid = edid_registry_key(&panel).and_then(|key| read_edid(&key));
+                let edid = edid.as_deref().unwrap_or_default();
+                let size_mm = edid_image_size_mm(edid).and_then(|(width_mm, height_mm)| {
+                    plausible_panel_mm(PanelReport {
+                        width_mm,
+                        height_mm,
+                        pixel_width,
+                        pixel_height,
+                        // Windows has no point space to estimate from.
+                        points_width: 0.0,
+                        points_height: 0.0,
+                    })
+                });
+                out.push(PanelCandidate {
+                    pixel_width,
+                    pixel_height,
+                    position_x: rect.left,
+                    position_y: rect.top,
+                    size_mm,
+                    name: edid_monitor_name(edid),
+                    product: edid_product_id(edid),
+                });
+            }
+        }
+        out
+    }
+
+    /// For the probe: the device paths and the raw EDID sizes behind each
+    /// candidate, before plausibility is applied.
+    #[cfg(test)]
+    pub fn probe_identity() {
+        for (rect, output) in monitors() {
+            for panel in panels_on(&output) {
+                let raw = edid_registry_key(&panel).and_then(|key| read_edid(&key)).map(|edid| {
+                    (
+                        edid.len(),
+                        edid_image_size_mm(&edid),
+                        edid_monitor_name(&edid),
+                        edid_product_id(&edid),
+                    )
+                });
+                println!(
+                    "monitor {} at ({}, {}) {}x{}: panel {panel} edid {raw:?}",
+                    from_wide(&output),
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
     use super::PanelCandidate;
 
@@ -481,7 +868,61 @@ mod tests {
             position_x,
             position_y: 0,
             size_mm,
+            name: None,
+            product: None,
         }
+    }
+
+    #[test]
+    fn names_pair_by_the_same_rule_as_sizes() {
+        let named = |position_x: i32, name: &str| PanelCandidate {
+            name: Some(name.into()),
+            ..candidate(1920, 1080, position_x, None)
+        };
+        let candidates = [named(0, "DELL U2720Q"), named(1920, "LG HDR 4K")];
+        assert_eq!(
+            paired(&candidates, |c| c.name.clone(), 1920, 1080, 1920, 0).as_deref(),
+            Some("LG HDR 4K")
+        );
+        // Mirrored glass that names itself differently is not guessed at.
+        let mirrored = [named(0, "DELL U2720Q"), named(0, "Prompter")];
+        assert_eq!(paired(&mirrored, |c| c.name.clone(), 1920, 1080, 0, 0), None);
+    }
+
+    #[test]
+    fn edid_monitor_name_reads_the_fc_descriptor_wherever_it_sits() {
+        let mut block = edid((60, 34), Some((597, 336)));
+        // Slot 2 holds a serial (0xFF); slot 3 holds the name.
+        block[72..90].copy_from_slice(b"\0\0\0\xFF\0SERIAL12345\n ");
+        block[90..108].copy_from_slice(b"\0\0\0\xFC\0DELL U2720Q\n ");
+        assert_eq!(edid_monitor_name(&block).as_deref(), Some("DELL U2720Q"));
+        // Thirteen characters fill the field with no line feed at all.
+        block[90..108].copy_from_slice(b"\0\0\0\xFC\0ABCDEFGHIJKLM");
+        assert_eq!(edid_monitor_name(&block).as_deref(), Some("ABCDEFGHIJKLM"));
+        // A laptop panel with only free text (0xFE) has no name to report,
+        // and the timing in slot 1 is never misread as a descriptor.
+        let mut laptop = edid((34, 19), Some((344, 194)));
+        laptop[72..90].copy_from_slice(b"\0\0\0\xFE\0LG Display\n  ");
+        assert_eq!(edid_monitor_name(&laptop), None);
+        // A name that is only padding is no name.
+        laptop[90..108].copy_from_slice(b"\0\0\0\xFC\0\n            ");
+        assert_eq!(edid_monitor_name(&laptop), None);
+    }
+
+    #[test]
+    fn edid_product_id_spells_the_windows_hardware_id() {
+        let mut block = edid((60, 34), None);
+        // "GSM": G=7, S=19, M=13 → 0b0_00111_10011_01101 = 0x1E6D.
+        block[8] = 0x1E;
+        block[9] = 0x6D;
+        // Product 0x5B7F, little-endian.
+        block[10] = 0x7F;
+        block[11] = 0x5B;
+        assert_eq!(edid_product_id(&block).as_deref(), Some("GSM5B7F"));
+        // A letter outside A–Z is not a manufacturer.
+        block[8] = 0x00;
+        block[9] = 0x00;
+        assert_eq!(edid_product_id(&block), None);
     }
 
     #[test]
@@ -519,6 +960,74 @@ mod tests {
         );
         // …and same-grid panels that disagree are dropped rather than guessed.
         assert_eq!(size_mm_for_monitor(&candidates, 1920, 1080, 5000, 0), None);
+    }
+
+    /// A base EDID block declaring `cm` in the basic parameters and, when
+    /// `timing_mm` is given, a first detailed timing with that size.
+    fn edid(cm: (u8, u8), timing_mm: Option<(u16, u16)>) -> Vec<u8> {
+        let mut block = vec![0u8; 128];
+        block[..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+        block[21] = cm.0;
+        block[22] = cm.1;
+        if let Some((width, height)) = timing_mm {
+            // 148.5 MHz, little-endian in 10 kHz units: any non-zero clock.
+            block[54] = 0x02;
+            block[55] = 0x3A;
+            block[66] = (width & 0xFF) as u8;
+            block[67] = (height & 0xFF) as u8;
+            block[68] = (((width >> 8) as u8) << 4) | ((height >> 8) as u8 & 0x0F);
+        }
+        block
+    }
+
+    #[test]
+    fn edid_size_prefers_the_millimetre_timing_to_the_centimetre_field() {
+        // The Elgato Prompter: 20 x 12 cm in the basic block, 200 x 117 mm in
+        // the timing — the timing wins.
+        assert_eq!(edid_image_size_mm(&edid((20, 12), Some((200, 117)))), Some((200.0, 117.0)));
+        // Twelve bits per axis: a 27-inch panel needs the high nibbles.
+        assert_eq!(edid_image_size_mm(&edid((60, 34), Some((597, 336)))), Some((597.0, 336.0)));
+        // A timing that declares no size falls back to the centimetres…
+        assert_eq!(edid_image_size_mm(&edid((34, 19), Some((0, 0)))), Some((340.0, 190.0)));
+        // …and so does a first descriptor that is not a timing at all.
+        let mut named = edid((34, 19), Some((344, 194)));
+        named[54] = 0;
+        named[55] = 0;
+        assert_eq!(edid_image_size_mm(&named), Some((340.0, 190.0)));
+    }
+
+    #[test]
+    fn edid_size_refuses_what_is_not_an_edid() {
+        // No size anywhere (a projector, an adapter).
+        assert_eq!(edid_image_size_mm(&edid((0, 0), None)), None);
+        // Short, and a bad header.
+        assert_eq!(edid_image_size_mm(&edid((34, 19), None)[..127]), None);
+        let mut bad = edid((34, 19), None);
+        bad[0] = 0x01;
+        assert_eq!(edid_image_size_mm(&bad), None);
+    }
+
+    #[test]
+    fn edid_registry_key_comes_from_the_device_interface_path() {
+        assert_eq!(
+            edid_registry_key(
+                r"\\?\DISPLAY#GSM5B7F#5&2b8e9fe0&0&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+            )
+            .as_deref(),
+            Some(r"SYSTEM\CurrentControlSet\Enum\DISPLAY\GSM5B7F\5&2b8e9fe0&0&UID4353\Device Parameters")
+        );
+        // Not a monitor interface, the wrong shape, or an attempt to climb
+        // out of the key: refused rather than read.
+        for bad in [
+            "",
+            r"MONITOR\GSM5B7F\{4d36e96e-e325-11ce-bfc1-08002be10318}\0001",
+            r"\\?\PCI#VEN_8086#4&1#{guid}",
+            r"\\?\DISPLAY#GSM5B7F#{guid}",
+            r"\\?\DISPLAY#GSM5B7F#5&2b8e9fe0&0&UID4353#{guid}#extra",
+            r"\\?\DISPLAY#..\..\SAM#1#{guid}",
+        ] {
+            assert_eq!(edid_registry_key(bad), None, "{bad}");
+        }
     }
 
     #[test]

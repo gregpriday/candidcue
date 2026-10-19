@@ -60,6 +60,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Windows only in effect: see `windows/webview_microphone.rs`.
+        .plugin(crate::windows::webview_microphone::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             // Recovery (§48.5). These work on FILES and never open the damaged

@@ -164,7 +164,7 @@ pub fn write_seal(dir: &Path, model: &ModelEntry) -> std::io::Result<()> {
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
     let temp = dir.join(format!("{SEAL_FILE}.part"));
     std::fs::write(&temp, &body)?;
-    std::fs::rename(&temp, dir.join(SEAL_FILE))
+    crate::util::rename(&temp, dir.join(SEAL_FILE))
 }
 
 /// What a candidate model directory turned out to be.
@@ -442,7 +442,7 @@ pub fn recover_backup(root: &Path, model: &ModelEntry) -> std::io::Result<bool> 
     if target.exists() {
         std::fs::remove_dir_all(&target)?;
     }
-    std::fs::rename(&backup, &target)?;
+    crate::util::rename(&backup, &target)?;
     tracing::warn!(
         model = %model.id,
         "restored a speech model whose replacement was interrupted"

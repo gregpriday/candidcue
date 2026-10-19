@@ -171,8 +171,28 @@ pub fn set_drop_target_script<R: tauri::Runtime>(
 ///
 /// The window's lifecycle is entirely Rust's — see `windows/preferences.rs`.
 /// The frontend asks; it does not get to create a second one.
+///
+/// SYNCHRONOUS ON macOS, ASYNC EVERYWHERE ELSE, because it builds a window.
+///
+/// A synchronous command runs on the main thread, inside the webview's own IPC
+/// callback, and on Windows building a WebView2 window there deadlocks the
+/// event loop (wry #583, and Tauri's own `WebviewWindowBuilder::build` docs):
+/// the whole app froze the moment Settings was opened. An async command runs
+/// on the runtime's pool, where the build is safe.
+///
+/// macOS keeps the synchronous form, and not only for sameness. The window
+/// commands that share this split (`open_stage`, `identify_displays`)
+/// enumerate monitors, and on macOS that reads `NSScreen`, which must happen on
+/// the main thread — exactly where a synchronous command already is.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn open_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), AppError> {
+    crate::windows::preferences::open(&app)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn open_preferences<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), AppError> {
     crate::windows::preferences::open(&app)
 }
 
@@ -590,12 +610,15 @@ pub fn restore_window_frame(app: &tauri::AppHandle) {
     let Some(paths) = app.try_state::<DataPaths>() else {
         return;
     };
-    let Ok(bytes) = std::fs::read(frame_path(&paths)) else {
-        return;
-    };
-    let Ok(stored) = serde_json::from_slice::<StoredFrame>(&bytes) else {
-        tracing::warn!("the stored window frame could not be read; using the default");
-        return;
+    let stored = match std::fs::read(frame_path(&paths)) {
+        Err(_) => None,
+        Ok(bytes) => match serde_json::from_slice::<StoredFrame>(&bytes) {
+            Ok(stored) => Some(stored),
+            Err(_) => {
+                tracing::warn!("the stored window frame could not be read; using the default");
+                None
+            }
+        },
     };
     let Some(window) = app.get_webview_window(CONTROL_LABEL) else {
         return;
@@ -644,14 +667,41 @@ pub fn restore_window_frame(app: &tauri::AppHandle) {
         .and_then(|monitor| usable_scale(monitor.scale_factor()))
         .or_else(|| window.scale_factor().ok().and_then(usable_scale))
         .unwrap_or(1.0);
-    let Some(frame) = interpret_stored(stored, space, legacy_scale) else {
-        tracing::info!("the stored window frame is in another platform's units; using the default");
-        return;
+    let remembered = stored.and_then(|stored| {
+        let frame = interpret_stored(stored, space, legacy_scale);
+        if frame.is_none() {
+            tracing::info!("the stored window frame is in another platform's units; using the default");
+        }
+        frame
+    });
+    /*
+     * NOTHING REMEMBERED IS NOT THE SAME AS NOTHING TO FIT.
+     *
+     * A first launch has no stored frame, and this used to return there and
+     * leave the configured 1240 × 820 wherever the OS put it. That does not fit
+     * a 1080p laptop at 125% — 864 points tall, less the taskbar — so the
+     * window's bottom edge, status bar included, opened under the taskbar on
+     * an ordinary Windows machine. The default goes through the same fit as a
+     * remembered frame; one that already fits is left exactly where it is.
+     *
+     * Not on macOS, where AppKit already constrains a new window to the
+     * visible screen, and where the launch is left exactly as it was.
+     */
+    let (frame, is_default) = match remembered {
+        Some(frame) => (frame, false),
+        None if cfg!(not(target_os = "macos")) => match measure_frame(&window) {
+            Some(frame) => (frame, true),
+            None => return,
+        },
+        None => return,
     };
-    let Some(fitted) = fit_to_monitors(frame, &monitors, space) else {
+    let Some(fitted) = fit_to_monitors(frame, &monitors, space, window_chrome(&window)) else {
         tracing::info!("no monitor can hold the stored window frame; using the default");
         return;
     };
+    if is_default && fitted == frame {
+        return;
+    }
 
     for placement in placements(fitted, space) {
         let _ = match placement {
@@ -742,16 +792,80 @@ fn fit_to_monitors(
     frame: WindowFrame,
     monitors: &[tauri::Monitor],
     space: FrameSpace,
+    chrome: WindowChrome,
 ) -> Option<WindowFrame> {
     let areas: Vec<WorkArea> = monitors
         .iter()
         .map(|monitor| {
             let area = monitor.work_area();
             let scale = usable_scale(monitor.scale_factor()).unwrap_or(1.0);
-            work_area_from_physical(area.position, area.size, scale, space)
+            inset_for_chrome(
+                work_area_from_physical(area.position, area.size, scale, space),
+                chrome.on(scale, space),
+            )
         })
         .collect();
     fit_frame(frame, &areas)
+}
+
+/// How much of the window lies outside its inner size: the title
+/// bar, the menu bar and the borders on Windows; nothing on macOS, where the
+/// content view is full-size and the inner size is the whole window.
+///
+/// A frame is an OUTER origin with an INNER size (see [`measure_frame`]), so a
+/// frame clamped to a work area with no allowance for this overhangs the area
+/// by exactly the chrome — about 64 pixels at 125% on Windows, the whole height
+/// of the taskbar.
+fn window_chrome<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> WindowChrome {
+    let none = WindowChrome { width: 0, height: 0, scale: 1.0 };
+    let (Ok(outer), Ok(inner)) = (window.outer_size(), window.inner_size()) else {
+        return none;
+    };
+    let Some(scale) = window.scale_factor().ok().and_then(usable_scale) else {
+        return none;
+    };
+    WindowChrome {
+        width: outer.width.saturating_sub(inner.width),
+        height: outer.height.saturating_sub(inner.height),
+        scale,
+    }
+}
+
+/// The chrome as measured: physical pixels, at the scale of the monitor the
+/// window was on when it was measured.
+///
+/// A title bar and a menu bar are drawn at the monitor's DPI, so the same
+/// chrome is twice as many pixels on a 200% panel as on a 100% one. Measured
+/// once on the launch monitor and subtracted as-is from every work area, a
+/// frame restored onto a denser panel still ran its bottom under the taskbar —
+/// so it is rescaled to each monitor it is fitted against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowChrome {
+    width: u32,
+    height: u32,
+    scale: f64,
+}
+
+impl WindowChrome {
+    /// This chrome on a monitor of `scale`, in `space`.
+    fn on(self, scale: f64, space: FrameSpace) -> (u32, u32) {
+        let convert = |pixels: u32| match space {
+            // Points: the same on every monitor, so the measuring scale
+            // converts them back and the target's does not matter.
+            FrameSpace::Logical => (pixels as f64 / self.scale).round() as u32,
+            FrameSpace::Physical => (pixels as f64 * scale / self.scale).round() as u32,
+        };
+        (convert(self.width), convert(self.height))
+    }
+}
+
+/// The part of a work area the window's INNER size may fill.
+fn inset_for_chrome(area: WorkArea, (chrome_width, chrome_height): (u32, u32)) -> WorkArea {
+    WorkArea {
+        width: area.width.saturating_sub(chrome_width),
+        height: area.height.saturating_sub(chrome_height),
+        ..area
+    }
 }
 
 /// Choose a work area for the frame and clamp it into that area.
@@ -841,6 +955,56 @@ mod tests {
 
     fn frame(x: i32, y: i32, width: u32, height: u32) -> WindowFrame {
         WindowFrame { x, y, width, height }
+    }
+
+    /// A 1080p Windows laptop at 125%, as measured: the work area above a
+    /// 60-pixel taskbar, and the control window's first-launch frame — the
+    /// configured 1240 × 820 points, placed by the OS at (96, 8) — with 64
+    /// pixels of title bar and menu bar and 16 of border outside it.
+    #[test]
+    fn a_first_launch_frame_is_fitted_with_its_chrome_inside_the_work_area() {
+        let area = work_area_from_physical(
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(1920, 1020),
+            1.25,
+            FrameSpace::Physical,
+        );
+        let chrome = (16, 64);
+        let default = frame(96, 8, 1550, 1025);
+
+        // Without the chrome the inner size is clamped to the area's height and
+        // the window still runs a title bar's height under the taskbar.
+        let naive = fit_frame(default, &[area]).unwrap();
+        assert!(naive.y + naive.height as i32 + chrome.1 as i32 > 1020);
+
+        let fitted = fit_frame(default, &[inset_for_chrome(area, chrome)]).unwrap();
+        assert!(fitted.y >= 0);
+        assert!(fitted.y + fitted.height as i32 + chrome.1 as i32 <= 1020, "{fitted:?}");
+        assert!(fitted.x + fitted.width as i32 + chrome.0 as i32 <= 1920, "{fitted:?}");
+        // Still no smaller than the window's declared minimum on that display.
+        assert!(fitted.height >= area.min_height, "{fitted:?}");
+        assert_eq!(fitted.width, 1550);
+    }
+
+    #[test]
+    fn chrome_is_rescaled_to_the_monitor_it_is_fitted_against() {
+        // Measured on a 100% launch monitor: 32 px of title and menu bar.
+        let chrome = WindowChrome { width: 16, height: 32, scale: 1.0 };
+        // The same bars on a 200% panel are twice the pixels…
+        assert_eq!(chrome.on(2.0, FrameSpace::Physical), (32, 64));
+        assert_eq!(chrome.on(1.0, FrameSpace::Physical), (16, 32));
+        // …and the same number of points anywhere.
+        assert_eq!(chrome.on(2.0, FrameSpace::Logical), (16, 32));
+        let measured_at_125 = WindowChrome { width: 20, height: 80, scale: 1.25 };
+        assert_eq!(measured_at_125.on(1.0, FrameSpace::Physical), (16, 64));
+        assert_eq!(measured_at_125.on(1.25, FrameSpace::Logical), (16, 64));
+    }
+
+    #[test]
+    fn a_frame_that_already_fits_is_left_where_it_is() {
+        let area = inset_for_chrome(LAPTOP, (0, 0));
+        let snug = frame(100, 60, 1240, 820);
+        assert_eq!(fit_frame(snug, &[area]), Some(snug));
     }
 
     /// A rectangle in points as tao reports it on macOS: multiplied by `scale`

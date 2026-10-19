@@ -30,9 +30,21 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/*
+ * A path inside the bundle, relative to its root and spelled with `/`.
+ *
+ * Every rule below is written against the bundle's own layout —
+ * `Contents/Info.plist`, `Contents/MacOS/<executable>`, a library's basename
+ * after the last `/` — and `relative` answers in the platform's separator. On
+ * Windows a perfectly valid `.app` therefore failed the layout check, and the
+ * runtime libraries lost their exemption. Splitting on `sep` is the identity on
+ * macOS, where this normally runs.
+ */
+const inBundle = (root, path) => relative(root, path).split(sep).join('/');
 
 const problems = [];
 
@@ -242,14 +254,14 @@ function walk(root) {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch (error) {
       // An unreadable directory is unexamined payload, not empty payload.
-      problems.push(`${relative(root, dir) || '.'} could not be listed: ${error.message}`);
+      problems.push(`${inBundle(root, dir) || '.'} could not be listed: ${error.message}`);
       continue;
     }
     for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push(
-          `${relative(root, full)} is a symlink — this script cannot vouch for what a ` +
+          `${inBundle(root, full)} is a symlink — this script cannot vouch for what a ` +
             `shipped link resolves to. Resolve it in the build or allow-list it here.`,
         );
       } else if (entry.isDirectory()) {
@@ -295,7 +307,7 @@ if (bundleRoot) {
     { label: 'Contents/Info.plist', matches: (rel) => rel === 'Contents/Info.plist' },
     { label: 'Contents/MacOS/<executable>', matches: (rel) => MAIN_EXECUTABLE.test(rel) },
   ];
-  const relatives = files.map((file) => relative(bundleRoot, file));
+  const relatives = files.map((file) => inBundle(bundleRoot, file));
   for (const { label, matches } of REQUIRED_LAYOUT) {
     if (!relatives.some(matches)) {
       problems.push(
@@ -306,7 +318,7 @@ if (bundleRoot) {
   }
 
   for (const file of files) {
-    const rel = relative(bundleRoot, file);
+    const rel = inBundle(bundleRoot, file);
     const lower = rel.toLowerCase();
 
     if (WEIGHT_EXTENSIONS.some((extension) => lower.endsWith(extension))) {
