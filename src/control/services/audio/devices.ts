@@ -39,8 +39,30 @@ export function toAudioDeviceInfos(devices: MediaDeviceInfoLike[]): AudioDeviceI
       label,
       isDefault,
       available: true,
+      ...(d.deviceId === '' || d.label === '' ? { withheld: true } : {}),
     };
   });
+}
+
+/**
+ * Whether this list hides which inputs are which — and so cannot say whether a
+ * remembered microphone is plugged in.
+ *
+ * Until a document has opened a microphone itself, the webview does not say
+ * what is connected. WKWebView answers every `enumerateDevices()` with ONE
+ * input, whose id and name are both empty, whatever is plugged in; Chromium
+ * does the same before a grant. macOS having granted CandidCue the microphone
+ * changes nothing: the rule is per document, and only a `getUserMedia` that
+ * succeeds in it lifts it. So the control window is in this state for its
+ * first take after every launch, and Settings each time it opens.
+ *
+ * Nothing can match against such a list — the one entry has no id, and its
+ * name is a placeholder we made up — so a "no match" read as "not connected"
+ * told everyone with a pinned microphone, on every launch, that it was
+ * unplugged while they were speaking into it.
+ */
+export function inputsWithheld(devices: AudioDeviceInfo[]): boolean {
+  return devices.some((d) => d.withheld === true);
 }
 
 /**
@@ -94,10 +116,18 @@ export function microphoneOptions(
       value: SYSTEM_DEFAULT_OPTION,
       label: resolvesTo ? `System default — ${resolvesTo}` : 'System default',
     },
-    ...devices.filter((d) => !d.isDefault).map((d) => ({ value: d.deviceId, label: d.label })),
+    // An input without an id cannot be pinned. One with an id but no name can,
+    // under the placeholder it was given.
+    ...devices
+      .filter((d) => !d.isDefault && d.deviceId !== '')
+      .map((d) => ({ value: d.deviceId, label: d.label })),
   ];
   if (missing && !devices.some((d) => d.deviceId === missing.deviceId)) {
-    options.push({ value: missing.deviceId, label: `${missing.label} (not connected)` });
+    // Withheld, the list cannot say it is unplugged — only that it is chosen.
+    options.push({
+      value: missing.deviceId,
+      label: inputsWithheld(devices) ? missing.label : `${missing.label} (not connected)`,
+    });
   }
   return options;
 }
@@ -123,7 +153,8 @@ export function matchRememberedMicrophone(
     if (byId) return byId;
   }
   if (remembered.label !== undefined && remembered.label !== '') {
-    const byLabel = specific.find((d) => d.label === remembered.label);
+    // A withheld input's label is our own placeholder, not its name.
+    const byLabel = specific.find((d) => d.withheld !== true && d.label === remembered.label);
     if (byLabel) return byLabel;
   }
   return undefined;
@@ -171,8 +202,12 @@ export function diffDeviceLists(
   const nextIds = new Set(next.map((d) => d.deviceId));
   const added = next.filter((d) => !prevIds.has(d.deviceId));
   const removed = previous.filter((d) => !nextIds.has(d.deviceId));
+  // A list without ids has not lost anything; it just is not saying. (Missing
+  // names do not matter here: loss is judged by id.)
   const selectedDeviceLost =
-    selection.mode === 'specific' && !nextIds.has(selection.deviceId);
+    selection.mode === 'specific' &&
+    !next.some((d) => d.deviceId === '') &&
+    !nextIds.has(selection.deviceId);
   return { devices: next, added, removed, selectedDeviceLost };
 }
 

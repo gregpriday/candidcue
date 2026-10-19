@@ -41,6 +41,7 @@ const micState = vi.hoisted(() => ({
     label: string;
     isDefault: boolean;
     available: boolean;
+    withheld?: boolean;
   }>,
 }));
 
@@ -450,6 +451,50 @@ describe('single-window Present', () => {
     expect(calls.startLiveSession).toHaveBeenCalledWith(
       expect.objectContaining({ micDeviceId: 'usb' }),
     );
+  });
+
+  it('honours the pin on the first take after a launch, when the webview names no inputs', async () => {
+    /*
+     * WKWebView lists ONE nameless input until this window has opened a
+     * microphone. That used to read as "not connected": a toast, and the take
+     * quietly opened the system default instead of the microphone chosen.
+     */
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'rode';
+    settingsState.value!.audio.preferredDeviceLabel = 'RØDE NT-USB Mini';
+    micState.devices = [
+      { deviceId: '', label: 'Microphone 1', isDefault: false, available: true, withheld: true },
+    ];
+
+    await startTake(SCRIPT.id);
+    expect(calls.startLiveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ micDeviceId: 'rode', micDeviceLabel: 'RØDE NT-USB Mini' }),
+    );
+    expect(calls.showToast).not.toHaveBeenCalled();
+  });
+
+  it('still says so when a named list does not include the pin', async () => {
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'rode';
+    settingsState.value!.audio.preferredDeviceLabel = 'RØDE NT-USB Mini';
+
+    await startTake(SCRIPT.id);
+    const opened = calls.startLiveSession.mock.calls[0]?.[0] as { micDeviceId?: string };
+    expect(opened.micDeviceId).toBeUndefined();
+    expect(calls.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('RØDE NT-USB Mini is not connected'),
+      'info',
+    );
+  });
+
+  it('reads the legacy `default` pin as the system default, not a missing device', async () => {
+    settingsState.value!.audio.followSystemDefault = false;
+    settingsState.value!.audio.preferredDeviceId = 'default';
+
+    await startTake(SCRIPT.id);
+    const opened = calls.startLiveSession.mock.calls[0]?.[0] as { micDeviceId?: string };
+    expect(opened.micDeviceId).toBeUndefined();
+    expect(calls.showToast).not.toHaveBeenCalled();
   });
 
   it('tears the take down if this window cannot be presented', async () => {

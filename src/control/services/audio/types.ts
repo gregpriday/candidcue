@@ -10,6 +10,7 @@ export interface MediaStreamTrackLike {
   readonly label: string;
   readonly readyState: 'live' | 'ended';
   readonly muted?: boolean;
+  getSettings?(): { deviceId?: string };
   stop(): void;
   addEventListener(type: string, listener: () => void): void;
   removeEventListener(type: string, listener: () => void): void;

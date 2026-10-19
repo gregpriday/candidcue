@@ -59,6 +59,7 @@
   import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
   import {
     SYSTEM_DEFAULT_OPTION,
+    inputsWithheld,
     matchRememberedMicrophone,
     microphoneOptions,
   } from '../services/audio';
@@ -1673,6 +1674,14 @@
   /** The remembered pin among the inputs that are connected right now. */
   const micPinnedDevice = $derived(micPinned ? matchRememberedMicrophone(micDevices, micPinned) : undefined);
   /**
+   * The webview has not named the inputs yet — it does not until this window
+   * has opened one (see `inputsWithheld`), which the meter does a moment after
+   * the section opens. Until then an unmatched pin is unknown, not unplugged.
+   */
+  const micInputsWithheld = $derived(inputsWithheld(micDevices));
+  /** The remembered pin is known NOT to be plugged in. */
+  const micPinMissing = $derived(micPinned !== undefined && !micPinnedDevice && !micInputsWithheld);
+  /**
    * The input a take would actually open — which is not always the one named in
    * the picker.
    *
@@ -1725,7 +1734,7 @@
    */
   const micActiveLabel = $derived(micPinnedDevice?.label ?? micSystemDefaultLabel);
   const micPickerDescription = $derived(
-    micPinned && !micPinnedDevice
+    micPinMissing
       ? 'Remembered for when it is plugged back in.'
       : micPinned
         ? 'Every take uses this microphone.'
@@ -1738,7 +1747,7 @@
    */
   const micAnnouncement = $derived.by((): string => {
     if (micPermission === 'granted') {
-      return micPinned && !micPinnedDevice
+      return micPinned && micPinMissing
         ? `${micPinned.label} is not connected. Takes use ${micSystemDefaultLabel ?? "your Mac's default input"} until it is back.`
         : '';
     }
@@ -2084,6 +2093,7 @@
 
     let cancelled = false;
     let release: (() => void | Promise<void>) | null = null;
+    let relisted = false;
     // Chained, not called: changing the device or a processing toggle re-runs
     // this effect, and starting the replacement before the previous capture has
     // let go is the collision this baton exists to prevent.
@@ -2093,6 +2103,13 @@
         deviceId,
         (snapshot) => {
           micLevel = snapshot;
+          // A level means this window has a microphone open, so the webview
+          // will name the inputs now. Asked once; the pin is re-bound from it,
+          // and a pinned microphone that is found moves the meter onto itself.
+          if (!relisted && !cancelled && micInputsWithheld) {
+            relisted = true;
+            void relistNamedMicrophones();
+          }
         },
         options,
       );
@@ -2214,6 +2231,22 @@
   }
 
   /**
+   * List again once this window has a microphone open, to replace the withheld
+   * list the section opened with (see `micInputsWithheld`). Never prompts: it
+   * is only called while the meter holds a capture.
+   */
+  async function relistNamedMicrophones(): Promise<void> {
+    try {
+      const devices = await getVoiceFacade().listMicrophones();
+      if (isMicrophoneRefused(micAccess)) return;
+      micDevices = devices;
+      repinRememberedMicrophone(devices);
+    } catch {
+      // The withheld list stands, and nothing is claimed from it.
+    }
+  }
+
+  /**
    * §28.1. Re-bind the remembered microphone to the id it has TODAY.
    *
    * Device ids are salted per origin and per session and can change when
@@ -2234,10 +2267,13 @@
     if (!remembered) return;
     const match = matchRememberedMicrophone(devices, remembered);
     if (!match) return;
-    if (match.deviceId === remembered.deviceId && match.label === remembered.label) return;
+    // Matched by id on a list that withholds names: its label is our own
+    // placeholder, and must not replace the name the pin was remembered by.
+    const label = match.withheld === true ? remembered.label : match.label;
+    if (match.deviceId === remembered.deviceId && label === remembered.label) return;
     void patchSettings('audio', {
       preferredDeviceId: match.deviceId,
-      preferredDeviceLabel: match.label,
+      preferredDeviceLabel: label,
     }).catch(() => {
       /* a remembered preference is a convenience, never a gate */
     });
@@ -2247,6 +2283,9 @@
    * The one place the input choice is made — the system-default row included.
    */
   function chooseMicrophone(value: string): void {
+    // A withheld input's empty id pins nothing; it is never offered, but a
+    // stale picker must not be able to write it either.
+    if (value === '') return;
     resetMicTest();
     if (value === SYSTEM_DEFAULT_OPTION) {
       void patchSettings('audio', { followSystemDefault: true }).catch(() => {});
@@ -2910,7 +2949,7 @@
                   options={micOptions}
                   onchange={(value) => chooseMicrophone(value)}
                 />
-                {#if micPinned && !micPinnedDevice}
+                {#if micPinned && micPinMissing}
                   <!--
                     The pin is kept, not quietly dropped: this is a microphone
                     that is coming back. But until it does, a DIFFERENT microphone

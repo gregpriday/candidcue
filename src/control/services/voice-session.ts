@@ -22,12 +22,14 @@
  * hearing me" readout and the §28.6 dead-input detector. Nothing it decides can
  * stop audio reaching the recogniser.
  */
-import type { AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
+import type { AudioDeviceInfo, AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
 import { trace, traceBegin } from './audio-trace';
 import {
   createAnalyserGraph,
+  inputsWithheld,
+  matchRememberedMicrophone,
   MicrophoneDeviceManager,
   MicrophoneMonitor,
   queryMicrophonePermission,
@@ -35,7 +37,9 @@ import {
   requestMicrophoneAccess,
   SilentInputDetector,
   vadConfigForSensitivity,
+  type MediaDevicesLike,
   type MediaStreamLike,
+  type MicAccessResult,
 } from './audio';
 import { PcmCapture } from './audio/capture';
 import { frameHasSignal } from './audio/levelMeter';
@@ -93,6 +97,21 @@ function serialiseTransport(task: () => Promise<void>): Promise<void> {
   return run;
 }
 
+const FALLBACK_TRACE: Record<InputFallbackReason, string> = {
+  busy: 'was busy',
+  missing: 'is not connected',
+  unknown: 'could not be found by name',
+};
+
+/** The input a stream is reading, when the webview says. */
+function openedDeviceId(stream: MediaStreamLike): string | undefined {
+  try {
+    return stream.getAudioTracks()[0]?.getSettings?.().deviceId;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Timer seam so tests drive a virtual clock instead of waiting. */
 export interface PipelineTimers {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -128,11 +147,23 @@ export interface FinalizedTranscriptItem {
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'offline';
 
+/**
+ * Why a take is on the system default rather than the input it was given:
+ * `busy` held by something else, `missing` not connected, `unknown` its id
+ * opened nothing and the webview would not say what is connected.
+ */
+export type InputFallbackReason = 'busy' | 'missing' | 'unknown';
+
 export interface VoicePipelineDeps {
   sessionId: string;
   sessionGeneration: number;
   compiled: CompiledScript;
   deviceId?: string;
+  /**
+   * The name `deviceId` was remembered by — how the take finds that microphone
+   * again when the id opens nothing (see `findPinnedMicrophone`).
+   */
+  deviceLabel?: string;
   /**
    * §28.3 capture processing — the user's Settings → Audio toggles, applied to
    * the one `getUserMedia` call the app makes.
@@ -176,14 +207,20 @@ export interface VoicePipelineDeps {
   /** §28.6: audio is flowing again — the counterpart to `onInputDeviceLost`. */
   onInputRestored?(): void;
   /**
-   * §28.2: the pinned device was busy, so the system default was opened.
+   * §28.2: the pinned device was busy, or is not connected, so the system
+   * default was opened.
    *
    * Reported rather than absorbed. A take that quietly runs on the built-in
    * microphone when the user chose an interface is a take whose audio is not
    * what they think it is, and the only place that can be corrected is a screen
    * that has been told.
    */
-  onInputFellBackToDefault?(): void;
+  onInputFellBackToDefault?(reason: InputFallbackReason): void;
+  /**
+   * The pinned microphone was found under a different id from `deviceId`, and
+   * opened. The owner remembers the new id, so the next take opens it at once.
+   */
+  onPinnedMicrophoneFound?(deviceId: string, label: string): void;
   /** A session-level provider failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
   /**
@@ -355,6 +392,19 @@ export class VoiceSessionPipeline {
   private deviceManager: MicrophoneDeviceManager | null = null;
   /** §28.2: a device chosen mid-session outranks `deps.deviceId`. */
   private deviceOverride: string | undefined;
+  /**
+   * Where `deps.deviceId` turned out to be, once its id opened nothing: the id
+   * the same microphone has now, or undefined for the system default when it
+   * is not connected. Null while the id has not been found wanting.
+   */
+  private pinResolved: { deviceId: string | undefined } | null = null;
+  /**
+   * The input this take's capture actually has open — undefined for the system
+   * default. The device watcher judges loss by this, not by what was asked for:
+   * after a fallback, the input that was asked for is not the one that can be
+   * lost.
+   */
+  private capturingDeviceId: string | undefined;
   private stopDeviceWatch: (() => void) | null = null;
   private readonly timers: PipelineTimers;
   private readonly now: () => number;
@@ -545,11 +595,8 @@ export class VoiceSessionPipeline {
       // not a failed switch; the pause or stop is what happened.
       throw this.isCurrent(epoch) ? err : new Error('SESSION_STOPPED');
     }
-    try {
-      this.deviceManager?.select({ mode: 'specific', deviceId });
-    } catch {
-      // Enumeration is a nicety; the capture swap already succeeded.
-    }
+    // The device watcher was moved by the acquisition, to whichever input
+    // actually opened.
     return true;
   }
 
@@ -879,23 +926,19 @@ export class VoiceSessionPipeline {
   }
 
   private get preferredDeviceId(): string | undefined {
-    return this.deviceOverride ?? this.deps.deviceId;
+    if (this.deviceOverride !== undefined) return this.deviceOverride;
+    return this.pinResolved ? this.pinResolved.deviceId : this.deps.deviceId;
   }
 
   /**
-   * Open the device and its level meter, and publish them.
-   *
-   * Nothing is published until the take is known to still want it. The stream
-   * and the monitor stay local across every await, so a stop that lands inside
-   * one (a permission prompt, the busy retry, the analyser graph) leaves this
-   * holding the only reference — and this is what closes them.
+   * One `getUserMedia` for this take, with the busy retry. Resolves only for a
+   * take that still wants it: a stream that arrives after a stop is closed here.
    */
-  private async acquireMicrophone(epoch: number, deviceId?: string): Promise<MediaStreamLike> {
-    await this.teardownAudio();
-    this.assertCurrent(epoch);
-    const mediaDevices = navigator.mediaDevices as unknown as Parameters<
-      typeof requestMicrophoneAccess
-    >[0];
+  private async openMicrophone(
+    epoch: number,
+    mediaDevices: MediaDevicesLike,
+    deviceId: string | undefined,
+  ): Promise<MicAccessResult> {
     /*
      * The take is the most contended `getUserMedia` in the app: it opens the
      * device immediately after the Preflight meter let go of it, and macOS does
@@ -904,7 +947,6 @@ export class VoiceSessionPipeline {
      * tracking is unavailable" into a start that waits a few hundred
      * milliseconds and then works.
      */
-    this.deps.onCaptureAttempt?.();
     const result = await requestMicrophoneAccess(
       mediaDevices,
       {
@@ -941,6 +983,116 @@ export class VoiceSessionPipeline {
       if (result.ok) releaseStream(result.stream);
       throw new Error('SESSION_STOPPED');
     }
+    return result;
+  }
+
+  /**
+   * The pinned id opened nothing. Find the microphone it named, by that name.
+   *
+   * An id is not a stable name for a device: another origin salts it
+   * differently (every `pnpm dev` port is one), and hardware can come back
+   * under a new one. Nor could the id be checked before the take: the webview
+   * names no inputs until this window has opened one (see `inputsWithheld`),
+   * so on the first take after a launch the stored id is all there is.
+   *
+   * Opening the system default is what makes the webview name them. With that
+   * stream held, the remembered name is looked up; if it is the device already
+   * open, the take keeps it, and if it is another, that one is opened instead.
+   * If it is not there at all, the take keeps the default and says so; if the
+   * webview still names nothing, it keeps the default without claiming why.
+   * Nothing is published until this has settled, so the meter and the tap only
+   * ever see the stream the take keeps.
+   */
+  private async findPinnedMicrophone(
+    epoch: number,
+    mediaDevices: MediaDevicesLike,
+    pinnedId: string,
+  ): Promise<{
+    result: MicAccessResult;
+    /** The input left open, when the take got one; undefined is the default. */
+    capturing: string | undefined;
+    fellBack: InputFallbackReason | null;
+  }> {
+    const opened = await this.openMicrophone(epoch, mediaDevices, undefined);
+    if (!opened.ok) return { result: opened, capturing: undefined, fellBack: null };
+
+    let inputs: AudioDeviceInfo[] | null;
+    try {
+      this.deviceManager ??= new MicrophoneDeviceManager(mediaDevices);
+      inputs = await this.deviceManager.listInputs();
+    } catch {
+      inputs = null;
+    }
+    if (!this.isCurrent(epoch)) {
+      releaseStream(opened.stream);
+      throw new Error('SESSION_STOPPED');
+    }
+
+    /*
+     * Not named even now, or not listed at all: the pin's absence is not
+     * proven, so it is not claimed — and not settled either, so a resume
+     * looks again. The take keeps the default it has.
+     */
+    if (inputs === null || inputsWithheld(inputs)) {
+      return { result: opened, capturing: undefined, fellBack: 'unknown' };
+    }
+    const found = matchRememberedMicrophone(inputs, {
+      deviceId: pinnedId,
+      label: this.deps.deviceLabel,
+    });
+    if (found === undefined) {
+      this.pinResolved = { deviceId: undefined };
+      return { result: opened, capturing: undefined, fellBack: 'missing' };
+    }
+    this.pinResolved = { deviceId: found.deviceId };
+    trace('microphone', 'pinned device found under a new id');
+    if (openedDeviceId(opened.stream) === found.deviceId) {
+      this.deps.onPinnedMicrophoneFound?.(found.deviceId, found.label);
+      return { result: opened, capturing: found.deviceId, fellBack: null };
+    }
+    // One capture at a time: the default goes before the pinned device opens.
+    releaseStream(opened.stream);
+    const pinned = await this.openMicrophone(epoch, mediaDevices, found.deviceId);
+    if (!pinned.ok) return { result: pinned, capturing: undefined, fellBack: null };
+    if (pinned.fellBackToDefault) return { result: pinned, capturing: undefined, fellBack: 'busy' };
+    this.deps.onPinnedMicrophoneFound?.(found.deviceId, found.label);
+    return { result: pinned, capturing: found.deviceId, fellBack: null };
+  }
+
+  /**
+   * Open the device and its level meter, and publish them.
+   *
+   * Nothing is published until the take is known to still want it. The stream
+   * and the monitor stay local across every await, so a stop that lands inside
+   * one (a permission prompt, the busy retry, the analyser graph) leaves this
+   * holding the only reference — and this is what closes them.
+   */
+  private async acquireMicrophone(epoch: number, deviceId?: string): Promise<MediaStreamLike> {
+    await this.teardownAudio();
+    this.assertCurrent(epoch);
+    const mediaDevices = navigator.mediaDevices as unknown as MediaDevicesLike;
+    this.deps.onCaptureAttempt?.();
+    let result = await this.openMicrophone(epoch, mediaDevices, deviceId);
+    let capturing = result.ok && !result.fellBackToDefault ? deviceId : undefined;
+    let fellBack: InputFallbackReason | null = result.ok && result.fellBackToDefault ? 'busy' : null;
+    /*
+     * The pinned id opened nothing — but only the take's own pin, and only
+     * until it has an answer: a device chosen mid-take was just listed, so
+     * "missing" there is one, and so is a pin already found or found absent.
+     */
+    if (
+      !result.ok &&
+      result.code === 'MIC_DEVICE_MISSING' &&
+      deviceId !== undefined &&
+      deviceId === this.deps.deviceId &&
+      this.deviceOverride === undefined &&
+      this.pinResolved === null
+    ) {
+      const found = await this.findPinnedMicrophone(epoch, mediaDevices, deviceId);
+      result = found.result;
+      capturing = found.capturing;
+      fellBack = found.fellBack;
+    }
     if (!result.ok) {
       trace('microphone-failed', `${result.code} after ${result.attempts} attempts`);
       throw new Error(result.code);
@@ -948,12 +1100,16 @@ export class VoiceSessionPipeline {
     if (result.attempts > 1) {
       trace('microphone', `acquired on attempt ${result.attempts}`);
     }
-    if (result.fellBackToDefault) {
+    if (fellBack !== null) {
       // The user picked a device and did not get it. That is theirs to know:
       // §28.2 makes which input is in use a visible fact, not an internal one.
-      trace('microphone', 'pinned device was busy — fell back to the system default');
-      this.deps.onInputFellBackToDefault?.();
+      trace('microphone', `pinned device ${FALLBACK_TRACE[fellBack]} — using the system default`);
+      this.deps.onInputFellBackToDefault?.(fellBack);
     }
+    this.capturingDeviceId = capturing;
+    this.deviceManager?.select(
+      capturing === undefined ? { mode: 'system_default' } : { mode: 'specific', deviceId: capturing },
+    );
     const stream = result.stream;
 
     const monitor = new MicrophoneMonitor({
@@ -1183,8 +1339,8 @@ export class VoiceSessionPipeline {
       );
       // Seed the baseline so the first diff is meaningful, then watch.
       void this.deviceManager.listInputs().catch(() => {});
-      const pinned = this.preferredDeviceId;
-      if (pinned) this.deviceManager.select({ mode: 'specific', deviceId: pinned });
+      const capturing = this.capturingDeviceId;
+      if (capturing) this.deviceManager.select({ mode: 'specific', deviceId: capturing });
       this.stopDeviceWatch = this.deviceManager.onDeviceChange((report) => {
         if (report.selectedDeviceLost) this.deps.onInputDeviceLost?.('MIC_DEVICE_LOST');
       });

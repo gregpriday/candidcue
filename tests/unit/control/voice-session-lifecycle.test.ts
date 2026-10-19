@@ -26,6 +26,7 @@ import type { SttFrame } from '../../../src/control/services/stt/local';
 
 interface FakeTrack {
   readyState: 'live' | 'ended';
+  getSettings(): { deviceId: string };
   stop(): void;
 }
 
@@ -56,6 +57,18 @@ const env = vi.hoisted(() => {
     busy: 0,
     /** The next `getUserMedia` rejects with this. */
     gumError: null as unknown,
+    /** Ids no input answers to: asking for one exactly is overconstrained. */
+    missing: new Set<string>(),
+    /** What `enumerateDevices` lists. */
+    inputs: [] as Array<{ deviceId: string; groupId: string; kind: string; label: string }>,
+    /** The input an unpinned stream turns out to be reading. */
+    systemDefault: 'built-in',
+    /** Every `devicechange` handler attached, to fire one. */
+    deviceChange: [] as Array<() => void>,
+    /** `enumerateDevices` rejects while this is set. */
+    enumerateFails: false,
+    /** How many streams were still live as each `getUserMedia` was asked. */
+    liveAtOpen: [] as number[],
     gumCalls: 0,
     streams: [] as FakeStream[],
     graphs: [] as Array<{ closed: boolean }>,
@@ -200,6 +213,7 @@ function before(at: Boundary, boundary: Boundary): boolean {
 function fakeStream(device: string | undefined): FakeStream {
   const track: FakeTrack = {
     readyState: 'live',
+    getSettings: () => ({ deviceId: device ?? env.state.systemDefault }),
     stop() {
       track.readyState = 'ended';
     },
@@ -212,6 +226,9 @@ function installNavigator(): void {
     mediaDevices: {
       getUserMedia: async (constraints: { audio: { deviceId?: { exact: string } } }) => {
         env.state.gumCalls += 1;
+        env.state.liveAtOpen.push(
+          env.state.streams.filter((stream) => stream.track.readyState === 'live').length,
+        );
         if (env.state.busy > 0) {
           env.state.busy -= 1;
           throw Object.assign(new Error('device in use'), { name: 'NotReadableError' });
@@ -221,17 +238,28 @@ function installNavigator(): void {
           env.state.gumError = null;
           throw err;
         }
+        const exact = constraints.audio.deviceId?.exact;
+        if (exact !== undefined && env.state.missing.has(exact)) {
+          throw Object.assign(new Error('no such device'), { name: 'OverconstrainedError' });
+        }
         await env.gate('getUserMedia');
         const stream = fakeStream(constraints.audio.deviceId?.exact);
         env.state.streams.push(stream);
         return stream;
       },
-      enumerateDevices: async () => [],
-      addEventListener: (type: string) => {
-        if (type === 'devicechange') env.state.watchers += 1;
+      enumerateDevices: async () => {
+        if (env.state.enumerateFails) throw new Error('enumeration failed');
+        return env.state.inputs;
       },
-      removeEventListener: (type: string) => {
-        if (type === 'devicechange') env.state.watchers -= 1;
+      addEventListener: (type: string, handler: () => void) => {
+        if (type !== 'devicechange') return;
+        env.state.watchers += 1;
+        env.state.deviceChange.push(handler);
+      },
+      removeEventListener: (type: string, handler: () => void) => {
+        if (type !== 'devicechange') return;
+        env.state.watchers -= 1;
+        env.state.deviceChange = env.state.deviceChange.filter((h) => h !== handler);
       },
     },
     permissions: {
@@ -255,7 +283,9 @@ interface Reports {
 
 const pipelines: VoiceSessionPipeline[] = [];
 
-function pipeline(): { p: VoiceSessionPipeline; reports: Reports } {
+function pipeline(
+  extra: Partial<ConstructorParameters<typeof VoiceSessionPipeline>[0]> = {},
+): { p: VoiceSessionPipeline; reports: Reports } {
   const reports: Reports = {
     states: [],
     fannedOut: [],
@@ -285,6 +315,7 @@ function pipeline(): { p: VoiceSessionPipeline; reports: Reports } {
       clearTimeout: () => {},
     },
     now: () => 1_000,
+    ...extra,
   });
   pipelines.push(p);
   return { p, reports };
@@ -409,6 +440,12 @@ beforeEach(() => {
     held: new Map(),
     busy: 0,
     gumError: null,
+    missing: new Set(),
+    inputs: [],
+    systemDefault: 'built-in',
+    deviceChange: [],
+    enumerateFails: false,
+    liveAtOpen: [],
     gumCalls: 0,
     streams: [],
     graphs: [],
@@ -904,5 +941,186 @@ describe('the STT listener hears only the take it belongs to (#289)', () => {
     expect(env.state.closed).toEqual([1]);
     deliver({ kind: 'transport', generation: 1, state: 'closed' });
     expect(reports.states.at(-1)).toBe('offline');
+  });
+});
+
+describe('a pinned microphone whose id opens nothing', () => {
+  /*
+   * The first take after a launch passes the stored id unchecked: the webview
+   * names no inputs until the window has opened one, so there was nothing to
+   * check it against. An id from another origin (a different `pnpm dev` port)
+   * or a re-salted one answers nothing, and that used to fail the whole start.
+   * Now the take opens the system default, which makes the inputs nameable,
+   * and finds the microphone by the name it was remembered by.
+   */
+  const BUILT_IN = { deviceId: 'built-in', groupId: 'g1', kind: 'audioinput', label: 'MacBook Pro Microphone' };
+  const RODE = { deviceId: 'rode-new', groupId: 'g2', kind: 'audioinput', label: 'RØDE NT-USB Mini' };
+
+  function pinnedPipeline() {
+    const found: Array<[string, string]> = [];
+    const fellBack: string[] = [];
+    const lost: string[] = [];
+    const made = pipeline({
+      deviceId: 'rode-old',
+      deviceLabel: 'RØDE NT-USB Mini',
+      onPinnedMicrophoneFound: (deviceId, label) => found.push([deviceId, label]),
+      onInputFellBackToDefault: (reason) => fellBack.push(reason),
+      onInputDeviceLost: (code) => lost.push(code),
+    });
+    return { ...made, found, fellBack, lost };
+  }
+
+  /** Something was plugged in or out; the watcher re-lists and diffs. */
+  async function deviceChanged(): Promise<void> {
+    for (const handler of env.state.deviceChange) handler();
+    await settled();
+  }
+
+  beforeEach(() => {
+    env.state.missing = new Set(['rode-old']);
+  });
+
+  it('moves to it under its new id, one capture at a time', async () => {
+    env.state.inputs = [BUILT_IN, RODE];
+    const { p, reports, found, fellBack } = pinnedPipeline();
+    await p.start();
+
+    expect(env.state.streams.map((stream) => stream.device)).toEqual([undefined, 'rode-new']);
+    // The default was released BEFORE the pinned device was asked for: the
+    // stale id, the default, then the found id with nothing else live.
+    expect(env.state.liveAtOpen).toEqual([0, 0, 0]);
+    expect(reports.fannedOut.map((stream) => stream.device)).toEqual(['rode-new']);
+    expect(found).toEqual([['rode-new', 'RØDE NT-USB Mini']]);
+    expect(fellBack).toEqual([]);
+    await expectOneLiveTake(reports);
+
+    // The resume opens the id it found, not the one that answered nothing.
+    await p.hardPause();
+    await p.resume();
+    expect(env.state.streams.at(-1)!.device).toBe('rode-new');
+  });
+
+  it('keeps the default stream when that is the pinned microphone', async () => {
+    env.state.inputs = [BUILT_IN, RODE];
+    env.state.systemDefault = 'rode-new';
+    const { p, reports, found, fellBack } = pinnedPipeline();
+    await p.start();
+
+    expect(env.state.streams.map((stream) => stream.device)).toEqual([undefined]);
+    expect(found).toEqual([['rode-new', 'RØDE NT-USB Mini']]);
+    expect(fellBack).toEqual([]);
+    await expectOneLiveTake(reports);
+  });
+
+  it('stays on the system default, and says so, when it really is not connected', async () => {
+    env.state.inputs = [BUILT_IN];
+    const { p, reports, found, fellBack } = pinnedPipeline();
+    await p.start();
+
+    expect(reports.fannedOut.map((stream) => stream.device)).toEqual([undefined]);
+    expect(fellBack).toEqual(['missing']);
+    expect(found).toEqual([]);
+    await expectOneLiveTake(reports);
+
+    await p.hardPause();
+    await p.resume();
+    expect(env.state.streams.at(-1)!.device).toBeUndefined();
+    expect(fellBack).toEqual(['missing']);
+  });
+
+  it('moves the device watcher too, when a resume is what had to look', async () => {
+    // Opened on the stored id, as an ordinary take does.
+    env.state.missing = new Set();
+    env.state.inputs = [BUILT_IN, { ...RODE, deviceId: 'rode-old' }];
+    const { p, found, lost } = pinnedPipeline();
+    await p.start();
+    await settled();
+
+    // Paused; meanwhile the same microphone comes back under a new id.
+    await p.hardPause();
+    env.state.missing = new Set(['rode-old']);
+    env.state.inputs = [BUILT_IN, RODE];
+    await p.resume();
+    expect(found).toEqual([['rode-new', 'RØDE NT-USB Mini']]);
+
+    // An unrelated change must not read as the microphone in use going away.
+    expect(env.state.deviceChange.length).toBeGreaterThan(0);
+    await deviceChanged();
+    expect(lost).toEqual([]);
+
+    // But the microphone in use going away still does.
+    env.state.inputs = [BUILT_IN];
+    await deviceChanged();
+    expect(lost).toEqual(['MIC_DEVICE_LOST']);
+  });
+
+  for (const [why, arrange] of [
+    ['the list cannot be read', () => (env.state.enumerateFails = true)],
+    ['the webview still names nothing', () => (env.state.inputs = [{ ...RODE, deviceId: '', label: '' }])],
+  ] as const) {
+    it(`does not call it unplugged when ${why}`, async () => {
+      arrange();
+      const { p, reports, found, fellBack } = pinnedPipeline();
+      await p.start();
+
+      expect(reports.fannedOut.map((stream) => stream.device)).toEqual([undefined]);
+      expect(fellBack).toEqual(['unknown']);
+      expect(found).toEqual([]);
+      await expectOneLiveTake(reports);
+
+      // Not settled as absent: a resume looks for it again.
+      env.state.enumerateFails = false;
+      env.state.inputs = [BUILT_IN, RODE];
+      await p.hardPause();
+      await p.resume();
+      expect(found).toEqual([['rode-new', 'RØDE NT-USB Mini']]);
+      expect(env.state.streams.at(-1)!.device).toBe('rode-new');
+    });
+  }
+
+  it('opens nothing when the take is stopped while it looks', async () => {
+    env.state.inputs = [BUILT_IN, RODE];
+    holdAt('getUserMedia');
+    const { p, found } = pinnedPipeline();
+    const outcome = p.start().catch((err: unknown) => err);
+    await reached('getUserMedia');
+    await p.stop();
+    release('getUserMedia');
+    await outcome;
+
+    expect(found).toEqual([]);
+    expectNothingOpen();
+  });
+});
+
+describe('the device watcher follows the input actually open', () => {
+  it('does not report a busy pin that the take fell back from as lost', async () => {
+    env.state.inputs = [
+      { deviceId: 'built-in', groupId: 'g1', kind: 'audioinput', label: 'MacBook Pro Microphone' },
+      { deviceId: 'usb', groupId: 'g2', kind: 'audioinput', label: 'USB microphone' },
+    ];
+    const lost: string[] = [];
+    const fellBack: string[] = [];
+    const { p } = pipeline({
+      deviceId: 'usb',
+      onInputDeviceLost: (code) => lost.push(code),
+      onInputFellBackToDefault: (reason) => fellBack.push(reason),
+    });
+    // Busy on every attempt that names it; the last attempt drops the id.
+    env.state.busy = 3;
+    const starting = p.start();
+    for (let i = 0; i < 3; i += 1) {
+      await vi.waitFor(() => expect(env.state.timers.length).toBeGreaterThan(0));
+      env.state.timers.shift()?.();
+    }
+    await starting;
+    await settled();
+    expect(fellBack).toEqual(['busy']);
+
+    // The busy USB microphone is unplugged. The take never had it.
+    env.state.inputs = [env.state.inputs[0]!];
+    for (const handler of env.state.deviceChange) handler();
+    await settled();
+    expect(lost).toEqual([]);
   });
 });

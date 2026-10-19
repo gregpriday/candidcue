@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   diffDeviceLists,
   FOLLOW_SYSTEM_DEFAULT,
+  inputsWithheld,
   matchRememberedMicrophone,
   microphoneOptions,
   MicrophoneDeviceManager,
@@ -60,6 +61,29 @@ describe('toAudioDeviceInfos (spec §28.2)', () => {
   });
 });
 
+describe('inputsWithheld', () => {
+  it('reads the list WKWebView gives a window that has not opened a microphone', () => {
+    // One input, no id, no name — whatever is actually plugged in.
+    const infos = toAudioDeviceInfos([device('')]);
+    expect(infos[0]?.withheld).toBe(true);
+    expect(inputsWithheld(infos)).toBe(true);
+  });
+
+  it('reads ids without names as withheld too', () => {
+    expect(inputsWithheld(toAudioDeviceInfos([device('mic-1')]))).toBe(true);
+  });
+
+  it('does not flag a list that names its inputs', () => {
+    const infos = toAudioDeviceInfos([device('default', 'Default - Built-in'), device('mic-1', 'Blue Yeti')]);
+    expect(infos.some((d) => 'withheld' in d)).toBe(false);
+    expect(inputsWithheld(infos)).toBe(false);
+  });
+
+  it('does not flag an empty list, which is a machine with no inputs', () => {
+    expect(inputsWithheld([])).toBe(false);
+  });
+});
+
 describe('resolveMicrophoneSelection (spec §28.2)', () => {
   const available = toAudioDeviceInfos([device('default', 'Default'), device('mic-1', 'Yeti')]);
 
@@ -112,6 +136,26 @@ describe('microphoneOptions (spec §28.1)', () => {
     expect(options.at(-1)).toEqual({ value: 'gone', label: 'Blue Yeti (not connected)' });
   });
 
+  it('offers no row for a withheld input, and does not call the pin unplugged', () => {
+    // WKWebView's answer before this window has opened a microphone.
+    const options = microphoneOptions(toAudioDeviceInfos([device('')]), {
+      deviceId: 'rode',
+      label: 'RØDE NT-USB Mini',
+    });
+    expect(options).toEqual([
+      { value: SYSTEM_DEFAULT_OPTION, label: 'System default' },
+      { value: 'rode', label: 'RØDE NT-USB Mini' },
+    ]);
+  });
+
+  it('keeps an input that has an id but no name, which can still be pinned', () => {
+    const options = microphoneOptions(toAudioDeviceInfos([device('rode')]), {
+      deviceId: 'rode',
+      label: 'RØDE NT-USB Mini',
+    });
+    expect(options.map((o) => o.value)).toEqual([SYSTEM_DEFAULT_OPTION, 'rode']);
+  });
+
   it('does not duplicate a remembered input that is present', () => {
     const options = microphoneOptions(toAudioDeviceInfos([device('mic-1', 'Blue Yeti')]), {
       deviceId: 'mic-1',
@@ -151,6 +195,11 @@ describe('matchRememberedMicrophone (spec §28.1)', () => {
 
   it('ignores an empty label rather than matching a placeholder', () => {
     expect(matchRememberedMicrophone(connected, { deviceId: 'gone', label: '' })).toBeUndefined();
+  });
+
+  it('never matches the placeholder name of a withheld input', () => {
+    const withheld = toAudioDeviceInfos([device('')]);
+    expect(matchRememberedMicrophone(withheld, { deviceId: 'gone', label: 'Microphone 1' })).toBeUndefined();
   });
 });
 
@@ -192,5 +241,14 @@ describe('MicrophoneDeviceManager', () => {
     const report = diffDeviceLists(before, after, { mode: 'specific', deviceId: 'mic-1' });
     expect(report.selectedDeviceLost).toBe(true);
     expect(report.removed).toHaveLength(1);
+  });
+
+  it('diffDeviceLists does not call a device lost on a list without ids', () => {
+    const before = toAudioDeviceInfos([device('default', 'Default'), device('mic-1', 'Yeti')]);
+    const report = diffDeviceLists(before, toAudioDeviceInfos([device('')]), {
+      mode: 'specific',
+      deviceId: 'mic-1',
+    });
+    expect(report.selectedDeviceLost).toBe(false);
   });
 });

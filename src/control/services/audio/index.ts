@@ -24,6 +24,7 @@ export {
   toAudioDeviceInfos,
   resolveMicrophoneSelection,
   matchRememberedMicrophone,
+  inputsWithheld,
   microphoneOptions,
   diffDeviceLists,
   type MicrophoneOption,

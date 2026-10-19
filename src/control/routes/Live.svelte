@@ -226,7 +226,8 @@ import { onShortcut } from '../lib/shortcuts';
     try {
       const found = await getVoiceFacade().listMicrophones();
       if (stale()) return;
-      micInputs = found.filter((device) => device.available !== false);
+      // An input listed without an id has nothing to switch to (see `inputsWithheld`).
+      micInputs = found.filter((device) => device.available !== false && device.deviceId !== '');
       if (!micInputs.some((device) => device.deviceId === micChoice)) {
         micChoice =
           micInputs.find((device) => device.isDefault)?.deviceId ?? micInputs[0]?.deviceId ?? '';
