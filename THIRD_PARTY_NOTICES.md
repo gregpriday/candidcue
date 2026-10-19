@@ -111,7 +111,7 @@ the full text of its licence in its own directory.
 
 ## Rust crates
 
-349 crates across both workspaces, with the SPDX expression each
+370 crates across both workspaces, with the SPDX expression each
 declares in its own manifest.
 
 | Crate | Version | Licence |
@@ -151,6 +151,7 @@ declares in its own manifest.
 | color_quant | 1.1.0 | MIT |
 | cookie | 0.18.1 | MIT OR Apache-2.0 |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 |
+| core-foundation | 0.9.4 | MIT OR Apache-2.0 |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 |
 | core-graphics | 0.25.0 | MIT OR Apache-2.0 |
 | core-graphics-types | 0.2.0 | MIT OR Apache-2.0 |
@@ -188,6 +189,7 @@ declares in its own manifest.
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
@@ -206,6 +208,7 @@ declares in its own manifest.
 | futures-executor | 0.3.33 | MIT OR Apache-2.0 |
 | futures-intrusive | 0.5.0 | MIT OR Apache-2.0 |
 | futures-io | 0.3.33 | MIT OR Apache-2.0 |
+| futures-macro | 0.3.33 | MIT OR Apache-2.0 |
 | futures-sink | 0.3.33 | MIT OR Apache-2.0 |
 | futures-task | 0.3.33 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
@@ -263,6 +266,7 @@ declares in its own manifest.
 | matchers | 0.2.0 | MIT |
 | memchr | 2.8.3 | Unlicense OR MIT |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
+| minisign-verify | 0.2.5 | MIT |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | mio | 1.2.2 | MIT |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
@@ -280,10 +284,12 @@ declares in its own manifest.
 | objc2-encode | 4.1.0 | MIT |
 | objc2-exception-helper | 0.1.1 | Zlib OR Apache-2.0 OR MIT |
 | objc2-foundation | 0.3.2 | MIT |
+| objc2-osa-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | open | 5.4.0 | MIT |
 | option-ext | 0.2.0 | MPL-2.0 |
+| osakit | 0.3.1 | MIT OR Apache-2.0 |
 | parking | 2.2.1 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 |
@@ -309,17 +315,22 @@ declares in its own manifest.
 | regex-automata | 0.4.16 | MIT OR Apache-2.0 |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 |
+| reqwest | 0.13.4 | MIT OR Apache-2.0 |
 | rfd | 0.16.0 | MIT |
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT |
+| rustix | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 |
+| rustls-platform-verifier | 0.7.1 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.15 | ISC |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
 | same-file | 1.0.6 | Unlicense/MIT |
 | schemars | 0.8.22 | MIT |
 | schemars_derive | 0.8.22 | MIT |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
+| security-framework | 3.7.0 | MIT OR Apache-2.0 |
+| security-framework-sys | 2.17.0 | MIT OR Apache-2.0 |
 | selectors | 0.36.1 | MPL-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
@@ -362,6 +373,8 @@ declares in its own manifest.
 | syn | 3.0.3 | MIT OR Apache-2.0 |
 | sync_wrapper | 1.0.2 | Apache-2.0 |
 | synstructure | 0.13.2 | MIT |
+| system-configuration | 0.7.0 | MIT OR Apache-2.0 |
+| system-configuration-sys | 0.6.0 | MIT OR Apache-2.0 |
 | tao | 0.35.3 | Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.11.5 | Apache-2.0 OR MIT |
@@ -371,9 +384,11 @@ declares in its own manifest.
 | tauri-plugin-fs | 2.5.1 | Apache-2.0 OR MIT |
 | tauri-plugin-opener | 2.5.4 | Apache-2.0 OR MIT |
 | tauri-plugin-single-instance | 2.4.3 | Apache-2.0 OR MIT |
+| tauri-plugin-updater | 2.12.0 | Apache-2.0 OR MIT |
 | tauri-runtime | 2.11.3 | Apache-2.0 OR MIT |
 | tauri-runtime-wry | 2.11.4 | Apache-2.0 OR MIT |
 | tauri-utils | 2.9.3 | Apache-2.0 OR MIT |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tendril | 0.5.1 | MIT OR Apache-2.0 |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 |
 | thiserror | 2.0.19 | MIT OR Apache-2.0 |
@@ -388,6 +403,7 @@ declares in its own manifest.
 | tokio-macros | 2.7.1 | MIT |
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 |
 | tokio-stream | 0.1.19 | MIT |
+| tokio-util | 0.7.19 | MIT |
 | toml | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_datetime | 1.1.1+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_parser | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
@@ -437,8 +453,11 @@ declares in its own manifest.
 | windows-link | 0.1.3 | MIT OR Apache-2.0 |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-numerics | 0.2.0 | MIT OR Apache-2.0 |
+| windows-registry | 0.6.1 | MIT OR Apache-2.0 |
 | windows-result | 0.3.4 | MIT OR Apache-2.0 |
+| windows-result | 0.4.1 | MIT OR Apache-2.0 |
 | windows-strings | 0.4.2 | MIT OR Apache-2.0 |
+| windows-strings | 0.5.1 | MIT OR Apache-2.0 |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 |
@@ -451,6 +470,7 @@ declares in its own manifest.
 | winnow | 1.0.4 | MIT |
 | writeable | 0.6.3 | Unicode-3.0 |
 | wry | 0.55.1 | Apache-2.0 OR MIT |
+| xattr | 1.6.1 | MIT OR Apache-2.0 |
 | yoke | 0.8.3 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
 | zerofrom | 0.1.8 | Unicode-3.0 |
@@ -459,6 +479,7 @@ declares in its own manifest.
 | zerotrie | 0.2.4 | Unicode-3.0 |
 | zerovec | 0.11.6 | Unicode-3.0 |
 | zerovec-derive | 0.11.3 | Unicode-3.0 |
+| zip | 4.6.1 | MIT |
 | zip | 9.0.4 | MIT |
 | zlib-rs | 0.6.8 | Zlib |
 | zmij | 1.0.23 | MIT |

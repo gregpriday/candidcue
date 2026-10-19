@@ -93,6 +93,13 @@ export interface AppSettings {
      * the script rather than when the stage renders it.
      */
     readHeadings: boolean;
+    /**
+     * "Check for updates automatically" (docs/updates.md). Rust-owned
+     * (`general.checkForUpdates`), because Rust is what refuses an automatic
+     * check when it is off — a cleared browser store must not be able to turn
+     * checks back on behind somebody's back.
+     */
+    checkForUpdates: boolean;
   };
   /**
    * Which panel a take belongs to, and how it presents (§14.2 A, §52.7).
@@ -1212,12 +1219,8 @@ export interface RestoreResult {
 }
 
 /*
- * `UpdateCheckResult` used to be declared here.
- *
- * CandidCue 1.0 updates manually (docs/updates.md), so there is no check to
- * have a result. The type is not "reserved for later": an updater is a feature
- * with signing, endpoint, rollback and privacy work attached, and it should
- * arrive with its own contract rather than find one already waiting.
+ * `UpdateCheckResult` lives in `src/shared/contracts/updates.ts`, with the
+ * rest of the update contract Rust's `updater.rs` holds to.
  */
 
 /**
@@ -1311,6 +1314,7 @@ export function defaultAppSettings(): AppSettings {
       restoreWindows: true,
       confirmEndSession: true,
       readHeadings: false,
+      checkForUpdates: true,
     },
     stage: {
       // Automatic. Pinning a fingerprint on first run would pin whichever

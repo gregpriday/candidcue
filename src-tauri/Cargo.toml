@@ -89,6 +89,19 @@ cc-align = { path = "../crates/cc-align" }
 cc-stt = { path = "../crates/cc-stt" }
 base64 = "0.23.0"
 tauri-plugin-single-instance = "2.4.3"
+# In-app updates (docs/updates.md). Rust-only: no `updater:*` or `process:*`
+# permission is granted to any webview and the JavaScript package is not
+# installed, so the only way to check or install is through the two commands in
+# `commands/update_cmds.rs`, which `updater.rs` gates. Default features on
+# purpose: `zip` is what lets a Linux AppImage or a Windows installer arrive
+# compressed as well as raw, and `system-proxy` is what lets a check work on a
+# network that only reaches the internet through the system's proxy.
+#
+# Pinned to 2.12.x with `~`, not left at "2": 2.13 and later require tauri
+# 2.12, and letting cargo resolve one silently upgrades tauri, wry and muda
+# underneath the whole app (and moves webview2-com off the 0.38 pinned below).
+# Move this with a deliberate tauri upgrade, not before.
+tauri-plugin-updater = "~2.12.0"
 libc = "0.2.189"
 
 # `CGDisplayScreenSize`: the panel's EDID size in millimetres, which is what

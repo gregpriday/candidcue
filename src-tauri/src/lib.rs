@@ -4,12 +4,11 @@
 //! and cross-window authority all live here; the webviews only ever see typed
 //! IPC results.
 //!
-//! There is no `updates` module. CandidCue 1.0 updates manually: the user
-//! downloads a new build and replaces the app. An `updates` stub used to sit
-//! here holding an `UpdateCheckCadence` enum that defaulted to `Daily`, beside
-//! two commands that always returned `NOT_IMPLEMENTED` — a contract a future
-//! change could have switched on without doing any of the signing or privacy
-//! work an updater needs. See `docs/updates.md`.
+//! `updater` finds, verifies and installs a newer build from the project's
+//! update server, and is the only module that talks to it. It holds the rules
+//! the webviews cannot be trusted to keep — the endpoint, the channel, and no
+//! install during a take — rather than leaving them to the UI. See
+//! `docs/updates.md`.
 
 pub mod align;
 pub mod app;
@@ -27,6 +26,7 @@ pub mod scripts;
 pub mod sessions;
 pub mod speech;
 pub mod settings;
+pub mod updater;
 pub mod util;
 pub mod web;
 pub mod windows;

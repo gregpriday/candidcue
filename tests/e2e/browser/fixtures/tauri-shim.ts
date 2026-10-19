@@ -718,6 +718,14 @@ function shimBody(config: ShimConfig): void {
         return '0.1.0-e2e';
 
       /*
+       * The update check (docs/updates.md). The shell schedules one about 15 s
+       * after boot, so a long journey reaches it; "nothing newer" keeps it
+       * from putting an update notice over the screen being tested.
+       */
+      case 'check_for_update':
+        return { available: false, currentVersion: '0.1.0-e2e' };
+
+      /*
        * The shell asks this BEFORE it routes anywhere, so the shim has to
        * answer it or every journey lands on the recovery screen instead of the
        * app. It is modelled rather than left to the `default: null` below for

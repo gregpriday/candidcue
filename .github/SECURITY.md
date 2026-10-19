@@ -23,17 +23,22 @@ CandidCue is a local desktop application. You write a script, it displays on a
 second screen, and an on-device speech recogniser follows you as you read.
 Recognition and alignment both run on your machine. There is no account, no
 runtime API key, no analytics or crash-reporting client, and no backend of ours
-for the app to talk to. Logs and session records stay on your machine unless you
-export them and send them to us yourself.
+for the app to talk to beyond the static files of the update host. Logs and
+session records stay on your machine unless you export them and send them to us
+yourself.
 
-One path reaches the network in a stock build: the speech recognition model you
-choose to install, downloaded and checked against digests compiled into the app
-before it is installed. It discloses ordinary HTTPS request metadata to the host
-being contacted, including your IP address and a CandidCue User-Agent. It does
-not send us your scripts or your audio. `docs/network-inventory.md` is the full
-inventory and the source of truth for every claim in this section. If you find
-CandidCue transmitting user content with no clear user action behind it, that is
-a bug and we want to hear about it.
+Two paths reach the network in a stock build. The speech recognition model you
+choose to install is downloaded and checked against digests compiled into the
+app before it is installed. The update check asks `updates.candidcue.com`
+whether a newer build exists — automatically unless the user turns it off, and
+on request — and an update the user chooses to install is downloaded from the
+same host and verified against a minisign public key compiled into the app
+before it is installed. Both disclose ordinary HTTPS request metadata to the
+host being contacted, including your IP address and a CandidCue User-Agent.
+Neither sends us your scripts or your audio. `docs/network-inventory.md` is the
+full inventory and the source of truth for every claim in this section. If you
+find CandidCue transmitting user content with no clear user action behind it,
+that is a bug and we want to hear about it.
 
 ### In scope
 
@@ -50,6 +55,9 @@ Examples rather than an exhaustive list:
   intended media scope.
 - The speech model download transport: URL validation, redirect handling and
   SSRF controls.
+- The updater: manifest handling, signature verification against the compiled-in
+  key, the refusal to install during a take, and anything that lets a webview
+  choose what is installed or from where (`docs/updates.md`).
 - The speech model supply and loading path: archive and per-file digest
   verification, catalogue-limited extraction, staged installation,
   install-marker checks, resolution, and ONNX loading and inference.

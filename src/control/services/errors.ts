@@ -149,10 +149,34 @@ const ERROR_COPY: Record<string, string> = {
   STT_ENGINE_ERROR:
     'The speech recogniser failed unexpectedly. In a take, press A to start or stop auto-scroll, then stop and start the take to retry voice following.',
 
+  /* -- updates ------------------------------------------------------------ */
+  //
+  // src-tauri/src/updater.rs. The install ones are read inside the update
+  // notice, under a title that already names the version, so they say what
+  // happened and what is left as it was rather than repeating which update.
+  UPDATE_CHECK_FAILED:
+    'CandidCue could not reach the update server. Check your internet connection, then try again.',
+  UPDATE_RESPONSE_INVALID:
+    'The update server sent an answer CandidCue could not read. Try again later.',
+  UPDATE_CHECK_DISABLED: 'Automatic update checks are turned off in Settings.',
+  UPDATE_BLOCKED_BY_TAKE:
+    'An update cannot be installed during a take. It will wait until the take ends.',
+  UPDATE_BUSY: 'An update is already being installed.',
+  UPDATE_NOT_AVAILABLE:
+    'There is no update waiting to be installed. Choose Check for Updates… in the Help menu to look again.',
+  UPDATE_SELF_INSTALL_UNSUPPORTED:
+    'This copy of CandidCue cannot update itself. Download the new version from candidcue.com.',
+  UPDATE_DOWNLOAD_FAILED:
+    'The update could not be downloaded, and nothing was changed. Check your internet connection, then try again.',
+  UPDATE_SIGNATURE_INVALID:
+    'The downloaded update did not pass its signature check, so it was not installed. CandidCue has not changed.',
+  UPDATE_INSTALL_FAILED:
+    'The update was downloaded but could not be installed. Try again, or download the new version from candidcue.com.',
+
   /* -- network ------------------------------------------------------------ */
   //
   // Transcription is local now, so nothing here is about speech: what is left
-  // reaches the network only to check for updates.
+  // is the speech-model download and the update check above.
   NETWORK_OFFLINE:
     'CandidCue cannot reach the network. Check your internet connection, then try again.',
   NETWORK_TIMEOUT:

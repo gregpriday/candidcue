@@ -258,6 +258,9 @@ fn harness() -> Harness {
             commands::close_stage,
             commands::publish_stage_document,
             commands::publish_stage_command,
+            // Updates: only the paths that refuse before reaching the network.
+            commands::check_for_update,
+            commands::install_update,
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
@@ -270,6 +273,7 @@ fn harness() -> Harness {
     app.manage(paths.clone());
     app.manage(ScriptLocks::default());
     app.manage(AppCoordinator::default());
+    app.manage(candidcue_lib::updater::UpdaterState::default());
 
     let webview = WebviewWindowBuilder::new(&app, "control", tauri::WebviewUrl::App("control.html".into()))
         .build()
@@ -1848,4 +1852,67 @@ fn clearing_logs_through_the_command_keeps_the_open_log_writable() {
         "after the clear\n",
         "the appender must still be writing somewhere the user can read"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Updates: the refusals that keep promises (docs/updates.md)
+// ---------------------------------------------------------------------------
+
+/// The two promises the update commands make that a test can hold without a
+/// network: an automatic check is refused, before any request, when the user
+/// turned automatic checks off; and an install is refused while a take is
+/// running. Both go through the real IPC binding, so a renamed `automatic`
+/// argument fails here too.
+///
+/// The refusals come first in each command, which is why this harness can run
+/// them without the updater plugin registered: a check or install that got past
+/// its refusal would need the plugin's state and panic rather than pass.
+#[test]
+fn update_commands_refuse_when_they_promised_to() {
+    let h = harness();
+
+    let settings = h.expect_ok("get_settings", Value::Null);
+    assert_eq!(
+        settings["value"]["general"]["checkForUpdates"],
+        json!(true),
+        "a fresh document checks automatically"
+    );
+    let revision = settings["revision"].as_i64().expect("revision");
+    h.expect_ok(
+        "update_settings",
+        json!({ "expectedRevision": revision, "patch": { "general": { "checkForUpdates": false } } }),
+    );
+
+    let refused = h
+        .invoke("check_for_update", json!({ "automatic": true }))
+        .expect_err("an automatic check must be refused when checks are off");
+    assert!(!is_argument_rejection(&refused), "the argument must bind: {refused}");
+    assert_eq!(refused["code"], json!("UPDATE_CHECK_DISABLED"), "{refused}");
+
+    // An install while a take is running.
+    let created = h.expect_ok(
+        "create_script",
+        json!({ "input": { "title": "Update gate", "source": "# Gate\n\nBody.\n" } }),
+    );
+    let script_id = created["id"].as_str().expect("id").to_string();
+    let session = h.expect_ok(
+        "start_session",
+        json!({ "input": {
+            "scriptId": script_id,
+            "scriptSourceHash": "sha256:update-gate",
+            "mode": "voice",
+        }}),
+    );
+    let refused = h
+        .invoke("install_update", Value::Null)
+        .expect_err("an install during a take must be refused");
+    assert_eq!(refused["code"], json!("UPDATE_BLOCKED_BY_TAKE"), "{refused}");
+
+    // The take ends; with nothing found by a check, there is nothing to install.
+    let session_id = session["id"].as_str().expect("session id").to_string();
+    h.expect_ok("end_session", json!({ "sessionId": session_id, "summary": null }));
+    let refused = h
+        .invoke("install_update", Value::Null)
+        .expect_err("no check has found anything to install");
+    assert_eq!(refused["code"], json!("UPDATE_NOT_AVAILABLE"), "{refused}");
 }

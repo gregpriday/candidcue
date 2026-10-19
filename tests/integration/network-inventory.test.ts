@@ -240,6 +240,14 @@ const OUTBOUND_RUST = [
   /\bUdpSocket::bind\b/,
   /tokio::net::(?:TcpStream|UdpSocket)\b/,
   /tauri_plugin_http\b/,
+  /*
+   * The updater's request surface: building an updater (which is what makes
+   * the check and the download), or importing the trait that does. Registering
+   * the PLUGIN (`tauri_plugin_updater::Builder` in app.rs) makes no request and
+   * deliberately does not match.
+   */
+  /\bupdater_builder\s*\(/,
+  /\bUpdaterExt\b/,
 ];
 
 const usesOutboundRust = (code: string) => OUTBOUND_RUST.some((pattern) => pattern.test(code));
@@ -499,8 +507,14 @@ describe('nothing arrives that phones home on the app’s behalf', () => {
    * makes on purpose, and this is where they are reminded that the privacy
    * policy is a document with their name on it.
    */
+  /*
+   * `tauri-plugin-updater` left this list when the update check shipped
+   * (docs/updates.md). It did not leave the gate: the describe block below
+   * holds it to one manifest, no JavaScript package, no webview permission and
+   * the host this inventory names — which is a tighter rule than a ban on the
+   * name ever was.
+   */
   const FORBIDDEN = [
-    'tauri-plugin-updater',
     'tauri-plugin-http',
     'sentry',
     'posthog',
@@ -527,15 +541,102 @@ describe('nothing arrives that phones home on the app’s behalf', () => {
     expect(manifests.length).toBeGreaterThan(3);
   });
 
-  it.each(manifests)('%s declares no updater, analytics or crash-reporting client', (relPath) => {
+  it.each(manifests)('%s declares no analytics, crash-reporting or HTTP-plugin client', (relPath) => {
     const source = read(relPath);
     const present = FORBIDDEN.filter((name) => source.includes(name));
     expect(
       present,
-      `${relPath} pulls in ${present.join(', ')}. CandidCue 1.0 makes no ` +
-        `background network request of any kind (${INVENTORY}), and the ` +
-        `security policy and the privacy policy both say so in as many words.`,
+      `${relPath} pulls in ${present.join(', ')}. CandidCue's only background ` +
+        `request is the update check (${INVENTORY}), and the security policy and ` +
+        `the privacy policy both say so in as many words.`,
     ).toEqual([]);
+  });
+});
+
+describe('the update check is declared, Rust-owned and pointed where the inventory says', () => {
+  /*
+   * The updater is a network path the user did not start, so it gets the
+   * tightest rule in this file rather than a waiver. Each assertion is one way
+   * an UNDECLARED update surface could arrive: a second crate pulling the
+   * plugin in, the JavaScript package handing the webview the network, a
+   * capability granting the plugin's own commands, a different host compiled
+   * in, or a committed config loosening the transport.
+   */
+  const UPDATER_RS = 'src-tauri/src/updater.rs';
+
+  it('is declared in the app manifest and nowhere else', () => {
+    expect(read('src-tauri/Cargo.toml')).toMatch(/^tauri-plugin-updater\s*=/m);
+    for (const relPath of [
+      'crates/Cargo.toml',
+      'crates/cc-align/Cargo.toml',
+      'crates/cc-stt/Cargo.toml',
+    ]) {
+      expect(read(relPath), `${relPath} must not pull in the updater`).not.toContain(
+        'tauri-plugin-updater',
+      );
+    }
+  });
+
+  it('gives the webview no way to reach it but the two commands', () => {
+    const manifest = read('package.json');
+    expect(manifest, 'the JavaScript updater package').not.toContain('@tauri-apps/plugin-updater');
+    expect(manifest, 'nor the process plugin a JS relaunch needs').not.toContain(
+      '@tauri-apps/plugin-process',
+    );
+    const capabilities = readdirSync(join(REPO_ROOT, 'src-tauri/capabilities')).filter((entry) =>
+      entry.endsWith('.json'),
+    );
+    expect(capabilities.length, 'no capability files found').toBeGreaterThan(1);
+    for (const file of capabilities) {
+      const { permissions } = JSON.parse(read(`src-tauri/capabilities/${file}`)) as {
+        permissions: unknown[];
+      };
+      const granted = permissions.map((permission) =>
+        typeof permission === 'string' ? permission : JSON.stringify(permission),
+      );
+      expect(
+        granted.filter((permission) => /^(?:updater|process):|"(?:updater|process):/.test(permission)),
+        `${file} grants the updater or process plugin to a webview`,
+      ).toEqual([]);
+    }
+  });
+
+  it('contacts the host this inventory names, over https', () => {
+    const source = read(UPDATER_RS);
+    const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(source)?.[1];
+    expect(base, `UPDATE_BASE_URL could not be read out of ${UPDATER_RS}`).toBeDefined();
+    const url = new URL(base!);
+    expect(url.protocol).toBe('https:');
+    expect(
+      inventory.includes(url.hostname),
+      `${UPDATER_RS} checks ${url.hostname}, which ${INVENTORY} does not name. The ` +
+        `host a background check contacts is a privacy fact; revise the inventory ` +
+        `and legal/PRIVACY_POLICY.md first.`,
+    ).toBe(true);
+    expect(read('legal/PRIVACY_POLICY.md'), 'the privacy policy names it too').toContain(
+      url.hostname,
+    );
+    expect(declaredCallers(), 'and the inventory lists the updater as a caller').toContain(
+      UPDATER_RS,
+    );
+  });
+
+  it('is never loosened in the committed config', () => {
+    const conf = JSON.parse(read('src-tauri/tauri.conf.json')) as {
+      plugins?: { updater?: Record<string, unknown> };
+      bundle?: Record<string, unknown>;
+    };
+    const updater = conf.plugins?.updater;
+    expect(updater, 'plugins.updater must carry the public key').toBeDefined();
+    expect(typeof updater?.['pubkey']).toBe('string');
+    for (const key of [
+      'dangerousInsecureTransportProtocol',
+      'dangerousAcceptInvalidCerts',
+      'dangerousAcceptInvalidHostnames',
+      'endpoints',
+    ]) {
+      expect(updater?.[key], `plugins.updater.${key} must not be committed`).toBeUndefined();
+    }
   });
 });
 
@@ -597,6 +698,10 @@ describe('claims the inventory bans', () => {
     { pattern: /completely offline/i, bullet: '"Completely offline from first launch."' },
     { pattern: /(there is )?no network code/i, bullet: '"There is no network code."' },
     { pattern: /\bautomatic updates\b/i, bullet: '"Automatic updates."' },
+    {
+      pattern: /never checks for updates/i,
+      bullet: '"CandidCue never checks for updates."',
+    },
     {
       pattern: /support bundle can never contain/i,
       bullet: '"A support bundle can never contain your prose"',

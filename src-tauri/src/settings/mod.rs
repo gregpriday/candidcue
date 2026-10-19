@@ -123,15 +123,20 @@ pub struct OpticalSettings {
 pub struct GeneralSettings {
     /// 'library' | 'last_script' (Appendix A.1).
     pub open_to: String,
+    /// Settings › Data, privacy & updates › "Check for updates automatically".
+    ///
+    /// On by default. Off, the scheduled check never runs AND Rust refuses an
+    /// automatic check outright (`commands::check_for_update`), so the setting
+    /// is a promise about the network kept by the code that owns the network.
+    /// Help › Check for Updates… still works: asking is consent to that one
+    /// request. A document written before this field existed has no
+    /// `checkForUpdates` key and reads as the default.
+    pub check_for_updates: bool,
     /*
-     * No `update_check`. It was a String defaulting to "daily" that nothing
-     * scheduled and nothing read — a persisted claim that the app checks for
-     * updates every day, in a build with no updater at all. CandidCue 1.0
-     * updates manually (docs/updates.md).
-     *
-     * Removing it is safe for documents already on disk: serde ignores unknown
-     * fields, so an existing settings row carrying `updateCheck` still
-     * deserialises and simply drops it on the next write.
+     * Not `update_check`, the retired field. It was a String defaulting to
+     * "daily" that nothing scheduled and nothing read. Documents still carrying
+     * it load, because serde ignores unknown fields, and drop it on their next
+     * write.
      */
     /*
      * No `save_transcript` either. It was the transcript retention window
@@ -159,6 +164,7 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             open_to: "library".into(),
+            check_for_updates: true,
         }
     }
 }
@@ -1274,10 +1280,10 @@ mod tests {
     /// still very much alive.
     ///
     /// `general.updateCheck` was a String defaulting to `"daily"` that nothing
-    /// ever scheduled and nothing ever read. It went with the rest of the
-    /// updater surface when CandidCue 1.0 settled on manual updates
-    /// (docs/updates.md), and every settings document written before that
-    /// still has it on disk.
+    /// ever scheduled and nothing ever read. It went with the half-built
+    /// updater surface before 1.0, and every settings document written before
+    /// that still has it on disk. The real switch is `checkForUpdates`, a
+    /// different key, so the old value is never mistaken for a choice.
     ///
     /// The test above covers a whole removed SECTION, which `AppSettings`
     /// tolerates by not using `deny_unknown_fields`. This covers a removed
@@ -1311,6 +1317,33 @@ mod tests {
             written["general"].get("updateCheck").is_none(),
             "the retired field must not be written back out"
         );
+        assert!(
+            settings.general.check_for_updates,
+            "a document from before the switch existed checks automatically, the default"
+        );
+    }
+
+    /// "Check for updates automatically" round-trips, and a document that
+    /// predates it reads as on.
+    #[test]
+    fn the_automatic_update_check_switch_defaults_on_and_round_trips() {
+        assert!(AppSettings::default().general.check_for_updates);
+
+        let off: AppSettings = serde_json::from_value(serde_json::json!({
+            "general": { "openTo": "library", "checkForUpdates": false },
+        }))
+        .expect("loads");
+        assert!(!off.general.check_for_updates);
+        assert_eq!(
+            serde_json::to_value(&off).expect("serializes")["general"]["checkForUpdates"],
+            serde_json::json!(false)
+        );
+
+        let older: AppSettings = serde_json::from_value(serde_json::json!({
+            "general": { "openTo": "library" },
+        }))
+        .expect("loads");
+        assert!(older.general.check_for_updates);
     }
 
     /// #217: the transcript retention window, retired the same way.

@@ -17,12 +17,14 @@
 //! in ten seconds.
 //!
 //! ---------------------------------------------------------------------------
-//! ONE REPOSITORY
+//! TWO SITES, BOTH COMPILE-TIME CONSTANTS
 //! ---------------------------------------------------------------------------
-//! `REPOSITORY_URL` is the only place the application names where the project
-//! lives, and every destination is a fixed page inside it. If the project
-//! moves, it changes here — and in `docs/network-inventory.md`, which tells a
-//! reader where the Help menu sends them.
+//! `REPOSITORY_URL` is where the project's source, issues and release notes
+//! live; `WEBSITE_URL` is where CandidCue is downloaded from. Every destination
+//! is a fixed page of one of the two, and those two constants are the only
+//! places the application names either. If one moves, it changes here — and in
+//! `docs/network-inventory.md`, which tells a reader where the Help menu sends
+//! them.
 //!
 //! Nothing here reaches the network. `open_url` hands the string to macOS, which
 //! launches the user's browser; CandidCue makes no request of its own
@@ -35,9 +37,33 @@
 /// different host or a different repository.
 pub const REPOSITORY_URL: &str = "https://github.com/gregpriday/candidcue";
 
+/// Where CandidCue is downloaded from: the project's website.
+///
+/// Releases are published to the project's own update host, not to GitHub's
+/// release pages, and this is the page that links them. It is also where the
+/// update notice sends a copy that cannot replace itself (a Linux package
+/// install, for one — see `updater::install_support`).
+pub const WEBSITE_URL: &str = "https://candidcue.com";
+
+/// Which of the two sites a destination is a page of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Site {
+    Repository,
+    Website,
+}
+
+impl Site {
+    fn base(self) -> &'static str {
+        match self {
+            Site::Repository => REPOSITORY_URL,
+            Site::Website => WEBSITE_URL,
+        }
+    }
+}
+
 /// Every page the application can open, and nothing else.
 ///
-/// Each path is a literal suffix to `REPOSITORY_URL`: it starts with `/` and is
+/// Each path is a literal suffix to its site's base: it starts with `/` and is
 /// concatenated, never joined as a URL — a URL join would treat `/releases` as
 /// rooted at the host and drop the repository from the path. A destination is
 /// added here, in `src/shared/contracts/commands.ts`, in
@@ -51,26 +77,27 @@ pub const REPOSITORY_URL: &str = "https://github.com/gregpriday/candidcue";
 /// people that the labels do not mean anything. `HEAD` rather than a branch
 /// name, so renaming the default branch does not break the link.
 ///
-/// `download` is the latest release: the newest one that is neither a draft nor
-/// a prerelease. Until there is one, GitHub redirects it to the releases page,
-/// so the item lands where Release Notes does rather than on an error.
+/// `download` is the website, which is where builds are published; the
+/// repository's release pages are not where a user downloads CandidCue from.
+/// Help › Download Latest Version opens it, and so does the update notice's
+/// Download button on a copy that cannot install an update itself.
 ///
 /// There is no separate "send feedback" entry: it would be a second menu item
 /// pointing at the same new-issue page.
-const DESTINATIONS: &[(&str, &str)] = &[
-    ("website", ""),
-    ("guide", "/blob/HEAD/README.md"),
-    ("support", "/issues/new"),
-    ("release-notes", "/releases"),
-    ("download", "/releases/latest"),
+const DESTINATIONS: &[(&str, Site, &str)] = &[
+    ("website", Site::Repository, ""),
+    ("guide", Site::Repository, "/blob/HEAD/README.md"),
+    ("support", Site::Repository, "/issues/new"),
+    ("release-notes", Site::Repository, "/releases"),
+    ("download", Site::Website, ""),
 ];
 
 /// The URL for a destination name, or `None` if the name is not one of ours.
 pub fn url_for(name: &str) -> Option<String> {
     DESTINATIONS
         .iter()
-        .find(|(key, _)| *key == name)
-        .map(|(_, path)| format!("{REPOSITORY_URL}{path}"))
+        .find(|(key, _, _)| *key == name)
+        .map(|(_, site, path)| format!("{}{path}", site.base()))
 }
 
 /// The command that uses this table is `commands::shell_cmds`. Deliberately:
@@ -83,21 +110,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_destination_is_a_page_inside_the_one_repository() {
-        for (name, _) in DESTINATIONS {
+    fn every_destination_is_a_page_of_one_of_the_two_sites() {
+        for (name, site, _) in DESTINATIONS {
             let url = url_for(name).expect("declared destinations resolve");
             assert!(
                 url.starts_with("https://"),
                 "{name} is not https, and a Help menu that opens http is a downgrade \
                  attack waiting for a coffee shop"
             );
-            // The repository itself or something under it — not merely a string
-            // that starts the same way, which `…/candidcue-fork` also does.
+            // The site itself or something under it — not merely a string that
+            // starts the same way, which `…/candidcue-fork` also does.
+            let base = site.base();
             assert!(
-                url == REPOSITORY_URL || url.starts_with(&format!("{REPOSITORY_URL}/")),
-                "{name} resolves to {url}, which is not inside {REPOSITORY_URL}"
+                url == base || url.starts_with(&format!("{base}/")),
+                "{name} resolves to {url}, which is not inside {base}"
             );
         }
+        assert!(!WEBSITE_URL.ends_with('/') && !REPOSITORY_URL.ends_with('/'));
     }
 
     /// The structural tests above would pass for a table that sent every name to
@@ -110,7 +139,7 @@ mod tests {
             ("guide", "https://github.com/gregpriday/candidcue/blob/HEAD/README.md"),
             ("support", "https://github.com/gregpriday/candidcue/issues/new"),
             ("release-notes", "https://github.com/gregpriday/candidcue/releases"),
-            ("download", "https://github.com/gregpriday/candidcue/releases/latest"),
+            ("download", "https://candidcue.com"),
         ];
         for (name, url) in expected {
             assert_eq!(url_for(name).as_deref(), Some(url), "{name}");
@@ -127,7 +156,7 @@ mod tests {
         // A duplicate key would make the second one unreachable, and `find`
         // would answer with the first — silently, and only for that one page.
         let mut seen = std::collections::HashSet::new();
-        for (name, _) in DESTINATIONS {
+        for (name, _, _) in DESTINATIONS {
             assert!(seen.insert(*name), "{name} is declared twice");
         }
     }
@@ -162,7 +191,7 @@ mod tests {
         let end = ts[start..].find(';').expect("the union is terminated") + start;
         let union = &ts[start..end];
 
-        for (name, _) in DESTINATIONS {
+        for (name, _, _) in DESTINATIONS {
             assert!(
                 union.contains(&format!("'{name}'")),
                 "`{name}` is a destination Rust will open and the WebDestination \
@@ -182,8 +211,8 @@ mod tests {
 
     /// The one place a path could smuggle in a different host or repository.
     #[test]
-    fn no_path_can_leave_the_repository() {
-        for (name, path) in DESTINATIONS {
+    fn no_path_can_leave_its_site() {
+        for (name, _, path) in DESTINATIONS {
             assert!(
                 path.is_empty() || path.starts_with('/'),
                 "{name}'s path {path:?} does not start with `/`, so it would be \

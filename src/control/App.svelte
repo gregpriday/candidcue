@@ -33,6 +33,9 @@
   } from './lib/check-then-start';
   import { speechModelReadiness } from './stores/speech-model-readiness';
   import TakeReadinessSheet from './components/TakeReadinessSheet.svelte';
+  import UpdateNotice from './components/UpdateNotice.svelte';
+  import { createUpdateController } from './stores/updates';
+  import { checkForUpdate, installUpdate, listenForUpdateProgress } from './services/updates';
   import {
     dispatchDroppedImages,
     dispatchInsert,
@@ -118,7 +121,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
     session,
     stopSession,
   } from './stores/session';
-  import { loadSettings } from './stores/settings';
+  import { getSettingsSnapshot, loadSettings } from './stores/settings';
   import {
     closeSyntaxReference,
     openSyntaxReference,
@@ -128,6 +131,45 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   let ready = $state(false);
   let shortcutsOpen = $state(false);
+
+  /*
+   * In-app updates (docs/updates.md, #191).
+   *
+   * A take is "active" from the moment one starts arming until the glass is
+   * gone: `takeStarting` covers the start, `session.active` the take, and the
+   * presenting phase the closing transition after the session has already
+   * ended. The update notice draws nothing for any of it, a manual check's
+   * toast is dropped during it, and the install stands down — and Rust refuses
+   * an install during a take whatever this says.
+   */
+  function takeIsActive(): boolean {
+    return get(session).active || get(takeStarting) || get(presentingPhase) !== 'off';
+  }
+  const updates = createUpdateController({
+    check: checkForUpdate,
+    install: installUpdate,
+    listenForProgress: listenForUpdateProgress,
+    takeActive: takeIsActive,
+    automaticChecksEnabled: () => getSettingsSnapshot().general.checkForUpdates,
+    /*
+     * The install ends in a restart, and on Windows the installer closes the
+     * app without the quit handshake. So the editor is flushed FIRST, and an
+     * install is refused rather than allowed to outrun a save that failed.
+     */
+    prepareToQuit: async () => {
+      await saveNow();
+      if (editorHasUnsavedWork()) {
+        throw new Error(
+          'Your script has changes that could not be saved, so the update was not installed. Save the script, then try again.',
+        );
+      }
+    },
+    report: (message, tone) => showToast(message, tone),
+    openDownloadPage: () => openWebDestination('download'),
+    bringToFront: () => void focusAppWindow('control'),
+  });
+  const updateNotice = updates.notice;
+  let stopUpdateSchedule: (() => void) | null = null;
   /**
    * Files are over the window right now (§20.2).
    *
@@ -678,6 +720,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
         ready = true;
 
         /*
+         * The automatic update check: once shortly after launch, then every few
+         * hours, each tick reading "Check for updates automatically" as it
+         * stands (`stores/updates.ts`). Only once the app is really up — a
+         * recovery launch never gets here, and Rust refuses an automatic check
+         * there anyway.
+         */
+        stopUpdateSchedule = updates.start();
+
+        /*
          * After `ready`, and it does not need to wait for a paint: ToastRegion
          * lives outside the boot branch and is mounted for the whole life of the
          * shell. Raised last so it lands on the app rather than on the splash.
@@ -813,6 +864,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       teardownShutdown();
       releaseModelReadiness();
       releaseReadinessOnNavigate();
+      stopUpdateSchedule?.();
     };
   });
 
@@ -1065,6 +1117,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
         showToast(`The notices could not be opened. ${describeError(err)}`, 'danger');
       });
     },
+    checkForUpdates: () => void updates.checkNow(),
   };
 
   /** The script a File command acts on: the open one, or the selected row. */
@@ -1393,6 +1446,19 @@ import { rememberReaderFrame } from './lib/reader-frame';
   {/if}
 
   <ToastRegion />
+  <!--
+    The update notice (docs/updates.md). Outside the boot branch, so an update
+    found from the recovery screen — which may be the fix for what put the app
+    there — can still be installed. `hidden` for the whole of a take: an update
+    found then is held and appears when the take ends, never on the glass.
+  -->
+  <UpdateNotice
+    notice={$updateNotice}
+    hidden={$session.active || $takeStarting || $presentingPhase !== 'off'}
+    oninstall={() => void updates.install()}
+    onlater={() => updates.later()}
+    ondownload={() => void updates.download()}
+  />
   <ConfirmHost />
   <!--
     "Before this take", for every way of starting one (CCUX-013, #301). Hosted
