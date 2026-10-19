@@ -117,7 +117,7 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
 
   // Expected setup reads accent, NOT the warning treatment — in the row wash
   // AND in the pill, which are set independently.
-  await expect(pill(micRow(page))).toHaveText('Set up');
+  await expect(pill(micRow(page))).toHaveText('Not set up');
   await expect(pill(micRow(page))).toHaveClass(hasToken('accent'));
   await expect(micRow(page)).toHaveClass(hasToken('setup'));
   await expect(micRow(page)).not.toHaveClass(hasToken('attention'));
@@ -249,7 +249,7 @@ test('the welcome screen never probes microphone hardware to answer its own read
 
   // Read the counters only once the screen has fully settled — both rows in
   // their final state — or this asserts about a render that had not happened.
-  await expect(pill(micRow(page))).toHaveText('Set up');
+  await expect(pill(micRow(page))).toHaveText('Not set up');
   await expect(pill(displayRow(page))).toHaveText('Automatic');
 
   expect(await page.evaluate(() => window.__MIC_PROBES__)).toEqual({

@@ -317,6 +317,11 @@
       background var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast) var(--ease-out);
   }
+  /* At rest the field is the title, so it ends the way the title does: with an
+     ellipsis, not a word cut in half. Focus drops it so the caret can scroll. */
+  .title-input:not(:focus) {
+    text-overflow: ellipsis;
+  }
   .title-input:hover {
     background: var(--bg-hover-chrome);
   }

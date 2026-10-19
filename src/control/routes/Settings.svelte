@@ -696,6 +696,20 @@
    * is not called missing while the take fills it.
    */
   const pinnedMissing = $derived(displays.length > 0 && takeDisplay.reason === 'pin-missing');
+  /**
+   * The ordinary case of the same split: nothing missing, but takes open on one
+   * panel and the test and calibration use another (Automatic on a laptop with
+   * the prompter plugged in). Said beside the controls, because "this display"
+   * under a tile that reads Automatic named the wrong one.
+   */
+  const targetsSplit = $derived(
+    !pinnedMissing &&
+      effectiveDisplay !== null &&
+      // An unnamed window monitor is still somewhere other than the panel the
+      // test opens on, and the note says so in words.
+      (takeDisplay.display === null ||
+        takeDisplay.display.fingerprint !== effectiveDisplay.fingerprint),
+  );
   /** Where the take falls back to, named — or described, when the OS could not name it. */
   const windowPanel = $derived(
     windowDisplay === null
@@ -3177,10 +3191,25 @@
               </p>
             </div>
           {/if}
+          {#if targetsSplit}
+            <p class="hint-line target-note" data-search-row>
+              Takes open on <strong
+                >{takeDisplay.display ? displayName(takeDisplay.display) : windowPanel}</strong
+              >. Tests and calibration
+              use <strong>{displayName(effectiveDisplay)}</strong>, so a preview never covers the
+              editor.
+            </p>
+          {/if}
           <div class="row-actions" data-search-row>
             <Button disabled={identifying} onclick={() => void identifyDisplays()}>Identify displays</Button>
+            <!-- Named by the number Identify paints on the panel, which is short
+                 at any monitor name and is the one the tiles carry. -->
             <Button disabled={!effectiveDisplay || stageTesting} onclick={() => void runDisplayTest()}>
-              {stageTesting ? 'Opening…' : 'Show test on this display'}
+              {stageTesting
+                ? 'Opening…'
+                : effectiveDisplay && numbers.has(effectiveDisplay.fingerprint)
+                  ? `Show test on display ${numbers.get(effectiveDisplay.fingerprint)}`
+                  : 'Show test on this display'}
             </Button>
           </div>
           {#if displaysError}
@@ -4556,6 +4585,10 @@
     color: var(--text-muted);
     max-width: var(--prose-measure);
   }
+  .target-note strong {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
   /* Keys named in a hint, as the keys they are. */
   .hint-line kbd {
     display: inline-flex;
@@ -4836,9 +4869,11 @@
     border-color: var(--border-strong);
     background: var(--bg-hover-chrome);
   }
+  /* The state edge, not the hover one: --border-strong is under 3:1 on the
+     porcelain around the tile, so the choice leaned on the glyph's colour. */
   .monitor-tile.selected,
   .monitor-tile.selected:hover {
-    border-color: var(--border-strong);
+    border-color: var(--border-state);
     background: var(--bg-panel);
     box-shadow: var(--shadow-card);
   }

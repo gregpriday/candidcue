@@ -157,7 +157,7 @@
     tone: PillTone;
     pill: string;
     detail: string;
-    /** Only 'attention' tints the row; expected setup is accent, faults warn. */
+    /** Only 'attention' tints the row; unfinished setup is neutral, faults warn. */
     emphasis: 'quiet' | 'setup' | 'attention';
     /** The fix control's label. Speech has none while its picker is the action. */
     action?: string;
@@ -182,8 +182,10 @@
           action: 'Test microphone',
         }
       : {
-          tone: 'accent',
-          pill: 'Set up',
+          // Neutral, and a state rather than a verb: a petrol "Set up" capsule
+          // read as done, and said the same words as the link beneath it.
+          tone: 'neutral',
+          pill: 'Not set up',
           detail: 'Choose a microphone and check the level. Nothing is recorded.',
           emphasis: 'setup',
           action: 'Set up microphone',
@@ -267,8 +269,8 @@
       };
     }
     return {
-      tone: 'accent',
-      pill: 'Set up',
+      tone: 'neutral',
+      pill: 'Not set up',
       detail: 'Voice following needs a one-time download. Writing works without it.',
       emphasis: 'setup',
     };
@@ -439,8 +441,8 @@
         <p class="wordmark"><BrandMark size={22} /><span>CandidCue</span></p>
         <h1 id="welcome-heading" class="heading">Speak naturally. Keep your place.</h1>
         <p class="body">
-          CandidCue is a voice-following teleprompter for your second screen. Write or import a
-          Markdown script, choose a microphone, and present while the text follows you.
+          CandidCue is a voice-following teleprompter. Write or import a Markdown script, choose a
+          microphone, and present while the text follows you.
         </p>
       </div>
 

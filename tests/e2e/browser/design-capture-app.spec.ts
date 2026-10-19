@@ -197,6 +197,21 @@ async function shoot(
   if (size < 4_000) throw new Error(`${name}.png is ${size} bytes — not a real capture`);
 }
 
+test('00 the startup splash', async ({ page }) => {
+  await boot(page);
+  // The splash lasts as long as the boot report takes, so hold it open: on a
+  // fast machine it is otherwise gone before a frame can be taken.
+  await page.addInitScript(() => {
+    (
+      window as unknown as { __E2E__: { setHeld(command: string, held: boolean): void } }
+    ).__E2E__.setHeld('get_boot_status', true);
+  });
+  await page.goto('/control.html');
+  await expect(page.locator('.boot-mark')).toBeVisible();
+  await parkPointer(page);
+  await shoot(page, '00-splash');
+});
+
 test('01 library with the sidebar', async ({ page }) => {
   await bootLibrary(page);
   await parkPointer(page);

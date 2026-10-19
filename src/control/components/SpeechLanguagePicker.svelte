@@ -561,9 +561,12 @@
   The size rides on the button: it is the price of pressing it.
 -->
 {#snippet nextAction(option: SpeechLanguageOption, status: SpeechModelStatus)}
+  <!-- Filled in Settings, where installing a language is the page's job.
+       Plain on Welcome: there the setup is optional, and the filled button
+       belongs to starting a script — two of them is no primary at all. -->
   {#if !status.installed}
     <Button
-      variant="primary"
+      variant={compact ? 'default' : 'primary'}
       disabled={busyByModel[option.modelId]}
       onclick={() =>
         void runModelAction(option.modelId, startSpeechModelDownload, 'The download could not start.')}
@@ -572,7 +575,11 @@
       <span class="button-size">{formatBytes(status.downloadBytes)}</span>
     </Button>
   {:else if !option.active}
-    <Button variant="primary" disabled={!canActivate} onclick={() => void activate(option)}>
+    <Button
+      variant={compact ? 'default' : 'primary'}
+      disabled={!canActivate}
+      onclick={() => void activate(option)}
+    >
       Use {languageDisplayName(option.languageTag)}
     </Button>
   {/if}

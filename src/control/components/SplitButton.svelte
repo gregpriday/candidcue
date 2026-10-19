@@ -428,8 +428,13 @@
        without introducing a second hue. */
     background: color-mix(in srgb, var(--accent-contrast) 34%, transparent);
   }
+  /* The press as well as the hover. A keyboard press is `:active` without
+     `:hover`, and fell through to the outlined variant's grey press above —
+     the white label on --bg-secondary, all but invisible. */
   .primary .main:hover:not(:disabled),
   .primary .caret:hover:not(:disabled),
+  .primary .main:active:not(:disabled),
+  .primary .caret:active:not(:disabled),
   .primary.open .caret {
     background: var(--accent-strong);
   }

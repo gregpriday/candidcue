@@ -2424,8 +2424,15 @@
     background: var(--accent);
     color: var(--accent-contrast);
   }
+  /* Answered is a ring, not a disc. Petrol and the success green sit close in
+     hue, so two filled discs — the step you are on and the ones you have done —
+     read as one state; the current step keeps the only fill. */
   .step-item[data-state='answered'] .step-marker {
     border-color: var(--success);
+    background: var(--bg-app);
+    color: var(--success);
+  }
+  .step-item.active[data-state='answered'] .step-marker {
     background: var(--success);
     color: var(--accent-contrast);
   }
