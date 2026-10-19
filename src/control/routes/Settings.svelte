@@ -245,7 +245,7 @@
       id: 'privacy',
       label: 'Data, privacy & updates',
       keywords:
-        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
+        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / check for updates automatically / automatic update check / update check / install update / new version / updates.candidcue.com / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
     },
   ];
 
@@ -530,8 +530,18 @@
   });
 
   let engineStatus = $state<SpeechEngineStatus | null>(null);
-  /** The update policy sentence, filled in once the running version is known. */
-  let updateNote = $state('');
+  /** The running version, once Rust has said what it is (`app_version`). */
+  let runningVersion = $state<string | null>(null);
+  /**
+   * The update policy sentence, filled in once the running version is known.
+   * Derived, so flipping "Check for updates automatically" rewrites the
+   * sentence under it rather than leaving it describing the old answer.
+   */
+  const updateNote = $derived(
+    runningVersion === null
+      ? ''
+      : settingsService.describeUpdatePolicy(runningVersion, $settings.general.checkForUpdates),
+  );
   let diagnostics = $state<SystemDiagnostics | null>(null);
   let diagnosticsError = $state<string | null>(null);
   let diagnosticsLoading = $state(false);
@@ -2493,16 +2503,16 @@
   }
 
   /*
-   * `runUpdateCheck` used to sit here behind a "Check for updates" button that
-   * could only ever report that checking is unavailable. CandidCue 1.0 updates
-   * manually, so the section states the policy instead of offering an action
-   * that has no outcome (docs/updates.md).
+   * No "Check now" button here. Help › Check for Updates… is the action, and
+   * its answer is drawn in the document window, where the install flow lives —
+   * a second button here would have had to report into a window behind this
+   * one (docs/updates.md).
    */
   async function loadUpdatePolicy(): Promise<void> {
     const version = await settingsService.getAppVersion().catch(() => null);
     // A version we could not read is worth saying plainly. Inventing one here
     // is how the old `'0.1.0'` fallbacks ended up in support pastes.
-    updateNote = settingsService.describeUpdatePolicy(version ?? 'an unknown version');
+    runningVersion = version ?? 'an unknown version';
   }
 </script>
 
@@ -4181,26 +4191,33 @@
           <div class="privacy" data-search-row>
             <h3 class="privacy-head">When CandidCue uses the network</h3>
             <p class="privacy-body">
-              Only when you download a speech language, from Welcome or Speech settings. That
-              download carries neither your script nor your audio.
+              When you download a speech language, from Welcome or Speech settings, and when it
+              checks updates.candidcue.com for a newer version (Updates, below). Neither carries
+              your script or your audio.
             </p>
           </div>
           <div class="privacy" data-search-row>
             <!--
               #180 removed a "Diagnostic logging" toggle and an "Update channel"
               dropdown from here: neither reached Rust, so logging ran either way
-              and the channel selected nothing. A "Check for updates" button
-              survived that pass because it asked Rust a real question — but the
-              only answer Rust could give was "not available in this build".
+              and the channel selected nothing. The switch below is the opposite
+              case, and it is allowed here for that reason: it is Rust-owned
+              (`general.checkForUpdates`), and Rust refuses an automatic check
+              while it is off (`commands::check_for_update`), so turning it off
+              is a promise about the network kept by the code that owns it.
 
-              CandidCue 1.0 updates manually, so the whole update surface is now
-              one true statement rather than an action with no outcome
-              (docs/updates.md). The version comes from Rust, which reads it from
-              the signed bundle, so this line is also what a support request
-              should be asked to quote. Built like the statements above, so it
-              keeps their rhythm.
+              There is no channel to choose: a build follows the channel its own
+              version names (`updater.rs`). The version comes from Rust, which
+              reads it from the bundle, so the sentence is also what a support
+              request should be asked to quote.
             -->
             <h3 class="privacy-head">Updates</h3>
+            <Toggle
+              checked={$settings.general.checkForUpdates}
+              label="Check for updates automatically"
+              description="Shortly after CandidCue opens, then every six hours while it runs. An update is installed only when you choose, never during a take."
+              onchange={(value) => void patchSettings('general', { checkForUpdates: value })}
+            />
             <p class="privacy-body" data-testid="update-policy">
               {updateNote || 'Reading the installed version…'}
             </p>

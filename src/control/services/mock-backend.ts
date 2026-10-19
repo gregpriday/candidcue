@@ -282,7 +282,19 @@ export const mockSettings = {
   clearCache(kind: 'logs'): ClearResult {
     return { kind, clearedFiles: 0, clearedBytes: 0 };
   },
-  // No `checkForUpdate`: CandidCue 1.0 has no updater to mock.
+};
+
+/* ------------------------------------------------------------ updates */
+
+/**
+ * Browser dev has no update server and no bundle to replace. A check answers
+ * "nothing newer" for the version it is told is running, which is the one
+ * answer that cannot put an install button in front of somebody in a browser.
+ */
+export const mockUpdates = {
+  check(currentVersion: string): { available: false; currentVersion: string } {
+    return { available: false, currentVersion };
+  },
 };
 
 /* ------------------------------------------------------------ speech */

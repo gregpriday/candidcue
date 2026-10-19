@@ -13,6 +13,7 @@ pub mod sessions_cmds;
 pub mod settings_cmds;
 pub mod shell_cmds;
 pub mod stage_cmds;
+pub mod update_cmds;
 
 pub use align_cmds::*;
 pub use assets_cmds::*;
@@ -25,6 +26,7 @@ pub use recovery_cmds::*;
 pub use settings_cmds::*;
 pub use shell_cmds::*;
 pub use stage_cmds::*;
+pub use update_cmds::*;
 
 /// Application version string, e.g. "0.1.0".
 #[tauri::command]

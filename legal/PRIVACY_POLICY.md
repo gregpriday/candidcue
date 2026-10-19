@@ -1,6 +1,6 @@
 # CandidCue Privacy Policy
 
-**Effective date:** 17 October 2026
+**Effective date:** 19 October 2026
 
 CandidCue is a free, MIT-licensed teleprompter for the Mac. This policy
 describes the CandidCue application as the project releases it; a fork or a
@@ -50,9 +50,23 @@ against a SHA-256 hash built into the app before it is installed. Those
 servers handle your IP address under their own privacy policies; we receive
 nothing.
 
-This version of CandidCue does not check for application updates. An image in
-a script that points at a web address is not fetched. Links to web pages, in
-the Help menu or the speech model's licence, open in your browser.
+CandidCue also checks whether a newer version of itself is available: about
+fifteen seconds after it opens and every six hours while it runs, unless you
+turn off **Check for updates automatically** in Settings › Data, privacy &
+updates, and whenever you choose **Check for Updates…** in the Help menu. A
+check requests one small file from `updates.candidcue.com`. The request names
+the version of CandidCue you are running, its release channel, and your
+operating system and processor type, and, like any download, shows that server
+your IP address. It carries no account, no identifier and none of your
+scripts, audio or settings. The server is hosted by Cloudflare, which handles
+your IP address under its own privacy policy. If you choose to install an
+update, it is downloaded from the same server and installed only after it
+passes a signature check built into CandidCue; nothing is installed without
+your say-so, and never during a take.
+
+An image in a script that points at a web address is not fetched. Links to web
+pages, in the Help menu, the update notice or the speech model's licence, open
+in your browser.
 
 ## Diagnostics
 
@@ -78,8 +92,7 @@ what you sent and the account or address it came from.
 ## Changes and contact
 
 If a version of CandidCue changes what it does with your data or on the
-network, an update check included, this policy will be revised before that
-version is released.
+network, this policy will be revised before that version is released.
 
 Questions can go to the [issue tracker](https://github.com/gregpriday/candidcue/issues),
 which is public. For anything private, use a

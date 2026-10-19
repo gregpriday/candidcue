@@ -180,14 +180,16 @@ export interface CommandActions {
   /**
    * Open one of the project's pages, BY NAME.
    *
-   * The name is the whole contract. Rust maps it to a fixed page of the one
-   * compile-time repository (`src-tauri/src/web.rs`); the control window has no
+   * The name is the whole contract. Rust maps it to a fixed page of one of
+   * two compile-time sites (`src-tauri/src/web.rs`); the control window has no
    * permission to open an address it chose, and this signature is where that
    * stays true — the moment this takes a URL, the restriction is gone.
    */
   openWebDestination(name: WebDestination): void;
   /** Open the third-party notices this build shipped with. */
   thirdPartyNotices(): void;
+  /** Help › Check for Updates… — ask the update server now. */
+  checkForUpdates(): void;
 }
 
 /**
@@ -834,6 +836,18 @@ export const COMMANDS: Record<CommandId, CommandDefinition> = {
     label: 'Download Latest Version',
     available: (c) => !presenting(c),
     run: (a) => a.openWebDestination('download'),
+  },
+  /*
+   * Unavailable while presenting, for the reason the web group is: its answer
+   * is drawn in this window, and during a take this window is the glass. An
+   * automatic check that finds something then is HELD until the take ends
+   * (`stores/updates.ts`); this one simply is not offered.
+   */
+  'help.check-for-updates': {
+    id: 'help.check-for-updates',
+    label: 'Check for Updates…',
+    available: (c) => !presenting(c),
+    run: (a) => a.checkForUpdates(),
   },
   'help.notices': {
     id: 'help.notices',

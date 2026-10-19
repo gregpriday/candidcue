@@ -317,8 +317,11 @@ The procedure:
 4. **Tell the people who have it.** Every tester, by the channel you gave them,
    naming: what is wrong, what it can do to their data, whether to stop using
    it, and what to do instead. If there is a release-announcement list, this is
-   what it exists for — the app does not check for updates, so nothing else
-   will tell them.
+   what it exists for — the app's update check only ever offers a NEWER
+   version, so it will not warn anybody about the one they already have. If the
+   withdrawn build is still named in an update manifest on
+   `updates.candidcue.com`, point that manifest back at the previous release
+   first, so nobody else is offered it (`docs/updates.md`).
 5. **Fix forward.** Never re-cut a tag that has been published. The replacement
    is a new version — `1.0.0-rc.3` — even if the fix is one line, and the fix
    lands on `develop` and reaches `main` through a release merge like any other.

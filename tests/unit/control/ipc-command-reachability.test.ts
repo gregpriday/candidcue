@@ -35,8 +35,9 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
   remove_asset_reference: 'Asset GC runs from the compiler side; no UI affordance yet.',
   // `install_update` used to be waived here as "no updater plugin is wired in
   // v1". That waiver was the problem in miniature: an unreachable command with
-  // a note explaining why it is fine to leave registered. CandidCue 1.0 updates
-  // manually (docs/updates.md), so the command is gone rather than excused.
+  // a note explaining why it is fine to leave registered. It was removed rather
+  // than excused, and came back only with a real updater behind it — so it is
+  // on MUST_BE_WIRED below instead (docs/updates.md).
   // `save_display_profile` and `list_display_profiles` went the same way
   // (#232): dormant since single-window presentation, waived here for it, and
   // now removed with the table they wrote.
@@ -53,6 +54,10 @@ const MUST_BE_WIRED = [
   // exact silent failure this file exists to catch.
   'start_alignment',
   'stop_alignment',
+  // Without these the app never learns a fix exists: every installed copy
+  // stays on its version, which is a failure nobody would ever see.
+  'check_for_update',
+  'install_update',
 ];
 
 function registeredCommands(): string[] {

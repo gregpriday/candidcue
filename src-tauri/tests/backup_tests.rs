@@ -2518,6 +2518,21 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         ("close_control_window", "window management; reads no database"),
         ("focus_app_window", "window management; reads no database"),
         ("reveal_logs", "opens one named directory"),
+        /*
+         * Updates (docs/updates.md). Neither touches the user's data, and a
+         * newer build is a plausible way OUT of a database that will not open.
+         * An automatic check reads the settings document only when the boot is
+         * ready and refuses otherwise; a manual one reads nothing of the
+         * user's.
+         */
+        (
+            "check_for_update",
+            "a request to the update host; reads settings only when the database is ready",
+        ),
+        (
+            "install_update",
+            "replaces the app bundle, not app data; refused during a take, not in recovery",
+        ),
     ];
 
     let app_rs = include_str!("../src/app.rs");
@@ -2557,6 +2572,7 @@ fn every_registered_command_is_classified_for_recovery_mode() {
         include_str!("../src/commands/recovery_cmds.rs"),
         include_str!("../src/commands/shell_cmds.rs"),
         include_str!("../src/commands/microphone_cmds.rs"),
+        include_str!("../src/commands/update_cmds.rs"),
     ]
     .concat();
 

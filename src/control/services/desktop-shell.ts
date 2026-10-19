@@ -242,6 +242,15 @@ export const PREFERENCES_COMMANDS = [
   'window.settings',
   'view.settings',
   'help.reveal-logs',
+  /*
+   * Enabled here, ANSWERED BY CONTROL. `menu.rs` routes this one to the
+   * document window from wherever it is chosen (`CONTROL_ROUTED_COMMANDS`),
+   * because the update notice and the install flow live there; control brings
+   * itself forward with the answer. Listing it is what stops this window's push
+   * greying it out. The handler `PreferencesApp.svelte` gives it is only a
+   * fallback for a delivery that should not happen.
+   */
+  'help.check-for-updates',
 ] as const satisfies readonly CommandId[];
 
 /**
@@ -526,7 +535,7 @@ export async function revealLogs(): Promise<void> {
  * Open one of the project's pages in the browser (Help › the web group).
  *
  * The payload is a NAME. Rust holds the table that turns it into a fixed page
- * of the one compile-time repository (`src-tauri/src/web.rs`), which is what
+ * of one of two compile-time sites (`src-tauri/src/web.rs`), which is what
  * lets the control window keep having no permission to open an arbitrary
  * address — the `opener:default` grant was removed in the 1.0 readiness pass
  * and this is deliberately not a way to get it back.

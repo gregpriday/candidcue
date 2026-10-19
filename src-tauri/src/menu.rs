@@ -340,6 +340,14 @@ pub fn install(app: &AppHandle) {
 /// commands are forwarded, to control; the rest are dropped. See the note at
 /// the emit site for why that split rather than all-or-nothing.
 fn command_target(app: &AppHandle, id: &str) -> Option<String> {
+    /*
+     * A command whose answer lives in the control window goes there from
+     * anywhere — Settings included — rather than to whichever window is in
+     * front. Control brings itself forward to show the answer.
+     */
+    if is_control_routed(id) {
+        return Some(CONTROL_LABEL.to_string());
+    }
     let focused = app
         .webview_windows()
         .values()
@@ -391,6 +399,26 @@ const CONTEXT_FREE_COMMANDS: &[&str] = &[
 
 fn is_context_free(id: &str) -> bool {
     CONTEXT_FREE_COMMANDS.contains(&id)
+}
+
+/// Commands the CONTROL window answers, whichever window they are chosen over.
+///
+/// Help › Check for Updates… is the one. Its answer — "up to date", or the
+/// update notice with Install and Restart — is drawn in the document window,
+/// because that is where the install flow and its never-during-a-take rule
+/// live (`src/control/stores/updates.ts`). Delivered to Settings it would
+/// have nowhere to go: Settings has no notice to show and no way to ask control
+/// for one. Routing it here is what makes it work from Settings as well, and
+/// control brings itself forward to show the answer.
+///
+/// Safe from anywhere for the same reason the context-free list is: it acts on
+/// no document. During a take control's own registry refuses it (`available`
+/// is false while presenting), so routing it here cannot put anything on the
+/// glass.
+const CONTROL_ROUTED_COMMANDS: &[&str] = &["help.check-for-updates"];
+
+fn is_control_routed(id: &str) -> bool {
+    CONTROL_ROUTED_COMMANDS.contains(&id)
 }
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -712,6 +740,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("help.website", "CandidCue on GitHub", None)?,
             &item("help.release-notes", "Release Notes", None)?,
             &item("help.download", "Download Latest Version", None)?,
+            &item("help.check-for-updates", "Check for Updates…", None)?,
             &item("help.report-problem", "Report a Problem", None)?,
             &sep()?,
             &item("help.privacy", "Privacy and Local Processing", None)?,
@@ -1102,6 +1131,35 @@ mod tests {
         // Anti-vacuity, and a nudge to think when the list grows: these are the
         // commands that act on no document, and there are not many of them.
         assert_eq!(super::CONTEXT_FREE_COMMANDS.len(), 5);
+    }
+
+    /// Every control-routed id is a real command, and Settings lists it as one
+    /// it answers — otherwise its menu push would grey the item out over the
+    /// very window this routing exists to serve.
+    #[test]
+    fn control_routed_commands_are_real_and_enabled_over_settings() {
+        let ts = include_str!("../../src/shared/contracts/commands.ts");
+        let shell = include_str!("../../src/control/services/desktop-shell.ts");
+        let preferences = shell
+            .split("export const PREFERENCES_COMMANDS = [")
+            .nth(1)
+            .and_then(|rest| rest.split("] as const").next())
+            .expect("PREFERENCES_COMMANDS is declared in desktop-shell.ts");
+        for id in super::CONTROL_ROUTED_COMMANDS {
+            assert!(
+                ts.contains(&format!("'{id}'")),
+                "`{id}` is routed to control but is not a declared command"
+            );
+            assert!(
+                preferences.contains(&format!("'{id}'")),
+                "`{id}` is routed to control from Settings, but Settings greys it out"
+            );
+            assert!(
+                !super::CONTEXT_FREE_COMMANDS.contains(id),
+                "`{id}` is in both lists; control routing already covers every window"
+            );
+        }
+        assert_eq!(super::CONTROL_ROUTED_COMMANDS, &["help.check-for-updates"]);
     }
 
     #[test]

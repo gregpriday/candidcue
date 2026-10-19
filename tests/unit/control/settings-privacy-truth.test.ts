@@ -3,10 +3,11 @@
  *
  * Three things were untrue at once, and all three read as reassurance:
  *
- *  - "CandidCue checks for software updates." It does not, and it now says so.
- *    `check_for_update`/`install_update` used to return NOT_IMPLEMENTED behind
- *    a button; CandidCue 1.0 has no updater at all and the section states the
- *    manual-update policy instead (docs/updates.md).
+ *  - "CandidCue checks for software updates." It did not: `check_for_update`
+ *    and `install_update` returned NOT_IMPLEMENTED behind a button. It does
+ *    now (docs/updates.md, #191), so the rule has turned round — the section
+ *    must say exactly what the check is (which host, when, what it sends), how
+ *    to turn it off, and that nothing is installed without being asked for.
  *  - A "Diagnostic logging" toggle and an "Update channel" dropdown, neither of
  *    which reached Rust. `toRustPatch` had no mapping for either, so both wrote
  *    to the localStorage overlay and no code ever read them back. Logging ran
@@ -26,8 +27,9 @@
  * static copy and static control presence, and mounting a 3,000-line route
  * would drag in microphone, display, model and diagnostics setup to prove
  * something about a paragraph. The claims that ARE behaviour — the version
- * comes from Rust, and the update sentence never implies a check — are driven
- * through the real service path at the bottom of this file.
+ * comes from Rust, and the update sentence describes the check it really makes
+ * in the position the switch is in — are driven through the real service path
+ * at the bottom of this file.
  *
  * Assertions are on CLAIMS, not on prose. Pinning the paragraphs verbatim would
  * break on a rewording that is just as true, which teaches people to delete the
@@ -122,33 +124,50 @@ describe('#180 the privacy section describes what the app actually does', () => 
     );
   });
 
-  it('does not claim CandidCue checks for updates', () => {
+  it('describes the update check rather than hiding or overstating it', () => {
     /*
-     * Banning the one sentence that used to be here is not enough — a reworded
-     * claim ("CandidCue checks for updates daily", "we let you know when a new
-     * version is out") is the same lie and would sail past a literal ban. So
-     * the rule is the SHAPE: no sentence in this section may put CandidCue in
-     * the position of doing the checking or the telling.
+     * The section used to be held to "CandidCue never checks for updates".
+     * That became false the day the updater shipped (#191), and a privacy
+     * screen that kept saying it would be the worst kind of wrong: reassuring.
+     * So the rule is now positive. The section must NAME the host a check
+     * contacts, and every mention of an update server must be that host — not
+     * "our servers", not a service nobody can look up.
      */
-    expect(privacySection).not.toMatch(/checks for software updates/i);
-    expect(privacySection).not.toMatch(/checks? for (?:new )?(?:updates|versions)(?! on its own)/i);
-    expect(privacySection).not.toMatch(/\b(?:notifies?|tells?|lets? you know|alerts?)\b[^.]*\bnew(?:er)? (?:version|build|release)/i);
-    expect(privacySection).not.toMatch(/\bup to date\b/i);
-
-    /*
-     * Naming an update service is only a lie when it is ASSERTED. The shipping
-     * copy says "CandidCue has no update service and never contacts one",
-     * which is the most useful sentence on the screen and which a flat ban on
-     * the phrase would delete. So every mention has to be negated.
-     */
+    expect(privacySection, 'the update host must be named').toMatch(/updates\.candidcue\.com/);
     for (const mention of privacySection.matchAll(
-      /(.{0,24})update (?:server|service|feed|channel|endpoint)/gi,
+      /update (?:server|service|feed|channel|endpoint)[^.]{0,60}/gi,
     )) {
       expect(
-        mention[1],
-        `"${mention[0]}" asserts an update service rather than denying one`,
-      ).toMatch(/\b(?:no|not|never|without)\b/i);
+        mention[0],
+        `"${mention[0]}" names an update service without saying which host it is`,
+      ).toMatch(/updates\.candidcue\.com/);
     }
+
+    /*
+     * A RESULT is not a policy. This section never ran a check, so it may not
+     * report one — "up to date" here would be the single worst thing it could
+     * say, a reassurance about a question nobody asked.
+     */
+    expect(privacySection).not.toMatch(/\bup to date\b/i);
+    expect(privacySection).not.toMatch(/\bupdate (?:is )?available\b/i);
+
+    /*
+     * And it must not overstate in the other direction: an update is never
+     * installed by the check itself.
+     */
+    expect(privacySection).not.toMatch(/install(?:s|ed)? (?:updates )?automatically/i);
+    expect(privacySection).not.toMatch(/\bautomatic updates\b/i);
+  });
+
+  it('says when the network is used, update checks included', () => {
+    const network = privacySection.match(
+      /When CandidCue uses the network<\/h3>\s*<p class="privacy-body">([^<]*)/,
+    );
+    expect(network, 'the network paragraph could not be located').not.toBeNull();
+    const text = network?.[1] ?? '';
+    expect(text, 'the model download is one use').toMatch(/speech language/i);
+    expect(text, 'the update check is the other').toMatch(/updates\.candidcue\.com/);
+    expect(text, 'and an exclusive claim must not survive beside it').not.toMatch(/^\s*Only\b/);
   });
 
   it('does not invent a CandidCue server to be private from', () => {
@@ -197,13 +216,23 @@ describe('#180 the privacy section describes what the app actually does', () => 
      *
      * The rule is that a control in this section must DECIDE something, which
      * is exactly what the two removed ones did not — and, since #214, what the
-     * retention Select did not either. Nothing left in the section is a stored
-     * preference, so: no toggles and no selects at all. A privacy setting that
-     * genuinely ships can relax this, and should say what it decides when it
-     * does.
+     * retention Select did not either. So: no selects at all, and exactly one
+     * toggle — "Check for updates automatically", the one stored preference
+     * here that decides something. It writes `checkForUpdates`, a Rust-owned
+     * field the Rust `check_for_update` command reads before it will make an
+     * automatic check. Any other toggle has to make the same case before it
+     * relaxes this.
      */
-    expect(privacySection, 'no Toggle may return to this section').not.toMatch(/<Toggle\b/);
     expect(privacySection, 'no Select may return to this section').not.toMatch(/<Select\b/);
+    const toggles = [...privacySection.matchAll(/<Toggle\b[\s\S]*?\/>/g)].map((match) => match[0]);
+    expect(toggles, 'the update switch is the only toggle in this section').toHaveLength(1);
+    expect(toggles[0]).toMatch(/label="Check for updates automatically"/);
+    expect(toggles[0], 'and it reads the Rust-owned field').toMatch(
+      /checked=\{\$settings\.general\.checkForUpdates\}/,
+    );
+    expect(toggles[0], 'and writes it').toMatch(
+      /patchSettings\('general', \{ checkForUpdates: value \}\)/,
+    );
   });
 
   /*
@@ -266,41 +295,32 @@ describe('#180 the privacy section describes what the app actually does', () => 
     );
   });
 
-  it('offers no update action, because CandidCue 1.0 has no updater', () => {
+  it('offers the switch and the policy, and no second check button', () => {
     /*
-     * A "Check for updates" button used to survive here on the grounds that it
-     * asked Rust a real question. The answer was always "not available in this
-     * build", which makes it an action with no outcome — the same defect as the
-     * two controls #180 deleted, one level down. CandidCue 1.0 updates manually
-     * (docs/updates.md) and the section states that instead.
-     */
-    expect(privacySection, 'no update-check button may return').not.toMatch(/Check for updates/i);
-    expect(withoutComments, 'no update-check handler may return').not.toMatch(/runUpdateCheck/);
-
-    /*
-     * Structural, not spelling — the same escalation as the Toggle/Select rule
-     * above. Banning the old LABEL and the old HANDLER NAME leaves
-     * `<Button onclick={() => findNewerBuilds()}>Find newer builds</Button>`
-     * passing, which is the identical defect wearing different words. The real
-     * rule is that this section contains no interactive control at all beyond
-     * the maintenance actions, which live in their own `row-actions` block.
+     * Help › Check for Updates… is the action, and its answer is drawn in the
+     * document window where the install flow lives. A button here would have
+     * had to report into a window behind this one — so the Updates block has a
+     * switch and a statement, and no button.
      */
     const updateBlock = privacySection.slice(privacySection.indexOf('<h3 class="privacy-head">Updates'));
     expect(updateBlock, 'the Updates block must be found, or the ban below is vacuous').toContain(
       'data-testid="update-policy"',
     );
     expect(updateBlock, 'the Updates block must offer no button').not.toMatch(/<Button\b/);
+    expect(withoutComments, 'no update-check handler may return').not.toMatch(/runUpdateCheck/);
 
     /*
      * The rendered node must actually consume the policy sentence. Asserting
      * only that `describeUpdatePolicy` appears SOMEWHERE in the route would
-     * pass with its result discarded and misleading static copy in the node.
+     * pass with its result discarded and misleading static copy in the node —
+     * and it must be handed the switch's position, or the sentence under the
+     * switch describes the wrong one.
      */
     expect(updateBlock, 'the visible node must render the policy state').toMatch(
       /data-testid="update-policy"[^>]*>\s*\{updateNote/,
     );
     expect(withoutComments, 'the policy state must come from the pure function').toMatch(
-      /updateNote = settingsService\.describeUpdatePolicy\(/,
+      /settingsService\.describeUpdatePolicy\(runningVersion, \$settings\.general\.checkForUpdates\)/,
     );
   });
 });
@@ -319,7 +339,7 @@ describe('#180 the dead privacy settings are gone from the settings shape', () =
   });
 });
 
-describe('the manual-update policy is stated truthfully', () => {
+describe('the update policy is stated truthfully', () => {
   beforeEach(() => {
     ipc.calls.length = 0;
   });
@@ -336,47 +356,46 @@ describe('the manual-update policy is stated truthfully', () => {
     expect(ipc.calls).toEqual(['app_version']);
   });
 
-  it('never implies CandidCue watches for new versions', async () => {
-    /*
-     * The failure this guards against is the one the old code made structurally
-     * possible: a sentence that reads as reassurance about a check that never
-     * happens. Asserting only that SOME sentence is produced would pass with
-     * "CandidCue is up to date." in it — the single worst thing this screen
-     * could say.
-     */
+  it('says exactly what the automatic check is, when it is on', async () => {
     const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
-    const sentence = describeUpdatePolicy('9.9.9-test');
+    const sentence = describeUpdatePolicy('9.9.9-test', true);
 
     expect(sentence, 'the running version must be quotable from this line').toContain('9.9.9-test');
-    expect(sentence, 'the policy must be stated, not implied').toMatch(/never checks for updates/i);
-    expect(sentence, 'the user must be told how to actually update').toMatch(/download/i);
+    expect(sentence, 'which host').toMatch(/updates\.candidcue\.com/);
+    expect(sentence, 'when').toMatch(/every six hours/i);
+    expect(sentence, 'and how to ask by hand').toMatch(/Check for Updates…/);
+    /*
+     * What the request carries — the whole of it. The IP address is named
+     * because leaving it out is the classic understatement; the version, OS
+     * and processor are in the URL and the User-Agent (updater.rs).
+     */
+    expect(sentence, 'it carries the version').toMatch(/sends this version/i);
+    expect(sentence, 'the platform').toMatch(/operating system and processor/i);
+    expect(sentence, 'and, like any request, the IP address').toMatch(/IP address/);
+    expect(sentence, 'and nothing personal').toMatch(/nothing that identifies you/i);
+    expect(sentence, 'none of the scripts or audio').toMatch(/none of your scripts or\s+audio/i);
 
+    // What it never does.
+    expect(sentence, 'installs are the user’s decision').toMatch(/installed only when you choose/i);
+    expect(sentence, 'never during a take').toMatch(/never during a take/i);
+    expect(sentence, 'and only if signed').toMatch(/signature/i);
+
+    // A policy is not a result.
     expect(sentence).not.toMatch(/up to date/i);
-    expect(sentence).not.toMatch(/checking/i);
-    expect(sentence).not.toMatch(/update (?:available|server|service is)/i);
+    expect(sentence).not.toMatch(/update (?:is )?available/i);
+    expect(sentence).not.toMatch(/install(?:s|ed)? automatically|automatic updates/i);
+  });
 
-    /*
-     * The bans above are all about the WORD "check", and a sentence can imply
-     * a check without using it: "CandidCue never checks for updates manually;
-     * it polls the release feed at launch and tells you when a newer build
-     * exists" satisfies every assertion above while describing an updater.
-     *
-     * So this bans the MECHANISMS too. It is not an exhaustive list of ways to
-     * be misleading — no ban list is — but it covers the vocabulary anyone
-     * would reach for when wiring the feature back up, which is when this test
-     * needs to fire.
-     */
-    expect(sentence).not.toMatch(/\bpolls?\b|\bpolling\b/i);
-    expect(sentence).not.toMatch(/release feed|update feed|manifest|endpoint/i);
-    expect(sentence).not.toMatch(/\b(?:notifies?|tells?|alerts?|lets? you know)\b/i);
-    expect(sentence).not.toMatch(/\bautomatic(?:ally)?\b/i);
+  it('says the network is only touched on request, when the switch is off', async () => {
+    const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
+    const sentence = describeUpdatePolicy('9.9.9-test', false);
 
-    /*
-     * And the positive claim must be unqualified. "never checks for updates
-     * manually" and "never checks for updates without asking" both match the
-     * `/never checks for updates/i` above while meaning the opposite.
-     */
-    expect(sentence).toMatch(/never checks for updates and never contacts/i);
+    expect(sentence).toContain('9.9.9-test');
+    expect(sentence).toMatch(/Automatic checks are off/i);
+    expect(sentence, 'the remaining contact is by request only').toMatch(
+      /contacts updates\.candidcue\.com only when you\s+choose Check for Updates…/i,
+    );
+    expect(sentence, 'and it must not still describe a schedule').not.toMatch(/every six hours/i);
   });
 
   it('would still see comment-shaped copy if it were ever rendered', () => {
@@ -405,14 +424,16 @@ describe('the manual-update policy is stated truthfully', () => {
     );
   });
 
-  it('says what happens to user data across a manual update', async () => {
+  it('says what happens to user data across an update', async () => {
     /*
-     * "Replace the app in your Applications folder" is an instruction people
-     * hesitate over precisely because it sounds destructive. Scripts, settings
-     * and calibrations live in the app data directory, not the bundle, so the
+     * "Installing one replaces the app" is a sentence people hesitate over
+     * precisely because it sounds destructive. Scripts, settings and
+     * calibrations live in the app data directory, not the bundle, so the
      * sentence must say so — otherwise the honest policy reads as a warning.
      */
     const { describeUpdatePolicy } = await import('../../../src/control/services/settings');
-    expect(describeUpdatePolicy('1.2.3')).toMatch(/scripts, settings/i);
+    for (const automatic of [true, false]) {
+      expect(describeUpdatePolicy('1.2.3', automatic)).toMatch(/scripts,\s+settings/i);
+    }
   });
 });

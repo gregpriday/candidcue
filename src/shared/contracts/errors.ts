@@ -128,10 +128,22 @@ export const APP_ERROR_CODES = [
    */
   'PRESENTATION_FAILED',
   /*
-   * No `UPDATE_SIGNATURE_INVALID` / `UPDATE_INSTALL_FAILED`. CandidCue 1.0
-   * updates manually (docs/updates.md); planned error codes for a feature that
-   * does not exist are part of what made the half-updater look wired.
+   * In-app updates (src-tauri/src/updater.rs, docs/updates.md). Each is minted
+   * by Rust; none is reserved for later.
    */
+  'UPDATE_CHECK_FAILED',
+  'UPDATE_RESPONSE_INVALID',
+  /** An automatic check while "Check for updates automatically" is off. */
+  'UPDATE_CHECK_DISABLED',
+  /** An install while a take is running or the window is presenting. */
+  'UPDATE_BLOCKED_BY_TAKE',
+  'UPDATE_BUSY',
+  'UPDATE_NOT_AVAILABLE',
+  /** A copy that cannot replace itself: a Linux package, a dev build. */
+  'UPDATE_SELF_INSTALL_UNSUPPORTED',
+  'UPDATE_DOWNLOAD_FAILED',
+  'UPDATE_SIGNATURE_INVALID',
+  'UPDATE_INSTALL_FAILED',
   'INTERNAL_UNEXPECTED',
   // Structured codes minted by src-tauri/src/errors.rs constructors.
   'NOT_IMPLEMENTED',

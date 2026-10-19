@@ -57,6 +57,14 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwMUY0OEQwQTgwMThFNDcKUldSSGpnR28wRWdmTUJVY1NUbzdvaE1xKzRrelhqM2VoUnhPKy92V1pJOFo0MmV3SFBuZFJmU0sK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "copyright": "Copyright (c) 2026 Greg Priday",

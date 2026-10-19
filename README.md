@@ -39,12 +39,14 @@ now you build it from source (below). The remaining work is tracked in the
 ## Privacy
 
 No account, no telemetry and no API key. Recognition happens on device, so your
-audio and your script are not uploaded anywhere. The only network activity in
-normal use is the speech model download you start yourself (about 128 MB,
-checked against a pinned SHA-256). [`docs/network-inventory.md`](docs/network-inventory.md)
-lists every network path in the app, and an update check planned for v1.0.0
-([#191](https://github.com/gregpriday/candidcue/issues/191)) will be added there
-when it lands.
+audio and your script are not uploaded anywhere. The app uses the network for
+two things: the speech model download you start yourself (about 128 MB, checked
+against a pinned SHA-256), and an update check against `updates.candidcue.com`
+shortly after launch and every six hours, which you can turn off in Settings
+and which installs an update only when you choose to, never during a take
+([`docs/updates.md`](docs/updates.md)).
+[`docs/network-inventory.md`](docs/network-inventory.md) lists every network
+path in the app and exactly what each one sends.
 
 ## Requirements
 

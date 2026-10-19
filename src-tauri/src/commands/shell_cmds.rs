@@ -573,8 +573,8 @@ fn frame_path(paths: &DataPaths) -> std::path::PathBuf {
 /// `Moved`/`Resized` recorder in `app.rs` already covers every way the window
 /// can change shape, including the ones the frontend cannot see. A registered
 /// command with no caller is a widened ACL surface for a feature that does not
-/// exist — the same objection this codebase already records against the
-/// `check_for_update` stub that always returned NOT_IMPLEMENTED — and
+/// exist — the same objection that removed an always-NOT_IMPLEMENTED
+/// `check_for_update` stub before the real updater replaced it — and
 /// `ipc-command-reachability.test.ts` exists precisely to catch it.
 pub fn write_frame(paths: &DataPaths, frame: WindowFrame) -> Result<(), AppError> {
     /*

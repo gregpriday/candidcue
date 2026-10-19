@@ -129,9 +129,12 @@ commands.allow = [
   # (commands/microphone_cmds.rs), so neither widens what can be launched.
   "get_microphone_permission",
   "open_microphone_settings",
-  # No "check_for_update" / "install_update": CandidCue 1.0 updates manually
-  # (docs/updates.md). Both were permitted here while always returning
-  # NOT_IMPLEMENTED, which left an updater's ACL surface pre-approved.
+  # Updates (docs/updates.md). Neither takes a URL, a version or a path: the
+  # endpoint and the key are compiled in, and the install takes whatever Rust's
+  # own check found. Rust refuses an install during a take. The updater
+  # PLUGIN's commands (`updater:*`) and `process:*` are granted to no window.
+  "check_for_update",
+  "install_update",
   "start_session",
   "end_session",
   "list_sessions",
