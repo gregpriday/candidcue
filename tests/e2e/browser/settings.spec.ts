@@ -772,10 +772,12 @@ test('rows that render after the search ran are filtered too', async ({ page }) 
   await expect(framing).toBeHidden();
   await expect(horizontal).toContainText('Teleprompter Display');
   await expect(horizontal).toBeVisible();
-  // And the note counts what is actually left on screen: the display tiles
-  // and the sizing line arrived with the list and name the teleprompter, and
-  // the "connect" hint went with the list's absence.
-  await expectRowFilterNote(page, 5);
+  // And the note counts what is actually left on screen: the display tiles,
+  // the sizing line and the "Takes open on … Tests and calibration use" note
+  // (Automatic here, so the test panel is not where takes open) arrived with
+  // the list and name the teleprompter, and the "connect" hint went with the
+  // list's absence.
+  await expectRowFilterNote(page, 6);
 
   await page.getByRole('button', { name: 'Show all' }).click();
   await expect(framing).toBeVisible();
