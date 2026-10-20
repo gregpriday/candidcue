@@ -115,10 +115,10 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
 
   await expect(page.getByRole('heading', heading)).toBeVisible();
 
-  // Expected setup reads accent, NOT the warning treatment — in the row wash
+  // Expected setup reads neutral, NOT the warning treatment — in the row wash
   // AND in the pill, which are set independently.
   await expect(pill(micRow(page))).toHaveText('Not set up');
-  await expect(pill(micRow(page))).toHaveClass(hasToken('accent'));
+  await expect(pill(micRow(page))).toHaveClass(hasToken('neutral'));
   await expect(micRow(page)).toHaveClass(hasToken('setup'));
   await expect(micRow(page)).not.toHaveClass(hasToken('attention'));
 
