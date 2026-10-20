@@ -54,8 +54,8 @@ CandidCue also checks whether a newer version of itself is available: about
 fifteen seconds after it opens and every six hours while it runs, unless you
 turn off **Check for updates automatically** in Settings › Data, privacy &
 updates, and whenever you choose **Check for Updates…** in the Help menu. A
-check requests one small file from `updates.candidcue.com`. The request names
-the version of CandidCue you are running, its release channel, and your
+check requests one small file from `updates.speakingglass.com`. The request
+names the version of CandidCue you are running, its release channel, and your
 operating system and processor type, and, like any download, shows that server
 your IP address. It carries no account, no identifier and none of your
 scripts, audio or settings. The server is hosted by Cloudflare, which handles

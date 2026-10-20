@@ -385,7 +385,19 @@ describe('a release is published through the origin it was staged for', () => {
 
   it('refuses another one', () => {
     const { out } = stageMac();
-    expect(() => feed.checkOrigin(out, 'https://updates.candidcue.com')).toThrow(/staged for/);
+    expect(() => feed.checkOrigin(out, 'https://updates.speakingglass.com')).toThrow(/staged for/);
+  });
+
+  /*
+   * The publisher's default origin and the updater's compiled base are two
+   * constants in two languages. If they part, every release lands somewhere no
+   * installed copy looks.
+   */
+  it('publishes by default to the base the app polls', () => {
+    const updater = readFileSync(join(__dirname, '../../src-tauri/src/updater.rs'), 'utf8');
+    const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
+    expect(base, 'UPDATE_BASE_URL could not be read out of updater.rs').toBeDefined();
+    expect(`${feed.DEFAULT_PUBLIC_URL}/releases/`).toBe(base);
   });
 });
 

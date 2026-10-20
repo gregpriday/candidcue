@@ -29,7 +29,7 @@ yourself.
 
 Two paths reach the network in a stock build. The speech recognition model you
 choose to install is downloaded and checked against digests compiled into the
-app before it is installed. The update check asks `updates.candidcue.com`
+app before it is installed. The update check asks `updates.speakingglass.com`
 whether a newer build exists — automatically unless the user turns it off, and
 on request — and an update the user chooses to install is downloaded from the
 same host and verified against a minisign public key compiled into the app

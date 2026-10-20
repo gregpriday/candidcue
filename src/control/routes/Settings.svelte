@@ -245,7 +245,7 @@
       id: 'privacy',
       label: 'Data, privacy & updates',
       keywords:
-        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / check for updates automatically / automatic update check / update check / install update / new version / updates.candidcue.com / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
+        'data, privacy & updates / your data / privacy / location / backup / export all data / restore from export / your voice stays here / when the microphone is open / when candidcue uses the network / network / download / updates / check for updates automatically / automatic update check / update check / install update / new version / updates.speakingglass.com / version / about / diagnostics / refresh / candidcue version / platform / database check / scripts / sessions recorded / data folder / recent errors / copy diagnostics / export support bundle / support bundle / reveal bundle / clear logs / logs',
     },
   ];
 
@@ -4221,7 +4221,7 @@
             <h3 class="privacy-head">When CandidCue uses the network</h3>
             <p class="privacy-body">
               When you download a speech language, from Welcome or Speech settings, and when it
-              checks updates.candidcue.com for a newer version (Updates, below). Neither carries
+              checks updates.speakingglass.com for a newer version (Updates, below). Neither carries
               your script or your audio.
             </p>
           </div>

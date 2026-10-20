@@ -48,7 +48,7 @@
  *   node scripts/release-feed.mjs newest-stable [tags…]
  *
  * `CANDIDCUE_PUBLIC_URL` overrides the public origin (default
- * https://updates.candidcue.com). `stage` records it, and every later command
+ * https://updates.speakingglass.com). `stage` records it, and every later command
  * refuses a stage recorded for a different origin than the one it was given.
  */
 
@@ -71,7 +71,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-export const DEFAULT_PUBLIC_URL = 'https://updates.candidcue.com';
+export const DEFAULT_PUBLIC_URL = 'https://updates.speakingglass.com';
 export const PRODUCT = 'CandidCue';
 
 const SEMVER =

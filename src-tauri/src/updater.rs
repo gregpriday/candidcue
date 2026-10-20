@@ -52,7 +52,7 @@ use crate::windows::CONTROL_LABEL;
 ///
 /// As permanent as the signing key: it is compiled into every installed copy,
 /// so moving it strands every copy that knows only the old one.
-pub const UPDATE_BASE_URL: &str = "https://updates.candidcue.com/releases/";
+pub const UPDATE_BASE_URL: &str = "https://updates.speakingglass.com/releases/";
 
 /// Rust → control: an install is downloading, installing or about to restart.
 /// Mirrored verbatim in `src/shared/contracts/updates.ts`.
@@ -790,15 +790,15 @@ mod tests {
     fn the_endpoint_is_one_host_and_the_plugins_own_placeholders() {
         assert_eq!(
             endpoint_for_version("0.1.0"),
-            "https://updates.candidcue.com/releases/latest-{{target}}-{{arch}}.json"
+            "https://updates.speakingglass.com/releases/latest-{{target}}-{{arch}}.json"
         );
         assert_eq!(
             endpoint_for_version("0.2.0-beta.1"),
-            "https://updates.candidcue.com/releases/beta-{{target}}-{{arch}}.json"
+            "https://updates.speakingglass.com/releases/beta-{{target}}-{{arch}}.json"
         );
         assert_eq!(
             endpoint_for_version("1.0.0-rc.1"),
-            "https://updates.candidcue.com/releases/rc-{{target}}-{{arch}}.json"
+            "https://updates.speakingglass.com/releases/rc-{{target}}-{{arch}}.json"
         );
     }
 
@@ -809,7 +809,7 @@ mod tests {
     fn the_endpoint_parses_as_an_https_url() {
         let url: tauri::Url = endpoint_for_version("0.1.0").parse().expect("a URL");
         assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("updates.candidcue.com"));
+        assert_eq!(url.host_str(), Some("updates.speakingglass.com"));
         assert_eq!(
             url.path(),
             "/releases/latest-%7B%7Btarget%7D%7D-%7B%7Barch%7D%7D.json"
