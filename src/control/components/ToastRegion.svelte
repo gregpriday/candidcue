@@ -438,7 +438,9 @@
   .region {
     /* Above the status band with a gap, or above whatever a route publishes
        (Live's transport), whichever is higher. */
-    --toast-bottom: max(var(--toast-safe-bottom, 0px), calc(var(--statusbar-h) + var(--space-3)));
+    /* As far above the status band as it is in from the window's side
+       (`--page-x`), so the stack sits square in its corner. */
+    --toast-bottom: max(var(--toast-safe-bottom, 0px), calc(var(--statusbar-h) + var(--page-x)));
     position: fixed;
     right: var(--page-x);
     bottom: var(--toast-bottom);
@@ -594,7 +596,12 @@
   /* Text, not a second button shape: the toast is already a surface, and a
      filled button inside it would outweigh the message it acts on. It sits on
      its own line under the message, its text aligned with the message's, so a
-     long label never squeezes the words it acts on into a column. */
+     long label never squeezes the words it acts on into a column.
+
+     Ink with a quiet underline that firms on hover — the app's inline link
+     (Welcome's `.link`). Not petrol: "Show in Finder" and "Retry" are
+     utilities, and petrol is Present's; the notice's own glyph already says
+     whether it went well. */
   .action {
     margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
     padding: var(--space-1) var(--space-2);
@@ -602,13 +609,20 @@
     background: transparent;
     font: inherit;
     font-weight: 600;
-    color: var(--accent-strong);
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
-    transition: background var(--dur-fast) var(--ease-out);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      text-decoration-color var(--dur-fast) var(--ease-out);
   }
   .action:hover {
     background: var(--bg-hover-surface);
+    text-decoration-color: currentColor;
   }
 
   /* Its centre on the first line, like the glyph's. */

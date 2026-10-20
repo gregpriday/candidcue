@@ -102,36 +102,34 @@
     color: var(--text-primary);
   }
   /*
-   * A press reads as PUSHED IN; it does not shrink (§23.5, §9.3).
+   * A press does not shrink (§23.5, §9.3), and it does not sink either.
    *
-   * The same correction `Button.svelte` made, and it matters more here: icon
-   * buttons come in rows of five or six, and a row of shrinking squares is the
-   * single clearest tell that a desktop toolbar was built out of web
-   * components.
-   *
-   * An inset shadow rather than a darker fill, and that is the contrast check
-   * deciding rather than taste: `--bg-hover-chrome` already sits at 4.56:1
-   * against `--text-faint`, so any surface a step further from the text fails
-   * AA — the design-system token test rejected two candidates before this. A
-   * shadow inside the same surface changes the shape of the control without
-   * changing the ground its glyph is read against.
+   * Icon buttons come in rows of five or six, and a row of shrinking squares is
+   * the clearest tell that a desktop toolbar was built out of web components.
+   * The inset shadow that replaced the shrink was elevation by another name, so
+   * the press is now the ghost button's (`Button.svelte`): the hover ground,
+   * held. A darker fill is not available — `--bg-hover-chrome` already sits at
+   * 4.56:1 against `--text-faint`, and the design-system token test rejects any
+   * ground a step further from the text.
    */
   .icon-button:active:not(:disabled) {
     background: var(--bg-hover-chrome);
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
   }
   .icon-button:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
 
-  /* Toggled state — a seated white pill, same selection language as the rail. */
+  /* Toggled state: the chosen segment's language, exactly — a flat panel fill,
+     the state keyline, the glyph in ink (SegmentedControl's `.selected`). It
+     sat beside "Both" with a paler ring and a petrol glyph, two ways of
+     saying "on" an inch apart. No shadow: a chosen control is marked, not
+     lifted (the flat-button recipe). */
   .active,
   .active:hover:not(:disabled) {
     background: var(--bg-panel);
-    border-color: var(--border);
-    box-shadow: var(--shadow-card);
-    color: var(--accent-strong);
+    border-color: var(--border-state);
+    color: var(--text-primary);
   }
 
   .danger:hover:not(:disabled) {

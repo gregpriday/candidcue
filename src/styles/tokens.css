@@ -677,12 +677,15 @@
    * button or a column of script still colours the menu that opens over it.
    * The light inner edge is the line where the glass catches the light; on a
    * white fill it all but disappears, which is right — the rim and the shadow
-   * draw the edge, the inner line only keeps it crisp.
+   * draw the edge, the inner line only keeps it crisp. The rim is the one that
+   * has to hold over a white page (a Library row, the editor), where the
+   * shadow alone left a menu with no edge at all: 14% ink, the weight of the
+   * hairline a Mac menu draws there.
    */
   --glass-tint: rgba(255, 255, 255, 0.91);
   --glass-tint-thick: rgba(250, 251, 250, 0.92);
   --glass-solid: #ffffff;
-  --glass-rim: rgba(34, 40, 43, 0.1);
+  --glass-rim: rgba(34, 40, 43, 0.14);
   --glass-edge: rgba(255, 255, 255, 0.65);
   --glass-shadow: 0 14px 36px rgba(34, 40, 43, 0.14), 0 2px 8px rgba(34, 40, 43, 0.06);
   /*

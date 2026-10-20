@@ -180,9 +180,11 @@ pub struct PanelCandidate {
     pub position_x: i32,
     pub position_y: i32,
     pub size_mm: Option<PhysicalSizeMm>,
-    /// The name the panel gives itself in its EDID, where the platform's own
-    /// monitor name is not one. Windows only: tao names a Windows monitor by
-    /// its GDI device path (`\\.\DISPLAY1`).
+    /// The name people know the panel by, where tao's monitor name is not
+    /// one. On Windows the panel's own EDID name (tao names a Windows monitor
+    /// by its GDI device path, `\\.\DISPLAY1`); on a Mac the one AppKit shows in
+    /// System Settings (tao's is `Monitor #<model number>`). A label only:
+    /// fingerprints keep tao's name on a Mac.
     pub name: Option<String>,
     /// The panel's manufacturer and product code from its EDID (`GSM5B7F`):
     /// its model, the same on every port and after every reboot. Windows only,
@@ -279,7 +281,7 @@ impl PanelSizes {
         self.fact(monitor, |c| c.size_mm)
     }
 
-    /// The EDID name of the panel this monitor is (see [`PanelCandidate::name`]).
+    /// The name the panel goes by (see [`PanelCandidate::name`]).
     pub fn name_for_monitor(&self, monitor: &Monitor) -> Option<String> {
         self.fact(monitor, |c| c.name.clone())
     }
@@ -322,6 +324,7 @@ mod platform {
         let Ok(ids) = CGDisplay::active_displays() else {
             return Vec::new();
         };
+        let names = screen_names();
         ids.into_iter()
             .map(|id| {
                 let display = CGDisplay::new(id);
@@ -349,12 +352,52 @@ mod platform {
                         points_width: bounds.size.width,
                         points_height: bounds.size.height,
                     }),
-                    // tao's `Monitor #<model>` is already the model here.
-                    name: None,
+                    // tao's `Monitor #<model>` is already the model, so it
+                    // stays the identity; this is only the name people read.
+                    name: names.get(&id).cloned(),
                     product: None,
                 }
             })
             .collect()
+    }
+
+    /// What each display is called in System Settings › Displays, by
+    /// CoreGraphics display id: "Built-in Retina Display", "DELL U2720Q",
+    /// "Elgato Prompter".
+    ///
+    /// tao names every Mac monitor `Monitor #<model number>`, which is a
+    /// stable identity and a meaningless label: "Teleprompter · Monitor
+    /// #44578" beside Present told nobody which panel that was. AppKit has the
+    /// real name, and `NSScreenNumber` in a screen's device description is the
+    /// same id CoreGraphics lists the displays by.
+    ///
+    /// AppKit answers on the main thread only, which is where `list_displays`
+    /// runs (a synchronous command). Anywhere else this is empty and the label
+    /// stays tao's name, as it always was.
+    fn screen_names() -> std::collections::HashMap<u32, String> {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSScreen;
+        use objc2_foundation::{NSNumber, NSString};
+
+        let mut names = std::collections::HashMap::new();
+        let Some(mtm) = MainThreadMarker::new() else {
+            return names;
+        };
+        let key = NSString::from_str("NSScreenNumber");
+        for screen in NSScreen::screens(mtm).to_vec() {
+            let Some(number) = screen.deviceDescription().objectForKey(&key) else {
+                continue;
+            };
+            let Ok(number) = number.downcast::<NSNumber>() else {
+                continue;
+            };
+            let name = screen.localizedName().to_string();
+            let name = name.trim();
+            if !name.is_empty() {
+                names.insert(number.unsignedIntValue(), name.to_owned());
+            }
+        }
+        names
     }
 
     /// For the probe: the raw numbers behind each candidate, including the

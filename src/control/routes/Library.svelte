@@ -1172,6 +1172,16 @@
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
   }
+  /* Drawn at 22px to sit in the header row; hit at 28px, so the target
+     clears WCAG 2.5.8's 24px floor without the row growing to fit it. */
+  button.heading {
+    position: relative;
+  }
+  button.heading::after {
+    content: '';
+    position: absolute;
+    inset: -3px 0;
+  }
   button.heading:hover {
     background: var(--bg-hover-surface);
     color: var(--text-primary);

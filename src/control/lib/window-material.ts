@@ -13,9 +13,9 @@
  * first paint and no frame ever shows an opaque rail turning clear.
  *
  * Where the material SHOWS is the page's question, because only the page knows
- * where its chrome is: with a navigation rail drawn, the rail and the toolbar
- * band are glass and the document area is paper (`tokens.css`, WINDOW
- * MATERIAL). A window says it has a rail with {@link showMaterialRail}; until
+ * where its chrome is: the toolbar band, and the navigation rail when one is
+ * drawn, are glass and the document area is paper (`tokens.css`, WINDOW
+ * MATERIAL). A window says its chrome is up with {@link showMaterialRail}; until
  * it does, the canvas is opaque and only the titlebar shows the material —
  * which is what makes the boot splash, the recovery screen and a take safe
  * without any of them knowing this exists.
@@ -87,8 +87,9 @@ export function applyWindowMaterial(
 /**
  * Open (or close) the window's chrome to the material.
  *
- * `true` while a navigation rail is drawn: the canvas goes clear, the rail and
- * the toolbar band show the material, and the document area below the
+ * `true` while the window's chrome is drawn: the canvas goes clear, the
+ * toolbar band (and a rail, if there is one) shows the material, and the
+ * document area below the
  * toolbar keeps the desk's paper (`tokens.css`, WINDOW MATERIAL). Harmless on
  * a root with no material — the rules key on both attributes — so callers do
  * not need to ask first.

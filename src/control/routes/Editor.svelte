@@ -806,6 +806,33 @@ import type { PresentationMode } from '../services/settings-types';
   );
 
   /**
+   * What the warning beside Present SAYS, as the thing to do about it.
+   *
+   * It is a button to Settings › Speech, and a statement ("Voice following
+   * unavailable") read as a readout in the destination's place: people saw
+   * the problem and not that the words were the way to fix it. So it names
+   * the remedy, ending in an ellipsis because it opens a window, and the
+   * finding's own sentence — what is true — is its description.
+   */
+  /** What the Present group's live region says — see the markup. */
+  const presentStatusAnnouncement = $derived(
+    voiceModelProblem
+      ? $workspace.outlineVisible
+        ? ''
+        : voiceModelProblem.detail
+      : $takeDestination
+        ? destinationAnnouncement($takeDestination)
+        : '',
+  );
+
+  const VOICE_REMEDY: Record<string, string> = {
+    model_missing: 'Set up voice following…',
+    model_installing: 'Voice model installing…',
+    model_damaged: 'Repair voice following…',
+    model_unsupported: 'Choose a speech language…',
+  };
+
+  /**
    * Present, unless there is something the presenter has to know first.
    *
    * The immediate-launch rule is load-bearing: on a healthy familiar setup this
@@ -1011,13 +1038,13 @@ import type { PresentationMode } from '../services/settings-types';
      * shapes because it is a rarer choice than either, and it does not carry a
      * start row of its own: a practice opens at the beginning of the script.
      *
-     * That is a real limit, not a composition. `SplitButton` runs the row it is
-     * given the moment it is chosen and closes, so there is no gesture that
-     * picks a start row AND this one — practising a single section is simply
-     * not reachable from this menu today. It is recorded in the plan's "what is
-     * not done" rather than papered over here, because the shape of the fix is
-     * a design decision (a start row per shape, or a practice that opens at the
-     * caret) and not a wiring one.
+     * `SplitButton` runs the row it is given the moment it is chosen and
+     * closes, so no gesture picks a start row AND this one. The decision taken
+     * is the second of the two shapes that left open: a practice that opens at
+     * the caret, as its own row, offered only when the caret is somewhere a
+     * take could start — so working on one troublesome paragraph no longer
+     * means rehearsing from the top. Like every practice it is not bounded to
+     * a part; it simply begins there.
      */
     {
       label: PRACTICE_LABEL,
@@ -1025,6 +1052,15 @@ import type { PresentationMode } from '../services/settings-types';
       group: {},
       onselect: () => void checkThenPresent(undefined, undefined, true),
     },
+    ...(caretStartPoint === null
+      ? []
+      : [
+          {
+            label: `${PRACTICE_LABEL} from here`,
+            description: startPlace(caretStartPoint) ?? 'From the cursor',
+            onselect: () => void checkThenPresent(undefined, caretStartPoint?.tokenIndex, true),
+          },
+        ]),
     {
       label: 'Review take setup…',
       description: 'Speech model, microphone and display',
@@ -2332,29 +2368,61 @@ import type { PresentationMode } from '../services/settings-types';
           a way to act on it — a toolbar is the wrong place to argue a case.
         -->
         <div class="present-group">
-          {#if $takeDestination}
-            {@const destination = $takeDestination}
-            <p
-              class="present-destination"
-              class:mismatch={destination.mismatch !== null}
-              title={destination.mismatch?.detail ?? destination.summary}
-            >
+          <!-- One slot of fixed width for whichever line stands beside Present,
+               so the controls to its left keep their place when it changes:
+               the mode switch moved 59px when the warning replaced the
+               destination, and would again for every panel name. -->
+          <!--
+            ONE live region for whatever stands beside Present, mounted outside
+            its branches so a change between them is heard: the destination
+            moving, and voice readiness changing (installed, removed, damaged)
+            while the editor is open. A readiness change is said here only while
+            the outline is closed — when it is open its footer, a live region of
+            its own, says it, and this stays quiet rather than say it twice.
+          -->
+          <span class="sr-only" role="status" aria-live="polite">{presentStatusAnnouncement}</span>
+          <div class="present-status">
+            {#if voiceModelProblem}
+              {@const problem = voiceModelProblem}
+              {@const section = problem.action?.settingsSection ?? 'speech'}
+              {@const remedy = VOICE_REMEDY[problem.id] ?? 'Set up voice following…'}
               <!--
-                One live region for the pair, so a screen reader is told the
-                destination and its caveat as one fact rather than two, and gets
-                the WHOLE mismatch — what is different and what to do. A sighted
-                user is invited to hover by the colour change; nobody else is.
-                `polite`, because this changes when a window is dragged and must
-                never interrupt.
+                Why a voice take will not follow, beside the button that starts
+                one. It lived only in the outline's footer, so closing the
+                outline — which is what somebody does to concentrate — took a
+                known problem off the screen until they pressed Present. It takes
+                the destination's place while it lasts: the readiness sheet still
+                names the destination, and the one line here should be the thing
+                that is wrong.
               -->
-              <span class="sr-only" role="status" aria-live="polite">
-                {destinationAnnouncement(destination)}
-              </span>
-              <span class="present-destination-text" aria-hidden="true">
-                {destination.summary}
-              </span>
-            </p>
-          {/if}
+              <button
+                type="button"
+                class="present-voice"
+                title={problem.detail}
+                aria-describedby="present-voice-detail"
+                onclick={() => void openSettingsWindow(section)}
+              >
+                <Icon name="alert" size={13} />
+                <span class="present-voice-text">{remedy}</span>
+              </button>
+              <span id="present-voice-detail" class="sr-only">{problem.detail}</span>
+            {:else if $takeDestination}
+              {@const destination = $takeDestination}
+              <p
+                class="present-destination"
+                class:mismatch={destination.mismatch !== null}
+                title={destination.mismatch?.detail ?? destination.summary}
+              >
+                <!-- Heard through the region above, which says the
+                     destination and its caveat as one fact, and the WHOLE
+                     mismatch — what is different and what to do. `polite`,
+                     because this changes when a window is dragged. -->
+                <span class="present-destination-text" aria-hidden="true">
+                  {destination.summary}
+                </span>
+              </p>
+            {/if}
+          </div>
           <SplitButton
             variant="primary"
             label={$takeStarting ? 'Opening stage…' : 'Present'}
@@ -3022,7 +3090,12 @@ import type { PresentationMode } from '../services/settings-types';
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--bg-chrome);
+    /* The desk's paper — the Library's ground — not the chrome tone. On the
+       window material the chrome is the frame, and with the status band now
+       part of it, a chrome-grey outline sat between chrome above and below and
+       read as more frame in light while reading as content in dark. The outline
+       is a view of the document: it is paper in both. */
+    background: var(--bg-app);
     /* No border: the `PaneDivider` beside it draws the line, and two would be a
        two-pixel rule with a seam down the middle. */
   }
@@ -3449,6 +3522,14 @@ import type { PresentationMode } from '../services/settings-types';
     gap: var(--space-2);
     min-width: 0;
   }
+  .present-status {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    width: 34ch;
+    min-width: 0;
+    font-size: var(--text-2xs);
+  }
   /*
    * One quiet line, right-aligned into the button.
    *
@@ -3484,6 +3565,54 @@ import type { PresentationMode } from '../services/settings-types';
     color: var(--warning);
   }
 
+  /*
+   * The voice warning in the destination's place. A button, because it goes
+   * somewhere (Settings › Speech); quiet, because it is a warning about a take
+   * nobody has started — the warning colour on the words, no fill, the chrome
+   * hover. Never petrol, which is not a status.
+   */
+  .present-voice {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    max-width: 34ch;
+    height: 28px;
+    /* The words end where the destination's did, 8px from Present: the
+       padding is given back on the trailing side, so the line beside the
+       button does not jump when the warning takes its place. */
+    padding: 0 6px;
+    margin-right: -6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--warning);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  /* The app's inline-link mark, in the warning's colour: a quiet underline
+     that firms on hover (Welcome's `.link`, the toasts' actions). */
+  .present-voice-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+    text-underline-offset: 3px;
+  }
+  .present-voice:hover {
+    background: var(--bg-hover-chrome);
+  }
+  .present-voice:hover .present-voice-text {
+    text-decoration-color: currentColor;
+  }
+  .present-voice :global(svg) {
+    flex: 0 0 auto;
+  }
+
   /* Announced but not drawn. */
   .sr-only {
     position: absolute;
@@ -3514,6 +3643,18 @@ import type { PresentationMode } from '../services/settings-types';
   @media (max-width: 1100px) {
     .present-destination {
       display: none;
+    }
+    .present-status {
+      width: auto;
+    }
+    /* The warning keeps its glyph at any width; the words go to the tooltip
+       and the accessible name, which is the whole detail. */
+    .present-voice-text {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
     }
   }
 </style>

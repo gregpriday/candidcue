@@ -294,16 +294,18 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * The window's chrome, opened to the window material.
    *
    * On a Mac or Windows 11 the window's backing is the system's own glass
-   * (`lib/window-material.ts`): with the sidebar drawn, the sidebar and the
-   * toolbar band sit on it and the document area stays paper. Exactly when the
-   * sidebar is drawn and no longer: during the boot splash, the recovery
-   * screen, a take or with the sidebar hidden the canvas stays opaque, so
-   * nothing but the chrome can ever show the desktop through it.
+   * (`lib/window-material.ts`): on the Library and the Editor the toolbar band
+   * — and the sidebar, when it is drawn — sit on it and the document area
+   * stays paper. Hiding the sidebar keeps the band on the glass: a band that
+   * turned opaque, in a different tone, every time the sidebar was toggled
+   * read as two different windows. During the boot splash, the recovery screen
+   * or a take the canvas stays opaque, so nothing but the chrome can ever show
+   * the desktop through it.
    */
   $effect(() => {
-    const sidebarDrawn = ready && recoveryStatus === null && showSidebar && $workspace.sidebarVisible;
-    showMaterialRail(document.documentElement, sidebarDrawn);
-    showSidebarChrome(document.documentElement, sidebarDrawn);
+    const chromeDrawn = ready && recoveryStatus === null && showSidebar;
+    showMaterialRail(document.documentElement, chromeDrawn);
+    showSidebarChrome(document.documentElement, chromeDrawn && $workspace.sidebarVisible);
   });
 
   /*
@@ -1639,6 +1641,13 @@ import { rememberReaderFrame } from './lib/reader-frame';
   :global(html[data-presenting='true']) .shell {
     border-top-color: transparent;
   }
+  /* Nor under an overlay titlebar (a Mac: `lib/window-material.ts`): the page
+     runs up under the traffic lights, so there is no titlebar edge for the
+     seam to mark — only a hairline across the top of the window, and the
+     toolbar pushed a pixel lower than its band. */
+  :global(html[data-titlebar='overlay']) .shell {
+    border-top-width: 0;
+  }
 
   .content {
     flex: 1 1 auto;
@@ -1732,6 +1741,10 @@ import { rememberReaderFrame } from './lib/reader-frame';
     outline-color: var(--border-strong);
   }
 
+  /* The words get a plate of their own. The wash is a thin, see-through
+     veil over whatever the window holds, so the instruction cannot borrow its
+     contrast from it; the plate is thick glass (GLASS POLICY in tokens.css),
+     whose fills hold every text role at AA over anything. */
   .drop-card {
     display: flex;
     flex-direction: column;
@@ -1739,6 +1752,12 @@ import { rememberReaderFrame } from './lib/reader-frame';
     gap: var(--space-1);
     padding: var(--space-5) var(--space-8);
     text-align: center;
+    background: var(--glass-fill-thick);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
   }
   .drop-title {
     margin: 0;

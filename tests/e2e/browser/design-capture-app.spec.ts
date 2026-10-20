@@ -126,7 +126,26 @@ interface Boot {
   seeds?: ShimScriptSeed[];
   viewport?: { width: number; height: number };
   welcomed?: boolean;
+  /** The default speech model's status, when it is not the installed one. */
+  modelStatus?: Record<string, unknown>;
 }
+
+/** No speech model on this machine: what a first install looks like. */
+const MODEL_NOT_INSTALLED = {
+  modelId: 'x-asr-480ms',
+  modelName: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
+  languages: ['en', 'zh'],
+  phase: 'notInstalled',
+  source: null,
+  installed: false,
+  supported: true,
+  downloadBytes: 133_895_136,
+  installedBytes: 169_347_218,
+  progressBytes: 0,
+  progressTotal: 0,
+  operationId: null,
+  error: null,
+};
 
 /** Make the page report macOS before any app code reads `navigator`. */
 async function pretendMac(page: Page): Promise<void> {
@@ -138,8 +157,57 @@ async function pretendMac(page: Page): Promise<void> {
   });
 }
 
+/*
+ * The window as a Mac draws it: the system's sidebar material behind the page,
+ * and the overlay titlebar with its traffic lights on the toolbar band
+ * (`windows/material.rs`, tokens.css WINDOW MATERIAL).
+ *
+ * A browser has neither, so both are stood in for: the init-script globals Rust
+ * would set, a flat fill behind the page at the colour the real material was
+ * MEASURED at on macOS 26 (it barely moves with what is behind the window: 226
+ * to 237 grey light, 38 to 71 dark), and three lights where AppKit centres them
+ * in its unified titlebar — 19pt in, 14pt each, 20pt apart, on the 52px band's
+ * middle. Close enough to judge layout, tint and seams; the real vibrancy is
+ * still a native capture's to show. DESIGN_CAPTURE_MATERIAL=none takes the
+ * window as Linux or Windows 10 draws it instead.
+ */
+const MATERIAL = process.env['DESIGN_CAPTURE_MATERIAL'] === 'none' ? null : 'vibrancy';
+const MATERIAL_FILL = SCHEME === 'dark' ? 'rgb(71, 74, 75)' : 'rgb(226, 228, 228)';
+
+async function simulateMacWindow(page: Page): Promise<void> {
+  if (MATERIAL === null) return;
+  await page.addInitScript((fill: string) => {
+    const w = window as unknown as Record<string, unknown>;
+    w['__CANDIDCUE_WINDOW_MATERIAL__'] = 'vibrancy';
+    w['__CANDIDCUE_TITLEBAR__'] = 'overlay';
+    const paint = () => {
+      const style = document.createElement('style');
+      style.textContent = `
+        html:not([data-presenting='true']) { background: ${fill} !important; }
+        .capture-traffic-lights { position: fixed; top: 19px; left: 19px; z-index: 2147483647;
+          display: flex; gap: 6px; pointer-events: none; }
+        .capture-traffic-lights i { width: 14px; height: 14px; border-radius: 50%;
+          box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2); }
+        html[data-presenting='true'] .capture-traffic-lights { display: none; }`;
+      document.head.append(style);
+      const lights = document.createElement('div');
+      lights.className = 'capture-traffic-lights';
+      lights.setAttribute('aria-hidden', 'true');
+      for (const colour of ['#ff5f57', '#febc2e', '#28c840']) {
+        const light = document.createElement('i');
+        light.style.background = colour;
+        lights.append(light);
+      }
+      document.body.append(lights);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paint);
+    else paint();
+  }, MATERIAL_FILL);
+}
+
 async function boot(page: Page, opts: Boot = {}): Promise<void> {
   await pretendMac(page);
+  await simulateMacWindow(page);
   await page.setViewportSize(opts.viewport ?? WINDOW);
   await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: SCHEME });
   await installTauriShim(page, {
@@ -147,6 +215,16 @@ async function boot(page: Page, opts: Boot = {}): Promise<void> {
     seedScripts: opts.seeds ?? LIBRARY,
     engineStatus: ENGINE_READY,
     promptMode: 'voice',
+    // Keyed by the catalogue id AND the recogniser id: Settings asks by one
+    // and the editor's readiness by the other.
+    ...(opts.modelStatus
+      ? {
+          modelStatus: opts.modelStatus,
+          modelStatuses: Object.fromEntries(
+            ['x-asr-480ms', ENGINE_READY.model].map((id) => [id, { ...opts.modelStatus, modelId: id }]),
+          ),
+        }
+      : {}),
   });
 }
 
@@ -409,4 +487,72 @@ test('23 editor, both, at a larger text size', async ({ page }) => {
     .toBeGreaterThan(18);
   await parkPointer(page);
   await shoot(page, '23-editor-both-larger');
+});
+
+test('24 library, a row context menu over the list', async ({ page }) => {
+  await bootLibrary(page);
+  await row(page, 'Daintree intro').click({ button: 'right' });
+  await expect(page.locator('.menu[role="menu"]')).toBeVisible();
+  await expect(page.locator('.menu[role="menu"]')).toHaveClass(/placed/);
+  await shoot(page, '24-library-context-menu');
+});
+
+test('25 notices over the editor', async ({ page }) => {
+  await bootLibrary(page);
+  await openScript(page, 'Sample: read this aloud');
+  await page.evaluate(`(async () => {
+    window.__toastHarness ??= await import('/src/control/stores/toasts.ts');
+  })()`);
+  await page.evaluate(() => {
+    const store = (window as unknown as {
+      __toastHarness: {
+        holdToasts: (hold: boolean) => void;
+        showToast: (message: string, tone: string, options?: { action?: { label: string; run: () => void } }) => number;
+      };
+    }).__toastHarness;
+    store.holdToasts(true);
+    store.showToast('Exported “Sample: read this aloud” to Downloads.', 'success', {
+      action: { label: 'Show in Finder', run: () => undefined },
+    });
+    store.showToast('The script could not be saved. Your changes are still here; try again.', 'danger', {
+      action: { label: 'Retry', run: () => undefined },
+    });
+  });
+  await expect(page.locator('.toast:not(.folded)')).toHaveCount(2);
+  await parkPointer(page);
+  await shoot(page, '25-editor-notices');
+});
+
+test('26 a take with its controls drawer open', async ({ page }) => {
+  await bootLibrary(page);
+  await collection(page).getByRole('button', { name: 'Present', exact: true }).first().click();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await page.getByRole('button', { name: /Take controls/ }).click();
+  await expect(page.getByRole('region', { name: 'Take controls' })).toBeVisible();
+  await parkPointer(page);
+  await shoot(page, '26-take-drawer');
+});
+
+test('27 editor with the sidebar hidden', async ({ page }) => {
+  await bootLibrary(page);
+  await openScript(page, 'Sample: read this aloud');
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.emit('menu://command', { id: 'view.toggle-sidebar' })))
+    .toBeGreaterThan(0);
+  await expect(page.getByRole('navigation', { name: 'Library' })).toBeHidden();
+  await parkPointer(page);
+  await shoot(page, '27-editor-no-sidebar');
+});
+
+test('28 editor with no speech model and the outline closed', async ({ page }) => {
+  await bootLibrary(page, { modelStatus: MODEL_NOT_INSTALLED });
+  await openScript(page, 'Sample: read this aloud');
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.emit('menu://command', { id: 'view.toggle-outline' })))
+    .toBeGreaterThan(0);
+  await expect(page.getByRole('complementary', { name: 'Outline' })).toBeHidden();
+  await expect(page.getByRole('button', { name: /Set up voice following/ })).toBeVisible();
+  await parkPointer(page);
+  await shoot(page, '28-editor-no-model');
 });

@@ -362,11 +362,20 @@
       if (event.key === 'Escape') {
         event.stopPropagation();
         event.preventDefault();
+        // A cleared panel comes back first; the next Escape cancels.
+        if (endReveal) {
+          endReveal();
+          return;
+        }
         oncancel();
         return;
       }
       if (event.key !== 'Tab') return;
-      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+      // Not the controls a reveal has cleared: they are inert while it is up,
+      // and the trap must not hand focus to something nobody can see.
+      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+        (element) => element.closest('[inert]') === null,
+      );
       const active = document.activeElement as HTMLElement | null;
       const next = nextTrapFocus(focusables, active, event.shiftKey, panel.contains(active));
       if (next) {
@@ -426,6 +435,8 @@
    * where the panel will come back.
    */
   let revealing = $state(false);
+  /** Puts the panel back, while a reveal is up. */
+  let endReveal: (() => void) | null = null;
 
   /**
    * Clear the panel until `released` fires on the window, or the window loses
@@ -441,11 +452,30 @@
     });
     function end(): void {
       revealing = false;
+      endReveal = null;
       for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);
       window.removeEventListener('blur', end);
     }
+    endReveal = end;
     for (const [type, listener] of listeners) window.addEventListener(type, listener, true);
     window.addEventListener('blur', end);
+  }
+
+  // A reveal left up by a click outlives nothing: leaving puts it away.
+  $effect(() => () => endReveal?.());
+
+  /**
+   * The activation with no press behind it — a screen reader's, a switch's —
+   * TOGGLES the reveal, because there is nothing to hold. Pointer presses and
+   * Space/Return held and released it already; a pointer click carries a
+   * click count and the keys' clicks never arrive (their keydown is
+   * cancelled), so only a zero-count click gets here. A second one, or
+   * Escape, puts the panel back.
+   */
+  function onRevealClick(event: MouseEvent): void {
+    if (event.detail !== 0) return;
+    if (revealing) endReveal?.();
+    else holdReveal([]);
   }
 
   function onRevealPointerDown(event: PointerEvent): void {
@@ -555,6 +585,7 @@
       aria-pressed={revealing}
       onpointerdown={onRevealPointerDown}
       onkeydown={onRevealKeydown}
+      onclick={onRevealClick}
     >
       <Icon name="eye" size={15} />
     </button>
@@ -563,6 +594,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="body"
+    inert={revealing}
     bind:this={body}
     data-more-above={moreAbove ? '' : undefined}
     data-more-below={moreBelow ? '' : undefined}
@@ -849,7 +881,7 @@
        on a control and the panel does not jump when it comes and goes; shown
        only while there is more below. -->
   {#if moreAbove || moreBelow}
-    <div class="more-row">
+    <div class="more-row" inert={revealing}>
       <button
         type="button"
         class="more"
@@ -862,7 +894,7 @@
     </div>
   {/if}
 
-  <footer class="foot">
+  <footer class="foot" inert={revealing}>
     {#if readoutOnly}
       <Button variant="primary" size="sm" onclick={oncancel}>Close</Button>
     {:else}

@@ -208,11 +208,16 @@
     // been torn down.
     window.addEventListener('resize', onGeometryChange);
     window.addEventListener('scroll', onGeometryChange, true);
+    // And when the window stops being the one in front, as a Mac or Windows
+    // menu does — switching to another app must not leave this one waiting
+    // for the return, holding the keyboard. No focus restore: the user left.
+    window.addEventListener('blur', onGeometryChange);
     return () => {
       window.removeEventListener('pointerdown', dismiss, true);
       window.removeEventListener('contextmenu', dismiss, true);
       window.removeEventListener('resize', onGeometryChange);
       window.removeEventListener('scroll', onGeometryChange, true);
+      window.removeEventListener('blur', onGeometryChange);
     };
   });
 </script>

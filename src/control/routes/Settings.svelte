@@ -673,6 +673,13 @@
    */
   const numbers = $derived(displayNumbers(displays));
 
+  /** A panel's name held on one line: "Pro / Display XDR" broke a product
+      name in two inside the Automatic tile. The number, the dot and the name
+      travel together too, so no line ends on a stray "·". */
+  function unbroken(name: string): string {
+    return name.replace(/ /g, '\u00a0');
+  }
+
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
   /**
    * Where a prompter take opens right now: Present's own rule
@@ -3139,7 +3146,7 @@
                    is wherever the CandidCue window is. -->
               <span class="monitor-meta">
                 {automaticDisplay
-                  ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? ` · ${automaticDisplay.name}` : ''}`
+                  ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? `\u00a0·\u00a0${unbroken(automaticDisplay.name)}` : ''}`
                   : 'The display the CandidCue window is on'}
               </span>
             </button>
@@ -3239,7 +3246,7 @@
               <span>
                 Prompter text on <strong>{effectiveDisplay?.name ?? 'this display'}</strong>:
                 {#if appliedRig}
-                  {appliedRig.rigName}, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
+                  the “{appliedRig.rigName}” rig, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
                     ? ''
                     : `, about ${Math.round(rigOptics.charactersPerLine)} characters a line`}.
                 {:else if automaticRig}
@@ -4550,13 +4557,18 @@
     background: var(--bg-elevated);
   }
 
+  /*
+   * The scroller runs to the window's edge and the COLUMN inside it is held to
+   * 640px. With the cap on the scroller itself, a visible scroll bar (a mouse
+   * attached, or "Always show scroll bars") hung in the margin 28px short of
+   * the edge, where the editor's and the Library's sit flush.
+   */
   .content {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-6) var(--page-x) var(--space-8);
-    max-width: 640px;
     /*
       Sections stacked as plain blocks had NO space between them: the next
       section's heading sat directly on the previous section's last control —
@@ -4575,6 +4587,9 @@
     */
     --field-label-color: var(--text-primary);
     --field-label-weight: 500;
+  }
+  .content > :global(*) {
+    max-width: calc(640px - 2 * var(--page-x));
   }
   /* No last word alone on a line, in any of the section's prose — its own and
      its fields' descriptions alike. */
@@ -4941,6 +4956,8 @@
     min-height: 26px;
     margin-bottom: var(--space-1);
   }
+  /* A disc, not a key. Outlined and square-cornered it was the shortcut
+     sheet's keycap, and a "1" on a key reads as a key to press. */
   .monitor-number {
     display: inline-flex;
     align-items: center;
@@ -4948,8 +4965,7 @@
     min-width: 26px;
     height: 26px;
     padding: 0 var(--space-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-pill);
     background: var(--bg-secondary);
     color: var(--text-primary);
     font-size: var(--text-base);
@@ -4981,6 +4997,10 @@
     line-height: var(--lh-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    /* The Automatic tile holds a panel's name together (`unbroken`), and a
+       name longer than the tile must still break rather than run into the
+       next one: only where nothing else fits. */
+    overflow-wrap: anywhere;
   }
   .monitor-badges {
     display: flex;
@@ -5486,28 +5506,16 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
+    /* Steady. It pulsed, forever, beside the input meter that already moves
+       with the voice — a second, competing motion while somebody judges their
+       microphone, and the house allows no perpetual motion. A filled mark is
+       "listening"; the words beside it say so too. */
     background: var(--live);
-    animation: mic-test-pulse 1.4s var(--ease-inout) infinite;
   }
   /* Starting is not yet listening: a hollow mark until the microphone is live. */
   .mic-test[data-phase='opening'] .mic-test-dot::before {
     background: transparent;
     box-shadow: inset 0 0 0 1.5px var(--live);
-    animation: none;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .mic-test-dot::before {
-      animation: none;
-    }
-  }
-  @keyframes mic-test-pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.35;
-    }
   }
   .mic-test-words {
     margin: 0;

@@ -119,13 +119,22 @@ core-graphics = "0.25"
 # version tauri itself already links, so the app carries one copy.
 window-vibrancy = "0.6"
 # The unified titlebar the traffic lights centre in, over the page's toolbar
-# band (`windows/material.rs`). All three already in the tree at these
+# band (`windows/material.rs`), and the name each display goes by in System
+# Settings (`windows/panel_size.rs`). All three already in the tree at these
 # versions, through tao and window-vibrancy.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSDictionary",
+  "NSString",
+  "NSValue",
+] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
+  "NSGraphics",
   "NSResponder",
+  "NSScreen",
   "NSToolbar",
   "NSWindow",
 ] }

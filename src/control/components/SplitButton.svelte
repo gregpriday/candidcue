@@ -171,18 +171,48 @@
     if (restoreFocus) root?.querySelector<HTMLElement>('.caret')?.focus();
   }
 
+  function toggle(highlight: boolean): void {
+    if (open) {
+      closeMenu(true);
+      return;
+    }
+    openMenu(firstEnabledIndex(items), highlight);
+  }
+
+  /**
+   * The caret opens on the PRESS, as a Mac menu does and as every other menu
+   * in the app does (OverflowMenu, which documents the cancelled default: in
+   * Chromium and in WKWebView the press would otherwise move focus off the
+   * first item after `openMenu` put it there). The launcher was the one menu
+   * that waited for the release.
+   *
+   * Set while the click that press will send on release is still to come; a
+   * keyboard click is told apart by its click count, so a stale flag can
+   * swallow neither.
+   */
+  let pressHandled = false;
+
+  function onCaretMouseDown(event: MouseEvent): void {
+    pressHandled = false;
+    if (event.button !== 0 || event.ctrlKey || disabled) return;
+    event.preventDefault();
+    pressHandled = true;
+    toggle(false);
+  }
+
   /**
    * `detail` tells a pointer click from a key-synthesised one — see
    * OverflowMenu, which documents why that is the only available discriminator
    * and why getting it wrong leaves a keyboard user inside a menu with nothing
    * drawn to say where they are.
    */
-  function toggle(event?: MouseEvent): void {
-    if (open) {
-      closeMenu(true);
+  function onCaretClick(event: MouseEvent): void {
+    const fromKeyboard = event.detail === 0;
+    if (pressHandled && !fromKeyboard) {
+      pressHandled = false;
       return;
     }
-    openMenu(firstEnabledIndex(items), !event || event.detail === 0);
+    toggle(fromKeyboard);
   }
 
   function onTriggerKeydown(event: KeyboardEvent): void {
@@ -205,7 +235,9 @@
       closeMenu(false);
       return;
     }
-    const index = nextMenuIndex(items, activeIndex, event.key);
+    // Opened by the pointer, nothing is highlighted yet, so the first arrow
+    // lands ON the first row (OverflowMenu's origin), not one past it.
+    const index = nextMenuIndex(items, highlighted ? activeIndex : -1, event.key);
     if (index !== null) {
       event.preventDefault();
       focusItem(index);
@@ -224,8 +256,9 @@
   function typeahead(key: string): void {
     const lower = key.toLowerCase();
     const count = items.length;
+    const origin = highlighted ? activeIndex : -1;
     for (let step = 1; step <= count; step += 1) {
-      const index = (Math.max(activeIndex, 0) + step) % count;
+      const index = (((origin + step) % count) + count) % count;
       const item = items[index];
       if (item && !item.disabled && item.label.toLowerCase().startsWith(lower)) {
         focusItem(index);
@@ -245,8 +278,16 @@
     const onPointerDown = (event: PointerEvent) => {
       if (root && !root.contains(event.target as Node)) closeMenu(false);
     };
+    // And when the window stops being the one in front, as a native menu
+    // does: an app switch must not leave it open, holding the keyboard, for
+    // the return. No focus restore — the user went somewhere else.
+    const onBlur = () => closeMenu(false);
     window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('blur', onBlur);
+    };
   });
 
   // A closed menu must not keep a stale highlight for the next open, and a
@@ -270,7 +311,8 @@
     aria-haspopup="menu"
     aria-expanded={open}
     aria-label={menuLabel}
-    onclick={toggle}
+    onclick={onCaretClick}
+    onmousedown={onCaretMouseDown}
     onkeydown={onTriggerKeydown}
   >
     <Icon name="chevron-down" size={15} />
@@ -555,9 +597,11 @@
     /*
       With the label's 24px line, a one-line row is 32px — the height
       OverflowMenu's rows are — and a row with a description is still clearly
-      one target rather than two lines that happen to touch.
+      one target rather than two lines that happen to touch. The sides are
+      OverflowMenu's and ContextMenu's 12px, so the three menus share one
+      inset; at 8px this one sat 4px tighter to its rim than its siblings.
     */
-    padding: var(--space-1) var(--space-2);
+    padding: var(--space-1) var(--space-3);
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -630,14 +674,17 @@
     As wide as the row highlight, in the hairline the other menus use: a rule
     narrower than the accent fill beside it read as a second, unrelated inset.
   */
+  /* Inset to the label column, as ContextMenu and OverflowMenu draw theirs:
+     past the tick, to the item's own trailing padding. Edge to edge, the most
+     used menu in the app ruled its groups unlike every other. */
   .separator {
     height: 1px;
-    margin: var(--space-1) 0;
+    margin: var(--space-1) var(--space-3) var(--space-1) calc(var(--space-3) + 15px + var(--space-2));
     background: var(--border-faint);
   }
   .group-label {
     /* Lines up with the item labels: the item's inset, the tick, the gap. */
-    padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) + 15px + var(--space-2));
+    padding: var(--space-1) var(--space-3) var(--space-1) calc(var(--space-3) + 15px + var(--space-2));
     font-size: var(--text-2xs);
     font-weight: 600;
     letter-spacing: var(--ls-caps);

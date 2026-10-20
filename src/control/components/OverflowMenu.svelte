@@ -318,8 +318,16 @@
     const onPointerDown = (event: PointerEvent) => {
       if (root && !root.contains(event.target as Node)) closeMenu(false);
     };
+    // And when the window stops being the one in front, as a native menu
+    // does: an app switch must not leave it open, holding the keyboard, for
+    // the return. No focus restore — the user went somewhere else.
+    const onBlur = () => closeMenu(false);
     window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('blur', onBlur);
+    };
   });
 </script>
 

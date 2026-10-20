@@ -526,7 +526,7 @@
    * a keyboard user left inside a menu with nothing drawn to say where has no
    * way to tell what Return would fire.
    */
-  function toggleMenu(event?: MouseEvent): void {
+  function toggleMenu(highlight: boolean): void {
     if (menuOpen) {
       closeMenu(true);
       return;
@@ -545,7 +545,40 @@
       callAppearanceAttention();
       return;
     }
-    openMenu(firstEnabledIndex(rows), !event || event.detail === 0);
+    openMenu(firstEnabledIndex(rows), highlight);
+  }
+
+  /**
+   * The cog opens on the PRESS, as every menu at the desk does (OverflowMenu,
+   * SplitButton). A presenter who learns the Present menu while preparing
+   * should not meet a different contract on the stage. The default is
+   * cancelled for OverflowMenu's reason: the press would otherwise move focus
+   * after `openMenu` has put it on the first row.
+   *
+   * With the appearance panel up the trigger's `pointerdown` is cancelled
+   * (below), which suppresses this press, so the click alone reaches
+   * `toggleMenu` and only calls the panel's attention — as before.
+   *
+   * Set while the click that press will send on release is still to come; a
+   * keyboard click is told apart by its click count.
+   */
+  let pressHandled = false;
+
+  function onTriggerMouseDown(event: MouseEvent): void {
+    pressHandled = false;
+    if (event.button !== 0 || event.ctrlKey) return;
+    event.preventDefault();
+    pressHandled = true;
+    toggleMenu(false);
+  }
+
+  function onTriggerClick(event: MouseEvent): void {
+    const fromKeyboard = event.detail === 0;
+    if (pressHandled && !fromKeyboard) {
+      pressHandled = false;
+      return;
+    }
+    toggleMenu(fromKeyboard);
   }
 
   function onTriggerKeydown(event: KeyboardEvent): void {
@@ -689,7 +722,9 @@
         return;
       }
 
-      const index = nextMenuIndex(rows, activeIndex, event.key);
+      // Opened by the pointer, nothing is highlighted yet: the first arrow
+      // lands ON the first row, as in the desk's menus.
+      const index = nextMenuIndex(rows, highlighted ? activeIndex : -1, event.key);
       if (index === null) return;
       event.stopPropagation();
       event.preventDefault();
@@ -720,11 +755,16 @@
       // because the browser's own focus happens after this capture handler.
       closeMenu(true);
     };
+    // The window going behind another closes the menu too, as a native menu
+    // does — and with no focus restore, since the operator went elsewhere.
+    const onBlur = (): void => closeMenu(false);
     window.addEventListener('keydown', onKeydown, true);
     window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeydown, true);
       window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('blur', onBlur);
     };
   });
 
@@ -964,7 +1004,8 @@
           // following the press out to a trigger the panel's trap reaches past.
           if (appearanceOpen) event.preventDefault();
         }}
-        onclick={toggleMenu}
+        onmousedown={onTriggerMouseDown}
+        onclick={onTriggerClick}
         onkeydown={onTriggerKeydown}
       >
         <!--
