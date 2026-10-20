@@ -69,6 +69,17 @@
     line-height: 1.45;
     color: var(--text-primary);
   }
+  /*
+   * On the dark desk the specimen keeps its paper ink, so it brings its paper
+   * with it. The light desk's white dialog was that paper; a dark one is not,
+   * and paper ink on it disappears. `--bg-app` is read on this root, so it is
+   * the paper palette's own field, not the desk's.
+   */
+  :global([data-appearance='dark']) .specimen {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    background: var(--bg-app);
+  }
   p {
     margin: 0;
   }

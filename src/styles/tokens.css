@@ -11,6 +11,9 @@
      [data-theme='paper']     → the FROZEN light palette the light presentation
                                 surfaces were drawn against
 
+   The desk has a light and a dark appearance and follows the system's: the
+   dark one is the workspace block retuned under `data-appearance='dark'`.
+
    The dark studio palette is ALSO the un-themed default on :root, so the stage
    window (which sets no attribute) stays dark exactly as before. The control
    shell sets data-theme per route (workspace at rest, studio when live).
@@ -66,6 +69,11 @@
   /* Anything set in --font-brand: the wordmark and the brand display headings.
      A grotesque's tracking at 17-28px, not the serif-era --ls-title. */
   --ls-brand: -0.015em;
+  /* The website's heading voice — medium weight, set tight — for the desk's
+     display headings (Welcome and the Library's first-run invitation). Not
+     --ls-title: presentation surfaces read that one. */
+  --ls-heading: -0.025em;
+  --fw-heading: 500;
   --ls-prose: 0.01em;
   --prose-leading: 1.6;
 
@@ -337,6 +345,11 @@
   --accent-strong: #ec9d7a;
   --accent-contrast: #241510;
   --accent-soft: #3a2018;
+  /* The filled action (Button's primary). On the desk it is ink and only
+     Present keeps the accent; here, as on paper, it is still the accent. */
+  --action: #e08a63;
+  --action-strong: #ec9d7a;
+  --action-contrast: #241510;
   --focus: #ec9d7a;
   /* Neutral keyboard-focus edge for surfaces (rows, tiles, editors, panels).
      3.98:1 against --bg-hover-surface, the brightest surface it sits inside,
@@ -398,12 +411,13 @@
   --editor-selection-inactive: rgba(255, 255, 255, 0.08);
 
   --selection: rgba(224, 138, 99, 0.22);
-  /* Find in the editor: every hit, the current one, and the edge that marks
-     the current one by shape rather than by a second shade. Amber, so a hit
-     never reads as a selection (terracotta) — and a fill, where a cue is amber
-     TEXT, so the two never share a channel. */
+  /* Find in the editor: every hit, and the edge that marks the current one.
+     The current hit IS the selection, so it is drawn on the selection's own
+     tint with no fill of its own: a second shade stacked on the selection is
+     what left the faintest syntax unreadable. Amber, so a hit never reads as a
+     selection — and a fill, where a cue is amber TEXT, so the two never share
+     a channel. */
   --find-match: rgba(222, 169, 77, 0.24);
-  --find-match-current: rgba(222, 169, 77, 0.46);
   --find-match-edge: #dea94d;
   /* Other occurrences of the selected word: a whisper, not a search result. */
   --selection-match: rgba(255, 255, 255, 0.08);
@@ -528,6 +542,13 @@
   --accent-contrast: #ffffff;
   --accent-soft: #e5eff0;
   --accent-wash: rgba(23, 107, 117, 0.05); /* 5% petrol — selected radio/index */
+  /* The filled action is ink, as the website draws its own: New script, a
+     dialog's confirm, Welcome's first step. Petrol stays with Present, the
+     mark and a chosen control, so on any screen it is the one thing to do.
+     White on graphite is 14.9:1; the hover/press step deepens it. */
+  --action: #22282b;
+  --action-strong: #0f1213;
+  --action-contrast: #ffffff;
   --focus: #176b75;
   /* Neutral keyboard-focus edge for surfaces. 3.50:1 against
      --bg-hover-chrome, the darkest surface it sits inside, and 4.33:1 on white.
@@ -597,12 +618,149 @@
   --editor-selection-inactive: rgba(34, 40, 43, 0.1);
 
   --selection: rgba(23, 107, 117, 0.12);
-  /* --find-match-edge is 5.2:1 on white, so the current hit's outline carries
-     the state on its own (SC 1.4.11). */
-  --find-match: rgba(214, 158, 46, 0.24);
-  --find-match-current: rgba(214, 158, 46, 0.5);
+  /* The current hit is the selection and carries no fill of its own: its
+     outline is the state (4.18:1 on the selection, SC 1.4.11), and the
+     editor's faintest syntax keeps 4.53:1 there and 5.02:1 on any other hit. */
+  --find-match: rgba(214, 158, 46, 0.14);
   --find-match-edge: #8f6514;
   --selection-match: rgba(34, 40, 43, 0.07);
+}
+
+/* ============================================================================
+   The desk in the DARK appearance — graphite under porcelain ink, with Pale
+   Petrol as the accent. The same palette the website draws its dark pages in.
+
+   The desk follows the system: `lib/appearance.ts` puts the system's choice on
+   the document root as `data-appearance`, and this block retunes the workspace
+   palette under it. There is no setting in the app, by design — Apple asks apps
+   to follow the systemwide choice rather than offer their own. It never reaches
+   a running take (studio) or a frozen paper surface: those carry their own
+   `data-theme`, and their own declarations win over anything inherited.
+
+   Every token the light block declares has a value here, so nothing on the
+   desk falls through to a light value in the dark. Elevation is lighter, not
+   shadowed: canvas, then the sidebar and bands, then panels, then controls and
+   wells. The ink greys are pinned by the brightest of those surfaces
+   (--bg-row-selected-inactive), where faint text still keeps 5.5:1.
+   ============================================================================ */
+[data-appearance='dark'] [data-theme='workspace'],
+[data-theme='workspace'][data-appearance='dark'] {
+  color-scheme: dark;
+
+  --bg-app: #121516;
+  --bg-canvas: #121516;
+  --bg-chrome: #16191b;
+  --bg-panel: #191d1f;
+  --bg-panel-header: #1c2123;
+  --bg-secondary: #1e2325;
+  --bg-elevated: #1e2325;
+  --bg-sunken: #1e2325;
+  --bg-hover: #232829;
+  --bg-hover-chrome: #22272a;
+  --bg-hover-surface: #202527;
+  --bg-selected: rgba(164, 205, 209, 0.14);
+
+  --bg-toolbar: #15181a;
+  --bg-statusbar: #131618;
+  --bg-hover-statusbar: #23292b;
+  --bg-active-statusbar: #2a3133;
+  /* One ink at rising strength, as in the light block — porcelain here. */
+  --bg-row-selected: rgba(242, 244, 243, 0.09);
+  --bg-source-selected: rgba(242, 244, 243, 0.075);
+  --bg-row-hover: rgba(242, 244, 243, 0.035);
+  --bg-row-selected-quiet: rgba(242, 244, 243, 0.055);
+  --bg-row-selected-quiet-hover: rgba(242, 244, 243, 0.07);
+  --bg-row-selected-hover: rgba(242, 244, 243, 0.11);
+  /* Retired (see the light block); kept so a stale reference stays visible. */
+  --bg-row-selected-inactive: #24292b;
+  --divider: #262c2e;
+  --divider-hover: #3d4548;
+
+  --text-primary: #f2f4f3;
+  --text-secondary: #abb4b7;
+  --text-muted: #9aa4a7; /* 5.78:1 on --bg-row-selected-inactive */
+  --text-faint: #96a0a3; /* 5.50:1 there */
+
+  --border: #2b3133;
+  --border-control: #3a4245;
+  --border-strong: #5b6568;
+  /* 3.84:1 on --bg-row-selected-inactive, the brightest surface it sits on. */
+  --border-state: #7a8487;
+  --border-faint: #22272a;
+  --border-seam: #22272a;
+
+  /* Pale Petrol, the brand guide's counterpart for dark grounds: 10.3:1 on
+     the sidebar, and a Pale Petrol fill takes graphite lettering (10.7:1).
+     Studio Petrol itself is 2.97:1 on this canvas, too close to be a fill's
+     only edge. */
+  --accent: #a4cdd1;
+  --accent-strong: #c3e0e3;
+  --accent-contrast: #121516;
+  --accent-soft: #1e2a2c;
+  --accent-wash: rgba(164, 205, 209, 0.06);
+  /* Porcelain ink under graphite lettering (15.4:1); the step dims it. */
+  --action: #f2f4f3;
+  --action-strong: #d3d9d9;
+  --action-contrast: #121516;
+  --focus: #a4cdd1;
+  --focus-quiet: #7a8487;
+  --success: #55b894;
+  --success-soft: rgba(85, 184, 148, 0.16);
+  --warning: #dea94d;
+  --warning-soft: rgba(222, 169, 77, 0.16);
+  --danger: #ef7168;
+  --danger-strong: #d95e56;
+  --danger-contrast: var(--accent-contrast); /* 4.97:1 on --danger-strong */
+  --danger-soft: rgba(239, 113, 104, 0.16);
+
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.18);
+  --live-glow: transparent;
+
+  --meter-low: #55b894;
+  --meter-mid: #dea94d;
+  --meter-high: #ef7168;
+
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-preview: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  --empty-bg: #161b1c;
+  --empty-border: #262c2e;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: #1b2224;
+  --empty-hover-border: #3a4b4f;
+
+  --prose-text-warm: #e6eaea;
+  --prose-secondary-warm: #c3cacc;
+  --prose-muted-warm: #9ea8ab;
+  /* Highlights are held to what is drawn over them: the editor's faintest
+     syntax keeps 4.64:1 on the selection, which the current find hit shares
+     (its amber edge is 5.84:1 there), and 5.30:1 on any other hit. Selected UI
+     text keeps 5.11:1 on a panel and 4.77:1 in a well. */
+  --editor-selection: rgba(164, 205, 209, 0.14);
+  --editor-selection-inactive: rgba(242, 244, 243, 0.1);
+
+  --selection: rgba(164, 205, 209, 0.1);
+  --find-match: rgba(222, 169, 77, 0.1);
+  --find-match-edge: #dea94d;
+  --selection-match: rgba(242, 244, 243, 0.08);
+
+  /* The light veil is lost on a dark page; a dialog needs a deeper one, deep
+     enough that the porcelain action behind it stops competing. */
+  --dialog-scrim: rgba(0, 0, 0, 0.6);
 }
 
 /* ============================================================================
@@ -680,6 +838,9 @@
   --accent-contrast: #ffffff;
   --accent-soft: #f6e7df;
   --accent-wash: rgba(179, 90, 56, 0.05);
+  --action: #b35a38;
+  --action-strong: #9c4a2c;
+  --action-contrast: #ffffff;
   --focus: #b35a38;
   --focus-quiet: #7b7771;
 
@@ -733,7 +894,6 @@
   --editor-selection-inactive: rgba(24, 25, 29, 0.1);
   --selection: rgba(183, 94, 59, 0.16);
   --find-match: rgba(214, 158, 46, 0.24);
-  --find-match-current: rgba(214, 158, 46, 0.5);
   --find-match-edge: #8f6514;
   --selection-match: rgba(24, 25, 29, 0.07);
 }

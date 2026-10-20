@@ -1,5 +1,5 @@
 <!--
-  Calm empty-state invitation on the warm empty tokens. No illustrations,
+  Calm empty-state invitation. No illustrations,
   no feature carousel (spec §12.3).
 
   ---------------------------------------------------------------------------
@@ -11,18 +11,20 @@
   places it hurts most, a search that found nothing and a load that failed, where
   the surrounding list structure is exactly the context the user needs kept.
 
-    editorial  the boxed, centred invitation in the brand face. First run, and
+    editorial  the centred invitation in the display voice. First run, and
                nothing else.
     plain      unboxed, still centred. A search miss, an empty Trash, an error
                shown in a list area that is otherwise intact.
     compact    unboxed, left-aligned, small. An inspector or a narrow pane,
                where a centred block with 48px of padding is simply cropped.
 
-  Only `editorial` sets its title in the brand face: a first-run invitation is
-  one of the desk's few branded display moments. `plain` and `compact` are
+  Only `editorial` sets its title in the display voice — the website's heading,
+  the UI face at a medium weight set tight: a first-run invitation is one of
+  the desk's few branded display moments. It is no longer boxed: the website
+  draws on the page itself, not in tinted cards, and an empty Library has
+  nothing for a frame to set it apart from. `plain` and `compact` are
   interface messages — a search miss, an empty Trash, a failed load — and their
-  titles are headings like any other, in the UI font (§3.3: no display face in
-  dense panels).
+  titles are headings like any other (§3.3: no display voice in dense panels).
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -100,18 +102,13 @@
   .editorial {
     align-items: center;
     padding: var(--space-10) var(--space-8);
-    border: 1px solid var(--empty-border);
-    border-radius: var(--radius-md);
-    background: var(--empty-bg);
     text-align: center;
   }
-  /* Tracked like the Welcome heading, the other brand-face title on the desk;
-     no synthesis, so a missing weight is never faked. */
+  /* The Welcome heading's voice, the desk's other display title. */
   .editorial .title {
-    font-family: var(--font-brand);
     font-size: var(--text-2xl);
-    letter-spacing: var(--ls-brand);
-    font-synthesis: none;
+    font-weight: var(--fw-heading);
+    letter-spacing: var(--ls-heading);
   }
   .editorial .body {
     max-width: var(--prose-measure-narrow);

@@ -4465,9 +4465,13 @@
     background: none;
     padding: 0;
     font: inherit;
-    color: var(--accent-strong);
+    color: var(--text-primary);
     cursor: pointer;
     text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+  }
+  .row-filter-clear:hover {
+    text-decoration-color: currentColor;
   }
 
   /* The toolbar's search field — same shape as the Library's. */
@@ -4769,15 +4773,21 @@
     color: var(--text-secondary);
     max-width: var(--prose-measure);
   }
+  /* Ink with a quiet underline that firms on hover — the website's inline
+     link. Petrol is left to Present and to chosen controls. */
   .inline-link {
     border: none;
     background: transparent;
     padding: 0;
     font: inherit;
-    color: var(--accent-strong);
+    color: var(--text-primary);
     text-decoration: underline;
+    text-decoration-color: var(--border-strong);
     text-underline-offset: 2px;
     cursor: pointer;
+  }
+  .inline-link:hover {
+    text-decoration-color: currentColor;
   }
 
   /* Persistent inline failure text. Sits beside the control that failed and
@@ -4870,12 +4880,13 @@
     background: var(--bg-hover-chrome);
   }
   /* The state edge, not the hover one: --border-strong is under 3:1 on the
-     porcelain around the tile, so the choice leaned on the glyph's colour. */
+     porcelain around the tile, so the choice leaned on the glyph's colour.
+     No resting shadow: a tile is chosen, not floating, and the state edge and
+     the panel face say so in both appearances. */
   .monitor-tile.selected,
   .monitor-tile.selected:hover {
     border-color: var(--border-state);
     background: var(--bg-panel);
-    box-shadow: var(--shadow-card);
   }
   .monitor-glyph {
     color: var(--text-muted);
@@ -5405,9 +5416,11 @@
   .mic-test[data-tone='idle'] .mic-test-verdict {
     font-weight: 500;
   }
-  /* A live session must be unmistakable at a glance. */
+  /* A live session must be unmistakable at a glance: the verdict in ink, and
+     the on-air dot beside it in --live, the token kept for an open microphone.
+     Not petrol, which is never a status. */
   .mic-test[data-tone='live'] .mic-test-verdict {
-    color: var(--accent-strong);
+    color: var(--text-primary);
   }
   .mic-test[data-tone='good'] .mic-test-verdict {
     color: var(--success);
@@ -5437,13 +5450,13 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--accent-strong);
+    background: var(--live);
     animation: mic-test-pulse 1.4s var(--ease-inout) infinite;
   }
   /* Starting is not yet listening: a hollow mark until the microphone is live. */
   .mic-test[data-phase='opening'] .mic-test-dot::before {
     background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--accent-strong);
+    box-shadow: inset 0 0 0 1.5px var(--live);
     animation: none;
   }
   @media (prefers-reduced-motion: reduce) {

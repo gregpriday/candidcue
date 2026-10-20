@@ -23,6 +23,10 @@ import { collection, row } from './fixtures/library';
 import { gotoSection, openPreferences } from './fixtures/preferences';
 
 const OUT = process.env['DESIGN_CAPTURE_DIR'];
+/* The desk follows the system's appearance. DESIGN_CAPTURE_SCHEME=dark takes
+   every shot under a dark system, written beside the light ones with a
+   `--dark` suffix so a light and a dark run can share one directory. */
+const SCHEME = process.env['DESIGN_CAPTURE_SCHEME'] === 'dark' ? 'dark' : 'light';
 
 test.skip(!OUT, 'design capture harness: set DESIGN_CAPTURE_DIR to run it');
 test.describe.configure({ timeout: 90_000 });
@@ -137,7 +141,7 @@ async function pretendMac(page: Page): Promise<void> {
 async function boot(page: Page, opts: Boot = {}): Promise<void> {
   await pretendMac(page);
   await page.setViewportSize(opts.viewport ?? WINDOW);
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: SCHEME });
   await installTauriShim(page, {
     welcomed: opts.welcomed ?? true,
     seedScripts: opts.seeds ?? LIBRARY,
@@ -191,7 +195,7 @@ async function shoot(
   if (!OUT) throw new Error('DESIGN_CAPTURE_DIR must be set');
   fs.mkdirSync(OUT, { recursive: true });
   await settle(page);
-  const file = path.join(OUT, `app--${name}.png`);
+  const file = path.join(OUT, `app--${name}${SCHEME === 'dark' ? '--dark' : ''}.png`);
   await page.screenshot({ path: file, clip });
   const size = fs.statSync(file).size;
   if (size < 4_000) throw new Error(`${name}.png is ${size} bytes — not a real capture`);
@@ -359,6 +363,7 @@ test('21 script syntax reference', async ({ page }) => {
  * carries. Reads the committed icon files, so a regenerated set is what shows.
  */
 test('22 app icon at the sizes macOS draws it', async ({ page }) => {
+  test.skip(SCHEME === 'dark', 'the icon sheet draws both desktops itself');
   const icons = path.resolve('src-tauri/icons');
   const data = (file: string) =>
     `data:image/png;base64,${fs.readFileSync(path.join(icons, file)).toString('base64')}`;

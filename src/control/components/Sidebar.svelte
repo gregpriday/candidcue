@@ -331,15 +331,16 @@
   }
 
   /*
-   * New Script reads as a command rather than a destination: accent-coloured
-   * label, but the same row geometry as everything else. §7.1 — a document
-   * command, not a marketing CTA.
+   * New Script reads as a command rather than a destination: a heavier ink
+   * label and its plus, in the same row geometry as everything else. §7.1 — a
+   * document command, not a marketing CTA. Ink rather than petrol, so the
+   * window's one petrol action stays Present.
    */
   .nav-item.command {
-    color: var(--accent-strong);
+    color: var(--text-primary);
     font-weight: 600;
   }
   .nav-item.command :global(svg) {
-    color: var(--accent-strong);
+    color: var(--text-primary);
   }
 </style>

@@ -108,7 +108,7 @@
     border-color: var(--border-strong);
   }
   .primary:active:not(:disabled) {
-    background: var(--accent-strong);
+    background: var(--action-strong);
   }
   .danger-primary:active:not(:disabled) {
     background: var(--danger-strong);
@@ -137,15 +137,22 @@
     font-size: var(--text-sm);
   }
 
-  /* Primary — a solid accent fill, edge to edge in the fill's own colour. */
+  /*
+   * Primary — a solid fill, edge to edge in the fill's own colour.
+   *
+   * The ACTION fill, not the accent: on the desk that is ink, the way the
+   * website draws its own buttons, so the accent is left to Present (its own
+   * SplitButton) and to chosen controls. Presentation surfaces keep the accent
+   * here, because their palettes say `--action` is the accent.
+   */
   .primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-contrast);
+    background: var(--action);
+    border-color: var(--action);
+    color: var(--action-contrast);
   }
   .primary:hover:not(:disabled) {
-    background: var(--accent-strong);
-    border-color: var(--accent-strong);
+    background: var(--action-strong);
+    border-color: var(--action-strong);
   }
   .primary:disabled {
     opacity: 1;

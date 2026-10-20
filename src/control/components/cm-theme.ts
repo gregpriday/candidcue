@@ -186,11 +186,12 @@ const themeSpec = {
 
   /*
    * Hits, and the one you are on. The current hit is told apart by an edge,
-   * not only by a deeper shade: it is also the selection, and a reader with
-   * the replace field focused needs to see which one Replace will change.
-   * The edge is inset, and every hit carries a pixel of fill past each end
-   * that the margin gives back, so the edge clears the first and last letter
-   * without moving a single glyph.
+   * and only by the edge: it is also the selection, so it sits on the
+   * selection's tint, and a fill of its own stacked on that tint is what left
+   * the faintest syntax unreadable. A reader with the replace field focused
+   * still sees which one Replace will change. The edge is inset, and every hit
+   * carries a pixel of fill past each end that the margin gives back, so the
+   * edge clears the first and last letter without moving a single glyph.
    */
   '&.cm-editor .cm-searchMatch': {
     backgroundColor: 'var(--find-match)',
@@ -199,7 +200,7 @@ const themeSpec = {
     margin: '0 -1px',
   },
   '&.cm-editor .cm-searchMatch.cm-searchMatch-selected': {
-    backgroundColor: 'var(--find-match-current)',
+    backgroundColor: 'transparent',
     boxShadow: 'inset 0 0 0 1px var(--find-match-edge)',
   },
   // Other occurrences of the selected word: quieter than a search result.

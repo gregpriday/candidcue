@@ -1414,16 +1414,20 @@
   }
 
   /* Reads as a link, because it is one; it simply does not navigate this window.
-     Small accent text takes --accent-strong, the strong step, on the light desk. */
+     Ink with a quiet underline, like every link on the desk. */
   .licence-link {
     background: none;
     border: 0;
     padding: 0;
     font: inherit;
-    color: var(--accent-strong);
+    color: var(--text-primary);
     text-decoration: underline;
+    text-decoration-color: var(--border-strong);
     text-underline-offset: 2px;
     cursor: pointer;
+  }
+  .licence-link:hover {
+    text-decoration-color: currentColor;
   }
 
   /* --- inventory ----------------------------------------------------------- */

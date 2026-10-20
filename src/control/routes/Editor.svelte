@@ -3472,11 +3472,12 @@ import type { PresentationMode } from '../services/settings-types';
   }
   /*
    * A mismatch is INFORMATION, not an error — presenting where the window is,
-   * is a deliberate supported behaviour — so it warms rather than alarms.
-   * `--accent-strong` because small accent text takes the strong step.
+   * is a deliberate supported behaviour — so it warms rather than alarms: the
+   * attention colour, not the danger one, and never petrol, which is not a
+   * status.
    */
   .present-destination.mismatch {
-    color: var(--accent-strong);
+    color: var(--warning);
   }
 
   /* Announced but not drawn. */

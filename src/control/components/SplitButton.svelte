@@ -438,6 +438,16 @@
   .primary.open .caret {
     background: var(--accent-strong);
   }
+  /*
+   * In the dark appearance the strong step is the LIGHTER one — Pale Petrol's
+   * readable counterpart — which is right for a hover and an open menu and
+   * wrong for a press: a press darkens. So the press alone deepens the accent
+   * toward the page, and graphite lettering keeps 6.8:1 on it.
+   */
+  :global([data-appearance='dark']) .primary .main:active:not(:disabled),
+  :global([data-appearance='dark']) .primary .caret:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 80%, #000);
+  }
 
   .split:has(.main:disabled) {
     box-shadow: none;

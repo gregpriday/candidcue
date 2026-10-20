@@ -119,6 +119,11 @@ const FROZEN: Record<string, string> = {
   '--accent-contrast': '#ffffff',
   '--accent-soft': '#f6e7df',
   '--accent-wash': 'rgba(179, 90, 56, 0.05)',
+  // The filled action: the desk's turned ink, and a paper surface's primary
+  // buttons stay exactly the accent they were.
+  '--action': '#b35a38',
+  '--action-strong': '#9c4a2c',
+  '--action-contrast': '#ffffff',
   '--focus': '#b35a38',
   '--focus-quiet': '#7b7771',
   '--success': '#1f6b52',
@@ -161,7 +166,6 @@ const FROZEN: Record<string, string> = {
   '--editor-selection-inactive': 'rgba(24, 25, 29, 0.1)',
   '--selection': 'rgba(183, 94, 59, 0.16)',
   '--find-match': 'rgba(214, 158, 46, 0.24)',
-  '--find-match-current': 'rgba(214, 158, 46, 0.5)',
   '--find-match-edge': '#8f6514',
   '--selection-match': 'rgba(24, 25, 29, 0.07)',
 };
