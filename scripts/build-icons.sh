@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Regenerate every bundled app icon from the two SVG sources in
-# src-tauri/icons/source/. macOS only (iconutil), and it needs rsvg-convert and
-# python3: `brew install librsvg`.
+# Regenerate every bundled app icon from the sources in src-tauri/icons/source/.
+# macOS only (iconutil, sips), and it needs rsvg-convert and python3:
+# `brew install librsvg`.
 #
 #   bash scripts/build-icons.sh            # into src-tauri/icons
 #   bash scripts/build-icons.sh <dir>      # into <dir>, leaving the tree alone
 #
-# icon.svg is the 1024 master on the macOS icon grid; icon-small.svg is the
-# same mark redrawn for 16 and 32 px, which is what the small slots of the .icns
-# and the .ico get. `tauri icon` would downsample the master into those slots
-# instead, which is exactly what the small drawing exists to avoid.
+# icon.png is the 1024 master on the macOS icon grid: the mark in mark.svg
+# rendered in Liquid Glass on a petrol squircle, opaque inside the squircle,
+# clear outside it, with its soft drop shadow baked into the margin. It is a
+# raster because the glass is; resize it, never redraw it. icon-small.svg is
+# the same mark redrawn flat for 16 and 32 px, which is what the small slots of
+# the .icns and the .ico get. `tauri icon` would downsample the master into
+# those slots instead, which is exactly what the small drawing exists to avoid.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,18 +22,21 @@ mkdir -p "$icons"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-for tool in rsvg-convert python3 iconutil; do
+for tool in rsvg-convert python3 iconutil sips; do
   command -v "$tool" >/dev/null || { echo "build-icons: $tool is required" >&2; exit 1; }
 done
 
-big() { rsvg-convert -w "$1" -h "$1" "$src/icon.svg" -o "$2"; }
+master_size="$(sips -g pixelWidth -g pixelHeight "$src/icon.png" | awk '/pixel/ {print $2}' | sort -u)"
+[ "$master_size" = 1024 ] || { echo "build-icons: icon.png must be 1024 x 1024" >&2; exit 1; }
+
+big() { sips -z "$1" "$1" "$src/icon.png" --out "$2" >/dev/null; }
 small() { rsvg-convert -w "$1" -h "$1" "$src/icon-small.svg" -o "$2"; }
 # The master framed for Windows: the macOS grid's 100px margin cropped to the
 # small drawing's, so every .ico entry fills its canvas by the same share
-# (87.5%) and Explorer does not shrink the tile as the view grows.
-sed 's/viewBox="0 0 1024 1024"/viewBox="41 41 942 942"/' "$src/icon.svg" > "$work/icon-wide.svg"
-grep -q 'viewBox="41 41 942 942"' "$work/icon-wide.svg" || { echo "build-icons: icon.svg has no 1024 viewBox" >&2; exit 1; }
-wide() { rsvg-convert -w "$1" -h "$1" "$work/icon-wide.svg" -o "$2"; }
+# (87.5%) and Explorer does not shrink the tile as the view grows. sips crops
+# about the centre, so 942 leaves 41 px off every side.
+sips -c 942 942 "$src/icon.png" --out "$work/icon-wide.png" >/dev/null
+wide() { sips -z "$1" "$1" "$work/icon-wide.png" --out "$2" >/dev/null; }
 
 # macOS: the .icns, from an .iconset with the small drawing in the small slots.
 # Only the 2x small slots: macOS 26 sets a 1x 16 or 32 px representation in a
