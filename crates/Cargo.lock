@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "cc-align"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "cc-bench"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "cc-align",
@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "cc-stt"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",

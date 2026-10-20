@@ -53,6 +53,12 @@ use crate::windows::CONTROL_LABEL;
 /// the two spellings identical.
 pub const MENU_COMMAND_EVENT: &str = "menu://command";
 
+/// File › Exit on Linux, where GTK offers no predefined Quit (see `build`).
+/// Answered here rather than by a window: it is the application's exit, not a
+/// command any page implements, so it is never forwarded as a menu command.
+#[cfg(target_os = "linux")]
+const LINUX_EXIT_ID: &str = "app.exit";
+
 /// One menu item's state, as the frontend reports it.
 ///
 /// `checked` and `label` are optional because most items have neither: an item
@@ -287,6 +293,13 @@ pub fn install(app: &AppHandle) {
     let handle = app.clone();
     app.on_menu_event(move |_app, event| {
         let id = event.id().0.as_str();
+        // The same request a predefined Quit makes: `ExitRequested`, which
+        // `app.rs` holds open for the frontend's flush before it lets go.
+        #[cfg(target_os = "linux")]
+        if id == LINUX_EXIT_ID {
+            handle.exit(0);
+            return;
+        }
         /*
          * TO THE FOCUSED WINDOW, not to control.
          *
@@ -340,6 +353,14 @@ pub fn install(app: &AppHandle) {
 /// commands are forwarded, to control; the rest are dropped. See the note at
 /// the emit site for why that split rather than all-or-nothing.
 fn command_target(app: &AppHandle, id: &str) -> Option<String> {
+    /*
+     * A command whose answer lives in the control window goes there from
+     * anywhere — Settings included — rather than to whichever window is in
+     * front. Control brings itself forward to show the answer.
+     */
+    if is_control_routed(id) {
+        return Some(CONTROL_LABEL.to_string());
+    }
     let focused = app
         .webview_windows()
         .values()
@@ -391,6 +412,26 @@ const CONTEXT_FREE_COMMANDS: &[&str] = &[
 
 fn is_context_free(id: &str) -> bool {
     CONTEXT_FREE_COMMANDS.contains(&id)
+}
+
+/// Commands the CONTROL window answers, whichever window they are chosen over.
+///
+/// Help › Check for Updates… is the one. Its answer — "up to date", or the
+/// update notice with Install and Restart — is drawn in the document window,
+/// because that is where the install flow and its never-during-a-take rule
+/// live (`src/control/stores/updates.ts`). Delivered to Settings it would
+/// have nowhere to go: Settings has no notice to show and no way to ask control
+/// for one. Routing it here is what makes it work from Settings as well, and
+/// control brings itself forward to show the answer.
+///
+/// Safe from anywhere for the same reason the context-free list is: it acts on
+/// no document. During a take control's own registry refuses it (`available`
+/// is false while presenting), so routing it here cannot put anything on the
+/// glass.
+const CONTROL_ROUTED_COMMANDS: &[&str] = &["help.check-for-updates"];
+
+fn is_control_routed(id: &str) -> bool {
+    CONTROL_ROUTED_COMMANDS.contains(&id)
 }
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -512,7 +553,17 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         file.append(&sep()?)?;
         file.append(&item("view.settings", "Settings…", Some("CmdOrCtrl+,"))?)?;
         file.append(&sep()?)?;
+        #[cfg(not(target_os = "linux"))]
         file.append(&PredefinedMenuItem::quit(app, Some("Exit"))?)?;
+        /*
+         * GTK has no predefined Quit: muda builds nothing for one there, and
+         * File ended in a rule with no Exit under it — while the recovery
+         * screen's copy tells a Linux user to choose File › Exit. So Linux gets
+         * a plain item that asks for the same exit a predefined Quit does
+         * (`on_menu_event` below), through the flush handshake in `app.rs`.
+         */
+        #[cfg(target_os = "linux")]
+        file.append(&MenuItem::with_id(app, LINUX_EXIT_ID, "Exit", true, None::<&str>)?)?;
     }
 
     /*
@@ -523,25 +574,30 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      * key handling, but Undo does NOT reliably reach CodeMirror, and a text
      * field has no context-menu Cut/Copy/Paste at all.
      */
-    let edit = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
+    let edit = Submenu::new(app, "Edit", true)?;
+    /*
+     * GTK has no predefined Undo or Redo — muda builds nothing for either — so
+     * on Linux the menu opened on a bare rule. The web view answers Ctrl+Z and
+     * Ctrl+Shift+Z itself there.
+     */
+    if cfg!(not(target_os = "linux")) {
+        edit.append_items(&[
             &PredefinedMenuItem::undo(app, None)?,
             &PredefinedMenuItem::redo(app, None)?,
             &sep()?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-            &sep()?,
-            &item("edit.find", "Find…", Some(keys::FIND))?,
-            &item("edit.find-next", "Find Next", Some(keys::FIND_NEXT))?,
-            &item("edit.find-previous", "Find Previous", Some(keys::FIND_PREVIOUS))?,
-            &item("edit.replace", "Find and Replace…", Some(keys::REPLACE))?,
-        ],
-    )?;
+        ])?;
+    }
+    edit.append_items(&[
+        &PredefinedMenuItem::cut(app, None)?,
+        &PredefinedMenuItem::copy(app, None)?,
+        &PredefinedMenuItem::paste(app, None)?,
+        &PredefinedMenuItem::select_all(app, None)?,
+        &sep()?,
+        &item("edit.find", "Find…", Some(keys::FIND))?,
+        &item("edit.find-next", "Find Next", Some(keys::FIND_NEXT))?,
+        &item("edit.find-previous", "Find Previous", Some(keys::FIND_PREVIOUS))?,
+        &item("edit.replace", "Find and Replace…", Some(keys::REPLACE))?,
+    ])?;
     menu.append(&edit)?;
 
     /*
@@ -682,13 +738,23 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
      * webview pushed: no renderer knows whether this window exists.
      */
     let stage_window = item("window.stage", "Stage", None)?;
-    window_items.push(&minimize);
-    window_items.push(&maximize);
+    /*
+     * GTK has no predefined Minimize or Maximize — muda builds nothing for
+     * either — so on Linux the menu would open on a bare rule. The window
+     * manager's own controls do both there.
+     */
+    let window_controls = cfg!(not(target_os = "linux"));
+    if window_controls {
+        window_items.push(&minimize);
+        window_items.push(&maximize);
+    }
     #[cfg(target_os = "macos")]
     let bring_all = PredefinedMenuItem::bring_all_to_front(app, None)?;
     #[cfg(target_os = "macos")]
     window_items.push(&bring_all);
-    window_items.push(&separator);
+    if window_controls {
+        window_items.push(&separator);
+    }
     window_items.push(&main_window);
     window_items.push(&settings_window);
     window_items.push(&stage_window);
@@ -712,6 +778,7 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("help.website", "CandidCue on GitHub", None)?,
             &item("help.release-notes", "Release Notes", None)?,
             &item("help.download", "Download Latest Version", None)?,
+            &item("help.check-for-updates", "Check for Updates…", None)?,
             &item("help.report-problem", "Report a Problem", None)?,
             &sep()?,
             &item("help.privacy", "Privacy and Local Processing", None)?,
@@ -747,7 +814,8 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
-/// Finder on macOS, File Explorer everywhere else (§25.3).
+/// Finder on macOS, File Explorer on Windows, and on Linux the generic name,
+/// since each desktop's file manager is called something else (§25.3).
 ///
 /// A compile-time choice rather than a runtime one: the binary only ever runs on
 /// the platform it was built for, and a `cfg` cannot drift the way a
@@ -757,7 +825,11 @@ const fn reveal_label() -> &'static str {
     {
         "Reveal in Finder"
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        "Show in File Manager"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         "Show in File Explorer"
     }
@@ -1102,6 +1174,35 @@ mod tests {
         // Anti-vacuity, and a nudge to think when the list grows: these are the
         // commands that act on no document, and there are not many of them.
         assert_eq!(super::CONTEXT_FREE_COMMANDS.len(), 5);
+    }
+
+    /// Every control-routed id is a real command, and Settings lists it as one
+    /// it answers — otherwise its menu push would grey the item out over the
+    /// very window this routing exists to serve.
+    #[test]
+    fn control_routed_commands_are_real_and_enabled_over_settings() {
+        let ts = include_str!("../../src/shared/contracts/commands.ts");
+        let shell = include_str!("../../src/control/services/desktop-shell.ts");
+        let preferences = shell
+            .split("export const PREFERENCES_COMMANDS = [")
+            .nth(1)
+            .and_then(|rest| rest.split("] as const").next())
+            .expect("PREFERENCES_COMMANDS is declared in desktop-shell.ts");
+        for id in super::CONTROL_ROUTED_COMMANDS {
+            assert!(
+                ts.contains(&format!("'{id}'")),
+                "`{id}` is routed to control but is not a declared command"
+            );
+            assert!(
+                preferences.contains(&format!("'{id}'")),
+                "`{id}` is routed to control from Settings, but Settings greys it out"
+            );
+            assert!(
+                !super::CONTEXT_FREE_COMMANDS.contains(id),
+                "`{id}` is in both lists; control routing already covers every window"
+            );
+        }
+        assert_eq!(super::CONTROL_ROUTED_COMMANDS, &["help.check-for-updates"]);
     }
 
     #[test]

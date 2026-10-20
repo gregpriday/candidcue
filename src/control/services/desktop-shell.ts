@@ -242,6 +242,15 @@ export const PREFERENCES_COMMANDS = [
   'window.settings',
   'view.settings',
   'help.reveal-logs',
+  /*
+   * Enabled here, ANSWERED BY CONTROL. `menu.rs` routes this one to the
+   * document window from wherever it is chosen (`CONTROL_ROUTED_COMMANDS`),
+   * because the update notice and the install flow live there; control brings
+   * itself forward with the answer. Listing it is what stops this window's push
+   * greying it out. The handler `PreferencesApp.svelte` gives it is only a
+   * fallback for a delivery that should not happen.
+   */
+  'help.check-for-updates',
 ] as const satisfies readonly CommandId[];
 
 /**
@@ -318,16 +327,19 @@ export function installWindowMenuCommands(
 }
 
 /**
- * The menu's chords, heard by the window itself — on Windows only.
+ * The menu's chords, heard by the window itself — on Windows and Linux.
  *
- * Windows cannot deliver a menu accelerator to a focused WebView2 at all
- * (`lib/menu-keys.ts` says why), so there every installer that answers menu
- * commands also answers their keys, through the same handlers. Everywhere else
- * the native menu takes the key before the page sees it, and a second listener
- * would run every command twice.
+ * Windows cannot deliver a menu accelerator to a focused WebView2 at all, and
+ * on Linux the menu bar is the control window's alone and stops answering its
+ * keys while a take hides it (`lib/menu-keys.ts` says why). So there every
+ * installer that answers menu commands also answers their keys, through the
+ * same handlers. On macOS the application menu takes every key before the page
+ * sees it, and a second listener would run every command twice. GTK takes a
+ * chord the visible bar answers before the page does too, so the bridge only
+ * ever hears the ones the bar did not.
  */
 function installMenuKeys(dispatch: MenuKeyDispatch): () => void {
-  if (!isTauriRuntime() || detectPlatform() !== 'windows') return () => {};
+  if (!isTauriRuntime() || detectPlatform() === 'macos') return () => {};
   // A runtime with no event target to listen on (a test's stand-in window)
   // has no keys to hear.
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
@@ -526,7 +538,7 @@ export async function revealLogs(): Promise<void> {
  * Open one of the project's pages in the browser (Help › the web group).
  *
  * The payload is a NAME. Rust holds the table that turns it into a fixed page
- * of the one compile-time repository (`src-tauri/src/web.rs`), which is what
+ * of one of two compile-time sites (`src-tauri/src/web.rs`), which is what
  * lets the control window keep having no permission to open an arbitrary
  * address — the `opener:default` grant was removed in the 1.0 readiness pass
  * and this is deliberately not a way to get it back.

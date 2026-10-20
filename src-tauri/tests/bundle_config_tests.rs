@@ -1,7 +1,14 @@
-//! `bundle.targets` is pinned to the macOS formats in the shared config, and
-//! to the NSIS installer in the Windows overlay (`tauri.windows.conf.json`,
-//! which Tauri merges over the shared file when building on Windows). Linux
-//! stays unclaimed until a real build proves it (issue #182).
+//! `bundle.targets` is pinned to the macOS formats in the shared config, to
+//! the NSIS installer in the Windows overlay (`tauri.windows.conf.json`, which
+//! Tauri merges over the shared file when building on Windows), and to the
+//! `.deb` and the AppImage in the Linux overlay (`tauri.linux.conf.json`).
+//!
+//! Linux is claimed on the same terms as Windows below: built, tested and
+//! Clippy-clean on Ubuntu 22.04 x64, both packages installed and launched
+//! there, and CI's `linux` job builds them on every push. Its cfg arms are
+//! real now — WebKitGTK's microphone grant, fullscreen on the prompter's
+//! monitor, display sleep held over the session bus — and `sherpa-onnx`'s
+//! static Linux runtime links.
 //!
 //! Windows is claimed now because it has been proven the way the paragraphs
 //! below ask: built, tested and run on a real Windows 11 host — the
@@ -129,6 +136,63 @@ fn windows_bundles_the_nsis_installer_and_nothing_else() {
         overlay["bundle"]["targets"],
         serde_json::json!(["nsis"]),
         "the Windows overlay must name exactly the formats a Windows build has proven"
+    );
+}
+
+/// The Linux overlay asks for the Debian package and the AppImage, and nothing
+/// else. An RPM would be a third format no Linux build has exercised.
+#[test]
+fn linux_bundles_the_deb_and_the_appimage_and_nothing_else() {
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.linux.conf.json"))
+        .expect("tauri.linux.conf.json must be valid JSON");
+    let mut targets: Vec<&str> = overlay["bundle"]["targets"]
+        .as_array()
+        .expect("the Linux overlay must name its bundle targets")
+        .iter()
+        .map(|target| target.as_str().expect("every bundle target must be a string"))
+        .collect();
+    targets.sort_unstable();
+    assert_eq!(
+        targets,
+        ["appimage", "deb"],
+        "the Linux overlay must name exactly the formats a Linux build has proven"
+    );
+}
+
+/// Linux keeps the shared CSP: the overlay must not carry one.
+///
+/// Unlike WebView2, WebKitGTK registers custom schemes, so Tauri serves the
+/// app, its assets and its IPC exactly as it does on macOS — `tauri://localhost`,
+/// `asset://localhost`, `ipc://localhost` — and the shared policy's `'self'`,
+/// `asset:` and `ipc:` already admit all three. A Linux copy would be a second
+/// policy that a later tightening could miss.
+#[test]
+fn linux_uses_the_shared_csp() {
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.linux.conf.json"))
+        .expect("tauri.linux.conf.json must be valid JSON");
+    assert!(
+        overlay.get("app").is_none(),
+        "the Linux overlay must not override `app` (and with it the shared CSP): {}",
+        overlay["app"]
+    );
+}
+
+/// The AppImage carries its own GStreamer.
+///
+/// Microphone capture in WebKitGTK is GStreamer: `getUserMedia` opens the input
+/// through its device monitor and the PulseAudio/PipeWire source plugins. An
+/// AppImage bundles `libgstreamer` with WebKit, and without its own plugins it
+/// would load the HOST's, built against whatever GStreamer that distribution
+/// ships — or find none at all. The `.deb` needs no such thing: the distro's
+/// WebKitGTK package already depends on the plugin sets.
+#[test]
+fn the_appimage_bundles_the_media_framework() {
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.linux.conf.json"))
+        .expect("tauri.linux.conf.json must be valid JSON");
+    assert_eq!(
+        overlay["bundle"]["linux"]["appimage"]["bundleMediaFramework"],
+        serde_json::json!(true),
+        "the AppImage must bundle GStreamer's plugins, or the microphone depends on the host's"
     );
 }
 

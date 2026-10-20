@@ -723,7 +723,96 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+/// Linux: GDK's own monitors, which carry the size the display server read
+/// from the panel — RandR's output millimetres on X11 (the EDID image size),
+/// `wl_output`'s physical size on Wayland. The same numbers, through the same
+/// plausibility filter as the other platforms: a VM's or a projector's `0x0`
+/// and the `160x90` placeholder are refused there, not here.
+///
+/// GDK is main-thread only. A snapshot taken anywhere else is empty — every
+/// monitor reports no size, which is the platform default the automatic
+/// profile already handles — rather than a GDK call from the wrong thread.
+/// `list_displays`, the one caller whose sizes reach the renderer, is a
+/// synchronous command, and Tauri runs those on the main thread.
+#[cfg(target_os = "linux")]
+mod platform {
+    use gtk::prelude::*;
+
+    use super::{plausible_panel_mm, PanelCandidate, PanelReport};
+
+    pub fn candidates() -> Vec<PanelCandidate> {
+        if !gtk::is_initialized_main_thread() {
+            return Vec::new();
+        }
+        let Some(display) = gtk::gdk::Display::default() else {
+            return Vec::new();
+        };
+        (0..display.n_monitors())
+            .filter_map(|index| display.monitor(index))
+            .map(|monitor| {
+                // GDK's geometry is in application pixels; tao reports a
+                // monitor as that times its scale, so the pairing in
+                // `PanelSizes::fact` compares like with like.
+                let geometry = monitor.geometry();
+                let scale = monitor.scale_factor().max(1);
+                let pixel_width = (geometry.width() * scale).max(0) as u32;
+                let pixel_height = (geometry.height() * scale).max(0) as u32;
+                let size_mm = plausible_panel_mm(PanelReport {
+                    width_mm: f64::from(monitor.width_mm()),
+                    height_mm: f64::from(monitor.height_mm()),
+                    pixel_width,
+                    pixel_height,
+                    // No CoreGraphics-style 72-DPI substitute to recognise.
+                    points_width: 0.0,
+                    points_height: 0.0,
+                });
+                PanelCandidate {
+                    pixel_width,
+                    pixel_height,
+                    position_x: geometry.x() * scale,
+                    position_y: geometry.y() * scale,
+                    size_mm,
+                    // tao already names a Linux monitor by GDK's model string,
+                    // so there is nothing better to offer here.
+                    name: None,
+                    product: None,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn probe_identity() {
+        if !gtk::is_initialized_main_thread() && gtk::init().is_err() {
+            println!("no display to probe");
+            return;
+        }
+        let Some(display) = gtk::gdk::Display::default() else {
+            println!("no display to probe");
+            return;
+        };
+        for index in 0..display.n_monitors() {
+            if let Some(monitor) = display.monitor(index) {
+                println!(
+                    "monitor {index} {:?} {:?} at {:?} scale {}: {}x{} mm",
+                    monitor.manufacturer(),
+                    monitor.model(),
+                    monitor.geometry(),
+                    monitor.scale_factor(),
+                    monitor.width_mm(),
+                    monitor.height_mm(),
+                );
+            }
+        }
+        // Now that this thread owns GDK, the candidates as `list_displays`
+        // would see them.
+        for candidate in candidates() {
+            println!("{candidate:?}");
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod platform {
     use super::PanelCandidate;
 

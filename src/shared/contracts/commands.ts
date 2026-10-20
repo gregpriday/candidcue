@@ -194,6 +194,14 @@ export const COMMAND_IDS = [
   'help.report-problem',
   'help.release-notes',
   'help.download',
+  /**
+   * Ask the update server now (docs/updates.md). Not a web destination — Rust
+   * makes the request — but filed with them because it is the other way to
+   * get a newer build. Answered by the CONTROL window from wherever it is
+   * chosen (`menu.rs::CONTROL_ROUTED_COMMANDS`), because that is where the
+   * update notice lives.
+   */
+  'help.check-for-updates',
   // The one that is not a website: the notices this build shipped, opened from
   // inside the bundle.
   'help.notices',

@@ -189,6 +189,8 @@ describe('osCopy', () => {
     }
     expect(menu).toContain('PredefinedMenuItem::quit(app, Some("Quit CandidCue"))');
     expect(menu).toContain(`PredefinedMenuItem::quit(app, Some("${osCopy('windows').quit}"))`);
+    // GTK has no predefined Quit, so Linux's File › Exit is an item of its own.
+    expect(menu).toContain(`MenuItem::with_id(app, LINUX_EXIT_ID, "${osCopy('linux').quit}"`);
     expect(osCopy('linux').quit).toBe(osCopy('windows').quit);
   });
 });

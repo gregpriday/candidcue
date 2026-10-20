@@ -310,6 +310,61 @@ fn stage_capability_declares_no_application_permissions() {
     }
 }
 
+/// No window may drive the updater plugin from JavaScript (docs/updates.md).
+///
+/// The plugin is registered for its Rust API: `updater.rs` builds the updater
+/// with the compiled-in endpoint and refuses an install during a take. Its own
+/// `plugin:updater|…` commands would let a webview check an endpoint of its
+/// choosing, and install without that refusal — so no capability grants them,
+/// and the control window reaches updates only through `check_for_update` and
+/// `install_update`.
+///
+/// Anti-vacuity first: the plugin's manifest must be in the generated ACL, or
+/// "denied" below would only mean "never heard of it".
+#[test]
+fn no_window_can_drive_the_updater_plugin_from_javascript() {
+    let manifests = acl_manifests();
+    let updater = manifests
+        .get("updater")
+        .expect("the updater plugin is registered, so its ACL manifest is generated");
+    let commands: BTreeSet<String> = updater
+        .permissions
+        .values()
+        .flat_map(|permission| permission.commands.allow.iter())
+        .map(|command| format!("plugin:updater|{command}"))
+        .collect();
+    assert!(
+        commands.contains("plugin:updater|download_and_install"),
+        "the manifest no longer names download_and_install; read it again: {commands:?}"
+    );
+
+    let authority = authority();
+    for window in [CONTROL_WINDOW, PREFERENCES_WINDOW, STAGE_WINDOW] {
+        for command in &commands {
+            assert!(
+                !allowed_for(&authority, command, window),
+                "`{window}` can invoke {command}; updates go through check_for_update \
+                 and install_update, which Rust gates"
+            );
+        }
+        assert!(
+            allowed_for(&authority, "install_update", window) == (window != STAGE_WINDOW),
+            "install_update must be reachable from control and Settings and never from the stage"
+        );
+    }
+
+    for capability in capabilities().values() {
+        for permission in &capability.permissions {
+            let identifier = permission.identifier().get();
+            assert!(
+                !identifier.starts_with("updater:") && !identifier.starts_with("process:"),
+                "capability `{}` grants `{identifier}`; the updater is Rust's",
+                capability.identifier
+            );
+        }
+    }
+}
+
 /// H5. No window may invoke the dialog plugin from JavaScript.
 ///
 /// The file pickers now run in Rust (`src/dialogs.rs`) and hand their result

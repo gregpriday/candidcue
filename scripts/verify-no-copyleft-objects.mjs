@@ -10,9 +10,13 @@
  * distributed terms GPL-3.0. CandidCue is MIT-licensed, and a binary that kept
  * any eSpeak NG or ucd-tools code would have to be distributed on GPL terms
  * instead. Nothing in that crate removes them from the link line — there is no
- * TTS feature, upstream's `-DSHERPA_ONNX_ENABLE_TTS=OFF` is unavailable
- * because we consume a prebuilt archive, and the `shared` alternative is
- * worse, because the sherpa-onnx dylib genuinely contains the code.
+ * TTS feature, and the `shared` alternative is worse, because the sherpa-onnx
+ * dylib genuinely contains the code.
+ *
+ * This is the macOS gate, and macOS links the stock archive. Windows and Linux
+ * do not: their linkers keep what this one strips, so they link upstream's
+ * text-to-speech-free build of the same release instead (`sherpa-no-tts.mjs`),
+ * and `verify-no-gpl-in-binary.mjs` checks the executables they produce.
  *
  * The comfortable assumption was that a static link extracts only what
  * resolves an undefined symbol, that CandidCue does speech-to-TEXT and calls

@@ -20,6 +20,10 @@ pub async fn start_session(
 ) -> Result<SessionRecord, AppError> {
     // Recovery mode owns no writable database (database::BootStatus).
     boot.require_ready()?;
+    // An installed update is about to restart the app (crate::updater).
+    if let Some(refusal) = crate::updater::restart_refusal() {
+        return Err(refusal);
+    }
     let script_id = ScriptId::parse(&input.script_id)?;
 
     // Spec §21.4: capture the script as it is about to be performed BEFORE
@@ -28,13 +32,30 @@ pub async fn start_session(
     repo::snapshot_pre_session(db.pool(), &paths, &locks, &script_id).await?;
 
     let mut record = sessions::start_session(db.pool(), &input).await?;
-    let generation = coordinator.begin_session(
-        record.id.clone(),
-        input.script_id.clone(),
-        input.compile_hash.clone(),
-    );
-    record.session_generation = generation;
-    Ok(record)
+    // Asked again, as one step with recording the take, because an install
+    // can overtake the awaits above (crate::updater::begin_take_unless_restarting).
+    let begun = crate::updater::begin_take_unless_restarting(|| {
+        coordinator.begin_session(
+            record.id.clone(),
+            input.script_id.clone(),
+            input.compile_hash.clone(),
+        )
+    });
+    match begun {
+        Ok(generation) => {
+            record.session_generation = generation;
+            Ok(record)
+        }
+        Err(refusal) => {
+            // The row exists but no take ever ran in it.
+            if let Err(err) =
+                sessions::end_session(db.pool(), &record.id, sessions::EndSessionSummary::default()).await
+            {
+                tracing::warn!(error = %err, "could not close the refused session row");
+            }
+            Err(refusal)
+        }
+    }
 }
 
 #[tauri::command]

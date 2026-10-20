@@ -60,6 +60,15 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        /*
+         * In-app updates (docs/updates.md). The plugin is registered for its
+         * Rust API alone: no capability grants `updater:*`, so its own
+         * `plugin:updater|…` commands are refused to every webview, and the
+         * only way in is `check_for_update` / `install_update` below, through
+         * `updater.rs`. The public key comes from `plugins.updater` in
+         * tauri.conf.json; the endpoint is compiled into `updater.rs`.
+         */
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Windows only in effect: see `windows/webview_microphone.rs`.
         .plugin(crate::windows::webview_microphone::plugin())
         .invoke_handler(tauri::generate_handler![
@@ -155,10 +164,11 @@ pub fn run() {
             // the privacy pane — a fixed per-platform url, never an argument.
             commands::get_microphone_permission,
             commands::open_microphone_settings,
-            // No `check_for_update` / `install_update`. CandidCue 1.0 updates
-            // manually (docs/updates.md); both used to be registered here and
-            // always returned NOT_IMPLEMENTED, which put a dead command on the
-            // ACL that a later change could have quietly filled in.
+            // Updates (docs/updates.md). Both are thin: the endpoint, the
+            // channel, the signature check and the refusal during a take all
+            // live in `updater.rs`, where the renderer cannot route around them.
+            commands::check_for_update,
+            commands::install_update,
             // Sessions (spec §36)
             commands::start_session,
             commands::end_session,
@@ -285,6 +295,10 @@ pub fn run() {
 
             // Cross-window authority (spec §43.4).
             handle.manage(AppCoordinator::default());
+
+            // The update the last check found, held for the install that may
+            // follow it — in Rust, so the install command needs no argument.
+            handle.manage(crate::updater::UpdaterState::default());
 
             // No credential store. The OS keychain entry existed for exactly one
             // secret — the speech provider's API key — and the recogniser is now

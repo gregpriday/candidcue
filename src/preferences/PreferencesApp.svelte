@@ -152,6 +152,10 @@
           showToast(`The log folder could not be opened. ${describeError(err)}`, 'danger');
         });
       },
+      /* Rust delivers this to the document window, where the update notice
+         lives (`menu.rs::CONTROL_ROUTED_COMMANDS`). Should it ever arrive here
+         instead, bringing that window forward is the honest half of it. */
+      'help.check-for-updates': () => void focusAppWindow('control'),
     });
 
     void (async () => {

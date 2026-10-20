@@ -13,8 +13,6 @@
  *    toggles, …) persist in a local overlay (localStorage) — they are
  *    frontend state, not the Rust document.
  */
-// `describeError`/`errorCode` used to be imported here for `checkForUpdate`,
-// which classified an updater failure. There is no updater (docs/updates.md).
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
@@ -54,10 +52,14 @@ interface RustSettings {
   schemaVersion: number;
   general: {
     openTo: string;
+    /**
+     * "Check for updates automatically". Absent in every document written
+     * before the switch existed, which Rust reads as on — and so does this.
+     */
+    checkForUpdates?: boolean;
     /*
-     * No `updateCheck`. Rust dropped the field with the updater stubs; serde
-     * ignores it on documents already on disk. Declaring it here would put the
-     * dead contract back on the TypeScript side of the boundary.
+     * No `updateCheck`, the retired string. serde ignores it on documents
+     * already on disk; `checkForUpdates` is a different key on purpose.
      */
     /*
      * No `saveTranscript` either. Takes stopped writing transcripts (#214) and
@@ -657,6 +659,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       ...defaults.general,
       launchBehavior: rust.general.openTo === 'last_script' ? 'recent' : 'library',
       defaultSessionMode: toSessionMode(rust.stageBehavior.promptMode),
+      checkForUpdates: rust.general.checkForUpdates !== false,
     },
     speech: {
       transcriptionModel: rust.audio.transcriptionModel,
@@ -837,6 +840,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       ...mergeSection(mapped.general, overlay.general),
       launchBehavior: mapped.general.launchBehavior,
       defaultSessionMode: mapped.general.defaultSessionMode,
+      checkForUpdates: mapped.general.checkForUpdates,
     }),
     // The recogniser name and locale are Rust-owned: they describe what
     // is built from, and an overlay disagreeing with the document would mean
@@ -898,6 +902,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('general', 'openTo', patch.general.launchBehavior === 'recent' ? 'last_script' : 'library');
     }
     put('stageBehavior', 'promptMode', patch.general.defaultSessionMode);
+    put('general', 'checkForUpdates', patch.general.checkForUpdates);
   }
   if (patch.audio) {
     // §28.4 — the missing half of the mapping. The slider persisted in the
@@ -1056,6 +1061,9 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
       // every restore and was read back over the restored document (#271).
       delete merged.launchBehavior;
       delete merged.defaultSessionMode;
+      // Rust-owned too, and Rust is what refuses an automatic check when it
+      // is off; a cached copy here could only ever disagree with it.
+      delete merged.checkForUpdates;
       // Rows that changed nothing (#218). Nothing reads the stored copy.
       for (const retired of RETIRED_GENERAL_ROWS) delete merged[retired];
     }
@@ -1239,16 +1247,9 @@ export async function clearCache(kind: 'logs'): Promise<ClearResult> {
 }
 
 /*
- * `checkForUpdate` and `describeUpdateCheck` used to live here.
- *
- * They were the honest half of a dishonest feature: the button asked Rust a
- * real question and Rust always answered NOT_IMPLEMENTED, which the sentence
- * faithfully reported as "not available in this build". The rest of the
- * surface was not honest — a `updateCheck: 'daily'` default nothing scheduled,
- * an `UpdateCheckCadence` enum, two registered commands. CandidCue 1.0 updates
- * manually, so all of it is gone rather than half of it (docs/updates.md).
- * Settings now states the running version and how to get a newer build, which
- * is a claim the app can actually keep.
+ * The update commands live in `services/updates.ts`, and the flow that uses
+ * them in `stores/updates.ts`. What stays here is the one sentence Settings
+ * shows about them, because it is a privacy statement and is tested as one.
  */
 
 /**
@@ -1274,17 +1275,28 @@ export async function getAppVersion(): Promise<string> {
 /**
  * What Settings tells a presenter about updates.
  *
- * Exported and pure so the claim is testable without mounting the route. The
- * failure this guards against is the one the old code made structurally
- * possible: text that implies CandidCue watches for new versions. It does not,
- * and this sentence must never say otherwise.
+ * Exported and pure so the claim is testable without mounting the route. It is
+ * a privacy statement before it is anything else, so it says exactly what the
+ * check is (docs/updates.md, docs/network-inventory.md): which host, when, what
+ * the request carries, and what it never does. It is not a RESULT — it never
+ * says "up to date" or "update available", because it does not know.
+ *
+ * `automatic` is the "Check for updates automatically" switch, so the sentence
+ * under the switch always describes the position it is in.
  */
-export function describeUpdatePolicy(currentVersion: string): string {
+export function describeUpdatePolicy(currentVersion: string, automatic: boolean): string {
+  const when = automatic
+    ? `CandidCue asks updates.candidcue.com whether a newer version exists shortly after it ` +
+      `opens and every six hours while it runs, and whenever you choose Check for Updates… in the ` +
+      `Help menu.`
+    : `Automatic checks are off, so CandidCue contacts updates.candidcue.com only when you ` +
+      `choose Check for Updates… in the Help menu.`;
   return (
-    `You are running CandidCue ${currentVersion}. ` +
-    `CandidCue never checks for updates and never contacts an update service. ` +
-    `To update, download the newest build from the official CandidCue website ` +
-    `and replace the app in your Applications folder — your scripts, settings ` +
-    `and calibrations are stored separately and are left untouched.`
+    `You are running CandidCue ${currentVersion}. ${when} ` +
+    `A check sends this version, your operating system and processor type, and — as any web ` +
+    `request does — your IP address; nothing that identifies you, and none of your scripts or ` +
+    `audio. An update is installed only when you choose to, never during a take, and only if it ` +
+    `carries the signature built into CandidCue. Installing one replaces the app; your scripts, ` +
+    `settings and calibrations are stored separately and are left untouched.`
   );
 }

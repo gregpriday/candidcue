@@ -197,8 +197,21 @@ function rustCrates() {
    * matters. The union is the honest answer for both artifacts — naming a
    * crate one of them does not contain costs nothing, leaving out one it does
    * contain is the gap.
+   *
+   * Linux likewise: its AppImage and .deb ship this file, and select the
+   * GTK/WebKitGTK bindings and zbus that no other target does.
+   *
+   * The resolution is still not perfectly host-independent — asked from a
+   * Windows or Linux host, the macOS triples drop `swift-rs` — so the file is
+   * generated and checked on macOS, the host whose answer is the complete
+   * one, and the Windows and Linux release jobs do not re-check it.
    */
-  const RELEASE_TARGETS = ['aarch64-apple-darwin', 'x86_64-apple-darwin', 'x86_64-pc-windows-msvc'];
+  const RELEASE_TARGETS = [
+    'aarch64-apple-darwin',
+    'x86_64-apple-darwin',
+    'x86_64-pc-windows-msvc',
+    'x86_64-unknown-linux-gnu',
+  ];
   const seen = new Map();
   let failedTrees = 0;
   for (const manifest of ['src-tauri/Cargo.toml', 'crates/Cargo.toml']) {
@@ -541,7 +554,8 @@ function render() {
     'from the application itself rather than from a repository.',
     '',
     'It ships inside the app. On macOS it is at',
-    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`.',
+    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux',
+    'packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.',
     '',
     'CandidCue itself is free software under the MIT licence. Its text is in',
     '`Contents/Resources/LICENSE.txt`, beside this file.',
@@ -559,6 +573,23 @@ function render() {
     'Licensed under the SIL Open Font License 1.1. The woff2 subsets are the ones',
     'published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,',
     'unmodified. Full text: `LICENSE-fonts.txt`, beside this file.',
+    '',
+    '## Shared libraries in the Linux AppImage',
+    '',
+    'The AppImage carries the shared libraries CandidCue needs from Ubuntu 22.04',
+    '("jammy") so that it runs on distributions that lack them: chiefly WebKitGTK,',
+    'GTK 3, GLib, GStreamer, cairo, pango, HarfBuzz, libsoup, GnuTLS and Nettle,',
+    'and their dependencies. The `.deb` carries none of them; the package manager',
+    'installs them. Each is the unmodified Ubuntu build, dynamically linked and',
+    "replaceable, under its own licence — most under the GNU LGPL (2.1 or later, or",
+    '3), the rest under permissive licences (MIT, BSD, the Unicode licence for ICU),',
+    'with some offered under a choice that includes the GPL. None is under the GPL',
+    'alone. The exact list is the AppImage\'s `usr/lib` directory, and the',
+    'corresponding source for each is published in the Ubuntu 22.04 archive',
+    '(<https://launchpad.net/ubuntu/jammy>), under the package that ships it. On',
+    'request, the source for any of them is also available from the CandidCue',
+    'project at <https://github.com/gregpriday/candidcue/issues>, for at least three',
+    'years after the release that carried it.',
     '',
     '## Statically linked native components',
     '',

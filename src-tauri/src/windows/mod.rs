@@ -48,13 +48,10 @@ pub mod events {
     pub const STAGE_CLOSED: &str = "stage://closed";
     pub const STAGE_ERROR: &str = "stage://error";
     /*
-     * `UPDATE_AVAILABLE` and `UPDATE_PROGRESS` used to be declared here,
-     * described as reserved for application updates.
-     *
-     * CandidCue 1.0 updates manually (docs/updates.md). Nothing emitted them
-     * and nothing listened for them; they were a reserved slot in a public
-     * event vocabulary for a feature that does not exist, which is how an
-     * updater gets switched on without the signing and privacy work it needs.
+     * No update events here. The updater's one event, `update://progress`, is
+     * declared beside the code that emits it (`crate::updater`) and mirrored in
+     * `src/shared/contracts/updates.ts`, with its own test holding the two
+     * spellings together.
      */
     /// A speech model's install progressing, finishing, or failing (§152).
     ///

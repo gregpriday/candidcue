@@ -1,0 +1,203 @@
+name: Publish a CandidCue release
+description: >
+  Put one operating system's verified release on R2 and on the GitHub Release.
+  Files go up first and are read back from the public URL byte for byte; the
+  update feed goes up last, so no installed copy is ever pointed at something
+  that is not there yet.
+
+# The caller has checked out the repository at the tag and set up Node: the
+# steps below run scripts/release-feed.mjs and scripts/release-notes.mjs from
+# it. Nothing here builds anything.
+
+inputs:
+  artifact_name:
+    description: The build job's artifact, holding stage/ (and, for macOS, sbom/ and provenance/)
+    required: true
+  extra_assets:
+    description: Space-separated globs, relative to the downloaded artifact, attached to the GitHub Release beside the staged files
+    required: false
+    default: ''
+  public_url:
+    description: The origin the bucket is served from (the CANDIDCUE_PUBLIC_URL repository variable)
+    required: true
+  r2_access_key_id:
+    description: R2 access key ID
+    required: true
+  r2_secret_access_key:
+    description: R2 secret access key
+    required: true
+  r2_endpoint:
+    description: The account's R2 S3 endpoint
+    required: true
+  r2_bucket:
+    description: The bucket the public URL serves
+    required: true
+  github_token:
+    description: A token that may create the GitHub Release
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/receive-candidcue
+      with:
+        artifact_name: ${{ inputs.artifact_name }}
+        path: verified
+
+    # `--verify-tag` only checks that the tag EXISTS. A tag deleted and
+    # recreated at another commit while this ran would satisfy it, and the
+    # files published would be from the original. A stable release can wait
+    # in an environment for a person, which makes that window long.
+    - name: The tag must still be the commit that was built
+      shell: bash
+      run: |
+        set -euo pipefail
+        now="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/${GITHUB_REF_NAME}^{}" | cut -f1)"
+        if [ -z "$now" ]; then
+          now="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}" "refs/tags/${GITHUB_REF_NAME}" | cut -f1)"
+        fi
+        if [ -z "$now" ]; then
+          echo "::error::${GITHUB_REF_NAME} no longer exists on the remote"
+          exit 1
+        fi
+        if [ "$now" != "${GITHUB_SHA}" ]; then
+          echo "::error::${GITHUB_REF_NAME} now points at $now, not the ${GITHUB_SHA} these files were built from"
+          exit 1
+        fi
+
+    # Equal is allowed through: a re-run repairs whatever a failed attempt
+    # left half done, and the next step keeps it from changing anything a
+    # live feed entry already points at.
+    - name: The version must not be older than what the feed serves
+      shell: bash
+      env:
+        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+      run: node scripts/release-feed.mjs monotonic --stage verified/stage
+
+    - name: No file already published may change
+      shell: bash
+      env:
+        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+      run: node scripts/release-feed.mjs write-once --stage verified/stage
+
+    # The aws CLI's default request checksums are an S3 extension R2 does not
+    # need; asking for them only when required keeps every CLI version working.
+    - name: Upload the release files
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        AWS_DEFAULT_REGION: auto
+        AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+        AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: |
+        set -euo pipefail
+        aws s3 cp verified/stage/files/ "s3://${R2_BUCKET}/releases/" \
+          --recursive --endpoint-url "${R2_ENDPOINT}" --no-progress \
+          --cache-control "public, max-age=31536000, immutable"
+
+    - name: Every file must be readable at its public URL
+      shell: bash
+      env:
+        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+      run: node scripts/release-feed.mjs verify-files --stage verified/stage
+
+    - name: Announce the release on the update feed
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        AWS_DEFAULT_REGION: auto
+        AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+        AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: |
+        set -euo pipefail
+        aws s3 cp verified/stage/feed/ "s3://${R2_BUCKET}/releases/" \
+          --recursive --endpoint-url "${R2_ENDPOINT}" --no-progress \
+          --content-type application/json \
+          --cache-control "no-cache, no-store, must-revalidate"
+
+    - name: The feed must serve what was announced
+      shell: bash
+      env:
+        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+      run: node scripts/release-feed.mjs verify-feed --stage verified/stage
+
+    # Each platform's workflow attaches its own files. Whichever finishes
+    # first creates the release; the others find it and add to it.
+    - name: Attach the files to the GitHub Release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        EXTRA_ASSETS: ${{ inputs.extra_assets }}
+        PUBLIC_URL: ${{ inputs.public_url }}
+      run: |
+        set -euo pipefail
+        TAG="${GITHUB_REF_NAME}"
+        VERSION="$(node -p "require('./verified/stage/release.json').version")"
+        # The notes come from CHANGELOG.md, reviewed with the code they describe.
+        node scripts/release-notes.mjs "$TAG" > "$RUNNER_TEMP/notes.md"
+        {
+          echo
+          echo '---'
+          echo
+          echo "macOS builds are signed and notarised. Windows and Linux builds are not code-signed; every update CandidCue installs is verified against its own signing key. Checksums are attached, and every file is also served from ${PUBLIC_URL}/releases/${VERSION}/."
+        } >> "$RUNNER_TEMP/notes.md"
+
+        files=(verified/stage/files/*/*)
+        for pattern in $EXTRA_ASSETS; do
+          for match in verified/$pattern; do
+            [ -f "$match" ] && files+=("$match")
+          done
+        done
+
+        # Created EMPTY, then filled. Given files, `gh release create` makes a
+        # draft, uploads into it and publishes it, deleting the draft if
+        # anything fails; another platform that found the draft and uploaded
+        # into it would lose its files with it. An empty release is published
+        # the moment it exists.
+        if ! gh release view "$TAG" >/dev/null 2>&1; then
+          # A prerelease tag must be MARKED as one: `gh release create`
+          # defaults to a full release, and would offer an rc as Latest.
+          # Never Latest at creation either: GitHub would hand the label to
+          # whichever release was created last. It is settled below.
+          flags=(--latest=false)
+          case "$TAG" in
+            *-*) flags+=(--prerelease) ;;
+          esac
+          # `--verify-tag`, because `gh release create` otherwise CREATES a
+          # missing tag from the default branch. Two platforms creating at
+          # once: the loser's create fails, and it uploads into the winner's.
+          if ! gh release create "$TAG" --verify-tag --title "CandidCue ${TAG}" \
+                --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"; then
+            sleep 10
+            gh release view "$TAG" >/dev/null
+          fi
+        fi
+        # Identical bytes when this replaces anything: write-once held the
+        # same files to that above.
+        gh release upload "$TAG" "${files[@]}" --clobber
+
+        # And every one of them is on the release, at its size.
+        attached="$(gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) \(.size)"')"
+        for file in "${files[@]}"; do
+          want="$(basename "$file") $(wc -c < "$file" | tr -d ' ')"
+          if ! grep -qxF "$want" <<<"$attached"; then
+            echo "::error::$want is not attached to the $TAG release"
+            exit 1
+          fi
+        done
+
+        # Latest goes to the newest stable release, whatever order the
+        # platforms and tags finished in. Every publish ends here, so they
+        # all converge on the same answer.
+        tags="$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')"
+        # shellcheck disable=SC2086 # one tag per word
+        newest="$(node scripts/release-feed.mjs newest-stable $tags)"
+        if [ -n "$newest" ]; then
+          gh release edit "$newest" --latest
+        fi

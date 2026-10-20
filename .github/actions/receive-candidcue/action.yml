@@ -1,0 +1,47 @@
+name: Receive a staged CandidCue release
+description: >
+  Download one operating system's release artifact and check that it is laid
+  out and intact the way publishing reads it: stage/release.json at the root,
+  and every file matching its SHA256SUMS.
+
+# Run twice per release. The build job runs it on its own upload, so a dry run
+# proves the handover a real publish depends on; the publish job runs it to
+# receive what it publishes. One action, so the two cannot disagree about the
+# layout. (They once did: an artifact uploaded from the single path `stage/`
+# has no `stage/` in it, and nothing but a real publish read it back.)
+
+inputs:
+  artifact_name:
+    description: The build job's artifact, holding stage/ (and, for macOS, sbom/ and provenance/)
+    required: true
+  path:
+    description: Where to put it, relative to the workspace
+    required: false
+    default: verified
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ inputs.path }}
+
+    # A publish job that found nothing would otherwise upload nothing and
+    # announce it, which is worse than no release: the feed entry exists and
+    # the file it names does not.
+    - name: The release must have survived the handover
+      shell: bash
+      env:
+        RECEIVED: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        test -s "$RECEIVED/stage/release.json"
+        cd "$RECEIVED"/stage/files/*/
+        sums=(SHA256SUMS-*.txt)
+        test -s "${sums[0]}"
+        if command -v sha256sum >/dev/null; then
+          sha256sum -c "${sums[0]}"
+        else
+          shasum -a 256 -c "${sums[0]}"
+        fi

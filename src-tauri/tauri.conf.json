@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CandidCue",
-  "version": "1.0.0-rc.1",
+  "version": "0.1.0",
   "identifier": "com.candidcue.app",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
@@ -54,6 +54,14 @@
             "$APPDATA/quarantine/**"
           ]
         }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwMUY0OEQwQTgwMThFNDcKUldSSGpnR28wRWdmTUJVY1NUbzdvaE1xKzRrelhqM2VoUnhPKy92V1pJOFo0MmV3SFBuZFJmU0sK",
+      "windows": {
+        "installMode": "passive"
       }
     }
   },

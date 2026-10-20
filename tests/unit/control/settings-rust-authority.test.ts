@@ -220,7 +220,9 @@ describe('#271 the overlay stops caching what Rust persists', () => {
 
     expect(rustPatches()).toEqual([
       {
-        general: { openTo: 'last_script' },
+        // `checkForUpdates` rides along because the whole section was sent,
+        // and it is Rust-owned: Rust reads it before an automatic update check.
+        general: { openTo: 'last_script', checkForUpdates: true },
         // No `pointerHideDelaySeconds`: nothing reads it (#218), so nothing sends it.
         stageBehavior: { promptMode: 'fixed', fixedSpeedWpm: 190 },
       },
@@ -228,6 +230,7 @@ describe('#271 the overlay stops caching what Rust persists', () => {
     const stored = overlay();
     expect(stored.general).not.toHaveProperty('launchBehavior');
     expect(stored.general).not.toHaveProperty('defaultSessionMode');
+    expect(stored.general).not.toHaveProperty('checkForUpdates');
     expect(stored.teleprompter).not.toHaveProperty('fixedSpeedWpm');
     // The sections themselves are still there, holding what is local.
     expect(stored.general).toHaveProperty('confirmEndSession');
@@ -263,5 +266,33 @@ describe('#271 the overlay stops caching what Rust persists', () => {
     // `mirrorY` never reached Rust and the per-panel move still needs it;
     // `hidePointer` went with its row (#218).
     expect(stored.teleprompter).toEqual({ mirrorY: true, fontSizePx: 80 });
+  });
+});
+
+describe('"Check for updates automatically" is Rust-owned', () => {
+  /*
+   * Rust reads `general.checkForUpdates` before it will make an automatic
+   * update check (`commands::check_for_update`). So the switch must reach Rust,
+   * must be read back from Rust, and must never be answered from a cached
+   * overlay copy — a cleared or stale browser store turning checks back on
+   * behind somebody's back is the failure this guards.
+   */
+  it('reads as on for a document written before the switch existed', async () => {
+    const loaded = await settings.getSettings();
+    expect(loaded.general.checkForUpdates).toBe(true);
+  });
+
+  it('reads the document, not a stale overlay copy', async () => {
+    ipc.serve(ipc.document({ checkForUpdates: false }));
+    seedOverlay({ general: { checkForUpdates: true } });
+    const loaded = await settings.getSettings();
+    expect(loaded.general.checkForUpdates).toBe(false);
+  });
+
+  it('writes the switch to Rust and keeps it out of the overlay', async () => {
+    const loaded = await settings.getSettings();
+    await settings.updateSettings(loaded.revision, { general: { checkForUpdates: false } } as never);
+    expect(rustPatches()).toEqual([{ general: { checkForUpdates: false } }]);
+    expect(overlay().general ?? {}).not.toHaveProperty('checkForUpdates');
   });
 });

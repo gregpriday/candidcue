@@ -90,9 +90,10 @@ and it would rewrite unrelated files.
 and `bugfix/*` from `develop`, open pull requests against `develop`, and merge
 them with a merge commit. `main` moves only on releases: `develop` is merged into
 `main` (a merge commit, and never `--delete-branch`, which would delete
-`develop`), then a `v*` tag is pushed from `main`, which is what `release.yml`
-builds. CI runs on pushes to both branches and on every pull request.
-`docs/release-runbook.md` has the full release procedure.
+`develop`), then a `v*` tag is pushed from `main`, which the three per-OS
+release workflows (`release-{macos,windows,linux}.yml`) build and publish to
+R2 and the GitHub Release. CI runs on pushes to both branches and on every pull
+request. `docs/release-runbook.md` has the full release procedure.
 
 ## Architecture
 
@@ -319,8 +320,9 @@ implying it covered the change.
 
 The app builds, tests and runs on Windows 11 (x64); CI's `windows` job runs
 both vitest projects, both Rust workspaces with Clippy, and builds the NSIS
-installer. The macOS paths are unchanged. What is different there, and has
-already bitten:
+installer — all against the text-to-speech-free sherpa-onnx (below) — then
+checks the executable for GPL code. The macOS paths are unchanged. What is
+different there, and has already bitten:
 
 - **Never build a window from a synchronous command or event handler.** On
   Windows that runs inside WebView2's own IPC callback and deadlocks the event
@@ -346,17 +348,77 @@ already bitten:
   node vitest project pins `navigator.platform` to a Mac
   (`tests/setup/node-platform.ts`), and Playwright's `Desktop Chrome` device
   reports a Windows user agent on every host.
-- **DO NOT DISTRIBUTE a Windows build yet — it contains GPL-3.0 code.** The
-  link map of the Windows release binary (2026-10-19) has 784 eSpeak NG, 179
-  ucd-tools and 129 piper-phonemize symbols with addresses. MSVC loads the TTS
-  objects to resolve the C API object's references (as ld64 does), but keeps
-  their C++ static initialisers as roots, and those reach eSpeak NG — where
-  ld64's dead-stripping removes all of it. `THIRD_PARTY_NOTICES.md` says no
-  eSpeak NG code is in the binary, which is measured true on macOS only. The
-  fix in reach: build sherpa-onnx v1.13.4 for Windows with
-  `-DSHERPA_ONNX_ENABLE_TTS=OFF` and point `SHERPA_ONNX_LIB_DIR` at it (with
-  empty `espeak-ng`/`ucd`/`piper_phonemize` libs for the crate's fixed link
-  line) — or ship Windows builds on GPL-3.0 terms. Decide before any release.
+- **Windows and Linux link sherpa-onnx WITHOUT text-to-speech — never ship
+  one that doesn't.** The stock `sherpa-onnx-sys` archive carries eSpeak NG
+  and ucd-tools (GPL-3.0). ld64 dead-strips them on macOS; MSVC keeps the TTS
+  objects' C++ static initialisers as roots (784 eSpeak NG symbols in the
+  2026-10-19 link map), and a GNU ld link keeps eSpeak NG as well — measured
+  the same day, the stripped release binary linked from the stock archive
+  carries eSpeak NG's strings and ucd-tools' tables on both. So a
+  distributable build sets
+  `SHERPA_ONNX_LIB_DIR` to what
+  `node scripts/sherpa-no-tts.mjs --target <win-x64|linux-x64> --dest <dir>`
+  prints: upstream's `-no-tts` static libraries of the same release (SHA-256
+  pinned, scanned for eSpeak NG/ucd-tools/piper-phonemize markers) plus empty
+  stand-ins for the three libraries the crate links unconditionally — on
+  Windows a minimal COFF archive, because `link.exe` refuses a zero-member one
+  (LNK1107). Keep `--dest` outside `target/` (rust-cache empties it). Then
+  `node scripts/verify-no-gpl-in-binary.mjs <executable>` checks the finished
+  binary; its header records the markers and the controls they were proven
+  on. CI's `windows` job does both. A build made WITHOUT `SHERPA_ONNX_LIB_DIR`
+  is fine to test locally and contains GPL code: never distribute one. There
+  is no `-no-tts` archive for linux-aarch64, and a sherpa-onnx bump must
+  re-pin both archives and re-establish the markers.
+
+## Linux
+
+The app builds, tests and runs on Ubuntu 22.04 (x64, WebKitGTK 4.1); CI's
+`linux` job runs both vitest projects, both Rust workspaces with Clippy, and
+builds the `.deb` and the AppImage (`src-tauri/tauri.linux.conf.json`). Both
+packages were run on a clean 22.04 container under Xvfb — launch, Settings,
+microphone capture from a PulseAudio source — and the `.deb` through Present,
+End Take and File › Exit as well. Not yet used on a real desktop, under
+Wayland, or on two real monitors. What is different there:
+
+- **WebKitGTK refuses the microphone unless asked.** `enable-media-stream` is
+  off by default (no `navigator.mediaDevices` at all) and a `permission-request`
+  nobody answers is a denial. `windows/webview_microphone.rs` turns the setting
+  on and grants the app's own pages (`tauri://localhost`) audio-only capture
+  and the device list, on every web view. Capture is GStreamer → PulseAudio/
+  PipeWire; WebKit ignores *monitor* sources as microphones. The `.deb` gets the
+  plugins through `libwebkit2gtk-4.1-0`'s own Depends; the AppImage bundles
+  them (`bundleMediaFramework`).
+- **Present is fullscreen on a named monitor**, on top of the borderless frame
+  (`present.rs::linux_fullscreen`): Wayland ignores `set_position`, so a
+  borderless move would leave the take on the desk monitor. `chrome::restore`
+  leaves fullscreen before any frame is replayed.
+- **GTK honours a menu accelerator only while its bar is on screen.** The bar is
+  the control window's alone and a take hides it, so presented takes and
+  Settings hear their chords through `menu-keys.ts`, as on Windows; while the
+  bar is visible GTK takes the key first and the page never sees it. muda's GTK
+  backend has no predefined Quit, Undo, Redo, Minimize or Maximize: File › Exit
+  is a plain item (`menu.rs::LINUX_EXIT_ID`) and the rest are left out. Edit's
+  Cut/Copy/Paste/Select All are listed with their keys, which work; clicking
+  them does nothing, because muda's `libxdo` feature is off.
+- **Display sleep** is held over the session bus
+  (`org.freedesktop.ScreenSaver.Inhibit`, then the desktop portal) on a thread
+  that owns the connection (`windows/sleep.rs`).
+- **Panel millimetres come from GDK**, which is main-thread only, so an
+  off-thread snapshot is empty (`windows/panel_size.rs`); `list_displays` is a
+  synchronous command and so runs on the main thread.
+- **Building**: `build-essential pkg-config file xdg-utils patchelf
+  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev`, then
+  `pnpm tauri build --bundles deb,appimage`. `patchelf` is the AppImage's
+  GStreamer plugin's; set `APPIMAGE_EXTRACT_AND_RUN=1` where FUSE is missing.
+  Under Rosetta/qemu the bundler's own AppImages fail with "Exec format error"
+  (binfmt refuses the `AI\x02` ELF magic) — an emulation artifact only.
+- The AppImage's GTK hook exports `GDK_BACKEND=x11`, so it runs under XWayland
+  on a Wayland session; the `.deb` runs as a native Wayland client.
+- **DO NOT DISTRIBUTE a Linux build linked against the stock sherpa-onnx
+  archive either.** Its x64 release binary carries eSpeak NG's own strings
+  (`%s/espeak-ng-data`, `phontab`, `phondata`; measured 2026-10-19): GNU ld keeps
+  the TTS objects as MSVC does. Link the TTS-free archive through
+  `SHERPA_ONNX_LIB_DIR` for a release.
 
 ## Gotchas
 

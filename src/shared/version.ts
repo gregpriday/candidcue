@@ -13,7 +13,7 @@
  * used to sit in `settings.ts` doing this job; they survived three version
  * bumps that never reached them.
  */
-export const APP_VERSION = '1.0.0-rc.1';
+export const APP_VERSION = '0.1.0';
 
 /**
  * What to show when the answer is "this is not a real build".

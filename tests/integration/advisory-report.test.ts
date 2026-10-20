@@ -448,7 +448,7 @@ describe('docs/advisory-exceptions.json', () => {
 /* ---------------------------------------------------- the release workflow */
 
 describe('the release advisory step', () => {
-  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+  const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release-macos.yml'), 'utf8');
   const uncommented = workflow
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('#'))

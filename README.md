@@ -1,6 +1,6 @@
 # CandidCue
 
-A voice-following teleprompter for macOS and Windows. Write your script in
+A voice-following teleprompter for macOS, Windows and Linux. Write your script in
 Markdown, press Present, and read. CandidCue listens with a speech recogniser
 that runs on your computer, works out where you are in the script, and scrolls
 to keep your next words in the reading band. Ad-lib, pause, or start a
@@ -10,11 +10,21 @@ It is free and open source, built for recording videos on a prompter rig (an
 Elgato Prompter or any display behind glass), and it works in an ordinary
 window on a single screen too.
 
-## Status
+## Download
 
-CandidCue is getting ready for v1.0.0. There is no signed download yet, so for
-now you build it from source (below). The remaining work is tracked in the
-[issues](https://github.com/gregpriday/candidcue/issues).
+The current release is on the
+[releases page](https://github.com/gregpriday/candidcue/releases/latest), and
+every file is also served from `https://updates.candidcue.com/releases/`:
+
+- **macOS** (12 or later, Apple Silicon and Intel): the universal `.dmg`,
+  signed and notarised.
+- **Windows** (11, 64-bit): the `-setup.exe` installer. It is not code-signed,
+  so SmartScreen asks first: choose **More info**, then **Run anyway**.
+- **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
+
+CandidCue updates itself after that. Each update is signed and checked against
+the key the app was built with, and it is never offered or installed during a
+take.
 
 ## What it does
 
@@ -39,18 +49,23 @@ now you build it from source (below). The remaining work is tracked in the
 ## Privacy
 
 No account, no telemetry and no API key. Recognition happens on device, so your
-audio and your script are not uploaded anywhere. The only network activity in
-normal use is the speech model download you start yourself (about 128 MB,
-checked against a pinned SHA-256). [`docs/network-inventory.md`](docs/network-inventory.md)
-lists every network path in the app, and an update check planned for v1.0.0
-([#191](https://github.com/gregpriday/candidcue/issues/191)) will be added there
-when it lands.
+audio and your script are not uploaded anywhere. The app uses the network for
+two things: the speech model download you start yourself (about 128 MB, checked
+against a pinned SHA-256), and an update check against `updates.candidcue.com`
+shortly after launch and every six hours, which you can turn off in Settings
+and which installs an update only when you choose to, never during a take
+([`docs/updates.md`](docs/updates.md)).
+[`docs/network-inventory.md`](docs/network-inventory.md) lists every network
+path in the app and exactly what each one sends.
 
 ## Requirements
 
 - macOS 12 or later, Apple Silicon or Intel; or Windows 11, 64-bit (x64).
   Windows 10 should work — it has the same WebView2 runtime, which the
   installer fetches where it is missing — but is not tested.
+- Linux x64: Ubuntu 22.04 or later, as a `.deb` or an AppImage, with a
+  PulseAudio or PipeWire sound server for the microphone. Other distributions
+  with glibc 2.35 and WebKitGTK 4.1 should work but are not tested.
 - A microphone
 - A second display for prompter mode (optional)
 - English, for voice following
@@ -70,6 +85,31 @@ On Windows you also need the Visual Studio Build Tools with the "Desktop
 development with C++" workload (the MSVC linker and Windows SDK). Everything
 else is the same: `pnpm install`, `pnpm dev`, and `pnpm tauri build` produces
 the NSIS installer (`src-tauri/tauri.windows.conf.json` sets the target).
+
+On Linux (Ubuntu 22.04 or later) install the WebKitGTK toolchain first:
+
+```bash
+sudo apt-get install build-essential pkg-config file xdg-utils patchelf \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev librsvg2-dev
+```
+
+`pnpm tauri build` then produces a `.deb` and an AppImage
+(`src-tauri/tauri.linux.conf.json` sets the targets).
+
+On its own, that installer links the sherpa-onnx archive the build downloads,
+which carries eSpeak NG (GPL-3.0); the macOS linker strips it, but MSVC keeps
+it. That is fine for a build you run yourself. A Windows (or Linux) build you
+give to anyone must link sherpa-onnx's text-to-speech-free libraries instead,
+and be checked:
+
+```powershell
+$env:SHERPA_ONNX_LIB_DIR = node scripts/sherpa-no-tts.mjs --target win-x64 --dest "$env:TEMP\sherpa-onnx-no-tts"
+pnpm tauri build
+node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue.exe
+```
+
+On Linux it is `--target linux-x64` and `src-tauri/target/release/candidcue`.
+The Windows section of [`CLAUDE.md`](CLAUDE.md) has the reasoning.
 
 The speech model is not in the repository or the app bundle. Install it from
 the Welcome screen or **Settings › Speech**. To skip that download while
@@ -126,8 +166,6 @@ there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
 
 ## Licence
 
-CandidCue is moving to the MIT licence
-([#223](https://github.com/gregpriday/candidcue/issues/223)). Until that change
-lands, the `LICENSE` file still carries an earlier proprietary notice.
+CandidCue is free and open source under the [MIT licence](LICENSE).
 Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
 and security reports go through [`.github/SECURITY.md`](.github/SECURITY.md).
