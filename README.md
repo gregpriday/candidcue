@@ -16,7 +16,7 @@ window on a single screen too.
 
 The current release is on the
 [releases page](https://github.com/gregpriday/candidcue/releases/latest), and
-every file is also served from `https://updates.candidcue.com/releases/`:
+every file is also served from `https://updates.speakingglass.com/releases/`:
 
 - **macOS** (12 or later, Apple Silicon and Intel): the universal `.dmg`,
   signed and notarised.
@@ -53,9 +53,10 @@ take.
 No account, no telemetry and no API key. Recognition happens on device, so your
 audio and your script are not uploaded anywhere. The app uses the network for
 two things: the speech model download you start yourself (about 128 MB, checked
-against a pinned SHA-256), and an update check against `updates.candidcue.com`
-shortly after launch and every six hours, which you can turn off in Settings
-and which installs an update only when you choose to, never during a take
+against a pinned SHA-256), and an update check against
+`updates.speakingglass.com` shortly after launch and every six hours, which you
+can turn off in Settings and which installs an update only when you choose to,
+never during a take
 ([`docs/updates.md`](docs/updates.md)).
 [`docs/network-inventory.md`](docs/network-inventory.md) lists every network
 path in the app and exactly what each one sends.

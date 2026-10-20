@@ -71,7 +71,7 @@ a `.deb` install is pointed at the download page instead.
   check. CandidCue talks to the network for two things only: downloading the
   speech model when you ask it to, and the update check, which sends nothing
   but the request itself (the app's version, platform and architecture) to
-  `updates.candidcue.com`.
+  `updates.speakingglass.com`.
 - **Back up your own work.** **Export all data** writes a checked, restorable
   archive of your scripts, their revisions and images, settings, calibrations
   and session history.

@@ -20,7 +20,7 @@ A check is one HTTPS `GET` of the manifest for this build's channel, platform
 and architecture:
 
 ```
-https://updates.candidcue.com/releases/<channel>-<os>-<arch>.json
+https://updates.speakingglass.com/releases/<channel>-<os>-<arch>.json
 ```
 
 with `User-Agent: CandidCue/<version>`, `Accept: application/json` and, as any
@@ -89,9 +89,9 @@ The channel is derived from the build's own compiled version
 
 `<os>` and `<arch>` are the plugin's `{{target}}` and `{{arch}}`: `darwin`,
 `windows` or `linux`, and `aarch64` or `x86_64`. The base,
-`https://updates.candidcue.com/releases/`, is one constant (`UPDATE_BASE_URL` in
-`src-tauri/src/updater.rs`). It is compiled into every installed copy, so it is
-as permanent as the signing key.
+`https://updates.speakingglass.com/releases/`, is one constant
+(`UPDATE_BASE_URL` in `src-tauri/src/updater.rs`). It is compiled into every
+installed copy, so it is as permanent as the signing key.
 
 The release pipeline publishes one file per platform in the plugin's
 dynamic-server format — `version`, `notes`, `pub_date`, `url` and `signature` at
@@ -103,7 +103,7 @@ writes:
   "version": "0.1.0",
   "notes": "…",
   "pub_date": "2026-10-19T12:00:00Z",
-  "url": "https://updates.candidcue.com/releases/0.1.0/<payload>",
+  "url": "https://updates.speakingglass.com/releases/0.1.0/<payload>",
   "signature": "<contents of the .sig file>"
 }
 ```

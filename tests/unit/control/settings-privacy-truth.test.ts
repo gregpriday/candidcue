@@ -133,14 +133,14 @@ describe('#180 the privacy section describes what the app actually does', () => 
      * contacts, and every mention of an update server must be that host — not
      * "our servers", not a service nobody can look up.
      */
-    expect(privacySection, 'the update host must be named').toMatch(/updates\.candidcue\.com/);
+    expect(privacySection, 'the update host must be named').toMatch(/updates\.speakingglass\.com/);
     for (const mention of privacySection.matchAll(
       /update (?:server|service|feed|channel|endpoint)[^.]{0,60}/gi,
     )) {
       expect(
         mention[0],
         `"${mention[0]}" names an update service without saying which host it is`,
-      ).toMatch(/updates\.candidcue\.com/);
+      ).toMatch(/updates\.speakingglass\.com/);
     }
 
     /*
@@ -166,7 +166,7 @@ describe('#180 the privacy section describes what the app actually does', () => 
     expect(network, 'the network paragraph could not be located').not.toBeNull();
     const text = network?.[1] ?? '';
     expect(text, 'the model download is one use').toMatch(/speech language/i);
-    expect(text, 'the update check is the other').toMatch(/updates\.candidcue\.com/);
+    expect(text, 'the update check is the other').toMatch(/updates\.speakingglass\.com/);
     expect(text, 'and an exclusive claim must not survive beside it').not.toMatch(/^\s*Only\b/);
   });
 
@@ -361,7 +361,7 @@ describe('the update policy is stated truthfully', () => {
     const sentence = describeUpdatePolicy('9.9.9-test', true);
 
     expect(sentence, 'the running version must be quotable from this line').toContain('9.9.9-test');
-    expect(sentence, 'which host').toMatch(/updates\.candidcue\.com/);
+    expect(sentence, 'which host').toMatch(/updates\.speakingglass\.com/);
     expect(sentence, 'when').toMatch(/every six hours/i);
     expect(sentence, 'and how to ask by hand').toMatch(/Check for Updates…/);
     /*
@@ -393,7 +393,7 @@ describe('the update policy is stated truthfully', () => {
     expect(sentence).toContain('9.9.9-test');
     expect(sentence).toMatch(/Automatic checks are off/i);
     expect(sentence, 'the remaining contact is by request only').toMatch(
-      /contacts updates\.candidcue\.com only when you\s+choose Check for Updates…/i,
+      /contacts updates\.speakingglass\.com only when you\s+choose Check for Updates…/i,
     );
     expect(sentence, 'and it must not still describe a schedule').not.toMatch(/every six hours/i);
   });
