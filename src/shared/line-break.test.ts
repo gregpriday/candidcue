@@ -18,7 +18,7 @@
  * is the one word the case changes.
  */
 import { describe, expect, it } from 'vitest';
-import { bestOf, budgetMessage } from './perf-budget';
+import { bestOf, budgetMiss } from './perf-budget';
 import {
   breakLines,
   tokensForLine,
@@ -666,7 +666,7 @@ describe('cost', () => {
     const run = bestOf(() => breakLines(tokens, { targetChars: 38, maxChars: 44, minChars: 19 }));
 
     expect(verifyLineBreakPlan(tokens, run.value)).toEqual([]);
-    expect(run.elapsedMs, budgetMessage('5,000-word plan', run, 16)).toBeLessThan(16);
+    expect(budgetMiss('5,000-word plan', run, 16)).toBeNull();
   });
 
   it('stays linear-ish: ten times the script is not a hundred times the work', () => {
@@ -697,6 +697,6 @@ describe('cost', () => {
     const run = bestOf(() => breakLines(tokens, { targetChars: 38 }));
 
     expect(verifyLineBreakPlan(tokens, run.value)).toEqual([]);
-    expect(run.elapsedMs, budgetMessage('zero-width scan', run, 120)).toBeLessThan(120);
+    expect(budgetMiss('zero-width scan', run, 120)).toBeNull();
   });
 });

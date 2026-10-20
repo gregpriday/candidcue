@@ -16,7 +16,7 @@ import {
 } from './wrap-plan';
 import { compile } from '../../shared/markdown/compile';
 import { FONT_METRICS_PROSE_SAMPLE } from './fontMetrics';
-import { bestOf, budgetMessage } from '../../shared/perf-budget';
+import { bestOf, budgetMiss } from '../../shared/perf-budget';
 import { listInsetEm } from '../../shared/list-marker';
 
 const BASE: AdvanceStyle = {
@@ -457,7 +457,7 @@ describe('what it costs to plan', () => {
     // than a few blocks that happened to fit.
     expect(plan.breakAfterTokens.size).toBeGreaterThan(200);
     expect(plan.unplannedBlocks).toBe(0);
-    expect(run.elapsedMs, budgetMessage('whole-script wrap plan', run, 400)).toBeLessThan(400);
+    expect(budgetMiss('whole-script wrap plan', run, 400)).toBeNull();
   });
 });
 

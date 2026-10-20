@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { CompiledScript, SafeRenderNode } from '../contracts';
 import { compile } from './compile';
-import { bestOf, budgetMessage } from '../perf-budget';
+import { bestOf, budgetMiss } from '../perf-budget';
 
 const fixture = (name: string): string =>
   readFileSync(fileURLToPath(new URL(`../../../tests/fixtures/markdown/${name}`, import.meta.url)), 'utf8');
@@ -1058,7 +1058,7 @@ describe('compile: determinism, hashes, empty input, performance', () => {
     // Spec §25.8 targets 100 ms on a 2024 laptop; 400 ms leaves headroom for
     // slower CI while still failing loudly on a quadratic regression (the
     // pre-fix container lookup blew past this).
-    expect(run.elapsedMs, budgetMessage('5,000-word compile', run, 400)).toBeLessThan(400);
+    expect(budgetMiss('5,000-word compile', run, 400)).toBeNull();
   });
 });
 
@@ -1419,7 +1419,7 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
     for (const token of run.value.spokenTokens) {
       expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe(token.surface);
     }
-    expect(run.elapsedMs, budgetMessage('long kept-marker run', run, 250)).toBeLessThan(250);
+    expect(budgetMiss('long kept-marker run', run, 250)).toBeNull();
   });
 
   it.each([
@@ -1431,7 +1431,7 @@ describe('compile: words past the first line of a quote or wrapped list item (#2
     const source = `> First\n>     ${'> '.repeat(8_000)}${tail}\n> after.\n`;
     const run = bestOf(() => compile(source, OPTS));
     expect(normalizedWords(run.value)).toEqual(expect.arrayContaining(['last', 'word', 'after']));
-    expect(run.elapsedMs, budgetMessage('long kept-marker run with slack', run, 250)).toBeLessThan(250);
+    expect(budgetMiss('long kept-marker run with slack', run, 250)).toBeNull();
   });
 
   it('maps a spoken alias on a later line onto its visual word', () => {
