@@ -93,7 +93,7 @@
      unrendered menu can be predicted. */
   const ITEM_H = 32;
   const SEPARATOR_H = 9;
-  const MENU_PAD = 8;
+  const MENU_PAD = 6; // --float-inset
 
   /**
    * The vertical band the menu can actually be seen in: the window, narrowed
@@ -395,19 +395,33 @@
     flex-direction: column;
     /* No gap: the highlight is a full-width wash, and gaps between washes read
        as a list of buttons rather than as a menu. */
-    padding: var(--space-2);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    padding: var(--float-inset);
+    /* Glass — see GLASS POLICY in tokens.css. Concentric: the 12px corner is
+       the rows' 6px plus the 6px inset they sit at. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
+    /* It grows out of the trigger: from the corner nearest it. */
+    transform-origin: top right;
+    animation: glass-materialize var(--dur-materialize) var(--ease-out);
   }
   .menu.left {
     right: auto;
     left: 0;
+    transform-origin: top left;
   }
   .menu.up {
     top: auto;
     bottom: calc(100% + 6px);
+    transform-origin: bottom right;
+  }
+  .menu.up.left {
+    transform-origin: bottom left;
   }
 
   .separator {

@@ -240,3 +240,47 @@ fn windows_csp_is_the_shared_csp_plus_the_asset_host() {
         .collect();
     assert_eq!(windows, expected, "the Windows CSP has drifted from the shared one");
 }
+
+/// Windows needs the control window created TRANSPARENT for Mica to show
+/// through it (`windows/material.rs`): tao gives a window per-pixel alpha only
+/// at creation, and nothing can make it so later. A Mac does the same at run
+/// time, so the shared definition stays opaque — and Linux, which has no
+/// material, keeps an ordinary window.
+///
+/// The overlay therefore has to restate the window, because Tauri's merge
+/// replaces an array rather than patching into it. This holds the restatement
+/// to the one difference: a size or a minimum changed in the shared file and
+/// not here would otherwise ship a different window on Windows alone.
+#[test]
+fn the_windows_control_window_differs_only_in_transparency() {
+    let shared: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+        .expect("tauri.conf.json must be valid JSON");
+    let overlay: serde_json::Value = serde_json::from_str(include_str!("../tauri.windows.conf.json"))
+        .expect("tauri.windows.conf.json must be valid JSON");
+
+    let shared_windows = shared["app"]["windows"].as_array().expect("shared windows");
+    let overlay_windows = overlay["app"]["windows"].as_array().expect("overlay windows");
+    assert_eq!(overlay_windows.len(), shared_windows.len(), "the overlay replaces the whole array");
+
+    let mut expected = shared_windows[0].clone();
+    expected["transparent"] = serde_json::Value::Bool(true);
+    assert_eq!(overlay_windows[0], expected);
+    assert_ne!(
+        shared_windows[0]["transparent"],
+        serde_json::Value::Bool(true),
+        "the shared window stays opaque: a Mac clears it at run time and Linux has no material"
+    );
+}
+
+/// The private API a transparent Mac webview needs, declared in both places
+/// tauri-build insists on: the config flag and the crate feature.
+#[test]
+fn the_mac_webview_may_be_transparent() {
+    let shared: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+        .expect("tauri.conf.json must be valid JSON");
+    assert_eq!(shared["app"]["macOSPrivateApi"], serde_json::Value::Bool(true));
+    assert!(
+        include_str!("../Cargo.toml").contains(r#""macos-private-api""#),
+        "Cargo.toml must enable tauri's macos-private-api feature"
+    );
+}

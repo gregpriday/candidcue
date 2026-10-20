@@ -214,6 +214,42 @@ Stage-side motion lives in `src/stage/motion/`: a persistent jerk-limited
 follower (`controller.ts`, pure — the caller supplies `dt`, no rAF, no DOM) fed
 by `engine.ts`, rendering through `src/stage/renderer/ScriptLayer.svelte`.
 
+### Glass: one material for what floats, the OS's for the chrome
+
+Two separate things, both in `src/styles/tokens.css`:
+
+- **In-page glass** (`GLASS POLICY`): menus, popovers, toasts, the take
+  drawer, the appearance sheet and the stage chrome draw from `--glass-fill`
+  / `--glass-backdrop` (thin, regular, thick), never from the raw tints or a
+  literal `blur()` — `glass-material.test.ts` scans every component and holds
+  every text colour on each palette's glass to 4.5:1 over solid black and
+  solid white (a script's images can be either), and the window chrome's text
+  over the system material's measured range. Reduce Transparency,
+  Increase Contrast, forced colours and an engine without `backdrop-filter`
+  all turn it solid. Content (editor, Library list, Settings forms, dialog
+  bodies) is never glass.
+- **Window material** (`windows/material.rs`, `WINDOW MATERIAL`): vibrancy on
+  a Mac, Mica on Windows 11 22H2+ (checked DWM call), none on Linux, older
+  Windows or with
+  `CANDIDCUE_WINDOW_MATERIAL=none`. Rust tells the page in an init script
+  (`lib/window-material.ts` → `data-window-material`) and the page clears the
+  canvas only while a rail is drawn (`data-material-rail`): titlebar, toolbar
+  band and rail are glass, the document area below the toolbar is paper. A
+  take takes the material away (`present.rs` → `material::suspend`) and the
+  restore gives it back. Needs `macos-private-api` (a transparent WKWebView;
+  this bars the Mac App Store) and, on Windows, a window created
+  `transparent` — hence the control window restated in
+  `tauri.windows.conf.json`.
+- **The Mac titlebar is an overlay** (`titleBarStyle: Overlay`, hidden title):
+  the page runs under it, so the toolbar band is 52px there (`--toolbar-h`
+  under `data-titlebar='overlay'`) to match the empty unified `NSToolbar`
+  `material.rs` adds, which is what centres the traffic lights on it. The
+  band and the sidebar's head are `data-tauri-drag-region`s (hence
+  `core:window:allow-start-dragging` in both desk capabilities); with no
+  sidebar drawn the band keeps `--traffic-lights-w` clear. On macOS 26 a
+  transparent webview paints nothing under the titlebar, which is why the
+  chrome is glass all the way to the top rather than just the rail.
+
 ### How a prompter take is sized
 
 A prompter fills the panel pinned in Settings › Prompter — Present moves the

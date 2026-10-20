@@ -15,7 +15,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# `macos-private-api`: a transparent webview on a Mac, which is what lets the
+# sidebar sit on the system's vibrancy (`windows/material.rs`). The private
+# piece is WKWebView's `drawsBackground` key; it bars the Mac App Store, which
+# this app does not ship through. Paired with `app.macOSPrivateApi` in
+# tauri.conf.json — tauri-build refuses one without the other.
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -110,6 +115,20 @@ libc = "0.2.189"
 # call is explicit rather than riding on a transitive version.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+# The sidebar material under the desk's windows (`windows/material.rs`). The
+# version tauri itself already links, so the app carries one copy.
+window-vibrancy = "0.6"
+# The unified titlebar the traffic lights centre in, over the page's toolbar
+# band (`windows/material.rs`). All three already in the tree at these
+# versions, through tao and window-vibrancy.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSResponder",
+  "NSToolbar",
+  "NSWindow",
+] }
 
 # The WebView2 COM surface, for the one event wry does not expose: granting the
 # app's own pages the microphone (`windows/webview_microphone.rs`). Both are
@@ -118,6 +137,12 @@ core-graphics = "0.25"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
 windows-core = "0.61"
+# Mica under the desk's windows, through DWM's documented system backdrop with
+# its result checked, and the build number that says whether this Windows has
+# it (`windows/material.rs`). Both already in the tree at these versions, the
+# first through tauri; `Win32_Graphics_Dwm` is the one feature added.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows-version = "0.1"
 
 # Linux. All three are already in the tree at these versions — wry, tao and muda
 # bring GTK and WebKitGTK, and the single-instance plugin brings zbus — so naming

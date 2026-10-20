@@ -75,6 +75,7 @@
 import { rememberReaderFrame } from './lib/reader-frame';
   import { emitShortcut, installShortcuts, onShortcut } from './lib/shortcuts';
   import { osCopy } from './lib/os-copy';
+  import { showMaterialRail, showSidebar as showSidebarChrome, windowTitlebar } from './lib/window-material';
   import { initAudioTrace } from './services/audio-trace';
   import { exportSupportBundle } from './services/diagnostics';
   import { describeError, errorCode } from './services/errors';
@@ -288,6 +289,41 @@ import { rememberReaderFrame } from './lib/reader-frame';
     if (black) document.documentElement.dataset['presenting'] = 'true';
     else delete document.documentElement.dataset['presenting'];
   });
+
+  /*
+   * The window's chrome, opened to the window material.
+   *
+   * On a Mac or Windows 11 the window's backing is the system's own glass
+   * (`lib/window-material.ts`): with the sidebar drawn, the sidebar and the
+   * toolbar band sit on it and the document area stays paper. Exactly when the
+   * sidebar is drawn and no longer: during the boot splash, the recovery
+   * screen, a take or with the sidebar hidden the canvas stays opaque, so
+   * nothing but the chrome can ever show the desktop through it.
+   */
+  $effect(() => {
+    const sidebarDrawn = ready && recoveryStatus === null && showSidebar && $workspace.sidebarVisible;
+    showMaterialRail(document.documentElement, sidebarDrawn);
+    showSidebarChrome(document.documentElement, sidebarDrawn);
+  });
+
+  /*
+   * A screen with no toolbar under an overlay titlebar (a Mac: see
+   * `lib/window-material.ts`) still needs somewhere to move the window from:
+   * the boot splash, the recovery screen, Welcome — and a reading window, a
+   * take somebody drags beside a call, whose stage runs right up under the
+   * traffic lights — get a drag strip across the top. Never over a toolbar,
+   * whose own band is the drag region and whose controls a strip on top would
+   * swallow, and never over a prompter take, which is borderless and must not
+   * be moved off its panel.
+   */
+  const overlayTitlebar = windowTitlebar() === 'overlay';
+  const titlebarStrip = $derived(
+    overlayTitlebar &&
+      (!ready ||
+        recoveryStatus !== null ||
+        $route.name === 'welcome' ||
+        ($route.name === 'live' && $session.stagePresentationMode === 'reader')),
+  );
 
   /*
    * The menu bar, kept in step with the application.
@@ -1448,6 +1484,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
     </main>
   {/if}
 
+  {#if titlebarStrip}
+    <div class="titlebar-strip" data-tauri-drag-region aria-hidden="true"></div>
+  {/if}
   <ToastRegion />
   <!--
     The update notice (docs/updates.md). Outside the boot branch, so an update
@@ -1610,6 +1649,39 @@ import { rememberReaderFrame } from './lib/reader-frame';
   }
 
   /*
+   * On a window material, the shell and the content column step back.
+   *
+   * The titlebar, the toolbar band and the sidebar are one piece of glass
+   * (tokens.css, WINDOW MATERIAL), and the shell or the column painting
+   * --bg-app would cover it again; the document area below each toolbar
+   * carries the paper itself. The titlebar seam goes too: it would be a line
+   * cut through the glass between the titlebar and the toolbar beneath it,
+   * which are the same surface now. The toolbar's own bottom edge is where the
+   * chrome ends.
+   */
+  :global(html[data-window-material][data-material-rail]) .shell {
+    border-top-width: 0;
+    background: transparent;
+  }
+  :global(html[data-window-material][data-material-rail]) .content {
+    background: transparent;
+  }
+
+  /*
+   * The overlay titlebar's drag strip, for the screens without a toolbar band.
+   * As tall as the band the traffic lights are centred in, and above the
+   * screen's own content (which starts lower than this on every one of them).
+   */
+  .titlebar-strip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--toolbar-h);
+    z-index: 30;
+  }
+
+  /*
    * Opaque black, over everything, and NOT animated.
    *
    * A fade would defeat the point: the frames it faded through are the ones
@@ -1634,10 +1706,11 @@ import { rememberReaderFrame } from './lib/reader-frame';
   /*
    * The drop target.
    *
-   * A wash and an inset dashed rule rather than a solid panel: the user needs to
-   * see WHERE they are dropping, which means seeing the window underneath. The
-   * rule is inset by a comfortable margin so it reads as "into this window"
-   * rather than as a border that has appeared around the content.
+   * A frost and an inset dashed rule rather than a solid panel: the user needs
+   * to see WHERE they are dropping, which means seeing the window underneath —
+   * as shapes, softened, so the card's words are not read through the
+   * Library's. The rule is inset by a comfortable margin so it reads as "into
+   * this window" rather than as a border that has appeared around the content.
    */
   .drop-target {
     position: fixed;
@@ -1647,6 +1720,8 @@ import { rememberReaderFrame } from './lib/reader-frame';
     place-items: center;
     pointer-events: none;
     background: color-mix(in srgb, var(--bg-app) 72%, transparent);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
+    backdrop-filter: var(--glass-backdrop-thin);
     box-shadow: inset 0 0 0 2px var(--accent);
     /* A dashed inset rule, drawn without a second element. */
     outline: 2px dashed var(--accent);

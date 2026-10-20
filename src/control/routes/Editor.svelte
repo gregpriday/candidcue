@@ -3183,8 +3183,12 @@ import type { PresentationMode } from '../services/settings-types';
     padding-block: 6px;
     padding-right: 10px;
     border-radius: 5px;
-    background: var(--bg-elevated);
-    box-shadow: var(--shadow-pop);
+    /* Glass, so the rows it opens out over stay visible as shapes under it —
+       which is what says it is the focused row grown, not a new thing. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    box-shadow: var(--glass-shadow);
     outline: 2px solid var(--focus-quiet);
     outline-offset: -2px;
     color: var(--text-primary);

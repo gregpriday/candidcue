@@ -10,6 +10,7 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::util::new_uuid;
 
 pub mod drag_drop;
+pub mod material;
 pub mod panel_size;
 pub mod preferences;
 pub mod present;

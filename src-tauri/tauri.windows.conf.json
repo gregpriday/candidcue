@@ -1,6 +1,23 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "app": {
+    "windows": [
+      {
+        "label": "control",
+        "title": "CandidCue",
+        "url": "control.html",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 680,
+        "visible": true,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true
+      }
+    ],
     "security": {
       "csp": "default-src 'self' asset: http://asset.localhost customprotocol:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     }

@@ -618,6 +618,12 @@
     container-type: inline-size;
     padding: clamp(var(--space-6), 6vh, var(--space-10)) var(--page-x-wide);
   }
+  /* Under an overlay titlebar (a Mac) the page starts at the window's top
+     edge, with the traffic lights and the drag strip over its first band; the
+     column starts below them. */
+  :global(html[data-titlebar='overlay']) .welcome {
+    padding-top: max(clamp(var(--space-6), 6vh, var(--space-10)), calc(var(--toolbar-h) + var(--space-4)));
+  }
 
   /*
    * Anchored to the top, centred across.

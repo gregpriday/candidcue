@@ -153,6 +153,20 @@ const FROZEN: Record<string, string> = {
   '--shadow-pop': '0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08)',
   '--shadow-hover': '0 4px 12px rgba(24, 25, 29, 0.09)',
   '--shadow-preview': '0 10px 28px rgba(24, 25, 29, 0.14), 0 2px 6px rgba(24, 25, 29, 0.06)',
+  // Glass, added with the material (tokens.css, GLASS POLICY): not a desk
+  // retune but presentation surfaces that became glass on purpose — the paper
+  // drawer and the appearance sheet over a paper read. The thick fill is the
+  // warm white the sheet was already frosted in, a point more opaque so its
+  // text holds 4.5:1 over solid black. Frozen from here on.
+  '--glass-tint': 'rgba(255, 255, 255, 0.9)',
+  '--glass-tint-thick': 'rgba(252, 250, 246, 0.91)',
+  '--glass-solid': '#ffffff',
+  '--glass-rim': 'rgba(24, 25, 29, 0.1)',
+  '--glass-edge': 'rgba(255, 255, 255, 0.65)',
+  '--glass-shadow': '0 14px 36px rgba(24, 25, 29, 0.14), 0 2px 8px rgba(24, 25, 29, 0.06)',
+  '--material-tint': 'rgba(246, 244, 240, 0.35)',
+  '--material-hover': 'rgba(24, 25, 29, 0.05)',
+  '--material-rule': 'rgba(24, 25, 29, 0.09)',
   '--empty-bg': '#faf1ec',
   '--empty-border': '#dedad3',
   '--empty-text': 'var(--text-secondary)',

@@ -67,9 +67,12 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import PaneDivider from './PaneDivider.svelte';
+  import { windowTitlebar } from '../lib/window-material';
   import { library, setLibraryView } from '../stores/library';
   import { navigate, route, type LibraryView } from '../stores/router';
   import { PANE_LIMITS, setPaneWidth, workspace } from '../stores/workspace';
+
+  const overlayTitlebar = windowTitlebar() === 'overlay';
 
   interface Props {
     onnew: () => void;
@@ -204,6 +207,15 @@
 </script>
 
 <aside class="sidebar" style="width: {$workspace.sidebarWidth}px">
+  {#if overlayTitlebar}
+    <!--
+      The traffic lights' place (a Mac, where the titlebar is an overlay — see
+      `lib/window-material.ts`): the head of the rail, as tall as the toolbar
+      band beside it so the first row starts where the document does, and the
+      handle the window is moved by from this side.
+    -->
+    <div class="titlebar-head" data-tauri-drag-region aria-hidden="true"></div>
+  {/if}
   <nav class="nav" aria-label="Library" bind:this={list} onfocusout={() => (focusIndex = -1)}>
     {#each rows as row, index (row.label)}
       {#if row.kind === 'settings'}
@@ -260,6 +272,13 @@
     /* No border: the PaneDivider beside it draws the line, and two would be a
        two-pixel rule with a seam down the middle. */
     min-width: 0;
+  }
+
+  /* The sidebar's own top padding is part of the band, so the head is the
+     band less it: the first row then starts at the toolbar's bottom edge. */
+  .titlebar-head {
+    flex: 0 0 auto;
+    height: calc(var(--toolbar-h) - var(--space-2) - var(--space-1));
   }
 
   .nav {
@@ -342,5 +361,32 @@
   }
   .nav-item.command :global(svg) {
     color: var(--text-primary);
+  }
+
+  /*
+   * On the window's material (vibrancy on a Mac, Mica on Windows 11 — see
+   * `lib/window-material.ts`), the rail is the system's glass with a light
+   * wash of the palette over it, rather than the chrome grey — the side of
+   * the glass frame whose top is the toolbar band.
+   *
+   * The hover and the rule go translucent with it: the opaque chrome greys are
+   * tuned for a grey rail, and on glass they read as patches stuck onto it.
+   * The selected row needs no change — it is already ink at low strength — and
+   * the text keeps its own colours, which `glass-material.test.ts` checks over
+   * the tint at its weakest.
+   */
+  :global(html[data-window-material][data-material-rail]) .sidebar {
+    --bg-hover-chrome: var(--material-hover);
+    background: var(--material-tint);
+  }
+  :global(html[data-window-material][data-material-rail]) .nav-item:hover {
+    background: var(--material-hover);
+  }
+  :global(html[data-window-material][data-material-rail]) .nav-item.active,
+  :global(html[data-window-material][data-material-rail]) .nav-item.active:hover {
+    background: var(--bg-source-selected);
+  }
+  :global(html[data-window-material][data-material-rail]) .rule {
+    background: var(--material-rule);
   }
 </style>

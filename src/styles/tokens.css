@@ -22,8 +22,26 @@
    syntax reference's "On the glass" specimen — so that retuning the desk can
    never change what the presenter sees.
 
-   Depth here comes from spacing, type, and controlled contrast — NOT from
+   Depth here comes from spacing, type, and controlled contrast — and, for the
+   things that float above the content, from ONE material: glass. NOT from
    glows, gradients, grain, or perpetual motion.
+
+   GLASS IS A LAYER, NOT A STYLE
+   -----------------------------
+   Content is never glass: the editor, the Library, a Settings form, a dialog's
+   body all stay opaque, because text whose background depends on whatever
+   happens to be behind it is text nobody can promise is readable. Glass is the
+   layer that floats over content — a menu, a popover, a toast, the take's
+   drawer, the stage's chrome — and, where the operating system lends us its
+   own material, the navigation rail beside it (see WINDOW MATERIAL below).
+
+   It is frost and colour, not see-through. Every glass fill is opaque enough
+   that the faintest text it carries still clears 4.5:1 over the worst thing it
+   can blur (`glass-material.test.ts` does that arithmetic), so what shows
+   through is the colour and shape of what is underneath, never its words. Two
+   thicknesses, never stacked — a menu opened from a glass sheet is the thick
+   one — and every one of them turns solid when the system asks for less
+   transparency or more contrast (the GLASS POLICY block, after the palettes).
    ============================================================================ */
 
 :root {
@@ -113,8 +131,24 @@
   --radius-md: 10px; /* popovers, dialogs, sheets */
   --radius-lg: 16px; /* stage previews, large visual areas */
   --radius-pill: 999px; /* status capsules, toggles */
+  /*
+   * Floating glass — menus, popovers, toasts — and the inset its rows sit at.
+   *
+   * CONCENTRIC: a row's corner is the floating surface's corner less the
+   * inset, so the two curves run parallel instead of the row's corner bulging
+   * toward the edge (a 10px menu around 6px rows at an 8px inset was 4px out).
+   * 12 = 6 + 6, which is also the stage chrome's own radius and padding, so a
+   * menu on the desk and a menu on the glass are one shape.
+   */
+  --radius-float: 12px;
+  --float-inset: 6px;
 
   --titlebar-h: 48px;
+  /* A Mac's three traffic lights at the leading end of an overlay titlebar
+     (19pt in, three 14pt lights 20pt apart in AppKit's unified titlebar), with
+     the toolbar's own gap after them. What a toolbar band keeps clear when no
+     sidebar is drawn for them to sit on. */
+  --traffic-lights-w: 92px;
 
   /* ---- Desktop chrome bands (desktop §8.1) ----
 
@@ -221,6 +255,27 @@
      itself is registered by `brand-fonts.css`, in the control window only. */
   --font-brand: 'Archivo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     sans-serif;
+
+  /*
+   * ---- Glass: the material's optics, the same in every palette ----
+   *
+   * Blur hides what is behind; saturation keeps the colour that survives it
+   * from going grey, which is most of what makes frost read as glass rather
+   * than as a dirty panel. Thin is the stage's chrome over moving type; the
+   * regular weight is a menu or a toast; thick is a sheet or a drawer, which is
+   * larger and so blurs further for the same calm.
+   *
+   * Components read the --glass-backdrop* names, never these: the policy block
+   * after the palettes swaps those for `none` when the system asks for less
+   * transparency, and a component that used these directly would ignore it.
+   */
+  --glass-filter-thin: blur(16px) saturate(130%);
+  --glass-filter: blur(28px) saturate(170%);
+  --glass-filter-thick: blur(36px) saturate(150%);
+  /* A floating surface arrives from the thing that opened it: a short grow and
+     fade, origin at the trigger. Feedback, not decoration — and Reduce Motion's
+     guard at the end of this file makes it instant. */
+  --dur-materialize: 140ms;
 
   /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
      resolve. */
@@ -392,6 +447,29 @@
   --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
   --shadow-hover: var(--shadow-card-hover); /* card lift on hover */
   --shadow-preview: var(--shadow-pop); /* studio preview surface */
+
+  /*
+   * Glass, studio. What it floats over is a take: white type on black, which
+   * blurs to a mid grey where the type is dense — and a script can carry an
+   * image, which may be a wide field of white. So the fill is the elevated
+   * surface at 97% — `glass-material.test.ts` holds every text colour to 4.5:1
+   * over solid black and solid white — and the rim is light, because a dark one is
+   * invisible on the glass and the stage's own chrome is drawn the same way.
+   * The thick weight is darker rather than more opaque: it is the near-black
+   * the appearance sheet was already frosted in, so the drawer and the sheet
+   * beside it are one material.
+   */
+  --glass-tint: rgba(32, 36, 44, 0.97);
+  --glass-tint-thick: rgba(9, 11, 15, 0.88);
+  --glass-solid: #20242c;
+  --glass-rim: rgba(255, 255, 255, 0.11);
+  --glass-edge: rgba(255, 255, 255, 0.05);
+  --glass-shadow: var(--shadow-pop);
+  /* The navigation rail on a window material. The studio never shows one; the
+     set is declared here so it is complete in every palette. */
+  --material-tint: rgba(15, 17, 21, 0.5);
+  --material-hover: rgba(255, 255, 255, 0.06);
+  --material-rule: rgba(255, 255, 255, 0.08);
 
   /* Empty-state invitations */
   --empty-bg: rgba(224, 138, 99, 0.08);
@@ -591,6 +669,38 @@
   --shadow-hover: 0 4px 12px rgba(34, 40, 43, 0.09); /* card lift on hover */
   --shadow-preview: 0 10px 28px rgba(34, 40, 43, 0.14), 0 2px 6px rgba(34, 40, 43, 0.06);
 
+  /*
+   * Glass, the light desk. Porcelain frost: 91% white over whatever it floats
+   * on, which is enough that every text colour it carries keeps 4.5:1 even
+   * over a field of solid black (a dark image in the preview), and little
+   * enough that — with the saturation the blur adds back — a petrol Present
+   * button or a column of script still colours the menu that opens over it.
+   * The light inner edge is the line where the glass catches the light; on a
+   * white fill it all but disappears, which is right — the rim and the shadow
+   * draw the edge, the inner line only keeps it crisp.
+   */
+  --glass-tint: rgba(255, 255, 255, 0.91);
+  --glass-tint-thick: rgba(250, 251, 250, 0.92);
+  --glass-solid: #ffffff;
+  --glass-rim: rgba(34, 40, 43, 0.1);
+  --glass-edge: rgba(255, 255, 255, 0.65);
+  --glass-shadow: 0 14px 36px rgba(34, 40, 43, 0.14), 0 2px 8px rgba(34, 40, 43, 0.06);
+  /*
+   * The window's chrome on the operating system's own material — vibrancy on
+   * a Mac, Mica on Windows 11 (see WINDOW MATERIAL after the palettes). The
+   * tint is laid over the material, not instead of it: a porcelain wash that
+   * pulls a vivid wallpaper back toward the palette, and the floor under the
+   * toolbar's smallest text. Measured on macOS 26, the light sidebar material
+   * stays between 232 and 237 grey over solid black and solid white behind
+   * the window, the dark one between 38 and 56; `glass-material.test.ts`
+   * checks the chrome's text over a margin past both. Hover and the rule are
+   * ink at low strength rather than the opaque chrome greys, which would read
+   * as grey patches stuck onto glass.
+   */
+  --material-tint: rgba(246, 247, 245, 0.35);
+  --material-hover: rgba(34, 40, 43, 0.05);
+  --material-rule: rgba(34, 40, 43, 0.09);
+
   /* The Library's first-run invitation: a whisper of petrol, lighter than
      --accent-soft, so it reads as an invitation rather than as a card. */
   --empty-bg: #eef4f4;
@@ -736,6 +846,20 @@
   --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
   --shadow-preview: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
 
+  /* Glass, the dark desk: graphite frost, a dark outer rim and a faint light
+     inner one, as a Mac draws its own dark menus. Held to 4.5:1 over solid
+     white, which a light image or diagram in the preview can be; the danger
+     red is the colour that sets the floor. */
+  --glass-tint: rgba(30, 35, 37, 0.94);
+  --glass-tint-thick: rgba(25, 29, 31, 0.92);
+  --glass-solid: #1e2325;
+  --glass-rim: rgba(0, 0, 0, 0.45);
+  --glass-edge: rgba(255, 255, 255, 0.08);
+  --glass-shadow: var(--shadow-pop);
+  --material-tint: rgba(18, 21, 22, 0.45);
+  --material-hover: rgba(242, 244, 243, 0.06);
+  --material-rule: rgba(242, 244, 243, 0.08);
+
   --empty-bg: #161b1c;
   --empty-border: #262c2e;
   --empty-text: var(--text-secondary);
@@ -878,6 +1002,22 @@
   --shadow-hover: 0 4px 12px rgba(24, 25, 29, 0.09);
   --shadow-preview: 0 10px 28px rgba(24, 25, 29, 0.14), 0 2px 6px rgba(24, 25, 29, 0.06);
 
+  /*
+   * Glass on paper — the take-controls drawer and the appearance sheet over a
+   * paper read. Not a desk retune: these surfaces became glass on purpose, and
+   * this is the paper they are frosted from. The thick fill is the warm white
+   * the appearance sheet was already frosted in.
+   */
+  --glass-tint: rgba(255, 255, 255, 0.9);
+  --glass-tint-thick: rgba(252, 250, 246, 0.91);
+  --glass-solid: #ffffff;
+  --glass-rim: rgba(24, 25, 29, 0.1);
+  --glass-edge: rgba(255, 255, 255, 0.65);
+  --glass-shadow: 0 14px 36px rgba(24, 25, 29, 0.14), 0 2px 8px rgba(24, 25, 29, 0.06);
+  --material-tint: rgba(246, 244, 240, 0.35);
+  --material-hover: rgba(24, 25, 29, 0.05);
+  --material-rule: rgba(24, 25, 29, 0.09);
+
   /* Empty-state invitations */
   --empty-bg: #faf1ec;
   --empty-border: #dedad3;
@@ -896,6 +1036,122 @@
   --find-match: rgba(214, 158, 46, 0.24);
   --find-match-edge: #8f6514;
   --selection-match: rgba(24, 25, 29, 0.07);
+}
+
+/* ============================================================================
+   GLASS POLICY — what a component actually paints, and when it is solid.
+
+   Components draw glass from the names below and never from a palette's
+   --glass-tint* or the --glass-filter* optics directly:
+
+     background: var(--glass-fill);              (or --glass-fill-thick)
+     backdrop-filter: var(--glass-backdrop);     (or -thick / -thin)
+     border: 1px solid var(--glass-border);
+     box-shadow: inset 0 0 0 1px var(--glass-inner-edge), var(--glass-shadow);
+
+   Declared on `:root` AND on every `[data-theme]` element, deliberately. A
+   custom property that reads another is resolved where it is DECLARED and
+   inherited as a finished value, so `--glass-fill: var(--glass-tint)` on :root
+   alone would hand every frozen paper drawer and every studio take the root's
+   tint. Declaring it again on each palette's root resolves it against that
+   palette — the trap `--focus-ring` documents above, avoided rather than
+   inherited.
+
+   Then the system gets the last word. Each of these turns the material solid
+   by itself, and they are separate rules rather than one combined test so
+   that each is readable and each can be found:
+
+     - an engine that cannot blur: a translucent fill with nothing behind it
+       blurred is words over words, so it is the opaque surface instead;
+     - Reduce Transparency (macOS, and Windows' "Transparency effects" through
+       the same media feature where the engine reports it);
+     - Increase Contrast, which also hardens the rim into a real border;
+     - forced colours, where the system paints every surface anyway.
+
+   The stage's own chrome is not drawn from these fills — `stage.css` keeps its
+   tuned plate — but it reads the same backdrops, and each stage surface
+   carries the same two fallbacks beside its own `@supports` rule.
+   ============================================================================ */
+:root,
+[data-theme] {
+  --glass-fill: var(--glass-tint);
+  --glass-fill-thick: var(--glass-tint-thick);
+  --glass-border: var(--glass-rim);
+  --glass-inner-edge: var(--glass-edge);
+}
+:root {
+  --glass-backdrop-thin: var(--glass-filter-thin);
+  --glass-backdrop: var(--glass-filter);
+  --glass-backdrop-thick: var(--glass-filter-thick);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root,
+  [data-theme] {
+    --glass-fill: var(--glass-solid);
+    --glass-fill-thick: var(--glass-solid);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme] {
+    --glass-fill: var(--glass-solid);
+    --glass-fill-thick: var(--glass-solid);
+  }
+  :root {
+    --glass-backdrop-thin: none;
+    --glass-backdrop: none;
+    --glass-backdrop-thick: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme] {
+    --glass-fill: var(--glass-solid);
+    --glass-fill-thick: var(--glass-solid);
+    --glass-border: var(--border-strong);
+    --glass-inner-edge: transparent;
+  }
+  :root {
+    --glass-backdrop-thin: none;
+    --glass-backdrop: none;
+    --glass-backdrop-thick: none;
+  }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --glass-backdrop-thin: none;
+    --glass-backdrop: none;
+    --glass-backdrop-thick: none;
+  }
+}
+
+/*
+ * A floating surface's arrival: it grows a little out of the thing that
+ * opened it, rather than appearing whole. The surface sets `transform-origin`
+ * at its trigger. An animation, not a transition, so it never touches
+ * `visibility` (see ContextMenu for why that matters), and Reduce Motion's
+ * guard at the end of this file makes it instant.
+ */
+@keyframes glass-materialize {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/*
+ * The overlay titlebar (a Mac): the toolbar band IS the window's titlebar, so
+ * it takes the titlebar's height — AppKit's unified titlebar, 52pt, which the
+ * traffic lights are centred in (`windows/material.rs`). Everywhere else the
+ * band stays 44px under the platform's own titlebar. The band's controls do
+ * not grow; it is the air around them that matches the window.
+ */
+html[data-titlebar='overlay'] {
+  --toolbar-h: 52px;
 }
 
 /* ---- Base reset ---- */
@@ -964,6 +1220,55 @@ html[data-presenting='true'] body {
 html[data-presenting='true'][data-presenting-theme='reader-paper'],
 html[data-presenting='true'][data-presenting-theme='reader-paper'] body {
   background: #f6f2ea;
+}
+
+/* ============================================================================
+   WINDOW MATERIAL — the window's chrome on the operating system's own glass.
+
+   Where the platform lends one, the window's backing is a system material:
+   vibrancy on a Mac (the sidebar material Finder and Mail sit on), Mica on
+   Windows 11 (the backdrop Explorer and Settings use). Rust lays it under the
+   whole webview (`windows/material.rs`) and tells the page which one through
+   `data-window-material` before the first paint; a platform with none —
+   Linux, Windows 10, or `CANDIDCUE_WINDOW_MATERIAL=none` — carries no
+   attribute and gets exactly the opaque desk below.
+
+   THE CHROME IS GLASS, THE DOCUMENT IS PAPER
+   ------------------------------------------
+   The material shows through an L: the titlebar and the toolbar band across
+   the top, and the navigation rail down the side. Everything the rail and the
+   toolbar frame — the script, the Library's list, a Settings form — is the
+   desk's opaque canvas, as it always was. That is the arrangement Windows 11
+   uses for Mica, and on a Mac it is forced anyway: a transparent webview
+   paints nothing under the titlebar, so the titlebar strip is the material
+   whatever the page does, and the toolbar band beneath it has to be glass too
+   or the window's top edge reads as two unrelated bands.
+
+   The window that has a rail says so — App.svelte for the sidebar, Settings
+   for its section list — with `data-material-rail` on the root. Only then is
+   the canvas clear; with the rail hidden, or not yet drawn (the boot splash,
+   the recovery screen), the canvas is the opaque desk and only the titlebar
+   strip shows the material, as a window's titlebar does.
+
+   Never during a take. A presenting window is black glass or paper and must
+   not show the desktop anywhere — `present.rs` takes the material away for
+   the take as well, and these rules step aside for the ones above.
+   ============================================================================ */
+html[data-window-material][data-material-rail]:not([data-presenting='true']),
+html[data-window-material][data-material-rail]:not([data-presenting='true']) body {
+  background: transparent;
+}
+/*
+ * Below the toolbar band, paper. Every element after a toolbar in its route is
+ * the document area, and one that paints nothing of its own would otherwise be
+ * a window onto the material. `:where` holds this to the specificity of a bare
+ * class, so any surface that does paint itself — an editor pane, a list card,
+ * the status bar — keeps its own colour; only the unpainted get the canvas.
+ */
+:where(html[data-window-material][data-material-rail]:not([data-presenting='true']))
+  .toolbar-stack
+  ~ * {
+  background-color: var(--bg-app);
 }
 
 ::selection {

@@ -922,17 +922,17 @@
      * fallback is what a plain panel — and the Settings screen — gets.
      */
     max-height: min(432px, var(--stage-popover-max-height, calc(100vh - 96px)));
-    /* The glass, and the strip a held row keeps while the rest of it clears. */
-    --sheet-fill: rgba(9, 11, 15, 0.88);
+    /* The glass — the palette's thick weight, which IS this sheet's tuned
+       near-black (tokens.css) — and the strip a held row keeps while the rest
+       of it clears. */
+    --sheet-fill: var(--glass-fill-thick);
     --sheet-strip: rgba(9, 11, 15, 0.94);
     --sheet-edge-called: rgba(255, 255, 255, 0.5);
     border: 1px solid var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
     border-radius: var(--stage-chrome-radius, 12px);
     background: var(--sheet-fill);
-    /* Saturation lifted a little so the terracotta on the controls survives the
-       blur instead of going grey behind it. */
-    backdrop-filter: blur(22px) saturate(140%);
-    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    backdrop-filter: var(--glass-backdrop-thick);
+    -webkit-backdrop-filter: var(--glass-backdrop-thick);
     box-shadow: var(--shadow-pop);
     overflow: hidden;
     transition:
@@ -1007,8 +1007,8 @@
     z-index: -1;
     border-radius: var(--stage-chrome-radius, 12px);
     background: var(--sheet-strip);
-    backdrop-filter: blur(22px) saturate(140%);
-    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    backdrop-filter: var(--glass-backdrop-thick);
+    -webkit-backdrop-filter: var(--glass-backdrop-thick);
   }
 
   /* Held eye: the whole panel clears, the eye stays. */
@@ -1096,9 +1096,22 @@
    * stage's quiet chrome border, rather than as a hole in it.
    */
   .sheet[data-theme='paper'] {
-    --sheet-fill: rgba(252, 250, 246, 0.9);
     --sheet-strip: rgba(252, 250, 246, 0.96);
     --sheet-edge-called: rgba(36, 30, 20, 0.42);
+  }
+  /*
+   * And where the system asks for less transparency, solid outright — the
+   * palette's own surface, as every other glass in the app turns (tokens.css,
+   * GLASS POLICY). The held row's strip goes with it. After the paper rule on
+   * purpose: the two are equally specific, so the later one wins, and this
+   * one has to.
+   */
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .sheet,
+    .sheet[data-theme='paper'] {
+      --sheet-fill: var(--glass-solid);
+      --sheet-strip: var(--glass-solid);
+    }
   }
   .sheet[data-theme='paper'] .badge,
   .sheet[data-theme='paper'] .reveal:hover {

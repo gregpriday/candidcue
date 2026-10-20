@@ -6,6 +6,7 @@ import App from './App.svelte';
 import { bindRealVoiceFacadeIfAvailable } from './services/voice-live';
 import { applyPlatformAttribute } from './lib/platform';
 import { followSystemAppearance } from './lib/appearance';
+import { applyWindowMaterial } from './lib/window-material';
 
 // Bind the real audio/realtime services behind the voice facade before any
 // screen asks for microphones (falls back to the mock in plain-node tests).
@@ -15,6 +16,8 @@ bindRealVoiceFacadeIfAvailable();
 applyPlatformAttribute(document.documentElement);
 // Light or dark, as the system is, and as it changes.
 followSystemAppearance(document.documentElement);
+// The operating system's glass, if Rust laid one under this window.
+applyWindowMaterial(document.documentElement);
 
 const target = document.getElementById('root');
 if (!target) {

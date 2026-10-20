@@ -187,8 +187,8 @@
     border-radius: var(--stage-chrome-radius);
     background: var(--stage-chrome-bg);
     box-shadow: var(--stage-chrome-shadow);
-    -webkit-backdrop-filter: blur(16px) saturate(130%);
-    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
+    backdrop-filter: var(--glass-backdrop-thin);
     /* A readout, not a control. It must never eat a click meant for the window
        beneath, and it is skipped in the tab order for the same reason. */
     pointer-events: none;
@@ -343,6 +343,13 @@
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .voice-pill {
       background: var(--stage-chrome-bg-solid, rgb(12 14 18 / 92%));
+    }
+  }
+  /* No blur and no transparency under Reduce Transparency or Increase
+     Contrast (tokens.css, GLASS POLICY): an opaque plate. */
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .voice-pill {
+      background: var(--stage-chrome-bg-opaque, rgb(12 14 18));
     }
   }
 </style>

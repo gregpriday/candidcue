@@ -82,6 +82,7 @@
   import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
   import { openMicrophonePrivacySettings } from '../lib/open-settings';
   import { osCopy } from '../lib/os-copy';
+  import { showMaterialRail } from '../lib/window-material';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
     DEFAULT_STAGE_APPEARANCE,
@@ -165,6 +166,18 @@
     onclose?: () => void;
   }
   let { section, onclose }: Props = $props();
+
+  /*
+   * The Settings window's chrome on the window material (`lib/window-material
+   * .ts`): the toolbar band and the section list are glass, the form column is
+   * paper. For as long as this screen is up — Calibrate, which replaces it in
+   * the same window, has no section list and keeps the opaque desk.
+   */
+  $effect(() => {
+    const root = document.documentElement;
+    showMaterialRail(root, true);
+    return () => showMaterialRail(root, false);
+  });
 
   /**
    * The sections, each with the words somebody might search for.
@@ -4351,6 +4364,8 @@
   }
 
   .body {
+    /* The section list's width, read by the list and by the paper beside it. */
+    --section-nav-w: 212px;
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -4369,7 +4384,7 @@
      of their own. The rail is the main sidebar's paper with the same straight
      divider, so the two source lists in the app look like one idea. */
   .section-nav {
-    flex: 0 0 212px;
+    flex: 0 0 var(--section-nav-w);
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -4407,6 +4422,27 @@
     background: var(--bg-source-selected);
     color: var(--text-primary);
     font-weight: 600;
+  }
+
+  /*
+   * On the window's material (tokens.css, WINDOW MATERIAL): the section list
+   * is the glass under the toolbar band, and everything beside it is paper.
+   * The body paints the paper from the list's edge rather than the form column
+   * doing it, because the column stops at its reading measure and the window
+   * goes on past it. The list's divider and hover go translucent with it, as
+   * the main window's sidebar does.
+   */
+  :global(html[data-window-material][data-material-rail]) .body {
+    background: linear-gradient(
+      to right,
+      transparent 0 var(--section-nav-w),
+      var(--bg-app) var(--section-nav-w)
+    );
+  }
+  :global(html[data-window-material][data-material-rail]) .section-nav {
+    --bg-hover-chrome: var(--material-hover);
+    background: var(--material-tint);
+    border-right-color: var(--material-rule);
   }
 
   /*

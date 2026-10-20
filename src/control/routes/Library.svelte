@@ -993,6 +993,11 @@
     flex-direction: column;
     background: var(--bg-canvas);
   }
+  /* On the window's material the toolbar band is glass and the list below it
+     is paper (tokens.css, WINDOW MATERIAL), so the page itself paints neither. */
+  :global(html[data-window-material][data-material-rail]) .page {
+    background: transparent;
+  }
 
   /* ---- toolbar search ---- */
   .search {

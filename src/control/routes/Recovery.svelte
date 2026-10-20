@@ -784,6 +784,10 @@
     flex-direction: column;
     gap: var(--space-8);
   }
+  /* Below the traffic lights and the drag strip, under an overlay titlebar. */
+  :global(html[data-titlebar='overlay']) .column {
+    padding-top: calc(var(--toolbar-h) + var(--space-4));
+  }
 
   .head {
     display: flex;

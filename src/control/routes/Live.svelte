@@ -2712,7 +2712,10 @@ import { onShortcut } from '../lib/shortcuts';
        three-sided rather than a rounded box missing a border. */
     border-right: none;
     border-radius: var(--radius-md) 0 0 var(--radius-md);
-    background: var(--bg-elevated);
+    /* The stage's thin glass, like the dock across the window from it. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
+    backdrop-filter: var(--glass-backdrop-thin);
     color: var(--text-secondary);
     font: inherit;
     font-size: var(--text-sm);
@@ -2772,9 +2775,18 @@ import { onShortcut } from '../lib/shortcuts';
     width: min(clamp(340px, 28vw, 400px), 92vw);
     display: flex;
     flex-direction: column;
-    border-left: 1px solid var(--border);
-    background: var(--bg-elevated);
-    box-shadow: var(--shadow-pop);
+    /*
+     * Thick glass over the read — the appearance sheet's material, so the two
+     * operator surfaces a take can show are one thing. The script behind it
+     * stays visible as moving light, which is what tells the operator the
+     * take is still running under the drawer; its words never are (the fill
+     * holds the faintest label to 4.5:1 over dense blurred type).
+     */
+    border-left: 1px solid var(--glass-border);
+    background: var(--glass-fill-thick);
+    -webkit-backdrop-filter: var(--glass-backdrop-thick);
+    backdrop-filter: var(--glass-backdrop-thick);
+    box-shadow: var(--glass-shadow);
     pointer-events: auto;
     /* Off-canvas rather than removed — see `.take-controls`. */
     transform: translateX(100%);

@@ -421,6 +421,14 @@ fn windows_can_invoke_only_the_core_commands_their_frontends_call() {
                 // The Settings-section broadcast, the shutdown acknowledgement
                 // and the embedded stage's viewport hints.
                 "plugin:event|emit",
+                // Moving the window by its glass: on a Mac the titlebar is an
+                // overlay and the toolbar band and the sidebar's head are the
+                // drag regions (`data-tauri-drag-region`), so Tauri's own drag
+                // script invokes these two, for the window it runs in. Both
+                // accept another window's label; neither does more than move
+                // or zoom a window.
+                "plugin:window|start_dragging",
+                "plugin:window|internal_toggle_maximize",
             ],
         ),
         (
@@ -430,6 +438,9 @@ fn windows_can_invoke_only_the_core_commands_their_frontends_call() {
                 "plugin:event|unlisten",
                 // Calibrate's `targetIsControlPanel`.
                 "plugin:window|current_monitor",
+                // Moving the window by its toolbar, as the control window does.
+                "plugin:window|start_dragging",
+                "plugin:window|internal_toggle_maximize",
             ],
         ),
         (

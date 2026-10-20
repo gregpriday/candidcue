@@ -476,10 +476,16 @@
     position: relative;
     overflow-y: auto;
     overscroll-behavior: contain;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    /* Glass — see GLASS POLICY in tokens.css. A notice floats over whatever
+       the window is showing, which is exactly what the material is for. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
     pointer-events: auto;
   }
   /* No open notices: the live regions stay in the tree, the surface goes. */
@@ -497,8 +503,9 @@
     align-items: start;
     padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
     /* A hairline between neighbours; the first one's falls outside the tray's
-       scrollport and is clipped away. */
-    box-shadow: 0 -1px 0 var(--border);
+       scrollport and is clipped away. Ink at low strength rather than the
+       opaque border grey, which on glass reads as a stripe laid across it. */
+    box-shadow: 0 -1px 0 color-mix(in srgb, var(--text-primary) 9%, transparent);
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     color: var(--text-primary);

@@ -1238,8 +1238,8 @@
     border-radius: var(--stage-chrome-radius);
     background: var(--stage-chrome-bg);
     box-shadow: var(--stage-chrome-shadow);
-    -webkit-backdrop-filter: blur(16px) saturate(130%);
-    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
+    backdrop-filter: var(--glass-backdrop-thin);
     color: var(--stage-chrome-text);
     cursor: pointer;
     transition:
@@ -1465,8 +1465,8 @@
        carries prose over moving white type too. */
     background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
-    -webkit-backdrop-filter: blur(18px) saturate(130%);
-    backdrop-filter: blur(18px) saturate(130%);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
     color: var(--stage-chrome-text);
     overflow-y: auto;
   }
@@ -1564,8 +1564,8 @@
        than glass that is see-through. */
     background: var(--stage-chrome-popover-bg, rgb(12 14 18 / 90%));
     box-shadow: var(--stage-chrome-shadow);
-    -webkit-backdrop-filter: blur(18px) saturate(130%);
-    backdrop-filter: blur(18px) saturate(130%);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
     color: var(--stage-chrome-text);
   }
 
@@ -1670,6 +1670,16 @@
     .menu-popover,
     .confirm-popover {
       background: var(--stage-chrome-popover-bg-solid, rgb(12 14 18 / 96%));
+    }
+  }
+  /* …and where the system asks for less transparency or more contrast, which
+     takes the blur away (tokens.css, GLASS POLICY): an opaque plate, not the
+     nearly-opaque one, because the request is for none at all. */
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .dock-button,
+    .menu-popover,
+    .confirm-popover {
+      background: var(--stage-chrome-bg-opaque, rgb(12 14 18));
     }
   }
 </style>

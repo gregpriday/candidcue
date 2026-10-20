@@ -56,6 +56,8 @@
    * anything.
    */
   let placed = $state(false);
+  /** The corner the menu grows from: the one at the pointer. */
+  let origin = $state('top left');
 
   /*
    * Position AFTER the menu has rendered, from its real size.
@@ -97,15 +99,21 @@
       const rect = menu.getBoundingClientRect();
       const margin = 8;
       let { x, y } = request;
+      let horizontal = 'left';
+      let vertical = 'top';
       // Flip rather than clamp when there is room on the other side: a menu
       // shoved up against the window edge overlaps the thing it is about.
       if (x + rect.width + margin > window.innerWidth) {
         x = Math.max(margin, x - rect.width);
+        horizontal = 'right';
       }
       if (y + rect.height + margin > window.innerHeight) {
         y = Math.max(margin, y - rect.height);
+        vertical = 'bottom';
       }
       position = { x, y };
+      // It grows from the corner the pointer is at, whichever way it flipped.
+      origin = `${vertical} ${horizontal}`;
       placed = true;
     });
   });
@@ -216,10 +224,11 @@
     role="menu"
     tabindex="-1"
     aria-label={$contextMenu?.label ?? 'Actions'}
+    class:placed
     bind:this={menu}
     style="left: {position.x}px; top: {position.y}px; visibility: {placed
       ? 'visible'
-      : 'hidden'};"
+      : 'hidden'}; --menu-origin: {origin};"
     onkeydown={keydown}
   >
     {#each items as item, index (item.label)}
@@ -268,20 +277,35 @@
     /* The ⋯ menu's metrics, row for row. The two draw ONE list of actions
        (`rowMenuItems`), and a right-click that produced a tighter menu with
        squarer highlights read as a second, separately designed control. */
-    padding: var(--space-2);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    padding: var(--float-inset);
+    /* Glass — see GLASS POLICY in tokens.css. Concentric: the 12px corner is
+       the rows' 6px plus the 6px inset they sit at. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
+    transform-origin: var(--menu-origin, top left);
     /*
-     * Nothing here animates, and that has to be said out loud. Under Reduce
+     * No TRANSITION here, and that has to be said out loud. Under Reduce
      * Motion, tokens.css gives every element a 0.01ms transition, and an
      * element that declares none transitions `all` — `visibility` included. The
      * reveal from `hidden` then starts a transition whose first frame is still
      * hidden, the focus that follows is refused, and the menu opens with the
      * keyboard left on the row behind it.
+     *
+     * The arrival is an ANIMATION instead, and only once the menu is placed:
+     * opacity and scale, never visibility, so the menu is focusable from its
+     * first frame. Measuring happens before it, so the scale cannot shrink the
+     * rectangle the placement reads.
      */
     transition-property: none;
+  }
+  .menu.placed {
+    animation: glass-materialize var(--dur-materialize) var(--ease-out);
   }
   .menu:focus {
     outline: none;

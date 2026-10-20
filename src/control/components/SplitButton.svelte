@@ -500,10 +500,19 @@
     overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
-    padding: var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    /* Glass — see GLASS POLICY in tokens.css — at the floating surfaces'
+       concentric 12px corner around 6px rows. */
+    padding: var(--float-inset);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    /* Out of the button that opened it, at its right-hand corner. */
+    transform-origin: top right;
+    animation: glass-materialize var(--dur-materialize) var(--ease-out);
     /* The trigger may be an accent fill; the menu is never one. */
     color: var(--text-primary);
     /*
@@ -512,13 +521,17 @@
       with its full bottom padding and read as complete — the shapes, Practise
       and setup were simply not there. The covers scroll with the content and
       the shades stay put, so a shade shows only while there is more to see.
+
+      The covers are the glass's own fill. Translucent, they let a fifth of a
+      shade through where they lie over one — a shade is a 14% wash to begin
+      with, so what survives is under 3% and reads as nothing.
     */
     background:
-      linear-gradient(var(--bg-elevated) 30%, transparent) top / 100% 32px,
-      linear-gradient(transparent, var(--bg-elevated) 70%) bottom / 100% 32px,
+      linear-gradient(var(--glass-fill) 30%, transparent) top / 100% 32px,
+      linear-gradient(transparent, var(--glass-fill) 70%) bottom / 100% 32px,
       radial-gradient(farthest-side at 50% 0, var(--menu-shade), transparent) top / 100% 10px,
       radial-gradient(farthest-side at 50% 100%, var(--menu-shade), transparent) bottom / 100% 10px,
-      var(--bg-elevated);
+      var(--glass-fill);
     background-repeat: no-repeat;
     background-attachment: local, local, scroll, scroll;
     --menu-shade: color-mix(in srgb, var(--text-primary) 14%, transparent);
