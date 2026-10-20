@@ -71,6 +71,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Windows only in effect: see `windows/webview_microphone.rs`.
         .plugin(crate::windows::webview_microphone::plugin())
+        // The system's glass under the desk's windows — vibrancy on a Mac,
+        // Mica on Windows 11 — and the page told which before it paints.
+        .plugin(crate::windows::material::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             // Recovery (§48.5). These work on FILES and never open the damaged

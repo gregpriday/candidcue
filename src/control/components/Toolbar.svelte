@@ -37,6 +37,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
+  import { windowTitlebar } from '../lib/window-material';
 
   interface Props {
     title: string;
@@ -95,6 +96,15 @@
    * nothing to restore from. `$derived` re-seeds when the saved title changes
    * underneath (a rename from elsewhere, a different script loading).
    */
+  /*
+   * Under an overlay titlebar (a Mac: `lib/window-material.ts`) the band IS the
+   * window's titlebar, so its empty space moves the window — `deep`, so the
+   * title and the spacer drag too while every button, field and link inside
+   * still clicks (Tauri's drag script never drags from a control). Elsewhere
+   * the platform's own titlebar does that, and the band is just a band.
+   */
+  const dragRegion = windowTitlebar() === 'overlay' ? 'deep' : undefined;
+
   let draft = $derived(title);
 
   function commitTitle(): void {
@@ -141,7 +151,7 @@
     nothing about which one you reached. The name is the route's own title, so
     the announcement says which toolbar.
   -->
-  <header class="toolbar" aria-label={`${title} toolbar`}>
+  <header class="toolbar" aria-label={`${title} toolbar`} data-tauri-drag-region={dragRegion}>
     {#if onback}
       <!--
         In the SAME ROW as the title. §8.1 names the separate back row as the
@@ -380,5 +390,34 @@
      */
     overflow-x: clip;
     overflow-y: visible;
+  }
+
+  /*
+   * On the window's material (tokens.css, WINDOW MATERIAL), the toolbar band
+   * is the top of the glass frame: the titlebar above it is already the
+   * material, and the band continues it down to the document's edge, where
+   * its own bottom divider is the line between chrome and paper.
+   *
+   * The chrome hover is retuned for the band rather than in each control:
+   * every control here that hovers on chrome reads `--bg-hover-chrome`, and an
+   * opaque grey step on glass is a grey patch rather than a hover.
+   */
+  /*
+   * Under an overlay titlebar with no sidebar drawn, the traffic lights sit at
+   * the band's leading end, so the band keeps their width clear. With the
+   * sidebar drawn they are on the sidebar's head instead (Sidebar.svelte).
+   */
+  :global(html[data-titlebar='overlay']:not([data-sidebar])) .toolbar {
+    padding-left: var(--traffic-lights-w);
+  }
+
+  :global(html[data-window-material][data-material-rail]) .toolbar-stack {
+    --bg-hover-chrome: var(--material-hover);
+    background: var(--material-tint);
+    border-bottom-color: var(--material-rule);
+  }
+  :global(html[data-window-material][data-material-rail]) .secondary {
+    background: transparent;
+    border-top-color: var(--material-rule);
   }
 </style>

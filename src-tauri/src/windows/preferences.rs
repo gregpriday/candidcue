@@ -90,6 +90,29 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
      */
     builder = builder.center();
 
+    /*
+     * The same titlebar the control window has (tauri.conf.json): an overlay,
+     * with the page running to the top of the window and its toolbar band as
+     * the titlebar (`windows/material.rs` gives it the unified height the
+     * traffic lights centre in). The band is the drag region.
+     */
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+    }
+
+    /*
+     * Transparent at creation where Mica needs it to be (`windows/material.rs`):
+     * Windows gives a window per-pixel alpha only when it is made. A Mac clears
+     * the backing at run time instead, and Linux has no material to show.
+     */
+    #[cfg(windows)]
+    if super::material::chosen().is_some() {
+        builder = builder.transparent(true);
+    }
+
     builder
         .build()
         .map_err(|err| AppError::Internal(format!("the Settings window could not open: {err}")))?;

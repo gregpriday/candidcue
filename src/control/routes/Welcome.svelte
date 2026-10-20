@@ -249,7 +249,11 @@
     }
     if (modelStatus.installed) {
       return {
-        tone: 'neutral',
+        // The one row whose pill states a VERIFIED fact — the archive's digest
+        // was checked and the files sealed — so it takes the success tone
+        // Settings › Speech gives the same model ("Ready"). Neutral, it was
+        // the same grey capsule as "Not set up" two rows up.
+        tone: 'success',
         pill: 'Installed',
         // The narrow claim, like every other row: the files are here. Whether
         // a take follows also needs a microphone, which this row cannot see.
@@ -618,6 +622,12 @@
     container-type: inline-size;
     padding: clamp(var(--space-6), 6vh, var(--space-10)) var(--page-x-wide);
   }
+  /* Under an overlay titlebar (a Mac) the page starts at the window's top
+     edge, with the traffic lights and the drag strip over its first band; the
+     column starts below them. */
+  :global(html[data-titlebar='overlay']) .welcome {
+    padding-top: max(clamp(var(--space-6), 6vh, var(--space-10)), calc(var(--toolbar-h) + var(--space-4)));
+  }
 
   /*
    * Anchored to the top, centred across.
@@ -710,6 +720,8 @@
     line-height: var(--lh-body);
     color: var(--text-secondary);
     max-width: 46ch;
+    /* No "you." alone on the last line. */
+    text-wrap: pretty;
   }
   .lede {
     color: var(--text-primary);

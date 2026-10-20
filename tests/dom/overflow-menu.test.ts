@@ -518,9 +518,10 @@ describe('OverflowMenu — opening direction', () => {
   });
 
   it('counts separators in the height it needs', async () => {
-    // Four items (128) plus padding (16) is 144, which fits in 150. The ruled-off
-    // item adds 9 more and it no longer does — so a menu that ignored separators
-    // would open downward here and be clipped.
+    // Four items (128) plus padding (12, the 6px float inset each side) is 140,
+    // which fits in the 148 below this trigger. The ruled-off item adds 9 more
+    // and it no longer does — so a menu that ignored separators would open
+    // downward here and be clipped.
     const list = items(
       { label: 'Open' },
       { label: 'Present' },
@@ -528,7 +529,7 @@ describe('OverflowMenu — opening direction', () => {
       { label: 'Move to Trash', danger: true, separated: true },
     );
     renderMenu(list);
-    stubTriggerRect(580, 610);
+    stubTriggerRect(582, 612);
     await openByClick();
     expect(menuEl().classList.contains('up')).toBe(true);
   });

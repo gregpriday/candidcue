@@ -180,6 +180,8 @@
   --stage-chrome-text-faint: rgb(36 36 36 / 52%);
   --stage-chrome-popover-bg: rgb(252 250 246 / 94%);
   --stage-chrome-popover-bg-solid: rgb(252 250 246 / 98%);
+  /* Fully opaque, for when the system asks for no transparency at all. */
+  --stage-chrome-bg-opaque: rgb(252 250 246);
   --stage-chrome-highlight: rgb(96 89 79);
   --stage-chrome-highlight-text: #fcfaf6;
   --stage-chrome-control-border: rgb(36 30 20 / 18%);

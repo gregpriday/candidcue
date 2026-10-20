@@ -438,7 +438,9 @@
   .region {
     /* Above the status band with a gap, or above whatever a route publishes
        (Live's transport), whichever is higher. */
-    --toast-bottom: max(var(--toast-safe-bottom, 0px), calc(var(--statusbar-h) + var(--space-3)));
+    /* As far above the status band as it is in from the window's side
+       (`--page-x`), so the stack sits square in its corner. */
+    --toast-bottom: max(var(--toast-safe-bottom, 0px), calc(var(--statusbar-h) + var(--page-x)));
     position: fixed;
     right: var(--page-x);
     bottom: var(--toast-bottom);
@@ -476,10 +478,16 @@
     position: relative;
     overflow-y: auto;
     overscroll-behavior: contain;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    /* Glass — see GLASS POLICY in tokens.css. A notice floats over whatever
+       the window is showing, which is exactly what the material is for. */
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
     pointer-events: auto;
   }
   /* No open notices: the live regions stay in the tree, the surface goes. */
@@ -497,8 +505,9 @@
     align-items: start;
     padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
     /* A hairline between neighbours; the first one's falls outside the tray's
-       scrollport and is clipped away. */
-    box-shadow: 0 -1px 0 var(--border);
+       scrollport and is clipped away. Ink at low strength rather than the
+       opaque border grey, which on glass reads as a stripe laid across it. */
+    box-shadow: 0 -1px 0 color-mix(in srgb, var(--text-primary) 9%, transparent);
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     color: var(--text-primary);
@@ -587,7 +596,12 @@
   /* Text, not a second button shape: the toast is already a surface, and a
      filled button inside it would outweigh the message it acts on. It sits on
      its own line under the message, its text aligned with the message's, so a
-     long label never squeezes the words it acts on into a column. */
+     long label never squeezes the words it acts on into a column.
+
+     Ink with a quiet underline that firms on hover — the app's inline link
+     (Welcome's `.link`). Not petrol: "Show in Finder" and "Retry" are
+     utilities, and petrol is Present's; the notice's own glyph already says
+     whether it went well. */
   .action {
     margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
     padding: var(--space-1) var(--space-2);
@@ -595,13 +609,20 @@
     background: transparent;
     font: inherit;
     font-weight: 600;
-    color: var(--accent-strong);
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
-    transition: background var(--dur-fast) var(--ease-out);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      text-decoration-color var(--dur-fast) var(--ease-out);
   }
   .action:hover {
     background: var(--bg-hover-surface);
+    text-decoration-color: currentColor;
   }
 
   /* Its centre on the first line, like the glyph's. */

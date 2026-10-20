@@ -959,6 +959,7 @@ fn apply_reader<R: Runtime>(
          * what stops the OS clamping a deliberately narrow reading window
          * straight back up to the editor's minimum.
          */
+        super::material::suspend(&window.as_ref().window());
         let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 255)));
         return apply_windowed(
             app,
@@ -1008,9 +1009,13 @@ fn apply_reader_in_place<R: Runtime>(
      * Left at the OS default the strip the layout has not reached yet is white,
      * and it would flash on every drag rather than once per take.
      */
+    super::material::suspend(&window.as_ref().window());
     let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 255)));
     window.set_always_on_top(false).map_err(presentation_failed)?;
     chrome::restore(app, window, decorations)?;
+    // A reading window arriving from the prompter has its titlebar back, but
+    // not the toolbar AppKit dropped with it (`windows/material.rs`).
+    super::material::restore_titlebar(&window.as_ref().window());
     set_min_size(
         window,
         Some(tauri::LogicalSize {
@@ -1195,7 +1200,13 @@ fn apply_presentation<R: Runtime>(
      * colour. Left at the OS default it is white — which is the exact artifact
      * this whole module exists to remove, arriving from the one direction the
      * geometry change does not cover.
+     *
+     * The window material goes first (`windows/material.rs`): with it still
+     * laid under the webview, the strip a resize outruns would be a frosted
+     * blur of the desktop rather than this black. All three ways into a take
+     * take it away; only the restore puts it back.
      */
+    super::material::suspend(&window.as_ref().window());
     let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 255)));
 
     /*
@@ -2231,8 +2242,12 @@ pub fn set_control_presenting<R: Runtime>(
              * hard-coded paper colour, which would be wrong the moment the
              * workspace palette moves; noted here so the next person does not
              * read the old promise and trust it.
+             *
+             * On a window material (`windows/material.rs`) the backing is
+             * transparent instead, with the material laid back under it — the
+             * take took both away, and the desk wants both again.
              */
-            let _ = window.set_background_color(None);
+            super::material::resume(&window.as_ref().window());
         }
         PresentAction::Nothing => {
             // Idempotent, but the take's claim is still withdrawn: a leaked one
@@ -2257,6 +2272,7 @@ pub fn set_control_presenting<R: Runtime>(
              * reason: it is a latch this module sets and nothing else clears.
              */
             chrome::restore(app, &window, true)?;
+            super::material::restore_titlebar(&window.as_ref().window());
             set_min_size(&window, declared_min_size(app));
             target = window.inner_size().unwrap_or(PhysicalSize { width: 0, height: 0 });
         }

@@ -10,6 +10,7 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::util::new_uuid;
 
 pub mod drag_drop;
+pub mod material;
 pub mod panel_size;
 pub mod preferences;
 pub mod present;
@@ -298,8 +299,11 @@ fn monitor_topology_hash(monitor: &Monitor, identity: Option<&str>) -> String {
 
 /// What a monitor is called: `label` for people, `identity` for fingerprints.
 ///
-/// On macOS both are tao's name, `Monitor #<model number>` — the panel's
-/// model, unchanged by which port it is on or how the displays are arranged.
+/// On macOS the identity is tao's name, `Monitor #<model number>` — the
+/// panel's model, unchanged by which port it is on or how the displays are
+/// arranged — and the label is the name System Settings gives the display
+/// ("DELL U2720Q"), which tao does not expose. Keying fingerprints to it
+/// instead would orphan every pin and rig saved before it was read.
 ///
 /// Windows is different. tao names a Windows monitor by its GDI device path,
 /// `\\.\DISPLAY2`, which is handed out in enumeration order: replug the
@@ -328,11 +332,14 @@ fn monitor_names(monitors: &[Monitor], panels: &panel_size::PanelSizes) -> Vec<M
                     .or_else(|| monitor.name().cloned());
                 MonitorNames { label, identity }
             }
+            // Elsewhere tao's name is the identity. On a Mac the label is the
+            // name System Settings shows, where AppKit could say
+            // (`panel_size.rs`); a snapshot taken only for naming has none, and
+            // the label is never part of a fingerprint.
             #[cfg(not(target_os = "windows"))]
             {
-                let _ = panels;
                 MonitorNames {
-                    label: monitor.name().cloned(),
+                    label: panels.name_for_monitor(monitor).or_else(|| monitor.name().cloned()),
                     identity: monitor.name().cloned(),
                 }
             }

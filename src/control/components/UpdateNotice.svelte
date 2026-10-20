@@ -93,8 +93,8 @@
 <style>
   /*
    * A floating surface like the toast tray it mirrors across the window: the
-   * panel background, a full hairline border and the pop shadow, all round. No
-   * one-sided accent edge — the primary button carries the clay.
+   * same glass, the same rim and shadow, all round. No one-sided accent edge —
+   * the primary button carries the colour.
    */
   .update-notice {
     position: fixed;
@@ -106,10 +106,14 @@
     flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-4);
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-float);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
     color: var(--text-primary);
     font-size: var(--text-sm);
     line-height: var(--lh-label);

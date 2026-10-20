@@ -15,6 +15,7 @@ import '../styles/tokens.css';
 import PreferencesApp from './PreferencesApp.svelte';
 import { applyPlatformAttribute } from '../control/lib/platform';
 import { followSystemAppearance } from '../control/lib/appearance';
+import { applyWindowMaterial } from '../control/lib/window-material';
 import { bindRealVoiceFacadeIfAvailable } from '../control/services/voice-live';
 
 /*
@@ -43,6 +44,7 @@ bindRealVoiceFacadeIfAvailable();
 document.documentElement.dataset['theme'] = 'workspace';
 applyPlatformAttribute(document.documentElement);
 followSystemAppearance(document.documentElement);
+applyWindowMaterial(document.documentElement);
 
 const target = document.getElementById('root');
 if (!target) {

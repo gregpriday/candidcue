@@ -682,19 +682,38 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
-    /* Room for the scrollbar, so it never sits on the keys. */
+    /* Room for the scrollbar, so it never sits on the keys — taken from the
+       panel's own margin, not from the column, so the keys still end where
+       Done does. It was 8px short of it. */
     padding-right: var(--space-2);
-    /* A hairline where rows run on past the edge, and nothing where they do
-       not: the line is the "there is more" a sliced row cannot say. Always
-       present as transparent, so it never shifts the content by a pixel. */
-    border-block: 1px solid transparent;
-    transition: border-color var(--dur-fast) var(--ease-out);
+    margin-right: calc(-1 * var(--space-2));
+    /* Where rows run on past an edge, they FADE into it, and where they do
+       not, they stop clean. A hairline did this job and read as one more row
+       rule: with the Mac's scroll bars hidden until a scroll, the list looked
+       finished at "Bold". The mask belongs to the scroller's box, so it stays
+       at the edge while the rows move under it. */
+    --fade-above: 0px;
+    --fade-below: 0px;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--fade-above),
+      #000 calc(100% - var(--fade-below)),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--fade-above),
+      #000 calc(100% - var(--fade-below)),
+      transparent 100%
+    );
   }
   .scroll.more-above {
-    border-top-color: var(--border);
+    --fade-above: 28px;
   }
   .scroll.more-below {
-    border-bottom-color: var(--border);
+    --fade-below: 40px;
   }
   .intro {
     margin: 0;

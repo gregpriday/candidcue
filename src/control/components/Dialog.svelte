@@ -200,10 +200,19 @@
     flex-direction: column;
     gap: var(--space-4);
     padding: var(--space-6);
+    /*
+     * Opaque, deliberately: a dialog's body is content — a form, a choice, a
+     * paragraph that has to be read — and content is never glass (tokens.css).
+     * It wears the glass family's edge instead, so a dialog and the menus
+     * around it still read as one set of floating things: the same rim, the
+     * same light inner line, the same soft shadow.
+     */
     background: var(--bg-panel);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
-    box-shadow: var(--shadow-pop);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-inner-edge),
+      var(--glass-shadow);
   }
   .panel.wide {
     width: min(560px, 100%);

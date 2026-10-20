@@ -4,6 +4,7 @@
   transport, §15.3 pause semantics, F.17 end-of-session summary.
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
@@ -1481,8 +1482,15 @@ import { onShortcut } from '../lib/shortcuts';
    * status block and its remedy are. Focus is not moved.
    */
   function openTakeControls(): void {
+    // Opened from the tab with focus on it, focus goes into the drawer: the
+    // tab fades out while the drawer is open, and focus left on it would be
+    // focus nobody can see. The PANEL rather than its first control, so Space
+    // still reaches the take (it pauses) instead of pressing a button, and Tab
+    // walks in from the top.
+    const fromTab = takeControlsTab !== null && document.activeElement === takeControlsTab;
     takeControlsOpen = true;
     if (takeControlsAttention) takeControlsBody?.scrollTo({ top: 0 });
+    if (fromTab) void tick().then(() => takeControlsPanel?.focus());
   }
 
   /** And a fault that arrives while it is open is brought into view the same way. */
@@ -1493,8 +1501,88 @@ import { onShortcut } from '../lib/shortcuts';
     attentionWas = attention;
   });
 
+  /*
+   * HOLD TO SEE THE WHOLE STAGE — the appearance sheet's eye, in the drawer.
+   *
+   * The drawer is thick glass over the right-hand end of every line, and the
+   * thing an operator opens it to do — hold the text, set the place — is
+   * judged by reading exactly those lines. Closing the drawer to look and
+   * opening it again to act is two trips, mid-take. So the eye clears the
+   * panel for as long as it is held, by pointer or by Space/Return, and puts
+   * it back on release; nothing moves, nothing is applied, and the script's
+   * geometry never changes (the panel is an overlay, so revealing it reflows
+   * nothing). Same gesture, same release rules as `StageAppearanceSheet`.
+   */
+  let takeControlsRevealing = $state(false);
+  /** Puts the panel back, while a reveal is up. */
+  let endTakeControlsReveal: (() => void) | null = null;
+
+  /**
+   * Clear the panel until `released` fires on the window, or the window loses
+   * focus — a release that happens in another app must still bring it back.
+   */
+  function holdTakeControlsReveal(released: Array<[string, (event: Event) => boolean]>): void {
+    takeControlsRevealing = true;
+    const listeners = released.map(([type, matches]) => {
+      const listener = (event: Event): void => {
+        if (matches(event)) end();
+      };
+      return [type, listener] as const;
+    });
+    function end(): void {
+      takeControlsRevealing = false;
+      endTakeControlsReveal = null;
+      for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);
+      window.removeEventListener('blur', end);
+    }
+    endTakeControlsReveal = end;
+    for (const [type, listener] of listeners) window.addEventListener(type, listener, true);
+    window.addEventListener('blur', end);
+  }
+
+  // A reveal left up by a click outlives nothing: leaving puts it away.
+  $effect(() => () => endTakeControlsReveal?.());
+
+  /**
+   * The activation with no press behind it — a screen reader's, a switch's —
+   * TOGGLES the reveal, because there is nothing to hold.
+   *
+   * Pointer presses and Space/Return already held and released it, and their
+   * clicks are not a second request: a pointer click carries a click count,
+   * and the keys' clicks never arrive (their keydown is cancelled). So only a
+   * zero-count click gets here. A second one puts the panel back, as does
+   * Escape (the drawer's own Escape handler asks first) or closing the drawer.
+   */
+  function onTakeRevealClick(event: MouseEvent): void {
+    if (event.detail !== 0) return;
+    if (takeControlsRevealing) endTakeControlsReveal?.();
+    else holdTakeControlsReveal([]);
+  }
+
+  function onTakeRevealPointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    // Focus stays where it was: this is a look, not a move.
+    event.preventDefault();
+    holdTakeControlsReveal([
+      ['pointerup', () => true],
+      ['pointercancel', () => true],
+    ]);
+  }
+
+  function onTakeRevealKeydown(event: KeyboardEvent): void {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    // Space is also Start / Pause / Resume. A control with focus already keeps
+    // it from the stage, and this one must not let it through either.
+    event.stopPropagation();
+    if (event.repeat || takeControlsRevealing) return;
+    const key = event.key;
+    holdTakeControlsReveal([['keyup', (up) => (up as KeyboardEvent).key === key]]);
+  }
+
   function closeTakeControls(restoreFocus = true): void {
     if (!takeControlsOpen) return;
+    endTakeControlsReveal?.();
     takeControlsOpen = false;
     // Only back to a trigger that is still there. Closing because the take
     // ended takes the whole layer with it, and focusing a hidden button strands
@@ -1534,6 +1622,11 @@ import { onShortcut } from '../lib/shortcuts';
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
+      // A cleared panel comes back first; the next Escape closes it.
+      if (endTakeControlsReveal) {
+        endTakeControlsReveal();
+        return;
+      }
       closeTakeControls();
     };
     window.addEventListener('keydown', onKeyDown, true);
@@ -2316,6 +2409,7 @@ import { onShortcut } from '../lib/shortcuts';
     aria-expanded={takeControlsOpen}
     aria-controls="take-controls-panel"
     aria-label={takeControlsAttention ? 'Take controls — needs attention' : 'Take controls'}
+    tabindex={takeControlsOpen ? -1 : 0}
     bind:this={takeControlsTab}
     onclick={() => (takeControlsOpen ? closeTakeControls() : openTakeControls())}
   >
@@ -2347,6 +2441,8 @@ import { onShortcut } from '../lib/shortcuts';
     aria-label="Take controls"
     aria-hidden={!takeControlsOpen}
     inert={!takeControlsOpen}
+    tabindex="-1"
+    data-revealing={takeControlsRevealing ? '' : undefined}
     bind:this={takeControlsPanel}
   >
     <!--
@@ -2361,14 +2457,36 @@ import { onShortcut } from '../lib/shortcuts';
       <div class="tc-head-row">
         <span class="tc-elapsed">{formatClock($session.elapsedSeconds)}</span>
         <span class="tc-close">
-          <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
+          <!-- Before the close button, so the one that stays while the panel
+               is cleared is not the one beside the window's edge. -->
+          <button
+            type="button"
+            class="tc-reveal"
+            data-focus="control"
+            aria-label="Hold to see the whole stage"
+            title="Hold to see the whole stage"
+            aria-pressed={takeControlsRevealing}
+            onpointerdown={onTakeRevealPointerDown}
+            onkeydown={onTakeRevealKeydown}
+            onclick={onTakeRevealClick}
+          >
+            <Icon name="eye" size={15} />
+          </button>
+          <!-- Inert while the panel is cleared, like everything else in it but
+               the eye: a control nobody can see must not take a Tab press or
+               a switch scan either. -->
+          <span class="tc-close-slot" inert={takeControlsRevealing}>
+            <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
+          </span>
         </span>
       </div>
-      {@render partStatus(true)}
-      <div class="tc-lights">{@render statusPills(false)}</div>
+      <div class="tc-head-detail" inert={takeControlsRevealing}>
+        {@render partStatus(true)}
+        <div class="tc-lights">{@render statusPills(false)}</div>
+      </div>
     </header>
 
-    <div class="tc-body" bind:this={takeControlsBody}>
+    <div class="tc-body" inert={takeControlsRevealing} bind:this={takeControlsBody}>
       <!--
         The answer FIRST, with its remedy inside it. When this drawer is opened
         during a take it is usually because the tab was showing attention, and
@@ -2411,7 +2529,7 @@ import { onShortcut } from '../lib/shortcuts';
       />
     </div>
 
-    <footer class="tc-foot">
+    <footer class="tc-foot" inert={takeControlsRevealing}>
       <Button
         variant="danger"
         title={`End take (${transportKey('Mod+.')})`}
@@ -2690,8 +2808,8 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /*
-   * The way in. Full opacity, a readable label and an edge that holds against
-   * black glass.
+   * The way in. Full opacity and a readable label; the edge is the dock's
+   * faint keyline, which is all a dark plate on black needs.
    *
    * It was 12px at 55% opacity — about 2.9:1 for its label — on the reasoning
    * that it should not compete with the script. It is the only route to the
@@ -2707,13 +2825,22 @@ import { onShortcut } from '../lib/shortcuts';
     gap: 6px;
     min-height: var(--button-h);
     padding: 0 var(--space-3) 0 10px;
-    border: 1px solid var(--focus-quiet);
+    /* The drawer's own material and rim, so the tab and the panel it opens
+       are one piece — and the dock across the window, the same near-black
+       with a faint white keyline, is the same chrome. A brighter blue-grey
+       rim made it the lightest non-text thing on the black field, which on a
+       beamsplitter is the thing that catches the light. */
+    border: 1px solid var(--glass-border);
     /* No crescent: the tab is flush to the right edge, so it is genuinely
        three-sided rather than a rounded box missing a border. */
     border-right: none;
     border-radius: var(--radius-md) 0 0 var(--radius-md);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
+    background: var(--glass-fill-thick);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
+    backdrop-filter: var(--glass-backdrop-thin);
+    /* The dock's brightness (about 7:1 on the plate), not a step above it:
+       on beamsplitter glass the brighter chrome is the stray light. */
+    color: var(--text-muted);
     font: inherit;
     font-size: var(--text-sm);
     font-weight: 600;
@@ -2721,7 +2848,18 @@ import { onShortcut } from '../lib/shortcuts';
     pointer-events: auto;
     transition:
       background var(--dur-fast) var(--ease-out),
-      color var(--dur-fast) var(--ease-out);
+      color var(--dur-fast) var(--ease-out),
+      opacity var(--dur-med) var(--ease-out);
+  }
+  /*
+   * Out of sight while the drawer is open. The panel slides over it, and
+   * through thick glass a tab left underneath was a ghost of itself behind
+   * the panel's close button. Faded rather than hidden: closing the drawer
+   * puts focus straight back on it, in the same tick, before a `visibility`
+   * change would have let it take focus.
+   */
+  .tc-tab.open {
+    opacity: 0;
   }
   .tc-tab:hover {
     background: var(--bg-hover-surface);
@@ -2772,9 +2910,18 @@ import { onShortcut } from '../lib/shortcuts';
     width: min(clamp(340px, 28vw, 400px), 92vw);
     display: flex;
     flex-direction: column;
-    border-left: 1px solid var(--border);
-    background: var(--bg-elevated);
-    box-shadow: var(--shadow-pop);
+    /*
+     * Thick glass over the read — the appearance sheet's material, so the two
+     * operator surfaces a take can show are one thing. The script behind it
+     * stays visible as moving light, which is what tells the operator the
+     * take is still running under the drawer; its words never are (the fill
+     * holds the faintest label to 4.5:1 over dense blurred type).
+     */
+    border-left: 1px solid var(--glass-border);
+    background: var(--glass-fill-thick);
+    -webkit-backdrop-filter: var(--glass-backdrop-thick);
+    backdrop-filter: var(--glass-backdrop-thick);
+    box-shadow: var(--glass-shadow);
     pointer-events: auto;
     /* Off-canvas rather than removed — see `.take-controls`. */
     transform: translateX(100%);
@@ -2782,6 +2929,11 @@ import { onShortcut } from '../lib/shortcuts';
   }
   .tc-panel.open {
     transform: translateX(0);
+  }
+  /* Focus arrives on the panel only to hand on to what is in it; the panel is
+     a surface, and surfaces take no ring (tokens.css, focus policy). */
+  .tc-panel:focus {
+    outline: none;
   }
   /*
    * A closed drawer sits just off the right edge, and its drop shadow does
@@ -2807,6 +2959,14 @@ import { onShortcut } from '../lib/shortcuts';
     padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--divider);
   }
+  .tc-head-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .tc-close-slot {
+    display: inline-flex;
+  }
   .tc-head-row {
     display: flex;
     align-items: center;
@@ -2827,6 +2987,57 @@ import { onShortcut } from '../lib/shortcuts';
     flex: 0 0 auto;
     margin-left: auto;
     display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  /* The eye: an icon button's size and quiet states, held rather than
+     clicked. */
+  .tc-reveal {
+    display: inline-grid;
+    place-items: center;
+    /* The close button's size beside it (IconButton's standard tier). */
+    width: var(--icon-control-h);
+    height: var(--icon-control-h);
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .tc-reveal:hover {
+    background: var(--bg-hover-chrome);
+    color: var(--text-primary);
+  }
+
+  /*
+   * Held: the glass goes and so does everything on it but the eye, which stays
+   * where the panel will come back and brings its own backing — it is alone
+   * on the stage while it is held.
+   */
+  .tc-panel[data-revealing] {
+    background-color: transparent;
+    border-left-color: transparent;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .tc-panel[data-revealing] > :not(.tc-head),
+  .tc-panel[data-revealing] .tc-head > :not(.tc-head-row),
+  .tc-panel[data-revealing] .tc-elapsed,
+  .tc-panel[data-revealing] .tc-close > :not(.tc-reveal) {
+    opacity: 0;
+  }
+  .tc-panel[data-revealing] .tc-head {
+    border-bottom-color: transparent;
+  }
+  .tc-panel[data-revealing] .tc-reveal {
+    background: var(--glass-fill);
+    border-color: var(--glass-border);
+    color: var(--text-primary);
   }
   .take-part.stacked {
     display: flex;

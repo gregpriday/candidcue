@@ -234,6 +234,33 @@
       background var(--dur-fast) var(--ease-out),
       color var(--dur-fast) var(--ease-out);
   }
+  /* The target is taller than the fill: 19px is what the band has room to
+     DRAW, and a pointer target under 24px (WCAG 2.5.8) is a miss waiting to
+     happen at the bottom edge of the window. The extension is invisible and
+     reaches past the band's own edge, which nothing else claims. */
+  .interactive {
+    position: relative;
+    /* `.item` clips, for the label's ellipsis — and a clipped box clips the
+       extension below with it. The label inside does its own truncating. */
+    overflow: visible;
+  }
+  .interactive::after {
+    content: '';
+    position: absolute;
+    inset: -3px 0;
+  }
+  /*
+   * On the window's material the status band is chrome like the toolbar band,
+   * and wears the same glass (tokens.css, WINDOW MATERIAL): the frame closes
+   * at the bottom as it does at the top. Its own opaque tone matched the
+   * chrome in light and the paper in dark — a band in one appearance and a
+   * well in the other.
+   */
+  :global(html[data-window-material][data-material-rail]) .statusbar {
+    --bg-hover-statusbar: var(--material-hover);
+    background: var(--material-tint);
+    border-top-color: var(--material-rule);
+  }
   .interactive:hover {
     background: var(--bg-hover-statusbar);
   }

@@ -24,6 +24,8 @@
  * colours and the typography, and let the native menu, window, keyboard and
  * dialog conventions do their job. A `[data-platform='windows']` block that
  * re-created macOS vibrancy would be exactly the mimicry the guardrails forbid.
+ * (Each platform's OWN material is a different thing: `data-window-material`,
+ * set from what Rust actually laid under the window — `lib/window-material.ts`.)
  */
 
 export type Platform = 'macos' | 'windows' | 'linux';

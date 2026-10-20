@@ -59,8 +59,11 @@
   import { loadSettings } from '../control/stores/settings';
   import { showToast } from '../control/stores/toasts';
   import { isSettingsSection } from '../control/lib/commands';
+  import { windowTitlebar } from '../control/lib/window-material';
   import { SETTINGS_OVERLAY_KEY } from '../control/services/settings';
   import { workspace } from '../control/stores/workspace';
+
+  const overlayTitlebar = windowTitlebar() === 'overlay';
 
   let ready = $state(false);
   let failure = $state<string | null>(null);
@@ -209,6 +212,11 @@
   all by looking for its main region.
 -->
 <main class="shell" aria-label="Settings">
+  {#if overlayTitlebar && (failure !== null || !ready)}
+    <!-- No toolbar yet to move the window by, under an overlay titlebar (a
+         Mac: `lib/window-material.ts`), so a strip across the top instead. -->
+    <div class="titlebar-strip" data-tauri-drag-region aria-hidden="true"></div>
+  {/if}
   {#if failure !== null}
     <!--
       Settings that will not load is not a reason to show an empty window. It
@@ -249,6 +257,19 @@
     height: 100%;
     background: var(--bg-app);
     color: var(--text-primary);
+  }
+  .titlebar-strip {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--toolbar-h);
+  }
+
+  /* On the window material Settings paints its own paper and glass
+     (Settings.svelte), so the shell under it steps back. */
+  :global(html[data-window-material][data-material-rail]) .shell {
+    background: transparent;
   }
 
   .loading,

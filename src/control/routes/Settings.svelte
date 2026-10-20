@@ -82,6 +82,7 @@
   import { isMicrophoneRefused, readMicrophonePermission } from '../services/microphone-permission';
   import { openMicrophonePrivacySettings } from '../lib/open-settings';
   import { osCopy } from '../lib/os-copy';
+  import { showMaterialRail } from '../lib/window-material';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
     DEFAULT_STAGE_APPEARANCE,
@@ -165,6 +166,18 @@
     onclose?: () => void;
   }
   let { section, onclose }: Props = $props();
+
+  /*
+   * The Settings window's chrome on the window material (`lib/window-material
+   * .ts`): the toolbar band and the section list are glass, the form column is
+   * paper. For as long as this screen is up — Calibrate, which replaces it in
+   * the same window, has no section list and keeps the opaque desk.
+   */
+  $effect(() => {
+    const root = document.documentElement;
+    showMaterialRail(root, true);
+    return () => showMaterialRail(root, false);
+  });
 
   /**
    * The sections, each with the words somebody might search for.
@@ -659,6 +672,13 @@
    * gone after 2.5 s and the operator is still finding the tile.
    */
   const numbers = $derived(displayNumbers(displays));
+
+  /** A panel's name held on one line: "Pro / Display XDR" broke a product
+      name in two inside the Automatic tile. The number, the dot and the name
+      travel together too, so no line ends on a stray "·". */
+  function unbroken(name: string): string {
+    return name.replace(/ /g, '\u00a0');
+  }
 
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
   /**
@@ -3126,7 +3146,7 @@
                    is wherever the CandidCue window is. -->
               <span class="monitor-meta">
                 {automaticDisplay
-                  ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? ` · ${automaticDisplay.name}` : ''}`
+                  ? `Currently display ${numbers.get(automaticDisplay.fingerprint)}${automaticDisplay.name ? `\u00a0·\u00a0${unbroken(automaticDisplay.name)}` : ''}`
                   : 'The display the CandidCue window is on'}
               </span>
             </button>
@@ -3226,7 +3246,7 @@
               <span>
                 Prompter text on <strong>{effectiveDisplay?.name ?? 'this display'}</strong>:
                 {#if appliedRig}
-                  {appliedRig.rigName}, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
+                  the “{appliedRig.rigName}” rig, {Math.round(rigOptics.bodyFontSizePx)} px{rigOptics.charactersPerLine === null
                     ? ''
                     : `, about ${Math.round(rigOptics.charactersPerLine)} characters a line`}.
                 {:else if automaticRig}
@@ -4351,6 +4371,8 @@
   }
 
   .body {
+    /* The section list's width, read by the list and by the paper beside it. */
+    --section-nav-w: 212px;
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -4369,7 +4391,7 @@
      of their own. The rail is the main sidebar's paper with the same straight
      divider, so the two source lists in the app look like one idea. */
   .section-nav {
-    flex: 0 0 212px;
+    flex: 0 0 var(--section-nav-w);
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -4407,6 +4429,27 @@
     background: var(--bg-source-selected);
     color: var(--text-primary);
     font-weight: 600;
+  }
+
+  /*
+   * On the window's material (tokens.css, WINDOW MATERIAL): the section list
+   * is the glass under the toolbar band, and everything beside it is paper.
+   * The body paints the paper from the list's edge rather than the form column
+   * doing it, because the column stops at its reading measure and the window
+   * goes on past it. The list's divider and hover go translucent with it, as
+   * the main window's sidebar does.
+   */
+  :global(html[data-window-material][data-material-rail]) .body {
+    background: linear-gradient(
+      to right,
+      transparent 0 var(--section-nav-w),
+      var(--bg-app) var(--section-nav-w)
+    );
+  }
+  :global(html[data-window-material][data-material-rail]) .section-nav {
+    --bg-hover-chrome: var(--material-hover);
+    background: var(--material-tint);
+    border-right-color: var(--material-rule);
   }
 
   /*
@@ -4514,13 +4557,18 @@
     background: var(--bg-elevated);
   }
 
+  /*
+   * The scroller runs to the window's edge and the COLUMN inside it is held to
+   * 640px. With the cap on the scroller itself, a visible scroll bar (a mouse
+   * attached, or "Always show scroll bars") hung in the margin 28px short of
+   * the edge, where the editor's and the Library's sit flush.
+   */
   .content {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-6) var(--page-x) var(--space-8);
-    max-width: 640px;
     /*
       Sections stacked as plain blocks had NO space between them: the next
       section's heading sat directly on the previous section's last control —
@@ -4539,6 +4587,9 @@
     */
     --field-label-color: var(--text-primary);
     --field-label-weight: 500;
+  }
+  .content > :global(*) {
+    max-width: calc(640px - 2 * var(--page-x));
   }
   /* No last word alone on a line, in any of the section's prose — its own and
      its fields' descriptions alike. */
@@ -4905,6 +4956,8 @@
     min-height: 26px;
     margin-bottom: var(--space-1);
   }
+  /* A disc, not a key. Outlined and square-cornered it was the shortcut
+     sheet's keycap, and a "1" on a key reads as a key to press. */
   .monitor-number {
     display: inline-flex;
     align-items: center;
@@ -4912,8 +4965,7 @@
     min-width: 26px;
     height: 26px;
     padding: 0 var(--space-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-pill);
     background: var(--bg-secondary);
     color: var(--text-primary);
     font-size: var(--text-base);
@@ -4945,6 +4997,10 @@
     line-height: var(--lh-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    /* The Automatic tile holds a panel's name together (`unbroken`), and a
+       name longer than the tile must still break rather than run into the
+       next one: only where nothing else fits. */
+    overflow-wrap: anywhere;
   }
   .monitor-badges {
     display: flex;
@@ -5450,28 +5506,16 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
+    /* Steady. It pulsed, forever, beside the input meter that already moves
+       with the voice — a second, competing motion while somebody judges their
+       microphone, and the house allows no perpetual motion. A filled mark is
+       "listening"; the words beside it say so too. */
     background: var(--live);
-    animation: mic-test-pulse 1.4s var(--ease-inout) infinite;
   }
   /* Starting is not yet listening: a hollow mark until the microphone is live. */
   .mic-test[data-phase='opening'] .mic-test-dot::before {
     background: transparent;
     box-shadow: inset 0 0 0 1.5px var(--live);
-    animation: none;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .mic-test-dot::before {
-      animation: none;
-    }
-  }
-  @keyframes mic-test-pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.35;
-    }
   }
   .mic-test-words {
     margin: 0;

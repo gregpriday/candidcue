@@ -411,8 +411,8 @@
     border-radius: var(--stage-chrome-radius, 12px);
     background: var(--stage-chrome-bg, rgba(12, 14, 18, 0.74));
     color: var(--stage-chrome-text, rgba(245, 243, 239, 0.88));
-    backdrop-filter: blur(16px) saturate(130%);
-    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    backdrop-filter: var(--glass-backdrop-thin);
+    -webkit-backdrop-filter: var(--glass-backdrop-thin);
     pointer-events: auto;
     line-height: 1.3;
   }
@@ -718,6 +718,15 @@
     .strip,
     .pill {
       background: var(--stage-chrome-bg-solid, rgb(12 14 18 / 92%));
+    }
+  }
+  /* No blur and no transparency under Reduce Transparency or Increase
+     Contrast (tokens.css, GLASS POLICY): an opaque plate. */
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .suggestion,
+    .strip,
+    .pill {
+      background: var(--stage-chrome-bg-opaque, rgb(12 14 18));
     }
   }
 </style>
