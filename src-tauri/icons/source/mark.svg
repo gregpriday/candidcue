@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The mark on its own, as clean vector geometry: the source the app icon's
-  glass rendering (icon.png) was drawn from, kept here for use in the app.
+  The mark on its own, as clean vector geometry: what the app icon (icon.svg)
+  carries, kept here for use in the app.
 
   A pane of teleprompter glass in perspective, the line being read, and the
   two cue triangles the stage draws beside that line, grown out of the pane's
