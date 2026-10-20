@@ -969,6 +969,44 @@ async fn reconciliation_makes_no_changes_after_an_integrity_failure() {
     assert!(orphan.join("script.md").exists());
 }
 
+/// The other side of that gate: a HEALTHY database must pass it.
+///
+/// SQLite's FTS5 answers its part of `quick_check` from the search index's
+/// structure as the connection running the check last read it, without asking
+/// whether another connection has written since. So a pooled connection that
+/// checked once, then sat idle while a script was saved through another one,
+/// reported "malformed inverted index for FTS5 table main.script_search" — and
+/// reconciliation, failing closed, adopted and repaired nothing that launch.
+/// Which connection the pool handed the check was a matter of timing, which is
+/// how `a_folder_that_cannot_be_adopted_yet_keeps_its_name_for_the_retry`
+/// failed on CI runners and almost never on a Mac. The pool reconciling here
+/// has one connection, so the check would land on the stale one every time.
+#[tokio::test]
+async fn a_search_index_written_through_another_connection_still_passes_the_check() {
+    let h = harness().await;
+    let one_connection = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with((*h.pool.connect_options()).clone())
+        .await
+        .expect("a second pool on the same database");
+
+    let first = reconcile::run_startup_reconciliation(&one_connection, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(first.integrity_ok, "{first:?}");
+
+    new_script(&h, "Saved elsewhere", "Through the other pool.").await;
+
+    let second = reconcile::run_startup_reconciliation(&one_connection, &h.paths, &h.locks)
+        .await
+        .expect("reconciliation");
+    assert!(
+        second.integrity_ok,
+        "a search index another connection wrote is not a corrupt one: {second:?}"
+    );
+    one_connection.close().await;
+}
+
 // ---------------------------------------------------------------------------
 // H5: caller-supplied paths (spec §50.7)
 // ---------------------------------------------------------------------------
