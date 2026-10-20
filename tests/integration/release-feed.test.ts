@@ -397,7 +397,8 @@ describe('a release is published through the origin it was staged for', () => {
     const updater = readFileSync(join(__dirname, '../../src-tauri/src/updater.rs'), 'utf8');
     const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
     expect(base, 'UPDATE_BASE_URL could not be read out of updater.rs').toBeDefined();
-    expect(`${feed.DEFAULT_PUBLIC_URL}/releases/`).toBe(base);
+    // Trailing slashes trimmed the way the script's own releasesUrl() does.
+    expect(`${feed.DEFAULT_PUBLIC_URL.replace(/\/+$/, '')}/releases/`).toBe(base);
   });
 });
 
