@@ -6,7 +6,7 @@
 #
 #   DESIGN_CAPTURE_DIR=/tmp/icon-shots bash scripts/capture-icon.sh
 #
-# The icon is built from the two SVG sources by build-icons.sh into a scratch
+# The icon is built from its sources by build-icons.sh into a scratch
 # directory, put in a throwaway .app, and drawn by macOS itself (NSWorkspace),
 # so every picture is what Finder and the Dock show — the system's own edge
 # treatment and its choice of representation at each size included — beside
