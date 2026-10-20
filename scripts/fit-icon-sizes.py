@@ -28,7 +28,7 @@ SLOPE = math.tan(math.radians(17.66))  # the master's side lean
 #   n canvas, m tile margin, w outer bottom width, h outer height, y0 outer top,
 #   t rim, lh line height, ll line length, line_y line top row, gap tile between
 #   a cue tip and the line, rh half the cue's root span on the inner side,
-#   gradient (the master's) or flat petrol.
+#   gradient (the master's) or flat Optical Blue.
 SIZES = {
     '16':     dict(n=16, m=1, w=13, h=8,  y0=4,  t=1, lh=2, ll=3,  line_y=7,  gap=1,   rh=2.0,  gradient=False),
     '20':     dict(n=20, m=1, w=16, h=10, y0=5,  t=1, lh=2, ll=4,  line_y=9,  gap=1,   rh=2.0,  gradient=False),
@@ -43,7 +43,7 @@ SIZES = {
     # which is 44 device pixels on a 2x screen. The tile there is its own.
     'brand-44': dict(n=44, m=0, w=34, h=20, y0=12, t=2, lh=3, ll=14, line_y=20, gap=1.5, rh=3.5, gradient=False),
 }
-PETROL, TOP, BOTTOM, MARK = '#176B75', '#25747e', '#06636d', '#ffffff'
+TILE, TOP, BOTTOM, MARK = '#3D63B8', '#4B70C3', '#3759A5', '#ffffff'
 
 # The macOS continuous-corner squircle, as a polyline on a 32-unit grid spanning
 # 2..30; every drawing maps it onto its own tile.
@@ -101,7 +101,7 @@ def mark(n, w, h, y0, t, lh, ll, line_y, gap, rh, **_):
 
 def write(name, p):
     n, m = p['n'], p['m']
-    defs, fill = '', PETROL
+    defs, fill = '', TILE
     if p['gradient']:
         defs = (f'  <defs><linearGradient id="tile" x1="0" y1="{m}" x2="0" y2="{n - m}" gradientUnits="userSpaceOnUse">'
                 f'<stop offset="0" stop-color="{TOP}"/><stop offset="1" stop-color="{BOTTOM}"/></linearGradient></defs>\n')

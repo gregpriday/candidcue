@@ -119,8 +119,8 @@ awk -v r="$rmse" 'BEGIN { exit !(r < 0.12) }' || {
 cp "$work/icons/icon.png" "$out/master.png"
 
 # --- dock-dark / dock-light --------------------------------------------------
-# Real neighbours, chosen to include the blue and green icons this petrol one
-# has to stand apart from. Whatever is not installed is skipped; at least four
+# Real neighbours, chosen to include the blue icons this blue one has to
+# stand apart from. Whatever is not installed is skipped; at least four
 # must be.
 
 neighbours=(
@@ -244,7 +244,7 @@ magick "$work/sizes-light.png" "$work/sizes-dark.png" -append "$out/sizes.png"
 
 # --- brandmark --------------------------------------------------------------
 # The component's own markup, lifted out of the .svelte file, so this shows
-# what Welcome draws rather than a copy of it. The tile is a fixed petrol, so
+# what Welcome draws rather than a copy of it. The tile is a fixed blue, so
 # the per-theme --accent below only matters if the mark ever takes it again.
 # The name beside it is a stand-in: ImageMagick cannot read the bundled
 # Archivo woff2, so it is set in $font. Judge the mark here, and the
