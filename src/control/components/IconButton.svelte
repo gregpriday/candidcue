@@ -110,7 +110,7 @@
    * components.
    *
    * An inset shadow rather than a darker fill, and that is the contrast check
-   * deciding rather than taste: `--bg-hover-chrome` already sits at 4.57:1
+   * deciding rather than taste: `--bg-hover-chrome` already sits at 4.56:1
    * against `--text-faint`, so any surface a step further from the text fails
    * AA — the design-system token test rejected two candidates before this. A
    * shadow inside the same surface changes the shape of the control without

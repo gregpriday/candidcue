@@ -1,16 +1,20 @@
 <!--
-  One syntax reference example as a take draws it on the glass, in the
-  control window's light palette.
+  One syntax reference example as a take draws it on the glass, in the frozen
+  light `paper` palette.
+
+  `data-theme="paper"` on the root, not the desk's `workspace` palette it sits
+  in: this is a rendered presentation example, so it keeps the colours a take
+  was drawn in when the desk around it is retuned.
 
   The blocks are the compiler's own, already projected for a take
   (`lib/syntax-specimens.ts`), and their text goes through RenderNodes, so what
   shows here is what compiling the example leaves on the glass. What this file
   adds is the glass's vocabulary at reading size: a cue is an upper-case
   capsule, an unspoken heading is a quiet label in the cue colour, and silent
-  and stage notes are quieter than the script. The colours are the workspace's
-  stand-ins for the stage's — the cue gold becomes `--warning`, as it is in the
-  editor's preview — because a black panel inside this one would be a second
-  frame on the page.
+  and stage notes are quieter than the script. The colours are the paper
+  palette's stand-ins for the stage's — the cue gold becomes `--warning`, as it
+  is in the editor's preview — because a black panel inside this one would be a
+  second frame on the page.
 
   Not a renderer for scripts. It draws the handful of shapes the reference's
   examples compile to, and draws anything else as a plain line.
@@ -27,7 +31,7 @@
   let { blocks }: Props = $props();
 </script>
 
-<div class="specimen">
+<div class="specimen" data-theme="paper">
   {#each blocks as block (block.id)}
     {#if block.kind === 'heading' && !block.spoken}
       <p class="quiet-heading"><RenderNodes nodes={block.renderNodes} /></p>
@@ -64,6 +68,17 @@
     font-size: var(--text-base);
     line-height: 1.45;
     color: var(--text-primary);
+  }
+  /*
+   * On the dark desk the specimen keeps its paper ink, so it brings its paper
+   * with it. The light desk's white dialog was that paper; a dark one is not,
+   * and paper ink on it disappears. `--bg-app` is read on this root, so it is
+   * the paper palette's own field, not the desk's.
+   */
+  :global([data-appearance='dark']) .specimen {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-sm);
+    background: var(--bg-app);
   }
   p {
     margin: 0;

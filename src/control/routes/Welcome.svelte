@@ -157,7 +157,7 @@
     tone: PillTone;
     pill: string;
     detail: string;
-    /** Only 'attention' tints the row; expected setup is accent, faults warn. */
+    /** Only 'attention' tints the row; unfinished setup is neutral, faults warn. */
     emphasis: 'quiet' | 'setup' | 'attention';
     /** The fix control's label. Speech has none while its picker is the action. */
     action?: string;
@@ -182,8 +182,10 @@
           action: 'Test microphone',
         }
       : {
-          tone: 'accent',
-          pill: 'Set up',
+          // Neutral, and a state rather than a verb: a petrol "Set up" capsule
+          // read as done, and said the same words as the link beneath it.
+          tone: 'neutral',
+          pill: 'Not set up',
           detail: 'Choose a microphone and check the level. Nothing is recorded.',
           emphasis: 'setup',
           action: 'Set up microphone',
@@ -257,17 +259,18 @@
     }
     if (isModelDamaged(modelStatus)) {
       // Not "Set up": this machine DID download it, and calling it a one-time
-      // download not yet done would be wrong on both counts (#258).
+      // download not yet done would be wrong on both counts (#258). A fault, so
+      // it warns: the accent is for expected setup, and must not read as one.
       return {
-        tone: 'accent',
+        tone: 'warning',
         pill: 'Damaged',
         detail: 'Download it again to restore voice following. Writing works without it.',
         emphasis: 'setup',
       };
     }
     return {
-      tone: 'accent',
-      pill: 'Set up',
+      tone: 'neutral',
+      pill: 'Not set up',
       detail: 'Voice following needs a one-time download. Writing works without it.',
       emphasis: 'setup',
     };
@@ -437,9 +440,10 @@
              what carries the identity everywhere else. -->
         <p class="wordmark"><BrandMark size={22} /><span>CandidCue</span></p>
         <h1 id="welcome-heading" class="heading">Speak naturally. Keep your place.</h1>
+        <!-- The website's lede: what it is, in ink, then how, quieter. -->
         <p class="body">
-          CandidCue is a voice-following teleprompter for your second screen. Write or import a
-          Markdown script, choose a microphone, and present while the text follows you.
+          <span class="lede">A voice-following teleprompter.</span> Write or import a Markdown
+          script, choose a microphone, and present while the text follows you.
         </p>
       </div>
 
@@ -655,36 +659,47 @@
     gap: var(--space-3);
   }
 
+  /*
+   * The name as it is always written — title case, never small capitals — in
+   * the brand face and in one colour. The mark beside it carries the colour;
+   * the word is ink. Sized to sit with the 22px mark, while the line height
+   * stays the panel title's: the two columns' first lines share a 23px line
+   * box, though a 17px brand face and a 15px UI face cannot share a baseline.
+   *
+   * `font-synthesis: none` because a browser that cannot find the 600 weight
+   * would otherwise smear a bolder one out of the regular, and a faked bold is
+   * the one thing a wordmark cannot be.
+   */
   .wordmark {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     margin: 0;
     line-height: var(--lh-body);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
-    color: var(--accent-strong);
+    font-family: var(--font-brand);
+    font-size: var(--text-lg);
+    font-weight: 600;
+    letter-spacing: var(--ls-brand);
+    font-synthesis: none;
+    color: var(--text-primary);
   }
 
   /*
-   * The page-title size, from 32.
+   * The page-title size, from 32, in the website's heading voice: the UI face
+   * at a medium weight, set tight. The brand face is the wordmark's alone, as
+   * it is on the website, so the name above is the one thing set in it.
    *
-   * The serif hero stays — this is the one screen where a little editorial
-   * storytelling is right, and §3.3 keeps the display face as a brand accent
-   * for exactly this moment. What comes down is the SCALE (§16.1): this is a
-   * setup assistant with three actions and a checklist beside it, and it
-   * should read as the top of a window, not as the top of a marketing site.
-   * The page-title token is what every other screen's title is set at.
+   * What came down earlier is the SCALE (§16.1): this is a setup assistant
+   * with three actions and a checklist beside it, and it should read as the
+   * top of a window, not as the top of a marketing site. The page-title token
+   * is what every other screen's title is set at.
    */
   .heading {
     margin: 0;
-    font-family: var(--font-serif);
     font-size: var(--text-page-title);
     line-height: var(--lh-page-title);
-    font-weight: 600;
-    letter-spacing: var(--ls-title);
+    font-weight: var(--fw-heading);
+    letter-spacing: var(--ls-heading);
     color: var(--text-primary);
     text-wrap: balance;
   }
@@ -695,6 +710,9 @@
     line-height: var(--lh-body);
     color: var(--text-secondary);
     max-width: 46ch;
+  }
+  .lede {
+    color: var(--text-primary);
   }
 
   /* The two regions are named alike, so they read as peers. */
@@ -728,26 +746,24 @@
   /* ---- setup ---- */
 
   /*
-   * One white panel on the paper canvas, and the only frame here: rows are
-   * divided by hairlines rather than boxed, so nothing is a bordered card
-   * inside a bordered card.
+   * A list on the canvas, ruled top and bottom and between its rows, with no
+   * frame around it — the website's hairlines rather than a card. The text
+   * sits on the rules' left edge, so the column reads as one measure. The top
+   * rule and the header's padding keep its first line level with the start
+   * column's.
    */
   .setup-panel {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    /* No resting shadow: a contained panel on the page, not a floating one. */
-    overflow: hidden;
+    border-block: 1px solid var(--border);
   }
 
   .setup-header {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: var(--space-4) var(--space-5) var(--space-3);
+    padding: var(--space-4) 0 var(--space-3);
   }
 
   .setup-note {
@@ -762,7 +778,7 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    border-top: 1px solid var(--border-faint);
+    border-top: 1px solid var(--border);
   }
 
   .readiness-item {
@@ -770,10 +786,10 @@
     flex-direction: column;
     align-items: flex-start;
     gap: var(--space-1);
-    padding: var(--space-4) var(--space-5);
+    padding: var(--space-4) 0;
   }
   .readiness-item + .readiness-item {
-    border-top: 1px solid var(--border-faint);
+    border-top: 1px solid var(--border);
   }
   /*
    * Only a degraded rig tints its row, and it tints the whole row, edge to
@@ -783,6 +799,9 @@
    * checklist look like a list of things already wrong.
    */
   .readiness-item.attention {
+    /* The wash reaches past the text it marks, which stays on the column. */
+    margin-inline: calc(-1 * var(--space-3));
+    padding-inline: var(--space-3);
     background: var(--warning-soft);
   }
 
@@ -823,8 +842,8 @@
 
   .setup-footer {
     margin-top: auto;
-    padding: var(--space-3) var(--space-5);
-    border-top: 1px solid var(--border-faint);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--border);
   }
 
   /* ---- links ---- */
@@ -844,22 +863,22 @@
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     font-weight: 600;
-    color: var(--accent-strong);
+    color: var(--text-primary);
     border-radius: var(--radius-sm);
     text-decoration: underline;
     text-decoration-thickness: 1px;
+    text-decoration-color: var(--border-strong);
     text-underline-offset: 3px;
     cursor: pointer;
   }
   .readiness-item .link {
     margin-top: var(--space-1);
   }
-  /* Small terracotta text must never drop to --accent (it sits right on the
-     AA line); hover darkens to the primary text colour instead, which also
-     reads as the right direction for a hover. */
+  /* Ink with a quiet underline that firms on hover — the website's inline
+     link. Petrol is left to Present and to chosen controls. */
   .link:hover {
     color: var(--text-primary);
-    text-decoration-thickness: 2px;
+    text-decoration-color: currentColor;
   }
   /* The ways out of the screen are links too, just not setup actions. */
   .link.quiet {

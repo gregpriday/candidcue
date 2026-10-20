@@ -833,12 +833,12 @@
              first-use invitation, not a message inside a list.
 
              Create a script is NOT filled here. The toolbar's New script is the
-             same command, already filled, and two terracotta buttons for one
+             same command, already filled, and two filled buttons for one
              command is the screen asking which to press. -->
         <EmptyState
           variant="editorial"
-          title="Write the words. CandidCue keeps your place."
-          body="Create a script, or import Markdown you have already written."
+          title="Your words. Your pace."
+          body="Write or import a Markdown script."
         >
           {#snippet actions()}
             <Button onclick={() => createAndOpenScript('new')}>Create a script</Button>

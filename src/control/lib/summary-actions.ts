@@ -93,7 +93,7 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
   if (part !== null) {
     actions.push({
       id: 'record-part-again',
-      label: `Record part ${part.ordinal} again`,
+      label: `Present part ${part.ordinal} again`,
       primary: retryIsPrimary,
       startTokenIndex: part.startTokenIndex,
       partId: part.id,
@@ -112,7 +112,9 @@ export function summaryActions(input: SummaryActionsInput): SummaryAction[] {
   if (nextPart !== null) {
     actions.push({
       id: 'record-next-part',
-      label: `Record “${nextPart.label}” next`,
+      // By number, not by name: a part's title can be any length, and in the
+      // label it pushed the footer onto two rows. The name is in the facts.
+      label: `Present part ${nextPart.ordinal} next`,
       primary: nextIsPrimary,
       startTokenIndex: nextPart.startTokenIndex,
       partId: nextPart.id,

@@ -7,6 +7,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
+  import BrandMark from './components/BrandMark.svelte';
   import Button from './components/Button.svelte';
   import ConfirmHost from './components/ConfirmHost.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
@@ -265,7 +266,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * The page canvas goes black for the length of a take.
    *
    * Not cosmetic, and not the same job as the cover below. `body`'s background
-   * is `--bg-app` — warm paper under the workspace theme, still a light-ish
+   * is `--bg-app` — porcelain under the workspace theme, still a light-ish
    * grey under studio — and the stage's true black comes from `.stage-root`,
    * an absolutely-positioned element. When the window grows, the viewport gains
    * area before the layout reaches it, and what paints there is the CANVAS. So
@@ -1368,7 +1369,9 @@ import { rememberReaderFrame } from './lib/reader-frame';
   {:else if !ready}
     <div class="boot">
       {#if bootFailure === null}
-        <p class="boot-mark">CandidCue</p>
+        <!-- The same lockup as Welcome's wordmark. The mark is decorative, so
+             the name is read once. -->
+        <p class="boot-mark"><BrandMark size={22} /><span>CandidCue</span></p>
       {:else}
         <section class="boot-failure" role="alert">
           <h1 class="boot-failure-title">CandidCue could not finish starting</h1>
@@ -1569,7 +1572,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
    * `windows/present.rs`), so the titlebar is transparent and what shows through
    * it is this app's own `--bg-app`. macOS insets the PAGE CONTENT below the
    * titlebar while the canvas keeps painting the full window height — so the
-   * strip above `.shell` is warm paper, `.shell` starts at the titlebar's bottom
+   * strip above `.shell` is porcelain, `.shell` starts at the titlebar's bottom
    * edge, and the window reads as one undivided surface with the traffic lights
    * floating in it and nothing to say where the chrome ends.
    *
@@ -1680,12 +1683,23 @@ import { rememberReaderFrame } from './lib/reader-frame';
     display: grid;
     place-items: center;
   }
+  /*
+   * Set exactly as Welcome's wordmark — brand face, 600, one colour, no faked
+   * weight — so the first thing the window shows is the same lockup the first
+   * screen does, not a second rendering of the name.
+   */
   .boot-mark {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin: 0;
+    line-height: var(--lh-body);
+    font-family: var(--font-brand);
     font-size: var(--text-lg);
-    font-weight: 650;
-    letter-spacing: var(--ls-title);
-    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: var(--ls-brand);
+    font-synthesis: none;
+    color: var(--text-primary);
   }
 
   /*

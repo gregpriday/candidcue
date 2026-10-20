@@ -116,8 +116,9 @@ awk -v r="$rmse" 'BEGIN { exit !(r < 0.12) }' || {
 cp "$work/icons/icon.png" "$out/master.png"
 
 # --- dock-dark / dock-light --------------------------------------------------
-# Real neighbours, chosen to include the warm icons this one has to stand
-# apart from. Whatever is not installed is skipped; at least four must be.
+# Real neighbours, chosen to include the blue and green icons this petrol one
+# has to stand apart from. Whatever is not installed is skipped; at least four
+# must be.
 
 neighbours=(
   /System/Library/CoreServices/Finder.app
@@ -213,7 +214,11 @@ magick "$work/win-dark.png" "$work/win-light.png" -append "$out/windows.png"
 
 # --- brandmark --------------------------------------------------------------
 # The component's own markup, lifted out of the .svelte file, so this shows
-# what Welcome draws rather than a copy of it. --accent is resolved per theme.
+# what Welcome draws rather than a copy of it. The tile is a fixed petrol, so
+# the per-theme --accent below only matters if the mark ever takes it again.
+# The name beside it is a stand-in: ImageMagick cannot read the bundled
+# Archivo woff2, so it is set in $font. Judge the mark here, and the
+# wordmark's letterforms in the app itself.
 
 mark_svg() { # mark_svg <accent> <px> <out>
   sed -n '/<svg/,/<\/svg>/p' "$root/src/control/components/BrandMark.svelte" \
@@ -229,8 +234,8 @@ wordmark() { # wordmark <bg> <fg> <accent> <out>
   magick "$work/mark.png" "$work/word.png" -background none -gravity center +smush 16 \
     -background "$1" -flatten -bordercolor "$1" -border 28x24 "$4"
 }
-wordmark '#f6f4f0' '#1d1b19' '#b35a38' "$work/wm-light.png"
-wordmark '#0f1115' '#ecebe8' '#e08a63' "$work/wm-dark.png"
+wordmark '#f6f7f5' '#22282b' '#176b75' "$work/wm-light.png"
+wordmark '#22282b' '#f6f7f5' '#a4cdd1' "$work/wm-dark.png"
 magick "$work/wm-light.png" "$work/wm-dark.png" -append -filter point -resize 200% "$out/brandmark.png"
 
 # --- verify -----------------------------------------------------------------

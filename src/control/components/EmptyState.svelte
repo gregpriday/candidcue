@@ -1,25 +1,30 @@
 <!--
-  Calm empty-state invitation on the warm empty tokens. No illustrations,
+  Calm empty-state invitation. No illustrations,
   no feature carousel (spec §12.3).
 
   ---------------------------------------------------------------------------
   THREE VARIANTS, BECAUSE ONE BOX DOES NOT FIT THREE JOBS
   ---------------------------------------------------------------------------
   §10.7 and §19.10: the enclosing card is right for a first-use invitation and
-  wrong for everything else. A bordered, padded, serif-titled block sitting in
+  wrong for everything else. A bordered, padded, display-titled block sitting in
   the middle of a list is a web landing-page section — and it appears in the two
   places it hurts most, a search that found nothing and a load that failed, where
   the surrounding list structure is exactly the context the user needs kept.
 
-    editorial  the boxed, serif, centred invitation. First run, and nothing else.
+    editorial  the centred invitation in the display voice. First run, and
+               nothing else.
     plain      unboxed, still centred. A search miss, an empty Trash, an error
                shown in a list area that is otherwise intact.
     compact    unboxed, left-aligned, small. An inspector or a narrow pane,
                where a centred block with 48px of padding is simply cropped.
 
-  The serif title stays in `editorial` and `plain` as a restrained brand accent
-  (§3.3, §10.7) and is dropped in `compact`, where §3.3's other rule applies: no
-  display serif in dense panels.
+  Only `editorial` sets its title in the display voice — the website's heading,
+  the UI face at a medium weight set tight: a first-run invitation is one of
+  the desk's few branded display moments. It is no longer boxed: the website
+  draws on the page itself, not in tinted cards, and an empty Library has
+  nothing for a frame to set it apart from. `plain` and `compact` are
+  interface messages — a search miss, an empty Trash, a failed load — and their
+  titles are headings like any other (§3.3: no display voice in dense panels).
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -97,14 +102,13 @@
   .editorial {
     align-items: center;
     padding: var(--space-10) var(--space-8);
-    border: 1px solid var(--empty-border);
-    border-radius: var(--radius-md);
-    background: var(--empty-bg);
     text-align: center;
   }
+  /* The Welcome heading's voice, the desk's other display title. */
   .editorial .title {
-    font-family: var(--font-serif);
     font-size: var(--text-2xl);
+    font-weight: var(--fw-heading);
+    letter-spacing: var(--ls-heading);
   }
   .editorial .body {
     max-width: var(--prose-measure-narrow);
@@ -123,7 +127,7 @@
     text-align: center;
   }
   .plain .title {
-    font-family: var(--font-serif);
+    font-family: var(--font-ui);
     font-size: var(--text-xl);
   }
   .plain .body {
@@ -142,7 +146,7 @@
     text-align: left;
   }
   .compact .title {
-    /* No serif here: §3.3 keeps the display face out of dense panels. */
+    /* No display face here: §3.3 keeps it out of dense panels. */
     font-size: var(--text-sm);
     font-weight: 650;
     letter-spacing: normal;

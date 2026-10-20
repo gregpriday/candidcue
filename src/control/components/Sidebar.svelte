@@ -318,7 +318,7 @@
   /*
    * Selected: a neutral tonal fill and stronger text. No white surface, no
    * border, no shadow — see the note at the top for why the pill had to go —
-   * and no clay wash either (`--bg-source-selected`): the accent is the icon's.
+   * and no accent wash either (`--bg-source-selected`): the accent is the icon's.
    */
   .nav-item.active,
   .nav-item.active:hover {
@@ -331,15 +331,16 @@
   }
 
   /*
-   * New Script reads as a command rather than a destination: accent-coloured
-   * label, but the same row geometry as everything else. §7.1 — a document
-   * command, not a marketing CTA.
+   * New Script reads as a command rather than a destination: a heavier ink
+   * label and its plus, in the same row geometry as everything else. §7.1 — a
+   * document command, not a marketing CTA. Ink rather than petrol, so the
+   * window's one petrol action stays Present.
    */
   .nav-item.command {
-    color: var(--accent-strong);
+    color: var(--text-primary);
     font-weight: 600;
   }
   .nav-item.command :global(svg) {
-    color: var(--accent-strong);
+    color: var(--text-primary);
   }
 </style>

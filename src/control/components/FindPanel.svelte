@@ -426,7 +426,7 @@
    * inside it, so three of them fit inside a 28px field with air between
    * them and around them.
    *
-   * Off, a quiet glyph; on, the seated white pill with the glyph in clay. The
+   * Off, a quiet glyph; on, the seated white pill with the glyph in the accent. The
    * pill's edge is `--border-state` rather than IconButton's `--border`: here
    * it sits on the white field, where a shadow alone would not show it, and
    * the state edge is what carries "on" at 3:1 without leaning on colour.

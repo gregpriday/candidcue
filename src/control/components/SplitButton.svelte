@@ -397,7 +397,7 @@
     Only the outlined variant firms its border, and only for a hover over one of
     its own halves. A bare `.split:hover` matched the open MENU too — it is a
     descendant — and outranked `.primary`, so pointing at any row repainted the
-    clay button with a grey ring.
+    accent button with a grey ring.
   */
   .split:not(.primary):has(> .main:hover:not(:disabled), > .caret:hover:not(:disabled)) {
     border-color: var(--border-strong);
@@ -412,7 +412,7 @@
     background: var(--bg-secondary);
   }
 
-  /* Primary — the same flat clay fill and 13px label as Button: no lip, no
+  /* Primary — the same flat accent fill and 13px label as Button: no lip, no
      shadow, no bigger hero label (see the note at the top of Button.svelte). */
   .primary {
     /* The hero action's height (36px, tokens.css §9.1): Present is the one
@@ -424,14 +424,29 @@
     color: var(--accent-contrast);
   }
   .primary .divider {
-    /* A wash of the contrast colour, so the rule reads on the clay fill
+    /* A wash of the contrast colour, so the rule reads on the accent fill
        without introducing a second hue. */
     background: color-mix(in srgb, var(--accent-contrast) 34%, transparent);
   }
+  /* The press as well as the hover. A keyboard press is `:active` without
+     `:hover`, and fell through to the outlined variant's grey press above —
+     the white label on --bg-secondary, all but invisible. */
   .primary .main:hover:not(:disabled),
   .primary .caret:hover:not(:disabled),
+  .primary .main:active:not(:disabled),
+  .primary .caret:active:not(:disabled),
   .primary.open .caret {
     background: var(--accent-strong);
+  }
+  /*
+   * In the dark appearance the strong step is the LIGHTER one — Pale Petrol's
+   * readable counterpart — which is right for a hover and an open menu and
+   * wrong for a press: a press darkens. So the press alone deepens the accent
+   * toward the page, and graphite lettering keeps 6.8:1 on it.
+   */
+  :global([data-appearance='dark']) .primary .main:active:not(:disabled),
+  :global([data-appearance='dark']) .primary .caret:active:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 80%, #000);
   }
 
   .split:has(.main:disabled) {
@@ -489,7 +504,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-pop);
-    /* The trigger may be a clay fill; the menu is never one. */
+    /* The trigger may be an accent fill; the menu is never one. */
     color: var(--text-primary);
     /*
       A quiet shade at whichever edge has more menu beyond it, and nothing when
@@ -541,7 +556,7 @@
   .item:focus-visible {
     outline: none;
   }
-  /* A solid clay fill with an inverse label and description: the highlight is
+  /* A solid accent fill with an inverse label and description: the highlight is
      the only focus indicator a menu row has — see OverflowMenu. */
   .item.active:not(:disabled) {
     background: var(--accent-strong);
@@ -551,7 +566,7 @@
     color: inherit;
   }
   /* Inverse, but a step back from the label so the row keeps its two levels —
-     5.1:1 on the clay, still clear of AA. */
+     7.9:1 on the strong accent, still clear of AA. */
   .item.active:not(:disabled) .item-desc {
     color: color-mix(in srgb, var(--accent-contrast) 88%, transparent);
   }
@@ -559,7 +574,7 @@
     opacity: 0.45;
     cursor: not-allowed;
   }
-  /* Information, not an unavailable command: readable (6.1:1), and no
+  /* Information, not an unavailable command: readable (5.8:1), and no
      forbidden cursor over text that is only there to be read. */
   .item.note:disabled {
     opacity: 1;
@@ -600,7 +615,7 @@
 
   /*
     As wide as the row highlight, in the hairline the other menus use: a rule
-    narrower than the clay fill beside it read as a second, unrelated inset.
+    narrower than the accent fill beside it read as a second, unrelated inset.
   */
   .separator {
     height: 1px;

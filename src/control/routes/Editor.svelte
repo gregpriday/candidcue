@@ -3133,7 +3133,7 @@ import type { PresentationMode } from '../services/settings-types';
   /*
    * Where the caret is (or, in Preview, what is at the top of the pane): the
    * neutral fill and 600 text every source list uses for "you are here". No
-   * bar and no clay — see Sidebar.svelte for why.
+   * bar and no accent wash — see Sidebar.svelte for why.
    *
    * The time goes to primary too. On this fill the faint grey measures 4.25:1,
    * under the floor the rest of the column clears.
@@ -3472,11 +3472,12 @@ import type { PresentationMode } from '../services/settings-types';
   }
   /*
    * A mismatch is INFORMATION, not an error — presenting where the window is,
-   * is a deliberate supported behaviour — so it warms rather than alarms.
-   * `--accent-strong` because small terracotta text needs it to clear AA.
+   * is a deliberate supported behaviour — so it warms rather than alarms: the
+   * attention colour, not the danger one, and never petrol, which is not a
+   * status.
    */
   .present-destination.mismatch {
-    color: var(--accent-strong);
+    color: var(--warning);
   }
 
   /* Announced but not drawn. */

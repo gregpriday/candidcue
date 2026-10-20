@@ -465,7 +465,7 @@
   /*
    * The highlight is the menu's focus indicator — the only one, since an
    * outline would draw a second selection under it — so it has to be seen:
-   * a solid clay fill with an inverse label, the way a Mac menu marks the item
+   * a solid accent fill with an inverse label, the way a Mac menu marks the item
    * Return would choose. The faint surface wash it replaces measured 1.1:1
    * against the menu, which is no indicator at all to a keyboard user. The
    * same treatment in OverflowMenu, ContextMenu and SplitButton.

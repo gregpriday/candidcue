@@ -1,15 +1,26 @@
 /* ============================================================================
-   CandidCue design tokens — "warm editorial workspace + focused dark studio"
+   CandidCue design tokens — "porcelain desk + focused dark studio"
 
-   Two themes share one set of token NAMES so components never hard-code a
-   palette. Theme is chosen by a `data-theme` attribute:
+   Three palettes share one set of token NAMES so components never hard-code a
+   palette. Palette is chosen by a `data-theme` attribute:
 
-     [data-theme='workspace'] → calm light surfaces for preparing & reviewing
-     [data-theme='studio']    → restrained dark surfaces for the live session
+     [data-theme='workspace'] → the desk: porcelain, graphite and studio petrol,
+                                for preparing & reviewing
+     [data-theme='studio']    → restrained dark surfaces for the running take,
+                                and the stage's default
+     [data-theme='paper']     → the FROZEN light palette the light presentation
+                                surfaces were drawn against
+
+   The desk has a light and a dark appearance and follows the system's: the
+   dark one is the workspace block retuned under `data-appearance='dark'`.
 
    The dark studio palette is ALSO the un-themed default on :root, so the stage
    window (which sets no attribute) stays dark exactly as before. The control
    shell sets data-theme per route (workspace at rest, studio when live).
+   `paper` is never a route: a presentation surface sets it on its own root —
+   the take-controls drawer and the appearance sheet over a paper read, the
+   syntax reference's "On the glass" specimen — so that retuning the desk can
+   never change what the presenter sees.
 
    Depth here comes from spacing, type, and controlled contrast — NOT from
    glows, gradients, grain, or perpetual motion.
@@ -55,6 +66,14 @@
   --ls-caps: 0.06em;
   --ls-tight: 0;
   --ls-title: -0.018em; /* page titles — tightened editorial tracking */
+  /* Anything set in --font-brand: the wordmark and the brand display headings.
+     A grotesque's tracking at 17-28px, not the serif-era --ls-title. */
+  --ls-brand: -0.015em;
+  /* The website's heading voice — medium weight, set tight — for the desk's
+     display headings (Welcome and the Library's first-run invitation). Not
+     --ls-title: presentation surfaces read that one. */
+  --ls-heading: -0.025em;
+  --fw-heading: 500;
   --ls-prose: 0.01em;
   --prose-leading: 1.6;
 
@@ -186,17 +205,22 @@
   --ease-signature: var(--ease-out);
 
   /* ---- Type families ----
-     System stack for application chrome (resolves to SF Pro on macOS). An
-     optional editorial serif is reserved for the live question and quotations
-     only — every control / label / metric stays in the UI font. */
+     System stack for application chrome (resolves to SF Pro on macOS); every
+     control / label / metric stays in the UI font. The prompter's own faces,
+     serif alternative included, are the stage's business (`stageFontStack`)
+     and are not tokens here. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   /* Menlo before the generic: every Mac has it, and an engine that does not
      resolve `ui-monospace` otherwise drops to Courier. */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* Bundled via @fontsource (control entry) so it renders deterministically;
-     Georgia is the only fallback if the bundle somehow fails to load. */
-  --font-serif: 'Source Serif 4', Georgia, serif;
   --font-prose: var(--font-ui);
+  /* The brand face, for the handful of branded display moments on the desk —
+     the wordmark, the Welcome heading, the Library's first-run invitation —
+     and nowhere else. Controls, labels and the user's own script keep
+     --font-ui, and nothing on a presentation surface may name it. The face
+     itself is registered by `brand-fonts.css`, in the control window only. */
+  --font-brand: 'Archivo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
 
   /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
      resolve. */
@@ -212,7 +236,7 @@
   /* The modal scrim is the same dark veil in both themes: it exists to push the
      page back, and a light veil over a light page does not. The value is the
      studio canvas at 40%, but it is deliberately NOT `var(--bg-app)` — that
-     would flip to warm paper under the workspace theme. */
+     would flip to porcelain under the workspace theme. */
   --dialog-scrim: rgba(15, 17, 21, 0.4);
 }
 
@@ -321,6 +345,11 @@
   --accent-strong: #ec9d7a;
   --accent-contrast: #241510;
   --accent-soft: #3a2018;
+  /* The filled action (Button's primary). On the desk it is ink and only
+     Present keeps the accent; here, as on paper, it is still the accent. */
+  --action: #e08a63;
+  --action-strong: #ec9d7a;
+  --action-contrast: #241510;
   --focus: #ec9d7a;
   /* Neutral keyboard-focus edge for surfaces (rows, tiles, editors, panels).
      3.98:1 against --bg-hover-surface, the brightest surface it sits inside,
@@ -382,136 +411,154 @@
   --editor-selection-inactive: rgba(255, 255, 255, 0.08);
 
   --selection: rgba(224, 138, 99, 0.22);
-  /* Find in the editor: every hit, the current one, and the edge that marks
-     the current one by shape rather than by a second shade. Amber, so a hit
-     never reads as a selection (terracotta) — and a fill, where a cue is amber
-     TEXT, so the two never share a channel. */
+  /* Find in the editor: every hit, and the edge that marks the current one.
+     The current hit IS the selection, so it is drawn on the selection's own
+     tint with no fill of its own: a second shade stacked on the selection is
+     what left the faintest syntax unreadable. Amber, so a hit never reads as a
+     selection — and a fill, where a cue is amber TEXT, so the two never share
+     a channel. */
   --find-match: rgba(222, 169, 77, 0.24);
-  --find-match-current: rgba(222, 169, 77, 0.46);
   --find-match-edge: #dea94d;
   /* Other occurrences of the selected word: a whisper, not a search result. */
   --selection-match: rgba(255, 255, 255, 0.08);
 }
 
 /* ============================================================================
-   LIGHT workspace palette — calm warm editorial surfaces.
+   LIGHT workspace palette — the desk: porcelain, graphite and studio petrol.
    Declared after the dark block so it wins at equal specificity on the shell.
+
+   Every grey here carries the faint blue-green of porcelain and graphite —
+   never a warm or beige grey, and never a dead neutral. Petrol is the accent
+   and nothing else: the primary action, focus, a chosen option, the text
+   selection. Surfaces and row states stay grey and ink, so the accent stays a
+   small fraction of any screen.
    ============================================================================ */
 [data-theme='workspace'] {
   color-scheme: light;
 
-  --bg-app: #f6f4f0;
-  --bg-canvas: #f6f4f0;
-  --bg-chrome: #efebe5; /* sidebar — slightly quieter than the content */
+  --bg-app: #f6f7f5;
+  --bg-canvas: #f6f7f5;
+  --bg-chrome: #ecefee; /* sidebar — slightly quieter than the content */
   --bg-panel: #ffffff;
-  --bg-panel-header: #f3f0ea;
-  --bg-secondary: #efebe5;
+  --bg-panel-header: #f1f3f2;
+  --bg-secondary: #ecefee;
   --bg-elevated: #ffffff;
-  --bg-sunken: #f1eee8;
-  --bg-hover: #ece8e1; /* legacy shared hover — migrate to chrome/surface below */
-  --bg-hover-chrome: #e8e3db; /* sidebar, nav, toolbar, breadcrumb/back controls */
-  --bg-hover-surface: #f7f4ef; /* rows & cards on white panels */
-  --bg-selected: rgba(183, 94, 59, 0.1);
+  --bg-sunken: #eff2f1;
+  --bg-hover: #e8eceb; /* legacy shared hover — migrate to chrome/surface below */
+  --bg-hover-chrome: #e4e8e7; /* sidebar, nav, toolbar, breadcrumb/back controls */
+  --bg-hover-surface: #f4f6f5; /* rows & cards on white panels */
+  --bg-selected: rgba(23, 107, 117, 0.1);
 
   /* Desktop surface grammar — see the studio block for what each one is for. */
-  --bg-toolbar: #f1ede7;
-  --bg-statusbar: #ece8e1;
+  --bg-toolbar: #eef1f0;
+  --bg-statusbar: #e8eceb;
   /* Dark enough to read as a hover on the bar, light enough that warning and
-     danger text still clear 4.5:1 on it (4.97 and 4.85; 4.69 and 4.58 pressed). */
-  --bg-hover-statusbar: #e1dbd2;
-  --bg-active-statusbar: #dcd5cb;
+     danger text still clear 4.5:1 on it (5.16 and 5.04; 4.87 and 4.76 pressed). */
+  --bg-hover-statusbar: #dbe1e0;
+  --bg-active-statusbar: #d5dbda;
   /*
-   * A selected script in the Library, in the same neutral ink as the source
-   * list's "you are here" (below), on white rather than on paper.
+   * A selected script in the Library, in the same graphite ink as the source
+   * list's "you are here" (below), on white rather than on the canvas.
    *
    * It used to be a clay tint, with a warm grey for hover. The two were never
    * one idea: hover looked like the canvas showing through and selection like
    * a blush, and the faintest selection step could only be found by the accent
-   * bar beside it. Any clay light enough to sit behind body text reads pink or
-   * peach on white. Neutral ink at rising strength does not, and it is what
-   * the sidebar beside the list already says.
+   * bar beside it. Any accent tint light enough to sit behind body text reads
+   * as a wash of colour on white rather than as a state — clay read pink or
+   * peach. Ink at rising strength does not, and it is what the sidebar beside
+   * the list already says.
    */
-  --bg-row-selected: rgba(24, 25, 29, 0.1);
+  --bg-row-selected: rgba(34, 40, 43, 0.1);
   /*
-   * A source list's current row, in neutral rather than in clay.
+   * A source list's current row, in ink rather than in the accent.
    *
-   * The accent tint spread across a sidebar row on the warm-grey rail read as
-   * a peach wash — the combination this palette was rebuilt to avoid — and it
-   * said "selected item" in the same voice the Library uses for a selected
-   * DOCUMENT. A place you are is a quieter fact than a thing you picked: a
-   * darker step of the rail's own paper, with the accent kept for the row's
-   * icon, is how a Mac sidebar says it.
+   * An accent tint spread across a sidebar row reads as a wash — in clay, on
+   * the old warm-grey rail, it read as peach — and it says "selected item" in
+   * the voice a selected DOCUMENT would use. A place you are is a quieter fact
+   * than a thing you picked: a darker step of the rail's own grey, with the
+   * accent kept for the row's icon, is how a Mac sidebar says it.
    */
-  --bg-source-selected: rgba(24, 25, 29, 0.075);
+  --bg-source-selected: rgba(34, 40, 43, 0.075);
   /* The rest of the Library ramp — see the studio block for the order. */
-  --bg-row-hover: rgba(24, 25, 29, 0.03);
-  --bg-row-selected-quiet: rgba(24, 25, 29, 0.055);
-  --bg-row-selected-quiet-hover: rgba(24, 25, 29, 0.07);
-  --bg-row-selected-hover: rgba(24, 25, 29, 0.115);
+  --bg-row-hover: rgba(34, 40, 43, 0.03);
+  --bg-row-selected-quiet: rgba(34, 40, 43, 0.055);
+  --bg-row-selected-quiet-hover: rgba(34, 40, 43, 0.07);
+  --bg-row-selected-hover: rgba(34, 40, 43, 0.115);
   /*
    * RETIRED, and kept only so a stale reference fails visibly rather than
    * silently falling back to transparent.
    *
-   * This was the unfocused half of Library selection: an opaque warm grey,
-   * which spread across a full-width row on a white list read as dirt rather
-   * than as a state. The Library now draws every row state from one neutral
-   * ink ramp (`--bg-row-*`). Do not reach for this for a new surface.
+   * This was the unfocused half of Library selection: an opaque grey, which
+   * spread across a full-width row on a white list read as dirt rather than
+   * as a state. The Library now draws every row state from one ink ramp
+   * (`--bg-row-*`). Do not reach for this for a new surface.
    */
-  --bg-row-selected-inactive: #e8e3db;
-  --divider: #e2ded6;
-  --divider-hover: #c7c1b6;
+  --bg-row-selected-inactive: #e4e8e7;
+  --divider: #dde2e1;
+  --divider-hover: #bec6c5;
 
-  --text-primary: #18191d;
-  --text-secondary: #5d626c;
+  --text-primary: #22282b;
+  --text-secondary: #5e676a;
   /*
-   * Muted and faint sit almost on top of each other, and that is the honest
-   * answer rather than an oversight.
+   * Secondary, muted and faint sit almost on top of each other, and that is
+   * the honest answer rather than an oversight.
    *
-   * The surface that pins both is --bg-hover-chrome (#e8e3db): a sidebar row,
+   * The surface that pins them is --bg-hover-chrome (#e4e8e7): a sidebar row,
    * a back control, a revision row all pass under the cursor, and faint text
-   * rides along (RevisionHistory's timestamps, Sidebar's version line). To
-   * clear 4.5:1 there a colour has to reach ~#61656e — which is DARKER than
-   * the old muted (#676b74, itself only 4.18:1 on that surface). Fixing faint
-   * alone would therefore have inverted the two steps, so muted moves with it.
+   * rides along (RevisionHistory's timestamps, Sidebar's version line). The
+   * Library's strongest row step, --bg-row-selected-hover over white, carries
+   * faint metadata too and asks for nearly the same. To clear 4.5:1 on both a
+   * grey has to be no lighter than ~#5f696c — a shade DARKER than the
+   * palette's muted ink (#626b6e), which is 4.42:1 on that hover and 4.38:1
+   * on that row. So all three steps sit just under it, secondary darkest.
    *
    * Three low-emphasis greys cannot stay visibly apart while all of them clear
-   * AA on the same warm hover surface. Correct ordering and readable text beat
-   * a decorative distinction nobody could safely rely on.
+   * AA on the same hover surface. Correct ordering and readable text beat a
+   * decorative distinction nobody could safely rely on.
    */
-  --text-muted: #5f636c; /* 4.71:1 on --bg-hover-chrome */
-  --text-faint: #61656e; /* 4.57:1 on --bg-hover-chrome */
+  --text-muted: #5f686b; /* 4.62:1 on --bg-hover-chrome */
+  --text-faint: #5f696c; /* 4.56:1 on --bg-hover-chrome */
 
-  --border: #dedad3; /* decorative divider */
-  --border-control: #c7c1b6; /* resting control outline — medium-light warm gray */
-  --border-strong: #99948c; /* emphasis only: hover, focus, active drag */
+  --border: #d8dedd; /* decorative divider */
+  --border-control: #bec6c5; /* resting control outline — medium-light cool grey */
+  --border-strong: #8e9698; /* emphasis only: hover, focus, active drag */
   /*
    * The edge that tells you a control's STATE: an off switch's track and knob,
    * the selected segment's keyline. SC 1.4.11 wants 3:1 for that, and nothing
-   * above reaches it everywhere — --border-control is 1.63:1 on the canvas (it
+   * above reaches it everywhere — --border-control is 1.62:1 on the canvas (it
    * draws a control's outline, which the label already identifies), and
-   * --border-strong is 2.74:1. This is 3.11:1 on --bg-hover-chrome, the
-   * darkest surface it sits on, and 3.34:1 on a segmented track.
+   * --border-strong is 2.81:1. This is 3.14:1 on --bg-hover-chrome, the
+   * darkest surface it sits on, and 3.35:1 on a segmented track.
    */
-  --border-state: #857f76;
-  --border-faint: #e7e3dc;
-  --border-seam: #e7e3dc;
+  --border-state: #7a8385;
+  --border-faint: #e3e8e7;
+  --border-seam: #e3e8e7;
 
-  /* Terracotta "clay". --accent is AA-legible as text on the warm canvas
-     (~4.5:1); --accent-strong is the darker hover/press + safest text weight. */
-  --accent: #b35a38;
-  --accent-strong: #9c4a2c;
+  /* Studio petrol. --accent is AA-legible as text on the canvas (5.75:1) and
+     carries white at 6.18:1; --accent-strong, deep petrol, is the darker
+     hover/press and the safest text weight (9.07:1 on the canvas). */
+  --accent: #176b75;
+  --accent-strong: #104b53;
   --accent-contrast: #ffffff;
-  --accent-soft: #f6e7df;
-  --accent-wash: rgba(179, 90, 56, 0.05); /* 5% terracotta — selected radio/index */
-  --focus: #b35a38;
-  /* Neutral keyboard-focus edge for surfaces. 3.48:1 against
-     --bg-hover-chrome, the darkest surface it sits inside, and 4.45:1 on white.
-     --border-strong is 3.01:1 on white but only 2.74:1 on the app canvas, so it
+  --accent-soft: #e5eff0;
+  --accent-wash: rgba(23, 107, 117, 0.05); /* 5% petrol — selected radio/index */
+  /* The filled action is ink, as the website draws its own: New script, a
+     dialog's confirm, Welcome's first step. Petrol stays with Present, the
+     mark and a chosen control, so on any screen it is the one thing to do.
+     White on graphite is 14.9:1; the hover/press step deepens it. */
+  --action: #22282b;
+  --action-strong: #0f1213;
+  --action-contrast: #ffffff;
+  --focus: #176b75;
+  /* Neutral keyboard-focus edge for surfaces. 3.50:1 against
+     --bg-hover-chrome, the darkest surface it sits inside, and 4.33:1 on white.
+     --border-strong is 3.01:1 on white but only 2.81:1 on the app canvas, so it
      cannot be the focus signal. */
-  --focus-quiet: #7b7771;
+  --focus-quiet: #727b7e;
   /* Status foregrounds are darkened from the source palette so 12-13px text on
      the translucent -soft fills clears WCAG AA (the lighter source hues sat
-     ~3.8:1 on the warm canvas). */
+     under 4:1 on the canvas). They are state, not brand: they do not move with
+     the accent. */
   --success: #1f6b52;
   --success-soft: rgba(47, 125, 101, 0.12);
   --warning: #7a5310;
@@ -537,13 +584,301 @@
 
   --shadow-panel: none;
   --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(34, 40, 43, 0.06);
+  --shadow-card-hover: 0 6px 16px rgba(34, 40, 43, 0.1);
+  --shadow-transport: 0 -2px 12px rgba(34, 40, 43, 0.05);
+  --shadow-pop: 0 12px 32px rgba(34, 40, 43, 0.16), 0 2px 8px rgba(34, 40, 43, 0.08);
+  --shadow-hover: 0 4px 12px rgba(34, 40, 43, 0.09); /* card lift on hover */
+  --shadow-preview: 0 10px 28px rgba(34, 40, 43, 0.14), 0 2px 6px rgba(34, 40, 43, 0.06);
+
+  /* The Library's first-run invitation: a whisper of petrol, lighter than
+     --accent-soft, so it reads as an invitation rather than as a card. */
+  --empty-bg: #eef4f4;
+  --empty-border: #d8dedd;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: #e5eff0;
+  --empty-hover-border: #bcd4d7;
+
+  /* Reading text (transcripts / source prose). The names are older than this
+     palette; the values are graphite. */
+  --prose-text-warm: #262c2f;
+  --prose-secondary-warm: #4c5458;
+  --prose-muted-warm: #687174;
+  /*
+   * The Markdown editor's drawn selection, focused and not.
+   *
+   * A step stronger than --selection, which tints incidental selections of UI
+   * text: here selecting is half the work. 0.15 is the ceiling, because the
+   * editor's punctuation (--text-faint) sits on it and keeps 4.53:1 there.
+   * The inactive tint is neutral ink, as a Mac shows a selection in a view
+   * that does not have the keyboard; --text-faint keeps 4.66:1 on it.
+   */
+  --editor-selection: rgba(23, 107, 117, 0.15);
+  --editor-selection-inactive: rgba(34, 40, 43, 0.1);
+
+  --selection: rgba(23, 107, 117, 0.12);
+  /* The current hit is the selection and carries no fill of its own: its
+     outline is the state (4.18:1 on the selection, SC 1.4.11), and the
+     editor's faintest syntax keeps 4.53:1 there and 5.02:1 on any other hit. */
+  --find-match: rgba(214, 158, 46, 0.14);
+  --find-match-edge: #8f6514;
+  --selection-match: rgba(34, 40, 43, 0.07);
+}
+
+/* ============================================================================
+   The desk in the DARK appearance — graphite under porcelain ink, with Pale
+   Petrol as the accent. The same palette the website draws its dark pages in.
+
+   The desk follows the system: `lib/appearance.ts` puts the system's choice on
+   the document root as `data-appearance`, and this block retunes the workspace
+   palette under it. There is no setting in the app, by design — Apple asks apps
+   to follow the systemwide choice rather than offer their own. It never reaches
+   a running take (studio) or a frozen paper surface: those carry their own
+   `data-theme`, and their own declarations win over anything inherited.
+
+   Every token the light block declares has a value here, so nothing on the
+   desk falls through to a light value in the dark. Elevation is lighter, not
+   shadowed: canvas, then the sidebar and bands, then panels, then controls and
+   wells. The ink greys are pinned by the brightest of those surfaces
+   (--bg-row-selected-inactive), where faint text still keeps 5.5:1.
+   ============================================================================ */
+[data-appearance='dark'] [data-theme='workspace'],
+[data-theme='workspace'][data-appearance='dark'] {
+  color-scheme: dark;
+
+  --bg-app: #121516;
+  --bg-canvas: #121516;
+  --bg-chrome: #16191b;
+  --bg-panel: #191d1f;
+  --bg-panel-header: #1c2123;
+  --bg-secondary: #1e2325;
+  --bg-elevated: #1e2325;
+  --bg-sunken: #1e2325;
+  --bg-hover: #232829;
+  --bg-hover-chrome: #22272a;
+  --bg-hover-surface: #202527;
+  --bg-selected: rgba(164, 205, 209, 0.14);
+
+  --bg-toolbar: #15181a;
+  --bg-statusbar: #131618;
+  --bg-hover-statusbar: #23292b;
+  --bg-active-statusbar: #2a3133;
+  /* One ink at rising strength, as in the light block — porcelain here. */
+  --bg-row-selected: rgba(242, 244, 243, 0.09);
+  --bg-source-selected: rgba(242, 244, 243, 0.075);
+  --bg-row-hover: rgba(242, 244, 243, 0.035);
+  --bg-row-selected-quiet: rgba(242, 244, 243, 0.055);
+  --bg-row-selected-quiet-hover: rgba(242, 244, 243, 0.07);
+  --bg-row-selected-hover: rgba(242, 244, 243, 0.11);
+  /* Retired (see the light block); kept so a stale reference stays visible. */
+  --bg-row-selected-inactive: #24292b;
+  --divider: #262c2e;
+  --divider-hover: #3d4548;
+
+  --text-primary: #f2f4f3;
+  --text-secondary: #abb4b7;
+  --text-muted: #9aa4a7; /* 5.78:1 on --bg-row-selected-inactive */
+  --text-faint: #96a0a3; /* 5.50:1 there */
+
+  --border: #2b3133;
+  --border-control: #3a4245;
+  --border-strong: #5b6568;
+  /* 3.84:1 on --bg-row-selected-inactive, the brightest surface it sits on. */
+  --border-state: #7a8487;
+  --border-faint: #22272a;
+  --border-seam: #22272a;
+
+  /* Pale Petrol, the brand guide's counterpart for dark grounds: 10.3:1 on
+     the sidebar, and a Pale Petrol fill takes graphite lettering (10.7:1).
+     Studio Petrol itself is 2.97:1 on this canvas, too close to be a fill's
+     only edge. */
+  --accent: #a4cdd1;
+  --accent-strong: #c3e0e3;
+  --accent-contrast: #121516;
+  --accent-soft: #1e2a2c;
+  --accent-wash: rgba(164, 205, 209, 0.06);
+  /* Porcelain ink under graphite lettering (15.4:1); the step dims it. */
+  --action: #f2f4f3;
+  --action-strong: #d3d9d9;
+  --action-contrast: #121516;
+  --focus: #a4cdd1;
+  --focus-quiet: #7a8487;
+  --success: #55b894;
+  --success-soft: rgba(85, 184, 148, 0.16);
+  --warning: #dea94d;
+  --warning-soft: rgba(222, 169, 77, 0.16);
+  --danger: #ef7168;
+  --danger-strong: #d95e56;
+  --danger-contrast: var(--accent-contrast); /* 4.97:1 on --danger-strong */
+  --danger-soft: rgba(239, 113, 104, 0.16);
+
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.18);
+  --live-glow: transparent;
+
+  --meter-low: #55b894;
+  --meter-mid: #dea94d;
+  --meter-high: #ef7168;
+
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-preview: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  --empty-bg: #161b1c;
+  --empty-border: #262c2e;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: #1b2224;
+  --empty-hover-border: #3a4b4f;
+
+  --prose-text-warm: #e6eaea;
+  --prose-secondary-warm: #c3cacc;
+  --prose-muted-warm: #9ea8ab;
+  /* Highlights are held to what is drawn over them: the editor's faintest
+     syntax keeps 4.64:1 on the selection, which the current find hit shares
+     (its amber edge is 5.84:1 there), and 5.30:1 on any other hit. Selected UI
+     text keeps 5.11:1 on a panel and 4.77:1 in a well. */
+  --editor-selection: rgba(164, 205, 209, 0.14);
+  --editor-selection-inactive: rgba(242, 244, 243, 0.1);
+
+  --selection: rgba(164, 205, 209, 0.1);
+  --find-match: rgba(222, 169, 77, 0.1);
+  --find-match-edge: #dea94d;
+  --selection-match: rgba(242, 244, 243, 0.08);
+
+  /* The light veil is lost on a dark page; a dialog needs a deeper one, deep
+     enough that the porcelain action behind it stops competing. */
+  --dialog-scrim: rgba(0, 0, 0, 0.6);
+}
+
+/* ============================================================================
+   PAPER palette — FROZEN. The light palette the presentation surfaces were
+   drawn against, kept exactly as the workspace block stood before the desk
+   moved to porcelain, graphite and petrol.
+
+   A take on paper puts operator controls over the read — the take-controls
+   drawer (`Live.svelte`) and the appearance sheet
+   (`StageAppearanceSheet.svelte`) — and the syntax reference draws "On the
+   glass" specimens of what a take shows (`SyntaxSpecimen.svelte`). Those are
+   presentation surfaces, and what the presenter sees must not change because
+   the desk did. So they carry `data-theme="paper"` instead of borrowing the
+   desk's palette, and this block must NEVER follow a desk retune.
+
+   It declares every token the workspace block declares and nothing else, so no
+   palette token on a frozen surface falls through to a desk value, and what it
+   does inherit is what it inherited before. One kind of token is not this
+   block's to give: an alias declared once on :root — `--focus-ring:
+   var(--focus)` — resolves against the DOCUMENT's palette, so a paper drawer
+   in a running take wears the studio ring, exactly as it always has.
+   `paper-palette.test.ts` pins the token set against the workspace block and
+   every value literally. The reasoning behind
+   each value — the contrast ratios, why rows are ink and not clay — is the
+   workspace block's as it stood when these were the desk's values.
+   ============================================================================ */
+[data-theme='paper'] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg-app: #f6f4f0;
+  --bg-canvas: #f6f4f0;
+  --bg-chrome: #efebe5;
+  --bg-panel: #ffffff;
+  --bg-panel-header: #f3f0ea;
+  --bg-secondary: #efebe5;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f1eee8;
+  --bg-hover: #ece8e1;
+  --bg-hover-chrome: #e8e3db;
+  --bg-hover-surface: #f7f4ef;
+  --bg-selected: rgba(183, 94, 59, 0.1);
+  --bg-toolbar: #f1ede7;
+  --bg-statusbar: #ece8e1;
+  --bg-hover-statusbar: #e1dbd2;
+  --bg-active-statusbar: #dcd5cb;
+  /* Row states, in one ink */
+  --bg-row-selected: rgba(24, 25, 29, 0.1);
+  --bg-source-selected: rgba(24, 25, 29, 0.075);
+  --bg-row-hover: rgba(24, 25, 29, 0.03);
+  --bg-row-selected-quiet: rgba(24, 25, 29, 0.055);
+  --bg-row-selected-quiet-hover: rgba(24, 25, 29, 0.07);
+  --bg-row-selected-hover: rgba(24, 25, 29, 0.115);
+  --bg-row-selected-inactive: #e8e3db;
+  --divider: #e2ded6;
+  --divider-hover: #c7c1b6;
+
+  /* Text */
+  --text-primary: #18191d;
+  --text-secondary: #5d626c;
+  --text-muted: #5f636c;
+  --text-faint: #61656e;
+
+  /* Lines */
+  --border: #dedad3;
+  --border-control: #c7c1b6;
+  --border-strong: #99948c;
+  --border-state: #857f76;
+  --border-faint: #e7e3dc;
+  --border-seam: #e7e3dc;
+
+  /* Accent — terracotta "clay" — and focus */
+  --accent: #b35a38;
+  --accent-strong: #9c4a2c;
+  --accent-contrast: #ffffff;
+  --accent-soft: #f6e7df;
+  --accent-wash: rgba(179, 90, 56, 0.05);
+  --action: #b35a38;
+  --action-strong: #9c4a2c;
+  --action-contrast: #ffffff;
+  --focus: #b35a38;
+  --focus-quiet: #7b7771;
+
+  /* Status */
+  --success: #1f6b52;
+  --success-soft: rgba(47, 125, 101, 0.12);
+  --warning: #7a5310;
+  --warning-soft: rgba(154, 103, 22, 0.12);
+  --danger: #a6342b;
+  --danger-strong: #8e2922;
+  --danger-contrast: var(--accent-contrast);
+  --danger-soft: rgba(185, 65, 56, 0.1);
+
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.12);
+  --live-glow: transparent;
+
+  --meter-low: #2f9e76;
+  --meter-mid: #c58a2e;
+  --meter-high: #d2564b;
+
+  /* Elevation */
+  --shadow-panel: none;
+  --shadow-well: none;
   --shadow-card: 0 1px 2px rgba(24, 25, 29, 0.06);
   --shadow-card-hover: 0 6px 16px rgba(24, 25, 29, 0.1);
   --shadow-transport: 0 -2px 12px rgba(24, 25, 29, 0.05);
   --shadow-pop: 0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08);
-  --shadow-hover: 0 4px 12px rgba(24, 25, 29, 0.09); /* card lift on hover */
+  --shadow-hover: 0 4px 12px rgba(24, 25, 29, 0.09);
   --shadow-preview: 0 10px 28px rgba(24, 25, 29, 0.14), 0 2px 6px rgba(24, 25, 29, 0.06);
 
+  /* Empty-state invitations */
   --empty-bg: #faf1ec;
   --empty-border: #dedad3;
   --empty-text: var(--text-secondary);
@@ -551,26 +886,14 @@
   --empty-hover-bg: #f6e7df;
   --empty-hover-border: #e6c8b6;
 
+  /* Reading text, selection and find */
   --prose-text-warm: #2a2b30;
   --prose-secondary-warm: #4f535c;
   --prose-muted-warm: #6b707a;
-  /*
-   * The Markdown editor's drawn selection, focused and not.
-   *
-   * A step stronger than --selection, which tints incidental selections of UI
-   * text: here selecting is half the work. 0.2 is the ceiling, because the
-   * editor's punctuation (--text-faint) sits on it and keeps 4.53:1 there.
-   * The inactive tint is neutral, as a Mac shows a selection in a view that
-   * does not have the keyboard; --text-faint keeps 4.77:1 on it.
-   */
   --editor-selection: rgba(183, 94, 59, 0.2);
   --editor-selection-inactive: rgba(24, 25, 29, 0.1);
-
   --selection: rgba(183, 94, 59, 0.16);
-  /* --find-match-edge is 5.2:1 on white, so the current hit's outline carries
-     the state on its own (SC 1.4.11). */
   --find-match: rgba(214, 158, 46, 0.24);
-  --find-match-current: rgba(214, 158, 46, 0.5);
   --find-match-edge: #8f6514;
   --selection-match: rgba(24, 25, 29, 0.07);
 }

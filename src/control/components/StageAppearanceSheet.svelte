@@ -82,9 +82,11 @@
 
   A reading window also chooses its FIELD — Dark or Paper — which a prompter
   never does (the prompter's black is the point of `stage.css`). On paper the
-  panel is a sheet of warm paper rather than dark glass: it takes the
-  workspace palette by carrying `data-theme="workspace"`, so every control in
-  it is the light one, and a dark slab is not dropped onto a light page.
+  panel is a sheet of warm paper rather than dark glass: it takes the frozen
+  paper palette by carrying `data-theme="paper"`, so every control in it is
+  the light one, and a dark slab is not dropped onto a light page. Not the
+  desk's `workspace` palette: this is a presentation surface, and it must not
+  change when the desk is retuned.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
@@ -524,7 +526,7 @@
   tabindex="-1"
   aria-modal="true"
   aria-labelledby="{uid}-title"
-  data-theme={onPaper ? 'workspace' : undefined}
+  data-theme={onPaper ? 'paper' : undefined}
   data-window={inReadingWindow ? 'reading' : 'prompter'}
   data-peeking={peeking ? '' : undefined}
   data-revealing={revealing ? '' : undefined}
@@ -954,7 +956,7 @@
     .sheet {
       --sheet-fill: rgba(9, 11, 15, 0.96);
     }
-    .sheet[data-theme='workspace'] {
+    .sheet[data-theme='paper'] {
       --sheet-fill: rgba(252, 250, 246, 0.98);
     }
   }
@@ -1085,7 +1087,7 @@
   /*
    * On paper: a sheet of warm paper, not a pane of dark glass.
    *
-   * `data-theme="workspace"` hands everything inside the light palette — the
+   * `data-theme="paper"` hands everything inside the light palette — the
    * title, the labels, the sliders and segmented controls. What is left here is
    * the panel's own surfaces, which were written as white-on-dark literals and
    * would otherwise draw white hairlines on a light sheet. Translucent for the
@@ -1093,27 +1095,27 @@
    * above the paper field so it reads as a sheet laid over the page, with the
    * stage's quiet chrome border, rather than as a hole in it.
    */
-  .sheet[data-theme='workspace'] {
+  .sheet[data-theme='paper'] {
     --sheet-fill: rgba(252, 250, 246, 0.9);
     --sheet-strip: rgba(252, 250, 246, 0.96);
     --sheet-edge-called: rgba(36, 30, 20, 0.42);
   }
-  .sheet[data-theme='workspace'] .badge,
-  .sheet[data-theme='workspace'] .reveal:hover {
+  .sheet[data-theme='paper'] .badge,
+  .sheet[data-theme='paper'] .reveal:hover {
     background: var(--bg-hover-surface);
   }
-  .sheet[data-theme='workspace'] .more,
-  .sheet[data-theme='workspace'][data-revealing] .reveal {
+  .sheet[data-theme='paper'] .more,
+  .sheet[data-theme='paper'][data-revealing] .reveal {
     border-color: var(--border-control);
   }
-  .sheet[data-theme='workspace'] .nudge button {
+  .sheet[data-theme='paper'] .nudge button {
     border-color: var(--border-control);
     background: var(--bg-elevated);
   }
-  .sheet[data-theme='workspace'] .nudge button:hover:not(:disabled) {
+  .sheet[data-theme='paper'] .nudge button:hover:not(:disabled) {
     background: var(--bg-hover-surface);
   }
-  .sheet[data-theme='workspace'] .foot {
+  .sheet[data-theme='paper'] .foot {
     border-top-color: var(--divider);
   }
 

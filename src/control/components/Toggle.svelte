@@ -81,7 +81,7 @@
   }
 
   /*
-   * Off is an outline and a grey knob; on is a clay fill and a white knob.
+   * Off is an outline and a grey knob; on is an accent fill and a white knob.
    *
    * Off used to be a light track with a white knob, which put both the track's
    * edge (1.63:1) and the knob (1.19:1 on the track) under SC 1.4.11's 3:1 —

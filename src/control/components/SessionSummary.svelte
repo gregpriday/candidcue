@@ -33,7 +33,7 @@
 -->
 <script lang="ts">
   import Button from './Button.svelte';
-  import { openMicrophonePrivacySettings } from '../lib/open-settings';
+  import { openMicrophonePrivacySettings, openSettingsWindow } from '../lib/open-settings';
   import { osCopy } from '../lib/os-copy';
   import Dialog from './Dialog.svelte';
   import { clearSession, session } from '../stores/session';
@@ -44,7 +44,7 @@
     summaryActions,
   } from '../lib/summary-actions';
   import { coverIsUp, presentingPhase } from '../stores/presenting';
-  import { navigate } from '../stores/router';
+  import { navigate, type SettingsSection } from '../stores/router';
   import { checkThenStartTake } from '../lib/check-then-start';
   import { formatClock } from '../lib/format';
   import Disclosure from './Disclosure.svelte';
@@ -165,6 +165,24 @@
           durationSeconds: $session.summary.durationSeconds,
         }),
   );
+
+  /**
+   * Where an outcome that names a Settings remedy can take the presenter.
+   *
+   * Only the two outcomes whose suggestion IS a trip to Settings: nothing heard
+   * from a microphone that was allowed (test it), and no usable speech model
+   * (fix it). A refused microphone has its own row, to the OS pane, above.
+   */
+  const settingsRemedy = $derived.by((): { section: SettingsSection; label: string } | null => {
+    if (!outcome || $session.summary === null) return null;
+    if ($session.summary.voiceFollowingAvailable === false) {
+      return { section: 'speech', label: 'Open Speech settings…' };
+    }
+    if (outcome.health === 'no_speech' && outcome.tone === 'attention') {
+      return { section: 'audio', label: 'Test microphone…' };
+    }
+    return null;
+  });
 </script>
 
 <!--
@@ -220,6 +238,15 @@
               {osCopy().openMicrophoneSettings}
             </Button>
           </div>
+        {:else if settingsRemedy}
+          <!-- The same dead end one step on: a suggestion to go to Settings
+               with no way there sent the presenter back through the take they
+               had just been told would not work. -->
+          <div class="outcome-actions">
+            <Button size="sm" onclick={() => void openSettingsWindow(settingsRemedy.section)}>
+              {settingsRemedy.label}
+            </Button>
+          </div>
         {/if}
       </div>
 
@@ -251,6 +278,12 @@
             -->
             {partOutcomeLabel(summary) ?? ''}
           </dd>
+          {#if summary.nextPart}
+            <!-- What "Present part N next" will start, by name, so the button
+                 can say it by number. -->
+            <dt>Next</dt>
+            <dd>Part {summary.nextPart.ordinal} · {summary.nextPart.label}</dd>
+          {/if}
         {/if}
       </dl>
     {/if}
@@ -454,8 +487,10 @@
   .outcome.good::before {
     background: var(--success);
   }
+  /* Warning, not the accent: the accent is the desk's brand colour and sits
+     close to --success in hue, so an attention bar in it read as a good take. */
   .outcome.attention::before {
-    background: var(--accent);
+    background: var(--warning);
   }
   .outcome-headline {
     margin: 0;

@@ -1,5 +1,7 @@
 # CandidCue
 
+**Your words. Your pace.**
+
 A voice-following teleprompter for macOS, Windows and Linux. Write your script in
 Markdown, press Present, and read. CandidCue listens with a speech recogniser
 that runs on your computer, works out where you are in the script, and scrolls
