@@ -655,7 +655,10 @@ describe('the §30.3 bounds honour the plant across the profile space', () => {
       }
     }
     expect(violations.slice(0, 20)).toEqual([]);
-  });
+    // A sweep of the whole profile space, 3000 substeps per cell: about 2 s
+    // here, 2 to 3.3 s on the Windows runner, and once 5.1 s against vitest's
+    // 5 s default. The bounds are the subject; the wall clock is not.
+  }, 20_000);
 
   it('reduced motion is unaffected: the target is followed exactly', () => {
     // §32.4/A.3. Snap has no dynamics to bound, and the target is inside the
