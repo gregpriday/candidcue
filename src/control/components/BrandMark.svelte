@@ -1,18 +1,19 @@
 <!--
   The CandidCue mark, in the page.
 
-  The same drawing as the app icon (`src-tauri/icons/source/icon.svg`): the line
-  being read, bright, between the two cue ticks the stage draws beside it on
-  the glass, with the lines already read above it dimming away and the next two
-  below. Kept in step with that file by hand — it is seven shapes on a 24-unit
-  grid.
+  The app icon's mark: a pane of teleprompter glass in perspective, the line
+  being read, and the two cue triangles the stage draws beside that line,
+  grown out of the pane's edges. The path is copied from
+  `src-tauri/icons/source/sizes/icon-brand-44.svg`, the mark drawn for 44
+  device pixels, which is what Welcome's 22 px is on a 2x screen: the rim, the
+  line and the tile's edges land on whole pixels there, where the master's
+  mark scaled down put them between rows and turned them into grey bands.
+  Regenerate it with scripts/fit-icon-sizes.py and copy the path back here.
 
-  The tile is the icon's petrol (#176b75; the opaque current line and ticks
-  are white on it at 6.2:1) in both themes, not `--accent`: the accent is
-  retuned per theme, and the dark theme's is a light coral that the white
-  lines wash out against; a mark that changes colour with the theme is
-  no longer the app's icon. The tile matches `icon-small.svg`'s flat fill,
-  which a unit test holds it to.
+  The tile is the icon's Optical Blue (#3d63b8) in both themes, not
+  `--accent`: the accent is retuned per theme, and a mark that changes colour
+  with the theme is no longer the app's icon. The tile matches the small icon
+  drawings' flat fill (`sizes/icon-32.svg`), which a unit test holds it to.
 
   Decorative wherever it appears: the word "CandidCue" always sits beside it,
   so it is hidden from assistive technology rather than given a second name.
@@ -30,24 +31,16 @@
   class="brand-mark"
   width={size}
   height={size}
-  viewBox="0 0 24 24"
+  viewBox="0 0 44 44"
   aria-hidden="true"
   focusable="false"
 >
-  <rect width="24" height="24" rx="5.4" fill="#176b75" />
-  <g fill="#ffffff">
-    <rect x="6.5" y="4" width="8.5" height="1.8" rx="0.9" opacity="0.25" />
-    <rect x="6.5" y="7.55" width="10" height="1.8" rx="0.9" opacity="0.5" />
-    <rect x="6.5" y="10.8" width="11" height="2.4" rx="1.2" />
-    <rect x="6.5" y="14.65" width="9.3" height="1.8" rx="0.9" opacity="0.85" />
-    <rect x="6.5" y="18.2" width="6.5" height="1.8" rx="0.9" opacity="0.85" />
-    <path
-      d="M2.75 10.33 L5.38 12 L2.75 13.67 Z M21.25 10.33 L18.62 12 L21.25 13.67 Z"
-      stroke="#ffffff"
-      stroke-width="0.53"
-      stroke-linejoin="round"
-    />
-  </g>
+  <rect width="44" height="44" rx="9.9" fill="#3D63B8" />
+  <path
+    d="M5 32H39L32.633 12H11.367ZM7.736 30L9.328 25L13.5 21.5L11.556 18L12.83 14H31.17L32.444 18L30.5 21.5L34.672 25L36.264 30ZM16.5 20H27.5A1.5 1.5 0 0 1 27.5 23H16.5A1.5 1.5 0 0 1 16.5 20Z"
+    fill="#ffffff"
+    fill-rule="evenodd"
+  />
 </svg>
 
 <style>

@@ -6,7 +6,7 @@
 #
 #   DESIGN_CAPTURE_DIR=/tmp/icon-shots bash scripts/capture-icon.sh
 #
-# The icon is built from the two SVG sources by build-icons.sh into a scratch
+# The icon is built from its sources by build-icons.sh into a scratch
 # directory, put in a throwaway .app, and drawn by macOS itself (NSWorkspace),
 # so every picture is what Finder and the Dock show — the system's own edge
 # treatment and its choice of representation at each size included — beside
@@ -19,6 +19,9 @@
 #                   enlarged pixel for pixel at 1x and at 2x (what a Retina
 #                   Finder list shows); and a greyscale squint row
 #   windows.png     the .ico entries on dark and light taskbars, enlarged
+#   sizes.png       every built size as it ships (the PNGs at 128/64/32 and
+#                   the .ico's 48/30/24/20/16) at 1x on light and dark, then
+#                   the 32 and 16 px drawings one pixel to a block
 #   brandmark.png   the in-app mark (BrandMark.svelte) as Welcome draws it,
 #                   in both themes
 #
@@ -37,7 +40,7 @@ for tool in magick swiftc rsvg-convert iconutil; do
 done
 
 mkdir -p "$out"
-rm -f "$out"/{master,dock-dark,dock-light,ladder,windows,brandmark}.png
+rm -f "$out"/{master,dock-dark,dock-light,ladder,windows,sizes,brandmark}.png
 work="$(mktemp -d)"
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 app="$work/CandidCueIconProbe.app"
@@ -116,8 +119,8 @@ awk -v r="$rmse" 'BEGIN { exit !(r < 0.12) }' || {
 cp "$work/icons/icon.png" "$out/master.png"
 
 # --- dock-dark / dock-light --------------------------------------------------
-# Real neighbours, chosen to include the blue and green icons this petrol one
-# has to stand apart from. Whatever is not installed is skipped; at least four
+# Real neighbours, chosen to include the blue icons this blue one has to
+# stand apart from. Whatever is not installed is skipped; at least four
 # must be.
 
 neighbours=(
@@ -212,9 +215,36 @@ win_row '#202020' "$work/win-dark.png"
 win_row '#f3f3f3' "$work/win-light.png"
 magick "$work/win-dark.png" "$work/win-light.png" -append "$out/windows.png"
 
+# --- sizes ------------------------------------------------------------------
+# The built files themselves, not the system's render of them: what a Windows
+# shell or a Linux desktop is handed at each size, side by side at 1x.
+
+ico_at() { # ico_at <px> <out>: the .ico entry of exactly that size
+  local f; for f in "$work"/ico-*.png; do
+    [ "$(magick identify -format %w "$f")" = "$1" ] && { cp "$f" "$2"; return; }
+  done
+  echo "capture-icon: the .ico has no ${1}px entry" >&2; exit 1
+}
+for px in 48 30 24 20 16; do ico_at "$px" "$work/sz-$px.png"; done
+cp "$work/icons/128x128.png" "$work/sz-128.png"; cp "$work/icons/64x64.png" "$work/sz-64.png"
+cp "$work/icons/32x32.png" "$work/sz-32.png"
+sizes_row() { # sizes_row <bg> <out>
+  local cells=() px
+  for px in 128 64 48 32 30 24 20 16; do
+    magick "$work/sz-$px.png" -background "$1" -gravity center -extent 150x150 "$work/szc-$px.png"
+    cells+=("$work/szc-$px.png")
+  done
+  magick "$work/sz-32.png" -background "$1" -alpha remove -filter point -resize 400% -gravity center -extent 150x150 "$work/szz-32.png"
+  magick "$work/sz-16.png" -background "$1" -alpha remove -filter point -resize 800% -gravity center -extent 150x150 "$work/szz-16.png"
+  magick "${cells[@]}" "$work/szz-32.png" "$work/szz-16.png" -background "$1" +append "$2"
+}
+sizes_row '#eceeed' "$work/sizes-light.png"
+sizes_row '#1e2326' "$work/sizes-dark.png"
+magick "$work/sizes-light.png" "$work/sizes-dark.png" -append "$out/sizes.png"
+
 # --- brandmark --------------------------------------------------------------
 # The component's own markup, lifted out of the .svelte file, so this shows
-# what Welcome draws rather than a copy of it. The tile is a fixed petrol, so
+# what Welcome draws rather than a copy of it. The tile is a fixed blue, so
 # the per-theme --accent below only matters if the mark ever takes it again.
 # The name beside it is a stand-in: ImageMagick cannot read the bundled
 # Archivo woff2, so it is set in $font. Judge the mark here, and the
@@ -240,8 +270,8 @@ magick "$work/wm-light.png" "$work/wm-dark.png" -append -filter point -resize 20
 
 # --- verify -----------------------------------------------------------------
 
-for f in master dock-dark dock-light ladder windows brandmark; do
+for f in master dock-dark dock-light ladder windows sizes brandmark; do
   [ -s "$out/$f.png" ] || { echo "capture-icon: $f.png was not written" >&2; exit 1; }
   magick identify "$out/$f.png" >/dev/null
 done
-echo "capture-icon: wrote 6 images to $out (system render RMSE $rmse)"
+echo "capture-icon: wrote 7 images to $out (system render RMSE $rmse)"

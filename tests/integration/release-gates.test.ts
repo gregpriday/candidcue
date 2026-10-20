@@ -2284,7 +2284,12 @@ describe('the notes this tree would actually publish', () => {
     expect(extracted.output, 'the update check must be disclosed').toMatch(/checks for updates/i);
     expect(extracted.output, 'and that it never interrupts a take').toMatch(/never prompts[^.]*during a take/i);
     expect(extracted.output, 'and that it can be turned off').toMatch(/automatic check off/i);
-    expect(extracted.output, 'and where it goes').toContain('updates.candidcue.com');
+    // The host the app actually polls, read from where it is compiled in, so
+    // the notes cannot keep naming an old one after the feed moves.
+    const updater = readFileSync(join(REPO_ROOT, 'src-tauri/src/updater.rs'), 'utf8');
+    const base = /pub const UPDATE_BASE_URL: &str = "([^"]+)";/.exec(updater)?.[1];
+    expect(base, 'UPDATE_BASE_URL could not be read out of updater.rs').toBeDefined();
+    expect(extracted.output, 'and where it goes').toContain(new URL(base!).hostname);
     expect(extracted.output, 'the absence of telemetry must be explicit').toMatch(/No telemetry/i);
 
     // The two documented degraded analyses must be listed as limitations,

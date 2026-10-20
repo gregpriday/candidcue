@@ -197,9 +197,9 @@ order, and stops at the first failure:
 3. Refuses to change a file that is already published: every file already
    under `releases/<version>/` must be byte for byte the one staged.
 4. Uploads the installers, the updater payload and its `.sig`, and
-   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `candidcue` R2
+   `SHA256SUMS-<os>.txt` to `releases/<version>/` in the `speaking-glass` R2
    bucket, cached as immutable.
-5. Downloads every one of them back from `https://updates.candidcue.com` and
+5. Downloads every one of them back from `https://updates.speakingglass.com` and
    compares the bytes.
 6. Only then uploads the feed: `releases/<channel>-<target>-<arch>.json`,
    which installed copies poll, and `releases/<channel>-<os>.json`, which a
@@ -369,7 +369,7 @@ The procedure:
    (`candidcue-release-<os>`, under `stage/feed/`) — and upload them with the
    same `no-cache` header the workflow uses:
    ```bash
-   wrangler r2 object put candidcue/releases/latest-darwin-aarch64.json \
+   wrangler r2 object put speaking-glass/releases/latest-darwin-aarch64.json \
      --file stage/feed/latest-darwin-aarch64.json --remote \
      --content-type application/json --cache-control "no-cache, no-store, must-revalidate"
    ```

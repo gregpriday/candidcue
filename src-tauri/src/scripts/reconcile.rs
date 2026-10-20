@@ -73,9 +73,10 @@ pub async fn run_startup_reconciliation(
         ..Default::default()
     };
 
-    // 1. Quick database integrity check.
-    let check: String = sqlx::query_scalar("PRAGMA quick_check")
-        .fetch_one(pool)
+    // 1. Quick database integrity check, on a connection of its own: one of
+    // the pool's can report a healthy search index as malformed (see
+    // `database::quick_check`).
+    let check: String = crate::database::quick_check(pool)
         .await
         .unwrap_or_else(|_| "failed".into());
     report.integrity_ok = check == "ok";

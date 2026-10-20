@@ -1286,10 +1286,10 @@ export async function getAppVersion(): Promise<string> {
  */
 export function describeUpdatePolicy(currentVersion: string, automatic: boolean): string {
   const when = automatic
-    ? `CandidCue asks updates.candidcue.com whether a newer version exists shortly after it ` +
+    ? `CandidCue asks updates.speakingglass.com whether a newer version exists shortly after it ` +
       `opens and every six hours while it runs, and whenever you choose Check for Updates… in the ` +
       `Help menu.`
-    : `Automatic checks are off, so CandidCue contacts updates.candidcue.com only when you ` +
+    : `Automatic checks are off, so CandidCue contacts updates.speakingglass.com only when you ` +
       `choose Check for Updates… in the Help menu.`;
   return (
     `You are running CandidCue ${currentVersion}. ${when} ` +

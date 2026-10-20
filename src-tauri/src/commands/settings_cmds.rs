@@ -258,8 +258,9 @@ pub async fn get_system_diagnostics<R: tauri::Runtime>(
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
 ) -> Result<SystemDiagnostics, AppError> {
-    let integrity: String = sqlx::query_scalar("PRAGMA quick_check")
-        .fetch_one(db.pool())
+    // Not on a pooled connection, which can report a healthy search index as
+    // malformed (see `database::quick_check`).
+    let integrity: String = crate::database::quick_check(db.pool())
         .await
         .unwrap_or_else(|_| "failed".into());
     let script_count: i64 = sqlx::query_scalar("SELECT count(*) FROM scripts")

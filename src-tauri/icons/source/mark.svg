@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The mark on its own, as clean vector geometry: what the app icon (icon.svg)
+  carries, kept here for use in the app.
+
+  A pane of teleprompter glass in perspective, the line being read, and the
+  two cue triangles the stage draws beside that line, grown out of the pane's
+  edges so the glass itself points at your place.
+
+  Exactly symmetric about x = 512 on a 1024 grid (the viewBox is cropped to the
+  mark). Sides lean 17.66 degrees; the rim is 37.3 wide on the sides, 36 on
+  top and 31.5 at the bottom; outer corners are r22, inner corners sharp. The
+  line is a 374 x 80 capsule on y = 492.5, and each arrow's apex sits on that
+  axis 30 short of the line, its root spanning 45 above and below it on the
+  inner edge. Filled with currentColor, so it takes the colour of its context.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="62 233 900 516" width="900" height="516"><path fill="currentColor" fill-rule="evenodd" d="M84.6 748L939.4 748A22 22 0 0 0 960.37 719.32L810.51 248.82A22 22 0 0 0 789.55 233.5L234.45 233.5A22 22 0 0 0 213.49 248.82L63.63 719.32A22 22 0 0 0 84.6 748ZM103.68 716.5L160.69 537.5L285.01 495.85A4 4 0 0 0 285.31 488.37L189.36 447.5L246.05 269.5H777.95L834.64 447.5L738.69 488.37A4 4 0 0 0 738.99 495.85L863.31 537.5L920.32 716.5ZM365 452.5H659A40 40 0 0 1 659 532.5H365A40 40 0 0 1 365 452.5Z"/></svg>

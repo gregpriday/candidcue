@@ -150,6 +150,37 @@ pub fn corrupt_database_error(detail: &str) -> AppError {
     .with_log(format!("integrity check: {detail}"))
 }
 
+/// `PRAGMA quick_check` on the live database, run on a connection opened for
+/// it and closed after — never on one of the pool's.
+///
+/// The bundled SQLite (3.46) answers the FTS5 part of the check from the
+/// search index's structure as the connection running it last read it, and
+/// does not first ask whether another connection has written since: every
+/// cursor FTS5 opens goes through `fts5NewTransaction`, which compares
+/// `PRAGMA data_version` and drops a stale copy, but `fts5IntegrityMethod`
+/// calls `sqlite3Fts5StorageIntegrity` directly. So a pooled connection that
+/// ran a check or a search, then sat idle while another connection saved a
+/// script, reported a healthy index as "malformed inverted index for FTS5
+/// table main.script_search". Startup reconciliation fails closed on any
+/// answer but "ok", so it then adopted and repaired nothing that launch, and
+/// Diagnostics showed the database as needing attention. Which connection the
+/// pool handed the check was a matter of timing, which is why it showed up on
+/// slower CI runners and almost never on a Mac. A connection opened for the
+/// check has nothing cached to be stale.
+///
+/// `init`'s own check does not need this: it runs on the pool's first
+/// connection, before anything has read the index.
+pub async fn quick_check(pool: &SqlitePool) -> Result<String, sqlx::Error> {
+    use sqlx::{ConnectOptions, Connection};
+
+    let mut conn = pool.connect_options().connect().await?;
+    let check = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_one(&mut conn)
+        .await;
+    let _ = conn.close().await;
+    check
+}
+
 /// Create the app data directory if needed, open the pool, verify integrity,
 /// take a pre-migration backup, then run migrations.
 pub async fn init(app_data_dir: &Path) -> Result<SqlitePool, AppError> {
