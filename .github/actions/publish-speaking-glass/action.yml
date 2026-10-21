@@ -1,4 +1,4 @@
-name: Publish a CandidCue release
+name: Publish a Speaking Glass release
 description: >
   Put one operating system's verified release on R2 and on the GitHub Release.
   Files go up first and are read back from the public URL byte for byte; the
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: ''
   public_url:
-    description: The origin the bucket is served from (the CANDIDCUE_PUBLIC_URL repository variable)
+    description: The origin the bucket is served from (the SPEAKING_GLASS_PUBLIC_URL repository variable)
     required: true
   r2_access_key_id:
     description: R2 access key ID
@@ -39,7 +39,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/receive-candidcue
+    - uses: ./.github/actions/receive-speaking-glass
       with:
         artifact_name: ${{ inputs.artifact_name }}
         path: verified
@@ -71,13 +71,13 @@ runs:
     - name: The version must not be older than what the feed serves
       shell: bash
       env:
-        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/release-feed.mjs monotonic --stage verified/stage
 
     - name: No file already published may change
       shell: bash
       env:
-        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/release-feed.mjs write-once --stage verified/stage
 
     # The aws CLI's default request checksums are an S3 extension R2 does not
@@ -101,7 +101,7 @@ runs:
     - name: Every file must be readable at its public URL
       shell: bash
       env:
-        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/release-feed.mjs verify-files --stage verified/stage
 
     - name: Announce the release on the update feed
@@ -124,7 +124,7 @@ runs:
     - name: The feed must serve what was announced
       shell: bash
       env:
-        CANDIDCUE_PUBLIC_URL: ${{ inputs.public_url }}
+        SPEAKING_GLASS_PUBLIC_URL: ${{ inputs.public_url }}
       run: node scripts/release-feed.mjs verify-feed --stage verified/stage
 
     # Each platform's workflow attaches its own files. Whichever finishes
@@ -145,7 +145,7 @@ runs:
           echo
           echo '---'
           echo
-          echo "macOS builds are signed and notarised. Windows and Linux builds are not code-signed; every update CandidCue installs is verified against its own signing key. Checksums are attached, and every file is also served from ${PUBLIC_URL}/releases/${VERSION}/."
+          echo "macOS builds are signed and notarised. Windows and Linux builds are not code-signed; every update Speaking Glass installs is verified against its own signing key. Checksums are attached, and every file is also served from ${PUBLIC_URL}/releases/${VERSION}/."
         } >> "$RUNNER_TEMP/notes.md"
 
         files=(verified/stage/files/*/*)
@@ -172,7 +172,7 @@ runs:
           # `--verify-tag`, because `gh release create` otherwise CREATES a
           # missing tag from the default branch. Two platforms creating at
           # once: the loser's create fails, and it uploads into the winner's.
-          if ! gh release create "$TAG" --verify-tag --title "CandidCue ${TAG}" \
+          if ! gh release create "$TAG" --verify-tag --title "Speaking Glass ${TAG}" \
                 --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"; then
             sleep 10
             gh release view "$TAG" >/dev/null

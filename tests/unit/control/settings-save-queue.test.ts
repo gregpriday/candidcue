@@ -79,7 +79,7 @@ function broadcast(revision: number, openTo: 'library' | 'last_script'): unknown
         delayProfile: 'low',
       },
       commands: {
-        wakePhrase: 'CandidCue',
+        wakePhrase: 'Speaking Glass',
         wakeMode: 'strict',
       },
     },

@@ -9,7 +9,7 @@
  * server left running in another checkout (the normal state when worktrees are
  * in play) made it fail outright instead of moving aside.
  *
- * So: find a free port, hand it to Vite through `CANDIDCUE_DEV_PORT`, and hand
+ * So: find a free port, hand it to Vite through `SPEAKING_GLASS_DEV_PORT`, and hand
  * the matching `devUrl` to the Tauri CLI through an inline `--config` overlay
  * so both halves agree. `pnpm tauri dev` on its own still works and still uses
  * 1420 from tauri.conf.json — this launcher is the only thing that moves.
@@ -50,7 +50,7 @@ async function findFreePort(start) {
   );
 }
 
-const requested = Number(process.env['CANDIDCUE_DEV_PORT'] ?? DEFAULT_PORT);
+const requested = Number(process.env['SPEAKING_GLASS_DEV_PORT'] ?? DEFAULT_PORT);
 const port = await findFreePort(Number.isFinite(requested) ? requested : DEFAULT_PORT);
 
 if (port !== DEFAULT_PORT) {
@@ -72,7 +72,7 @@ if (port !== DEFAULT_PORT) {
  */
 const overlay = JSON.stringify({ build: { devUrl: `http://localhost:${port}` } });
 const tauriArgs = ['dev', '--config', overlay, ...process.argv.slice(2)];
-const env = { ...process.env, CANDIDCUE_DEV_PORT: String(port) };
+const env = { ...process.env, SPEAKING_GLASS_DEV_PORT: String(port) };
 /*
  * WINDOWS HAS NEITHER HALF OF THE ABOVE.
  *

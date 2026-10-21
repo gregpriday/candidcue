@@ -26,7 +26,7 @@ import { openScript } from './fixtures/library';
  * line it is supposed to mark is the one the harness chose. A capture that did
  * not reach its state throws instead of saving a plausible wrong frame.
  *
- *   DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5312 \
+ *   DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5312 \
  *     ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *     tests/e2e/browser/design-reading-cue.spec.ts --project=chromium
  */
@@ -315,7 +315,7 @@ async function bootReader(page: Page, theme: 'dark' | 'paper', style: CueStyle):
   });
   await page.addInitScript(
     ({ theme, style }) => {
-      const key = 'candidcue.settings-overlay.v1';
+      const key = 'speaking-glass.settings-overlay.v1';
       const overlay = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, unknown>;
       const teleprompter = (overlay['teleprompter'] ?? {}) as Record<string, unknown>;
       overlay['teleprompter'] = { ...teleprompter, readerTheme: theme, readingCue: style };

@@ -14,7 +14,7 @@ import { openPreferences } from './fixtures/preferences';
  * pin; the `expect` before each screenshot exists only so a state that failed
  * to render throws instead of writing a plausible picture of the wrong screen.
  *
- *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/somewhere CANDIDCUE_E2E_PORT=5313 \
+ *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/somewhere SPEAKING_GLASS_E2E_PORT=5313 \
  *       ./node_modules/.bin/playwright test tests/e2e/browser/design-speech-install.spec.ts
  *
  * The output directory is REQUIRED and deliberately has no default: a fallback
@@ -174,8 +174,8 @@ const RETRY = {
   error: { code: 'STT_MODEL_DOWNLOAD_FAILED', message: 'The download was interrupted.' },
 };
 
-const OFFLINE = { code: 'NETWORK_OFFLINE', userMessage: 'CandidCue could not reach the internet.' };
-const LOAD_FAILED = { code: 'IPC_ERROR', userMessage: 'CandidCue could not ask the backend about speech languages.' };
+const OFFLINE = { code: 'NETWORK_OFFLINE', userMessage: 'Speaking Glass could not reach the internet.' };
+const LOAD_FAILED = { code: 'IPC_ERROR', userMessage: 'Speaking Glass could not ask the backend about speech languages.' };
 
 interface Shot {
   name: string;

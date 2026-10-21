@@ -255,7 +255,7 @@ export interface CompiledScript {
    * Spoken-token ranges inside `:::literal-command` blocks (spec §23.7).
    *
    * Command detection must be suppressed while the alignment cursor is inside
-   * one of these ranges, otherwise reading "CandidCue, go to chapter one"
+   * one of these ranges, otherwise reading "Speaking Glass, go to chapter one"
    * aloud from the script can fire real navigation — the exact thing the
    * directive exists to prevent. Consumers pass this straight into
    * `buildTrackingDocument(...)` and `CommandRouterDeps.literalCommandRanges`.

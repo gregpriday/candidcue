@@ -72,7 +72,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
         PREFERENCES_LABEL,
         WebviewUrl::App("preferences.html".into()),
     )
-    .title("CandidCue Settings")
+    .title("Speaking Glass Settings")
     .inner_size(880.0, 660.0)
     .min_inner_size(720.0, 480.0)
     .resizable(true)

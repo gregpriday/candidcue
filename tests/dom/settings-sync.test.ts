@@ -42,8 +42,8 @@ describe('installOverlaySync', () => {
 
   it('re-reads when a watched key moves', () => {
     const reread = vi.fn();
-    teardowns.push(installOverlaySync(['candidcue.settings-overlay.v1'], reread));
-    fire('candidcue.settings-overlay.v1');
+    teardowns.push(installOverlaySync(['speaking-glass.settings-overlay.v1'], reread));
+    fire('speaking-glass.settings-overlay.v1');
     expect(reread).toHaveBeenCalledTimes(1);
   });
 
@@ -54,8 +54,8 @@ describe('installOverlaySync', () => {
      * IPC round trip behind a pointer gesture, and adopt nothing.
      */
     const reread = vi.fn();
-    teardowns.push(installOverlaySync(['candidcue.settings-overlay.v1'], reread));
-    fire('candidcue.workspace.v1');
+    teardowns.push(installOverlaySync(['speaking-glass.settings-overlay.v1'], reread));
+    fire('speaking-glass.workspace.v1');
     expect(reread).not.toHaveBeenCalled();
   });
 
@@ -63,16 +63,16 @@ describe('installOverlaySync', () => {
     // `localStorage.clear()` dispatches `key: null`. Treating that as "not my
     // key" would leave the window holding an overlay that no longer exists.
     const reread = vi.fn();
-    teardowns.push(installOverlaySync(['candidcue.settings-overlay.v1'], reread));
+    teardowns.push(installOverlaySync(['speaking-glass.settings-overlay.v1'], reread));
     fire(null);
     expect(reread).toHaveBeenCalledTimes(1);
   });
 
   it('stops listening when torn down', () => {
     const reread = vi.fn();
-    const stop = installOverlaySync(['candidcue.settings-overlay.v1'], reread);
+    const stop = installOverlaySync(['speaking-glass.settings-overlay.v1'], reread);
     stop();
-    fire('candidcue.settings-overlay.v1');
+    fire('speaking-glass.settings-overlay.v1');
     expect(reread).not.toHaveBeenCalled();
   });
 });

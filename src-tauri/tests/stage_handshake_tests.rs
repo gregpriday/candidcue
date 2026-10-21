@@ -36,8 +36,8 @@
 //! mean granting the stage window `core:allow-invoke`, and its minimal
 //! privilege (listen/emit and nothing else) is a spec commitment, Appendix D.3.
 
-use candidcue_lib::coordinator::AppCoordinator;
-use candidcue_lib::windows::{self, events, STAGE_LABEL};
+use speaking_glass_lib::coordinator::AppCoordinator;
+use speaking_glass_lib::windows::{self, events, STAGE_LABEL};
 use std::sync::mpsc;
 use std::time::Duration;
 use tauri::{Listener, Manager};

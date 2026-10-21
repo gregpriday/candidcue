@@ -7,7 +7,7 @@
  * `sherpa-onnx-sys` links a fixed set of static archives, and three are
  * copyleft: `libespeak-ng.a` and `libucd.a` are GPL-3.0-or-later, and
  * `libpiper_phonemize.a` declares MIT while linking eSpeak NG, which makes its
- * distributed terms GPL-3.0. CandidCue is MIT-licensed, and a binary that kept
+ * distributed terms GPL-3.0. Speaking Glass is MIT-licensed, and a binary that kept
  * any eSpeak NG or ucd-tools code would have to be distributed on GPL terms
  * instead. Nothing in that crate removes them from the link line — there is no
  * TTS feature, and the `shared` alternative is worse, because the sherpa-onnx
@@ -19,7 +19,7 @@
  * and `verify-no-gpl-in-binary.mjs` checks the executables they produce.
  *
  * The comfortable assumption was that a static link extracts only what
- * resolves an undefined symbol, that CandidCue does speech-to-TEXT and calls
+ * resolves an undefined symbol, that Speaking Glass does speech-to-TEXT and calls
  * no TTS entry point, and that therefore nothing comes out. That assumption is
  * FALSE and this script is how we found out: `libsherpa-onnx-c-api.a` is one
  * broad object with undefined references to `OfflineTts`, so the linker
@@ -254,7 +254,7 @@ for (const path of maps) {
   if (missingAnchors.length > 0) {
     problems.push(
       `${path} (${arch}): links nothing from ${missingAnchors.join(', ')}. A map without the ` +
-        `speech runtime is a map of something other than CandidCue, and proves nothing.`,
+        `speech runtime is a map of something other than Speaking Glass, and proves nothing.`,
     );
     continue;
   }
@@ -312,7 +312,7 @@ for (const { component, literal, stdlib, project } of survivors.values()) {
   if (forbidden) {
     problems.push(
       `${component.component} (${component.spdx}): ${project.length} of its OWN symbol(s) ` +
-        `survived into the binary — plus ${residue}, which are not the problem. CandidCue is ` +
+        `survived into the binary — plus ${residue}, which are not the problem. Speaking Glass is ` +
         `MIT-licensed, and a binary carrying this project's code could only be distributed ` +
         `on its terms:\n${detail}`,
     );

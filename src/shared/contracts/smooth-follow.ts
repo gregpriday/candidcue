@@ -284,7 +284,7 @@ export interface SmoothFollowLineUnits {
  * figure and this band quietly starts meaning a different range of pitches for
  * that bound than for the one beside it.
  *
- * 42–253 px spans the rigs CandidCue is used on, from a 9-inch panel read at
+ * 42–253 px spans the rigs Speaking Glass is used on, from a 9-inch panel read at
  * 1.8 m to a 15.6-inch one at arm's length. Outside it the pitch is not a size
  * anybody chose: a font that never loaded, a measurement pass that ran against
  * an empty document, a display scale read wrong. Multiplying a bad pitch by five

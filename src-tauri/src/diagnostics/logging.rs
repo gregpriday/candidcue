@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Rust log filenames are `candidcue-rust.<YYYY-MM-DD>.log`.
+/// Rust log filenames are `speaking-glass-rust.<YYYY-MM-DD>.log`.
 ///
 /// The prefix is load-bearing in a way that is easy to miss. `tracing-appender`
 /// enforces its retention by listing the WHOLE log directory and deleting the
@@ -33,7 +33,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// standing between the client trace and the appender's pruner. Renaming this
 /// to anything the client trace also starts with would make the appender
 /// silently delete the frontend's trace. There is a test pinning that.
-const RUST_LOG_PREFIX: &str = "candidcue-rust";
+pub const RUST_LOG_PREFIX: &str = "speaking-glass-rust";
 const RUST_LOG_SUFFIX: &str = "log";
 
 /// Daily rotation, sized to keep at least a week: today plus seven days back.
@@ -356,7 +356,7 @@ fn is_rust_log_name(name: &str) -> bool {
         return false;
     };
     // Parse the date rather than trusting the shape, so a hand-dropped
-    // `candidcue-rust.notes.log` is not mistaken for ours and shipped in a
+    // `speaking-glass-rust.notes.log` is not mistaken for ours and shipped in a
     // support bundle or truncated instead of cleared.
     //
     // This governs THIS module's decisions only. The appender's own pruner
@@ -785,13 +785,13 @@ mod tests {
 
     #[test]
     fn rust_log_names_must_carry_a_real_date() {
-        assert!(is_rust_log_name("candidcue-rust.2026-08-03.log"));
+        assert!(is_rust_log_name("speaking-glass-rust.2026-08-03.log"));
         // Shape alone is not enough: a file dropped in by hand is not evidence.
-        assert!(!is_rust_log_name("candidcue-rust.notes.log"));
-        assert!(!is_rust_log_name("candidcue-rust.2026-13-40.log"));
-        assert!(!is_rust_log_name("candidcue-rust.log"));
+        assert!(!is_rust_log_name("speaking-glass-rust.notes.log"));
+        assert!(!is_rust_log_name("speaking-glass-rust.2026-13-40.log"));
+        assert!(!is_rust_log_name("speaking-glass-rust.log"));
         assert!(!is_rust_log_name("other.2026-08-03.log"));
-        assert!(!is_rust_log_name("candidcue-rust.2026-08-03.txt"));
+        assert!(!is_rust_log_name("speaking-glass-rust.2026-08-03.txt"));
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
         let path = rust_log_path(dir.path(), date);
         assert_eq!(
             path.file_name().expect("name").to_string_lossy(),
-            "candidcue-rust.2026-08-03.log"
+            "speaking-glass-rust.2026-08-03.log"
         );
         // If this stops holding, a panic goes into a file the support bundle
         // does not collect.
@@ -1026,11 +1026,11 @@ mod tests {
         let bundle = temp();
         write(&dir.path().join(CLIENT_TRACE), "live trace\n");
         write(&dir.path().join(CLIENT_TRACE_PREV), "previous trace\n");
-        write(&dir.path().join("candidcue-rust.2026-08-02.log"), "day one\n");
-        write(&dir.path().join("candidcue-rust.2026-08-03.log"), "day two\n");
+        write(&dir.path().join("speaking-glass-rust.2026-08-02.log"), "day one\n");
+        write(&dir.path().join("speaking-glass-rust.2026-08-03.log"), "day two\n");
         // Decoys: neither is ours, and neither belongs in something the user
         // hands to a stranger.
-        write(&dir.path().join("candidcue-rust.notes.log"), "not a log\n");
+        write(&dir.path().join("speaking-glass-rust.notes.log"), "not a log\n");
         write(&dir.path().join("secrets.txt"), "not ours\n");
 
         copy_support_logs(dir.path(), bundle.path()).expect("copy");
@@ -1038,9 +1038,9 @@ mod tests {
         let logs = bundle.path().join("logs");
         assert_eq!(read(&logs.join(CLIENT_TRACE)), "live trace\n");
         assert_eq!(read(&logs.join(CLIENT_TRACE_PREV)), "previous trace\n");
-        assert_eq!(read(&logs.join("candidcue-rust.2026-08-02.log")), "day one\n");
-        assert_eq!(read(&logs.join("candidcue-rust.2026-08-03.log")), "day two\n");
-        assert!(!logs.join("candidcue-rust.notes.log").exists());
+        assert_eq!(read(&logs.join("speaking-glass-rust.2026-08-02.log")), "day one\n");
+        assert_eq!(read(&logs.join("speaking-glass-rust.2026-08-03.log")), "day two\n");
+        assert!(!logs.join("speaking-glass-rust.notes.log").exists());
         assert!(!logs.join("secrets.txt").exists());
     }
 
@@ -1062,11 +1062,11 @@ mod tests {
         for i in 0..500 {
             contents.push_str(&format!("line {i}\n"));
         }
-        write(&dir.path().join("candidcue-rust.2026-08-03.log"), &contents);
+        write(&dir.path().join("speaking-glass-rust.2026-08-03.log"), &contents);
 
         copy_support_logs_with_limit(dir.path(), bundle.path(), 64).expect("copy");
 
-        let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
+        let copied = read(&bundle.path().join("logs/speaking-glass-rust.2026-08-03.log"));
         assert!(copied.starts_with(TRUNCATION_MARKER), "{copied:?}");
         assert!(copied.ends_with("line 499\n"), "the tail must be the newest lines");
         assert!(
@@ -1091,13 +1091,13 @@ mod tests {
         // 16 bytes: two 8-byte lines. A window of exactly 8 begins precisely
         // after the first line's newline.
         write(
-            &dir.path().join("candidcue-rust.2026-08-03.log"),
+            &dir.path().join("speaking-glass-rust.2026-08-03.log"),
             "aaaaaaa\nbbbbbbb\n",
         );
 
         copy_support_logs_with_limit(dir.path(), bundle.path(), 8).expect("copy");
 
-        let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
+        let copied = read(&bundle.path().join("logs/speaking-glass-rust.2026-08-03.log"));
         assert_eq!(
             copied,
             format!("{TRUNCATION_MARKER}bbbbbbb\n"),
@@ -1119,13 +1119,13 @@ mod tests {
         // "BBB\n" — the byte before it is a 'B', so the window starts mid-line,
         // and the one newline it holds is its last byte.
         write(
-            &dir.path().join("candidcue-rust.2026-08-03.log"),
+            &dir.path().join("speaking-glass-rust.2026-08-03.log"),
             "AAAAAAAAAA\nBBBBBB\n",
         );
 
         copy_support_logs_with_limit(dir.path(), bundle.path(), 4).expect("copy");
 
-        let copied = read(&bundle.path().join("logs/candidcue-rust.2026-08-03.log"));
+        let copied = read(&bundle.path().join("logs/speaking-glass-rust.2026-08-03.log"));
         assert_eq!(
             copied,
             format!("{TRUNCATION_MARKER}BBB\n"),

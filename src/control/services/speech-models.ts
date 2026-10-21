@@ -110,7 +110,7 @@ export function progressFraction(status: SpeechModelStatus | null): number | nul
  * Whether Remove should be offered.
  *
  * Only a model this machine downloaded is ours to delete. `bundled` is inside
- * the application bundle; `override` is a developer's `CANDIDCUE_MODELS_DIR`,
+ * the application bundle; `override` is a developer's `SPEAKING_GLASS_MODELS_DIR`,
  * where Remove would delete an invisible app-data copy and leave the visible
  * model exactly where it was — a button that appears to do nothing.
  *
@@ -394,7 +394,7 @@ export function reconcileModelStatuses(
  * The display name for a language tag, in the reader's own locale.
  *
  * `Intl.DisplayNames` rather than a table in this repository: the names are a
- * fact about human languages, not about CandidCue, and a hand-kept list would
+ * fact about human languages, not about Speaking Glass, and a hand-kept list would
  * be one more thing to translate. Falls back to the tag itself where the
  * runtime has no name for it — a bare `en` is a worse label than "English" and
  * a better one than nothing.

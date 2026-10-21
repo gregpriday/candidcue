@@ -13,7 +13,7 @@ import { gotoSection, openPreferences } from './fixtures/preferences';
  * state that failed to render throws instead of writing a plausible picture of
  * the wrong screen.
  *
- *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/somewhere CANDIDCUE_E2E_PORT=5315 \
+ *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/somewhere SPEAKING_GLASS_E2E_PORT=5315 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-settings.spec.ts
  *
@@ -47,7 +47,7 @@ const SMALLEST = { width: 720, height: 480 };
 /** Band height for whole-section captures, in CSS pixels. */
 const BAND = 1100;
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 
 const BUILTIN = {
   id: 'display-0',
@@ -74,7 +74,7 @@ const ELGATO = {
   topologyHash: 'top-e2e',
 };
 
-/** A panel CandidCue cannot size: no model match and no EDID millimetres. */
+/** A panel Speaking Glass cannot size: no model match and no EDID millimetres. */
 const UNKNOWN_PANEL = {
   id: 'display-1',
   name: 'HDMI Capture Monitor',
@@ -158,7 +158,7 @@ function stubs(config: {
   micRefuse: boolean;
 }): void {
   if (config.overlay) {
-    localStorage.setItem('candidcue.settings-overlay.v1', JSON.stringify(config.overlay));
+    localStorage.setItem('speaking-glass.settings-overlay.v1', JSON.stringify(config.overlay));
   }
 
   // WKWebView has no Permissions API for the microphone, so the screen decides
@@ -187,7 +187,7 @@ function stubs(config: {
         databaseIntegrityOk: true,
         scriptCount: 24,
         sessionCount: 311,
-        dataDir: '/Users/presenter/Library/Application Support/com.candidcue.app',
+        dataDir: '/Users/presenter/Library/Application Support/com.speakingglass.app',
       });
     }
     return invoke(command, args);

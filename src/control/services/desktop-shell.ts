@@ -420,24 +420,24 @@ export function composeWindowTitle(input: {
   }
   switch (input.routeName) {
     case 'editor':
-      return input.scriptTitle ? `${input.scriptTitle} — CandidCue` : 'CandidCue';
+      return input.scriptTitle ? `${input.scriptTitle} — Speaking Glass` : 'Speaking Glass';
     case 'settings':
-      return 'CandidCue Settings';
+      return 'Speaking Glass Settings';
     case 'calibrate':
-      return 'Display Calibration — CandidCue';
+      return 'Display Calibration — Speaking Glass';
     case 'welcome':
-      return 'Welcome to CandidCue';
+      return 'Welcome to Speaking Glass';
     case 'library':
       switch (input.libraryView) {
         case 'trash':
-          return 'Trash — CandidCue';
+          return 'Trash — Speaking Glass';
         case 'recent':
-          return 'Recent — CandidCue';
+          return 'Recent — Speaking Glass';
         default:
-          return 'Library — CandidCue';
+          return 'Library — Speaking Glass';
       }
     default:
-      return 'CandidCue';
+      return 'Speaking Glass';
   }
 }
 
@@ -515,7 +515,7 @@ export async function closeControlWindow(): Promise<void> {
  * held was the read half, with neither `allow-set-focus` nor
  * `allow-unminimize`, so the call is rejected by
  * the ACL — inside a `try` that had been reading the rejection as "this is
- * browser dev". Window › CandidCue was a silent no-op for exactly that reason.
+ * browser dev". Window › Speaking Glass was a silent no-op for exactly that reason.
  *
  * See `focus_app_window` in `shell_cmds.rs` for why the capability is not
  * simply widened instead.

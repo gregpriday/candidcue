@@ -89,7 +89,7 @@
           layout="row"
           label="Motion profile"
           value={motionFamily.label}
-          description="CandidCue's one motion profile. Follow feel tunes it."
+          description="Speaking Glass's one motion profile. Follow feel tunes it."
         />
       {/if}
     </div>

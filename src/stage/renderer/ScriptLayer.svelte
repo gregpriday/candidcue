@@ -3006,7 +3006,7 @@
         // Same argument one threshold up: how big a jump is worth travelling
         // smoothly is decided by how much READING it carries the presenter
         // across, and the viewport-relative answer changed by nearly half
-        // between the two panels CandidCue actually runs on.
+        // between the two panels Speaking Glass actually runs on.
         linePitchPx: measuredLinePitchPx,
       });
       disposition =

@@ -327,7 +327,7 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
     // The readiness sheet shows the title and nothing else, so it carries the
     // whole fact on its own.
     expect(mismatch.title).toBe(
-      'The prompter display you chose is not connected, so this take will open on Studio Display, where the CandidCue window is.',
+      'The prompter display you chose is not connected, so this take will open on Studio Display, where the Speaking Glass window is.',
     );
     expect(mismatch.detail).toContain('“Elgato rig”');
     expect(mismatch.suggestion).toMatch(/reconnect/i);
@@ -359,7 +359,7 @@ describe('resolveTakeDestination — the pinned panel (#302)', () => {
     );
     expect(destination.confidence).toBe('unknown');
     expect(destination.mismatch!.title).toBe(
-      'The prompter display you chose is not connected, so this take will open on the display the CandidCue window is on.',
+      'The prompter display you chose is not connected, so this take will open on the display the Speaking Glass window is on.',
     );
   });
 

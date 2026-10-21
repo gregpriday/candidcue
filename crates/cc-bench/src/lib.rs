@@ -1,6 +1,6 @@
 //! cc-bench library: fixtures, gold timelines, synthetic events, TTS
 //! synthesis, capture, replay, metrics and suite orchestration for the
-//! CandidCue alignment engine.
+//! Speaking Glass alignment engine.
 
 pub mod app_tokens;
 pub mod capture_local;

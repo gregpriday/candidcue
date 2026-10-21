@@ -1,5 +1,5 @@
 /**
- * CandidCue Markdown compiler (spec §22, §23, §24, §25).
+ * Speaking Glass Markdown compiler (spec §22, §23, §24, §25).
  *
  * Pure and deterministic: (source, options) -> CompiledScript. Runs in the
  * compiler worker but has no worker dependencies. Never calls the network.
@@ -65,11 +65,15 @@ import { deriveParts } from './parts';
  *
  * 1.2.3 drops the retired coaching directives: no `coaching` field, and no
  * warnings about `cc:` comments or `coach:` front matter (#208).
+ *
+ * 1.2.4 follows the rename to Speaking Glass: the default wake phrase is the
+ * product's name, so a sentence that says "Speaking Glass" now draws the
+ * command-collision warning and one that says "CandidCue" no longer does.
  */
-export const COMPILER_VERSION = '1.2.3';
+export const COMPILER_VERSION = '1.2.4';
 export const SCHEMA_VERSION = 1;
 export { DEFAULT_WORDS_PER_MINUTE };
-const DEFAULT_WAKE_PHRASES = ['CandidCue', 'Candid Cue'];
+const DEFAULT_WAKE_PHRASES = ['Speaking Glass', 'SpeakingGlass'];
 
 /* ------------------------------------------------------------------ */
 /* Minimal structural mdast typing (kept local so the compiler does not */
@@ -394,7 +398,7 @@ function pushRenderText(
 /**
  * Characters that may sit between two source-adjacent inline runs without
  * introducing a spoken word boundary: emphasis, strong, strikethrough and
- * code-span delimiters. `**Candid**Cue` is said as one word "CandidCue", so
+ * code-span delimiters. `**Speaking**Glass` is said as one word "SpeakingGlass", so
  * the gap "**" must not become a space (§22.3 — visual formatting never
  * changes token identity).
  */

@@ -47,7 +47,7 @@
  *   node scripts/release-feed.mjs verify-feed --stage <dir>
  *   node scripts/release-feed.mjs newest-stable [tags…]
  *
- * `CANDIDCUE_PUBLIC_URL` overrides the public origin (default
+ * `SPEAKING_GLASS_PUBLIC_URL` overrides the public origin (default
  * https://updates.speakingglass.com). `stage` records it, and every later command
  * refuses a stage recorded for a different origin than the one it was given.
  */
@@ -72,7 +72,7 @@ import { isDeepStrictEqual } from 'node:util';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const DEFAULT_PUBLIC_URL = 'https://updates.speakingglass.com';
-export const PRODUCT = 'CandidCue';
+export const PRODUCT = 'SpeakingGlass';
 
 const SEMVER =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/;
@@ -149,7 +149,7 @@ export function monotonicVerdict(live, candidate) {
  * What each OS ships, and under which names.
  *
  * The names are decided HERE rather than taken from the bundler, which names
- * the macOS updater payload `CandidCue.app.tar.gz` with no version at all —
+ * the macOS updater payload `Speaking Glass.app.tar.gz` with no version at all —
  * fine in a build directory, a collision waiting to happen in a directory of
  * releases.
  */
@@ -427,7 +427,7 @@ export function checkOrigin(stageDir, publicUrl) {
   if (releasesUrl(staged) !== releasesUrl(publicUrl)) {
     throw new Error(
       `the release was staged for ${staged}, but this step was given ${publicUrl}. ` +
-        'Stage and publish with the same CANDIDCUE_PUBLIC_URL.',
+        'Stage and publish with the same SPEAKING_GLASS_PUBLIC_URL.',
     );
   }
 }
@@ -637,7 +637,7 @@ function setOutput(name, value) {
 
 async function main(argv) {
   const [command, ...args] = argv;
-  const publicUrl = process.env.CANDIDCUE_PUBLIC_URL || DEFAULT_PUBLIC_URL;
+  const publicUrl = process.env.SPEAKING_GLASS_PUBLIC_URL || DEFAULT_PUBLIC_URL;
   switch (command) {
     case 'channel': {
       const channel = channelFor(args[0] ?? JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version);

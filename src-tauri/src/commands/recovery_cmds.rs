@@ -32,7 +32,7 @@ pub struct BootStatusReport {
     pub data_directory: String,
 }
 
-/// Did CandidCue actually start?
+/// Did Speaking Glass actually start?
 ///
 /// Deliberately infallible and dependency-free: this is the one question that
 /// must be answerable when everything else has failed.
@@ -177,8 +177,8 @@ pub async fn restore_database_backup(
      * fsynced, verified with the same integrity check the backup itself had to
      * pass, and only then does the rename publish it.
      */
-    let live = paths.root().join("candidcue.sqlite3");
-    let staging = paths.root().join("candidcue.sqlite3.restoring");
+    let live = paths.root().join("speaking-glass.sqlite3");
+    let staging = paths.root().join("speaking-glass.sqlite3.restoring");
     let _ = std::fs::remove_file(&staging);
     std::fs::copy(&source, &staging)?;
     crate::util::sync_file(&staging)?;
@@ -253,7 +253,7 @@ pub async fn rescue_scripts<R: tauri::Runtime>(
     }
 
     let target = dest_root.join(format!(
-        "CandidCue-scripts-{}",
+        "SpeakingGlass-scripts-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     ));
     let rescued = backup::rescue_scripts_to(&paths, &target).await?;
@@ -319,14 +319,14 @@ pub async fn write_unsaved_recovery(
 
     std::fs::write(
         dir.join("README.txt"),
-        "Text CandidCue could not save before it closed.\n\
+        "Text Speaking Glass could not save before it closed.\n\
          \n\
          Each file here is the editor's copy of a script at the moment the app\n\
          was closed, written because saving it had failed — usually because the\n\
-         file had also changed outside CandidCue, or the disk was full or\n\
+         file had also changed outside Speaking Glass, or the disk was full or\n\
          read-only.\n\
          \n\
-         CandidCue does not read these back automatically: doing so would mean\n\
+         Speaking Glass does not read these back automatically: doing so would mean\n\
          choosing between this text and what is on disk, and that choice is\n\
          yours. Compare them and copy across whatever you want to keep.\n\
          \n\

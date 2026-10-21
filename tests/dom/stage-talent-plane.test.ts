@@ -449,7 +449,7 @@ describe('Clean Take against Diagnostic Take', () => {
 
   it('carries only the tail of a long utterance, not everything since the last final', async () => {
     /*
-     * The bar answers "is CandidCue hearing me?", and the words that answer it
+     * The bar answers "is Speaking Glass hearing me?", and the words that answer it
      * are the ones that just arrived. It used to hold the whole utterance and
      * rely on `overflow: hidden`, which hides the excess on the glass while the
      * element still LAYS OUT at the full width of it — a strip of moving text

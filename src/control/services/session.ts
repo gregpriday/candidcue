@@ -271,7 +271,7 @@ export function createTrackingDriver(options: TrackingDriverOptions): TrackingDr
 
 const FALLBACK_LINES = [
   'Speak naturally and the stage follows along.',
-  'CandidCue keeps your place while you talk.',
+  'Speaking Glass keeps your place while you talk.',
   'Pause any time — the script simply waits.',
 ];
 

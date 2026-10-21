@@ -1,5 +1,5 @@
 /**
- * The voice pill — "CandidCue is picking up what you say", in the corner of the
+ * The voice pill — "Speaking Glass is picking up what you say", in the corner of the
  * stage.
  *
  * ---------------------------------------------------------------------------

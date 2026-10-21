@@ -5,8 +5,8 @@
 
 use std::fs;
 
-use candidcue_lib::scripts::import_export::ExportOptions;
-use candidcue_lib::scripts::{
+use speaking_glass_lib::scripts::import_export::ExportOptions;
+use speaking_glass_lib::scripts::{
     reconcile, repo, CreateScriptInput, DataPaths, ScriptId, ScriptLocks, ScriptMetadataPatch,
     ScriptStatus,
 };
@@ -20,7 +20,7 @@ struct Harness {
 
 async fn harness() -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("database init + migrations");
     let paths = DataPaths::new(dir.path().to_path_buf());
@@ -507,7 +507,7 @@ async fn reconciliation_ignores_non_uuid_directories() {
 /// unique name with `create_new`.
 #[test]
 fn concurrent_atomic_writes_never_share_a_temp_file() {
-    use candidcue_lib::util::atomic_write;
+    use speaking_glass_lib::util::atomic_write;
 
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("script.md");
@@ -717,16 +717,16 @@ fn manifest_json(assets: &[&str]) -> Vec<u8> {
 }
 
 type ImportOutcome = Result<
-    candidcue_lib::scripts::import_export::ImportResult,
-    candidcue_lib::errors::AppError,
+    speaking_glass_lib::scripts::import_export::ImportResult,
+    speaking_glass_lib::errors::AppError,
 >;
 
 async fn import_bundle_bytes(h: &Harness, bytes: Vec<u8>) -> ImportOutcome {
     let dir = h.paths.root().join("incoming");
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{}.candidcue", uuid::Uuid::new_v4()));
+    let path = dir.join(format!("{}.speakingglass", uuid::Uuid::new_v4()));
     fs::write(&path, bytes).unwrap();
-    candidcue_lib::scripts::import_export::import_script(
+    speaking_glass_lib::scripts::import_export::import_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -734,7 +734,7 @@ async fn import_bundle_bytes(h: &Harness, bytes: Vec<u8>) -> ImportOutcome {
         // constructed here the same way the command constructs it, from a path
         // the Rust-side dialog produced. It has no `Deserialize` impl any more,
         // which is what stops a webview payload from ever becoming one (H5).
-        candidcue_lib::scripts::import_export::ImportOptions {
+        speaking_glass_lib::scripts::import_export::ImportOptions {
             path: path.to_string_lossy().to_string(),
             title: None,
         },
@@ -767,7 +767,7 @@ async fn a_valid_bundle_asset_is_referenced_and_survives_gc() {
             .unwrap();
     assert_eq!(references, 1, "the imported asset must be referenced");
 
-    candidcue_lib::assets::collect_garbage(&h.pool, &h.paths)
+    speaking_glass_lib::assets::collect_garbage(&h.pool, &h.paths)
         .await
         .expect("gc");
     assert!(
@@ -883,18 +883,18 @@ fn corrupt_database_file(db: &std::path::Path) {
 async fn a_corrupt_database_is_not_migrated_or_modified() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let pool = candidcue_lib::database::init(dir.path()).await.unwrap();
+        let pool = speaking_glass_lib::database::init(dir.path()).await.unwrap();
         sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&pool)
             .await
             .ok();
         pool.close().await;
     }
-    let db = dir.path().join("candidcue.sqlite3");
+    let db = dir.path().join("speaking-glass.sqlite3");
     corrupt_database_file(&db);
     let before = fs::read(&db).unwrap();
 
-    let err = candidcue_lib::database::init(dir.path())
+    let err = speaking_glass_lib::database::init(dir.path())
         .await
         .expect_err("a corrupt database must not open for writing");
     assert_eq!(err.code(), "DATABASE_CORRUPT");
@@ -921,7 +921,7 @@ async fn reconciliation_makes_no_changes_after_an_integrity_failure() {
     let orphan;
     {
         let h = Harness {
-            pool: candidcue_lib::database::init(dir.path()).await.unwrap(),
+            pool: speaking_glass_lib::database::init(dir.path()).await.unwrap(),
             paths: paths.clone(),
             locks: ScriptLocks::default(),
             _dir: tempfile::tempdir().unwrap(),
@@ -939,7 +939,7 @@ async fn reconciliation_makes_no_changes_after_an_integrity_failure() {
         h.pool.close().await;
     }
 
-    let db = dir.path().join("candidcue.sqlite3");
+    let db = dir.path().join("speaking-glass.sqlite3");
     corrupt_database_file(&db);
 
     // `database::init` now refuses outright, so open the damaged file
@@ -1031,14 +1031,14 @@ async fn a_failed_bundle_export_does_not_destroy_the_destination() {
     let id = new_script(&h, "Talk", "# Talk\n\nBody.\n").await;
     let external = tempfile::tempdir().unwrap();
 
-    let precious = external.path().join("precious.candidcue");
+    let precious = external.path().join("precious.speakingglass");
     fs::write(&precious, b"IRREPLACEABLE\n").unwrap();
 
     // A directory where the file should be makes the rename fail late, after
     // the zip has been fully written — exactly the "half-way through" case.
-    let blocked = external.path().join("blocked.candidcue");
+    let blocked = external.path().join("blocked.speakingglass");
     fs::create_dir_all(&blocked).unwrap();
-    let err = candidcue_lib::scripts::import_export::export_script(
+    let err = speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1050,7 +1050,7 @@ async fn a_failed_bundle_export_does_not_destroy_the_destination() {
     assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
 
     // And a successful export leaves no temp files lying around next to it.
-    candidcue_lib::scripts::import_export::export_script(
+    speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1083,7 +1083,7 @@ async fn an_export_refuses_to_write_through_a_symlink() {
     std::os::unix::fs::symlink(&secret, &link).unwrap();
 
     for format in ["markdown", "text", "bundle"] {
-        let err = candidcue_lib::scripts::import_export::export_script(
+        let err = speaking_glass_lib::scripts::import_export::export_script(
             &h.pool,
             &h.paths,
             &h.locks,
@@ -1097,15 +1097,15 @@ async fn an_export_refuses_to_write_through_a_symlink() {
     assert_eq!(fs::read(&secret).unwrap(), b"PRIVATE KEY\n");
 }
 
-/// CandidCue's own managed storage is not a valid export destination: writing
+/// Speaking Glass's own managed storage is not a valid export destination: writing
 /// there can overwrite a canonical script, a revision, or the database itself.
 #[tokio::test]
-async fn an_export_refuses_candidcues_own_storage() {
+async fn an_export_refuses_the_apps_own_storage() {
     let h = harness().await;
     let id = new_script(&h, "Talk", "# Talk\n\nBody.\n").await;
 
     let canonical = h.paths.canonical_file(&id);
-    let err = candidcue_lib::scripts::import_export::export_script(
+    let err = speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1136,11 +1136,11 @@ async fn an_import_refuses_symlinks_and_non_files() {
     let link = external.path().join("link.md");
     std::os::unix::fs::symlink(&real, &link).unwrap();
 
-    let err = candidcue_lib::scripts::import_export::import_script(
+    let err = speaking_glass_lib::scripts::import_export::import_script(
         &h.pool,
         &h.paths,
         &h.locks,
-        candidcue_lib::scripts::import_export::ImportOptions {
+        speaking_glass_lib::scripts::import_export::ImportOptions {
             path: link.to_string_lossy().to_string(),
             title: None,
         },
@@ -1151,11 +1151,11 @@ async fn an_import_refuses_symlinks_and_non_files() {
 
     let dir = external.path().join("adirectory.md");
     fs::create_dir_all(&dir).unwrap();
-    let err = candidcue_lib::scripts::import_export::import_script(
+    let err = speaking_glass_lib::scripts::import_export::import_script(
         &h.pool,
         &h.paths,
         &h.locks,
-        candidcue_lib::scripts::import_export::ImportOptions {
+        speaking_glass_lib::scripts::import_export::ImportOptions {
             path: dir.to_string_lossy().to_string(),
             title: None,
         },
@@ -1305,7 +1305,7 @@ fn solid_png(rgb: [u8; 3]) -> Vec<u8> {
     out.into_inner()
 }
 
-fn asset_name(asset: &candidcue_lib::assets::ImportedAsset) -> String {
+fn asset_name(asset: &speaking_glass_lib::assets::ImportedAsset) -> String {
     asset.markdown_path.trim_start_matches("assets/").to_string()
 }
 
@@ -1334,8 +1334,8 @@ async fn script_that_dropped_an_image(
     snapshot: bool,
 ) -> (
     ScriptId,
-    candidcue_lib::assets::ImportedAsset,
-    candidcue_lib::assets::ImportedAsset,
+    speaking_glass_lib::assets::ImportedAsset,
+    speaking_glass_lib::assets::ImportedAsset,
 ) {
     let created = repo::create_script(&h.pool, &h.paths, create_input("Shots", "Draft."))
         .await
@@ -1347,7 +1347,7 @@ async fn script_that_dropped_an_image(
         let path = picked.path().join(file);
         fs::write(&path, solid_png(rgb)).unwrap();
         imported.push(
-            candidcue_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
+            speaking_glass_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
                 .await
                 .expect("import"),
         );
@@ -1390,11 +1390,11 @@ async fn script_that_dropped_an_image(
 }
 
 async fn resolves(h: &Harness, id: &ScriptId, href: &str) -> bool {
-    let request = [candidcue_lib::assets::AssetRequest {
+    let request = [speaking_glass_lib::assets::AssetRequest {
         id: "img-x".into(),
         href: href.to_string(),
     }];
-    candidcue_lib::assets::resolve_asset_urls(&h.pool, &h.paths, id, &request)
+    speaking_glass_lib::assets::resolve_asset_urls(&h.pool, &h.paths, id, &request)
         .await
         .expect("resolve")
         .contains_key("img-x")
@@ -1407,7 +1407,7 @@ async fn resolves(h: &Harness, id: &ScriptId, href: &str) -> bool {
 /// of them reported that index malformed while another found it fine.
 async fn relaunch(h: &mut Harness) -> reconcile::RecoveryReport {
     h.pool.close().await;
-    h.pool = candidcue_lib::database::init(h._dir.path())
+    h.pool = speaking_glass_lib::database::init(h._dir.path())
         .await
         .expect("relaunch");
     reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
@@ -1450,7 +1450,7 @@ async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
     // Markdown, with its images.
     let out = tempfile::tempdir().unwrap();
     let md = out.path().join("talk.md");
-    let result = candidcue_lib::scripts::import_export::export_script(
+    let result = speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1467,7 +1467,7 @@ async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
 
     // Without them, the warning counts the images the text uses.
     let bare = tempfile::tempdir().unwrap();
-    let result = candidcue_lib::scripts::import_export::export_script(
+    let result = speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1483,8 +1483,8 @@ async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
     assert!(!bare.path().join("assets").exists());
 
     // A bundle: the manifest and the archive agree, on the kept image alone.
-    let bundle = out.path().join("talk.candidcue");
-    candidcue_lib::scripts::import_export::export_script(
+    let bundle = out.path().join("talk.speakingglass");
+    speaking_glass_lib::scripts::import_export::export_script(
         &h.pool,
         &h.paths,
         &h.locks,
@@ -1520,11 +1520,11 @@ async fn issue_253_an_export_carries_only_the_images_its_text_uses() {
     assert_eq!(manifest["assets"], serde_json::json!([asset_name(&kept)]));
 
     // And it imports, with the image it shows.
-    let reimported = candidcue_lib::scripts::import_export::import_script(
+    let reimported = speaking_glass_lib::scripts::import_export::import_script(
         &h.pool,
         &h.paths,
         &h.locks,
-        candidcue_lib::scripts::import_export::ImportOptions {
+        speaking_glass_lib::scripts::import_export::ImportOptions {
             path: bundle.to_string_lossy().to_string(),
             title: None,
         },
@@ -1706,7 +1706,7 @@ async fn issue_253_startup_keeps_an_image_any_recoverable_text_may_still_use() {
     // rebuild would index it.
     let unlisted = h.paths.revisions_dir(&id).join(format!(
         "20261017T090000000Z-{}.md",
-        &candidcue_lib::util::sha256_hex(both.as_bytes())[..12]
+        &speaking_glass_lib::util::sha256_hex(both.as_bytes())[..12]
     ));
     fs::write(&unlisted, &both).unwrap();
     let report = relaunch(&mut h).await;
@@ -1742,7 +1742,7 @@ async fn issue_253_startup_keeps_an_image_any_recoverable_text_may_still_use() {
     // A launch that repaired the library leaves collection to the next one.
     fs::write(
         h.paths.canonical_file(&id),
-        format!("{}\nEdited outside CandidCue.\n", with_kept(&kept.markdown_path)),
+        format!("{}\nEdited outside Speaking Glass.\n", with_kept(&kept.markdown_path)),
     )
     .unwrap();
     let report = relaunch(&mut h).await;
@@ -1805,13 +1805,13 @@ async fn issue_253_an_export_whose_text_shows_no_image_carries_and_mentions_none
     let picked = tempfile::tempdir().unwrap();
     let path = picked.path().join("unused.png");
     fs::write(&path, solid_png([1, 2, 3])).unwrap();
-    candidcue_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
+    speaking_glass_lib::assets::import_image(&h.pool, &h.paths, &id, path.to_str().unwrap())
         .await
         .expect("import");
 
     for (format, file) in [("markdown", "words.md"), ("text", "words.txt")] {
         let out = tempfile::tempdir().unwrap();
-        let result = candidcue_lib::scripts::import_export::export_script(
+        let result = speaking_glass_lib::scripts::import_export::export_script(
             &h.pool,
             &h.paths,
             &h.locks,

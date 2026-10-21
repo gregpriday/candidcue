@@ -256,7 +256,7 @@ const ipc = vi.hoisted(() => {
         vadSensitivity: 0.5,
       },
       commands: {
-        wakePhrase: 'CandidCue',
+        wakePhrase: 'Speaking Glass',
         wakeMode: 'strict',
       },
     } as Record<string, unknown>,
@@ -306,7 +306,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 const settingsService = await import('../../../src/control/services/settings');
 
 beforeEach(() => {

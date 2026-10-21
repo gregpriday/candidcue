@@ -1,22 +1,22 @@
-# CandidCue Privacy Policy
+# Speaking Glass Privacy Policy
 
 **Effective date:** 19 October 2026
 
-CandidCue is a free, MIT-licensed teleprompter for the Mac. This policy
-describes the CandidCue application as the project releases it; a fork or a
+Speaking Glass is a free, MIT-licensed teleprompter for the Mac. This policy
+describes the Speaking Glass application as the project releases it; a fork or a
 modified build may behave differently. The project's pages on GitHub — the
 repository, its releases and its issue tracker — are run by GitHub under the
 [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement).
 
 ## On your Mac
 
-Speech recognition and following run on your Mac. CandidCue does not upload
+Speech recognition and following run on your Mac. Speaking Glass does not upload
 your microphone audio or your scripts. No account, no API key, no analytics
 client, no crash reporter.
 
 ## Your microphone
 
-CandidCue opens your microphone briefly when you grant access, while a take or
+Speaking Glass opens your microphone briefly when you grant access, while a take or
 a microphone test is running, and while the input meter is on screen in Audio
 settings. Audio from a take or a test is held in memory and transcribed on your
 Mac by the speech model installed there; it is not written to disk. The input
@@ -33,7 +33,7 @@ it ran, how long it took, and where in the script it started and stopped),
 diagnostic logs, backups taken before a database upgrade, and recovery copies
 of anything a save could not write or a restore or repair replaced. None of it
 is sent to us, and we cannot retrieve it. Older revisions and trashed scripts
-are cleared out automatically, and logs rotate. Deleting something in CandidCue
+are cleared out automatically, and logs rotate. Deleting something in Speaking Glass
 does not remove the copies kept apart from it: those backups and recovery
 copies, files you exported, or what your own backup software has saved.
 
@@ -44,24 +44,24 @@ screen or from Speech settings. The download goes to the model's release
 hosting on GitHub (`github.com`) and to whatever host that redirects it to,
 such as a content delivery network, so the server that finally sends the file
 is not one we can promise in advance. Like any download, it shows that server
-your IP address, and its User-Agent names CandidCue and its version. It
+your IP address, and its User-Agent names Speaking Glass and its version. It
 carries none of your scripts, audio or transcripts, and the file is checked
 against a SHA-256 hash built into the app before it is installed. Those
 servers handle your IP address under their own privacy policies; we receive
 nothing.
 
-CandidCue also checks whether a newer version of itself is available: about
+Speaking Glass also checks whether a newer version of itself is available: about
 fifteen seconds after it opens and every six hours while it runs, unless you
 turn off **Check for updates automatically** in Settings › Data, privacy &
 updates, and whenever you choose **Check for Updates…** in the Help menu. A
 check requests one small file from `updates.speakingglass.com`. The request
-names the version of CandidCue you are running, its release channel, and your
+names the version of Speaking Glass you are running, its release channel, and your
 operating system and processor type, and, like any download, shows that server
 your IP address. It carries no account, no identifier and none of your
 scripts, audio or settings. The server is hosted by Cloudflare, which handles
 your IP address under its own privacy policy. If you choose to install an
 update, it is downloaded from the same server and installed only after it
-passes a signature check built into CandidCue; nothing is installed without
+passes a signature check built into Speaking Glass; nothing is installed without
 your say-so, and never during a take.
 
 An image in a script that points at a web address is not fetched. Links to web
@@ -73,17 +73,17 @@ in your browser.
 Logs are written on your Mac and are not uploaded. Support bundles are created
 only when you ask for one, and go only where you send them. A bundle is
 designed to leave out your scripts, your transcripts and your microphone
-audio, but CandidCue cannot recognise prose in a log line, so read a bundle
+audio, but Speaking Glass cannot recognise prose in a log line, so read a bundle
 before you send it to anyone.
 
 ## Your data
 
-We hold none of the data CandidCue creates, so there is nothing for us to
+We hold none of the data Speaking Glass creates, so there is nothing for us to
 access, correct or delete on your behalf. **Export all data**, in Settings ›
 Data, privacy & updates, copies your scripts with their revisions and images,
-your settings and the database to a folder you choose. To remove CandidCue's
+your settings and the database to a folder you choose. To remove Speaking Glass's
 data from your Mac, quit it and delete
-`~/Library/Application Support/com.candidcue.app`. A few interface preferences
+`~/Library/Application Support/com.speakingglass.app`. A few interface preferences
 are kept separately in macOS's web storage for the app, and anything you
 exported or saved elsewhere stays where you put it.
 If you send us something — an issue, an email or a support bundle — we have
@@ -91,7 +91,7 @@ what you sent and the account or address it came from.
 
 ## Changes and contact
 
-If a version of CandidCue changes what it does with your data or on the
+If a version of Speaking Glass changes what it does with your data or on the
 network, this policy will be revised before that version is released.
 
 Questions can go to the [issue tracker](https://github.com/gregpriday/candidcue/issues),

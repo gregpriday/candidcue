@@ -25,7 +25,7 @@ a script rolling at 130 words a minute while you read along is a different
 exercise, and one the app already offers inside any take with the space bar.
 
 So a practice reuses the reader-mode machinery whole. Reader mode is built to
-phase 4 of `CandidCue_Reader_Mode_Specification.md`: the window keeps its
+phase 4 of `SpeakingGlass_Reader_Mode_Specification.md`: the window keeps its
 chrome, latches a resting frame, lowers its minimum size, resolves optics for a
 desk, hardens resize, and pops out to the prompter on ⌃⌘F. Every one of those
 is what a rehearsal wants, and every one was hard to get right.

@@ -342,7 +342,7 @@ function scriptedTranscriptionTest(
   setState: (state: RealtimeState) => void,
 ): Unsubscribe {
   setState('listening');
-  const phrase = 'CandidCue is following my voice.';
+  const phrase = 'Speaking Glass is following my voice.';
   const words = phrase.split(' ');
   let index = 0;
   const timer = setInterval(() => {

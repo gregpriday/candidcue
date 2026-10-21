@@ -71,7 +71,7 @@ describe('the sidebar source list', () => {
     const container = await mount();
     const text = container.textContent ?? '';
     expect(text).not.toContain('Keyboard shortcuts');
-    expect(text).not.toMatch(/CandidCue \d/);
+    expect(text).not.toMatch(/Speaking Glass \d/);
   });
 
   it('is a single tab stop, anchored on the current route', async () => {

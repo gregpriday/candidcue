@@ -33,5 +33,5 @@ test('[mock-backed] stage window renders its waiting state before any session', 
   await page.goto('/stage.html');
   const root = page.locator('.stage-root');
   await expect(root).toHaveAttribute('data-phase', 'handshake');
-  await expect(root.locator('.waiting')).toHaveText('CandidCue');
+  await expect(root.locator('.waiting')).toHaveText('Speaking Glass');
 });

@@ -4,7 +4,7 @@
  * Opt-in: it skips unless DESIGN_CAPTURE_DIR names a directory to write into,
  * so the normal suite never runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-writing-surface.spec.ts
  *
@@ -142,7 +142,7 @@ async function boot(page: Page, opts: Boot = {}): Promise<void> {
   });
   if (opts.workspace) {
     await page.addInitScript((ws) => {
-      localStorage.setItem('candidcue.workspace.v1', JSON.stringify(ws));
+      localStorage.setItem('speaking-glass.workspace.v1', JSON.stringify(ws));
     }, opts.workspace);
   }
   await page.setViewportSize(opts.viewport ?? WINDOW);

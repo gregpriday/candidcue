@@ -1,4 +1,4 @@
-name: Receive a staged CandidCue release
+name: Receive a staged Speaking Glass release
 description: >
   Download one operating system's release artifact and check that it is laid
   out and intact the way publishing reads it: stage/release.json at the root,

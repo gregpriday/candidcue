@@ -105,7 +105,7 @@ describe('recognising a Sidecar panel', () => {
     ).toBe(false);
   });
 
-  it('says no to the panels CandidCue is actually built around', () => {
+  it('says no to the panels Speaking Glass is actually built around', () => {
     expect(
       isLikelySidecarDisplay({
         name: 'Elgato Prompter',
@@ -164,7 +164,7 @@ describe('the checklist', () => {
   it('claims verification for exactly the one thing it can see', () => {
     /*
      * The honesty flag is the load-bearing field. An item marked verifiable is
-     * rendered as a statement CandidCue is making; everything else is rendered
+     * rendered as a statement Speaking Glass is making; everything else is rendered
      * as a reminder the presenter ticks. Marking a second one true would be the
      * app asserting a fact about a rig it cannot see.
      */

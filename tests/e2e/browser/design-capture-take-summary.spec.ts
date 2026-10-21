@@ -3,7 +3,7 @@
  * can take, for design review. Opt-in: it skips unless DESIGN_CAPTURE_DIR
  * names a directory to write into, so the normal suite never runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-take-summary.spec.ts
  *
@@ -30,7 +30,7 @@ const SCRIPT = {
     'and why it matters for the next one.\n\n' +
     '## The pricing story\n\nWe moved two plans into one and nobody missed the second.\n\n' +
     '## Start a sentence over\n\nIf you lose your place, start the sentence again. ' +
-    'CandidCue holds where it is until it hears you.\n\n' +
+    'Speaking Glass holds where it is until it hears you.\n\n' +
     '## What we learned from the beta\n\nPeople read faster than they think they do.\n',
 };
 

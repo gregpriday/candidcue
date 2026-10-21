@@ -24,7 +24,7 @@
  * WHY NOT `data-platform`
  * ---------------------------------------------------------------------------
  * A Mac always has vibrancy, but a Windows machine may or may not have Mica,
- * and the escape hatch (`CANDIDCUE_WINDOW_MATERIAL=none`) turns either off.
+ * and the escape hatch (`SPEAKING_GLASS_WINDOW_MATERIAL=none`) turns either off.
  * The platform says what the page is running on; this says what Rust actually
  * put under it. Styling the rail from the platform would draw a clear column
  * over a Windows 10 window that has nothing behind it.
@@ -35,9 +35,9 @@ export type WindowMaterial = 'vibrancy' | 'mica';
 declare global {
   interface Window {
     /** Set by Rust's initialization script; absent in a plain browser. */
-    __CANDIDCUE_WINDOW_MATERIAL__?: unknown;
+    __SPEAKING_GLASS_WINDOW_MATERIAL__?: unknown;
     /** `'overlay'` on a Mac, where the page runs under the traffic lights. */
-    __CANDIDCUE_TITLEBAR__?: unknown;
+    __SPEAKING_GLASS_TITLEBAR__?: unknown;
   }
 }
 
@@ -51,9 +51,9 @@ export type WindowTitlebar = 'overlay';
  * this page has no rules for, and the safe reading of that is the opaque desk.
  */
 export function windowMaterial(
-  source: { __CANDIDCUE_WINDOW_MATERIAL__?: unknown } = typeof window === 'undefined' ? {} : window,
+  source: { __SPEAKING_GLASS_WINDOW_MATERIAL__?: unknown } = typeof window === 'undefined' ? {} : window,
 ): WindowMaterial | null {
-  const value = source.__CANDIDCUE_WINDOW_MATERIAL__;
+  const value = source.__SPEAKING_GLASS_WINDOW_MATERIAL__;
   return value === 'vibrancy' || value === 'mica' ? value : null;
 }
 
@@ -64,9 +64,9 @@ export function windowMaterial(
  * sidebar is drawn, at the leading end of the toolbar band when it is not.
  */
 export function windowTitlebar(
-  source: { __CANDIDCUE_TITLEBAR__?: unknown } = typeof window === 'undefined' ? {} : window,
+  source: { __SPEAKING_GLASS_TITLEBAR__?: unknown } = typeof window === 'undefined' ? {} : window,
 ): WindowTitlebar | null {
-  return source.__CANDIDCUE_TITLEBAR__ === 'overlay' ? 'overlay' : null;
+  return source.__SPEAKING_GLASS_TITLEBAR__ === 'overlay' ? 'overlay' : null;
 }
 
 /**

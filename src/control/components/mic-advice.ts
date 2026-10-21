@@ -117,7 +117,7 @@ export const MIC_STATUS_LABEL: Record<MicCondition, string> = {
 export const MIC_ADVICE: Record<MicCondition, string> = {
   idle: 'Say a few words to check the level.',
   clipping: 'The signal is clipping. Reduce the microphone gain for more reliable transcription.',
-  no_signal: 'CandidCue cannot hear this microphone. Check the selected device and input level.',
+  no_signal: 'Speaking Glass cannot hear this microphone. Check the selected device and input level.',
   too_low: 'The signal is very quiet. Move closer or increase the microphone level.',
   quiet: 'Ready when you are — the level moves as you speak.',
   speaking: 'This microphone is working.',

@@ -442,7 +442,7 @@ fn main() -> anyhow::Result<()> {
              *
              * Every Tier-B performance rendered locally by macOS `say` — free,
              * deterministic and kept — into the shared rendered directory
-             * (point `CANDIDCUE_TTS_CACHE_DIR` somewhere of its own so these
+             * (point `SPEAKING_GLASS_TTS_CACHE_DIR` somewhere of its own so these
              * never mix with the hosted renders). `capture-local` then streams
              * them through the shipping recogniser, which records every live
              * field the frozen corpora predate. See `tts::say_clip`.

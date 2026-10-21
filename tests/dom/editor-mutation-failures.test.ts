@@ -300,7 +300,7 @@ describe('a trash that failed leaves the author in the script', () => {
  * Issue #255. Once autosave had moved the revision on, the trash named the one
  * the Library loaded, and Rust refused it as an external change: the author was
  * left in the script they had just deleted, reading about an edit made outside
- * CandidCue that never happened. The fake refuses a stale revision, so these
+ * Speaking Glass that never happened. The fake refuses a stale revision, so these
  * fail exactly the way the app did.
  */
 describe('Move to Trash works on a script that has been edited', () => {

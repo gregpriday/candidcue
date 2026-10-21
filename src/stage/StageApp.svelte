@@ -990,7 +990,7 @@
    * moving: the microphone was never captured, the recogniser heard nothing,
    * or the aligner failed to match good text. This bar tells them apart at a
    * glance. One of them turned out to be another application holding the
-   * microphone, which CandidCue cannot prevent and could not report.
+   * microphone, which Speaking Glass cannot prevent and could not report.
    */
   let transcriptTap = $state('');
   /**
@@ -2569,7 +2569,7 @@
           class:blanked={scriptHidden}
           aria-hidden="true"
         >
-          CandidCue
+          Speaking Glass
         </div>
       {/if}
 

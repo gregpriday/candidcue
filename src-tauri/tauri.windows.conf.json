@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "control",
-        "title": "CandidCue",
+        "title": "Speaking Glass",
         "url": "control.html",
         "width": 1240,
         "height": 820,

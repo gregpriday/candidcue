@@ -22,6 +22,7 @@ import {
 } from '../lib/format';
 import type { AppSettings, ClearResult } from './settings-types';
 import { defaultAppSettings } from './settings-types';
+import { adoptLegacyValue } from '../lib/legacy-storage';
 import type {
   DisplayDescriptor,
   IdentificationSession,
@@ -33,7 +34,7 @@ import type { SaveResult, ScriptListFilter, ScriptPage, ScriptSort } from './scr
 // this module through a dynamic import, and types are erased.
 import type { SpeechLanguageOptions, SpeechModelStatus } from './speech-models';
 
-const STORAGE_KEY = 'candidcue.mock.scripts.v1';
+const STORAGE_KEY = 'speaking-glass.mock.scripts.v1';
 
 interface MockScriptRecord {
   doc: ScriptDocument;
@@ -73,6 +74,7 @@ class MockState {
     this.loaded = true;
     try {
       if (typeof localStorage === 'undefined') return;
+      adoptLegacyValue(localStorage, STORAGE_KEY);
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as MockScriptRecord[];

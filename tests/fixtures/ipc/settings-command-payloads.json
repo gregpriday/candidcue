@@ -22,10 +22,10 @@
     "databaseIntegrityOk": true,
     "scriptCount": 12,
     "sessionCount": 0,
-    "dataDir": "/Users/example/Library/Application Support/com.candidcue.app"
+    "dataDir": "/Users/example/Library/Application Support/com.speakingglass.app"
   },
   "expectedSupportBundleResult": {
-    "path": "/Users/example/Desktop/CandidCue-support-20260724-091500"
+    "path": "/Users/example/Desktop/SpeakingGlass-support-20260724-091500"
   },
   "_session_count_comment": [
     "sessionCount is deliberately 0 in this fixture. Nothing wrote the sessions",

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 /**
- * CandidCue is MIT, copyright Greg Priday, and that is stated in more places
+ * Speaking Glass is MIT, copyright Greg Priday, and that is stated in more places
  * than one: the root `LICENSE`, both package managers' manifests, and the
  * copyright string the bundler writes into the app's Info.plist. They used to
  * disagree — a closed-source `LICENSE` with its holder never filled in, no

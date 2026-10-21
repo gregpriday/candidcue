@@ -196,7 +196,7 @@ const mockVoiceFacade: VoiceFacade = {
     setMockRealtimeState('minting_credential');
     await wait(350);
     setMockRealtimeState('listening');
-    const phrase = 'CandidCue is following my voice.';
+    const phrase = 'Speaking Glass is following my voice.';
     const words = phrase.split(' ');
     let index = 0;
     const timer = setInterval(() => {

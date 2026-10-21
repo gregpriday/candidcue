@@ -86,7 +86,7 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
                 loaded: false,
                 model: String::new(),
                 detail: Some(
-                    "CandidCue could not read which speech language is selected.".to_string(),
+                    "Speaking Glass could not read which speech language is selected.".to_string(),
                 ),
             });
         }
@@ -402,7 +402,7 @@ pub struct SelectSpeechLanguageInput {
     pub language_tag: String,
 }
 
-/// Make a language the one CandidCue listens in.
+/// Make a language the one Speaking Glass listens in.
 ///
 /// Writes BOTH halves of the choice in ONE patch, and that is the whole reason
 /// this command exists rather than the screen issuing two settings writes. The
@@ -442,7 +442,7 @@ pub async fn select_speech_language<R: tauri::Runtime>(
         return Err(AppError::structured(
             "STT_LANGUAGE_UNAVAILABLE",
             ErrorCategory::Validation,
-            "CandidCue cannot follow that language yet.",
+            "Speaking Glass cannot follow that language yet.",
             false,
         )
         .with_log(format!("no offer for language tag {:?}", input.language_tag)));

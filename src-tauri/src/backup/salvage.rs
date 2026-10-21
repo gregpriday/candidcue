@@ -162,7 +162,7 @@ fn remove_abandoned_scratch(scratch_parent: &Path) {
 /// process that died is the one thing here worth not trusting.
 fn copy_database_set(database: &Path, scratch: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(scratch)?;
-    let copy = scratch.join("candidcue.sqlite3");
+    let copy = scratch.join("speaking-glass.sqlite3");
     std::fs::copy(database, &copy)?;
     let mut wal = database.as_os_str().to_owned();
     wal.push("-wal");

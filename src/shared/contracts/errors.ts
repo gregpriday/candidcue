@@ -97,7 +97,7 @@ export const APP_ERROR_CODES = [
   'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
   /*
-   * Window › CandidCue / Stage could not bring a window forward (§13.4).
+   * Window › Speaking Glass / Stage could not bring a window forward (§13.4).
    *
    * Raised rather than swallowed because the window IS there — the menu item is
    * only enabled when it is — so a focus that fails is a real fault the window
@@ -122,7 +122,7 @@ export const APP_ERROR_CODES = [
    *
    * Distinct from `STAGE_OPEN_FAILED` because they are different failures with
    * different remedies, and sharing a code meant sharing copy: a take that
-   * could not go borderless told the operator CandidCue "could not open the
+   * could not go borderless told the operator Speaking Glass "could not open the
    * stage window on that display" and to "choose another display" — naming a
    * window this path never opens and a picker it never consults.
    */

@@ -121,7 +121,7 @@ export interface FollowStatusInput {
    * DELIBERATELY NOT the store's broad `followingPaused`. That flag is ALSO
    * raised automatically when a device is lost or the transcript stops being
    * trustworthy, so reading it as a decision made the app answer a dead
-   * microphone with "Text held — CandidCue is still listening": a sentence that
+   * microphone with "Text held — Speaking Glass is still listening": a sentence that
    * is false in both halves, at the moment being wrong costs most. The session
    * store already draws this distinction as `followPausedByUser`, and says why
    * at its declaration.
@@ -187,7 +187,7 @@ export interface FollowStatus {
  * SIGNAL AND MATCHING ARE DIFFERENT FAULTS (CCUX-018)
  * ---------------------------------------------------------------------------
  * "Holding your place" was the answer to two completely different questions,
- * and they have opposite remedies. If CandidCue cannot HEAR you, the fix is the
+ * and they have opposite remedies. If Speaking Glass cannot HEAR you, the fix is the
  * microphone and no amount of re-reading will help. If it can hear you
  * perfectly and the words are not in the script — an ad-lib, an aside, a
  * paragraph skipped on purpose — then nothing is broken at all and the fix is
@@ -292,7 +292,7 @@ export function followStatus(input: FollowStatusInput, platform?: Platform): Fol
   if (input.heldByUser) {
     return {
       line: 'Text held',
-      detail: 'The text stays where it is. The take is still running and CandidCue is still listening.',
+      detail: 'The text stays where it is. The take is still running and Speaking Glass is still listening.',
       tone: 'neutral',
     };
   }
@@ -324,7 +324,7 @@ export function followStatus(input: FollowStatusInput, platform?: Platform): Fol
   if (!input.receivingFrames) {
     return {
       line: 'Heard you — finding your place',
-      detail: 'CandidCue is matching what you said against the script.',
+      detail: 'Speaking Glass is matching what you said against the script.',
       tone: 'accent',
     };
   }
@@ -333,7 +333,7 @@ export function followStatus(input: FollowStatusInput, platform?: Platform): Fol
   if (input.decision === 'holdOffScript') {
     return {
       line: 'Holding your place',
-      detail: 'CandidCue can hear you, but these words are not in the script. The text is holding until you come back to it.',
+      detail: 'Speaking Glass can hear you, but these words are not in the script. The text is holding until you come back to it.',
       tone: 'neutral',
     };
   }
@@ -437,7 +437,7 @@ export const FOLLOW_NOTICE_COPY: Record<
   low_transcript_confidence: {
     title: 'Following cautiously',
     detail:
-      'The transcript is coming through weakly, so CandidCue is leaning on word order and rare phrases, reducing lead, and holding back tips.',
+      'The transcript is coming through weakly, so Speaking Glass is leaning on word order and rare phrases, reducing lead, and holding back tips.',
     tone: 'info',
   },
   frame_performance: {

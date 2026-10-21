@@ -40,7 +40,7 @@ const SURFACES = [
   'U.S.A',
   '3.14',
   '42',
-  'CandidCue',
+  'SpeakingGlass',
   'twenty-first',
   '£20',
   '€5',
@@ -55,7 +55,7 @@ describe('the spoken-token contract with the alignment engine', () => {
     // fixture spells them without one.
     const source =
       "Hello world R & D AT&T $12 50% well-known don't e.g. U.S.A. 3.14 42 " +
-      'CandidCue twenty-first £20 €5 co-founder API';
+      'SpeakingGlass twenty-first £20 €5 co-founder API';
     const compiled = compile(source, { scriptId: 'contract' });
     expect(compiled.spokenTokens.map((t) => t.surface)).toEqual(SURFACES);
   });
@@ -63,7 +63,7 @@ describe('the spoken-token contract with the alignment engine', () => {
   it('hands every one of them to the engine, in order and unsplit', () => {
     const source =
       "Hello world R & D AT&T $12 50% well-known don't e.g. U.S.A. 3.14 42 " +
-      'CandidCue twenty-first £20 €5 co-founder API';
+      'SpeakingGlass twenty-first £20 €5 co-founder API';
     const compiled = compile(source, { scriptId: 'contract' });
     const tokens = alignTokensFor(compiled);
 

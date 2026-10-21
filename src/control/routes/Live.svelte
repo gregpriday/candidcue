@@ -1448,7 +1448,7 @@ import { onShortcut } from '../lib/shortcuts';
     if (micRecoveryOffered) {
       return $session.inputDeviceLost
         ? 'Microphone disconnected. Open Take controls to choose another input.'
-        : 'CandidCue is using a fallback input. Open Take controls to choose another.';
+        : 'Speaking Glass is using a fallback input. Open Take controls to choose another.';
     }
     if (voiceModelRefused) return 'Voice unavailable for this take. Take controls has the details.';
     const actionable = $smoothFollow.notices.find((notice) => notice.action);
@@ -1861,7 +1861,7 @@ import { onShortcut } from '../lib/shortcuts';
     <div class="mic-recovery" class:stacked>
       {#if stacked && !$session.inputDeviceLost}
         <p class="lf-note">
-          CandidCue is using a fallback input. Choose the microphone you meant to use.
+          Speaking Glass is using a fallback input. Choose the microphone you meant to use.
         </p>
       {/if}
       {#if stacked && micListing === 'failed'}
@@ -1954,7 +1954,7 @@ import { onShortcut } from '../lib/shortcuts';
     THE TAKE MOVED PANELS AFTER IT OPENED (CCUX-010).
 
     Three sentences in the order the guide asks a fault to answer them: what
-    happened, what CandidCue did to keep the take safe, and what the user can do
+    happened, what Speaking Glass did to keep the take safe, and what the user can do
     now. It is `status` rather than `alert` and carries no danger tone, because
     nothing has failed — the text is perfectly readable, it is simply sized for
     the panel this take was measured against. Alarming a presenter mid-take over

@@ -213,7 +213,7 @@ mod platform {
     impl Assertion {
         pub fn create() -> Option<Self> {
             let kind = CfString::new("NoDisplaySleepAssertion")?;
-            let name = CfString::new("CandidCue teleprompter take")?;
+            let name = CfString::new("Speaking Glass teleprompter take")?;
             let mut id: IOPMAssertionID = 0;
             // SAFETY: both CFStrings are live for the duration of the call and
             // `id` is a valid out-pointer.
@@ -268,7 +268,7 @@ mod platform {
         pub fn create() -> Option<Self> {
             let (tx, rx) = sync_channel::<()>(1);
             std::thread::Builder::new()
-                .name("candidcue-keep-awake".into())
+                .name("speaking-glass-keep-awake".into())
                 .spawn(move || {
                     // SAFETY: plain Win32 call with no pointer arguments.
                     let previous = unsafe {
@@ -318,7 +318,7 @@ mod platform {
     use zbus::blocking::Connection;
     use zbus::zvariant::{OwnedObjectPath, Value};
 
-    const APP: &str = "CandidCue";
+    const APP: &str = "Speaking Glass";
     const REASON: &str = "A teleprompter take is on screen";
 
     /// What has to be undone when the claim is withdrawn.
@@ -397,7 +397,7 @@ mod platform {
         pub fn create() -> Option<Self> {
             let (tx, rx) = sync_channel::<()>(1);
             std::thread::Builder::new()
-                .name("candidcue-keep-awake".into())
+                .name("speaking-glass-keep-awake".into())
                 .spawn(move || {
                     let connection = match Connection::session() {
                         Ok(connection) => connection,

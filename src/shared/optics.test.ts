@@ -37,7 +37,7 @@ import {
   type FontMetrics,
 } from './optics';
 
-/** The two panels CandidCue is actually built around. */
+/** The two panels Speaking Glass is actually built around. */
 const PROMPTER_9 = { diagonalMm: inchesToMm(9), widthPx: 1024, heightPx: 600 };
 const PROMPTER_XL = { diagonalMm: inchesToMm(15.6), widthPx: 1920, heightPx: 1080 };
 

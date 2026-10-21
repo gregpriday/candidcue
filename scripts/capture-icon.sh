@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Screenshots of the CandidCue app icon, for a design review. Opt-in: it does
+# Screenshots of the Speaking Glass app icon, for a design review. Opt-in: it does
 # nothing unless DESIGN_CAPTURE_DIR names a directory to write into, and it
 # never writes inside the repository. macOS only, like build-icons.sh, and it
 # needs swiftc (Xcode or the Command Line Tools) on top of what that needs.
@@ -43,7 +43,7 @@ mkdir -p "$out"
 rm -f "$out"/{master,dock-dark,dock-light,ladder,windows,sizes,brandmark}.png
 work="$(mktemp -d)"
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-app="$work/CandidCueIconProbe.app"
+app="$work/SpeakingGlassIconProbe.app"
 cleanup() {
   [ -d "$app" ] && "$lsregister" -u "$app" >/dev/null 2>&1 || true
   rm -rf "$work"
@@ -71,8 +71,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleExecutable</key><string>probe</string>
   <key>CFBundleIconFile</key><string>icon</string>
-  <key>CFBundleIdentifier</key><string>com.candidcue.iconprobe.$$.$RANDOM$RANDOM</string>
-  <key>CFBundleName</key><string>CandidCue</string>
+  <key>CFBundleIdentifier</key><string>com.speakingglass.iconprobe.$$.$RANDOM$RANDOM</string>
+  <key>CFBundleName</key><string>Speaking Glass</string>
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST
@@ -260,7 +260,7 @@ mark_svg() { # mark_svg <accent> <px> <out>
 wordmark() { # wordmark <bg> <fg> <accent> <out>
   mark_svg "$3" 44 "$work/mark.svg"
   rsvg-convert -w 44 -h 44 "$work/mark.svg" -o "$work/mark.png"
-  magick -background none -fill "$2" -font "$font" -pointsize 30 label:CandidCue "$work/word.png"
+  magick -background none -fill "$2" -font "$font" -pointsize 30 "label:Speaking Glass" "$work/word.png"
   magick "$work/mark.png" "$work/word.png" -background none -gravity center +smush 16 \
     -background "$1" -flatten -bordercolor "$1" -border 28x24 "$4"
 }

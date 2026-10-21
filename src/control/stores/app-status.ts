@@ -3,8 +3,9 @@
  */
 import { writable } from 'svelte/store';
 import * as settingsService from '../services/settings';
+import { adoptLegacyValue } from '../lib/legacy-storage';
 
-const WELCOMED_KEY = 'candidcue.welcomed.v1';
+const WELCOMED_KEY = 'speaking-glass.welcomed.v1';
 
 export interface AppStatus {
   version: string;
@@ -16,7 +17,9 @@ export const appStatus = { subscribe: state.subscribe };
 
 export function hasSeenWelcome(): boolean {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem(WELCOMED_KEY) === '1';
+    if (typeof localStorage === 'undefined') return false;
+    adoptLegacyValue(localStorage, WELCOMED_KEY);
+    return localStorage.getItem(WELCOMED_KEY) === '1';
   } catch {
     return true;
   }

@@ -85,7 +85,7 @@ describe('createAndOpenScript', () => {
     await expect(createAndOpenScript('new')).resolves.toBeUndefined();
 
     expect(dangerToast()).toBe(
-      'Could not create that script. CandidCue could not save the script. Check that the disk is not full or read-only, then try again.',
+      'Could not create that script. Speaking Glass could not save the script. Check that the disk is not full or read-only, then try again.',
     );
   });
 
@@ -148,7 +148,7 @@ describe('importMarkdown', () => {
     await importMarkdown();
 
     expect(dangerToast()).toBe(
-      'Could not import that file. That file is not in a format CandidCue can import.',
+      'Could not import that file. That file is not in a format Speaking Glass can import.',
     );
   });
 
@@ -189,7 +189,7 @@ describe('exportScriptToFile', () => {
     await exportScriptToFile('script-1', 'My script');
 
     expect(dangerToast()).toBe(
-      'Could not export that script. The file behind this script is missing. It may have been moved or deleted outside CandidCue.',
+      'Could not export that script. The file behind this script is missing. It may have been moved or deleted outside Speaking Glass.',
     );
   });
 

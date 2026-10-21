@@ -16,8 +16,8 @@
 //   node scripts/model-catalogue.mjs attribution [--model ID | --language LANG]
 //   node scripts/model-catalogue.mjs validate
 //
-// `CANDIDCUE_MODEL_CATALOGUE` overrides the catalogue path (used by tests).
-// `CANDIDCUE_MODEL_MIRROR` overrides `mirrorBaseUrl` (used to point a dev box
+// `SPEAKING_GLASS_MODEL_CATALOGUE` overrides the catalogue path (used by tests).
+// `SPEAKING_GLASS_MODEL_MIRROR` overrides `mirrorBaseUrl` (used to point a dev box
 // at a mirror before the catalogue itself is switched over).
 
 import { readFileSync } from 'node:fs';
@@ -225,7 +225,7 @@ function select(catalogue, { modelId, language }) {
  * name one set of bytes. That is the property the upstream release tag lacks.
  */
 function mirrorUrl(catalogue, model) {
-  const base = process.env.CANDIDCUE_MODEL_MIRROR || catalogue.mirrorBaseUrl;
+  const base = process.env.SPEAKING_GLASS_MODEL_MIRROR || catalogue.mirrorBaseUrl;
   if (!base) return '';
   requireHttps(base, 'mirror base');
   return `${base.replace(/\/+$/, '')}/sha256/${model.archive.sha256}/${model.archive.fileName}`;
@@ -274,7 +274,7 @@ function renderAttribution(model) {
     '',
     '# Bundled speech recognition model',
     '',
-    'CandidCue transcribes speech on-device using a model it does not own. This file',
+    'Speaking Glass transcribes speech on-device using a model it does not own. This file',
     'travels with the model because redistribution requires the attribution to travel',
     'with it, and the upstream archive ships no licence file of its own.',
     '',
@@ -299,8 +299,8 @@ function renderAttribution(model) {
     `- **Licence: ${a.license.name}** (\`${a.license.id}\`) — <${a.license.url}>`,
     '',
     a.modified
-      ? 'CandidCue redistributes these model weights **with modifications**.'
-      : 'CandidCue redistributes these model weights **unmodified**.',
+      ? 'Speaking Glass redistributes these model weights **with modifications**.'
+      : 'Speaking Glass redistributes these model weights **unmodified**.',
   );
   if (a.licenseNote) {
     lines.push('', a.licenseNote);
@@ -349,7 +349,7 @@ function parseArgs(argv) {
 }
 
 const [command, ...rest] = process.argv.slice(2);
-const catalogue = load(process.env.CANDIDCUE_MODEL_CATALOGUE || DEFAULT_CATALOGUE);
+const catalogue = load(process.env.SPEAKING_GLASS_MODEL_CATALOGUE || DEFAULT_CATALOGUE);
 
 switch (command) {
   case 'fields':

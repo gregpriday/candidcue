@@ -227,7 +227,7 @@ describe('what the screen offers', () => {
    * Only a real download is removable, and this is the rule both routes read.
    *
    * `bundled` lives inside the app bundle and is not ours to delete.
-   * `override` is `CANDIDCUE_MODELS_DIR`; Remove would delete an app-data copy
+   * `override` is `SPEAKING_GLASS_MODELS_DIR`; Remove would delete an app-data copy
    * the user cannot see while the override stayed installed — a button that
    * appears to do nothing. An earlier version tested `source !== 'bundled'`,
    * which offered Remove for an override.

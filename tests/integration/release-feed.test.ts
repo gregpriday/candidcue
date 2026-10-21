@@ -2,7 +2,7 @@
  * The update feed, broken in each way it exists to refuse.
  *
  * `scripts/release-feed.mjs` stands between a signed build and every installed
- * copy of CandidCue. Each failure it guards against is silent in production:
+ * copy of Speaking Glass. Each failure it guards against is silent in production:
  * a payload signed with the wrong key publishes cleanly and is then refused by
  * every client, a regressed feed hides every newer build, and a feed entry that
  * goes up before its payload is readable points clients at a 404. So each test
@@ -63,13 +63,13 @@ function macBundle(key: ReturnType<typeof minisignKey>, opts: { sig?: 'good' | '
   mkdirSync(join(bundle, 'macos'), { recursive: true });
   mkdirSync(join(bundle, 'dmg'), { recursive: true });
   const payload = Buffer.from('a signed, notarised app, tarred');
-  writeFileSync(join(bundle, 'macos', 'CandidCue.app.tar.gz'), payload);
-  writeFileSync(join(bundle, 'dmg', 'CandidCue_0.1.0_universal.dmg'), 'a disk image');
+  writeFileSync(join(bundle, 'macos', 'Speaking Glass.app.tar.gz'), payload);
+  writeFileSync(join(bundle, 'dmg', 'SpeakingGlass_0.1.0_universal.dmg'), 'a disk image');
   const sig = opts.sig ?? 'good';
-  if (sig === 'good') writeFileSync(join(bundle, 'macos', 'CandidCue.app.tar.gz.sig'), minisignSign(payload, key));
+  if (sig === 'good') writeFileSync(join(bundle, 'macos', 'Speaking Glass.app.tar.gz.sig'), minisignSign(payload, key));
   if (sig === 'other-key') {
     writeFileSync(
-      join(bundle, 'macos', 'CandidCue.app.tar.gz.sig'),
+      join(bundle, 'macos', 'Speaking Glass.app.tar.gz.sig'),
       minisignSign(payload, minisignKey(Buffer.from('fedcba9876543210', 'hex'))),
     );
   }
@@ -148,7 +148,7 @@ describe('staging lays out exactly what will be uploaded', () => {
       version: '0.1.0',
       notes: 'What changed.',
       pub_date: '2026-10-19T12:00:00Z',
-      url: `${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.app.tar.gz`,
+      url: `${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.app.tar.gz`,
     });
     expect(typeof arm.signature).toBe('string');
   });
@@ -156,10 +156,10 @@ describe('staging lays out exactly what will be uploaded', () => {
   it('versions the payload name the bundler leaves unversioned', () => {
     const { out } = stageMac();
     expect(readdirSync(join(out, 'files', '0.1.0')).sort()).toEqual([
-      'CandidCue_0.1.0_universal.app.tar.gz',
-      'CandidCue_0.1.0_universal.app.tar.gz.sig',
-      'CandidCue_0.1.0_universal.dmg',
       'SHA256SUMS-macos.txt',
+      'SpeakingGlass_0.1.0_universal.app.tar.gz',
+      'SpeakingGlass_0.1.0_universal.app.tar.gz.sig',
+      'SpeakingGlass_0.1.0_universal.dmg',
     ]);
   });
 
@@ -200,7 +200,7 @@ describe('staging lays out exactly what will be uploaded', () => {
   it('refuses a bundle directory holding two candidates rather than guessing', () => {
     const key = minisignKey();
     const bundle = macBundle(key);
-    writeFileSync(join(bundle, 'dmg', 'CandidCue_0.0.9_universal.dmg'), 'a leftover');
+    writeFileSync(join(bundle, 'dmg', 'SpeakingGlass_0.0.9_universal.dmg'), 'a leftover');
     expect(() =>
       feed.stage({ os: 'macos', bundle, out: join(scratch(), 's'), version: '0.1.0', publicUrl: PUBLIC, pubkey: key.pubkey }),
     ).toThrow(/exactly one/);
@@ -355,7 +355,7 @@ describe('a published file never changes', () => {
     const { out } = stageMac();
     const { fetchFn } = fakeFetch(
       published(out, {
-        [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.app.tar.gz`]: { status: 200, body: 'the first build' },
+        [`${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.app.tar.gz`]: { status: 200, body: 'the first build' },
       }),
     );
     await expect(feed.writeOnce(out, { fetchFn, log: () => {} })).rejects.toThrow(/already published with different bytes/);
@@ -371,7 +371,7 @@ describe('a published file never changes', () => {
 
   it('fails closed on anything but a 200 or a 404', async () => {
     const { out } = stageMac();
-    const { fetchFn } = fakeFetch({ [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.dmg`]: { status: 403 } });
+    const { fetchFn } = fakeFetch({ [`${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`]: { status: 403 } });
     await expect(feed.writeOnce(out, { fetchFn, log: () => {} })).rejects.toThrow(/HTTP 403/);
   });
 });
@@ -437,7 +437,7 @@ describe('nothing is announced until it is readable', () => {
   it('fails on a missing file', async () => {
     const { out } = stageMac();
     const routes = servedFiles(out);
-    delete routes[`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.dmg`];
+    delete routes[`${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`];
     const { fetchFn } = fakeFetch(routes);
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(/HTTP 404/);
   });
@@ -446,7 +446,7 @@ describe('nothing is announced until it is readable', () => {
     const { out } = stageMac();
     const { fetchFn } = fakeFetch(
       servedFiles(out, {
-        [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.app.tar.gz`]: { status: 200, body: 'an earlier build' },
+        [`${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.app.tar.gz`]: { status: 200, body: 'an earlier build' },
       }),
     );
     await expect(feed.verifyFiles(out, { fetchFn, ...quiet })).rejects.toThrow(/served sha256/);
@@ -455,10 +455,10 @@ describe('nothing is announced until it is readable', () => {
   it('retries a file that is not readable yet', async () => {
     const { out } = stageMac();
     let calls = 0;
-    const dmg = readFileSync(join(out, 'files', '0.1.0', 'CandidCue_0.1.0_universal.dmg'));
+    const dmg = readFileSync(join(out, 'files', '0.1.0', 'SpeakingGlass_0.1.0_universal.dmg'));
     const { fetchFn } = fakeFetch(
       servedFiles(out, {
-        [`${PUBLIC}/releases/0.1.0/CandidCue_0.1.0_universal.dmg`]: (() =>
+        [`${PUBLIC}/releases/0.1.0/SpeakingGlass_0.1.0_universal.dmg`]: (() =>
           ++calls === 1 ? { status: 404 } : { status: 200, body: dmg }) as unknown as Route,
       }),
     );

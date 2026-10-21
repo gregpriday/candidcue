@@ -243,7 +243,7 @@
       Another app saved <span class="script-name">“{title}”</span> with exactly the text you have
       open, so there’s nothing to choose between. Continue editing to resume saving.
     {:else if disk.status === 'failed'}
-      The file behind <span class="script-name">“{title}”</span> changed outside CandidCue while you
+      The file behind <span class="script-name">“{title}”</span> changed outside Speaking Glass while you
       were writing, so saving is paused. Your latest edits are still safe in this window.
     {:else}
       Another app changed <span class="script-name">“{title}”</span> while you were writing, so
@@ -265,7 +265,7 @@
       <div class="columns heads" aria-hidden="true">
         <div class="head">
           <p class="name">Version on disk</p>
-          <p class="where">Changed outside CandidCue</p>
+          <p class="where">Changed outside Speaking Glass</p>
         </div>
         <div class="head">
           <p class="name">Your edits</p>

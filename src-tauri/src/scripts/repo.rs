@@ -31,7 +31,7 @@ pub fn file_missing_error(script_id: &ScriptId) -> AppError {
     AppError::structured(
         "SCRIPT_FILE_MISSING",
         ErrorCategory::Storage,
-        "The script file is missing from CandidCue's data folder.",
+        "The script file is missing from Speaking Glass's data folder.",
         true,
     )
     .with_action(RecoveryAction::RevealFolder)
@@ -516,7 +516,7 @@ pub async fn save_script(
             return Err(AppError::structured(
                 "SCRIPT_CONFLICT",
                 ErrorCategory::Validation,
-                "This script's file changed outside CandidCue. Resolve the conflict before saving.",
+                "This script's file changed outside Speaking Glass. Resolve the conflict before saving.",
                 true,
             )
             .with_detail("scriptId", script_id.as_str())
@@ -570,7 +570,7 @@ pub async fn save_script(
 
     // 3–4: temp write + atomic rename.
     atomic_write(&canonical, source.as_bytes())
-        .map_err(|e| AppError::save_failed("CandidCue could not write the script file.")
+        .map_err(|e| AppError::save_failed("Speaking Glass could not write the script file.")
             .with_log(format!("canonical write failed: {e}")))?;
     let fingerprint = file_fingerprint(&canonical)?;
 
@@ -986,7 +986,7 @@ pub async fn permanently_delete_script(
             script_id.as_str()
         ));
         crate::util::rename(&dir, &target).map_err(|e| {
-            AppError::save_failed("CandidCue could not remove the script's folder.")
+            AppError::save_failed("Speaking Glass could not remove the script's folder.")
                 .with_log(format!("quarantine rename failed: {e}"))
         })?;
         Some(target)

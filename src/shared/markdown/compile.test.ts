@@ -222,11 +222,16 @@ describe('compile: §23 directives', () => {
   });
 
   it('warns about wake-phrase collisions outside literal blocks', () => {
-    const script = compile('Try saying CandidCue, go to the end, out loud.', OPTS);
+    const script = compile('Try saying Speaking Glass, go to the end, out loud.', OPTS);
     const collision = script.diagnostics.find((d) => d.code === 'command_collision');
     expect(collision).toBeDefined();
     expect(collision!.blocking).toBe(false);
     expect(collision!.suggestedAction).toBe('mark_literal_command');
+  });
+
+  it('no longer treats the former name, CandidCue, as the wake phrase', () => {
+    const script = compile('Try saying CandidCue, go to the end, out loud.', OPTS);
+    expect(script.diagnostics.filter((d) => d.code === 'command_collision')).toHaveLength(0);
   });
 
   it('a directive-only paragraph becomes a cue block', () => {

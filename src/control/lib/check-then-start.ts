@@ -42,7 +42,7 @@ export interface LaunchIntent {
   requested?: boolean;
   /**
    * The microphone was just refused to an explicit request from the sheet
-   * (#303). It outranks the OS's own answer: macOS can report CandidCue as
+   * (#303). It outranks the OS's own answer: macOS can report Speaking Glass as
    * allowed while the running webview is still refused until a relaunch, and
    * launching on the OS's word would meet that refusal over the prompter.
    */
@@ -332,7 +332,7 @@ export async function allowMicrophoneForTake(): Promise<void> {
      * Say what happened; the sheet stays, with Start anyway.
      */
     if (get(prompt) === held) {
-      showToast(`CandidCue could not open the microphone. ${describeError(err)}`, 'danger');
+      showToast(`Speaking Glass could not open the microphone. ${describeError(err)}`, 'danger');
     }
     return;
   }

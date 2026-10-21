@@ -38,7 +38,7 @@ import type { ToastTone } from './toasts';
 
 /** About fifteen seconds after launch: after the window and library settle. */
 export const FIRST_CHECK_DELAY_MS = 15_000;
-/** Then every six hours while CandidCue is running. */
+/** Then every six hours while Speaking Glass is running. */
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** What the notice shows. `hidden` is also what it shows during a take. */
@@ -197,7 +197,7 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
       if (current.kind === 'available' || current.kind === 'failed') set({ kind: 'hidden' });
       if (deps.takeActive()) return;
       deps.bringToFront();
-      deps.report(`CandidCue is up to date (${result.currentVersion}).`, 'success');
+      deps.report(`Speaking Glass is up to date (${result.currentVersion}).`, 'success');
     } catch (err) {
       if (deps.takeActive()) return;
       deps.bringToFront();
@@ -230,7 +230,7 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
         if (!fresh.available) {
           set({ kind: 'hidden' });
           if (!deps.takeActive()) {
-            deps.report(`CandidCue is up to date (${fresh.currentVersion}).`, 'success');
+            deps.report(`Speaking Glass is up to date (${fresh.currentVersion}).`, 'success');
           }
           return;
         }

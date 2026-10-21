@@ -3,7 +3,7 @@
  * changed on disk"). Opt-in: it writes screenshots for a design review and
  * asserts nothing about behaviour, so it never runs in the normal suite.
  *
- *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5319 \
+ *   DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5319 \
  *     ./node_modules/.bin/playwright test tests/e2e/browser/design-disk-conflict.spec.ts
  *
  * The conflict is driven the way production reaches it: the editor opens the
@@ -175,11 +175,11 @@ async function boot(page: Page, size: (typeof SIZES)[number], conflict: Conflict
   await page.locator('.cm-line', { hasText: TYPED_AFTER }).click();
   await page.keyboard.press('End');
   await page.keyboard.type(TYPED);
-  await expect(page.getByRole('button', { name: /Changed outside CandidCue/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Changed outside Speaking Glass/ })).toBeVisible();
 }
 
 async function openSheet(page: Page, via: 'pointer' | 'keyboard' = 'pointer'): Promise<void> {
-  const trigger = page.getByRole('button', { name: /Changed outside CandidCue/ });
+  const trigger = page.getByRole('button', { name: /Changed outside Speaking Glass/ });
   if (via === 'keyboard') {
     await trigger.focus();
     await page.keyboard.press('Enter');

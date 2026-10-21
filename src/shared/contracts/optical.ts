@@ -16,7 +16,7 @@
  * whenever the profile, the font metrics or the viewport change.
  *
  * Keeping them apart is what makes the system honest. A saved profile records
- * what somebody measured; a resolved block records what CandidCue concluded
+ * what somebody measured; a resolved block records what Speaking Glass concluded
  * from it, together with whether it had enough information to conclude anything
  * at all (`calibrated`, `metricsMeasured`, `fit`). Collapsing the two would
  * lose the distinction between "the presenter told us they stand 1.5 m away"
@@ -35,7 +35,7 @@
  * and could hold a copy, but no take reads its optics from there.)
  */
 
-/** Hardware CandidCue knows the physical dimensions of without being told. */
+/** Hardware Speaking Glass knows the physical dimensions of without being told. */
 export type OpticalHardwareKind =
   | 'elgato-prompter'
   | 'elgato-prompter-xl'
@@ -54,7 +54,7 @@ export type OpticalHardwareKind =
  * reads off the monitor (`DisplayDescriptor.physicalSizeMm`). Like `'model'`
  * and `'diagonal'` it describes bare glass, not an optical path, so it ranks
  * with them — below a ruler, above a guess — and is what lets a monitor
- * CandidCue has never heard of be sized without anybody measuring it.
+ * Speaking Glass has never heard of be sized without anybody measuring it.
  */
 export interface OpticalScale {
   mmPerCssPx: number;
@@ -158,7 +158,7 @@ export type ReadingContext = 'prompter' | 'reader';
  * ---------------------------------------------------------------------------
  * THE RULE: DISCOVER EVERYTHING, DECIDE NOTHING IRREVERSIBLY
  * ---------------------------------------------------------------------------
- * CandidCue should work out the right answer without being asked — panel model
+ * Speaking Glass should work out the right answer without being asked — panel model
  * from the display, physical scale from the model, type size from the distance,
  * measure from the panel, line pitch from the font it actually rendered. That
  * is the whole point of the optical layer, and a presenter who never opens this
@@ -391,7 +391,7 @@ export function defaultOpticalProfile(): OpticalProfile {
 }
 
 /**
- * Physical dimensions for the hardware CandidCue ships knowledge of.
+ * Physical dimensions for the hardware Speaking Glass ships knowledge of.
  *
  * Diagonals only — resolution comes from the display descriptor at runtime, so
  * a panel driven at a non-native resolution still resolves correctly. Elgato's

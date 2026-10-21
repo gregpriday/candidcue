@@ -1,5 +1,5 @@
 /**
- * "Did CandidCue do its job?" — answered in one sentence (CCUX-006).
+ * "Did Speaking Glass do its job?" — answered in one sentence (CCUX-006).
  *
  * The end-of-take dialog listed nineteen measurements and stated no conclusion.
  * Each row earns its place, several were added because a specific failure had
@@ -93,7 +93,7 @@ describe('resolveTakeOutcome', () => {
       const outcome = resolveTakeOutcome(
         take({ wordsHeard: 0, durationSeconds, microphoneRefused: true }),
       );
-      expect(outcome.headline).toBe('CandidCue could not use the microphone');
+      expect(outcome.headline).toBe('Speaking Glass could not use the microphone');
       expect(outcome.suggestion).toMatch(/System Settings/);
       expect(outcome.suggestion).not.toMatch(/test or change/i);
       expect(outcome.health).toBe('no_tracking');
@@ -104,14 +104,14 @@ describe('resolveTakeOutcome', () => {
     // Named, not read from the host: this suite runs as a Mac everywhere.
     const refused = take({ wordsHeard: 0, durationSeconds: 120, microphoneRefused: true });
     const windows = resolveTakeOutcome(refused, 'windows');
-    expect(windows.detail).toMatch(/^Windows did not allow CandidCue/);
+    expect(windows.detail).toMatch(/^Windows did not allow Speaking Glass/);
     expect(windows.suggestion).toContain('Windows Settings → Privacy & security → Microphone');
     const linux = resolveTakeOutcome(refused, 'linux');
-    expect(linux.detail).toMatch(/^This computer did not allow CandidCue/);
+    expect(linux.detail).toMatch(/^This computer did not allow Speaking Glass/);
     expect(linux.suggestion).toContain('your system settings');
     for (const outcome of [windows, linux]) {
       expect(`${outcome.detail} ${outcome.suggestion}`).not.toMatch(/\bMac\b|System Settings/);
-      expect(outcome.headline).toBe('CandidCue could not use the microphone');
+      expect(outcome.headline).toBe('Speaking Glass could not use the microphone');
     }
   });
 
@@ -119,7 +119,7 @@ describe('resolveTakeOutcome', () => {
     // A take that heard words, then had a resume refused, followed for part of
     // its length; the refusal must not hide that.
     const outcome = resolveTakeOutcome(take({ microphoneRefused: true }));
-    expect(outcome.headline).not.toBe('CandidCue could not use the microphone');
+    expect(outcome.headline).not.toBe('Speaking Glass could not use the microphone');
   });
 
   it('counts an unfinished utterance as having been heard', () => {
@@ -287,7 +287,7 @@ describe('resolveTakeOutcome', () => {
 
   it('never judges the delivery', () => {
     /*
-     * CandidCue can say whether it heard and whether it followed. It cannot
+     * Speaking Glass can say whether it heard and whether it followed. It cannot
      * tell whether a take was good, because nothing in it analyses delivery.
      * An outcome that praised a take would be inventing a measurement.
      */
@@ -372,7 +372,7 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
     );
     expect(outcome.health).toBe('steady');
     expect(outcome.tone).toBe('good');
-    expect(outcome.headline).toBe('CandidCue stayed with you');
+    expect(outcome.headline).toBe('Speaking Glass stayed with you');
     expect(outcome.detail).toContain('the time following was on');
     expect(outcome.detail).toContain('Not counted: 1:00 paused.');
     expect(outcome.suggestion).toBeNull();
@@ -544,7 +544,7 @@ describe('resolveTakeOutcome — time the presenter set following aside (#287)',
     const outcome = resolveTakeOutcome(
       take({ followingShare: null, followingTime: time({ onSeconds: 30, autoScrollSeconds: 60 }) }),
     );
-    expect(outcome.headline).toBe('CandidCue heard you, but did not track');
+    expect(outcome.headline).toBe('Speaking Glass heard you, but did not track');
     expect(outcome.detail).not.toMatch(/did not move on its own/);
   });
 

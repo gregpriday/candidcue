@@ -162,7 +162,7 @@ describe('Help › Check for Updates…', () => {
     const { deps, controller } = harness();
     await controller.checkNow();
     expect(deps.check).toHaveBeenCalledWith({ automatic: false });
-    expect(deps.report).toHaveBeenCalledWith('CandidCue is up to date (0.1.0).', 'success');
+    expect(deps.report).toHaveBeenCalledWith('Speaking Glass is up to date (0.1.0).', 'success');
     expect(deps.bringToFront).toHaveBeenCalled();
   });
 
@@ -318,7 +318,7 @@ describe('Install and Restart', () => {
     await h.controller.install();
     expect(install).toHaveBeenCalledTimes(1);
     expect(h.notice()).toEqual({ kind: 'hidden' });
-    expect(h.deps.report).toHaveBeenCalledWith('CandidCue is up to date (0.1.0).', 'success');
+    expect(h.deps.report).toHaveBeenCalledWith('Speaking Glass is up to date (0.1.0).', 'success');
   });
 
   it('sends a copy that cannot replace itself to the download page instead', async () => {

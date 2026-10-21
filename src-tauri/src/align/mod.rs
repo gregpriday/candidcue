@@ -1236,7 +1236,7 @@ mod canonicalization_contract_tests {
     /// emits them — including the standalone `&`, which it explicitly does.
     const APP_TOKEN_SURFACES: &[&str] = &[
         "Hello", "world", "R", "&", "D", "AT&T", "$12", "50%", "well-known",
-        "don't", "e.g", "U.S.A", "3.14", "42", "CandidCue", "twenty-first",
+        "don't", "e.g", "U.S.A", "3.14", "42", "SpeakingGlass", "twenty-first",
         "£20", "€5", "co-founder", "API",
     ];
 

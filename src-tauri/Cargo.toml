@@ -1,14 +1,16 @@
 [package]
-name = "candidcue"
+name = "speaking-glass"
 version = "0.1.0"
-description = "CandidCue — voice-following teleprompter"
+description = "Speaking Glass — voice-following teleprompter"
 authors = ["Greg Priday"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.85"
+# 1.89 for `std::fs::File::try_lock` (`legacy_data.rs`). `rust-toolchain.toml`
+# pins the toolchain every build actually uses.
+rust-version = "1.89"
 
 [lib]
-name = "candidcue_lib"
+name = "speaking_glass_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -45,6 +47,10 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
 ] }
 uuid = { version = "1", features = ["v4", "serde"] }
+# The platform data directory, resolved before the Tauri builder exists so the
+# CandidCue folder can be copied into place first (`legacy_data.rs`). The same
+# crate and version Tauri's own `app_data_dir` resolves it with.
+dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 sha2 = "0.10"

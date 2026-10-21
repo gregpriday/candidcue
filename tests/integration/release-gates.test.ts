@@ -59,7 +59,7 @@ afterAll(() => {
  * it needs, which also documents what the gate actually depends on.
  */
 function scratchRepo(paths: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), 'candidcue-gate-'));
+  const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-gate-'));
   workspaces.push(dir);
   for (const rel of paths) {
     const from = join(REPO_ROOT, rel);
@@ -607,13 +607,13 @@ const MODEL_SCRIPT = join(REPO_ROOT, 'scripts/verify-no-model-weights.mjs');
 
 /** A minimal but structurally valid macOS `.app`, plus whatever else is asked for. */
 function scratchApp(extra: Array<{ path: string; bytes?: number }> = []): string {
-  const dir = mkdtempSync(join(tmpdir(), 'candidcue-app-'));
+  const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-app-'));
   workspaces.push(dir);
-  const app = join(dir, 'CandidCue.app');
+  const app = join(dir, 'Speaking Glass.app');
   mkdirSync(join(app, 'Contents/MacOS'), { recursive: true });
   mkdirSync(join(app, 'Contents/Resources'), { recursive: true });
   writeFileSync(join(app, 'Contents/Info.plist'), '<plist/>\n');
-  writeFileSync(join(app, 'Contents/MacOS/candidcue'), 'x');
+  writeFileSync(join(app, 'Contents/MacOS/speaking-glass'), 'x');
   for (const { path, bytes } of extra) {
     const target = join(app, path);
     mkdirSync(dirname(target), { recursive: true });
@@ -723,7 +723,7 @@ describe('the installer is proven to carry no speech-model weights', () => {
      */
     expect(run(MODEL_SCRIPT, [join(REPO_ROOT, 'package.json')], REPO_ROOT).status).toBe(1);
 
-    const empty = mkdtempSync(join(tmpdir(), 'candidcue-empty-'));
+    const empty = mkdtempSync(join(tmpdir(), 'speaking-glass-empty-'));
     workspaces.push(empty);
     const result = run(MODEL_SCRIPT, [empty], REPO_ROOT);
     expect(result.status).toBe(1);
@@ -1138,7 +1138,7 @@ console.log('{}');
       );
       expect(notices).toContain('| untraced | MIT † | unconfirmed; upstream <https://example.test/untraced> |');
       expect(notices).toContain('† Recorded from the upstream project');
-      expect(notices).toContain('has to be verified before CandidCue is released.');
+      expect(notices).toContain('has to be verified before Speaking Glass is released.');
       expect(notices).toContain('- **untraced** — Somebody should look.\n');
       expect(notices).not.toContain('NOTICES.txt');
     });
@@ -1278,7 +1278,7 @@ const root = realpathSync.native(process.cwd());
 const at = (...parts) => '(' + join(root, ...parts) + ')';
 const lines = [
   args.join(' ').includes('src-tauri/Cargo.toml')
-    ? 'candidcue v1.0.0 ' + at('src-tauri')
+    ? 'speaking-glass v1.0.0 ' + at('src-tauri')
     : 'cc-bench v0.1.0 ' + at('crates', 'cc-bench'),
   'cc-align v0.1.0 ' + at('crates', 'cc-align'),
   'cc-macros v0.1.0 (proc-macro) ' + at('crates', 'cc-macros'),
@@ -1292,7 +1292,7 @@ console.log(lines.join('\\n'));
 `;
 
   function scratchCheckout(name: string) {
-    const home = mkdtempSync(join(tmpdir(), 'candidcue-home-'));
+    const home = mkdtempSync(join(tmpdir(), 'speaking-glass-home-'));
     workspaces.push(home);
     const dir = join(home, 'Projects', name);
     mkdirSync(join(dir, 'scripts'), { recursive: true });
@@ -1317,7 +1317,7 @@ console.log(lines.join('\\n'));
   }
 
   it('names every package inside the checkout relative to it', () => {
-    const checkout = scratchCheckout('candidcue');
+    const checkout = scratchCheckout('speaking-glass');
     const result = writeSboms(checkout);
     expect(result.status, result.output).toBe(0);
 
@@ -1348,7 +1348,7 @@ console.log(lines.join('\\n'));
       'serde_derive v1.0.0 (proc-macro)',
     ];
     expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toBe(
-      ['[build-dependencies]', 'candidcue v1.0.0 (src-tauri)', ...shared, ''].join('\n'),
+      ['[build-dependencies]', ...shared, 'speaking-glass v1.0.0 (src-tauri)', ''].join('\n'),
     );
     expect(readFileSync(join(checkout.dir, 'sbom/rust-alignment.txt'), 'utf8')).toBe(
       ['[build-dependencies]', shared[0], 'cc-bench v0.1.0 (crates/cc-bench)', ...shared.slice(1), ''].join(
@@ -1363,7 +1363,7 @@ console.log(lines.join('\\n'));
      * the script's idea of the checkout is the link while the tools, running
      * in it, print where it really is.
      */
-    const checkout = scratchCheckout('candidcue');
+    const checkout = scratchCheckout('speaking-glass');
     const linked = join(checkout.home, 'linked');
     // A junction on Windows, which needs no symlink privilege and which Node
     // resolves exactly as it does a symlink. The type is ignored elsewhere.
@@ -1374,12 +1374,12 @@ console.log(lines.join('\\n'));
     const [root] = JSON.parse(readFileSync(join(checkout.dir, 'sbom/javascript.json'), 'utf8'));
     expect(root.path).toBe('.');
     expect(readFileSync(join(checkout.dir, 'sbom/rust-app.txt'), 'utf8')).toContain(
-      'candidcue v1.0.0 (src-tauri)',
+      'speaking-glass v1.0.0 (src-tauri)',
     );
   });
 
   it('comes out byte-for-byte the same wherever it is written', () => {
-    const first = scratchCheckout('candidcue');
+    const first = scratchCheckout('speaking-glass');
     const second = scratchCheckout('another (checkout)');
     for (const checkout of [first, second]) {
       const result = writeSboms(checkout);
@@ -1397,7 +1397,7 @@ console.log(lines.join('\\n'));
     ['the home directory in a field that is not a path', 'pnpm-embedded', 'sbom/javascript.json'],
     ['a crate outside the checkout', 'cargo', 'sbom/rust-app.txt'],
   ])('refuses to publish %s', (_, outside, file) => {
-    const checkout = scratchCheckout('candidcue');
+    const checkout = scratchCheckout('speaking-glass');
     const result = writeSboms(checkout, { outside });
     expect(result.status, 'an SBOM that would publish a machine path must fail the gate').toBe(1);
     expect(result.output).toContain(`${file} would publish a path from this machine`);
@@ -1761,8 +1761,8 @@ const RELEASE_WORKFLOWS = {
   windows: '.github/workflows/release-windows.yml',
   linux: '.github/workflows/release-linux.yml',
 } as const;
-const PUBLISH_ACTION = '.github/actions/publish-candidcue/action.yml';
-const RECEIVE_ACTION = '.github/actions/receive-candidcue/action.yml';
+const PUBLISH_ACTION = '.github/actions/publish-speaking-glass/action.yml';
+const RECEIVE_ACTION = '.github/actions/receive-speaking-glass/action.yml';
 
 const stripComments = (source: string) =>
   source
@@ -1827,7 +1827,7 @@ describe('the release workflow cannot publish an unverified build', () => {
     );
     // The DMG and the updater payload are artifacts too, and each is asked.
     expect(uncommented).toMatch(/stapler validate "\$DMG"/);
-    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/CandidCue\.app"/);
+    expect(uncommented).toMatch(/stapler validate "\$RUNNER_TEMP\/payload\/Speaking Glass\.app"/);
   });
 
   it('publishes only after everything else has run', () => {
@@ -1843,10 +1843,10 @@ describe('the release workflow cannot publish an unverified build', () => {
 
     const publish = jobOf(uncommented, 'publish', RELEASE_WORKFLOWS.macos);
     expect(publish).toContain('needs: build');
-    expect(publish).toContain('./.github/actions/publish-candidcue');
+    expect(publish).toContain('./.github/actions/publish-speaking-glass');
 
     const order = [
-      './.github/actions/receive-candidcue',
+      './.github/actions/receive-speaking-glass',
       'release-feed.mjs monotonic',
       'release-feed.mjs write-once',
       'aws s3 cp verified/stage/files/',
@@ -1958,7 +1958,7 @@ describe('the release workflow cannot publish an unverified build', () => {
 
   /*
    * `gh release create` defaults to a full release, so `v1.0.0-rc.1` would
-   * have published as the Latest release of CandidCue.
+   * have published as the Latest release of Speaking Glass.
    */
   it('marks a prerelease tag as a prerelease', () => {
     expect(action).toContain('--prerelease');
@@ -2031,13 +2031,13 @@ describe('every operating system gates, verifies and stages before it publishes'
 
     // Staging records the origin publishing will be given, and checks it.
     const staging = build.slice(build.indexOf('- name: Stage the release'));
-    expect(staging.slice(0, staging.indexOf('run: |'))).toContain('CANDIDCUE_PUBLIC_URL: ${{ vars.CANDIDCUE_PUBLIC_URL }}');
+    expect(staging.slice(0, staging.indexOf('run: |'))).toContain('SPEAKING_GLASS_PUBLIC_URL: ${{ vars.SPEAKING_GLASS_PUBLIC_URL }}');
 
     // The build downloads its own artifact the way publishing will, so a dry
     // run proves the handover: an artifact uploaded from the single path
     // `stage/` has no stage/ in it, and only a real publish used to notice.
-    const upload = build.indexOf(`name: candidcue-release-${os}`);
-    const receive = build.indexOf('./.github/actions/receive-candidcue');
+    const upload = build.indexOf(`name: speaking-glass-release-${os}`);
+    const receive = build.indexOf('./.github/actions/receive-speaking-glass');
     expect(upload).toBeGreaterThan(-1);
     expect(receive, 'the build must receive its own artifact').toBeGreaterThan(upload);
     const uploadStep = build.slice(upload, build.indexOf('if-no-files-found', upload));
@@ -2057,10 +2057,10 @@ describe('every operating system gates, verifies and stages before it publishes'
     expect(gates).toContain('fetch-depth: 0');
 
     const publish = jobOf(uncommented, 'publish', relPath);
-    expect(publish).toContain('./.github/actions/publish-candidcue');
+    expect(publish).toContain('./.github/actions/publish-speaking-glass');
     expect(publish).toMatch(/if: startsWith\(github\.ref, 'refs\/tags\/v'\) && inputs\.dry_run != true/);
     // One publish per platform at a time, whichever tag it is for.
-    expect(publish).toContain(`group: publish-candidcue-${os}\n`);
+    expect(publish).toContain(`group: publish-speaking-glass-${os}\n`);
     expect(publish).toContain('cancel-in-progress: false');
   });
 });
@@ -2139,7 +2139,7 @@ describe('the release notes gate refuses what it exists to refuse', () => {
 
   const REAL = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
   const WRITTEN =
-    'CandidCue 1.0 is a voice-following teleprompter for macOS 12 and later, on ' +
+    'Speaking Glass 1.0 is a voice-following teleprompter for macOS 12 and later, on ' +
     'Apple Silicon and Intel. Voice following is English only and the speech model ' +
     'is a separate download you start yourself.';
 

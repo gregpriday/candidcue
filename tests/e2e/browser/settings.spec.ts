@@ -21,7 +21,7 @@ import { gotoSection, openPreferences } from './fixtures/preferences';
  * A display tile by the display's own name.
  *
  * Matched on `.monitor-name` exactly, not on the tile's text: the Automatic
- * tile names the panel the CandidCue window is on ("Currently display 2 ·
+ * tile names the panel the Speaking Glass window is on ("Currently display 2 ·
  * Teleprompter Display"), so a text match can find two.
  */
 function monitorTile(page: Page, name: string) {
@@ -214,7 +214,7 @@ test('the input picker offers the system default and every input, and remembers 
   // Remembered as a device id AND a label: the id alone does not survive a
   // re-salt, so the label is what identifies this microphone next launch.
   const overlay = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('candidcue.settings-overlay.v1') ?? '{}'),
+    JSON.parse(localStorage.getItem('speaking-glass.settings-overlay.v1') ?? '{}'),
   );
   expect(overlay.audio).toMatchObject({
     followSystemDefault: false,
@@ -233,7 +233,7 @@ test('the input picker offers the system default and every input, and remembers 
  * §28.1 — a grant this machine has already made is not asked for again.
  *
  * The regression this pins is platform-specific and invisible in dev: the only
- * webview CandidCue ships in does not implement
+ * webview Speaking Glass ships in does not implement
  * `navigator.permissions.query({ name: 'microphone' })`, so the permission
  * watcher reports 'unsupported' on EVERY launch and the screen kept showing
  * "Allow and choose microphone" forever. `audio.microphoneGranted` is the
@@ -252,7 +252,7 @@ test('a microphone grant remembered on this machine is not asked for again', asy
   await installTauriShim(page, { welcomed: true });
   await page.addInitScript(() => {
     localStorage.setItem(
-      'candidcue.settings-overlay.v1',
+      'speaking-glass.settings-overlay.v1',
       JSON.stringify({ audio: { microphoneGranted: true } }),
     );
     const query = navigator.permissions.query.bind(navigator.permissions);
@@ -329,7 +329,7 @@ async function seedAppliedRig(
       };
       const key = `${encodeURIComponent(fp)}::${encodeURIComponent(name)}`;
       localStorage.setItem(
-        'candidcue.settings-overlay.v1',
+        'speaking-glass.settings-overlay.v1',
         JSON.stringify({ optical: { profiles: { [key]: profile }, activeRig: { [fp]: name } } }),
       );
     },
@@ -479,7 +479,7 @@ test('a changed slider offers its way back to the default', async ({ page }) => 
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const raw = localStorage.getItem('candidcue.settings-overlay.v1');
+        const raw = localStorage.getItem('speaking-glass.settings-overlay.v1');
         if (raw === null) return null;
         const overlay = JSON.parse(raw) as { teleprompter?: Record<string, unknown> };
         return overlay.teleprompter?.['fontSizePx'] ?? null;
@@ -499,7 +499,7 @@ test('a changed slider offers its way back to the default', async ({ page }) => 
  */
 function storedDiagnosticTake(page: import('@playwright/test').Page): Promise<unknown> {
   return page.evaluate(() => {
-    const raw = localStorage.getItem('candidcue.settings-overlay.v1');
+    const raw = localStorage.getItem('speaking-glass.settings-overlay.v1');
     if (raw === null) return null;
     const overlay = JSON.parse(raw) as { teleprompter?: Record<string, unknown> };
     return overlay.teleprompter?.['diagnosticTake'] ?? null;
@@ -669,7 +669,7 @@ test('Following drops the dead Script fidelity control', async ({ page }) => {
   await expect(page.getByText('Script fidelity')).toHaveCount(0);
   // Motion profile states its one family rather than opening a dropdown of one.
   await expect(page.getByText('Standard motion (v1)')).toBeVisible();
-  await expect(page.getByText("CandidCue's one motion profile")).toBeVisible();
+  await expect(page.getByText("Speaking Glass's one motion profile")).toBeVisible();
   // What genuinely reaches resolveFollowProfile stays. Matched exactly: the
   // motion-profile description mentions follow feel too, and a loose match
   // would pass on the sentence about the control rather than the control.

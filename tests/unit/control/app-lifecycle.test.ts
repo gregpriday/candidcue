@@ -321,7 +321,7 @@ describe('the startup splash', () => {
 
     expect(mark, 'the splash renders its lockup').not.toBeNull();
     // The mark first, then the name, and the name only once.
-    expect(mark?.[1]).toMatch(/<BrandMark\b[^>]*\/>[\s\S]*\bCandidCue\b/);
-    expect(mark?.[1]?.match(/CandidCue/g)).toHaveLength(1);
+    expect(mark?.[1]).toMatch(/<BrandMark\b[^>]*\/>[\s\S]*\bSpeaking Glass\b/);
+    expect(mark?.[1]?.match(/Speaking Glass/g)).toHaveLength(1);
   });
 });

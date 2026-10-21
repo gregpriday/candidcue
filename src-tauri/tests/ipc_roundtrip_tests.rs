@@ -43,10 +43,10 @@
 use std::collections::BTreeSet;
 use std::sync::mpsc;
 
-use candidcue_lib::commands;
-use candidcue_lib::coordinator::AppCoordinator;
-use candidcue_lib::database::{self, Database};
-use candidcue_lib::scripts::{DataPaths, ScriptLocks};
+use speaking_glass_lib::commands;
+use speaking_glass_lib::coordinator::AppCoordinator;
+use speaking_glass_lib::database::{self, Database};
+use speaking_glass_lib::scripts::{DataPaths, ScriptLocks};
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -268,19 +268,19 @@ fn harness() -> Harness {
     // The mutating commands take `State<'_, BootStatus>` and refuse to run in
     // recovery mode, so the harness has to declare which mode it exercises.
     // `Ready` is the ordinary one; the recovery refusal has its own tests.
-    app.manage(candidcue_lib::database::BootStatus::Ready);
+    app.manage(speaking_glass_lib::database::BootStatus::Ready);
     app.manage(Database::new(pool.clone()));
     app.manage(paths.clone());
     app.manage(ScriptLocks::default());
     app.manage(AppCoordinator::default());
-    app.manage(candidcue_lib::updater::UpdaterState::default());
+    app.manage(speaking_glass_lib::updater::UpdaterState::default());
 
     let webview = WebviewWindowBuilder::new(&app, "control", tauri::WebviewUrl::App("control.html".into()))
         .build()
         .expect("mock control webview");
     let stage = WebviewWindowBuilder::new(
         &app,
-        candidcue_lib::windows::STAGE_LABEL,
+        speaking_glass_lib::windows::STAGE_LABEL,
         tauri::WebviewUrl::App("stage.html".into()),
     )
     .build()
@@ -1078,7 +1078,7 @@ fn a_stored_document_carrying_every_field_removed_by_219_loads_and_sheds_them() 
     let loaded = h.expect_ok("get_settings", Value::Null);
     assert_eq!(loaded["revision"], first["revision"]);
     let expected = serde_json::to_value(
-        serde_json::from_value::<candidcue_lib::settings::AppSettings>(fixture["document"].clone())
+        serde_json::from_value::<speaking_glass_lib::settings::AppSettings>(fixture["document"].clone())
             .expect("the fixture loads"),
     )
     .expect("serializes");
@@ -1566,7 +1566,7 @@ fn envelope(session_id: &str, stage_generation: u64, session_generation: u64) ->
 #[test]
 fn the_hydration_envelope_binds_reaches_the_stage_and_acks_honestly() {
     let h = harness();
-    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let rx = h.watch_stage(speaking_glass_lib::windows::events::STAGE_LOAD_SESSION);
     let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
 
     let ack = h.expect_ok(
@@ -1607,7 +1607,7 @@ fn the_hydration_envelope_binds_reaches_the_stage_and_acks_honestly() {
 #[test]
 fn an_envelope_without_a_render_document_is_rejected_at_the_boundary() {
     let h = harness();
-    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let rx = h.watch_stage(speaking_glass_lib::windows::events::STAGE_LOAD_SESSION);
     let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
 
     let mut broken = envelope(CAPTURED_SESSION, stage_generation, session_generation);
@@ -1633,7 +1633,7 @@ fn an_envelope_without_a_render_document_is_rejected_at_the_boundary() {
 #[test]
 fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
     let h = harness();
-    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let rx = h.watch_stage(speaking_glass_lib::windows::events::STAGE_LOAD_SESSION);
     let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
 
     let mut with_extras = envelope(CAPTURED_SESSION, stage_generation, session_generation);
@@ -1655,7 +1655,7 @@ fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
 #[test]
 fn the_directive_commands_bind_validate_and_emit() {
     let h = harness();
-    let commands = h.watch_stage(candidcue_lib::windows::events::STAGE_APPLY_COMMAND);
+    let commands = h.watch_stage(speaking_glass_lib::windows::events::STAGE_APPLY_COMMAND);
     let (stage_generation, _) = h.live_stage(CAPTURED_SESSION);
 
     h.expect_ok(
@@ -1825,7 +1825,7 @@ fn clearing_logs_through_the_command_keeps_the_open_log_writable() {
     let logs = h.paths.logs_dir();
     std::fs::create_dir_all(&logs).expect("logs dir");
 
-    let daily = logs.join("candidcue-rust.2026-08-03.log");
+    let daily = logs.join("speaking-glass-rust.2026-08-03.log");
     std::fs::write(&daily, "before the clear\n").expect("daily log");
     std::fs::write(logs.join("client-trace.log"), "trace\n").expect("client trace");
 

@@ -29,7 +29,7 @@ export type RevisionReason = (typeof REVISION_REASONS)[number];
 const REASON_LABELS: Record<RevisionReason, string> = {
   initial: 'First version',
   autosave_interval: 'While editing',
-  external_change: 'Changed outside CandidCue',
+  external_change: 'Changed outside Speaking Glass',
   external_change_preserved: 'Preserved outside edit',
   before_restore: 'Before a restore',
   pre_session: 'Before a session',

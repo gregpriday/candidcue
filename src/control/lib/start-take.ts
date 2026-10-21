@@ -199,7 +199,7 @@ async function compileForTake(
     // `script` is null only when the compile was superseded, which cannot
     // happen for a request made and awaited here — but a null slipping through
     // would reach the stage as an envelope with no document in it.
-    throw new Error('CandidCue did not finish reading this script.');
+    throw new Error('Speaking Glass did not finish reading this script.');
   }
   return { ...output, script: output.script };
 }
@@ -496,7 +496,7 @@ export async function startTake(
     const editorState = get(editor);
     if (editorState.scriptId === scriptId && editorState.saveState === 'conflict') {
       throw new Error(
-        'This script changed outside CandidCue. Resolve that in the editor before presenting.',
+        'This script changed outside Speaking Glass. Resolve that in the editor before presenting.',
       );
     }
     if (editorState.scriptId === scriptId && editorState.saveState === 'error') {

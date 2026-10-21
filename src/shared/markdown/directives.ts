@@ -1,5 +1,5 @@
 /**
- * CandidCue directive syntax (spec §23).
+ * Speaking Glass directive syntax (spec §23).
  *
  * Inline directives: [Cue: label], [Pause], [Beat], [Breathe], [Take: Name].
  * Container directives: :::spoken, :::silent, :::stage, :::literal-command.
@@ -422,7 +422,7 @@ export const INLINE_SAY_PATTERN = /\{say="([^"\n]*)"\}/;
  * ---------------------------------------------------------------------------
  * THE `---` AMBIGUITY
  * ---------------------------------------------------------------------------
- * A leading `---` is already valid CandidCue Markdown: it is a horizontal
+ * A leading `---` is already valid Speaking Glass Markdown: it is a horizontal
  * rule, and `Title\n---` is a setext heading. Three conditions must all hold,
  * and the third is the one that makes this safe:
  *

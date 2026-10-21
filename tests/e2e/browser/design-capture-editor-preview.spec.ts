@@ -6,7 +6,7 @@
  * DESIGN_CAPTURE_DIR names a directory to write into, so the normal suite never
  * runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-editor-preview.spec.ts
  *
@@ -232,7 +232,7 @@ async function boot(page: Page, opts: Boot = {}): Promise<void> {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   if (opts.layout) {
     await page.addInitScript((layout) => {
-      localStorage.setItem('candidcue.workspace.v1', JSON.stringify({ editorLayout: layout }));
+      localStorage.setItem('speaking-glass.workspace.v1', JSON.stringify({ editorLayout: layout }));
     }, opts.layout);
   }
   if (opts.compileError !== undefined || opts.workerCrash) {

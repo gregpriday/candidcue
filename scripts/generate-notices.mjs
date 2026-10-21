@@ -80,7 +80,7 @@ function throughCmd(command, args) {
 /**
  * Production dependencies only. A test runner or a bundler is not in the
  * artifact, and listing it would make the disclosure describe a machine that
- * built CandidCue rather than the application anyone received.
+ * built Speaking Glass rather than the application anyone received.
  */
 function javascriptPackages() {
   let report;
@@ -189,7 +189,7 @@ function rustCrates() {
    *
    * `-e normal` because a test runner is not in the artifact; the default
    * includes dev and build dependencies, which made this describe the machine
-   * that built CandidCue rather than the application anyone received.
+   * that built Speaking Glass rather than the application anyone received.
    *
    * And the Windows triple, since the installer ships this same file: Windows
    * pulls in crates macOS never selects (`webview2-com`, the `windows` family),
@@ -242,8 +242,8 @@ function rustCrates() {
       const match = line.trim().match(/^([A-Za-z0-9_-]+) v(\S+)/);
       if (!match) continue;
       const [, name, version] = match;
-      // The workspace's own crates are CandidCue, not a third party.
-      if (['candidcue', 'cc-align', 'cc-stt', 'cc-bench'].includes(name)) continue;
+      // The workspace's own crates are Speaking Glass, not a third party.
+      if (['speaking-glass', 'cc-align', 'cc-stt', 'cc-bench'].includes(name)) continue;
       seen.set(`${name} ${version}`, { name, version });
     }
     }
@@ -548,16 +548,16 @@ function render() {
     '',
     '# Third-party notices',
     '',
-    'CandidCue is built on work other people published. This file names every',
+    'Speaking Glass is built on work other people published. This file names every',
     'third-party component in a release, with its version and its licence, so the',
     'question "what is in this application, and under what terms?" can be answered',
     'from the application itself rather than from a repository.',
     '',
     'It ships inside the app. On macOS it is at',
-    '`CandidCue.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux',
-    'packages, at `/usr/lib/CandidCue/THIRD_PARTY_NOTICES.md`.',
+    '`Speaking Glass.app/Contents/Resources/THIRD_PARTY_NOTICES.md`; in the Linux',
+    'packages, at `/usr/lib/Speaking Glass/THIRD_PARTY_NOTICES.md`.',
     '',
-    'CandidCue itself is free software under the MIT licence. Its text is in',
+    'Speaking Glass itself is free software under the MIT licence. Its text is in',
     '`Contents/Resources/LICENSE.txt`, beside this file.',
     '',
     'Two third-party licences travel in full with the work they cover:',
@@ -585,7 +585,7 @@ function render() {
     '',
     '## Shared libraries in the Linux AppImage',
     '',
-    'The AppImage carries the shared libraries CandidCue needs from Ubuntu 22.04',
+    'The AppImage carries the shared libraries Speaking Glass needs from Ubuntu 22.04',
     '("jammy") so that it runs on distributions that lack them: chiefly WebKitGTK,',
     'GTK 3, GLib, GStreamer, cairo, pango, HarfBuzz, libsoup, GnuTLS and Nettle,',
     'and their dependencies. The `.deb` carries none of them; the package manager',
@@ -596,7 +596,7 @@ function render() {
     'alone. The exact list is the AppImage\'s `usr/lib` directory, and the',
     'corresponding source for each is published in the Ubuntu 22.04 archive',
     '(<https://launchpad.net/ubuntu/jammy>), under the package that ships it. On',
-    'request, the source for any of them is also available from the CandidCue',
+    'request, the source for any of them is also available from the Speaking Glass',
     'project at <https://github.com/gregpriday/candidcue/issues>, for at least three',
     'years after the release that carried it.',
     '',
@@ -621,7 +621,7 @@ function render() {
       ? [
           '† Recorded from the upstream project, and **not yet confirmed against the',
           'exact build in this archive**. The archive carries no licence metadata of its',
-          'own, so each of these has to be verified before CandidCue is released. They',
+          'own, so each of these has to be verified before Speaking Glass is released. They',
           'are listed rather than omitted because a component nobody has classified is',
           'still in the binary.',
           '',

@@ -28,7 +28,7 @@ import { installTauriShim } from './tauri-shim';
  * this layer, and this keeps the suite honest either way.
  */
 
-const BASE_URL = `http://localhost:${process.env.CANDIDCUE_E2E_PORT ?? '1420'}`;
+const BASE_URL = `http://localhost:${process.env.SPEAKING_GLASS_E2E_PORT ?? '1420'}`;
 const WARMUP_SCRIPT = {
   id: '00000000-0000-4000-8000-000000000000',
   title: 'Dependency warm-up',

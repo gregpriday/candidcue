@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CandidCue",
+  "productName": "Speaking Glass",
   "version": "0.1.0",
-  "identifier": "com.candidcue.app",
+  "identifier": "com.speakingglass.app",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "control",
-        "title": "CandidCue",
+        "title": "Speaking Glass",
         "url": "control.html",
         "width": 1240,
         "height": 820,
@@ -50,7 +50,7 @@
             "$APPDATA/scripts/*/script.md",
             "$APPDATA/scripts/**/*.md",
             "$APPDATA/scripts/*/revisions/**",
-            "$APPDATA/candidcue.sqlite3*",
+            "$APPDATA/speaking-glass.sqlite3*",
             "$APPDATA/backups/**",
             "$APPDATA/logs/**",
             "$APPDATA/diagnostics/**",

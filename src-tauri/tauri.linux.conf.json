@@ -6,7 +6,7 @@
       "appimage"
     ],
     "category": "Video",
-    "longDescription": "Write a script in Markdown, press Present, and CandidCue scrolls it as you speak. Speech is transcribed on this computer by an on-device model and never leaves it.",
+    "longDescription": "Write a script in Markdown, press Present, and Speaking Glass scrolls it as you speak. Speech is transcribed on this computer by an on-device model and never leaves it.",
     "linux": {
       "deb": {
         "section": "video"

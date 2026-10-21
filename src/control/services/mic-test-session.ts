@@ -61,7 +61,7 @@ export interface MicTestSnapshot {
   error: string | null;
   /**
    * Why the last session ended, or null while one is running. The UI says so
-   * when CandidCue closed the session on the user's behalf — an automatic stop
+   * when Speaking Glass closed the session on the user's behalf — an automatic stop
    * the operator cannot see is indistinguishable from a crash.
    */
   stoppedReason: MicTestStopReason | null;

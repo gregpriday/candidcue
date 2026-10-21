@@ -94,7 +94,7 @@ describe('listening — the ordinary state, which must stay ordinary', () => {
   it('waits through a long silence without accusing the microphone', () => {
     /*
      * The regression this file exists for. The check this replaced reported
-     * "CandidCue cannot hear that microphone" after 2.5 s of silence — which is
+     * "Speaking Glass cannot hear that microphone" after 2.5 s of silence — which is
      * how long it takes to read the sentence asking you to speak. Frames are
      * ARRIVING here; nobody is talking. That is a presenter thinking, and it is
      * not news.

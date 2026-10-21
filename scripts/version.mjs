@@ -467,7 +467,7 @@ function set(next) {
   for (const { path, next: contents } of pending) writeFileSync(path, contents, 'utf8');
 
   console.log(`Version set to ${next} in package.json, Cargo.toml, tauri.conf.json, version.ts.`);
-  console.log('Run `cargo update -p candidcue --manifest-path src-tauri/Cargo.toml` to refresh the lockfile.');
+  console.log('Run `cargo update -p speaking-glass --manifest-path src-tauri/Cargo.toml` to refresh the lockfile.');
 }
 
 const [command, argument] = process.argv.slice(2);

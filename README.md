@@ -1,9 +1,9 @@
-# CandidCue
+# Speaking Glass
 
 **Your words. Your pace.**
 
 A voice-following teleprompter for macOS, Windows and Linux. Write your script in
-Markdown, press Present, and read. CandidCue listens with a speech recogniser
+Markdown, press Present, and read. Speaking Glass listens with a speech recogniser
 that runs on your computer, works out where you are in the script, and scrolls
 to keep your next words in the reading band. Ad-lib, pause, or start a
 sentence over, and it waits for you rather than running ahead.
@@ -24,7 +24,7 @@ every file is also served from `https://updates.speakingglass.com/releases/`:
   so SmartScreen asks first: choose **More info**, then **Run anyway**.
 - **Linux** (64-bit, Ubuntu 22.04 or newer): the `.AppImage`, or the `.deb`.
 
-CandidCue updates itself after that. Each update is signed and checked against
+Speaking Glass updates itself after that. Each update is signed and checked against
 the key the app was built with, and it is never offered or installed during a
 take.
 
@@ -108,10 +108,10 @@ and be checked:
 ```powershell
 $env:SHERPA_ONNX_LIB_DIR = node scripts/sherpa-no-tts.mjs --target win-x64 --dest "$env:TEMP\sherpa-onnx-no-tts"
 pnpm tauri build
-node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/candidcue.exe
+node scripts/verify-no-gpl-in-binary.mjs src-tauri/target/release/speaking-glass.exe
 ```
 
-On Linux it is `--target linux-x64` and `src-tauri/target/release/candidcue`.
+On Linux it is `--target linux-x64` and `src-tauri/target/release/speaking-glass`.
 The Windows section of [`CLAUDE.md`](CLAUDE.md) has the reasoning.
 
 The speech model is not in the repository or the app bundle. Install it from
@@ -120,15 +120,20 @@ developing:
 
 ```bash
 pnpm models:fetch                                   # ~161 MB into src-tauri/models/
-export CANDIDCUE_MODELS_DIR="$PWD/src-tauri/models"
+export SPEAKING_GLASS_MODELS_DIR="$PWD/src-tauri/models"
 ```
 
 `models:fetch` is a POSIX shell script. On Windows, install the model from the
-app instead; `CANDIDCUE_MODELS_DIR` can then point at the copy it keeps in
-`%APPDATA%\com.candidcue.app\models`.
+app instead; `SPEAKING_GLASS_MODELS_DIR` can then point at the copy it keeps in
+`%APPDATA%\com.speakingglass.app\models`.
 
 Then open the sample script from the Welcome screen and read it aloud. It tells
 you what to watch for.
+
+Speaking Glass was called CandidCue until October 2026. A build from before the
+rename kept its data in a `com.candidcue.app` folder. The first launch of
+Speaking Glass copies that folder to `com.speakingglass.app` and leaves the
+original alone, so delete the original yourself once no older checkout needs it.
 
 ## Development
 
@@ -169,6 +174,6 @@ there (see [`docs/release-runbook.md`](docs/release-runbook.md)).
 
 ## Licence
 
-CandidCue is free and open source under the [MIT licence](LICENSE).
+Speaking Glass is free and open source under the [MIT licence](LICENSE).
 Third-party components are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md),
 and security reports go through [`.github/SECURITY.md`](.github/SECURITY.md).

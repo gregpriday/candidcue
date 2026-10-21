@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Prove that a linked, stripped CandidCue binary carries no eSpeak NG or
+ * Prove that a linked, stripped Speaking Glass binary carries no eSpeak NG or
  * ucd-tools code — and, on Windows and Linux, nothing of the text-to-speech
  * front end at all.
  *
@@ -87,7 +87,7 @@
  *   node scripts/verify-no-gpl-in-binary.mjs <binary>…
  *
  * Exits 1 when any binary fails. Run it on the executable a release ships —
- * on Windows `src-tauri/target/release/candidcue.exe` before NSIS compresses
+ * on Windows `src-tauri/target/release/speaking-glass.exe` before NSIS compresses
  * it into the installer, on Linux the ELF before it is packaged.
  */
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';

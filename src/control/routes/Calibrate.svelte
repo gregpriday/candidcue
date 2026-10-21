@@ -191,7 +191,7 @@
       label: 'Hardware',
       phase: 'rig',
       title: 'Which prompter is this?',
-      lead: 'CandidCue has already looked. Correct it if it guessed wrong, and give this arrangement a name you will recognise.',
+      lead: 'Speaking Glass has already looked. Correct it if it guessed wrong, and give this arrangement a name you will recognise.',
       records: 'hardware',
       card: null,
     },
@@ -679,7 +679,7 @@
         // second, more confident-sounding diagnosis of a fact nobody knows.
         stageError = {
           title: 'No prompt window',
-          detail: 'It was not opened, because CandidCue could not tell which displays are connected.',
+          detail: 'It was not opened, because Speaking Glass could not tell which displays are connected.',
         };
         return;
       }
@@ -774,7 +774,7 @@
    * feedback that wanted the opposite. A false NO costs a covered wizard that
    * Escape and leaving the route can both now recover from. A false YES refuses
    * to calibrate at all — on the two-display rig that is the entire point of the
-   * feature, for anyone whose monitor CandidCue cannot line up against its own
+   * feature, for anyone whose monitor Speaking Glass cannot line up against its own
    * enumeration. The recoverable failure is the one to take.
    */
   async function targetIsControlPanel(): Promise<boolean> {
@@ -1148,7 +1148,7 @@
     const inches = Number(diagonalField.trim());
     if (!viewport) {
       diagonalError =
-        'CandidCue needs this display’s size in pixels to use a diagonal, and could not read it. Measure the bar instead.';
+        'Speaking Glass needs this display’s size in pixels to use a diagonal, and could not read it. Measure the bar instead.';
       return false;
     }
     const diagonalMm = inchesToMm(inches);
@@ -1158,7 +1158,7 @@
       heightPx: viewport.heightPx,
     });
     if (mmPerCssPx === null) {
-      diagonalError = 'That is not a diagonal CandidCue can use. Type the size in inches.';
+      diagonalError = 'That is not a diagonal Speaking Glass can use. Type the size in inches.';
       return false;
     }
     diagonalError = null;
@@ -1172,7 +1172,7 @@
     if (!shape) return;
     const found = discoverProfile(shape, null);
     if (found.profile.scale === null) {
-      showToast('CandidCue does not know this panel’s physical size. Measure it instead.', 'info');
+      showToast('Speaking Glass does not know this panel’s physical size. Measure it instead.', 'info');
       return;
     }
     draftSettled('ruler');
@@ -1507,7 +1507,7 @@
      * because it was never calibrated — which is exactly backwards.
      */
     if (name.toLowerCase() === AUTOMATIC_RIG_NAME.toLowerCase()) {
-      rigNameError = `“${AUTOMATIC_RIG_NAME}” is the name of the sizing CandidCue works out on its own. Call this rig something else.`;
+      rigNameError = `“${AUTOMATIC_RIG_NAME}” is the name of the sizing Speaking Glass works out on its own. Call this rig something else.`;
       showToast(rigNameError, 'danger');
       void showStep(
         STEPS.findIndex((s) => s.id === 'hardware'),
@@ -1655,7 +1655,7 @@
       <div class="content" bind:this={contentElement}>
         {#if loadError}
           <div class="notice danger" role="alert">
-            <p class="notice-title">CandidCue could not list the connected displays</p>
+            <p class="notice-title">Speaking Glass could not list the connected displays</p>
             <p class="notice-detail">
               {loadError} So it cannot recognise this panel, check a typed diagonal against it, or
               open the prompt window. Presets, the ruler and every other step still work, and Apply
@@ -1682,7 +1682,7 @@
         {#if step.id === 'preset'}
           {#if !hydrated}
             <p class="status-line" role="status">
-              Reading what CandidCue already knows about this display…
+              Reading what Speaking Glass already knows about this display…
             </p>
             <div class="preset-grid" aria-hidden="true">
               {#each RIG_PRESETS as preset (preset.id)}
@@ -1715,7 +1715,7 @@
               {/each}
             </div>
             <p class="hint-line">
-              None of these? Skip — CandidCue starts from what it already knows about this display,
+              None of these? Skip — Speaking Glass starts from what it already knows about this display,
               and every answer stays open to correction.
             </p>
           {/if}
@@ -1751,10 +1751,10 @@
                   {:else if identification.confidence === 'resolution'}
                     Recognised as {identification.label}.
                   {:else if identification.confidence === 'panel'}
-                    Not a model CandidCue knows, but the display reports its size ({identification.label}),
+                    Not a model Speaking Glass knows, but the display reports its size ({identification.label}),
                     so text can be sized without measuring.
                   {:else}
-                    CandidCue could not recognise this panel, so the next step asks you to measure it.
+                    Speaking Glass could not recognise this panel, so the next step asks you to measure it.
                   {/if}
                 </span>
               </p>

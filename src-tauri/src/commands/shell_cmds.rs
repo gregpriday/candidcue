@@ -37,7 +37,7 @@ pub fn set_menu_state(app: tauri::AppHandle, items: Vec<MenuItemState>) -> Resul
 ///
 /// The window's title is the app's identity in the task switcher, in Mission
 /// Control, in the Windows taskbar and in the macOS Window menu. A static
-/// "CandidCue" there tells a user with three things open nothing at all, which
+/// "Speaking Glass" there tells a user with three things open nothing at all, which
 /// is why `document-title.ts` keeps this in step with the open script.
 ///
 /// `edited` maps to the macOS document-modified dot — the small grey dot in the
@@ -219,7 +219,7 @@ pub enum FocusTarget {
 /// which control and Settings held until #267 (control now holds nothing from
 /// the window plugin, Settings only `allow-current-monitor`), granted the READ
 /// half of the window plugin — sizes, positions, `is_focused` —
-/// and neither `allow-set-focus` nor `allow-unminimize`. Window › CandidCue had
+/// and neither `allow-set-focus` nor `allow-unminimize`. Window › Speaking Glass had
 /// therefore been a silent no-op since it was added; the renderer's call was
 /// rejected by the ACL inside a `try` that treated the rejection as "browser
 /// dev".
@@ -342,7 +342,7 @@ pub async fn reveal_logs(paths: tauri::State<'_, DataPaths>) -> Result<(), AppEr
         .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
 }
 
-/// Open one of CandidCue's own pages in the user's browser (Help).
+/// Open one of Speaking Glass's own pages in the user's browser (Help).
 ///
 /// Named rather than addressed. The argument is a key into a compile-time table
 /// in `crate::web`, never a URL — which is what lets the control window keep
@@ -355,7 +355,7 @@ pub async fn reveal_logs(paths: tauri::State<'_, DataPaths>) -> Result<(), AppEr
 pub async fn open_web_destination(name: String) -> Result<(), AppError> {
     let Some(url) = crate::web::url_for(&name) else {
         return Err(AppError::unsafe_path(
-            "CandidCue only opens its own pages, and that is not one of them.",
+            "Speaking Glass only opens its own pages, and that is not one of them.",
         )
         .with_detail("destination", name));
     };
@@ -365,7 +365,7 @@ pub async fn open_web_destination(name: String) -> Result<(), AppError> {
 
 /// Open the third-party notices that ship inside the bundle (Help › Licences).
 ///
-/// CandidCue is MIT-licensed and links a lot of other people's work. Apache-2.0,
+/// Speaking Glass is MIT-licensed and links a lot of other people's work. Apache-2.0,
 /// MIT, BSD and the model's own licence all require the notice to travel with
 /// the binary, and `tauri.conf.json` already bundles `THIRD_PARTY_NOTICES.md`
 /// as a resource — but nothing in the application pointed at it, so a user

@@ -1,5 +1,5 @@
 /* ============================================================================
-   CandidCue design tokens — "porcelain desk + focused dark studio"
+   Speaking Glass design tokens — "porcelain desk + focused dark studio"
 
    Three palettes share one set of token NAMES so components never hard-code a
    palette. Palette is chosen by a `data-theme` attribute:
@@ -1233,7 +1233,7 @@ html[data-presenting='true'][data-presenting-theme='reader-paper'] body {
    Windows 11 (the backdrop Explorer and Settings use). Rust lays it under the
    whole webview (`windows/material.rs`) and tells the page which one through
    `data-window-material` before the first paint; a platform with none —
-   Linux, Windows 10, or `CANDIDCUE_WINDOW_MATERIAL=none` — carries no
+   Linux, Windows 10, or `SPEAKING_GLASS_WINDOW_MATERIAL=none` — carries no
    attribute and gets exactly the opaque desk below.
 
    THE CHROME IS GLASS, THE DOCUMENT IS PAPER

@@ -3,7 +3,7 @@
  *
  * `sherpa-onnx-sys` links `libespeak-ng.a` and `libucd.a` — both
  * GPL-3.0-or-later — into an MIT-licensed binary, and nothing in that crate
- * removes them. What keeps CandidCue defensible is that the linker
+ * removes them. What keeps Speaking Glass defensible is that the linker
  * dead-strips every one of their objects, and that is a fact about a
  * particular binary rather than a policy: the next sherpa-onnx bump, or a
  * linker that decides differently, changes it silently.
@@ -29,7 +29,7 @@ afterAll(() => {
 });
 
 function workspace(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'candidcue-copyleft-'));
+  const dir = mkdtempSync(join(tmpdir(), 'speaking-glass-copyleft-'));
   workspaces.push(dir);
   return dir;
 }
@@ -91,7 +91,7 @@ function mapFile(dir: string, name: string, spec: MapSpec): string {
     ...new Set([...Object.keys(spec.live), ...Object.keys(spec.dead ?? {})]),
   ];
   const lines = [
-    '# Path: /build/candidcue',
+    '# Path: /build/speaking-glass',
     `# Arch: ${spec.arch ?? 'arm64'}`,
     '# Object files:',
     '[  0] linker synthesized',
@@ -238,14 +238,14 @@ describe.skipIf(process.platform === 'win32')('the copyleft gate', { timeout: 30
     const foreign = mapFile(dir, 'foreign.map', { live: { 'phonemize.cpp.o': ['_whatever'] } });
     const result = check(lib, foreign);
     expect(result.status).toBe(1);
-    expect(result.output).toContain('map of something other than CandidCue');
+    expect(result.output).toContain('map of something other than Speaking Glass');
   });
 
   it('refuses a map with no object-file section at all', () => {
     const dir = workspace();
     const lib = archives(dir, LIB_SPEC);
     const truncated = join(dir, 'truncated.map');
-    writeFileSync(truncated, '# Path: /build/candidcue\n# Arch: arm64\n');
+    writeFileSync(truncated, '# Path: /build/speaking-glass\n# Arch: arm64\n');
     const result = check(lib, truncated);
     expect(result.status).toBe(1);
     expect(result.output).toMatch(/not a linker map|did not finish/);

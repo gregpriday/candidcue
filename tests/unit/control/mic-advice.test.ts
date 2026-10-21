@@ -99,7 +99,7 @@ describe('mic conditions', () => {
     const state = feed([silent]);
     expect(micCondition(silent, state, 500)).toBe('no_signal');
     expect(MIC_ADVICE.no_signal).toBe(
-      'CandidCue cannot hear this microphone. Check the selected device and input level.',
+      'Speaking Glass cannot hear this microphone. Check the selected device and input level.',
     );
   });
 

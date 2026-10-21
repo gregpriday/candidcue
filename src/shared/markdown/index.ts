@@ -1,5 +1,5 @@
 /**
- * CandidCue Markdown compiler package (spec §22-§25). Pure TypeScript:
+ * Speaking Glass Markdown compiler package (spec §22-§25). Pure TypeScript:
  * usable from the compiler worker, tests, and (sparingly) the UI thread.
  */
 export { compile, COMPILER_VERSION, SCHEMA_VERSION, DEFAULT_WORDS_PER_MINUTE } from './compile';

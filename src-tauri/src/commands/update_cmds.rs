@@ -8,7 +8,7 @@ use crate::database::{BootStatus, Database};
 use crate::errors::{AppError, ErrorCategory};
 use crate::updater::{self, UpdateCheckResult};
 
-/// Ask the update server whether a newer CandidCue is available.
+/// Ask the update server whether a newer Speaking Glass is available.
 ///
 /// `automatic` is true for the scheduled check (shortly after launch, then every
 /// few hours) and false for Help › Check for Updates…. An automatic check is

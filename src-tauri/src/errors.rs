@@ -182,7 +182,7 @@ impl AppError {
         Self::structured(
             "NOT_IMPLEMENTED",
             ErrorCategory::Internal,
-            format!("{what} is not available in this version of CandidCue."),
+            format!("{what} is not available in this version of Speaking Glass."),
             false,
         )
         .with_detail("feature", what)
@@ -247,7 +247,7 @@ impl AppError {
         }
         match self.category() {
             ErrorCategory::Network => "A network problem interrupted the operation.".into(),
-            ErrorCategory::Database => "CandidCue could not access its local database.".into(),
+            ErrorCategory::Database => "Speaking Glass could not access its local database.".into(),
             ErrorCategory::Window => "The stage window could not be opened or positioned.".into(),
             ErrorCategory::Storage => "A file operation failed.".into(),
             ErrorCategory::Validation => "The request was not valid.".into(),

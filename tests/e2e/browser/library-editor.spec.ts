@@ -142,7 +142,7 @@ test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution shee
     .toBeGreaterThan(0);
 
   // The header swaps to the conflict affordance (not the generic "Save failed").
-  const conflictButton = page.getByRole('button', { name: /Changed outside CandidCue/ });
+  const conflictButton = page.getByRole('button', { name: /Changed outside Speaking Glass/ });
   await expect(conflictButton).toBeVisible();
 
   // Opening it reveals the resolution sheet — the whole point of F.8.
@@ -179,7 +179,7 @@ test('choosing the disk version writes the unsaved text to a new script first', 
     .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'save_script').length))
     .toBeGreaterThan(0);
 
-  await page.getByRole('button', { name: /Changed outside CandidCue/ }).click();
+  await page.getByRole('button', { name: /Changed outside Speaking Glass/ }).click();
   const sheet = page.getByRole('dialog', { name: 'This script changed on disk' });
   await sheet.getByRole('button', { name: 'Use disk version' }).click();
 
@@ -509,7 +509,7 @@ test('the script actions menu moves an autosaved script to Trash', async ({ page
   await page.getByRole('dialog', { name: 'Move to Trash?' }).getByRole('button', { name: 'Move to Trash' }).click();
 
   // Back in the Library, with the script gone from it — not left in the editor
-  // under a toast about a change made outside CandidCue.
+  // under a toast about a change made outside Speaking Glass.
   await expect(row(page, 'Blank canvas')).toBeVisible();
   await expect(row(page, 'Launch keynote')).toHaveCount(0);
   await expect(page.getByText(/could not be moved to Trash/)).toHaveCount(0);

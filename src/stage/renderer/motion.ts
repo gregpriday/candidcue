@@ -67,7 +67,7 @@ export const SMOOTH_JUMP_VIEWPORT_FACTOR = 2;
  * Two viewport heights is about 25 rendered lines on the 1080p stage the factor
  * was chosen against, and about 14 on a 600px panel — so "how big a jump is
  * worth travelling smoothly" changed by nearly half between the two displays
- * CandidCue is actually used on, for reasons that have nothing to do with the
+ * Speaking Glass is actually used on, for reasons that have nothing to do with the
  * jump. What decides it is how much READING the presenter is being carried
  * across, so lines are the unit.
  *

@@ -158,7 +158,7 @@ export interface ShimConfig {
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
 export const SCRIPT_CONFLICT_ERROR = {
   code: 'SCRIPT_CONFLICT',
-  userMessage: 'This script changed on disk outside CandidCue.',
+  userMessage: 'This script changed on disk outside Speaking Glass.',
 };
 
 /**
@@ -166,7 +166,7 @@ export const SCRIPT_CONFLICT_ERROR = {
  * it may reference only its `config` argument and browser globals.
  */
 function shimBody(config: ShimConfig): void {
-  const WELCOMED_KEY = 'candidcue.welcomed.v1';
+  const WELCOMED_KEY = 'speaking-glass.welcomed.v1';
   if (config.welcomed) {
     try {
       localStorage.setItem(WELCOMED_KEY, '1');
@@ -175,7 +175,7 @@ function shimBody(config: ShimConfig): void {
     }
   }
   if (config.diagnosticTake !== undefined) {
-    const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+    const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
     try {
       const overlay = JSON.parse(localStorage.getItem(OVERLAY_KEY) ?? '{}') as Record<
         string,
@@ -734,7 +734,7 @@ function shimBody(config: ShimConfig): void {
        * path by accident.
        */
       case 'get_boot_status':
-        return config.bootStatus ?? { databaseReady: true, dataDirectory: '/tmp/candidcue-e2e' };
+        return config.bootStatus ?? { databaseReady: true, dataDirectory: '/tmp/speaking-glass-e2e' };
 
       /*
        * The recovery screen's commands, shaped like `recovery_cmds.rs`. Both
@@ -748,15 +748,15 @@ function shimBody(config: ShimConfig): void {
 
       case 'restore_database_backup':
       case 'rebuild_database_index': {
-        const root = String(config.bootStatus?.['dataDirectory'] ?? '/tmp/candidcue-e2e');
+        const root = String(config.bootStatus?.['dataDirectory'] ?? '/tmp/speaking-glass-e2e');
         return { previousStateAt: `${root}/quarantine/pre-rebuild-20261018T081500Z`, restartRequired: true };
       }
 
       case 'rescue_scripts':
         return {
-          path: '/Users/sam/Desktop/CandidCue-scripts-20261018-081512',
+          path: '/Users/sam/Desktop/SpeakingGlass-scripts-20261018-081512',
           scriptsCopied: store.size,
-          namesFile: 'CandidCue script names.txt',
+          namesFile: 'Speaking Glass script names.txt',
         };
 
       // Nothing was repaired at startup. `null` is the ordinary answer here,
@@ -938,7 +938,7 @@ function shimBody(config: ShimConfig): void {
         if (!chosen) {
           throw {
             code: 'STT_LANGUAGE_UNAVAILABLE',
-            userMessage: 'CandidCue cannot follow that language yet.',
+            userMessage: 'Speaking Glass cannot follow that language yet.',
           };
         }
         // Both halves of the pair, together — the whole point of the command.

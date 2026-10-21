@@ -101,7 +101,7 @@ struct HoverPayload {
     ///
     /// Counted separately because the answer depends on WHERE the drop lands:
     /// an image over the editor is an insertion and over the Library is a
-    /// rejection. Without this the overlay said "CandidCue cannot import this"
+    /// rejection. Without this the overlay said "Speaking Glass cannot import this"
     /// over an editor that was about to import it perfectly happily.
     accepts_images: bool,
 }
@@ -125,7 +125,7 @@ struct ImportedPayload {
     /// Markdown for each image that landed in the open script's asset folder.
     ///
     /// The renderer inserts these at the caret. They carry the asset's
-    /// `candidcue-asset:` reference — never a filesystem path — which is the
+    /// `assets/…` reference — never a filesystem path — which is the
     /// same string `import_image` has always handed back.
     images: Vec<String>,
     /// The script the images were imported INTO.

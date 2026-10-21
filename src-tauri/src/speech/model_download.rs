@@ -81,7 +81,7 @@ pub const MODEL_HOP_LABELS: net::HopLabels = net::HopLabels {
     // are accepted. Mostly what is left is a network pointing the name
     // somewhere private, but a malformed or endless redirect chain is refused
     // under this code too, so the copy names no single cause.
-    blocked_message: "CandidCue could not safely follow the speech model's download address, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.",
+    blocked_message: "Speaking Glass could not safely follow the speech model's download address, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.",
     unreachable_code: "STT_MODEL_DOWNLOAD_FAILED",
     unreachable_message:
         "The speech model could not be downloaded. Check your connection and try again.",
@@ -2109,7 +2109,7 @@ mod tests {
         .await
         .expect("a damaged model must not stand in the way of its replacement");
 
-        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // `resolve` honours SPEAKING_GLASS_MODELS_DIR, which `model_store`'s tests
         // set; held so a usable override cannot answer for this download. Not
         // across the `await` above — a std guard there is a clippy error.
         let _env = store::env_guard();
@@ -3513,7 +3513,7 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                ".candidcue-model.json",
+                ".speaking-glass-model.json",
                 "ATTRIBUTION.md",
                 "LICENSE-Apache-2.0.txt",
                 "decoder.onnx",
@@ -3567,7 +3567,7 @@ mod tests {
         );
         // Still the model the resolver would pick — the property that
         // actually matters to a presenter about to start a take.
-        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // `resolve` honours SPEAKING_GLASS_MODELS_DIR, which `model_store`'s tests
         // set; held so a usable override cannot answer for this model.
         let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
@@ -3632,7 +3632,7 @@ mod tests {
         .expect_err("a model that cannot load must not install");
         assert_eq!(err.code(), "STT_MODEL_CORRUPT", "{err:?}");
 
-        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // `resolve` honours SPEAKING_GLASS_MODELS_DIR, which `model_store`'s tests
         // set; held so a usable override cannot answer for this model.
         let _env = store::env_guard();
         let resolved = store::resolve(temp.path(), None, &model)
@@ -3649,7 +3649,7 @@ mod tests {
     /// leaves no model and a full backup. Startup puts it back.
     #[test]
     fn an_interrupted_commit_is_recovered_on_the_next_launch() {
-        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // `resolve` honours SPEAKING_GLASS_MODELS_DIR, which `model_store`'s tests
         // set; held so a usable override cannot answer for this model.
         let _env = store::env_guard();
         let files = fixture_files();
@@ -3706,7 +3706,7 @@ mod tests {
     /// when the target is absent" did, and why the seal is the test.
     #[test]
     fn an_unsealed_target_beside_a_sealed_backup_is_repaired() {
-        // `resolve` honours CANDIDCUE_MODELS_DIR, which `model_store`'s tests
+        // `resolve` honours SPEAKING_GLASS_MODELS_DIR, which `model_store`'s tests
         // set; held so a usable override cannot answer for this model.
         let _env = store::env_guard();
         let files = fixture_files();

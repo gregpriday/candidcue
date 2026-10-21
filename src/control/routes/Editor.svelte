@@ -766,7 +766,7 @@ import type { PresentationMode } from '../services/settings-types';
         saving: 'Saving…',
         saved: 'Saved',
         error: 'Save failed',
-        conflict: 'Changed outside CandidCue',
+        conflict: 'Changed outside Speaking Glass',
       } as const
     )[$editor.saveState],
   );
@@ -2793,7 +2793,7 @@ import type { PresentationMode } from '../services/settings-types';
     <p class="save-verdict-title">Your text is still open in this window.</p>
     <p class="save-verdict-next">
       Press Esc or click outside this message to go back to it. Until your latest changes are saved,
-      they exist only in this window, so quitting CandidCue or a crash could lose them.
+      they exist only in this window, so quitting Speaking Glass or a crash could lose them.
     </p>
   </div>
   {#if $editor.lastError}

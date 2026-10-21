@@ -14,7 +14,7 @@
  * Somebody walking back from a camera is choosing between about five things:
  * keep going, redo the whole take, redo the last section, fix the microphone,
  * or go back to the script. To choose, they need to know one thing first: did
- * CandidCue hear me, and did it follow? That was derivable from the list and
+ * Speaking Glass hear me, and did it follow? That was derivable from the list and
  * stated nowhere in it.
  *
  * So this module makes the judgement, once, in a pure function, and the
@@ -24,7 +24,7 @@
  * ---------------------------------------------------------------------------
  * WHAT IT WILL NOT SAY
  * ---------------------------------------------------------------------------
- * Nothing here judges the DELIVERY. CandidCue can say whether it heard and
+ * Nothing here judges the DELIVERY. Speaking Glass can say whether it heard and
  * whether it followed; it cannot tell whether a take was good, confident or
  * engaging, because nothing in it analyses delivery. An outcome card that
  * called a take "great" would be inventing a measurement, which is the one
@@ -163,7 +163,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
        * begins false and the transport starts it — so "the script rolled at
        * your set pace" would be false for a fixed take nobody ever started.
        */
-      detail: 'CandidCue was not listening on this take, so there is no following to report.',
+      detail: 'Speaking Glass was not listening on this take, so there is no following to report.',
       suggestion: null,
       health: 'no_tracking',
       tone: 'neutral',
@@ -184,7 +184,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
   if (input.voiceFollowingAvailable === false) {
     return {
       headline: 'Take finished without voice following',
-      detail: 'No usable speech model was available, so CandidCue did not follow your voice.',
+      detail: 'No usable speech model was available, so Speaking Glass did not follow your voice.',
       suggestion: 'Check the speech model in Settings → Speech before the next take.',
       health: 'no_tracking',
       tone: 'neutral',
@@ -204,7 +204,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
     if (input.microphoneRefused) {
       const os = osCopy(platform);
       return {
-        headline: 'CandidCue could not use the microphone',
+        headline: 'Speaking Glass could not use the microphone',
         detail: os.micRefusedOutcomeDetail,
         suggestion: os.micRefusedOutcomeSuggestion,
         // Not "no speech detected": nothing was listening to detect it.
@@ -228,7 +228,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
       if (time && time.pausedSeconds > 0) return standDownOutcome(time);
       return {
         headline: 'Take ended early',
-        detail: 'This take was too short to tell whether CandidCue could hear you.',
+        detail: 'This take was too short to tell whether Speaking Glass could hear you.',
         suggestion: null,
         health: 'no_speech',
         tone: 'neutral',
@@ -240,10 +240,10 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
         // A roll moves the script by itself, so "the stage stayed where it
         // was" and "your moves were the only thing" are both false under one.
         (time?.autoScrollSeconds ?? 0) > 0
-          ? `CandidCue did not hear this take, so nothing but auto-scroll${input.manualJumps > 0 ? ' and your own moves' : ''} moved the script. Nothing was lost — the script itself is unchanged.`
+          ? `Speaking Glass did not hear this take, so nothing but auto-scroll${input.manualJumps > 0 ? ' and your own moves' : ''} moved the script. Nothing was lost — the script itself is unchanged.`
           : input.manualJumps > 0
-            ? `CandidCue did not hear this take, so the ${input.manualJumps === 1 ? 'one move you made was' : `${input.manualJumps} moves you made were`} the only thing that moved the script. Nothing was lost — it is exactly as you left it.`
-            : 'The stage stayed where it was, because CandidCue did not hear this take. Nothing was lost — the script is exactly as you left it.',
+            ? `Speaking Glass did not hear this take, so the ${input.manualJumps === 1 ? 'one move you made was' : `${input.manualJumps} moves you made were`} the only thing that moved the script. Nothing was lost — it is exactly as you left it.`
+            : 'The stage stayed where it was, because Speaking Glass did not hear this take. Nothing was lost — the script is exactly as you left it.',
       suggestion: 'Test or change the microphone in Settings before trying again.',
       health: 'no_speech',
       tone: 'attention',
@@ -276,7 +276,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
    */
   if (input.followingShare === null) {
     return {
-      headline: 'CandidCue heard you, but did not track',
+      headline: 'Speaking Glass heard you, but did not track',
       // A roll for part of the take DID move the stage on its own.
       detail:
         setAside > 0
@@ -298,7 +298,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
   if (input.reconnects > 0) {
     return {
       headline: 'Voice following was interrupted',
-      detail: `CandidCue held the text through ${input.reconnects === 1 ? 'an interruption' : `${input.reconnects} interruptions`} and picked you up again.`,
+      detail: `Speaking Glass held the text through ${input.reconnects === 1 ? 'an interruption' : `${input.reconnects} interruptions`} and picked you up again.`,
       suggestion: 'Present again. If it keeps happening, export a support bundle from Settings.',
       health: healthFromShare(input.followingShare),
       tone: 'attention',
@@ -318,7 +318,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
   if (input.followingShare < FREQUENT_HELP_BELOW) {
     return {
       headline: 'Following needed help',
-      detail: `CandidCue heard you but held its place for much of ${span}. Long ad-libs, repeated wording, or a weak microphone signal all do this.${notCounted}`,
+      detail: `Speaking Glass heard you but held its place for much of ${span}. Long ad-libs, repeated wording, or a weak microphone signal all do this.${notCounted}`,
       suggestion: 'Nothing is broken — but if it repeats, the script may need more distinctive openings.',
       health: 'frequent_help',
       tone: 'attention',
@@ -336,7 +336,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
    */
   if (input.followingShare < STEADY_ABOVE) {
     return {
-      headline: 'CandidCue stayed with you',
+      headline: 'Speaking Glass stayed with you',
       detail: `It followed you and held its place whenever it was unsure.${notCounted}`,
       suggestion: null,
       health: 'occasional_holds',
@@ -345,7 +345,7 @@ export function resolveTakeOutcome(input: TakeOutcomeInput, platform?: Platform)
   }
 
   return {
-    headline: 'CandidCue stayed with you',
+    headline: 'Speaking Glass stayed with you',
     detail:
       input.followingShare < 1
         ? `Speech was detected and the stage followed almost all of ${span}.${notCounted}`

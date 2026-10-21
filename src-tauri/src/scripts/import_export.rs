@@ -1,7 +1,9 @@
 //! Script import and export (spec §21.6, §46.2).
 //!
 //! Accepted import formats: `.md`, `.markdown`, `.txt`, and the
-//! ZIP-compatible `.candidcue` bundle (manifest.json + script.md + assets/).
+//! ZIP-compatible `.speakingglass` bundle (manifest.json + script.md + assets/).
+//! A `.candidcue` file is the same bundle under the app's former name, and
+//! imports the same way.
 //! The bundle importer rejects path traversal, absolute paths, symlinks,
 //! undeclared/oversized files, and decompression bombs.
 
@@ -78,12 +80,19 @@ pub struct ExportRequest {
     pub suggested_name: Option<String>,
 }
 
+/// The bundle's file extension.
+pub const BUNDLE_EXTENSION: &str = "speakingglass";
+
+/// What a bundle was called before the app was renamed Speaking Glass. Only
+/// read, never written: an export made before the rename must still import.
+pub const LEGACY_BUNDLE_EXTENSION: &str = "candidcue";
+
 /// The three formats, their save-dialog extension, and their filter label.
 pub fn export_format_extension(format: &str) -> Result<(&'static str, &'static str), AppError> {
     match format {
         "markdown" => Ok(("md", "Markdown")),
         "text" => Ok(("txt", "Plain text")),
-        "bundle" => Ok(("candidcue", "CandidCue bundle")),
+        "bundle" => Ok((BUNDLE_EXTENSION, "Speaking Glass bundle")),
         other => Err(AppError::invalid_input(format!(
             "Unknown export format: {other}. Use markdown, text, or bundle."
         ))),
@@ -209,7 +218,7 @@ fn checked_import_source(path: &Path) -> Result<PathBuf, AppError> {
 }
 
 /// Where an export may land. The parent directory is canonicalized, so a
-/// symlinked folder cannot smuggle the write somewhere else, and CandidCue's
+/// symlinked folder cannot smuggle the write somewhere else, and Speaking Glass's
 /// own managed storage is refused outright — an export is for the operator's
 /// documents, and a stray write inside the library corrupts it.
 fn checked_export_destination(
@@ -237,7 +246,7 @@ fn checked_export_destination(
     if let Ok(root) = paths.root().canonicalize() {
         if parent.starts_with(&root) {
             return Err(AppError::unsafe_path(
-                "Exports cannot be written inside CandidCue's own storage.",
+                "Exports cannot be written inside Speaking Glass's own storage.",
             ));
         }
     }
@@ -334,9 +343,11 @@ pub async fn import_script(
                 warnings: Vec::new(),
             })
         }
-        "candidcue" => import_bundle(pool, paths, locks, &source_path, options.title).await,
+        BUNDLE_EXTENSION | LEGACY_BUNDLE_EXTENSION => {
+            import_bundle(pool, paths, locks, &source_path, options.title).await
+        }
         _ => Err(AppError::validation(
-            "Only .md, .markdown, .txt, and .candidcue files can be imported.",
+            "Only .md, .markdown, .txt, and .speakingglass files can be imported.",
         )),
     }
 }
@@ -412,7 +423,7 @@ async fn import_bundle(
                         .with_log(format!("manifest parse: {e}")))?;
                 if parsed.schema_version != 1 {
                     return Err(AppError::validation(
-                        "This bundle was created by a newer version of CandidCue.",
+                        "This bundle was created by a newer version of Speaking Glass.",
                     ));
                 }
                 manifest = Some(parsed);
@@ -594,7 +605,7 @@ pub async fn export_script(
     let _guard = lock.lock().await;
 
     let canonical = repo::canonical_path_checked(pool, paths, script_id).await?;
-    // A canonical file saved with a BOM outside CandidCue exports without it.
+    // A canonical file saved with a BOM outside Speaking Glass exports without it.
     let source = into_without_bom(fs::read_to_string(&canonical)?);
     let summary = repo::get_summary(pool, script_id).await?;
 

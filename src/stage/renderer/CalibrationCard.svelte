@@ -321,7 +321,7 @@
 
       <p class="ruler-label">{barPx} CSS pixels — outer edge to outer edge</p>
       <p class="ruler-note">
-        Type what you measured, in millimetres. That is how CandidCue works out how large the text
+        Type what you measured, in millimetres. That is how Speaking Glass works out how large the text
         really looks from where you stand.
       </p>
     </div>

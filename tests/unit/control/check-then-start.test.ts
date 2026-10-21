@@ -562,7 +562,7 @@ describe('microphone access before the take', () => {
     // The sheet stays, Start anyway with it; the reason is said.
     expect(get(takeReadinessPrompt)?.verdict.blocked).toBe(false);
     const said = get(toasts).map((t) => t.message);
-    expect(said.some((m) => m.startsWith('CandidCue could not open the microphone.'))).toBe(true);
+    expect(said.some((m) => m.startsWith('Speaking Glass could not open the microphone.'))).toBe(true);
     expect(said.join(' ')).not.toContain('MIC_DEVICE_MISSING');
   });
 

@@ -402,7 +402,7 @@ pub fn client_for(hop: &Hop, idle_timeout: Duration) -> Result<reqwest::Client, 
         .referer(false)
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(idle_timeout)
-        .user_agent(concat!("CandidCue/", env!("CARGO_PKG_VERSION")));
+        .user_agent(concat!("SpeakingGlass/", env!("CARGO_PKG_VERSION")));
     if !hop.addrs.is_empty() {
         if let Some(host) = hop.url.host_str() {
             builder = builder.resolve_to_addrs(host, &hop.addrs);

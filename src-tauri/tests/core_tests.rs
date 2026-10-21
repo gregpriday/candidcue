@@ -3,12 +3,12 @@
 
 use std::fs;
 
-use candidcue_lib::scripts::{
+use speaking_glass_lib::scripts::{
     import_export::{self, ExportOptions, ImportOptions},
     repo, CreateScriptInput, DataPaths, PageRequest, ScriptFilter, ScriptId, ScriptLocks,
     ScriptMetadataPatch, ScriptStatus,
 };
-use candidcue_lib::settings;
+use speaking_glass_lib::settings;
 
 struct Harness {
     _dir: tempfile::TempDir,
@@ -19,7 +19,7 @@ struct Harness {
 
 async fn harness() -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
-    let pool = candidcue_lib::database::init(dir.path())
+    let pool = speaking_glass_lib::database::init(dir.path())
         .await
         .expect("database init + migrations");
     let paths = DataPaths::new(dir.path().to_path_buf());
@@ -52,12 +52,12 @@ async fn create_save_revision_trash_lifecycle() {
     let summary = repo::create_script(
         &h.pool,
         &h.paths,
-        create_input("Launch video", "Hello world from CandidCue today."),
+        create_input("Launch video", "Hello world from Speaking Glass today."),
     )
     .await
     .expect("create");
     assert_eq!(summary.title, "Launch video");
-    assert_eq!(summary.spoken_word_count, 5);
+    assert_eq!(summary.spoken_word_count, 6);
     let script_id = sid(&summary.id);
     let canonical = h.paths.canonical_file(&script_id);
     assert!(canonical.exists());
@@ -69,7 +69,7 @@ async fn create_save_revision_trash_lifecycle() {
         &h.locks,
         &script_id,
         1,
-        "Hello world from CandidCue today. Now longer.".into(),
+        "Hello world from Speaking Glass today. Now longer.".into(),
         ScriptMetadataPatch::default(),
     )
     .await
@@ -79,7 +79,7 @@ async fn create_save_revision_trash_lifecycle() {
     assert!(save.revision_id.is_some());
     assert_eq!(
         fs::read_to_string(&canonical).unwrap(),
-        "Hello world from CandidCue today. Now longer."
+        "Hello world from Speaking Glass today. Now longer."
     );
 
     // Stale expected revision → SCRIPT_CONFLICT.
@@ -138,7 +138,7 @@ async fn create_save_revision_trash_lifecycle() {
     let doc = repo::get_revision(&h.pool, &h.paths, &script_id, &first_revision.id)
         .await
         .expect("get revision");
-    assert_eq!(doc.source, "Hello world from CandidCue today.");
+    assert_eq!(doc.source, "Hello world from Speaking Glass today.");
 
     let restored = repo::restore_revision(
         &h.pool,
@@ -152,7 +152,7 @@ async fn create_save_revision_trash_lifecycle() {
     .expect("restore revision");
     assert_eq!(
         fs::read_to_string(&canonical).unwrap(),
-        "Hello world from CandidCue today."
+        "Hello world from Speaking Glass today."
     );
     assert!(restored.script_revision > save3.script_revision);
     // The restore itself is a destructive edit, so the body it replaced is
@@ -229,7 +229,7 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
     let canonical = h.paths.canonical_file(&script_id);
 
     // Simulate an external editor.
-    fs::write(&canonical, "# Outline\n\nEdited outside CandidCue.").unwrap();
+    fs::write(&canonical, "# Outline\n\nEdited outside Speaking Glass.").unwrap();
 
     // Saving over it with a stale in-memory copy is refused (spec §21.3).
     let err = repo::save_script(
@@ -250,7 +250,7 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
         .await
         .expect("get");
     assert!(doc.externally_changed);
-    assert_eq!(doc.source, "# Outline\n\nEdited outside CandidCue.");
+    assert_eq!(doc.source, "# Outline\n\nEdited outside Speaking Glass.");
     assert!(doc.summary.script_revision > 1);
     // The search entry is the adopted page's, heading and all (#254).
     assert_eq!(search_total(&h, "outline").await, 1);
@@ -441,7 +441,7 @@ async fn every_library_sort_key_actually_orders_the_result() {
             .expect("create");
     }
 
-    let titles = |page: &candidcue_lib::scripts::ScriptPage| -> Vec<String> {
+    let titles = |page: &speaking_glass_lib::scripts::ScriptPage| -> Vec<String> {
         page.items.iter().map(|s| s.title.clone()).collect()
     };
 
@@ -565,13 +565,13 @@ async fn trash_and_recent_views_select_the_right_scripts() {
 #[tokio::test]
 async fn clearing_logs_targets_the_log_directory_and_no_cache() {
     let h = harness().await;
-    let logs = candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "logs")
+    let logs = speaking_glass_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "logs")
         .expect("`logs` must be a kind clear_cache understands");
     assert_eq!(logs, vec![h.paths.logs_dir()]);
 
     for kind in ["all", "compiled", "vocabulary", "thumbnails", "everything"] {
         assert!(
-            candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, kind).is_err(),
+            speaking_glass_lib::commands::settings_cmds::clear_cache_targets(&h.paths, kind).is_err(),
             "{kind:?} must be rejected, not silently mapped onto something"
         );
     }
@@ -606,7 +606,7 @@ async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
     )
     .expect("previous trace");
     fs::write(
-        h.paths.logs_dir().join("candidcue-rust.2026-08-03.log"),
+        h.paths.logs_dir().join("speaking-glass-rust.2026-08-03.log"),
         "a warning nobody could read before\n",
     )
     .expect("rust log");
@@ -616,7 +616,7 @@ async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
     )
     .expect("report");
 
-    let diagnostics = candidcue_lib::commands::settings_cmds::SystemDiagnostics {
+    let diagnostics = speaking_glass_lib::commands::settings_cmds::SystemDiagnostics {
         app_version: "0.1.0".into(),
         os: "macos".into(),
         arch: "aarch64".into(),
@@ -625,7 +625,7 @@ async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
         session_count: 0,
         data_dir: h.paths.root().to_string_lossy().to_string(),
     };
-    candidcue_lib::commands::settings_cmds::write_support_bundle(
+    speaking_glass_lib::commands::settings_cmds::write_support_bundle(
         &h.paths,
         bundle.path(),
         &diagnostics,
@@ -648,7 +648,7 @@ async fn a_support_bundle_carries_the_logs_and_not_just_the_facts() {
         "a crash plus a relaunch must still reach whoever is debugging it"
     );
     assert_eq!(
-        fs::read_to_string(logs.join("candidcue-rust.2026-08-03.log")).expect("rust log in bundle"),
+        fs::read_to_string(logs.join("speaking-glass-rust.2026-08-03.log")).expect("rust log in bundle"),
         "a warning nobody could read before\n"
     );
 }
@@ -672,7 +672,7 @@ async fn settings_defaults_patch_and_conflict() {
     assert_eq!(initial.value.stage_behavior.fixed_speed_wpm, 130);
     assert_eq!(
         initial.value.audio.transcription_model,
-        candidcue_lib::speech::default_model().id
+        speaking_glass_lib::speech::default_model().id
     );
 
     // Patch a nested field; others survive.
@@ -742,7 +742,7 @@ async fn import_markdown_and_bundle_roundtrip() {
     assert_eq!(revisions[0].reason, "import");
 
     // Bundle export → re-import roundtrip.
-    let bundle_path = external.path().join("talk.candidcue");
+    let bundle_path = external.path().join("talk.speakingglass");
     let exported = import_export::export_script(
         &h.pool,
         &h.paths,
@@ -772,6 +772,29 @@ async fn import_markdown_and_bundle_roundtrip() {
     assert_eq!(reimported.script.title, "My Talk");
     let source = fs::read_to_string(h.paths.canonical_file(&sid(&reimported.script.id))).unwrap();
     assert_eq!(source, "# Talk\n\nSpoken body here.\n");
+
+    // A bundle saved before the rename carries the old `.candidcue` extension
+    // and is the same format, so it still imports.
+    let legacy = external.path().join("talk.candidcue");
+    fs::copy(&exported.path, &legacy).unwrap();
+    let from_legacy = import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        ImportOptions {
+            path: legacy.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+    .expect("legacy bundle import");
+    assert_eq!(from_legacy.script.title, "My Talk");
+    assert_ne!(from_legacy.script.id, reimported.script.id, "a new script, not the last one");
+    let source = fs::read_to_string(h.paths.canonical_file(&sid(&from_legacy.script.id))).unwrap();
+    assert_eq!(source, "# Talk\n\nSpoken body here.\n");
+    let revisions = repo::list_revisions(&h.pool, &sid(&from_legacy.script.id)).await.unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].reason, "import");
 
     // Unknown extension refused.
     let bad = external.path().join("script.exe");
@@ -873,7 +896,7 @@ async fn a_byte_order_mark_does_not_survive_a_bundle_import() {
 
     let h = harness().await;
     let external = tempfile::tempdir().unwrap();
-    let bundle = external.path().join("quarterly.candidcue");
+    let bundle = external.path().join("quarterly.speakingglass");
     let mut writer = zip::ZipWriter::new(fs::File::create(&bundle).unwrap());
     let options = zip::write::SimpleFileOptions::default();
     writer.start_file("manifest.json", options).unwrap();
@@ -890,7 +913,7 @@ async fn a_byte_order_mark_does_not_survive_a_bundle_import() {
     assert_eq!(imported.spoken_word_count, 5);
     let revisions = repo::list_revisions(&h.pool, &script_id).await.unwrap();
     assert_eq!(revisions.len(), 1);
-    assert_eq!(revisions[0].source_hash, candidcue_lib::util::sha256_hex(QUARTERLY.as_bytes()));
+    assert_eq!(revisions[0].source_hash, speaking_glass_lib::util::sha256_hex(QUARTERLY.as_bytes()));
 }
 
 #[tokio::test]
@@ -954,7 +977,7 @@ async fn an_external_byte_order_mark_is_adopted_once_and_never_handed_on() {
         .expect("adoption snapshot");
     assert_eq!(
         adopted.source_hash,
-        candidcue_lib::util::sha256_hex(format!("{BOM}{QUARTERLY}").as_bytes())
+        speaking_glass_lib::util::sha256_hex(format!("{BOM}{QUARTERLY}").as_bytes())
     );
     let viewed = repo::get_revision(&h.pool, &h.paths, &script_id, &adopted.id)
         .await
@@ -1053,7 +1076,7 @@ async fn seed_legacy_bom_metadata(h: &Harness, script_id: &ScriptId, marked: &st
              last_compile_version = 'spoken-stats-2'
          WHERE id = ?",
     )
-    .bind(candidcue_lib::util::sha256_hex(marked.as_bytes()))
+    .bind(speaking_glass_lib::util::sha256_hex(marked.as_bytes()))
     .bind(script_id.as_str())
     .execute(&h.pool)
     .await
@@ -1074,7 +1097,7 @@ async fn seed_legacy_bom_metadata(h: &Harness, script_id: &ScriptId, marked: &st
 
 #[tokio::test]
 async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup() {
-    use candidcue_lib::scripts::reconcile;
+    use speaking_glass_lib::scripts::reconcile;
 
     let h = harness().await;
     let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
@@ -1122,7 +1145,7 @@ async fn library_metadata_extracted_with_a_byte_order_mark_is_rebuilt_at_startup
 
 #[tokio::test]
 async fn a_legacy_marked_script_restored_from_its_revision_is_rebuilt_too() {
-    use candidcue_lib::scripts::reconcile;
+    use speaking_glass_lib::scripts::reconcile;
 
     let h = harness().await;
     let summary = repo::create_script(&h.pool, &h.paths, create_input("Legacy", QUARTERLY))
@@ -1172,7 +1195,7 @@ async fn an_import_with_two_marks_stores_one_text() {
     let script_id = sid(&imported.id);
     assert_eq!(fs::read_to_string(h.paths.canonical_file(&script_id)).unwrap(), QUARTERLY);
     let revisions = repo::list_revisions(&h.pool, &script_id).await.unwrap();
-    assert_eq!(revisions[0].source_hash, candidcue_lib::util::sha256_hex(QUARTERLY.as_bytes()));
+    assert_eq!(revisions[0].source_hash, speaking_glass_lib::util::sha256_hex(QUARTERLY.as_bytes()));
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,7 +1204,7 @@ async fn an_import_with_two_marks_stores_one_text() {
 
 #[tokio::test]
 async fn session_records_start_end_and_list() {
-    use candidcue_lib::sessions;
+    use speaking_glass_lib::sessions;
 
     let h = harness().await;
     let script = repo::create_script(&h.pool, &h.paths, create_input("S", "Body words here."))
@@ -1229,7 +1252,7 @@ async fn session_records_start_end_and_list() {
 
 /// The history one presented take leaves: an ended session. Returns its id.
 async fn present_once(h: &Harness, script_id: &str) -> String {
-    use candidcue_lib::sessions;
+    use speaking_glass_lib::sessions;
 
     let input: sessions::StartSessionInput = serde_json::from_value(serde_json::json!({
         "scriptId": script_id,
@@ -1305,7 +1328,7 @@ async fn a_presented_script_deletes_permanently_with_its_history_and_nothing_els
         fs::read_to_string(h.paths.canonical_file(&sid(&survivor.id))).unwrap(),
         "Said again."
     );
-    let listed = candidcue_lib::sessions::list_sessions(&h.pool, Some(survivor.id.clone()), 10)
+    let listed = speaking_glass_lib::sessions::list_sessions(&h.pool, Some(survivor.id.clone()), 10)
         .await
         .unwrap();
     assert_eq!(listed.len(), 1);
@@ -1400,7 +1423,7 @@ async fn expired_trash_purge_deletes_presented_scripts_and_skips_one_that_fails(
 
 #[tokio::test]
 async fn reconciliation_recovers_orphans_and_missing_files() {
-    use candidcue_lib::scripts::reconcile;
+    use speaking_glass_lib::scripts::reconcile;
 
     let h = harness().await;
 
@@ -1458,8 +1481,8 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
 /// exactly where it was, unindexed, with a note.
 #[tokio::test]
 async fn an_adopted_folder_indexes_only_the_files_that_prove_themselves() {
-    use candidcue_lib::scripts::reconcile;
-    use candidcue_lib::util::sha256_hex;
+    use speaking_glass_lib::scripts::reconcile;
+    use speaking_glass_lib::util::sha256_hex;
 
     let h = harness().await;
     let orphan = sid("0a651b8e-3a54-4a7e-bb6d-000000000252");
@@ -1537,7 +1560,7 @@ async fn an_adopted_folder_indexes_only_the_files_that_prove_themselves() {
 /// library's order nor a pending compare-and-swap save notices it happened.
 #[tokio::test]
 async fn reconciliation_rederives_stale_library_stats_without_editing_the_script() {
-    use candidcue_lib::scripts::{reconcile, words::SPOKEN_STATS_VERSION};
+    use speaking_glass_lib::scripts::{reconcile, words::SPOKEN_STATS_VERSION};
 
     let h = harness().await;
     let source = "<!-- TODO: cut this line before Friday -->\n\nWelcome back. [Cue: smile at camera] Let's go.\n";

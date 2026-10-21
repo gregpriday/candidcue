@@ -108,7 +108,7 @@ describe('recovery reports a database failure without frightening the user', () 
     /*
      * The single most useful sentence this screen can carry. Script content
      * lives in Markdown files and those files are the authority (§48.1) — a
-     * database failure does not touch them. Without saying so, "CandidCue
+     * database failure does not touch them. Without saying so, "Speaking Glass
      * could not open its database" reads as "your work is gone".
      *
      * The screen says it once, above every failure's own explanation, rather
@@ -236,7 +236,7 @@ describe('the recovery screen offers the actions the review asked for', () => {
     expect(recoverySource).toMatch(/named after its first line/);
     // "Quit" on macOS and "Exit" elsewhere, the native menu's own verb, so the
     // source carries it as `{os.quit}` (lib/os-copy.ts).
-    expect(recoverySource).toMatch(/\{os\.quit\} and reopen CandidCue to finish/);
+    expect(recoverySource).toMatch(/\{os\.quit\} and reopen Speaking Glass to finish/);
     expect(recoverySource).not.toMatch(/`Rebuilt\./);
   });
 });
@@ -245,7 +245,7 @@ describe('an answer the shell cannot read is not an answer that it started', () 
   /*
    * The whole browser journey suite ran into this: a backend that replied
    * `null` to `get_boot_status` made `boot.databaseReady` throw a `TypeError`
-   * out of the startup path, and every route landed on the generic "CandidCue
+   * out of the startup path, and every route landed on the generic "Speaking Glass
    * could not finish starting" screen reading "Cannot read properties of null
    * (reading 'databaseReady')".
    *

@@ -7,7 +7,7 @@
  * uncalibrated fallback) or pins the things that must NOT have moved (the
  * angular ladder, the legibility-outranks-measure order, prompter geometry).
  *
- * `docs/CandidCue_Reader_Mode_Specification.md` §4 has the arithmetic these
+ * `docs/SpeakingGlass_Reader_Mode_Specification.md` §4 has the arithmetic these
  * numbers come from.
  */
 import { describe, expect, it } from 'vitest';

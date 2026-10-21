@@ -50,7 +50,7 @@ const ipc = vi.hoisted(() => {
         transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         language: 'en',
       },
-      commands: { wakePhrase: 'CandidCue', wakeMode: 'strict' },
+      commands: { wakePhrase: 'Speaking Glass', wakeMode: 'strict' },
     },
   };
   return {
@@ -110,7 +110,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   },
 });
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 const settings = await import('../../../src/control/services/settings');
 
 function rig(overrides: Partial<OpticalProfile> = {}): OpticalProfile {
@@ -559,7 +559,7 @@ describe('Rust is the authority for calibrated rigs', () => {
     /*
      * A fresh install has nothing to move. Flagging an adoption anyway made the
      * first launch write an empty `optical` section purely to plant the
-     * authority marker — and put "CandidCue could not move your saved
+     * authority marker — and put "Speaking Glass could not move your saved
      * teleprompter calibrations into permanent storage" in front of somebody
      * who has never calibrated anything if that write failed.
      *

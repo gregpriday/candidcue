@@ -371,7 +371,7 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
 
 /** Redacted support payload (§57.3, §64: "text is redacted by default"). */
 export interface FollowDiagnosticsExport {
-  kind: 'candidcue.follow-diagnostics';
+  kind: 'speaking-glass.follow-diagnostics';
   version: 1;
   redacted: true;
   exportedAtMs: number;
@@ -739,7 +739,7 @@ export function createSmoothFollowStore(
     exportDiagnostics() {
       const s = get(store);
       return {
-        kind: 'candidcue.follow-diagnostics',
+        kind: 'speaking-glass.follow-diagnostics',
         version: 1,
         redacted: true,
         exportedAtMs: now(),

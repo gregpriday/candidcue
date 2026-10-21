@@ -21,14 +21,14 @@
 //! reads `downloadBytes`, not `download_bytes`, and a rename that compiles
 //! would break the picker with nothing failing here.
 
-use candidcue_lib::align::{AlignToken, AlignmentState};
-use candidcue_lib::coordinator::AppCoordinator;
-use candidcue_lib::database::{self, Database};
-use candidcue_lib::settings;
-use candidcue_lib::speech::language_options;
-use candidcue_lib::speech::model_manager::SpeechModelManager;
-use candidcue_lib::speech::SpeechEngine;
-use candidcue_lib::{commands, scripts::DataPaths};
+use speaking_glass_lib::align::{AlignToken, AlignmentState};
+use speaking_glass_lib::coordinator::AppCoordinator;
+use speaking_glass_lib::database::{self, Database};
+use speaking_glass_lib::settings;
+use speaking_glass_lib::speech::language_options;
+use speaking_glass_lib::speech::model_manager::SpeechModelManager;
+use speaking_glass_lib::speech::SpeechEngine;
+use speaking_glass_lib::{commands, scripts::DataPaths};
 use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -77,7 +77,7 @@ fn harness() -> Harness {
 
     // `select_speech_language` and `start_speech_model_download` refuse to run
     // in recovery mode, so the harness has to declare which mode it exercises.
-    app.manage(candidcue_lib::database::BootStatus::Ready);
+    app.manage(speaking_glass_lib::database::BootStatus::Ready);
     app.manage(Database::new(pool));
     app.manage(paths);
     app.manage(AppCoordinator::default());
@@ -91,7 +91,7 @@ fn harness() -> Harness {
             .expect("mock control webview");
     let preferences = WebviewWindowBuilder::new(
         &app,
-        candidcue_lib::windows::preferences::PREFERENCES_LABEL,
+        speaking_glass_lib::windows::preferences::PREFERENCES_LABEL,
         tauri::WebviewUrl::App("preferences.html".into()),
     )
     .build()
@@ -257,7 +257,7 @@ fn the_catalogue_id_and_the_recogniser_id_are_reported_separately() {
     let recognizer_id = english["recognizerId"].as_str().expect("recognizerId");
     assert_ne!(model_id, recognizer_id);
     assert_eq!(model_id, "x-asr-480ms");
-    assert_eq!(recognizer_id, candidcue_lib::speech::default_model().id);
+    assert_eq!(recognizer_id, speaking_glass_lib::speech::default_model().id);
 
     // The status carries the SHORT id, because that is what the install
     // commands are addressed with.
@@ -479,7 +479,7 @@ fn settings_can_test_transcription_when_no_take_is_open() {
 }
 
 /// A start the guard let through: it reached the model. Without one that is
-/// exactly `STT_MODEL_NOT_INSTALLED`; with `CANDIDCUE_MODELS_DIR` exported it
+/// exactly `STT_MODEL_NOT_INSTALLED`; with `SPEAKING_GLASS_MODELS_DIR` exported it
 /// is a stream, stopped again here. Anything else — an argument that failed to
 /// bind, say — is not admission, which "not the refusal code" would miss.
 fn assert_admitted(h: &Harness, result: Result<Value, Value>) {
@@ -497,13 +497,13 @@ fn assert_admitted(h: &Harness, result: Result<Value, Value>) {
 /// running test. Ignored because they need the model:
 ///
 /// ```text
-/// CANDIDCUE_MODELS_DIR=/path/to/src-tauri/models \
+/// SPEAKING_GLASS_MODELS_DIR=/path/to/src-tauri/models \
 ///   cargo test --test speech_language_tests transcription_ -- --ignored
 /// ```
 fn require_model() {
     assert!(
-        std::env::var_os("CANDIDCUE_MODELS_DIR").is_some(),
-        "set CANDIDCUE_MODELS_DIR to a directory `pnpm models:fetch` filled"
+        std::env::var_os("SPEAKING_GLASS_MODELS_DIR").is_some(),
+        "set SPEAKING_GLASS_MODELS_DIR to a directory `pnpm models:fetch` filled"
     );
 }
 
@@ -522,7 +522,7 @@ fn generation_of(value: Value) -> u64 {
 }
 
 #[test]
-#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+#[ignore = "needs the recogniser: set SPEAKING_GLASS_MODELS_DIR"]
 fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
     require_model();
     let h = harness();
@@ -550,7 +550,7 @@ fn transcription_a_settings_test_cannot_take_the_recogniser_from_a_take() {
 /// load, which takes over a second. A load faster than the pause below fails
 /// loudly at `expect_err` rather than passing by accident.
 #[test]
-#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+#[ignore = "needs the recogniser: set SPEAKING_GLASS_MODELS_DIR"]
 fn transcription_a_settings_test_queued_behind_a_load_yields_to_the_take() {
     require_model();
     let h = harness();
@@ -576,7 +576,7 @@ fn transcription_a_settings_test_queued_behind_a_load_yields_to_the_take() {
 }
 
 #[test]
-#[ignore = "needs the recogniser: set CANDIDCUE_MODELS_DIR"]
+#[ignore = "needs the recogniser: set SPEAKING_GLASS_MODELS_DIR"]
 fn transcription_a_take_still_replaces_a_running_settings_test() {
     require_model();
     let h = harness();
@@ -645,7 +645,7 @@ async fn a_write_cannot_split_the_language_from_its_recogniser() {
     assert_eq!(stored.value.audio.language, "en-US");
     assert_eq!(
         stored.value.audio.transcription_model,
-        candidcue_lib::speech::default_model().id
+        speaking_glass_lib::speech::default_model().id
     );
 }
 
@@ -663,7 +663,7 @@ async fn a_coherent_language_write_is_accepted() {
     assert_eq!(updated.value.audio.language, "en-GB");
     assert_eq!(
         updated.value.audio.transcription_model,
-        candidcue_lib::speech::default_model().id
+        speaking_glass_lib::speech::default_model().id
     );
 }
 
@@ -684,7 +684,7 @@ async fn an_unrelated_patch_leaves_the_language_alone() {
     assert_eq!(updated.value.audio.language, "en-US");
     assert_eq!(
         updated.value.audio.transcription_model,
-        candidcue_lib::speech::default_model().id
+        speaking_glass_lib::speech::default_model().id
     );
 }
 
@@ -746,7 +746,7 @@ async fn an_obsolete_language_does_not_make_settings_unwritable() {
     assert_eq!(updated.value.audio.language, "en-US");
     assert_eq!(
         updated.value.audio.transcription_model,
-        candidcue_lib::speech::default_model().id
+        speaking_glass_lib::speech::default_model().id
     );
 
     // …and the repair is now on disk. A stale tag that survived every write

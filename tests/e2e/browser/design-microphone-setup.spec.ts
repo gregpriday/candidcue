@@ -12,7 +12,7 @@ import { gotoSection, openPreferences } from './fixtures/preferences';
  * the state on screen, so it is a tool for looking at the section rather than
  * a test of it, and it never runs in the normal suite:
  *
- *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/mic CANDIDCUE_E2E_PORT=5312 \
+ *     DESIGN_CAPTURE=1 DESIGN_CAPTURE_DIR=/tmp/mic SPEAKING_GLASS_E2E_PORT=5312 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-microphone-setup.spec.ts
  *
@@ -74,7 +74,7 @@ function micStubs(config: MicFixture): void {
   (window as unknown as { __MIC__: typeof state }).__MIC__ = state;
 
   if (config.audio) {
-    localStorage.setItem('candidcue.settings-overlay.v1', JSON.stringify({ audio: config.audio }));
+    localStorage.setItem('speaking-glass.settings-overlay.v1', JSON.stringify({ audio: config.audio }));
   }
 
   // WKWebView has no Permissions API for the microphone, so the screen must
@@ -316,18 +316,18 @@ test('test: opening, listening, hearing, answered', async ({ page }) => {
   await expect(page.getByText(/Listening/).first()).toBeVisible();
   await shoot(page, 'test-listening--880');
 
-  await emitFrame(page, { kind: 'partial', itemId: 'i1', text: 'CandidCue is following' });
-  await expect(page.getByText('CandidCue is following', { exact: false }).first()).toBeVisible();
+  await emitFrame(page, { kind: 'partial', itemId: 'i1', text: 'Speaking Glass is following' });
+  await expect(page.getByText('Speaking Glass is following', { exact: false }).first()).toBeVisible();
   await shoot(page, 'test-waiting--880');
 
   await emitFrame(page, {
     kind: 'final',
     itemId: 'i1',
-    text: 'CandidCue is following my voice.',
+    text: 'Speaking Glass is following my voice.',
     audioEndMs: 2400,
   });
   await expect(page.getByRole('button', { name: 'Stop test' })).toHaveCount(0);
-  await expect(page.getByText('CandidCue is following my voice.').first()).toBeVisible();
+  await expect(page.getByText('Speaking Glass is following my voice.').first()).toBeVisible();
   // The meter reopens once the test lets go; capture it settled, not mid-calibration.
   await expect(meterStatus(page)).toHaveText('Hearing you');
   await shoot(page, 'test-success--880');

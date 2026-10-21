@@ -18,7 +18,7 @@ import { openScript } from './fixtures/library';
  * are written, so a capture that did not reach its state fails instead of
  * saving a plausible wrong frame.
  *
- *   DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5321 \
+ *   DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5321 \
  *     ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *     tests/e2e/browser/design-stage-dock.spec.ts --project=chromium
  */
@@ -57,7 +57,7 @@ async function boot(page: Page, size: { width: number; height: number }): Promis
 /** Paper saved in Settings, before the app reads its overlay. */
 async function seedPaper(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const key = 'candidcue.settings-overlay.v1';
+    const key = 'speaking-glass.settings-overlay.v1';
     const overlay = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, unknown>;
     const teleprompter = (overlay['teleprompter'] ?? {}) as Record<string, unknown>;
     overlay['teleprompter'] = { ...teleprompter, readerTheme: 'paper' };

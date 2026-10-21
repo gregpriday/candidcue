@@ -6,7 +6,7 @@
  * Windows spellings. Opt-in: it skips unless DESIGN_CAPTURE_DIR names a
  * directory to write into, so the normal suite never runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-script-actions.spec.ts
  *

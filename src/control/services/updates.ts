@@ -18,7 +18,7 @@ import { DEV_APP_VERSION } from '../../shared/version';
 import { invokeOrMock, ipcInvoke, isTauriRuntime } from './ipc';
 
 /**
- * Ask Rust whether a newer CandidCue is available.
+ * Ask Rust whether a newer Speaking Glass is available.
  *
  * `automatic` marks the scheduled check. Rust refuses one of those outright
  * when "Check for updates automatically" is off (`UPDATE_CHECK_DISABLED`); a

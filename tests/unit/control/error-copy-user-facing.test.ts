@@ -518,7 +518,7 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
  * keeps it as `snapshot.error`; Settings → Audio renders it verbatim. That is
  * the microphone test, where `toggleAutoScroll()` returns early on
  * `!state.active` and `A` is just a letter — so "Press A to start or stop
- * auto-scroll. Reinstall CandidCue after the take." is exactly the defect
+ * auto-scroll. Reinstall Speaking Glass after the take." is exactly the defect
  * gregpriday/candidcue#121 is about, relocated rather than fixed.
  *
  * The fix is a conditional: a sentence that names a take-only affordance has to
@@ -570,7 +570,7 @@ describe('recogniser copy stays true on the surface with no take', () => {
     // Left column: every clause this fix removed.
     for (const bad of [
       'Press A to start or stop auto-scroll.',
-      'Reinstall CandidCue after the take.',
+      'Reinstall Speaking Glass after the take.',
       'To retry voice following, stop and restart the take.',
       'Use auto-scroll instead.',
     ]) {
@@ -579,7 +579,7 @@ describe('recogniser copy stays true on the surface with no take', () => {
     for (const good of [
       'In a take, press A to start or stop auto-scroll.',
       'In a take, press A to start or stop auto-scroll, then stop and start the take to retry.',
-      'Restart CandidCue, and reinstall it if this keeps happening.',
+      'Restart Speaking Glass, and reinstall it if this keeps happening.',
       'The speech model is missing from this installation.',
     ]) {
       expect(unscoped(good), `'${good}' is true on both surfaces and should pass`).toEqual([]);
@@ -628,7 +628,7 @@ describe('recogniser copy stays true on the surface with no take', () => {
  *    is removed even though `describeError` would still emit sensible prose.
  *
  *  - `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` told the reader to
- *    reinstall CandidCue. The model lives in the app-data directory now, so a
+ *    reinstall Speaking Glass. The model lives in the app-data directory now, so a
  *    reinstall leaves it byte for byte where it was: an instruction that cannot
  *    work, which is the same class of defect as naming a mode Settings marks
  *    unavailable.
@@ -659,11 +659,11 @@ describe('the model download is the remedy, not a reinstall', () => {
    * Deliberately not a bare `/reinstall/i`. The dash class covers U+2010–U+2015
    * and U+2011 so the phrase cannot slip through on a hyphen nobody typed on
    * purpose, and the second branch catches the same instruction written as two
-   * words — "install CandidCue again", "try installing the app again" — which a
+   * words — "install Speaking Glass again", "try installing the app again" — which a
    * narrower pattern would have waved past.
    */
   const REINSTALL_ADVICE =
-    /\bre[\s‐-―‑-]?install|\binstall(?:ing)?\s+(?:CandidCue|the app|it)\s+again\b/iu;
+    /\bre[\s‐-―‑-]?install|\binstall(?:ing)?\s+(?:Speaking Glass|the app|it)\s+again\b/iu;
 
   /** What Rust puts on the `AppError`, at both raise sites, verbatim. */
   const BACKEND_MESSAGES = [
@@ -717,12 +717,12 @@ describe('the model download is the remedy, not a reinstall', () => {
     // same standard the session-mode bans above are held to. The left column is
     // the clause this issue removed plus the ways it could come back.
     for (const spelling of [
-      'Reinstall CandidCue to restore voice following.',
-      'Restart CandidCue, and reinstall it if this keeps happening.',
-      're-install CandidCue',
+      'Reinstall Speaking Glass to restore voice following.',
+      'Restart Speaking Glass, and reinstall it if this keeps happening.',
+      're-install Speaking Glass',
       // U+2011, which a word processor introduces without anyone deciding to.
-      're‑install CandidCue',
-      'Install CandidCue again to fix it.',
+      're‑install Speaking Glass',
+      'Install Speaking Glass again to fix it.',
       'Try installing the app again.',
     ]) {
       expect(spelling, `'${spelling}' should trip the reinstall ban`).toMatch(REINSTALL_ADVICE);
@@ -733,7 +733,7 @@ describe('the model download is the remedy, not a reinstall', () => {
     for (const spelling of [
       'Download the model again in Settings → Speech.',
       'The speech model for the requested language is not installed.',
-      'Restart CandidCue to bring it back.',
+      'Restart Speaking Glass to bring it back.',
     ]) {
       expect(spelling, `'${spelling}' is honest copy and should pass`).not.toMatch(
         REINSTALL_ADVICE,

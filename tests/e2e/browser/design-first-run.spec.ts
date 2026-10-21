@@ -11,7 +11,7 @@ import { installTauriShim, type ShimConfig } from './fixtures/tauri-shim';
  * writes one PNG per state and window size, so a layout change can be judged
  * from pixels rather than from the markup.
  *
- *     DESIGN_CAPTURE_DIR=/abs/dir CANDIDCUE_E2E_PORT=5317 \
+ *     DESIGN_CAPTURE_DIR=/abs/dir SPEAKING_GLASS_E2E_PORT=5317 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-first-run.spec.ts
  *
@@ -28,7 +28,7 @@ import { installTauriShim, type ShimConfig } from './fixtures/tauri-shim';
 const OUT = process.env['DESIGN_CAPTURE_DIR'];
 test.skip(!OUT, 'design capture harness: set DESIGN_CAPTURE_DIR to run it');
 
-const OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+const OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 
 const SIZES = {
   wide: { width: 1240, height: 820 },

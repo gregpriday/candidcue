@@ -36,7 +36,7 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
  * are three different sentences with three different remedies — collapsing
  * them into one apologetic line is the same defect as showing the code.
  *
- * Where CandidCue genuinely cannot suggest an action, the copy says so in
+ * Where Speaking Glass genuinely cannot suggest an action, the copy says so in
  * plain English rather than implying one that does not exist.
  */
 const ERROR_COPY: Record<string, string> = {
@@ -46,7 +46,7 @@ const ERROR_COPY: Record<string, string> = {
   // provider to be down, so nothing here asks the presenter to go and fix
   // something on a website.
   //
-  // Nor does anything here ask them to reinstall CandidCue any more, which is
+  // Nor does anything here ask them to reinstall Speaking Glass any more, which is
   // what `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` used to say. The
   // weights were in the bundle when that copy was written; since §152 the stock
   // installer ships none and the model is downloaded into the app-data
@@ -133,11 +133,11 @@ const ERROR_COPY: Record<string, string> = {
     'The speech model files could not be found. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
   // Not "remove the model, then download it again": Settings offers Remove only
   // for a model this machine DOWNLOADED, and a load failure can also come from
-  // a bundled or `CANDIDCUE_MODELS_DIR` copy that has no Remove button to press.
+  // a bundled or `SPEAKING_GLASS_MODELS_DIR` copy that has no Remove button to press.
   // Download is offered whenever a model is not usable, so it is the half of
   // that pair which is always there to follow.
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue; if this keeps happening, download the model again in Settings → Speech.',
+    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart Speaking Glass; if this keeps happening, download the model again in Settings → Speech.',
   // Found BEFORE the load, which is the point (#258): a damaged graph handed to
   // the recogniser used to abort the app at the top of every take. No restart
   // clause, unlike `STT_MODEL_LOAD_FAILED` — the files are what is wrong, and a
@@ -145,7 +145,7 @@ const ERROR_COPY: Record<string, string> = {
   STT_MODEL_DAMAGED:
     'The speech model files on this computer are damaged. In a take, press A to start or stop auto-scroll. Download the model again in Settings → Speech.',
   STT_WORKER_FAILED:
-    'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
+    'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart Speaking Glass to bring it back.',
   STT_ENGINE_ERROR:
     'The speech recogniser failed unexpectedly. In a take, press A to start or stop auto-scroll, then stop and start the take to retry voice following.',
 
@@ -155,32 +155,32 @@ const ERROR_COPY: Record<string, string> = {
   // notice, under a title that already names the version, so they say what
   // happened and what is left as it was rather than repeating which update.
   UPDATE_CHECK_FAILED:
-    'CandidCue could not reach the update server. Check your internet connection, then try again.',
+    'Speaking Glass could not reach the update server. Check your internet connection, then try again.',
   UPDATE_RESPONSE_INVALID:
-    'The update server sent an answer CandidCue could not read. Try again later.',
+    'The update server sent an answer Speaking Glass could not read. Try again later.',
   UPDATE_CHECK_DISABLED: 'Automatic update checks are turned off in Settings.',
   UPDATE_BLOCKED_BY_TAKE:
     'An update cannot be installed during a take. It will wait until the take ends.',
   UPDATE_RESTART_PENDING:
-    'CandidCue is restarting to finish installing an update. Start the take after it reopens.',
+    'Speaking Glass is restarting to finish installing an update. Start the take after it reopens.',
   UPDATE_BUSY: 'An update is already being installed.',
   UPDATE_NOT_AVAILABLE:
     'There is no update waiting to be installed. Choose Check for Updates… in the Help menu to look again.',
   UPDATE_SELF_INSTALL_UNSUPPORTED:
-    'This copy of CandidCue cannot update itself. Download the new version from candidcue.com.',
+    'This copy of Speaking Glass cannot update itself. Download the new version from speakingglass.com.',
   UPDATE_DOWNLOAD_FAILED:
     'The update could not be downloaded, and nothing was changed. Check your internet connection, then try again.',
   UPDATE_SIGNATURE_INVALID:
-    'The downloaded update did not pass its signature check, so it was not installed. CandidCue has not changed.',
+    'The downloaded update did not pass its signature check, so it was not installed. Speaking Glass has not changed.',
   UPDATE_INSTALL_FAILED:
-    'The update was downloaded but could not be installed. Try again, or download the new version from candidcue.com.',
+    'The update was downloaded but could not be installed. Try again, or download the new version from speakingglass.com.',
 
   /* -- network ------------------------------------------------------------ */
   //
   // Transcription is local now, so nothing here is about speech: what is left
   // is the speech-model download and the update check above.
   NETWORK_OFFLINE:
-    'CandidCue cannot reach the network. Check your internet connection, then try again.',
+    'Speaking Glass cannot reach the network. Check your internet connection, then try again.',
   NETWORK_TIMEOUT:
     'The server did not respond in time. Check your internet connection, then try again.',
 
@@ -203,7 +203,7 @@ const ERROR_COPY: Record<string, string> = {
   /*
    * Not an IPC code — the voice pipeline throws it when a stop lands while a
    * start is still in flight. It has copy because it reached a presenter once,
-   * as "Something went wrong and CandidCue has no specific advice for it",
+   * as "Something went wrong and Speaking Glass has no specific advice for it",
    * which is the worst sentence in the app: alarming, useless, and about
    * nothing the presenter did. The store now swallows it when the session is
    * genuinely gone; this is the backstop for every path that does not.
@@ -223,9 +223,9 @@ const ERROR_COPY: Record<string, string> = {
   // A presenter told to check their internet connection about an ONNX graph
   // failing to start goes and looks at their router.
   REALTIME_NEGOTIATION_FAILED:
-    'CandidCue could not start the speech recogniser for this take. Try starting the take again; if it keeps failing, reinstall the language in Settings › Speech.',
+    'Speaking Glass could not start the speech recogniser for this take. Try starting the take again; if it keeps failing, reinstall the language in Settings › Speech.',
   REALTIME_CONNECTION_LOST:
-    'The speech recogniser stopped during the take. Start voice following again; if it keeps stopping, restart CandidCue.',
+    'The speech recogniser stopped during the take. Start voice following again; if it keeps stopping, restart Speaking Glass.',
   REALTIME_NO_TRANSCRIPTS:
     'Your microphone is being read but no words are coming back, so following is on hold. Check that the right input is selected in Settings › Audio, then start the take again.',
 
@@ -236,18 +236,18 @@ const ERROR_COPY: Record<string, string> = {
   // request wrongly. Named rather than hidden — a silent generic failure on
   // this is how a broken link in the library looks like a broken script.
   INVALID_SCRIPT_ID:
-    'CandidCue could not identify that script. Go back to the library and open it again.',
+    'Speaking Glass could not identify that script. Go back to the library and open it again.',
   SCRIPT_CONFLICT:
-    'This script’s file changed outside CandidCue since it was opened. Reload it before saving, or the newer version will be overwritten.',
+    'This script’s file changed outside Speaking Glass since it was opened. Reload it before saving, or the newer version will be overwritten.',
   SCRIPT_SAVE_FAILED:
-    'CandidCue could not save the script. Check that the disk is not full or read-only, then try again.',
+    'Speaking Glass could not save the script. Check that the disk is not full or read-only, then try again.',
   SCRIPT_FILE_MISSING:
-    'The file behind this script is missing. It may have been moved or deleted outside CandidCue.',
+    'The file behind this script is missing. It may have been moved or deleted outside Speaking Glass.',
   SCRIPT_COMPILE_FAILED:
-    'CandidCue could not read this script. The notes under the outline say what needs attention.',
-  IMPORT_INVALID_FORMAT: 'That file is not in a format CandidCue can import.',
+    'Speaking Glass could not read this script. The notes under the outline say what needs attention.',
+  IMPORT_INVALID_FORMAT: 'That file is not in a format Speaking Glass can import.',
   IMPORT_UNSAFE_PATH:
-    'That file sits outside the folders CandidCue is allowed to read, so it was not imported.',
+    'That file sits outside the folders Speaking Glass is allowed to read, so it was not imported.',
 
   /* -- assets ------------------------------------------------------------- */
   ASSET_UNSUPPORTED: 'That file type is not supported as a script image.',
@@ -255,24 +255,24 @@ const ERROR_COPY: Record<string, string> = {
 
   /* -- database ----------------------------------------------------------- */
   DATABASE_MIGRATION_FAILED:
-    'CandidCue could not upgrade its database. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
+    'Speaking Glass could not upgrade its database. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
   DATABASE_INTEGRITY_FAILED:
-    'The CandidCue database did not pass its integrity check. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
+    'The Speaking Glass database did not pass its integrity check. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
 
   /* -- stage window ------------------------------------------------------- */
   STAGE_DISPLAY_MISSING:
     'The selected display is no longer connected. Reconnect it, or choose another display.',
   STAGE_OPEN_FAILED:
-    'CandidCue could not open the stage window on that display. Choose another display, then try again.',
+    'Speaking Glass could not open the stage window on that display. Choose another display, then try again.',
   // Single-window presentation: no second window, no display picker, so the
   // copy above would send the operator somewhere that cannot help them.
   PRESENTATION_FAILED:
-    'CandidCue could not turn this window into the teleprompter. The window has been left as it was — try Present again.',
+    'Speaking Glass could not turn this window into the teleprompter. The window has been left as it was — try Present again.',
   STAGE_SESSION_MISMATCH:
     'That stage window belongs to a different session, so the change was not applied.',
   STAGE_LAYOUT_FAILED:
     'The stage could not lay out this script. Stop and start the take to rebuild it.',
-  // Window › CandidCue / Stage. Names what to do instead, because the window is
+  // Window › Speaking Glass / Stage. Names what to do instead, because the window is
   // still there — it simply would not come forward.
   get WINDOW_FOCUS_FAILED() {
     return osCopy().windowFocusFailed;
@@ -280,7 +280,7 @@ const ERROR_COPY: Record<string, string> = {
   // File › Close Window. The window is still open and nothing was lost, so the
   // copy names the other way out rather than an error to investigate.
   get WINDOW_CLOSE_FAILED() {
-    return `The window could not be closed. ${osCopy().quit} CandidCue instead.`;
+    return `The window could not be closed. ${osCopy().quit} Speaking Glass instead.`;
   },
   WINDOW_CLOSE_REFUSED: 'Only the main window can close itself this way.',
   // Not in APP_ERROR_CODES: raised by the window layer and by Preflight's own
@@ -296,13 +296,13 @@ const ERROR_COPY: Record<string, string> = {
   // scripts are Markdown files and a database failure does not touch them,
   // which is the single most useful thing to say here.
   DATABASE_CORRUPT:
-    'CandidCue’s database failed its integrity check and was not changed. Your scripts are separate Markdown files and are unaffected.',
+    'Speaking Glass’s database failed its integrity check and was not changed. Your scripts are separate Markdown files and are unaffected.',
   DATABASE_BACKUP_REQUIRED:
-    'CandidCue needs to upgrade its database but could not first save a backup of it, so it made no changes. This is usually a full disk or a permissions problem in its data folder.',
+    'Speaking Glass needs to upgrade its database but could not first save a backup of it, so it made no changes. This is usually a full disk or a permissions problem in its data folder.',
   DATABASE_UNAVAILABLE:
-    'CandidCue is in recovery mode because its database did not open, so this action is unavailable. Recover the database and reopen CandidCue.',
+    'Speaking Glass is in recovery mode because its database did not open, so this action is unavailable. Recover the database and reopen Speaking Glass.',
   RESTORE_FAILED:
-    'The restore did not finish, and CandidCue put your previous data back. A copy of it was also kept.',
+    'The restore did not finish, and Speaking Glass put your previous data back. A copy of it was also kept.',
 
   /* -- installing a language ---------------------------------------------- */
   //
@@ -320,19 +320,19 @@ const ERROR_COPY: Record<string, string> = {
   STT_MODEL_CANCELLED:
     'The language download was cancelled. What was transferred is kept, so starting again resumes rather than restarts.',
   STT_MODEL_BUSY:
-    'CandidCue is already installing or removing a language. Wait for that to finish and try again.',
+    'Speaking Glass is already installing or removing a language. Wait for that to finish and try again.',
   STT_MODEL_UNKNOWN:
-    'CandidCue does not recognise that language. Reinstall CandidCue if this keeps happening.',
+    'Speaking Glass does not recognise that language. Reinstall Speaking Glass if this keeps happening.',
   STT_MODEL_UNSUPPORTED:
-    'That language is not available in this version of CandidCue.',
+    'That language is not available in this version of Speaking Glass.',
   STT_MODEL_URL_INSECURE:
-    'The download address for that language is not secure, so CandidCue refused it. This is a problem with the release rather than with your machine.',
+    'The download address for that language is not secure, so Speaking Glass refused it. This is a problem with the release rather than with your machine.',
   // Not the release's fault: the url is compiled in, and the fake-IP and NAT64
   // answers ordinary networks give it are accepted (#261). Mostly what is left
   // is a network pointing the name somewhere private, but a broken redirect
   // chain lands here too, so the copy names no single cause.
   STT_MODEL_URL_BLOCKED:
-    'CandidCue could not safely follow the download address for that language, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.',
+    'Speaking Glass could not safely follow the download address for that language, so it stopped. A Wi-Fi sign-in page, DNS filter or VPN can cause this: check your network settings, or try another network.',
 
   /* -- choosing a language ------------------------------------------------ */
   STT_LANGUAGE_CHANGE_BLOCKED:
@@ -348,9 +348,9 @@ const ERROR_COPY: Record<string, string> = {
 
   /* -- generic backend ---------------------------------------------------- */
   INTERNAL_UNEXPECTED:
-    'Something went wrong inside CandidCue. Try again; if it keeps happening, export a support bundle from Settings → Data, privacy & updates → Diagnostics.',
-  NOT_IMPLEMENTED: 'This feature is not available in this version of CandidCue.',
-  NOT_FOUND: 'CandidCue could not find what that action needed.',
+    'Something went wrong inside Speaking Glass. Try again; if it keeps happening, export a support bundle from Settings → Data, privacy & updates → Diagnostics.',
+  NOT_IMPLEMENTED: 'This feature is not available in this version of Speaking Glass.',
+  NOT_FOUND: 'Speaking Glass could not find what that action needed.',
   VALIDATION_FAILED: 'That request was not valid, so nothing was changed.',
 };
 
@@ -360,7 +360,7 @@ const ERROR_COPY: Record<string, string> = {
  * recorded) and points at the one place the raw code can be read.
  */
 const UNMAPPED_CODE_COPY =
-  'Something went wrong and CandidCue has no specific advice for it. The details are in Settings → Data, privacy & updates → Diagnostics.';
+  'Something went wrong and Speaking Glass has no specific advice for it. The details are in Settings → Data, privacy & updates → Diagnostics.';
 
 const FALLBACK_COPY = 'Something unexpected went wrong.';
 

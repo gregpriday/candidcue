@@ -6,7 +6,7 @@
  * writer meets along the way. Opt-in: it skips unless DESIGN_CAPTURE_DIR names
  * a directory to write into, so the normal suite never runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-app.spec.ts
  *
@@ -178,8 +178,8 @@ async function simulateMacWindow(page: Page): Promise<void> {
   if (MATERIAL === null) return;
   await page.addInitScript((fill: string) => {
     const w = window as unknown as Record<string, unknown>;
-    w['__CANDIDCUE_WINDOW_MATERIAL__'] = 'vibrancy';
-    w['__CANDIDCUE_TITLEBAR__'] = 'overlay';
+    w['__SPEAKING_GLASS_WINDOW_MATERIAL__'] = 'vibrancy';
+    w['__SPEAKING_GLASS_TITLEBAR__'] = 'overlay';
     const paint = () => {
       const style = document.createElement('style');
       style.textContent = `
@@ -471,7 +471,7 @@ test('22 app icon at the sizes macOS draws it', async ({ page }) => {
 test('23 editor, both, at a larger text size', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(
-      'candidcue.workspace.v1',
+      'speaking-glass.workspace.v1',
       JSON.stringify({ editorLayout: 'split', documentScale: 1.25 }),
     );
   });

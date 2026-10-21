@@ -5,7 +5,7 @@
  * Opt-in: it skips unless DESIGN_CAPTURE_DIR names a directory to write into,
  * so the normal suite never runs it.
  *
- *     DESIGN_CAPTURE_DIR=/tmp/shots CANDIDCUE_E2E_PORT=5300 \
+ *     DESIGN_CAPTURE_DIR=/tmp/shots SPEAKING_GLASS_E2E_PORT=5300 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-capture-recovery.spec.ts
  *
@@ -27,7 +27,7 @@ test.use({ deviceScaleFactor: 2 });
 
 const WINDOW = { width: 1240, height: 820 };
 const NARROW = { width: 760, height: 700 };
-const DATA_DIRECTORY = '/Users/sam/Library/Application Support/com.candidcue.app';
+const DATA_DIRECTORY = '/Users/sam/Library/Application Support/com.speakingglass.app';
 
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
@@ -205,7 +205,7 @@ test('05 an answer nobody could read, and no data folder', async ({ page }) => {
   await bootRecovery(page, {
     code: 'DATABASE_UNAVAILABLE',
     message:
-      'CandidCue could not determine whether its database opened: it asked, and the answer could not be read.',
+      'Speaking Glass could not determine whether its database opened: it asked, and the answer could not be read.',
     dataDirectory: '',
     backups: [],
   });
@@ -259,7 +259,7 @@ test('11 scripts saved somewhere else', async ({ page }) => {
   await bootRecovery(page);
   await backupsSettled(page);
   await page.getByRole('button', { name: /scripts/i }).first().click();
-  await expect(page.getByText(/CandidCue-scripts-/).first()).toBeVisible();
+  await expect(page.getByText(/SpeakingGlass-scripts-/).first()).toBeVisible();
   await parkPointer(page);
   await shoot(page, '11-scripts-saved');
 });
@@ -272,7 +272,7 @@ test('12 a restore refused', async ({ page }) => {
       code: 'VALIDATION_FAILED',
       category: 'validation',
       userMessage:
-        'The backup did not survive being copied into place, so nothing was published. Your previous database is at /Users/sam/Library/Application Support/com.candidcue.app/quarantine/pre-rebuild-20261018T081500Z: database disk image is malformed',
+        'The backup did not survive being copied into place, so nothing was published. Your previous database is at /Users/sam/Library/Application Support/com.speakingglass.app/quarantine/pre-rebuild-20261018T081500Z: database disk image is malformed',
       recoverable: true,
     }),
   );

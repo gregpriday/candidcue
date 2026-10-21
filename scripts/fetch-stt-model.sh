@@ -32,7 +32,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="${REPO_ROOT}/scripts/model-catalogue.mjs"
-MODELS_DIR="${CANDIDCUE_MODELS_DIR:-${REPO_ROOT}/src-tauri/models}"
+MODELS_DIR="${SPEAKING_GLASS_MODELS_DIR:-${REPO_ROOT}/src-tauri/models}"
 
 FORCE=false
 SELECTOR=()

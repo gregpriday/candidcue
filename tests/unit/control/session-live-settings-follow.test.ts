@@ -166,7 +166,7 @@ function broadcast(revision: number, fixedSpeedWpm: number): unknown {
         delayProfile: 'low',
       },
       commands: {
-        wakePhrase: 'CandidCue',
+        wakePhrase: 'Speaking Glass',
         wakeMode: 'strict',
       },
     },

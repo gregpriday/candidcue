@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use crate::plan::{GoldTimeline, GoldWord, Performance};
 
 pub const SAMPLE_RATE: u32 = 24_000;
-pub const CACHE_DIR_ENV: &str = "CANDIDCUE_TTS_CACHE_DIR";
-pub const ALLOW_GENERATION_ENV: &str = "CANDIDCUE_ALLOW_TTS_GENERATION";
+pub const CACHE_DIR_ENV: &str = "SPEAKING_GLASS_TTS_CACHE_DIR";
+pub const ALLOW_GENERATION_ENV: &str = "SPEAKING_GLASS_ALLOW_TTS_GENERATION";
 const BYTES_PER_MS: f64 = (SAMPLE_RATE as f64 * 2.0) / 1000.0;
 /// Silence stitched between segments (natural inter-phrase gap).
 const SEGMENT_GAP_MS: u32 = 120;
@@ -209,7 +209,7 @@ impl Synthesizer {
 pub fn shared_cache_dir() -> PathBuf {
     std::env::var_os(CACHE_DIR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/private/tmp/candidcue-bench/tts-cache"))
+        .unwrap_or_else(|| PathBuf::from("/private/tmp/speaking-glass-bench/tts-cache"))
 }
 
 pub fn shared_rendered_dir() -> PathBuf {
@@ -599,7 +599,7 @@ mod tests {
     fn cache_directory_is_machine_wide() {
         let expected = std::env::var_os(CACHE_DIR_ENV)
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/private/tmp/candidcue-bench/tts-cache"));
+            .unwrap_or_else(|| PathBuf::from("/private/tmp/speaking-glass-bench/tts-cache"));
         assert_eq!(shared_cache_dir(), expected);
         assert_eq!(
             shared_rendered_dir(),

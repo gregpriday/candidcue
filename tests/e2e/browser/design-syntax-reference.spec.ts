@@ -1,7 +1,7 @@
 /**
  * Design captures of the script syntax reference — opt-in, never part of the suite.
  *
- *     DESIGN_CAPTURE_DIR=/abs/out CANDIDCUE_E2E_PORT=5318 \
+ *     DESIGN_CAPTURE_DIR=/abs/out SPEAKING_GLASS_E2E_PORT=5318 \
  *       ./node_modules/.bin/playwright test --config=playwright.config.ts \
  *       tests/e2e/browser/design-syntax-reference.spec.ts
  *

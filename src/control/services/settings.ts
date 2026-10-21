@@ -43,6 +43,7 @@ import {
   type RestoreResult,
 } from './settings-types';
 import { DEV_APP_VERSION } from '../../shared/version';
+import { adoptLegacyValue } from '../lib/legacy-storage';
 
 /* ---------------------------------------------------------------------------
  * Rust settings twins (src-tauri/src/settings/mod.rs, camelCase over IPC)
@@ -184,7 +185,7 @@ interface RustRestoreResult {
  * when this key moves, and that is the only signal there is. See
  * `installOverlaySync` in `services/settings-sync.ts`.
  */
-export const SETTINGS_OVERLAY_KEY = 'candidcue.settings-overlay.v1';
+export const SETTINGS_OVERLAY_KEY = 'speaking-glass.settings-overlay.v1';
 const OVERLAY_KEY = SETTINGS_OVERLAY_KEY;
 
 type Overlay = Partial<{
@@ -213,6 +214,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function loadOverlay(): Overlay {
   try {
     if (typeof localStorage === 'undefined') return {};
+    adoptLegacyValue(localStorage, OVERLAY_KEY);
     const raw = localStorage.getItem(OVERLAY_KEY);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
@@ -450,7 +452,7 @@ function overlayStatedAMode(stored: unknown): boolean {
  * The same question `overlayStatedAMode` asks for the presentation mode, and it
  * was missing here — so a fresh install with nothing to migrate still flagged an
  * adoption, wrote an empty `optical` section on its first launch purely to plant
- * the marker, and could raise "CandidCue could not move your saved teleprompter
+ * the marker, and could raise "Speaking Glass could not move your saved teleprompter
  * calibrations into permanent storage" at somebody who has never calibrated
  * anything.
  *
@@ -1286,17 +1288,17 @@ export async function getAppVersion(): Promise<string> {
  */
 export function describeUpdatePolicy(currentVersion: string, automatic: boolean): string {
   const when = automatic
-    ? `CandidCue asks updates.speakingglass.com whether a newer version exists shortly after it ` +
+    ? `Speaking Glass asks updates.speakingglass.com whether a newer version exists shortly after it ` +
       `opens and every six hours while it runs, and whenever you choose Check for Updates… in the ` +
       `Help menu.`
-    : `Automatic checks are off, so CandidCue contacts updates.speakingglass.com only when you ` +
+    : `Automatic checks are off, so Speaking Glass contacts updates.speakingglass.com only when you ` +
       `choose Check for Updates… in the Help menu.`;
   return (
-    `You are running CandidCue ${currentVersion}. ${when} ` +
+    `You are running Speaking Glass ${currentVersion}. ${when} ` +
     `A check sends this version, your operating system and processor type, and — as any web ` +
     `request does — your IP address; nothing that identifies you, and none of your scripts or ` +
     `audio. An update is installed only when you choose to, never during a take, and only if it ` +
-    `carries the signature built into CandidCue. Installing one replaces the app; your scripts, ` +
+    `carries the signature built into Speaking Glass. Installing one replaces the app; your scripts, ` +
     `settings and calibrations are stored separately and are left untouched.`
   );
 }

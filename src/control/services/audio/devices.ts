@@ -51,7 +51,7 @@ export function toAudioDeviceInfos(devices: MediaDeviceInfoLike[]): AudioDeviceI
  * Until a document has opened a microphone itself, the webview does not say
  * what is connected. WKWebView answers every `enumerateDevices()` with ONE
  * input, whose id and name are both empty, whatever is plugged in; Chromium
- * does the same before a grant. macOS having granted CandidCue the microphone
+ * does the same before a grant. macOS having granted Speaking Glass the microphone
  * changes nothing: the rule is per document, and only a `getUserMedia` that
  * succeeds in it lifts it. So the control window is in this state for its
  * first take after every launch, and Settings each time it opens.

@@ -4,8 +4,8 @@
 //! DTO that is not mirrored fails here or in
 //! `tests/unit/control/scripts-ipc-contract.test.ts`.
 
-use candidcue_lib::scripts::import_export::{ExportRequest, ImportRequest};
-use candidcue_lib::scripts::{
+use speaking_glass_lib::scripts::import_export::{ExportRequest, ImportRequest};
+use speaking_glass_lib::scripts::{
     CreateScriptInput, PageRequest, RevisionDocument, RevisionSummary, SaveResult, ScriptFilter,
     ScriptId, ScriptMetadataPatch, ScriptStatus,
 };
@@ -183,18 +183,18 @@ fn export_request_accepts_every_frontend_format() {
             .unwrap_or_else(|e| panic!("{key} must deserialize: {e}"));
         assert_eq!(request.format, expected_format);
         assert!(
-            candidcue_lib::scripts::import_export::export_format_extension(&request.format).is_ok(),
+            speaking_glass_lib::scripts::import_export::export_format_extension(&request.format).is_ok(),
             "{key} sends a format the exporter rejects"
         );
     }
 
-    // `candidcue` is the file extension, never a format name.
+    // `speakingglass` is the file extension, never a format name.
     let bogus: ExportRequest =
-        serde_json::from_value(serde_json::json!({ "format": "candidcue" }))
+        serde_json::from_value(serde_json::json!({ "format": "speakingglass" }))
             .expect("parses as a string");
     assert!(
-        candidcue_lib::scripts::import_export::export_format_extension(&bogus.format).is_err(),
-        "the exporter must reject `candidcue`, which is why the frontend sends `bundle`"
+        speaking_glass_lib::scripts::import_export::export_format_extension(&bogus.format).is_err(),
+        "the exporter must reject `speakingglass`, which is why the frontend sends `bundle`"
     );
 
     // The format is not optional.
@@ -515,7 +515,7 @@ fn stage_session_mismatch_is_in_the_typescript_error_contract() {
 // §44.11 / §47.10 diagnostics and support bundle
 // ---------------------------------------------------------------------------
 
-use candidcue_lib::commands::settings_cmds::{SupportBundleResult, SystemDiagnostics};
+use speaking_glass_lib::commands::settings_cmds::{SupportBundleResult, SystemDiagnostics};
 
 fn settings_fixture() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -542,13 +542,13 @@ fn system_diagnostics_serializes_to_the_frontend_shape() {
         database_integrity_ok: true,
         script_count: 12,
         session_count: 0,
-        data_dir: "/Users/example/Library/Application Support/com.candidcue.app".into(),
+        data_dir: "/Users/example/Library/Application Support/com.speakingglass.app".into(),
     };
     let encoded = serde_json::to_value(&diagnostics).expect("serializes");
     assert_eq!(encoded, f["expectedSystemDiagnostics"]);
 
     let bundle = SupportBundleResult {
-        path: "/Users/example/Desktop/CandidCue-support-20260724-091500".into(),
+        path: "/Users/example/Desktop/SpeakingGlass-support-20260724-091500".into(),
     };
     assert_eq!(
         serde_json::to_value(&bundle).expect("serializes"),
@@ -637,7 +637,7 @@ fn destination_taking_export_commands_run_their_own_picker() {
 // §28.4 Local voice-detection sensitivity — the round trip, not one half of it
 // ---------------------------------------------------------------------------
 
-use candidcue_lib::settings::{
+use speaking_glass_lib::settings::{
     validate as validate_settings, AppSettings as RustAppSettings,
     AudioSettings as RustAudioSettings,
 };
@@ -731,7 +731,7 @@ fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
         // The shipping recogniser, read from the constant rather than typed
         // out: this test is about the missing VAD field defaulting, and it
         // should not have to be edited every time the model changes.
-        "transcriptionModel": candidcue_lib::speech::default_model().id,
+        "transcriptionModel": speaking_glass_lib::speech::default_model().id,
         "language": "en-US",
         // Retired with #219, and exactly what a section this old carries.
         "softPauseAutoDisconnectMinutes": 10,
